@@ -259,13 +259,13 @@ UNDEFINED VARIABLE - fuzz_crash_023.md:188:22:188:25
 NOT IMPLEMENTED - :0:0:0:0
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_023.md:193:4:193:13
-UNUSED VARIABLE - fuzz_crash_023.md:165:2:165:14
 UNUSED VARIABLE - fuzz_crash_023.md:166:2:166:6
-UNUSED VARIABLE - fuzz_crash_023.md:178:2:178:8
-UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
-UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
-UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
 UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
+UNUSED VARIABLE - fuzz_crash_023.md:165:2:165:14
+UNUSED VARIABLE - fuzz_crash_023.md:178:2:178:8
+UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
+UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
+UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
 UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 TYPE MISMATCH - fuzz_crash_023.md:67:11:67:14
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
@@ -699,18 +699,6 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable `interpolated` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_interpolated` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_023.md:165:2:165:14:**
-```roc
-	interpolated = "Hello, ${world}"
-```
- ^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
 Variable `list` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
@@ -720,6 +708,30 @@ The unused variable is declared here:
 	list = [
 ```
  ^^^^
+
+
+**UNUSED VARIABLE**
+Variable `static_dispatch_style` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_static_dispatch_style` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:189:2:189:23:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+ ^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `interpolated` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_interpolated` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:165:2:165:14:**
+```roc
+	interpolated = "Hello, ${world}"
+```
+ ^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -735,15 +747,15 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `tag_with_payload` is not used anywhere in your code.
+Variable `multiline_tuple` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_tag_with_payload` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_multiline_tuple` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_023.md:164:2:164:18:**
+**fuzz_crash_023.md:180:2:180:17:**
 ```roc
-	tag_with_payload = Ok(number)
+	multiline_tuple = (
 ```
- ^^^^^^^^^^^^^^^^
+ ^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -759,27 +771,15 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `multiline_tuple` is not used anywhere in your code.
+Variable `tag_with_payload` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_multiline_tuple` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_tag_with_payload` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_023.md:180:2:180:17:**
+**fuzz_crash_023.md:164:2:164:18:**
 ```roc
-	multiline_tuple = (
+	tag_with_payload = Ok(number)
 ```
- ^^^^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `static_dispatch_style` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_static_dispatch_style` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_023.md:189:2:189:23:**
-```roc
-	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-```
- ^^^^^^^^^^^^^^^^^^^^^
+ ^^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**

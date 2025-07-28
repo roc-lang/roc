@@ -8,8 +8,7 @@ const std = @import("std");
 const compile = @import("compile");
 const parse = @import("parse");
 const base = @import("base");
-
-const canonicalize = @import("../../canonicalize.zig");
+const Can = @import("can");
 
 const AST = parse.AST;
 const ModuleEnv = compile.ModuleEnv;
@@ -32,10 +31,10 @@ test "exposed but not implemented - values" {
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
-    defer canonicalizer.deinit();
+    var czer = try Can.init(&env, &ast, null);
+    defer czer.deinit();
 
-    try canonicalizer.canonicalizeFile();
+    try czer.canonicalizeFile();
 
     // Check that we have an "exposed but not implemented" diagnostic for 'bar'
     var found_bar_error = false;
@@ -71,10 +70,10 @@ test "exposed but not implemented - types" {
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
-    defer canonicalizer.deinit();
+    var czer = try Can.init(&env, &ast, null);
+    defer czer.deinit();
 
-    try canonicalizer.canonicalizeFile();
+    try czer.canonicalizeFile();
 
     // Check that we have an "exposed but not implemented" diagnostic for 'OtherType'
     var found_other_type_error = false;
@@ -112,10 +111,12 @@ test "redundant exposed entries" {
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
-    defer canonicalizer.deinit();
+    var czer = try Can.init(&env, &ast, null);
+    defer czer
+        .deinit();
 
-    try canonicalizer.canonicalizeFile();
+    try czer
+        .canonicalizeFile();
 
     // Check that we have redundant exposed warnings
     var found_foo_redundant = false;
@@ -159,10 +160,12 @@ test "shadowing with exposed items" {
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
-    defer canonicalizer.deinit();
+    var czer = try Can.init(&env, &ast, null);
+    defer czer
+        .deinit();
 
-    try canonicalizer.canonicalizeFile();
+    try czer
+        .canonicalizeFile();
 
     // Check that we have shadowing warnings
     var shadowing_count: usize = 0;
@@ -196,10 +199,12 @@ test "shadowing non-exposed items" {
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
-    defer canonicalizer.deinit();
+    var czer = try Can.init(&env, &ast, null);
+    defer czer
+        .deinit();
 
-    try canonicalizer.canonicalizeFile();
+    try czer
+        .canonicalizeFile();
 
     // Check that we still get shadowing warnings for non-exposed items
     var found_shadowing = false;
@@ -240,10 +245,12 @@ test "exposed items correctly tracked across shadowing" {
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
-    defer canonicalizer.deinit();
+    var czer = try Can.init(&env, &ast, null);
+    defer czer
+        .deinit();
 
-    try canonicalizer.canonicalizeFile();
+    try czer
+        .canonicalizeFile();
 
     // Should have:
     // - Shadowing warning for x
@@ -303,10 +310,12 @@ test "complex case with redundant, shadowing, and not implemented" {
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
-    defer canonicalizer.deinit();
+    var czer = try Can.init(&env, &ast, null);
+    defer czer
+        .deinit();
 
-    try canonicalizer.canonicalizeFile();
+    try czer
+        .canonicalizeFile();
 
     var found_a_redundant = false;
     var found_a_shadowing = false;
@@ -361,10 +370,12 @@ test "exposed_items is populated correctly" {
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
-    defer canonicalizer.deinit();
+    var czer = try Can.init(&env, &ast, null);
+    defer czer
+        .deinit();
 
-    try canonicalizer.canonicalizeFile();
+    try czer
+        .canonicalizeFile();
 
     // Check that exposed_items contains the correct number of items
     // The exposed items were added during canonicalization
@@ -400,10 +411,12 @@ test "exposed_items persists after canonicalization" {
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
-    defer canonicalizer.deinit();
+    var czer = try Can.init(&env, &ast, null);
+    defer czer
+        .deinit();
 
-    try canonicalizer.canonicalizeFile();
+    try czer
+        .canonicalizeFile();
 
     // All exposed items should be in exposed_items, even those not implemented
     const x_idx = env.idents.findByString("x").?;
@@ -436,10 +449,12 @@ test "exposed_items never has entries removed" {
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
-    defer canonicalizer.deinit();
+    var czer = try Can.init(&env, &ast, null);
+    defer czer
+        .deinit();
 
-    try canonicalizer.canonicalizeFile();
+    try czer
+        .canonicalizeFile();
 
     // All exposed items should remain in exposed_items
     // Even though foo appears twice and baz is not implemented,
@@ -475,10 +490,12 @@ test "exposed_items handles identifiers with different attributes" {
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
 
-    var canonicalizer = try canonicalize.init(&env, &ast, null);
-    defer canonicalizer.deinit();
+    var czer = try Can.init(&env, &ast, null);
+    defer czer
+        .deinit();
 
-    try canonicalizer.canonicalizeFile();
+    try czer
+        .canonicalizeFile();
 
     // Both should be in exposed_items as separate entries
     const foo_idx = env.idents.findByString("foo").?;

@@ -3042,3 +3042,307 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
         .scratch_record_destructs = base.Scratch(ModuleEnv.Pattern.RecordDestruct.Idx){ .items = .{} },
     };
 }
+
+/// Serialize this NodeStore to the given CompactWriter. The resulting NodeStore
+/// in the writer's buffer will have offsets instead of pointers. Calling any
+/// methods on it or dereferencing its internal "pointers" (which are now
+/// offsets) is illegal behavior!
+pub fn serialize(
+    self: *const NodeStore,
+    allocator: std.mem.Allocator,
+    writer: *collections.CompactWriter,
+) std.mem.Allocator.Error!*const NodeStore {
+    // First, write the NodeStore struct itself
+    const offset_self = try writer.appendAlloc(allocator, NodeStore);
+
+    // Then serialize the sub-structures and update the struct
+    offset_self.* = .{
+        .gpa = undefined, // Will be set when deserializing
+        .nodes = (try self.nodes.serialize(allocator, writer)).*,
+        .regions = (try self.regions.serialize(allocator, writer)).*,
+        .extra_data = (try self.extra_data.serialize(allocator, writer)).*,
+        // All scratch arrays are serialized as empty
+        // TODO: maybe we can put these all at the end of ModuleEnv and not bother serializing them, and just re-init on deserialization?
+        .scratch_statements = .{ .items = .{} },
+        .scratch_exprs = .{ .items = .{} },
+        .scratch_captures = .{ .items = .{} },
+        .scratch_record_fields = .{ .items = .{} },
+        .scratch_match_branches = .{ .items = .{} },
+        .scratch_match_branch_patterns = .{ .items = .{} },
+        .scratch_if_branches = .{ .items = .{} },
+        .scratch_where_clauses = .{ .items = .{} },
+        .scratch_patterns = .{ .items = .{} },
+        .scratch_pattern_record_fields = .{ .items = .{} },
+        .scratch_record_destructs = .{ .items = .{} },
+        .scratch_type_annos = .{ .items = .{} },
+        .scratch_anno_record_fields = .{ .items = .{} },
+        .scratch_exposed_items = .{ .items = .{} },
+        .scratch_defs = .{ .items = .{} },
+        .scratch_diagnostics = .{ .items = .{} },
+    };
+
+    return @constCast(offset_self);
+}
+
+/// Add the given offset to the memory addresses of all pointers in `self`.
+pub fn relocate(self: *NodeStore, offset: isize) void {
+    self.nodes.relocate(offset);
+    self.regions.relocate(offset);
+    self.extra_data.relocate(offset);
+    // Note: scratch arrays are empty after deserialization, so no need to relocate
+}
+
+test "NodeStore empty CompactWriter roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create an empty NodeStore
+    var original = try NodeStore.init(gpa);
+    defer original.deinit();
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_empty_nodestore.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize using CompactWriter
+    var writer = collections.CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*NodeStore, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(NodeStore))));
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify empty
+    try testing.expectEqual(@as(usize, 0), deserialized.nodes.len());
+    try testing.expectEqual(@as(usize, 0), deserialized.regions.len());
+    try testing.expectEqual(@as(usize, 0), deserialized.extra_data.len());
+}
+
+test "NodeStore basic CompactWriter roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create NodeStore and add some nodes
+    var original = try NodeStore.init(gpa);
+    defer original.deinit();
+
+    // Add a simple expression node
+    const node1 = Node{
+        .tag = .expr_int,
+        .data_1 = 0, // extra_data index
+        .data_2 = 0,
+        .data_3 = 0,
+    };
+    _ = try original.nodes.append(gpa, node1);
+
+    // Add integer value to extra_data (i128 as 4 u32s)
+    const value: i128 = 42;
+    const value_bytes: [16]u8 = @bitCast(value);
+    const value_u32s: [4]u32 = @bitCast(value_bytes);
+    for (value_u32s) |u32_val| {
+        _ = try original.extra_data.append(gpa, u32_val);
+    }
+
+    // Add a region
+    const region = Region{
+        .start = .{ .row = 1, .column = 0 },
+        .end = .{ .row = 1, .column = 5 },
+    };
+    _ = try original.regions.append(gpa, region);
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_basic_nodestore.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize
+    var writer = collections.CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*NodeStore, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(NodeStore))));
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    deserialized.gpa = gpa; // Set the allocator
+
+    // Verify nodes
+    try testing.expectEqual(@as(usize, 1), deserialized.nodes.len());
+    const retrieved_node = deserialized.nodes.get(@enumFromInt(0));
+    try testing.expectEqual(Node.Tag.expr_int, retrieved_node.tag);
+    try testing.expectEqual(@as(u32, 0), retrieved_node.data_1);
+
+    // Verify extra_data
+    try testing.expectEqual(@as(usize, 4), deserialized.extra_data.len());
+    const retrieved_u32s = deserialized.extra_data.items.items[0..4];
+    const retrieved_bytes: [16]u8 = @bitCast(retrieved_u32s.*);
+    const retrieved_value: i128 = @bitCast(retrieved_bytes);
+    try testing.expectEqual(@as(i128, 42), retrieved_value);
+
+    // Verify regions
+    try testing.expectEqual(@as(usize, 1), deserialized.regions.len());
+    const retrieved_region = deserialized.regions.get(@enumFromInt(0));
+    try testing.expectEqual(region.start.row, retrieved_region.start.row);
+    try testing.expectEqual(region.start.column, retrieved_region.start.column);
+    try testing.expectEqual(region.end.row, retrieved_region.end.row);
+    try testing.expectEqual(region.end.column, retrieved_region.end.column);
+}
+
+test "NodeStore multiple nodes CompactWriter roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create NodeStore with various node types
+    var original = try NodeStore.init(gpa);
+    defer original.deinit();
+
+    // Add expression variable node
+    const var_node = Node{
+        .tag = .expr_var,
+        .data_1 = 5, // pattern_idx
+        .data_2 = 0,
+        .data_3 = 0,
+    };
+    _ = try original.nodes.append(gpa, var_node);
+
+    // Add expression list node
+    const list_node = Node{
+        .tag = .expr_list,
+        .data_1 = 10, // elems start
+        .data_2 = 3, // elems len
+        .data_3 = 2, // elem_var
+    };
+    _ = try original.nodes.append(gpa, list_node);
+
+    // Add float node with extra data
+    const float_node = Node{
+        .tag = .expr_frac_f64,
+        .data_1 = 0, // extra_data index
+        .data_2 = 0,
+        .data_3 = 0,
+    };
+    _ = try original.nodes.append(gpa, float_node);
+
+    // Add float value to extra_data
+    const float_value: f64 = 3.14159;
+    const float_as_u64: u64 = @bitCast(float_value);
+    const float_as_u32s: [2]u32 = @bitCast(float_as_u64);
+    for (float_as_u32s) |u32_val| {
+        _ = try original.extra_data.append(gpa, u32_val);
+    }
+
+    // Add regions for each node
+    const regions = [_]Region{
+        .{ .start = .{ .row = 1, .column = 0 }, .end = .{ .row = 1, .column = 5 } },
+        .{ .start = .{ .row = 2, .column = 0 }, .end = .{ .row = 2, .column = 10 } },
+        .{ .start = .{ .row = 3, .column = 0 }, .end = .{ .row = 3, .column = 7 } },
+    };
+    for (regions) |region| {
+        _ = try original.regions.append(gpa, region);
+    }
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_multiple_nodestore.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize
+    var writer = collections.CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*NodeStore, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(NodeStore))));
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    deserialized.gpa = gpa;
+
+    // Verify nodes
+    try testing.expectEqual(@as(usize, 3), deserialized.nodes.len());
+
+    // Verify var node
+    const retrieved_var = deserialized.nodes.get(@enumFromInt(0));
+    try testing.expectEqual(Node.Tag.expr_var, retrieved_var.tag);
+    try testing.expectEqual(@as(u32, 5), retrieved_var.data_1);
+
+    // Verify list node
+    const retrieved_list = deserialized.nodes.get(@enumFromInt(1));
+    try testing.expectEqual(Node.Tag.expr_list, retrieved_list.tag);
+    try testing.expectEqual(@as(u32, 10), retrieved_list.data_1);
+    try testing.expectEqual(@as(u32, 3), retrieved_list.data_2);
+    try testing.expectEqual(@as(u32, 2), retrieved_list.data_3);
+
+    // Verify float node and extra data
+    const retrieved_float = deserialized.nodes.get(@enumFromInt(2));
+    try testing.expectEqual(Node.Tag.expr_frac_f64, retrieved_float.tag);
+    const retrieved_float_u32s = deserialized.extra_data.items.items[0..2];
+    const retrieved_float_u64: u64 = @bitCast(retrieved_float_u32s.*);
+    const retrieved_float_value: f64 = @bitCast(retrieved_float_u64);
+    try testing.expectApproxEqAbs(float_value, retrieved_float_value, 0.0001);
+
+    // Verify regions
+    try testing.expectEqual(@as(usize, 3), deserialized.regions.len());
+    for (regions, 0..) |expected_region, i| {
+        const retrieved_region = deserialized.regions.get(@enumFromInt(i));
+        try testing.expectEqual(expected_region.start.row, retrieved_region.start.row);
+        try testing.expectEqual(expected_region.start.column, retrieved_region.start.column);
+        try testing.expectEqual(expected_region.end.row, retrieved_region.end.row);
+        try testing.expectEqual(expected_region.end.column, retrieved_region.end.column);
+    }
+
+    // Verify all scratch arrays are empty
+    try testing.expectEqual(@as(usize, 0), deserialized.scratch_statements.items.items.len);
+    try testing.expectEqual(@as(usize, 0), deserialized.scratch_exprs.items.items.len);
+    try testing.expectEqual(@as(usize, 0), deserialized.scratch_patterns.items.items.len);
+}

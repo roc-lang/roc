@@ -126,7 +126,7 @@ Desugaring converts syntax sugar (like `x + 1`) into more fundamental operations
 [A table of all operators in Roc and what they desugar to](https://www.roc-lang.org/tutorial#operator-desugaring-table)
 
 Desugaring in the compiler:
-- New compiler: [canonicalize.zig (WIP)](src/check/canonicalize.zig)
+- New compiler: there is no desugaring in the new compiler, these are implicitly handled by the compiler but not modified into a different form or IR representation.
 - Old compiler: [desugar.rs](crates/check/can_solo/src/desugar.rs)
 
 ## Type Signature
@@ -473,7 +473,7 @@ Canonicalization occurs on a single module (file) in isolation, so the work can 
 If the source code for a [module](#module) has not changed, the CanIR can simply be loaded from disk and used immediately.
 
 Implementation of Canonicalization:
-- new compiler: [canonicalize.zig](src/check/canonicalize.zig), [canonicalize folder](https://github.com/roc-lang/roc/tree/main/src/check/canonicalize)
+- new compiler: [canonicalize/Mod.zig](src/canonicalize/Mod.zig), [canonicalize folder](https://github.com/roc-lang/roc/tree/main/src/canonicalize)
 - old compiler: [can folder](crates/compiler/can)
 
 ## Lambda Set

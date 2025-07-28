@@ -10,8 +10,7 @@ const base = @import("base");
 const types = @import("types");
 const compile = @import("compile");
 const parse = @import("parse");
-
-const canonicalize = @import("../../canonicalize.zig");
+const Can = @import("can");
 
 const ModuleEnv = compile.ModuleEnv;
 
@@ -20,7 +19,7 @@ const ModuleEnv = compile.ModuleEnv;
 fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
-    can: *canonicalize,
+    can: *Can,
     expr_idx: ModuleEnv.Expr.Idx,
 } {
     const module_env = try allocator.create(ModuleEnv);
@@ -34,8 +33,8 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "Test");
 
-    const can = try allocator.create(canonicalize);
-    can.* = try canonicalize.init(module_env, parse_ast, null);
+    const can = try allocator.create(Can);
+    can.* = try Can.init(module_env, parse_ast, null);
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
 

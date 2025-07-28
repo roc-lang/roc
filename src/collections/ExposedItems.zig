@@ -13,6 +13,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuilder;
+const CompactWriter = @import("serialization").CompactWriter;
 
 // We use u32 which is the bit representation of base.Ident.Idx
 // This includes both the 29-bit index AND the 3-bit attributes (effectful, ignored, reassignable)
@@ -111,7 +112,7 @@ pub const ExposedItems = struct {
     pub fn serialize(
         self: *const Self,
         allocator: Allocator,
-        writer: *@import("serialization").CompactWriter,
+        writer: *CompactWriter,
     ) Allocator.Error!*const Self {
         // Items must be sorted and deduplicated before serialization
         std.debug.assert(self.items.sorted);
@@ -292,7 +293,6 @@ test "ExposedItems basic operations" {
 test "ExposedItems empty CompactWriter roundtrip" {
     const testing = std.testing;
     const allocator = testing.allocator;
-    const CompactWriter = @import("serialization").CompactWriter;
 
     // Create an empty ExposedItems
     var original = ExposedItems.init();
@@ -336,7 +336,6 @@ test "ExposedItems empty CompactWriter roundtrip" {
 test "ExposedItems basic CompactWriter roundtrip" {
     const testing = std.testing;
     const allocator = testing.allocator;
-    const CompactWriter = @import("serialization").CompactWriter;
 
     // Create original ExposedItems and add some items
     var original = ExposedItems.init();
@@ -400,7 +399,6 @@ test "ExposedItems basic CompactWriter roundtrip" {
 test "ExposedItems with duplicates CompactWriter roundtrip" {
     const testing = std.testing;
     const allocator = testing.allocator;
-    const CompactWriter = @import("serialization").CompactWriter;
 
     var original = ExposedItems.init();
     defer original.deinit(allocator);
@@ -459,7 +457,6 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
 test "ExposedItems comprehensive CompactWriter roundtrip" {
     const testing = std.testing;
     const allocator = testing.allocator;
-    const CompactWriter = @import("serialization").CompactWriter;
 
     var original = ExposedItems.init();
     defer original.deinit(allocator);
@@ -530,7 +527,6 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
 test "ExposedItems multiple instances CompactWriter roundtrip" {
     const testing = std.testing;
     const allocator = testing.allocator;
-    const CompactWriter = @import("serialization").CompactWriter;
 
     // Create multiple ExposedItems instances
     var exposed1 = ExposedItems.init();

@@ -4,6 +4,7 @@ const std = @import("std");
 const collections = @import("collections");
 const serialization = @import("serialization");
 const testing = std.testing;
+const CompactWriter = collections.CompactWriter;
 
 /// The index of this string in a `StringLiteral.Store`.
 pub const Idx = enum(u32) { _ };
@@ -146,7 +147,7 @@ pub const Store = struct {
     pub fn serialize(
         self: *const Store,
         allocator: std.mem.Allocator,
-        writer: *collections.CompactWriter,
+        writer: *CompactWriter,
     ) std.mem.Allocator.Error!*const Store {
         // First, write the Store struct itself
         const offset_self = try writer.appendAlloc(allocator, Store);
@@ -213,7 +214,6 @@ test "StringLiteral.Store empty store serialization" {
 
 test "StringLiteral.Store empty CompactWriter roundtrip" {
     const gpa = testing.allocator;
-    const CompactWriter = collections.CompactWriter;
 
     // Create an empty Store
     var original = Store{};
@@ -256,7 +256,6 @@ test "StringLiteral.Store empty CompactWriter roundtrip" {
 
 test "StringLiteral.Store basic CompactWriter roundtrip" {
     const gpa = testing.allocator;
-    const CompactWriter = collections.CompactWriter;
 
     // Create original store and add some strings
     var original = Store{};
@@ -310,7 +309,6 @@ test "StringLiteral.Store basic CompactWriter roundtrip" {
 
 test "StringLiteral.Store comprehensive CompactWriter roundtrip" {
     const gpa = testing.allocator;
-    const CompactWriter = collections.CompactWriter;
 
     var original = Store{};
     defer original.deinit(gpa);
@@ -378,7 +376,6 @@ test "StringLiteral.Store comprehensive CompactWriter roundtrip" {
 
 test "StringLiteral.Store frozen state CompactWriter roundtrip" {
     const gpa = testing.allocator;
-    const CompactWriter = collections.CompactWriter;
 
     // Create and populate store
     var original = Store{};
@@ -434,7 +431,6 @@ test "StringLiteral.Store frozen state CompactWriter roundtrip" {
 
 test "StringLiteral.Store multiple stores CompactWriter roundtrip" {
     const gpa = testing.allocator;
-    const CompactWriter = collections.CompactWriter;
 
     // Create multiple stores
     var store1 = Store{};
@@ -515,7 +511,6 @@ test "StringLiteral.Store multiple stores CompactWriter roundtrip" {
 
 test "StringLiteral.Store edge case indices CompactWriter roundtrip" {
     const gpa = testing.allocator;
-    const CompactWriter = collections.CompactWriter;
 
     var original = Store{};
     defer original.deinit(gpa);

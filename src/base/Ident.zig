@@ -173,7 +173,8 @@ pub const Store = struct {
     /// This is different from insert in that it's guaranteed not to modify the store.
     pub fn findByString(self: *const Store, text: []const u8) ?Idx {
         // Look up in the interner without inserting
-        const interner_idx = self.interner.strings.get(text) orelse return null;
+        const result = self.interner.findStringOrSlot(text);
+        const interner_idx = result.idx orelse return null;
 
         // Create an Idx with inferred attributes from the text
         return Idx{
@@ -254,13 +255,14 @@ pub const Store = struct {
         if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
         const next_unique_name = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
 
-        // Create empty strings hash table (used only for deduplication during insertion)
-        const strings = std.StringHashMapUnmanaged(SmallStringInterner.Idx){};
+        // Create empty hash table
+        const hash_table = collections.SafeList(SmallStringInterner.Idx){};
 
         // Construct the interner
         const interner = SmallStringInterner{
             .bytes = bytes,
-            .strings = strings,
+            .hash_table = hash_table,
+            .entry_count = 0,
             .frozen = if (std.debug.runtime_safety) false else {},
         };
 
