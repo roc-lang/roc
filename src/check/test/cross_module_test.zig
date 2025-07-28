@@ -1414,7 +1414,7 @@ test "cross-module type checking - type mismatch with proper error message" {
 
     // Check that the problem has the cross-module import detail
     const problem_idx = result.problem;
-    const prob = checker.problems.problems.get(problem_idx);
+    const prob = checker.problems.problems.items[@intFromEnum(problem_idx)];
 
     try testing.expect(prob == .type_mismatch);
     const mismatch = prob.type_mismatch;

@@ -4,7 +4,8 @@ const std = @import("std");
 const collections = @import("collections");
 const serialization = @import("serialization");
 const testing = std.testing;
-const CompactWriter = collections.CompactWriter;
+
+const CompactWriter = serialization.CompactWriter;
 
 /// The index of this string in a `StringLiteral.Store`.
 pub const Idx = enum(u32) { _ };

@@ -33,8 +33,11 @@ const primes = [_]u64{
 };
 
 fn read_bytes(comptime bytes: u8, data: []const u8) u64 {
-    const T = std.meta.Int(.unsigned, 8 * bytes);
-    return mem.readIntLittle(T, data[0..bytes]);
+    _ = bytes;
+    _ = data;
+    //     const T = std.meta.Int(.unsigned, 8 * bytes);
+    //     return mem.readIntLittle(T, data[0..bytes]);
+    @panic("TODO FIX error: root source file struct 'mem' has no member named 'readIntLittle'");
 }
 
 fn read_8bytes_swapped(data: []const u8) u64 {
@@ -140,13 +143,14 @@ const WyhashStateless = struct {
         return mum(self.seed ^ self.msg_len, primes[4]);
     }
 
-    pub fn hash(seed: u64, input: []const u8) u64 {
-        const aligned_len = input.len - (input.len % 32);
+    // TODO FIXME
+    // pub fn hash(seed: u64, input: []const u8) u64 {
+    //     const aligned_len = input.len - (input.len % 32);
 
-        const c = WyhashStateless.init(seed);
-        @call(.{ .modifier = .always_inline }, c.update, .{input[0..aligned_len]});
-        return @call(.{ .modifier = .always_inline }, c.final, .{input[aligned_len..]});
-    }
+    //     const c = WyhashStateless.init(seed);
+    //     @call(.{ .modifier = .always_inline }, c.update, .{input[0..aligned_len]});
+    //     return @call(.{ .modifier = .always_inline }, c.final, .{input[aligned_len..]});
+    // }
 };
 
 /// Fast non-cryptographic 64bit hash function.
@@ -165,23 +169,24 @@ pub const Wyhash = struct {
         };
     }
 
-    pub fn update(self: *Wyhash, b: []const u8) void {
-        var off: usize = 0;
+    // TODO FIXME
+    // pub fn update(self: *Wyhash, b: []const u8) void {
+    //     var off: usize = 0;
 
-        if (self.buf_len != 0 and self.buf_len + b.len >= 32) {
-            off += 32 - self.buf_len;
-            mem.copy(u8, self.buf[self.buf_len..], b[0..off]);
-            self.state.update(self.buf[0..]);
-            self.buf_len = 0;
-        }
+    //     if (self.buf_len != 0 and self.buf_len + b.len >= 32) {
+    //         off += 32 - self.buf_len;
+    //         mem.copy(u8, self.buf[self.buf_len..], b[0..off]);
+    //         self.state.update(self.buf[0..]);
+    //         self.buf_len = 0;
+    //     }
 
-        const remain_len = b.len - off;
-        const aligned_len = remain_len - (remain_len % 32);
-        self.state.update(b[off .. off + aligned_len]);
+    //     const remain_len = b.len - off;
+    //     const aligned_len = remain_len - (remain_len % 32);
+    //     self.state.update(b[off .. off + aligned_len]);
 
-        mem.copy(u8, self.buf[self.buf_len..], b[off + aligned_len ..]);
-        self.buf_len += @as(u8, @intCast(b[off + aligned_len ..].len));
-    }
+    //     mem.copy(u8, self.buf[self.buf_len..], b[off + aligned_len ..]);
+    //     self.buf_len += @as(u8, @intCast(b[off + aligned_len ..].len));
+    // }
 
     pub fn final(self: *Wyhash) u64 {
         // const seed = self.state.seed;
@@ -192,7 +197,11 @@ pub const Wyhash = struct {
     }
 
     pub fn hash(seed: u64, input: []const u8) u64 {
-        return WyhashStateless.hash(seed, input);
+        _ = seed;
+        _ = input;
+
+        // return WyhashStateless.hash(seed, input);
+        @panic("TODO FIX ME");
     }
 };
 
@@ -212,6 +221,8 @@ test "test vectors" {
     try expectEqual(hash(4, "abcdefghijklmnopqrstuvwxyz"), 0xd0b270e1d8a7019c);
     try expectEqual(hash(5, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"), 0x602a1894d3bbfe7f);
     try expectEqual(hash(6, "12345678901234567890123456789012345678901234567890123456789012345678901234567890"), 0x829e9c148b75970e);
+
+    @panic("ASDF");
 }
 
 test "test vectors streaming" {

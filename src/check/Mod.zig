@@ -34,16 +34,6 @@ const Content = types_mod.Content;
 
 const Self = @This();
 
-test {
-    _ = @import("test/cross_module_test.zig");
-    _ = @import("test/let_polymorphism_integration_test.zig");
-    _ = @import("test/let_polymorphism_test.zig");
-    _ = @import("test/literal_size_test.zig");
-    _ = @import("test/nominal_type_origin_test.zig");
-    _ = @import("test/static_dispatch_test.zig");
-    _ = @import("test/test_rigid_instantiation.zig");
-}
-
 /// Key for the import cache: module index + expression index in that module
 const ImportCacheKey = struct {
     module_idx: ModuleEnv.Import.Idx,

@@ -67,7 +67,7 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
     }
 
     // Check if there are any type errors
-    const has_type_errors = checker.problems.problems.len() > 0;
+    const has_type_errors = checker.problems.problems.items.len > 0;
 
     return .{
         .module_env = module_env,
@@ -208,7 +208,7 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
     }
 
     // Check if there are any type errors
-    const has_type_errors = checker.problems.problems.len() > 0;
+    const has_type_errors = checker.problems.problems.items.len > 0;
 
     return .{
         .module_env = module_env,

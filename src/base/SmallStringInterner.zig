@@ -9,8 +9,10 @@
 const std = @import("std");
 const mod = @import("mod.zig");
 const collections = @import("collections");
+const serialization = @import("serialization");
 
 const Region = mod.Region;
+const CompactWriter = serialization.CompactWriter;
 
 const Self = @This();
 
@@ -189,7 +191,7 @@ pub fn freeze(self: *Self) void {
 pub fn serialize(
     self: *const Self,
     allocator: std.mem.Allocator,
-    writer: *collections.CompactWriter,
+    writer: *CompactWriter,
 ) std.mem.Allocator.Error!*const Self {
     // First, write the struct
     const offset_self = try writer.appendAlloc(allocator, Self);

@@ -279,7 +279,7 @@ pub const Store = struct {
     pub fn serialize(
         self: *const Store,
         allocator: std.mem.Allocator,
-        writer: *collections.CompactWriter,
+        writer: *serialization.CompactWriter,
     ) std.mem.Allocator.Error!*const Store {
         // First, write the Store struct itself
         const offset_self = try writer.appendAlloc(allocator, Store);

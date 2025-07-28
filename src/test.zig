@@ -8,15 +8,36 @@ const std = @import("std");
 const testing = std.testing;
 
 test {
-    testing.refAllDeclsRecursive(@import("serialization"));
+    // TODO FIX THIS -- this is not running the tests in base
+    testing.refAllDecls(@import("base"));
+
+    testing.refAllDeclsRecursive(@import("builtins"));
+
     testing.refAllDeclsRecursive(@import("collections"));
     testing.refAllDeclsRecursive(@import("types"));
-    testing.refAllDeclsRecursive(@import("can"));
-    testing.refAllDeclsRecursive(@import("check"));
 
-    // Using refAllDeclsRecursive here gives "error: @fence is deprecated, use other atomics to establish ordering" for
-    // some reason in an internal zig file. I suspect we need to update our zig version to resolve this
-    testing.refAllDecls(@import("base"));
+    testing.refAllDeclsRecursive(@import("serialization"));
+    testing.refAllDecls(@import("serialization/test/compact_writer_test.zig"));
+
+    testing.refAllDecls(@import("can"));
+    testing.refAllDecls(@import("canonicalize/test/bool_test.zig"));
+    testing.refAllDecls(@import("canonicalize/test/exposed_shadowing_test.zig"));
+    testing.refAllDecls(@import("canonicalize/test/frac_test.zig"));
+    testing.refAllDecls(@import("canonicalize/test/import_validation_test.zig"));
+    testing.refAllDecls(@import("canonicalize/test/int_test.zig"));
+    testing.refAllDecls(@import("canonicalize/test/node_store_test.zig"));
+
+    testing.refAllDecls(@import("check"));
+    testing.refAllDecls(@import("check/test/cross_module_test.zig"));
+    testing.refAllDecls(@import("check/test/let_polymorphism_integration_test.zig"));
+    testing.refAllDecls(@import("check/test/let_polymorphism_test.zig"));
+    testing.refAllDecls(@import("check/test/literal_size_test.zig"));
+    testing.refAllDecls(@import("check/test/nominal_type_origin_test.zig"));
+    testing.refAllDecls(@import("check/test/static_dispatch_test.zig"));
+    testing.refAllDecls(@import("check/test/test_rigid_instantiation.zig"));
+
+    testing.refAllDecls(@import("parse"));
+    testing.refAllDecls(@import("parse/test/ast_node_store_test.zig"));
 
     testing.refAllDeclsRecursive(@import("main.zig"));
     testing.refAllDeclsRecursive(@import("cache/mod.zig"));

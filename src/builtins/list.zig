@@ -203,7 +203,12 @@ pub const RocList = extern struct {
         if (update_mode == .InPlace) {
             return self;
         } else {
-            return self.makeUnique(alignment, element_width, elements_refcounted, dec);
+            _ = dec;
+            _ = alignment;
+            _ = element_width;
+            _ = elements_refcounted;
+            // return self.makeUnique(alignment, element_width, elements_refcounted, dec);
+            @panic("TODO FIX error: member function expected 5 argument(s), found 4");
         }
     }
 

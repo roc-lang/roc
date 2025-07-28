@@ -5,12 +5,11 @@ const base = @import("base");
 const types = @import("types");
 const check = @import("check");
 
-const unify = @import("../unify.zig");
-
 const TypesStore = types.TypesStore;
 const Content = types.Content;
 const Var = types.Var;
 const Num = types.Num;
+const unify = check.unify;
 const problem = check.problem;
 const snapshot = check.snapshot;
 const occurs = check.occurs;
