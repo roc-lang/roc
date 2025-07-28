@@ -1567,8 +1567,8 @@ expect {
 		(p-assign @75.1-75.3 (ident "ma"))
 		(e-closure @75.5-111.2
 			(captures
-				(capture @49.1-49.3 (ident "me"))
-				(capture @97.2-97.3 (ident "t")))
+				(capture @97.2-97.3 (ident "t"))
+				(capture @49.1-49.3 (ident "me")))
 			(e-lambda @75.5-111.2
 				(args
 					(p-underscore @75.6-75.7))
@@ -1714,7 +1714,7 @@ expect {
 				(ty-var @13.5-13.6 (name "a"))
 				(ty-var @13.8-13.9 (name "b"))))
 		(ty-fn @13.13-13.33 (effectful false)
-			(ty-malformed @13.13-13.16)
+			(ty @13.13-13.16 (name "Lis"))
 			(ty-malformed @13.19-13.21)
 			(ty-apply @13.26-13.33 (symbol "List")
 				(ty-var @13.31-13.32 (name "b")))))
@@ -1729,7 +1729,7 @@ expect {
 		(ty-header @24.1-24.4 (name "Som"))
 		(ty-record @24.7-24.27
 			(field (field "foo")
-				(ty-malformed @24.15-24.16))
+				(ty @24.15-24.16 (name "O")))
 			(field (field "bar")
 				(ty-malformed @24.24-24.25))))
 	(s-alias-decl @25.1-26.2

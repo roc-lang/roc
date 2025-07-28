@@ -4394,12 +4394,17 @@ fn canonicalizeTypeAnnoBasicType(
             // Create identifier from text if resolution fails
             try self.env.idents.insert(self.env.gpa, base.Ident.for_text(type_name_text));
 
+        const last_tok_region = self.parse_ir.tokens.resolve(ty.token);
+
         const type_decl_idx = self.scopeLookupTypeDecl(ident_idx) orelse {
             // Type not found in scope - issue diagnostic
-            return .{ .anno_idx = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type = .{
+            try self.env.pushDiagnostic(Diagnostic{ .undeclared_type = .{
                 .name = ident_idx,
-                .region = region,
-            } }), .mb_local_decl = null };
+                .region = last_tok_region,
+            } });
+            return .{ .anno_idx = try self.env.addTypeAnnoAndTypeVar(.{ .ty = .{
+                .symbol = ident_idx,
+            } }, .err, region), .mb_local_decl = null };
         };
 
         const type_decl = self.env.store.getStatement(type_decl_idx);
@@ -4422,11 +4427,9 @@ fn canonicalizeTypeAnnoBasicType(
                 };
             },
             else => {
-                const last_tok_region = self.parse_ir.tokens.resolve(ty.token);
-                return .{ .anno_idx = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .ident_not_in_scope = .{
-                    .ident = ident_idx,
-                    .region = last_tok_region,
-                } }), .mb_local_decl = null };
+                // Since we looked up this type decl from `scopeLookupTypeDecl`
+                // this state should be impossible
+                unreachable;
             },
         }
     }

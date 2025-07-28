@@ -130,11 +130,11 @@ AnotherType : SomeModule.MissingType
 		(annotation @6.1-6.13
 			(declared-type
 				(ty-fn @5.16-5.39 (effectful false)
-					(ty-malformed @5.16-5.32)
+					(ty @5.16-5.32 (name "UndeclaredResult"))
 					(ty @5.36-5.39 (name "Str"))))))
 	(s-alias-decl @3.1-3.21
 		(ty-header @3.1-3.7 (name "MyType"))
-		(ty-malformed @3.10-3.21))
+		(ty @3.10-3.21 (name "UnknownType")))
 	(s-alias-decl @10.1-10.37
 		(ty-header @10.1-10.12 (name "AnotherType"))
 		(ty-malformed @10.15-10.37)))

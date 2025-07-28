@@ -1839,9 +1839,9 @@ expect {
 		(p-assign @80.1-80.11 (ident "match_time"))
 		(e-closure @80.14-138.3
 			(captures
+				(capture @94.5-94.6 (ident "x"))
 				(capture @136.11-136.15 (ident "dude"))
-				(capture @86.4-86.5 (ident "x"))
-				(capture @94.5-94.6 (ident "x")))
+				(capture @86.4-86.5 (ident "x")))
 			(e-lambda @80.14-138.3
 				(args
 					(p-assign @81.2-81.3 (ident "a"))
@@ -2053,9 +2053,9 @@ expect {
 		(p-assign @144.1-144.6 (ident "main!"))
 		(e-closure @144.9-196.2
 			(captures
-				(capture @68.1-68.8 (ident "add_one"))
 				(capture @179.2-179.7 (ident "tuple"))
-				(capture @80.1-80.11 (ident "match_time")))
+				(capture @80.1-80.11 (ident "match_time"))
+				(capture @68.1-68.8 (ident "add_one")))
 			(e-lambda @144.9-196.2
 				(args
 					(p-underscore @144.10-144.11))
@@ -2234,7 +2234,7 @@ expect {
 			(declared-type
 				(ty-fn @143.9-143.38 (effectful false)
 					(ty-apply @143.9-143.21 (symbol "List")
-						(ty-malformed @143.14-143.20))
+						(ty @143.14-143.20 (name "String")))
 					(ty-apply @143.25-143.38 (symbol "Result")
 						(ty-record @143.32-143.34)
 						(ty-underscore @1.1-1.1))))))
@@ -2275,40 +2275,43 @@ expect {
 	(s-alias-decl @36.1-36.17
 		(ty-header @36.1-36.4 (name "Foo"))
 		(ty-tuple @36.7-36.17
-			(ty-malformed @36.8-36.11)
-			(ty-malformed @36.13-36.16)))
+			(ty @36.8-36.11 (name "Bar"))
+			(ty @36.13-36.16 (name "Baz"))))
 	(s-alias-decl @38.1-41.2
 		(ty-header @38.1-38.13 (name "FooMultiline"))
 		(ty-tuple @38.16-41.2
-			(ty-malformed @39.2-39.5)
-			(ty-malformed @40.2-40.5)))
+			(ty @39.2-39.5 (name "Bar"))
+			(ty @40.2-40.5 (name "Baz"))))
 	(s-alias-decl @43.1-43.43
 		(ty-header @43.1-43.8 (name "Some")
 			(ty-args
 				(ty-var @43.6-43.7 (name "a"))))
 		(ty-record @43.11-43.43
 			(field (field "foo")
-				(ty-malformed @43.19-43.21))
+				(ty-apply @43.19-43.24 (symbol "Ok")
+					(ty-var @43.22-43.23 (name "a"))))
 			(field (field "bar")
-				(ty-malformed @43.32-43.41))))
+				(ty @43.32-43.41 (name "Something")))))
 	(s-alias-decl @44.1-47.2
 		(ty-header @44.1-44.10 (name "SomeMl")
 			(ty-args
 				(ty-var @44.8-44.9 (name "a"))))
 		(ty-record @44.13-47.2
 			(field (field "foo")
-				(ty-malformed @45.8-45.10))
+				(ty-apply @45.8-45.13 (symbol "Ok")
+					(ty-var @45.11-45.12 (name "a"))))
 			(field (field "bar")
-				(ty-malformed @46.8-46.17))))
+				(ty @46.8-46.17 (name "Something")))))
 	(s-alias-decl @49.1-54.2
 		(ty-header @49.1-49.17 (name "SomeMultiline")
 			(ty-args
 				(ty-var @49.15-49.16 (name "a"))))
 		(ty-record @49.20-54.2
 			(field (field "foo")
-				(ty-malformed @52.4-52.6))
+				(ty-apply @52.4-52.9 (symbol "Ok")
+					(ty-var @52.7-52.8 (name "a"))))
 			(field (field "bar")
-				(ty-malformed @53.8-53.17))))
+				(ty @53.8-53.17 (name "Something")))))
 	(s-alias-decl @56.1-56.27
 		(ty-header @56.1-56.9 (name "Maybe")
 			(ty-args

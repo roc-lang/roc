@@ -379,8 +379,8 @@ combineResults = |result1, result2|
 		(annotation @8.1-8.15
 			(declared-type
 				(ty-fn @7.18-7.37 (effectful false)
-					(ty-malformed @7.18-7.25)
-					(ty-malformed @7.29-7.37)))))
+					(ty @7.18-7.25 (name "Request"))
+					(ty @7.29-7.37 (name "Response"))))))
 	(d-let
 		(p-assign @11.1-11.10 (ident "parseJson"))
 		(e-lambda @11.13-11.38

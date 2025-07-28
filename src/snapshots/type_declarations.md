@@ -213,17 +213,18 @@ NO CHANGE
 	(s-alias-decl @5.1-5.17
 		(ty-header @5.1-5.4 (name "Foo"))
 		(ty-tuple @5.7-5.17
-			(ty-malformed @5.8-5.11)
-			(ty-malformed @5.13-5.16)))
+			(ty @5.8-5.11 (name "Bar"))
+			(ty @5.13-5.16 (name "Baz"))))
 	(s-alias-decl @7.1-7.43
 		(ty-header @7.1-7.8 (name "Some")
 			(ty-args
 				(ty-var @7.6-7.7 (name "a"))))
 		(ty-record @7.11-7.43
 			(field (field "foo")
-				(ty-malformed @7.19-7.21))
+				(ty-apply @7.19-7.24 (symbol "Ok")
+					(ty-var @7.22-7.23 (name "a"))))
 			(field (field "bar")
-				(ty-malformed @7.32-7.41))))
+				(ty @7.32-7.41 (name "Something")))))
 	(s-alias-decl @9.1-9.27
 		(ty-header @9.1-9.9 (name "Maybe")
 			(ty-args

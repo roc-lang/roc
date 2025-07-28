@@ -2022,7 +2022,11 @@ main! = |_| { # Yeah Ie
 						(p-assign @151.1-151.6 (ident "empty"))
 						(e-empty_record @151.9-151.11))
 					(s-type-anno @153.1-153.25 (name "tuple")
-						(ty-malformed @153.9-153.14))
+						(ty-apply @153.9-153.25 (symbol "Value")
+							(ty-tuple @153.15-153.24
+								(ty-var @153.16-153.17 (name "a"))
+								(ty-var @153.19-153.20 (name "b"))
+								(ty-var @153.22-153.23 (name "c")))))
 					(s-expect @155.1-159.2
 						(e-block @155.8-159.2
 							(s-let @156.2-156.9
@@ -2041,7 +2045,7 @@ main! = |_| { # Yeah Ie
 			(declared-type
 				(ty-fn @99.9-99.38 (effectful false)
 					(ty-apply @99.9-99.21 (symbol "List")
-						(ty-malformed @99.14-99.20))
+						(ty @99.14-99.20 (name "String")))
 					(ty-apply @99.25-99.38 (symbol "Result")
 						(ty-record @99.32-99.34)
 						(ty-underscore @1.1-1.1))))))
@@ -2075,15 +2079,16 @@ main! = |_| { # Yeah Ie
 	(s-alias-decl @26.1-26.17
 		(ty-header @26.1-26.4 (name "Foo"))
 		(ty-tuple @26.7-26.17
-			(ty-malformed @26.8-26.11)
-			(ty-malformed @26.13-26.16)))
+			(ty @26.8-26.11 (name "Bar"))
+			(ty @26.13-26.16 (name "Baz"))))
 	(s-alias-decl @32.1-32.35
 		(ty-header @32.1-32.8 (name "Some")
 			(ty-args
 				(ty-var @32.6-32.7 (name "a"))))
 		(ty-record @32.11-32.35
 			(field (field "foo")
-				(ty-malformed @32.19-32.21))
+				(ty-apply @32.19-32.24 (symbol "Ok")
+					(ty-var @32.22-32.23 (name "a"))))
 			(field (field "bar")
 				(ty-malformed @32.32-32.33))))
 	(s-alias-decl @33.1-35.2
@@ -2092,14 +2097,14 @@ main! = |_| { # Yeah Ie
 				(ty-var @33.4-33.5 (name "a"))))
 		(ty-record @33.9-35.2
 			(field (field "bar")
-				(ty-malformed @34.8-34.11))))
+				(ty @34.8-34.11 (name "Som")))))
 	(s-alias-decl @37.1-39.2
 		(ty-header @37.1-37.9 (name "Soine")
 			(ty-args
 				(ty-var @37.7-37.8 (name "a"))))
 		(ty-record @37.12-39.2
 			(field (field "bar")
-				(ty-malformed @38.8-38.11))))
+				(ty @38.8-38.11 (name "Som")))))
 	(s-alias-decl @40.1-41.2
 		(ty-header @40.1-40.5 (name "Maya"))
 		(ty-tag-union @40.9-41.2))
@@ -2108,9 +2113,11 @@ main! = |_| { # Yeah Ie
 			(ty-args
 				(ty-var @43.6-43.7 (name "a"))))
 		(ty-fn @43.11-43.34 (effectful false)
-			(ty-malformed @43.11-43.16)
+			(ty-apply @43.11-43.19 (symbol "Maybe")
+				(ty-var @43.17-43.18 (name "a")))
 			(ty-var @43.21-43.22 (name "a"))
-			(ty-malformed @43.26-43.31)))
+			(ty-apply @43.26-43.34 (symbol "Maybe")
+				(ty-var @43.32-43.33 (name "a")))))
 	(s-import @4.1-4.38 (module "pf.Stdout") (qualifier "pf")
 		(exposes
 			(exposed (name "line!") (wildcard false))

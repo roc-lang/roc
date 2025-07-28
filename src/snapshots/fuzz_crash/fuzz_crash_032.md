@@ -309,7 +309,7 @@ olor = |color| {
 		(ty-header @3.1-3.12 (name "LocalStatus"))
 		(ty-fn @3.14-3.24 (effectful true)
 			(ty-malformed @3.14-3.17)
-			(ty-malformed @3.21-3.24))))
+			(ty @3.21-3.24 (name "Loc")))))
 ~~~
 # TYPES
 ~~~clojure

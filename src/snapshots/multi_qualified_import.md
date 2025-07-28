@@ -313,7 +313,7 @@ data = json
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @6.1-6.13
 			(declared-type
-				(ty-malformed @5.16-5.23))))
+				(ty @5.16-5.23 (name "Encoder")))))
 	(d-let
 		(p-assign @10.1-10.8 (ident "process"))
 		(e-lambda @10.11-10.33
