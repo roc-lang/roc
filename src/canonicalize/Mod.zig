@@ -1205,6 +1205,23 @@ fn canonicalizeImportStatement(
     const current_scope = self.currentScope();
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
+    // 9. Check that this module actually exists, and if not report an error
+    if (self.module_envs) |envs_map| {
+        // Check if the module exists
+        if (!envs_map.contains(module_name_text)) {
+            // Module not found - create diagnostic
+            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+                .module_name = module_name,
+                .region = import_region,
+            } });
+        }
+    } else {
+        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+            .module_name = module_name,
+            .region = import_region,
+        } });
+    }
+
     return import_idx;
 }
 
@@ -2901,38 +2918,117 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
         // If this is a tag without a prefix and not in unqualified_nominal_tags,
         // then it is an anonymous tag and we can just return it
         return CanonicalizedExpr{ .idx = tag_expr_idx, .free_vars = null };
-    } else {
-        // If this is a tag with a prefix, then is it a nominal tag.
-        //
-        // TODO: Currently this just get the last qualified, then
-        // looks up the associated type. Is this right?
+    } else if (e.qualifiers.span.len == 1) {
+        // If this is a tag with a single, then is it a nominal tag and the qualifier
+        // is the type
 
         // Get the last token of the qualifiers
         const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
-        const last_tok_idx = qualifier_toks[e.qualifiers.span.len - 1];
-        const last_tok_ident = self.parse_ir.tokens.resolveIdentifier(last_tok_idx) orelse unreachable;
-        const last_tok_region = self.parse_ir.tokens.resolve(last_tok_idx);
+        const type_tok_idx = qualifier_toks[0];
+        const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
+        const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
 
-        // Lookup last token (assumed to be a type decl) in scope
-        const nominal_type_decl = self.scopeLookupTypeDecl(last_tok_ident) orelse
+        // Lookup the type ident in scope
+        const nominal_type_decl = self.scopeLookupTypeDecl(type_tok_ident) orelse
             return CanonicalizedExpr{
-                .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
-                    .ident = last_tok_ident,
-                    .region = last_tok_region,
+                .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
+                    .name = type_tok_ident,
+                    .region = type_tok_region,
                 } }),
                 .free_vars = null,
             };
-
         const nominal_type_var = ModuleEnv.castIdx(Statement.Idx, TypeVar, nominal_type_decl);
-        const resolved = self.env.types.resolveVar(nominal_type_var);
 
-        const expr_idx = try self.env.addExprAndTypeVar(ModuleEnv.Expr{
+        const expr_idx = try self.env.addExprAndTypeVarRedirect(ModuleEnv.Expr{
             .e_nominal = .{
                 .nominal_type_decl = nominal_type_decl,
                 .backing_expr = tag_expr_idx,
                 .backing_type = .tag,
             },
-        }, resolved.desc.content, last_tok_region);
+        }, nominal_type_var, region);
+
+        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+    } else {
+        // If this is a tag with more than 1 qualifier, then it is an imported
+        // nominal type where the last qualifier is the type name, then the other
+        // are the module
+
+        // Get the last token of the qualifiers
+        const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
+
+        // Get the type from the last qualifier
+        const type_tok_idx = qualifier_toks[qualifier_toks.len - 1];
+        const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
+        const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
+        const type_tok_text = self.env.idents.getText(type_tok_ident);
+
+        // Get the fully resolved module name from all but the last qualifier
+        const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
+        const module_alias_text = self.parse_ir.resolveQualifiedName(
+            .{ .span = .{ .start = 0, .len = @intCast(qualifier_toks.len - 2) } },
+            qualifier_toks[qualifier_toks.len - 2],
+            &strip_tokens,
+        );
+        const module_alias = try self.env.idents.insert(self.env.gpa, base.Ident.for_text(module_alias_text));
+
+        // Check if this is a module alias
+        const module_name = self.scopeLookupModule(module_alias) orelse {
+            // Module is not in current scope
+            return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, ModuleEnv.Diagnostic{ .module_not_imported = .{
+                .module_name = module_alias,
+                .region = region,
+            } }), .free_vars = null };
+        };
+        const module_name_text = self.env.idents.getText(module_name);
+
+        // Check if this module is imported in the current scope
+        const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
+            return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
+                .module_name = module_name,
+                .region = region,
+            } }), .free_vars = null };
+        };
+
+        // Look up the target node index in the module's exposed_nodes
+        const target_node_idx, const type_content = blk: {
+            const envs_map = self.module_envs orelse {
+                break :blk .{ 0, Content.err };
+            };
+
+            const module_env = envs_map.get(module_name_text) orelse {
+                break :blk .{ 0, Content.err };
+            };
+
+            const target_ident = module_env.idents.findByString(type_tok_text) orelse {
+                // Type is not exposed by the module
+                return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, ModuleEnv.Diagnostic{ .type_not_exposed = .{
+                    .module_name = module_name,
+                    .type_name = type_tok_ident,
+                    .region = type_tok_region,
+                } }), .free_vars = null };
+            };
+
+            const other_module_node_id = module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse {
+                // Type is not exposed by the module
+                return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, ModuleEnv.Diagnostic{ .type_not_exposed = .{
+                    .module_name = module_name,
+                    .type_name = type_tok_ident,
+                    .region = type_tok_region,
+                } }), .free_vars = null };
+            };
+
+            // Successfully found the target node
+            break :blk .{ other_module_node_id, Content{ .flex_var = null } };
+        };
+
+        const expr_idx = try self.env.addExprAndTypeVar(ModuleEnv.Expr{
+            .e_nominal_external = .{
+                .module_idx = import_idx,
+                .target_node_idx = target_node_idx,
+                .backing_expr = tag_expr_idx,
+                .backing_type = .tag,
+            },
+        }, type_content, region);
 
         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
     }
@@ -3223,15 +3319,15 @@ fn canonicalizePattern(
 
                 // Get the last token of the qualifiers
                 const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
-                const last_tok_idx = qualifier_toks[e.qualifiers.span.len - 1];
-                const last_tok_region = self.parse_ir.tokens.resolve(last_tok_idx);
-                const last_tok_ident = self.parse_ir.tokens.resolveIdentifier(last_tok_idx) orelse unreachable;
+                const type_tok_idx = qualifier_toks[e.qualifiers.span.len - 1];
+                const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
+                const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
 
                 // Lookup last token (assumed to be a type decl) in scope
-                const nominal_type_decl = self.scopeLookupTypeDecl(last_tok_ident) orelse
-                    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .ident_not_in_scope = .{
-                        .ident = last_tok_ident,
-                        .region = last_tok_region,
+                const nominal_type_decl = self.scopeLookupTypeDecl(type_tok_ident) orelse
+                    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .undeclared_type = .{
+                        .name = type_tok_ident,
+                        .region = type_tok_region,
                     } });
 
                 // Create the nominal pattern
@@ -3242,7 +3338,7 @@ fn canonicalizePattern(
                         .backing_pattern = tag_pattern_idx,
                         .backing_type = .tag,
                     },
-                }, Content{ .flex_var = null }, last_tok_region);
+                }, Content{ .flex_var = null }, type_tok_region);
 
                 return pattern_idx;
             }
@@ -4174,8 +4270,8 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                         },
                         // Otherwise, this is malformed
                         .type_decl_anno => {
-                            return self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .ident_not_in_scope = .{
-                                .ident = name_ident,
+                            return self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
+                                .name = name_ident,
                                 .region = region,
                             } });
                         },
@@ -4184,11 +4280,12 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
             }
         },
         .underscore_type_var => |underscore_ty_var| {
+            type_anno_ctx.found_underscore = true;
+
             const region = self.parse_ir.tokenizedRegionToRegion(underscore_ty_var.region);
 
             // Underscore types aren't allowed in type declarations (aliases or nominal)
             if (type_anno_ctx.type == .type_decl_anno) {
-                type_anno_ctx.found_underscore = true;
                 try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                     .is_alias = true,
                     .region = region,
@@ -4233,8 +4330,8 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                         },
                         // Otherwise, this is malformed
                         .type_decl_anno => {
-                            return self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .ident_not_in_scope = .{
-                                .ident = name_ident,
+                            return self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
+                                .name = name_ident,
                                 .region = region,
                             } });
                         },
@@ -4249,11 +4346,12 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
             @panic("TODO mod_ty");
         },
         .underscore => |underscore| {
+            type_anno_ctx.found_underscore = true;
+
             const region = self.parse_ir.tokenizedRegionToRegion(underscore.region);
 
             // Underscore types aren't allowed in type declarations (aliases or nominal)
             if (type_anno_ctx.type == .type_decl_anno) {
-                type_anno_ctx.found_underscore = true;
                 try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                     .is_alias = true,
                     .region = region,
@@ -4328,99 +4426,33 @@ fn canonicalizeTypeAnnoBasicType(
 
     const region = self.parse_ir.tokenizedRegionToRegion(ty.region);
 
-    // Resolve the fully qualified type name
-    const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
-    const type_name_text = self.parse_ir.resolveQualifiedName(ty.qualifiers, ty.token, &strip_tokens);
+    // Get the last token of the qualifiers
+    const qualifier_toks = self.parse_ir.store.tokenSlice(ty.qualifiers);
 
-    // Check if this is a qualified type name (contains dots)
-    if (std.mem.indexOf(u8, type_name_text, ".")) |_| {
-        // This is a qualified type - create external declaration
-        // Split the qualified name to get module and type parts
-        const last_dot = std.mem.lastIndexOf(u8, type_name_text, ".") orelse unreachable;
-        const module_text = type_name_text[0..last_dot];
-        const local_type_text = type_name_text[last_dot + 1 ..];
+    // Get the type ident
+    const type_name_ident = self.parse_ir.tokens.resolveIdentifier(ty.token) orelse unreachable;
+    const type_name_region = self.parse_ir.tokens.resolve(ty.token);
 
-        const local_type_ident = try self.env.idents.insert(self.env.gpa, base.Ident.for_text(local_type_text));
-        const module_alias = try self.env.idents.insert(self.env.gpa, base.Ident.for_text(module_text));
+    if (qualifier_toks.len == 0) {
+        // Unqualified type
 
-        // Check if this is a module alias
-        const module_name = self.scopeLookupModule(module_alias) orelse {
-            // Module is not in current scope
-            return .{ .anno_idx = try self.env.pushMalformed(TypeAnno.Idx, ModuleEnv.Diagnostic{ .module_not_found = .{
-                .module_name = module_alias,
-                .region = region,
-            } }), .mb_local_decl = null };
-        };
-
-        // Check if this module is imported in the current scope
-        const import_idx = self.scopeLookupImportedModule(module_text) orelse {
-            // Module not imported in current scope
-            return .{ .anno_idx = try self.env.pushMalformed(TypeAnno.Idx, ModuleEnv.Diagnostic{ .module_not_imported = .{
-                .module_name = module_name,
-                .region = region,
-            } }), .mb_local_decl = null };
-        };
-
-        // Look up the target node index in the module's exposed_nodes
-        const mb_target_node_idx = if (self.module_envs) |envs_map| blk: {
-            if (envs_map.get(module_text)) |module_env| {
-                // TODO: Jared check this
-                if (module_env.idents.findByString(local_type_text)) |target_ident| {
-                    break :blk module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse 0;
-                } else {
-                    break :blk null;
-                }
-            } else {
-                break :blk null;
-            }
-        } else null;
-
-        const target_node_idx = mb_target_node_idx orelse {
-            return .{ .anno_idx = try self.env.pushMalformed(TypeAnno.Idx, ModuleEnv.Diagnostic{ .type_not_exposed = .{
-                .module_name = module_name,
-                .type_name = local_type_ident,
-                .region = region,
-            } }), .mb_local_decl = null };
-        };
-
-        // Create the ty_lookup_external expression with Import.Idx
-        // Type solving will copy this types from the origin type store into the
-        // this module's type store
-        return .{
-            .anno_idx = try self.env.addTypeAnnoAndTypeVar(ModuleEnv.TypeAnno{ .ty_lookup_external = .{
-                .module_idx = import_idx,
-                .target_node_idx = target_node_idx,
-            } }, types.Content{ .flex_var = null }, region),
-            .mb_local_decl = null,
-        };
-    } else {
-        // Unqualified type - check if this type is declared in scope
-        const ident_idx = if (self.parse_ir.tokens.resolveIdentifier(ty.token)) |ident|
-            ident
-        else
-            // Create identifier from text if resolution fails
-            try self.env.idents.insert(self.env.gpa, base.Ident.for_text(type_name_text));
-
-        const last_tok_region = self.parse_ir.tokens.resolve(ty.token);
-
-        const type_decl_idx = self.scopeLookupTypeDecl(ident_idx) orelse {
+        const type_decl_idx = self.scopeLookupTypeDecl(type_name_ident) orelse {
             // Type not found in scope - issue diagnostic
             try self.env.pushDiagnostic(Diagnostic{ .undeclared_type = .{
-                .name = ident_idx,
-                .region = last_tok_region,
+                .name = type_name_ident,
+                .region = type_name_region,
             } });
             return .{ .anno_idx = try self.env.addTypeAnnoAndTypeVar(.{ .ty = .{
-                .symbol = ident_idx,
+                .symbol = type_name_ident,
             } }, .err, region), .mb_local_decl = null };
         };
 
         const type_decl = self.env.store.getStatement(type_decl_idx);
-
         switch (type_decl) {
             .s_alias_decl => |decl| {
                 return .{
                     .anno_idx = try self.env.addTypeAnnoAndTypeVarRedirect(ModuleEnv.TypeAnno{ .ty = .{
-                        .symbol = ident_idx,
+                        .symbol = type_name_ident,
                     } }, ModuleEnv.varFrom(type_decl_idx), region),
                     .mb_local_decl = .{ .alias = decl },
                 };
@@ -4428,7 +4460,7 @@ fn canonicalizeTypeAnnoBasicType(
             .s_nominal_decl => |decl| {
                 return .{
                     .anno_idx = try self.env.addTypeAnnoAndTypeVarRedirect(ModuleEnv.TypeAnno{ .ty = .{
-                        .symbol = ident_idx,
+                        .symbol = type_name_ident,
                     } }, ModuleEnv.varFrom(type_decl_idx), region),
                     .mb_local_decl = .{ .nominal = decl },
                 };
@@ -4439,6 +4471,79 @@ fn canonicalizeTypeAnnoBasicType(
                 unreachable;
             },
         }
+    } else {
+        // This is an external type
+
+        // Get the fully resolved module name
+        const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
+        const module_alias_text = self.parse_ir.resolveQualifiedName(
+            .{ .span = .{ .start = 0, .len = @intCast(qualifier_toks.len - 1) } },
+            qualifier_toks[qualifier_toks.len - 1],
+            &strip_tokens,
+        );
+        const module_alias = try self.env.idents.insert(self.env.gpa, base.Ident.for_text(module_alias_text));
+
+        // Check if this is a module alias
+        const module_name = self.scopeLookupModule(module_alias) orelse {
+            // Module is not in current scope
+            return .{ .anno_idx = try self.env.pushMalformed(TypeAnno.Idx, ModuleEnv.Diagnostic{ .module_not_imported = .{
+                .module_name = module_alias,
+                .region = region,
+            } }), .mb_local_decl = null };
+        };
+        const module_name_text = self.env.idents.getText(module_name);
+
+        // Check if this module is imported in the current scope
+        const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
+            return .{ .anno_idx = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .module_not_imported = .{
+                .module_name = module_name,
+                .region = region,
+            } }), .mb_local_decl = null };
+        };
+
+        // Look up the target node index in the module's exposed_nodes
+        const type_name_text = self.env.idents.getText(type_name_ident);
+        const target_node_idx, const type_content = blk: {
+            const envs_map = self.module_envs orelse {
+                break :blk .{ 0, Content.err };
+            };
+
+            const module_env = envs_map.get(module_name_text) orelse {
+                break :blk .{ 0, Content.err };
+            };
+
+            const target_ident = module_env.idents.findByString(type_name_text) orelse {
+                // Type is not exposed by the module
+                return .{ .anno_idx = try self.env.pushMalformed(TypeAnno.Idx, ModuleEnv.Diagnostic{ .type_not_exposed = .{
+                    .module_name = module_name,
+                    .type_name = type_name_ident,
+                    .region = type_name_region,
+                } }), .mb_local_decl = null };
+            };
+
+            const other_module_node_id = module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse {
+                // Type is not exposed by the module
+                return .{ .anno_idx = try self.env.pushMalformed(TypeAnno.Idx, ModuleEnv.Diagnostic{ .type_not_exposed = .{
+                    .module_name = module_name,
+                    .type_name = type_name_ident,
+                    .region = type_name_region,
+                } }), .mb_local_decl = null };
+            };
+
+            // Successfully found the target node
+            break :blk .{ other_module_node_id, Content{ .flex_var = null } };
+        };
+
+        // Create the ty_lookup_external expression with Import.Idx
+        // Type solving will copy this types from the origin type store into the
+        // this module's type store
+        return .{
+            .anno_idx = try self.env.addTypeAnnoAndTypeVar(ModuleEnv.TypeAnno{ .ty_lookup_external = .{
+                .module_idx = import_idx,
+                .target_node_idx = target_node_idx,
+            } }, type_content, region),
+            .mb_local_decl = null,
+        };
     }
 }
 
@@ -4536,7 +4641,7 @@ fn canonicalizeTypeAnnoTypeApplication(
                                     const arg_var = ModuleEnv.varFrom(arg_anno_idx);
                                     try rigid_substitution.put(self.env.idents.getText(decl_ty.name), arg_var);
                                 },
-                                // TODO: Don't throw on underscore/malformed
+                                // TODO(jared): Don't throw on underscore/malformed
                                 else => unreachable,
                             }
                         }
@@ -4595,7 +4700,7 @@ fn canonicalizeTypeAnnoTypeApplication(
                                     const arg_var = ModuleEnv.varFrom(arg_anno_idx);
                                     try rigid_substitution.put(self.env.idents.getText(decl_ty.name), arg_var);
                                 },
-                                // TODO: Don't throw on underscore/malformed
+                                // TODO(jared): Don't throw on underscore/malformed
                                 else => unreachable,
                             }
                         }

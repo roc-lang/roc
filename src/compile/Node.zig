@@ -61,6 +61,7 @@ pub const Tag = enum {
     expr_dec_small,
     expr_tag,
     expr_nominal,
+    expr_nominal_external,
     expr_zero_argument_tag,
     expr_closure,
     expr_lambda,

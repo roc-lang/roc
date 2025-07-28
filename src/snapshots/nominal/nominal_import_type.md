@@ -13,24 +13,17 @@ red : Color.RGB
 red = Color.RGB.Red
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/nominal/nominal_import_type.md:0:0:0:0
-UNDEFINED VARIABLE - nominal_import_type.md:6:12:6:16
+MODULE NOT FOUND - nominal_import_type.md:3:1:3:13
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**MODULE NOT FOUND**
+The module `Color` was not found in this Roc project.
 
-**Compiler Diagnostic**
-Diagnostic type 'type_not_exposed' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/nominal/nominal_import_type.md:0:0:0:0**
-
-**UNDEFINED VARIABLE**
-Nothing is named `RGB` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**nominal_import_type.md:6:12:6:16:**
+You're attempting to use this module here:
+**nominal_import_type.md:3:1:3:13:**
 ```roc
-red = Color.RGB.Red
+import Color
 ```
-           ^^^^
+^^^^^^^^^^^^
 
 
 # TOKENS
@@ -64,10 +57,15 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.4 (ident "red"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-nominal-external @6.7-6.20
+			(module-idx "0")
+			(target-node-idx "0")
+			(e-tag @6.7-6.20 (name "Red")))
 		(annotation @6.1-6.4
 			(declared-type
-				(ty-malformed @5.7-5.16))))
+				(ty-lookup-external @5.7-5.16
+					(module-idx "0")
+					(target-node-idx "0")))))
 	(s-import @3.1-3.13 (module "Color")
 		(exposes)))
 ~~~
@@ -77,5 +75,5 @@ NO CHANGE
 	(defs
 		(patt @6.1-6.4 (type "Error")))
 	(expressions
-		(expr @6.12-6.16 (type "Error"))))
+		(expr @6.7-6.20 (type "Error"))))
 ~~~

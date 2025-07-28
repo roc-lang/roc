@@ -19,7 +19,7 @@ is_ok = |result| match result {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_tag_payload_two.md:6:10:6:18
+TYPE MISMATCH - nominal_tag_payload_two.md:6:10:6:21
 INVALID NOMINAL TAG - nominal_tag_payload_two.md:6:10:6:10
 INCOMPATIBLE MATCH PATTERNS - nominal_tag_payload_two.md:9:18:9:18
 INVALID NOMINAL TAG - nominal_tag_payload_two.md:10:5:10:5
@@ -27,11 +27,11 @@ INVALID NOMINAL TAG - nominal_tag_payload_two.md:11:5:11:5
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**nominal_tag_payload_two.md:6:10:6:18:**
+**nominal_tag_payload_two.md:6:10:6:21:**
 ```roc
 ok = |a| MyResult.Ok(a)
 ```
-         ^^^^^^^^
+         ^^^^^^^^^^^
 
 It is of type:
     _MyResult(ok, err)_
@@ -200,7 +200,7 @@ is_ok = |result| match result {
 		(e-lambda @6.6-6.24
 			(args
 				(p-assign @6.7-6.8 (ident "a")))
-			(e-nominal @6.10-6.18 (nominal "MyResult")
+			(e-nominal @6.10-6.21 (nominal "MyResult")
 				(e-tag @6.10-6.21 (name "Ok")
 					(args
 						(e-lookup-local @6.22-6.23
@@ -229,7 +229,7 @@ is_ok = |result| match result {
 									(p-nominal @10.5-10.13
 										(p-applied-tag @10.5-10.19))))
 							(value
-								(e-nominal @10.23-10.27 (nominal "Bool")
+								(e-nominal @10.23-10.32 (nominal "Bool")
 									(e-tag @10.23-10.32 (name "True")))))
 						(branch
 							(patterns
@@ -237,7 +237,7 @@ is_ok = |result| match result {
 									(p-nominal @11.5-11.13
 										(p-applied-tag @11.5-11.20))))
 							(value
-								(e-nominal @11.24-11.28 (nominal "Bool")
+								(e-nominal @11.24-11.34 (nominal "Bool")
 									(e-tag @11.24-11.34 (name "False")))))))))
 		(annotation @9.1-9.6
 			(declared-type

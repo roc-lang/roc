@@ -46,18 +46,48 @@ combineResults = |result1, result2|
     }
 ~~~
 # EXPECTED
+MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:56
+MODULE NOT FOUND - can_import_type_annotations.md:4:1:4:17
+MODULE NOT FOUND - can_import_type_annotations.md:5:1:5:38
 UNDECLARED TYPE - can_import_type_annotations.md:7:18:7:25
 UNDECLARED TYPE - can_import_type_annotations.md:7:29:7:37
 UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
 COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0
 COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0
 # PROBLEMS
+**MODULE NOT FOUND**
+The module `http.Client` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_type_annotations.md:3:1:3:56:**
+```roc
+import http.Client as Http exposing [Request, Response]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `json.Json` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_type_annotations.md:4:1:4:17:**
+```roc
+import json.Json
+```
+^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `utils.Result` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_type_annotations.md:5:1:5:38:**
+```roc
+import utils.Result exposing [Result]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type _Request_ is not declared in this scope.
 
@@ -102,42 +132,6 @@ Diagnostic type 'module_not_imported' is not yet handled in report generation.
 
 **Compiler Diagnostic**
 Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
 
 # TOKENS
@@ -396,13 +390,15 @@ combineResults = |result1, result2|
 			(declared-type
 				(ty-fn @10.13-10.30 (effectful false)
 					(ty @10.13-10.16 (name "Str"))
-					(ty-malformed @10.20-10.30)))))
+					(ty-lookup-external @10.20-10.30
+						(module-idx "1")
+						(target-node-idx "0"))))))
 	(d-let
 		(p-assign @14.1-14.10 (ident "handleApi"))
 		(e-closure @14.13-20.2
 			(captures
-				(capture @18.13-18.16 (ident "err"))
-				(capture @17.12-17.16 (ident "data")))
+				(capture @17.12-17.16 (ident "data"))
+				(capture @18.13-18.16 (ident "err")))
 			(e-lambda @14.13-20.2
 				(args
 					(p-assign @14.14-14.21 (ident "request")))
@@ -448,10 +444,16 @@ combineResults = |result1, result2|
 		(annotation @14.1-14.10
 			(declared-type
 				(ty-fn @13.13-13.62 (effectful false)
-					(ty-malformed @13.13-13.25)
+					(ty-lookup-external @13.13-13.25
+						(module-idx "0")
+						(target-node-idx "0"))
 					(ty-apply @13.29-13.62 (symbol "Result")
-						(ty-malformed @13.36-13.49)
-						(ty-malformed @13.51-13.61))))))
+						(ty-lookup-external @13.36-13.49
+							(module-idx "0")
+							(target-node-idx "0"))
+						(ty-lookup-external @13.51-13.61
+							(module-idx "1")
+							(target-node-idx "0")))))))
 	(d-let
 		(p-assign @23.1-23.7 (ident "config"))
 		(e-lookup-external @23.10-23.28
@@ -459,7 +461,9 @@ combineResults = |result1, result2|
 			(target-node-idx "0"))
 		(annotation @23.1-23.7
 			(declared-type
-				(ty-malformed @22.10-22.21))))
+				(ty-lookup-external @22.10-22.21
+					(module-idx "1")
+					(target-node-idx "0")))))
 	(d-let
 		(p-assign @27.1-27.15 (ident "advancedParser"))
 		(e-lambda @27.18-27.82
@@ -480,16 +484,18 @@ combineResults = |result1, result2|
 					(ty-malformed @26.18-26.36)
 					(ty @26.38-26.41 (name "Str"))
 					(ty-apply @26.45-26.82 (symbol "Result")
-						(ty-malformed @26.52-26.62)
+						(ty-lookup-external @26.52-26.62
+							(module-idx "1")
+							(target-node-idx "0"))
 						(ty-malformed @26.64-26.81))))))
 	(d-let
 		(p-assign @31.1-31.15 (ident "combineResults"))
 		(e-closure @31.18-39.6
 			(captures
+				(capture @36.21-36.24 (ident "err"))
 				(capture @35.20-35.26 (ident "value2"))
-				(capture @38.13-38.16 (ident "err"))
 				(capture @33.12-33.18 (ident "value1"))
-				(capture @36.21-36.24 (ident "err")))
+				(capture @38.13-38.16 (ident "err")))
 			(e-lambda @31.18-39.6
 				(args
 					(p-assign @31.19-31.26 (ident "result1"))

@@ -9,15 +9,27 @@ module[]import u.R}g:r->R.a.E
 ~~~
 # EXPECTED
 OVER CLOSED BRACE - :0:0:0:0
+MODULE NOT FOUND - fuzz_crash_042.md:1:9:1:19
 COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/fuzz_crash/fuzz_crash_042.md:0:0:0:0
 # PROBLEMS
 **OVER CLOSED BRACE**
 There are too many closing braces here.
 
+**MODULE NOT FOUND**
+The module `u.R` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_042.md:1:9:1:19:**
+```roc
+module[]import u.R}g:r->R.a.E
+```
+        ^^^^^^^^^^
+
+
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/fuzz_crash/fuzz_crash_042.md:0:0:0:0**
 
 # TOKENS

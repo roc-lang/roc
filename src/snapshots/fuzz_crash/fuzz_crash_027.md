@@ -181,11 +181,16 @@ PARSE ERROR - fuzz_crash_027.md:159:2:159:2
 UNDECLARED TYPE - fuzz_crash_027.md:26:8:26:11
 UNDECLARED TYPE - fuzz_crash_027.md:26:13:26:16
 UNDECLARED TYPE - fuzz_crash_027.md:32:19:32:21
-UNDEFINED VARIABLE - fuzz_crash_027.md:32:32:32:33
+UNDECLARED TYPE VARIABLE - fuzz_crash_027.md:32:32:32:33
 UNDECLARED TYPE - fuzz_crash_027.md:34:8:34:11
 UNDECLARED TYPE - fuzz_crash_027.md:38:8:38:11
 UNDECLARED TYPE - fuzz_crash_027.md:43:11:43:16
 UNDECLARED TYPE - fuzz_crash_027.md:43:26:43:31
+MODULE NOT FOUND - fuzz_crash_027.md:4:1:4:38
+MODULE NOT FOUND - fuzz_crash_027.md:6:1:8:4
+MODULE NOT FOUND - fuzz_crash_027.md:10:1:10:46
+MODULE NOT FOUND - fuzz_crash_027.md:12:1:12:19
+MODULE NOT FOUND - fuzz_crash_027.md:13:1:14:4
 UNDECLARED TYPE - fuzz_crash_027.md:29:2:29:5
 UNDECLARED TYPE - fuzz_crash_027.md:30:2:30:5
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_027.md:52:1:52:3
@@ -351,10 +356,12 @@ Some(a) : { foo : Ok(a), bar : g }
                   ^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `g` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNDECLARED TYPE VARIABLE**
+The type variable _g_ is not declared in this scope.
 
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
 **fuzz_crash_027.md:32:32:32:33:**
 ```roc
 Some(a) : { foo : Ok(a), bar : g }
@@ -404,6 +411,62 @@ This type is referenced here:
 Func(a) : Maybe(a), a -> Maybe(a)
 ```
                          ^^^^^
+
+
+**MODULE NOT FOUND**
+The module `pf.Stdout` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:4:1:4:38:**
+```roc
+import pf.Stdout exposing [line!, e!]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Stdot` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:6:1:8:4:**
+```roc
+import Stdot
+		exposing [ #tem
+		] # Cose
+```
+
+
+**MODULE NOT FOUND**
+The module `pkg.S` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:10:1:10:46:**
+```roc
+import pkg.S exposing [func as fry, Custom.*]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Bae` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:12:1:12:19:**
+```roc
+import Bae as Gooe
+```
+^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Ba` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:13:1:14:4:**
+```roc
+import
+	Ba
+```
 
 
 **UNDECLARED TYPE**

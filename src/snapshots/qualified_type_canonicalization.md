@@ -55,22 +55,18 @@ PARSE ERROR - qualified_type_canonicalization.md:8:1:8:7
 PARSE ERROR - qualified_type_canonicalization.md:8:14:8:21
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:10:15:10:23
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:10:24:10:32
+MODULE NOT FOUND - qualified_type_canonicalization.md:9:1:9:13
+MODULE NOT FOUND - qualified_type_canonicalization.md:10:1:10:15
 INVALID STATEMENT - qualified_type_canonicalization.md:10:15:10:23
 INVALID STATEMENT - qualified_type_canonicalization.md:10:24:10:32
 INVALID STATEMENT - qualified_type_canonicalization.md:10:33:10:40
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:15:19:15:24
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:19:26:19:35
+MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
+UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
 COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
 COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:31:16:31:21
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0
+UNDECLARED TYPE - qualified_type_canonicalization.md:31:16:31:21
 UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0
 COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0
 COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:42:27:42:42
@@ -137,6 +133,28 @@ import ModuleA.ModuleB exposing [TypeC]
                        ^^^^^^^^
 
 
+**MODULE NOT FOUND**
+The module `Color` was not found in this Roc project.
+
+You're attempting to use this module here:
+**qualified_type_canonicalization.md:9:1:9:13:**
+```roc
+import Color
+```
+^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `ModuleA` was not found in this Roc project.
+
+You're attempting to use this module here:
+**qualified_type_canonicalization.md:10:1:10:15:**
+```roc
+import ModuleA.ModuleB exposing [TypeC]
+```
+^^^^^^^^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -170,16 +188,21 @@ import ModuleA.ModuleB exposing [TypeC]
                                 ^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**MODULE NOT FOUND**
+The module `ExternalModule` was not found in this Roc project.
 
-**Compiler Diagnostic**
-Diagnostic type 'type_not_exposed' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0**
+You're attempting to use this module here:
+**qualified_type_canonicalization.md:11:1:11:32:**
+```roc
+import ExternalModule as ExtMod
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**UNDEFINED VARIABLE**
-Nothing is named `Color` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**UNDECLARED TYPE**
+The type _Color_ is not declared in this scope.
+
+This type is referenced here:
 **qualified_type_canonicalization.md:15:19:15:24:**
 ```roc
 simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
@@ -191,23 +214,6 @@ simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
 
 **Compiler Diagnostic**
 Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0**
-
-**UNDEFINED VARIABLE**
-Nothing is named `DataType` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**qualified_type_canonicalization.md:19:26:19:35:**
-```roc
-aliasedQualified = ExtMod.DataType.Default
-```
-                         ^^^^^^^^^
-
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
@@ -224,31 +230,19 @@ multiLevelQualified = TypeC.new
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0**
 
-**COMPILER DIAGNOSTIC**
+**UNDECLARED TYPE**
+The type _Color_ is not declared in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'type_not_exposed' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0**
-
-**UNDEFINED VARIABLE**
-Nothing is named `Color` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+This type is referenced here:
 **qualified_type_canonicalization.md:31:16:31:21:**
 ```roc
 getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
 ```
                ^^^^^
 
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'type_not_exposed' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0**
 
 **UNUSED VARIABLE**
 Variable `color` is not used anywhere in your code.
@@ -265,25 +259,13 @@ processColor = |color|
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0**
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'type_not_exposed' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0**
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
 Diagnostic type 'module_not_imported' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0**
 
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
@@ -501,16 +483,23 @@ transform = |result|
 (can-ir
 	(d-let
 		(p-assign @15.1-15.16 (ident "simpleQualified"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-runtime-error (tag "undeclared_type"))
 		(annotation @15.1-15.16
 			(declared-type
-				(ty-malformed @14.19-14.28))))
+				(ty-lookup-external @14.19-14.28
+					(module-idx "0")
+					(target-node-idx "0")))))
 	(d-let
 		(p-assign @19.1-19.17 (ident "aliasedQualified"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-nominal-external @19.20-19.43
+			(module-idx "2")
+			(target-node-idx "0")
+			(e-tag @19.20-19.43 (name "Default")))
 		(annotation @19.1-19.17
 			(declared-type
-				(ty-malformed @18.20-18.35))))
+				(ty-lookup-external @18.20-18.35
+					(module-idx "2")
+					(target-node-idx "0")))))
 	(d-let
 		(p-assign @23.1-23.20 (ident "multiLevelQualified"))
 		(e-runtime-error (tag "ident_not_in_scope"))
@@ -519,7 +508,7 @@ transform = |result|
 				(ty-malformed @22.23-22.44))))
 	(d-let
 		(p-assign @27.1-27.11 (ident "resultType"))
-		(e-nominal @27.14-27.20 (nominal "<malformed>")
+		(e-nominal @27.14-27.23 (nominal "<malformed>")
 			(e-tag @27.14-27.23 (name "Ok")
 				(args
 					(e-int @27.24-27.26 (value "42")))))
@@ -531,12 +520,14 @@ transform = |result|
 		(e-lambda @31.12-31.49
 			(args
 				(p-underscore @31.13-31.14))
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-runtime-error (tag "undeclared_type")))
 		(annotation @31.1-31.9
 			(declared-type
 				(ty-fn @30.12-30.27 (effectful false)
 					(ty-record @30.12-30.14)
-					(ty-malformed @30.18-30.27)))))
+					(ty-lookup-external @30.18-30.27
+						(module-idx "0")
+						(target-node-idx "0"))))))
 	(d-let
 		(p-assign @35.1-35.13 (ident "processColor"))
 		(e-lambda @35.16-36.22
@@ -547,7 +538,9 @@ transform = |result|
 		(annotation @35.1-35.13
 			(declared-type
 				(ty-fn @34.16-34.32 (effectful false)
-					(ty-malformed @34.16-34.25)
+					(ty-lookup-external @34.16-34.25
+						(module-idx "0")
+						(target-node-idx "0"))
 					(ty @34.29-34.32 (name "Str"))))))
 	(d-let
 		(p-assign @40.1-40.10 (ident "transform"))
@@ -605,9 +598,9 @@ transform = |result|
 		(patt @40.1-40.10 (type "Error -> Error")))
 	(expressions
 		(expr @15.19-15.24 (type "Error"))
-		(expr @19.26-19.35 (type "Error"))
+		(expr @19.20-19.43 (type "Error"))
 		(expr @23.23-23.32 (type "Error"))
-		(expr @27.14-27.20 (type "Error"))
+		(expr @27.14-27.23 (type "Error"))
 		(expr @31.12-31.49 (type "{  } -> Error"))
 		(expr @35.16-36.22 (type "Error -> Str"))
 		(expr @40.13-44.6 (type "Error -> Error"))))

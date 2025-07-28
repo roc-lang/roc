@@ -789,6 +789,10 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                 },
             }
         },
+        .e_nominal_external => |_| {
+            // TODO: Copy type from other module, then do same logic as regular
+            // nominal type checking
+        },
         .e_zero_argument_tag => |_| {},
         .e_binop => |binop| {
             does_fx = try self.checkBinopExpr(expr_idx, expr_region, binop);

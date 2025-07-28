@@ -23,14 +23,14 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_032.md:3:24:3:25
 IMPORT MUST BE TOP LEVEL - fuzz_crash_032.md:6:18:6:24
 UNEXPECTED TOKEN IN PATTERN - fuzz_crash_032.md:9:21:9:22
 PARSE ERROR - fuzz_crash_032.md:9:22:9:22
-UNDEFINED VARIABLE - fuzz_crash_032.md:3:14:3:17
+UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:3:14:3:17
 UNDECLARED TYPE - fuzz_crash_032.md:3:21:3:24
 INVALID STATEMENT - fuzz_crash_032.md:3:24:3:25
 INVALID STATEMENT - fuzz_crash_032.md:3:26:3:45
 NOT IMPLEMENTED - :0:0:0:0
-UNDEFINED VARIABLE - fuzz_crash_032.md:6:25:6:30
+UNDECLARED TYPE - fuzz_crash_032.md:6:25:6:30
 INVALID PATTERN - :0:0:0:0
-UNDEFINED VARIABLE - fuzz_crash_032.md:10:3:10:4
+UNDECLARED TYPE - fuzz_crash_032.md:10:3:10:4
 EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:13:1:14
 EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:9:1:12
 # PROBLEMS
@@ -82,10 +82,12 @@ Green => LocalStatus-Complete
                      
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `lue` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNDECLARED TYPE VARIABLE**
+The type variable _lue_ is not declared in this scope.
 
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
 **fuzz_crash_032.md:3:14:3:17:**
 ```roc
 LocalStatus :lue => Loc= [Pending, Complete]
@@ -131,10 +133,10 @@ This feature is not yet implemented: statement type in block
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
-**UNDEFINED VARIABLE**
-Nothing is named `Color` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNDECLARED TYPE**
+The type _Color_ is not declared in this scope.
 
+This type is referenced here:
 **fuzz_crash_032.md:6:25:6:30:**
 ```roc
 olor = |color| { import Color.RGB
@@ -145,10 +147,10 @@ olor = |color| { import Color.RGB
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
 
-**UNDEFINED VARIABLE**
-Nothing is named `B` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNDECLARED TYPE**
+The type _B_ is not declared in this scope.
 
+This type is referenced here:
 **fuzz_crash_032.md:10:3:10:4:**
 ```roc
   B.Blue => LocalStatus.Pending
@@ -267,7 +269,7 @@ olor = |color| {
 				(p-assign @6.9-6.14 (ident "color")))
 			(e-block @6.16-12.2
 				(s-expr @6.25-6.34
-					(e-runtime-error (tag "ident_not_in_scope")))
+					(e-runtime-error (tag "undeclared_type")))
 				(e-match @8.5-11.6
 					(match @8.5-11.6
 						(cond
@@ -279,7 +281,7 @@ olor = |color| {
 									(pattern (degenerate false)
 										(p-applied-tag @8.19-8.22)))
 								(value
-									(e-nominal @8.26-8.37 (nominal "<malformed>")
+									(e-nominal @8.26-8.45 (nominal "<malformed>")
 										(e-tag @8.26-8.45 (name "Pending")))))
 							(branch
 								(patterns
@@ -296,9 +298,9 @@ olor = |color| {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-runtime-error @10.3-10.4 (tag "ident_not_in_scope"))))
+										(p-runtime-error @10.3-10.4 (tag "undeclared_type"))))
 								(value
-									(e-nominal @10.13-10.24 (nominal "<malformed>")
+									(e-nominal @10.13-10.32 (nominal "<malformed>")
 										(e-tag @10.13-10.32 (name "Pending"))))))))))
 		(annotation @6.1-6.5
 			(declared-type
@@ -317,7 +319,7 @@ olor = |color| {
 	(defs
 		(patt @6.1-6.5 (type "Error -> Error")))
 	(type_decls
-		(alias @3.1-3.24 (type "LocalStatus")
+		(alias @3.1-3.24 (type "Error")
 			(ty-header @3.1-3.12 (name "LocalStatus"))))
 	(expressions
 		(expr @6.8-12.2 (type "Error -> Error"))))

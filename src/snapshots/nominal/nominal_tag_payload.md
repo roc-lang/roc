@@ -20,19 +20,19 @@ some2 = |a| Maybe.Some(a)
 none2 = Maybe.None
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_tag_payload.md:6:13:6:18
+TYPE MISMATCH - nominal_tag_payload.md:6:13:6:23
 INVALID NOMINAL TAG - nominal_tag_payload.md:6:13:6:13
-TYPE MISMATCH - nominal_tag_payload.md:9:9:9:14
-TYPE MISMATCH - nominal_tag_payload.md:11:13:11:18
-TYPE MISMATCH - nominal_tag_payload.md:13:9:13:14
+TYPE MISMATCH - nominal_tag_payload.md:9:9:9:19
+TYPE MISMATCH - nominal_tag_payload.md:11:13:11:23
+TYPE MISMATCH - nominal_tag_payload.md:13:9:13:19
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**nominal_tag_payload.md:6:13:6:18:**
+**nominal_tag_payload.md:6:13:6:23:**
 ```roc
 some1 = |a| Maybe.Some(a)
 ```
-            ^^^^^
+            ^^^^^^^^^^
 
 It is of type:
     _Maybe(a)_
@@ -56,11 +56,11 @@ But it should be one of:
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**nominal_tag_payload.md:9:9:9:14:**
+**nominal_tag_payload.md:9:9:9:19:**
 ```roc
 none1 = Maybe.None
 ```
-        ^^^^^
+        ^^^^^^^^^^
 
 It is of type:
     _Maybe(a)_
@@ -70,11 +70,11 @@ But you are trying to use it as:
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**nominal_tag_payload.md:11:13:11:18:**
+**nominal_tag_payload.md:11:13:11:23:**
 ```roc
 some2 = |a| Maybe.Some(a)
 ```
-            ^^^^^
+            ^^^^^^^^^^
 
 It is of type:
     _Maybe(a)_
@@ -84,11 +84,11 @@ But you are trying to use it as:
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**nominal_tag_payload.md:13:9:13:14:**
+**nominal_tag_payload.md:13:9:13:19:**
 ```roc
 none2 = Maybe.None
 ```
-        ^^^^^
+        ^^^^^^^^^^
 
 It is of type:
     _Maybe(a)_
@@ -177,7 +177,7 @@ NO CHANGE
 		(e-lambda @6.9-6.26
 			(args
 				(p-assign @6.10-6.11 (ident "a")))
-			(e-nominal @6.13-6.18 (nominal "Maybe")
+			(e-nominal @6.13-6.23 (nominal "Maybe")
 				(e-tag @6.13-6.23 (name "Some")
 					(args
 						(e-lookup-local @6.24-6.25
@@ -190,7 +190,7 @@ NO CHANGE
 						(ty-var @5.20-5.21 (name "a")))))))
 	(d-let
 		(p-assign @9.1-9.6 (ident "none1"))
-		(e-nominal @9.9-9.14 (nominal "Maybe")
+		(e-nominal @9.9-9.19 (nominal "Maybe")
 			(e-tag @9.9-9.19 (name "None")))
 		(annotation @9.1-9.6
 			(declared-type
@@ -201,14 +201,14 @@ NO CHANGE
 		(e-lambda @11.9-11.26
 			(args
 				(p-assign @11.10-11.11 (ident "a")))
-			(e-nominal @11.13-11.18 (nominal "Maybe")
+			(e-nominal @11.13-11.23 (nominal "Maybe")
 				(e-tag @11.13-11.23 (name "Some")
 					(args
 						(e-lookup-local @11.24-11.25
 							(p-assign @11.10-11.11 (ident "a"))))))))
 	(d-let
 		(p-assign @13.1-13.6 (ident "none2"))
-		(e-nominal @13.9-13.14 (nominal "Maybe")
+		(e-nominal @13.9-13.19 (nominal "Maybe")
 			(e-tag @13.9-13.19 (name "None"))))
 	(s-nominal-decl @3.1-3.28
 		(ty-header @3.1-3.9 (name "Maybe")
@@ -234,7 +234,7 @@ NO CHANGE
 					(ty-var @3.7-3.8 (name "a"))))))
 	(expressions
 		(expr @6.9-6.26 (type "a -> Error"))
-		(expr @9.9-9.14 (type "Error"))
+		(expr @9.9-9.19 (type "Error"))
 		(expr @11.9-11.26 (type "_arg -> Error"))
-		(expr @13.9-13.14 (type "Error"))))
+		(expr @13.9-13.19 (type "Error"))))
 ~~~

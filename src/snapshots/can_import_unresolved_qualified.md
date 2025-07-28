@@ -34,11 +34,34 @@ client = Http.invalidMethod
 parser = Json.Parser.Advanced.NonExistent.create
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_unresolved_qualified.md:0:0:0:0
+MODULE NOT FOUND - can_import_unresolved_qualified.md:3:1:3:17
+MODULE NOT FOUND - can_import_unresolved_qualified.md:4:1:4:27
 COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_unresolved_qualified.md:0:0:0:0
 COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_unresolved_qualified.md:0:0:0:0
 UNUSED VARIABLE - can_import_unresolved_qualified.md:15:19:15:22
 # PROBLEMS
+**MODULE NOT FOUND**
+The module `json.Json` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_unresolved_qualified.md:3:1:3:17:**
+```roc
+import json.Json
+```
+^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `http.Client` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_unresolved_qualified.md:4:1:4:27:**
+```roc
+import http.Client as Http
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
@@ -48,13 +71,7 @@ Diagnostic type 'module_not_imported' is not yet handled in report generation.
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_unresolved_qualified.md:0:0:0:0**
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_unresolved_qualified.md:0:0:0:0**
 
 **UNUSED VARIABLE**
@@ -185,7 +202,9 @@ parser = Json.create
 		(annotation @11.1-11.10
 			(declared-type
 				(ty-fn @10.13-10.36 (effectful false)
-					(ty-malformed @10.13-10.29)
+					(ty-lookup-external @10.13-10.29
+						(module-idx "0")
+						(target-node-idx "0"))
 					(ty @10.33-10.36 (name "Str"))))))
 	(d-let
 		(p-assign @15.1-15.15 (ident "processRequest"))

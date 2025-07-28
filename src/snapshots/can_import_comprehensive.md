@@ -42,9 +42,43 @@ main = {
 }
 ~~~
 # EXPECTED
-NIL
+MODULE NOT FOUND - can_import_comprehensive.md:3:1:3:17
+MODULE NOT FOUND - can_import_comprehensive.md:4:1:4:48
+MODULE NOT FOUND - can_import_comprehensive.md:5:1:5:27
 # PROBLEMS
-NIL
+**MODULE NOT FOUND**
+The module `json.Json` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_comprehensive.md:3:1:3:17:**
+```roc
+import json.Json
+```
+^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `http.Client` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_comprehensive.md:4:1:4:48:**
+```roc
+import http.Client as Http exposing [get, post]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `utils.String` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_comprehensive.md:5:1:5:27:**
+```roc
+import utils.String as Str
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),

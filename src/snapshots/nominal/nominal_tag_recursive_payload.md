@@ -13,15 +13,15 @@ empty : ConsList(_a)
 empty = ConsList.Nil
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_tag_recursive_payload.md:6:9:6:17
+TYPE MISMATCH - nominal_tag_recursive_payload.md:6:9:6:21
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**nominal_tag_recursive_payload.md:6:9:6:17:**
+**nominal_tag_recursive_payload.md:6:9:6:21:**
 ```roc
 empty = ConsList.Nil
 ```
-        ^^^^^^^^
+        ^^^^^^^^^^^^
 
 It is of type:
     _ConsList(a)_
@@ -74,7 +74,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.6 (ident "empty"))
-		(e-nominal @6.9-6.17 (nominal "ConsList")
+		(e-nominal @6.9-6.21 (nominal "ConsList")
 			(e-tag @6.9-6.21 (name "Nil")))
 		(annotation @6.1-6.6
 			(declared-type
@@ -101,5 +101,5 @@ NO CHANGE
 				(ty-args
 					(ty-var @3.10-3.11 (name "a"))))))
 	(expressions
-		(expr @6.9-6.17 (type "Error"))))
+		(expr @6.9-6.21 (type "Error"))))
 ~~~

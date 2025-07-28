@@ -12,7 +12,7 @@ module[]C:k||match 0{0|#
 # EXPECTED
 UNCLOSED STRING - :0:0:0:0
 PARSE ERROR - fuzz_crash_060.md:2:2:2:2
-UNDEFINED VARIABLE - fuzz_crash_060.md:1:11:1:12
+UNDECLARED TYPE VARIABLE - fuzz_crash_060.md:1:11:1:12
 INVALID STATEMENT - fuzz_crash_060.md:1:12:3:2
 # PROBLEMS
 **UNCLOSED STRING**
@@ -30,10 +30,12 @@ Here is the problematic code:
  
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `k` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNDECLARED TYPE VARIABLE**
+The type variable _k_ is not declared in this scope.
 
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
 **fuzz_crash_060.md:1:11:1:12:**
 ```roc
 module[]C:k||match 0{0|#

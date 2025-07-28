@@ -894,6 +894,67 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             break :blk report;
         },
+        .type_not_exposed => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "TYPE NOT EXPOSED", .runtime_error);
+
+            const type_name_bytes = self.idents.getText(data.type_name);
+            const type_name = try report.addOwnedString(type_name_bytes);
+
+            const module_name_bytes = self.idents.getText(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            // Format the message to match origin/main
+            try report.document.addText("The type ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" is not an exposed by the module ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting to use this type here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
+            break :blk report;
+        },
+        .module_not_found => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MODULE NOT FOUND", .runtime_error);
+
+            const module_name_bytes = self.idents.getText(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            // Format the message to match origin/main
+            try report.document.addText("The module ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(" was not found in this Roc project.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting to use this module here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
+            break :blk report;
+        },
         else => {
             // For unhandled diagnostics, create a generic report
             const diagnostic_name = @tagName(diagnostic);
@@ -1049,6 +1110,16 @@ pub fn addExprAndTypeVar(self: *Self, expr: Expr, content: types_mod.Content, re
     const expr_idx = try self.store.addExpr(expr, region);
     const expr_var = try self.types.freshFromContent(content);
     debugAssertIdxsEql("addExprAndTypeVar", expr_idx, expr_var);
+    self.debugAssertArraysInSync();
+    return expr_idx;
+}
+
+/// Add a new expression and type variable.
+/// This function asserts that the types array and the nodes are in sync.
+pub fn addExprAndTypeVarRedirect(self: *Self, expr: Expr, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!Expr.Idx {
+    const expr_idx = try self.store.addExpr(expr, region);
+    const expr_var = try self.types.freshRedirect(redirect_to);
+    debugAssertIdxsEql("addExprAndTypeVarRedirect", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }

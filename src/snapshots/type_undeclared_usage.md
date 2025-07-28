@@ -36,7 +36,7 @@ MyType : UnknownType
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/type_undeclared_usage.md:0:0:0:0**
 
 **UNDECLARED TYPE**

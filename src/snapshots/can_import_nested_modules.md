@@ -40,7 +40,9 @@ PARSE ERROR - can_import_nested_modules.md:5:1:5:7
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:13:5:20
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:20:5:27
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:28:5:36
+MODULE NOT FOUND - can_import_nested_modules.md:3:1:3:19
 INVALID STATEMENT - can_import_nested_modules.md:3:19:3:26
+MODULE NOT FOUND - can_import_nested_modules.md:4:1:4:19
 INVALID STATEMENT - can_import_nested_modules.md:4:19:4:24
 INVALID STATEMENT - can_import_nested_modules.md:4:25:4:27
 INVALID STATEMENT - can_import_nested_modules.md:5:8:5:13
@@ -158,6 +160,17 @@ import utils.String.Format exposing [padLeft]
                            ^^^^^^^^
 
 
+**MODULE NOT FOUND**
+The module `json.Parser` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_nested_modules.md:3:1:3:19:**
+```roc
+import json.Parser.Config
+```
+^^^^^^^^^^^^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -167,6 +180,17 @@ Only definitions, type annotations, and imports are allowed at the top level.
 import json.Parser.Config
 ```
                   ^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `http.Client` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_nested_modules.md:4:1:4:19:**
+```roc
+import http.Client.Auth as HttpAuth
+```
+^^^^^^^^^^^^^^^^^^
 
 
 **INVALID STATEMENT**
@@ -249,7 +273,7 @@ import utils.String.Format exposing [padLeft]
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
@@ -266,7 +290,7 @@ parseConfig = |settings| Config.toString(settings)
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
@@ -283,13 +307,13 @@ authenticate = |user, pass| HttpAuth.login(user, pass)
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0**
 
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**
@@ -328,19 +352,19 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0**
 
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0**
 
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**

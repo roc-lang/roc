@@ -104,7 +104,7 @@ pub fn deinit(store: *NodeStore) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 44;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 30;
+pub const MODULEENV_EXPR_NODE_COUNT = 31;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 13;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -436,6 +436,24 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             return ModuleEnv.Expr{
                 .e_nominal = .{
                     .nominal_type_decl = nominal_type_decl,
+                    .backing_expr = backing_expr,
+                    .backing_type = backing_type,
+                },
+            };
+        },
+        .expr_nominal_external => {
+            const module_idx: ModuleEnv.Import.Idx = @enumFromInt(node.data_1);
+            const target_node_idx: u16 = @intCast(node.data_2);
+
+            const extra_data_idx = node.data_3;
+            const extra_data = store.extra_data.items.items[extra_data_idx..][0..2];
+            const backing_expr: ModuleEnv.Expr.Idx = @enumFromInt(extra_data[0]);
+            const backing_type: ModuleEnv.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
+
+            return ModuleEnv.Expr{
+                .e_nominal_external = .{
+                    .module_idx = module_idx,
+                    .target_node_idx = target_node_idx,
                     .backing_expr = backing_expr,
                     .backing_type = backing_type,
                 },
@@ -1308,6 +1326,14 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
             node.data_1 = @intFromEnum(e.nominal_type_decl);
             node.data_2 = @intFromEnum(e.backing_expr);
             node.data_3 = @intFromEnum(e.backing_type);
+        },
+        .e_nominal_external => |e| {
+            node.tag = .expr_nominal_external;
+            node.data_1 = @intFromEnum(e.module_idx);
+            node.data_2 = @intCast(e.target_node_idx);
+            node.data_3 = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.backing_expr));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.backing_type));
         },
         .e_dot_access => |e| {
             node.tag = .expr_dot_access;

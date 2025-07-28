@@ -20,6 +20,7 @@ green = Green
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - nominal_import_wildcard.md:3:13:3:15
+MODULE NOT FOUND - nominal_import_wildcard.md:3:1:3:13
 INVALID STATEMENT - nominal_import_wildcard.md:3:13:3:15
 UNDECLARED TYPE - nominal_import_wildcard.md:5:7:5:12
 UNDECLARED TYPE - nominal_import_wildcard.md:8:8:8:13
@@ -35,6 +36,17 @@ Here is the problematic code:
 import Color.*
 ```
             ^^
+
+
+**MODULE NOT FOUND**
+The module `Color` was not found in this Roc project.
+
+You're attempting to use this module here:
+**nominal_import_wildcard.md:3:1:3:13:**
+```roc
+import Color.*
+```
+^^^^^^^^^^^^
 
 
 **INVALID STATEMENT**

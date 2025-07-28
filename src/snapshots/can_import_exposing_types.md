@@ -64,6 +64,9 @@ combineResults = |jsonResult, httpStatus|
 UNDECLARED TYPE - can_import_exposing_types.md:31:18:31:24
 UNDECLARED TYPE - can_import_exposing_types.md:32:18:32:24
 UNDECLARED TYPE - can_import_exposing_types.md:33:23:33:31
+MODULE NOT FOUND - can_import_exposing_types.md:3:1:3:49
+MODULE NOT FOUND - can_import_exposing_types.md:4:1:4:64
+MODULE NOT FOUND - can_import_exposing_types.md:5:1:5:38
 UNDECLARED TYPE - can_import_exposing_types.md:8:27:8:32
 UNDECLARED TYPE - can_import_exposing_types.md:8:34:8:39
 UNDECLARED TYPE - can_import_exposing_types.md:12:17:12:24
@@ -74,7 +77,6 @@ UNDECLARED TYPE - can_import_exposing_types.md:22:50:22:55
 UNDECLARED TYPE - can_import_exposing_types.md:22:58:22:63
 UNDEFINED VARIABLE - can_import_exposing_types.md:24:5:24:16
 UNDECLARED TYPE - can_import_exposing_types.md:37:16:37:22
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_exposing_types.md:0:0:0:0
 UNDECLARED TYPE - can_import_exposing_types.md:41:18:41:26
 UNDEFINED VARIABLE - can_import_exposing_types.md:45:23:45:37
 UNDECLARED TYPE - can_import_exposing_types.md:49:25:49:30
@@ -114,6 +116,39 @@ This type is referenced here:
     defaultResponse : Response,
 ```
                       ^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `json.Json` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_exposing_types.md:3:1:3:49:**
+```roc
+import json.Json exposing [Value, Error, Config]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `http.Client` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_exposing_types.md:4:1:4:64:**
+```roc
+import http.Client as Http exposing [Request, Response, Status]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `utils.Result` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_exposing_types.md:5:1:5:38:**
+```roc
+import utils.Result exposing [Result]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -225,12 +260,6 @@ createClient : Config -> Http.Client
 ```
                ^^^^^^
 
-
-**COMPILER DIAGNOSTIC**
-
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_exposing_types.md:0:0:0:0**
 
 **UNDECLARED TYPE**
 The type _Response_ is not declared in this scope.
@@ -713,13 +742,15 @@ combineResults = |jsonResult, httpStatus|
 			(declared-type
 				(ty-fn @37.16-37.37 (effectful false)
 					(ty @37.16-37.22 (name "Config"))
-					(ty-malformed @37.26-37.37)))))
+					(ty-lookup-external @37.26-37.37
+						(module-idx "1")
+						(target-node-idx "0"))))))
 	(d-let
 		(p-assign @42.1-42.15 (ident "handleResponse"))
 		(e-closure @42.18-46.6
 			(captures
-				(capture @45.13-45.18 (ident "error"))
-				(capture @44.12-44.18 (ident "status")))
+				(capture @44.12-44.18 (ident "status"))
+				(capture @45.13-45.18 (ident "error")))
 			(e-lambda @42.18-46.6
 				(args
 					(p-assign @42.19-42.27 (ident "response")))

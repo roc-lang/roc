@@ -670,7 +670,7 @@ is_named_color = |str| {
 				(p-assign @18.8-18.9 (ident "r"))
 				(p-assign @18.11-18.12 (ident "g"))
 				(p-assign @18.14-18.15 (ident "b")))
-			(e-nominal @18.17-18.22 (nominal "Color")
+			(e-nominal @18.17-18.26 (nominal "Color")
 				(e-tag @18.17-18.26 (name "RGB")
 					(args
 						(e-lookup-local @18.27-18.28
@@ -704,7 +704,7 @@ is_named_color = |str| {
 									(p-assign @21.18-21.19 (ident "a"))))
 							(args))
 						(e-dec-small @22.29-22.34 (numerator "2550") (denominator-power-of-ten "1") (value "255"))))
-				(e-nominal @23.5-23.10 (nominal "Color")
+				(e-nominal @23.5-23.15 (nominal "Color")
 					(e-tag @23.5-23.15 (name "RGBA")
 						(args
 							(e-lookup-local @23.16-23.17
@@ -843,7 +843,7 @@ is_named_color = |str| {
 															(p-assign @34.13-34.21 (ident "is_valid")))
 														(e-tag @42.25-42.27 (name "Ok")
 															(args
-																(e-nominal @42.28-42.33 (nominal "Color")
+																(e-nominal @42.28-42.37 (nominal "Color")
 																	(e-tag @42.28-42.37 (name "Hex")
 																		(args
 																			(e-lookup-local @42.38-42.41
@@ -998,7 +998,7 @@ is_named_color = |str| {
 							(args))
 						(e-tag @63.9-63.11 (name "Ok")
 							(args
-								(e-nominal @63.12-63.17 (nominal "Color")
+								(e-nominal @63.12-63.23 (nominal "Color")
 									(e-tag @63.12-63.23 (name "Named")
 										(args
 											(e-lookup-local @63.24-63.27

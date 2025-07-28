@@ -26,6 +26,7 @@ UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:3:23:3:31
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:12:14:17
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:17:14:22
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:22:14:29
+MODULE NOT FOUND - multi_qualified_import.md:3:1:3:17
 INVALID STATEMENT - multi_qualified_import.md:3:17:3:22
 INVALID STATEMENT - multi_qualified_import.md:3:23:3:31
 INVALID STATEMENT - multi_qualified_import.md:3:32:3:41
@@ -100,6 +101,17 @@ data = json.Core.Utf8.encode("hello")
                      ^^^^^^^
 
 
+**MODULE NOT FOUND**
+The module `json.Core` was not found in this Roc project.
+
+You're attempting to use this module here:
+**multi_qualified_import.md:3:1:3:17:**
+```roc
+import json.Core.Utf8 exposing [Encoder]
+```
+^^^^^^^^^^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -158,7 +170,7 @@ json_encoder = Json.Core.Utf8.defaultEncoder
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/multi_qualified_import.md:0:0:0:0**
 
 **UNUSED VARIABLE**
@@ -176,7 +188,7 @@ process = |encoder| "processing"
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
-Diagnostic type 'module_not_found' is not yet handled in report generation.
+Diagnostic type 'module_not_imported' is not yet handled in report generation.
 **/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/multi_qualified_import.md:0:0:0:0**
 
 **UNDEFINED VARIABLE**

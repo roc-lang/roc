@@ -18,21 +18,26 @@ handleResult = |result| {
 }
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/nominal/nominal_external_fully_qualified.md:0:0:0:0
-UNDEFINED VARIABLE - nominal_external_fully_qualified.md:8:23:8:36
-UNDEFINED VARIABLE - nominal_external_fully_qualified.md:9:23:9:36
+MODULE NOT FOUND - nominal_external_fully_qualified.md:3:1:3:22
+UNDECLARED TYPE - nominal_external_fully_qualified.md:8:23:8:36
+UNDECLARED TYPE - nominal_external_fully_qualified.md:9:23:9:36
 UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**MODULE NOT FOUND**
+The module `MyResultModule` was not found in this Roc project.
 
-**Compiler Diagnostic**
-Diagnostic type 'type_not_exposed' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/nominal/nominal_external_fully_qualified.md:0:0:0:0**
+You're attempting to use this module here:
+**nominal_external_fully_qualified.md:3:1:3:22:**
+```roc
+import MyResultModule
+```
+^^^^^^^^^^^^^^^^^^^^^
 
-**UNDEFINED VARIABLE**
-Nothing is named `MyResultType` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
+**UNDECLARED TYPE**
+The type _MyResultType_ is not declared in this scope.
+
+This type is referenced here:
 **nominal_external_fully_qualified.md:8:23:8:36:**
 ```roc
         MyResultModule.MyResultType.Ok(value) => value
@@ -40,10 +45,10 @@ Is there an `import` or `exposing` missing up-top?
                       ^^^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `MyResultType` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNDECLARED TYPE**
+The type _MyResultType_ is not declared in this scope.
 
+This type is referenced here:
 **nominal_external_fully_qualified.md:9:23:9:36:**
 ```roc
         MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
@@ -146,21 +151,23 @@ handleResult = |result| {
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-runtime-error @8.23-8.36 (tag "ident_not_in_scope"))))
+											(p-runtime-error @8.23-8.36 (tag "undeclared_type"))))
 									(value
 										(e-lookup-local @8.50-8.55
 											(p-assign @8.40-8.45 (ident "value")))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-runtime-error @9.23-9.36 (tag "ident_not_in_scope"))))
+											(p-runtime-error @9.23-9.36 (tag "undeclared_type"))))
 									(value
 										(e-string @9.50-9.74
 											(e-literal @9.51-9.73 (string "Error: $(code.toStr())")))))))))))
 		(annotation @6.1-6.13
 			(declared-type
 				(ty-fn @5.16-5.60 (effectful false)
-					(ty-malformed @5.16-5.43)
+					(ty-apply-external @5.16-5.53
+						(module-idx "0")
+						(target-node-idx "0"))
 					(ty @5.57-5.60 (name "Str"))))))
 	(s-import @3.1-3.22 (module "MyResultModule")
 		(exposes)))

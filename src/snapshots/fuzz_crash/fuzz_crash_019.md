@@ -136,11 +136,15 @@ PARSE ERROR - fuzz_crash_019.md:62:5:62:5
 PARSE ERROR - fuzz_crash_019.md:63:7:63:7
 PARSE ERROR - fuzz_crash_019.md:66:12:66:12
 UNDECLARED TYPE - fuzz_crash_019.md:13:13:13:16
-UNDEFINED VARIABLE - fuzz_crash_019.md:13:19:13:21
-UNDEFINED VARIABLE - fuzz_crash_019.md:19:4:19:6
-UNDEFINED VARIABLE - fuzz_crash_019.md:20:12:20:13
+UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:13:19:13:21
+UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:19:4:19:6
+UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:20:12:20:13
 UNDECLARED TYPE - fuzz_crash_019.md:24:15:24:16
-UNDEFINED VARIABLE - fuzz_crash_019.md:24:24:24:25
+UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:24:24:24:25
+MODULE NOT FOUND - fuzz_crash_019.md:4:1:4:34
+MODULE NOT FOUND - fuzz_crash_019.md:6:1:8:6
+MODULE NOT FOUND - fuzz_crash_019.md:10:1:10:19
+MODULE NOT FOUND - fuzz_crash_019.md:11:1:12:4
 UNDECLARED TYPE - fuzz_crash_019.md:37:7:37:9
 UNDEFINED VARIABLE - fuzz_crash_019.md:42:4:42:5
 UNDEFINED VARIABLE - fuzz_crash_019.md:42:6:42:10
@@ -279,10 +283,12 @@ Map(a, b) : Lis, (ab) -> List(b)
             ^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `ab` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNDECLARED TYPE VARIABLE**
+The type variable _ab_ is not declared in this scope.
 
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
 **fuzz_crash_019.md:13:19:13:21:**
 ```roc
 Map(a, b) : Lis, (ab) -> List(b)
@@ -290,10 +296,12 @@ Map(a, b) : Lis, (ab) -> List(b)
                   ^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `ab` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNDECLARED TYPE VARIABLE**
+The type variable _ab_ is not declared in this scope.
 
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
 **fuzz_crash_019.md:19:4:19:6:**
 ```roc
 		(ab) -> # row
@@ -301,10 +309,12 @@ Is there an `import` or `exposing` missing up-top?
    ^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNDECLARED TYPE VARIABLE**
+The type variable _b_ is not declared in this scope.
 
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
 **fuzz_crash_019.md:20:12:20:13:**
 ```roc
 			List(			b	) #z)
@@ -323,15 +333,62 @@ Som : { foo : O, bar : g }
               ^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `g` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNDECLARED TYPE VARIABLE**
+The type variable _g_ is not declared in this scope.
 
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
 **fuzz_crash_019.md:24:24:24:25:**
 ```roc
 Som : { foo : O, bar : g }
 ```
                        ^
+
+
+**MODULE NOT FOUND**
+The module `pf.Stdout` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_019.md:4:1:4:34:**
+```roc
+import pf.Stdout exposing [line!]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Stdot` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_019.md:6:1:8:6:**
+```roc
+import Stdot
+		exposing [ #tem
+Cust]
+```
+
+
+**MODULE NOT FOUND**
+The module `Bae` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_019.md:10:1:10:19:**
+```roc
+import Bae as Gooe
+```
+^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Ba` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_019.md:11:1:12:4:**
+```roc
+import
+	Ba
+```
 
 
 **UNDECLARED TYPE**
@@ -1567,8 +1624,8 @@ expect {
 		(p-assign @75.1-75.3 (ident "ma"))
 		(e-closure @75.5-111.2
 			(captures
-				(capture @97.2-97.3 (ident "t"))
-				(capture @49.1-49.3 (ident "me")))
+				(capture @49.1-49.3 (ident "me"))
+				(capture @97.2-97.3 (ident "t")))
 			(e-lambda @75.5-111.2
 				(args
 					(p-underscore @75.6-75.7))
