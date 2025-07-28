@@ -8,7 +8,7 @@ const types = @import("types");
 const parse = @import("parse");
 const compile = @import("compile");
 
-const instantiate = @import("instantiate.zig");
+const instantiate = @import("../check_types/instantiate.zig");
 const check_types = @import("../check_types.zig");
 
 const TypesStore = types.Store;

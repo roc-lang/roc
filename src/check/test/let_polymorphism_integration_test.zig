@@ -7,7 +7,7 @@ const parse = @import("parse");
 const Can = @import("can");
 const compile = @import("compile");
 
-const check_types = @import("check_types.zig");
+const check_types = @import("../check_types.zig");
 
 const testing = std.testing;
 const ModuleEnv = compile.ModuleEnv;

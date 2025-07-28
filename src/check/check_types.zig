@@ -1998,5 +1998,9 @@ test "call site unification order matters for concrete vs flexible types" {
 }
 
 test {
-    _ = @import("check_types/cross_module_test.zig");
+    _ = @import("test/cross_module_test.zig");
+    _ = @import("test/let_polymorphism_integration_test.zig");
+    _ = @import("test/let_polymorphism_test.zig");
+    _ = @import("test/literal_size_test.zig");
+    _ = @import("test/test_rigid_instantiation.zig");
 }

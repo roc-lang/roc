@@ -6,10 +6,10 @@ const types_mod = @import("types");
 const compile = @import("compile");
 
 const check_types = @import("../check_types.zig");
-const unifier = @import("unify.zig");
-const problem = @import("problem.zig");
-const snapshot = @import("snapshot.zig");
-const occurs = @import("occurs.zig");
+const unifier = @import("../check_types/unify.zig");
+const problem = @import("../check_types/problem.zig");
+const snapshot = @import("../check_types/snapshot.zig");
+const occurs = @import("../check_types/occurs.zig");
 
 const testing = std.testing;
 const ModuleEnv = compile.ModuleEnv;

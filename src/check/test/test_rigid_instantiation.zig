@@ -7,7 +7,8 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const instantiate = @import("./instantiate.zig");
+
+const instantiate = @import("../check_types/instantiate.zig");
 
 const Store = types.Store;
 
