@@ -478,8 +478,6 @@ pub const Diagnostic = struct {
         InvalidUnicodeEscapeSequence,
         InvalidEscapeSequence,
         UnclosedString,
-        OverClosedBrace,
-        MismatchedBrace,
         NonPrintableUnicodeInStrLiteral,
         InvalidUtf8InSource,
     };
@@ -998,15 +996,6 @@ pub const TokenOutput = struct {
     extra_messages_dropped: usize,
 };
 
-const BraceKind = union(enum) {
-    round,
-    square,
-    curly,
-    string_interpolation: StringKind,
-
-    const List = collections.SafeList(@This());
-};
-
 const StringKind = enum {
     single_line,
     multi_line,
@@ -1016,7 +1005,7 @@ const StringKind = enum {
 pub const Tokenizer = struct {
     cursor: Cursor,
     output: TokenizedBuffer,
-    stack: std.ArrayListUnmanaged(BraceKind),
+    string_interpolation_stack: std.ArrayListUnmanaged(StringKind),
     env: *ModuleEnv,
 
     /// Creates a new Tokenizer.
@@ -1029,18 +1018,18 @@ pub const Tokenizer = struct {
         return Tokenizer{
             .cursor = cursor,
             .output = output,
-            .stack = .{},
+            .string_interpolation_stack = .{},
             .env = env,
         };
     }
 
     pub fn deinit(self: *Tokenizer) void {
         self.output.deinit();
-        self.stack.deinit(self.env.gpa);
+        self.string_interpolation_stack.deinit(self.env.gpa);
     }
 
     pub fn finishAndDeinit(self: *Tokenizer) TokenOutput {
-        self.stack.deinit(self.env.gpa);
+        self.string_interpolation_stack.deinit(self.env.gpa);
         const actual_message_count = @min(self.cursor.message_count, self.cursor.messages.len);
         return .{
             .tokens = self.output,
@@ -1090,48 +1079,6 @@ pub const Tokenizer = struct {
                 .extra = .{ .interned = id },
                 .region = base.Region.from_raw_offsets(tok_offset, self.cursor.pos),
             });
-        }
-    }
-
-    fn consumeBraceCloseAndContinueStringInterp(self: *Tokenizer, brace: BraceKind) std.mem.Allocator.Error!void {
-        std.debug.assert(self.cursor.peek() == close_curly or self.cursor.peek() == ']' or self.cursor.peek() == ')');
-        const last = self.stack.pop();
-        if (last == null) {
-            self.cursor.pushMessageHere(.OverClosedBrace);
-            self.cursor.pos += 1;
-            return;
-        }
-        const start = self.cursor.pos;
-        switch (last.?) {
-            .round => {
-                if (brace != .round) {
-                    self.cursor.pushMessageHere(.MismatchedBrace);
-                }
-                self.cursor.pos += 1;
-                try self.pushTokenNormalHere(.CloseRound, start);
-            },
-            .square => {
-                if (brace != .square) {
-                    self.cursor.pushMessageHere(.MismatchedBrace);
-                }
-                self.cursor.pos += 1;
-                try self.pushTokenNormalHere(.CloseSquare, start);
-            },
-            .curly => {
-                if (brace != .curly) {
-                    self.cursor.pushMessageHere(.MismatchedBrace);
-                }
-                self.cursor.pos += 1;
-                try self.pushTokenNormalHere(.CloseCurly, start);
-            },
-            .string_interpolation => |kind| {
-                if (brace != .curly) {
-                    self.cursor.pushMessageHere(.MismatchedBrace);
-                }
-                self.cursor.pos += 1;
-                try self.pushTokenNormalHere(.CloseStringInterpolation, start);
-                try self.tokenizeStringLikeLiteralBody(kind);
-            },
         }
     }
 
@@ -1371,28 +1318,33 @@ pub const Tokenizer = struct {
 
                 '(' => {
                     self.cursor.pos += 1;
-                    try self.stack.append(self.env.gpa, .round);
                     try self.pushTokenNormalHere(if (sp) .OpenRound else .NoSpaceOpenRound, start);
                 },
                 '[' => {
                     self.cursor.pos += 1;
-                    try self.stack.append(self.env.gpa, .square);
                     try self.pushTokenNormalHere(.OpenSquare, start);
                 },
                 open_curly => {
                     self.cursor.pos += 1;
-                    try self.stack.append(self.env.gpa, .curly);
                     try self.pushTokenNormalHere(.OpenCurly, start);
                 },
 
                 ')' => {
-                    try self.consumeBraceCloseAndContinueStringInterp(.round);
+                    self.cursor.pos += 1;
+                    try self.pushTokenNormalHere(.CloseRound, start);
                 },
                 ']' => {
-                    try self.consumeBraceCloseAndContinueStringInterp(.square);
+                    self.cursor.pos += 1;
+                    try self.pushTokenNormalHere(.CloseSquare, start);
                 },
                 close_curly => {
-                    try self.consumeBraceCloseAndContinueStringInterp(.curly);
+                    self.cursor.pos += 1;
+                    if (self.string_interpolation_stack.pop()) |last| {
+                        try self.pushTokenNormalHere(.CloseStringInterpolation, start);
+                        try self.tokenizeStringLikeLiteralBody(last);
+                    } else {
+                        try self.pushTokenNormalHere(.CloseCurly, start);
+                    }
                 },
 
                 '_' => {
@@ -1542,7 +1494,7 @@ pub const Tokenizer = struct {
                     const dollar_start = self.cursor.pos;
                     self.cursor.pos += 2;
                     try self.pushTokenNormalHere(.OpenStringInterpolation, dollar_start);
-                    try self.stack.append(self.env.gpa, .{ .string_interpolation = kind });
+                    try self.string_interpolation_stack.append(self.env.gpa, kind);
                     return;
                 } else if (c == '\n') {
                     try self.pushTokenNormalHere(.StringPart, start);
