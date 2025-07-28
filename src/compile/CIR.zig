@@ -528,7 +528,7 @@ test "Import.Store basic CompactWriter roundtrip" {
     // Create a mock module env with string store
     var string_store = try base.StringLiteral.Store.initCapacityBytes(gpa, 1024);
     defer string_store.deinit(gpa);
-    
+
     const MockEnv = struct {
         strings: *base.StringLiteral.Store,
     };
@@ -580,12 +580,12 @@ test "Import.Store basic CompactWriter roundtrip" {
 
     // Verify the imports are accessible
     try testing.expectEqual(@as(usize, 3), deserialized.imports.len());
-    
+
     // Verify the interned string IDs are stored correctly
     const str_idx1 = deserialized.imports.items.items[0];
     const str_idx2 = deserialized.imports.items.items[1];
     const str_idx3 = deserialized.imports.items.items[2];
-    
+
     try testing.expectEqualStrings("json.Json", string_store.get(str_idx1));
     try testing.expectEqualStrings("core.List", string_store.get(str_idx2));
     try testing.expectEqualStrings("my.Module", string_store.get(str_idx3));
@@ -601,7 +601,7 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
     // Create a mock module env with string store
     var string_store = try base.StringLiteral.Store.initCapacityBytes(gpa, 1024);
     defer string_store.deinit(gpa);
-    
+
     const MockEnv = struct {
         strings: *base.StringLiteral.Store,
     };
@@ -652,11 +652,11 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
 
     // Verify correct number of imports
     try testing.expectEqual(@as(usize, 2), deserialized.imports.len());
-    
+
     // Get the string IDs and verify the strings
     const str_idx1 = deserialized.imports.items.items[@intFromEnum(idx1)];
     const str_idx2 = deserialized.imports.items.items[@intFromEnum(idx2)];
-    
+
     try testing.expectEqualStrings("test.Module", string_store.get(str_idx1));
     try testing.expectEqualStrings("another.Module", string_store.get(str_idx2));
 }
