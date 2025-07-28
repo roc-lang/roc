@@ -7,7 +7,6 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const instantiate = @import("./instantiate.zig");
 
 const Store = types.Store;
 
@@ -46,13 +45,15 @@ test "rigid variables need instantiation - multiple type parameters" {
     try std.testing.expect(store.needsInstantiation(func_var));
 
     // Instantiate for first use
-    const inst1_var = try instantiate.instantiateVarAlloc(&store, func_var, std.testing.allocator);
+    const inst1_var = try types.instantiate.instantiateVarAlloc(&store, func_var, &base.Ident.Store.empty(), .copy, std.testing.allocator);
     try std.testing.expect(inst1_var != func_var);
 
     // Instantiate for second use
-    const inst2_var = try instantiate.instantiateVarAlloc(&store, func_var, std.testing.allocator);
+    const inst2_var = try types.instantiate.instantiateVarAlloc(&store, func_var, &base.Ident.Store.empty(), .copy, std.testing.allocator);
     try std.testing.expect(inst2_var != func_var);
     try std.testing.expect(inst2_var != inst1_var);
+
+    // TODO: Test different rigid instantiation behavior
 }
 
 test "rigid vs flex variable instantiation behavior" {

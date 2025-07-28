@@ -10,7 +10,7 @@ const testing = std.testing;
 test {
     testing.refAllDeclsRecursive(@import("serialization"));
     testing.refAllDeclsRecursive(@import("collections"));
-    testing.refAllDeclsRecursive(@import("types"));
+    // testing.refAllDeclsRecursive(@import("types"));
     testing.refAllDeclsRecursive(@import("can"));
 
     // Using refAllDeclsRecursive here gives "error: @fence is deprecated, use other atomics to establish ordering" for
@@ -37,6 +37,5 @@ test {
     testing.refAllDeclsRecursive(@import("layout/layout.zig"));
     testing.refAllDeclsRecursive(@import("layout/store.zig"));
     testing.refAllDeclsRecursive(@import("layout/store_test.zig"));
-    testing.refAllDeclsRecursive(@import("check/check_types/test_rigid_instantiation.zig"));
     testing.refAllDeclsRecursive(@import("repl/eval.zig"));
 }

@@ -6,9 +6,10 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
+
 const types = @import("types.zig");
 const store_mod = @import("store.zig");
-const collections = @import("collections");
 
 const TypesStore = store_mod.Store;
 const Var = types.Var;
