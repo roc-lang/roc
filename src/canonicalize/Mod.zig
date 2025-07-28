@@ -13,7 +13,8 @@ const types = @import("types");
 const builtins = @import("builtins");
 const tracy = @import("tracy");
 
-const Scope = @import("./canonicalize/Scope.zig");
+/// **Scope Management**
+pub const Scope = @import("Scope.zig");
 
 const tokenize = parse.tokenize;
 const RocDec = builtins.RocDec;
@@ -3911,11 +3912,11 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
 }
 
 test {
-    _ = @import("canonicalize/test/int_test.zig");
-    _ = @import("canonicalize/test/frac_test.zig");
-    _ = @import("canonicalize/test/node_store_test.zig");
-    _ = @import("canonicalize/test/exposed_shadowing_test.zig");
-    _ = @import("let_polymorphism_integration_test.zig");
+    _ = @import("test/int_test.zig");
+    _ = @import("test/frac_test.zig");
+    _ = @import("test/bool_test.zig");
+    _ = @import("test/node_store_test.zig");
+    _ = @import("test/exposed_shadowing_test.zig");
 }
 /// Introduce a new identifier to the current scope, return an
 /// index if
@@ -5158,7 +5159,7 @@ fn currentScope(self: *Self) *Scope {
 }
 
 /// This will be used later for builtins like Num.nan, Num.infinity, etc.
-pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) Expr.Idx {
+pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) !Expr.Idx {
     // Dec doesn't have infinity, -infinity, or NaN
     const requirements = types.Num.Frac.Requirements{
         .fits_in_f32 = true,
@@ -5171,12 +5172,15 @@ pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) Expr.Idx 
     };
 
     // then in the final slot the actual expr is inserted
-    const expr_idx = try self.env.addExprAndTypeVar(ModuleEnv.Expr{
-        .e_frac_f64 = .{
-            .value = value,
-            .region = region,
+    const expr_idx = try self.env.addExprAndTypeVar(
+        ModuleEnv.Expr{
+            .e_frac_f64 = .{
+                .value = value,
+            },
         },
-    }, Content{ .structure = .{ .num = .{ .frac_unbound = frac_requirements } } }, region);
+        Content{ .structure = .{ .num = .{ .frac_unbound = frac_requirements } } },
+        region,
+    );
 
     return expr_idx;
 }

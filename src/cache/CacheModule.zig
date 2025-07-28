@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const base = @import("base");
-const canonicalize = @import("../check/canonicalize.zig");
+const Can = @import("can");
 const collections = @import("collections");
 const types = @import("types");
 const parse = @import("parse");
@@ -610,9 +610,11 @@ test "create and restore cache" {
     var ast = try parse(&module_env);
     defer ast.deinit(gpa);
 
-    var canonicalizer = try canonicalize.init(cir, &ast, null);
-    defer canonicalizer.deinit();
-    try canonicalizer.canonicalizeFile();
+    var czer = try Can.init(cir, &ast, null);
+    defer czer
+        .deinit();
+    try czer
+        .canonicalizeFile();
 
     // Generate original S-expression for comparison
     var original_tree = SExprTree.init(gpa);
@@ -682,9 +684,11 @@ test "cache filesystem roundtrip with in-memory storage" {
     var ast = try parse.parse(&module_env);
     defer ast.deinit(gpa);
 
-    var canonicalizer = try canonicalize.init(cir, &ast, null);
-    defer canonicalizer.deinit();
-    try canonicalizer.canonicalizeFile();
+    var czer = try Can.init(cir, &ast, null);
+    defer czer
+        .deinit();
+    try czer
+        .canonicalizeFile();
 
     // Generate original S-expression for comparison
     var original_tree = SExprTree.init(gpa);

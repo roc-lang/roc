@@ -5,7 +5,6 @@ const base = @import("base");
 const types_mod = @import("types");
 const compile = @import("compile");
 
-const can = @import("../canonicalize.zig");
 const check_types = @import("../check_types.zig");
 const unifier = @import("unify.zig");
 const problem = @import("problem.zig");

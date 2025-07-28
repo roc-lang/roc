@@ -5,9 +5,9 @@ const base = @import("base");
 const types = @import("types");
 const compile = @import("compile");
 const parse = @import("parse");
+const Can = @import("can");
 
 const ModuleEnv = compile.ModuleEnv;
-const canonicalize = @import("./canonicalize.zig");
 
 test "canonicalize True as Bool" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
@@ -31,7 +31,7 @@ test "canonicalize True as Bool" {
     try module_env.initCIRFields(allocator, "test");
 
     // Canonicalize
-    var can = try canonicalize.init(&module_env, &parse_ast, null);
+    var can = try Can.init(&module_env, &parse_ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
@@ -75,7 +75,7 @@ test "canonicalize False as Bool" {
     try module_env.initCIRFields(allocator, "test");
 
     // Canonicalize
-    var can = try canonicalize.init(&module_env, &parse_ast, null);
+    var can = try Can.init(&module_env, &parse_ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
@@ -119,7 +119,7 @@ test "canonicalize random tag not as Bool" {
     try module_env.initCIRFields(allocator, "test");
 
     // Canonicalize
-    var can = try canonicalize.init(&module_env, &parse_ast, null);
+    var can = try Can.init(&module_env, &parse_ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);

@@ -12,6 +12,7 @@ pub const RocModules = struct {
     compile: *Module,
     reporting: *Module,
     parse: *Module,
+    can: *Module,
     tracy: *Module,
     build_options: *Module,
 
@@ -25,6 +26,7 @@ pub const RocModules = struct {
             .compile = b.addModule("compile", .{ .root_source_file = b.path("src/compile/mod.zig") }),
             .reporting = b.addModule("reporting", .{ .root_source_file = b.path("src/reporting/mod.zig") }),
             .parse = b.addModule("parse", .{ .root_source_file = b.path("src/parse/mod.zig") }),
+            .can = b.addModule("can", .{ .root_source_file = b.path("src/canonicalize/Mod.zig") }),
             .tracy = b.addModule("tracy", .{ .root_source_file = b.path("src/tracy.zig") }),
             .build_options = b.addModule("build_options", .{ .root_source_file = build_options_step.getOutput() }),
         };
@@ -61,6 +63,14 @@ pub const RocModules = struct {
 
         self.tracy.addImport("builtins", self.builtins);
 
+        self.can.addImport("base", self.base);
+        self.can.addImport("parse", self.parse);
+        self.can.addImport("collections", self.collections);
+        self.can.addImport("compile", self.compile);
+        self.can.addImport("types", self.types);
+        self.can.addImport("builtins", self.builtins);
+        self.can.addImport("tracy", self.tracy);
+
         return self;
     }
 
@@ -72,6 +82,7 @@ pub const RocModules = struct {
         step.root_module.addImport("compile", self.compile);
         step.root_module.addImport("reporting", self.reporting);
         step.root_module.addImport("parse", self.parse);
+        step.root_module.addImport("can", self.can);
         step.root_module.addImport("tracy", self.tracy);
         step.root_module.addImport("builtins", self.builtins);
         step.root_module.addImport("build_options", self.build_options);
@@ -85,6 +96,7 @@ pub const RocModules = struct {
         step.root_module.addImport("compile", self.compile);
         step.root_module.addImport("reporting", self.reporting);
         step.root_module.addImport("parse", self.parse);
+        step.root_module.addImport("can", self.can);
         step.root_module.addImport("tracy", self.tracy);
         step.root_module.addImport("builtins", self.builtins);
         step.root_module.addImport("build_options", self.build_options);
