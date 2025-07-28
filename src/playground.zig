@@ -19,8 +19,8 @@ const parse = @import("parse");
 const reporting = @import("reporting");
 const types = @import("types");
 const compile = @import("compile");
+const can = @import("can");
 
-const can = @import("check/canonicalize.zig");
 const check_types = @import("check/check_types.zig");
 const WasmFilesystem = @import("playground/WasmFilesystem.zig");
 const snapshot = @import("snapshot.zig");

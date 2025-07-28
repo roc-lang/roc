@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
-const canonicalize = @import("../check/canonicalize.zig");
+const canonicalize = @import("can");
 const reporting = @import("reporting");
 const Filesystem = @import("../fs/Filesystem.zig");
 const cache_mod = @import("mod.zig");

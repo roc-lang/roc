@@ -7,10 +7,10 @@ const base = @import("base");
 const types = @import("types");
 const parse = @import("parse");
 const compile = @import("compile");
+const canonicalize = @import("can");
 
 const check_types = @import("../check_types.zig");
 const instantiate = @import("instantiate.zig");
-const canonicalize = @import("../canonicalize.zig");
 
 const TypesStore = types.Store;
 const CIR = canonicalize.CIR;

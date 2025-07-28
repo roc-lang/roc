@@ -3,8 +3,8 @@
 const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
+const canonicalize = @import("can");
 
-const canonicalize = @import("../../canonicalize.zig");
 const check_types = @import("../../check_types.zig");
 const types_mod = @import("../types");
 

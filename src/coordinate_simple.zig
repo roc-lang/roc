@@ -7,9 +7,9 @@ const base = @import("base");
 const parse = @import("parse");
 const reporting = @import("reporting");
 const compile = @import("compile");
+const canonicalize = @import("can");
 
 const tracy = @import("tracy");
-const canonicalize = @import("check/canonicalize.zig");
 const Solver = @import("check/check_types.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
 const Filesystem = @import("fs/Filesystem.zig");

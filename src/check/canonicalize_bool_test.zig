@@ -5,9 +5,9 @@ const base = @import("base");
 const types = @import("types");
 const compile = @import("compile");
 const parse = @import("parse");
+const canonicalize = @import("can");
 
 const ModuleEnv = compile.ModuleEnv;
-const canonicalize = @import("./canonicalize.zig");
 
 test "canonicalize True as Bool" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};

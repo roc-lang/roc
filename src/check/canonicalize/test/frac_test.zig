@@ -8,8 +8,7 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const parse = @import("parse");
-
-const canonicalize = @import("../../canonicalize.zig");
+const canonicalize = @import("can");
 const compile = @import("compile");
 const types = @import("types");
 const RocDec = @import("builtins").RocDec;

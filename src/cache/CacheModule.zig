@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const base = @import("base");
-const canonicalize = @import("../check/canonicalize.zig");
+const canonicalize = @import("can");
 const collections = @import("collections");
 const types = @import("types");
 const parse = @import("parse");

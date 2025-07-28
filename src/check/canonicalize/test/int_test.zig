@@ -10,8 +10,7 @@ const base = @import("base");
 const types = @import("types");
 const compile = @import("compile");
 const parse = @import("parse");
-
-const canonicalize = @import("../../canonicalize.zig");
+const canonicalize = @import("can");
 
 const ModuleEnv = compile.ModuleEnv;
 

@@ -4,9 +4,9 @@ const parse = @import("parse");
 const types = @import("types");
 const base = @import("base");
 const compile = @import("compile");
+const canonicalize = @import("can");
 
 const eval = @import("../interpreter.zig");
-const canonicalize = @import("../../check/canonicalize.zig");
 const check_types = @import("../../check/check_types.zig");
 const stack = @import("../stack.zig");
 const layout_store = @import("../../layout/store.zig");

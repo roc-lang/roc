@@ -12,9 +12,9 @@ const parse = @import("parse");
 const compile = @import("compile");
 const types = @import("types");
 const reporting = @import("reporting");
+const canonicalize = @import("can");
 
 const Solver = @import("check/check_types.zig");
-const canonicalize = @import("check/canonicalize.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
 const cache = @import("cache/mod.zig");
 const fmt = @import("fmt.zig");

@@ -6,12 +6,12 @@ const base = @import("base");
 const parse = @import("parse");
 const collections = @import("collections");
 const types = @import("types");
+const Can = @import("can");
 
 const cache = @import("../cache/mod.zig");
-const Can = @import("../check/canonicalize.zig");
-const Scope = @import("../check/canonicalize/Scope.zig");
 const Filesystem = @import("../fs/Filesystem.zig");
 
+const Scope = Can.Scope;
 const Package = base.Package;
 const ModuleImport = base.ModuleImport;
 const ModuleWork = base.ModuleWork;

@@ -7,8 +7,9 @@ const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
-const can = @import("canonicalize.zig");
+const can = @import("can");
 const compile = @import("compile");
+
 const unifier = @import("check_types/unify.zig");
 const occurs = @import("check_types/occurs.zig");
 const problem = @import("check_types/problem.zig");

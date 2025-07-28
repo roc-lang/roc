@@ -13,7 +13,8 @@ const types = @import("types");
 const builtins = @import("builtins");
 const tracy = @import("tracy");
 
-const Scope = @import("./canonicalize/Scope.zig");
+/// **Scope Management**
+pub const Scope = @import("Scope.zig");
 
 const tokenize = parse.tokenize;
 const RocDec = builtins.RocDec;
@@ -3911,11 +3912,10 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
 }
 
 test {
-    _ = @import("canonicalize/test/int_test.zig");
-    _ = @import("canonicalize/test/frac_test.zig");
-    _ = @import("canonicalize/test/node_store_test.zig");
-    _ = @import("canonicalize/test/exposed_shadowing_test.zig");
-    _ = @import("let_polymorphism_integration_test.zig");
+    _ = @import("test/int_test.zig");
+    _ = @import("test/frac_test.zig");
+    _ = @import("test/node_store_test.zig");
+    _ = @import("test/exposed_shadowing_test.zig");
 }
 /// Introduce a new identifier to the current scope, return an
 /// index if
