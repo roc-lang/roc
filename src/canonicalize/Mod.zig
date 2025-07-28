@@ -3914,6 +3914,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
 test {
     _ = @import("test/int_test.zig");
     _ = @import("test/frac_test.zig");
+    _ = @import("test/bool_test.zig");
     _ = @import("test/node_store_test.zig");
     _ = @import("test/exposed_shadowing_test.zig");
 }

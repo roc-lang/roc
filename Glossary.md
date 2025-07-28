@@ -473,7 +473,7 @@ Canonicalization occurs on a single module (file) in isolation, so the work can 
 If the source code for a [module](#module) has not changed, the CanIR can simply be loaded from disk and used immediately.
 
 Implementation of Canonicalization:
-- new compiler: [canonicalize/Mod.zig](src/check/canonicalize/Mod.zig), [canonicalize folder](https://github.com/roc-lang/roc/tree/main/src/check/canonicalize)
+- new compiler: [canonicalize/Mod.zig](src/canonicalize/Mod.zig), [canonicalize folder](https://github.com/roc-lang/roc/tree/main/src/canonicalize)
 - old compiler: [can folder](crates/compiler/can)
 
 ## Lambda Set
