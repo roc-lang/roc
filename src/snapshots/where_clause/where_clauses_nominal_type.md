@@ -12,19 +12,9 @@ Cache(k, v) := Dict(U64, v)
 		module(k).hash : k -> U64
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - where_clauses_nominal_type.md:5:20:5:21
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `k` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**where_clauses_nominal_type.md:5:20:5:21:**
-```roc
-		module(k).hash : k -> U64
-```
-                   ^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),CloseSquare(1:14-1:15),
@@ -72,7 +62,7 @@ NO CHANGE
 		(where
 			(method @5.3-5.28 (module-of "k") (ident "hash")
 				(args
-					(ty-malformed @5.20-5.21))
+					(ty-var @5.20-5.21 (name "k")))
 				(ty @5.25-5.28 (name "U64")))))
 	(ext-decl @5.3-5.28 (ident "module(k).hash") (kind "value")))
 ~~~

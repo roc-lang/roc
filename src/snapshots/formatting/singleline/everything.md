@@ -38,14 +38,6 @@ h = |x, y| {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - everything.md:8:32:8:33
-UNDEFINED VARIABLE - everything.md:8:35:8:36
-UNDEFINED VARIABLE - everything.md:8:62:8:63
-UNDEFINED VARIABLE - everything.md:8:65:8:66
-UNDEFINED VARIABLE - everything.md:9:32:9:33
-UNDEFINED VARIABLE - everything.md:9:35:9:36
-UNDEFINED VARIABLE - everything.md:9:62:9:63
-UNDEFINED VARIABLE - everything.md:9:65:9:66
 UNUSED VARIABLE - everything.md:26:10:26:11
 UNUSED VARIABLE - everything.md:27:9:27:10
 UNUSED VARIABLE - everything.md:28:11:28:12
@@ -56,94 +48,6 @@ UNUSED VARIABLE - everything.md:20:2:20:4
 UNUSED VARIABLE - everything.md:22:2:22:4
 UNUSED VARIABLE - everything.md:21:2:21:4
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `a` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**everything.md:8:32:8:33:**
-```roc
-A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
-```
-                               ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `a` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**everything.md:8:35:8:36:**
-```roc
-A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
-```
-                                  ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `a` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**everything.md:8:62:8:63:**
-```roc
-A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
-```
-                                                             ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `a` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**everything.md:8:65:8:66:**
-```roc
-A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
-```
-                                                                ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**everything.md:9:32:9:33:**
-```roc
-B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
-```
-                               ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**everything.md:9:35:9:36:**
-```roc
-B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
-```
-                                  ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**everything.md:9:62:9:63:**
-```roc
-B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
-```
-                                                             ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**everything.md:9:65:9:66:**
-```roc
-B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
-```
-                                                                ^
-
-
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
 
@@ -448,11 +352,11 @@ NO CHANGE
 		(p-assign @18.1-18.2 (ident "h"))
 		(e-closure @18.5-31.2
 			(captures
-				(capture @28.8-28.9 (ident "a"))
 				(capture @29.7-29.8 (ident "a"))
 				(capture @26.7-26.8 (ident "a"))
 				(capture @18.1-18.2 (ident "h"))
-				(capture @27.6-27.7 (ident "a")))
+				(capture @27.6-27.7 (ident "a"))
+				(capture @28.8-28.9 (ident "a")))
 			(e-lambda @18.5-31.2
 				(args
 					(p-assign @18.6-18.7 (ident "x"))
@@ -553,14 +457,14 @@ NO CHANGE
 			(method @8.16-8.44 (module-of "a") (ident "a1")
 				(args
 					(ty-tuple @8.31-8.37
-						(ty-malformed @8.32-8.33)
-						(ty-malformed @8.35-8.36)))
+						(ty-var @8.32-8.33 (name "a"))
+						(ty-var @8.35-8.36 (name "a"))))
 				(ty @8.41-8.44 (name "Str")))
 			(method @8.46-8.74 (module-of "a") (ident "a2")
 				(args
 					(ty-tuple @8.61-8.67
-						(ty-malformed @8.62-8.63)
-						(ty-malformed @8.65-8.66)))
+						(ty-var @8.62-8.63 (name "a"))
+						(ty-var @8.65-8.66 (name "a"))))
 				(ty @8.71-8.74 (name "Str")))))
 	(s-alias-decl @9.1-9.74
 		(ty-header @9.1-9.5 (name "B")
@@ -571,14 +475,14 @@ NO CHANGE
 			(method @9.16-9.44 (module-of "b") (ident "b1")
 				(args
 					(ty-tuple @9.31-9.37
-						(ty-malformed @9.32-9.33)
-						(ty-malformed @9.35-9.36)))
+						(ty-var @9.32-9.33 (name "b"))
+						(ty-var @9.35-9.36 (name "b"))))
 				(ty @9.41-9.44 (name "Str")))
 			(method @9.46-9.74 (module-of "b") (ident "b2")
 				(args
 					(ty-tuple @9.61-9.67
-						(ty-malformed @9.62-9.63)
-						(ty-malformed @9.65-9.66)))
+						(ty-var @9.62-9.63 (name "b"))
+						(ty-var @9.65-9.66 (name "b"))))
 				(ty @9.71-9.74 (name "Str")))))
 	(s-alias-decl @11.1-11.17
 		(ty-header @11.1-11.8 (name "C")

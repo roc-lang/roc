@@ -52,7 +52,7 @@ The tag is:
     _Some_
 
 But it should be one of:
-    _[Some(a), None]_
+    _[None, Some(a)]_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

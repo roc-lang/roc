@@ -15,43 +15,9 @@ Hash(a, hasher) : a
 Decode(a) : a where module(a).decode : List(U8) -> a
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - where_clauses_1.md:5:20:5:26
-UNDEFINED VARIABLE - where_clauses_1.md:5:30:5:36
-UNDEFINED VARIABLE - where_clauses_1.md:8:52:8:53
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `hasher` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**where_clauses_1.md:5:20:5:26:**
-```roc
-		module(a).hash : hasher -> hasher,
-```
-                   ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `hasher` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**where_clauses_1.md:5:30:5:36:**
-```roc
-		module(a).hash : hasher -> hasher,
-```
-                             ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `a` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**where_clauses_1.md:8:52:8:53:**
-```roc
-Decode(a) : a where module(a).decode : List(U8) -> a
-```
-                                                   ^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),Comma(1:13-1:14),UpperIdent(1:15-1:21),CloseSquare(1:21-1:22),
@@ -110,8 +76,8 @@ NO CHANGE
 		(where
 			(method @5.3-5.36 (module-of "a") (ident "hash")
 				(args
-					(ty-malformed @5.20-5.26))
-				(ty-malformed @5.30-5.36))
+					(ty-var @5.20-5.26 (name "hasher")))
+				(ty-var @5.30-5.36 (name "hasher")))
 			(alias @6.3-6.24 (module-of "hasher") (ident "Hasher"))))
 	(s-alias-decl @8.1-8.53
 		(ty-header @8.1-8.10 (name "Decode")
@@ -123,7 +89,7 @@ NO CHANGE
 				(args
 					(ty-apply @8.40-8.48 (symbol "List")
 						(ty @8.45-8.47 (name "U8"))))
-				(ty-malformed @8.52-8.53))))
+				(ty-var @8.52-8.53 (name "a")))))
 	(ext-decl @5.3-5.36 (ident "module(a).hash") (kind "value"))
 	(ext-decl @6.3-6.24 (ident "module(hasher).Hasher") (kind "type"))
 	(ext-decl @8.21-8.53 (ident "module(a).decode") (kind "value")))

@@ -495,6 +495,13 @@ pub fn canonicalizeFile(
                     const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
                     const where_start = self.env.store.scratchWhereClauseTop();
 
+                    // Enter a new scope for where clause
+                    try self.scopeEnter(self.env.gpa, false);
+                    defer self.scopeExit(self.env.gpa) catch {};
+
+                    // Introduce type parameters from the header into the scope
+                    try self.introduceTypeParametersFromHeader(header_idx);
+
                     for (where_slice) |where_idx| {
                         const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .type_decl_anno);
                         try self.env.store.addScratchWhereClause(canonicalized_where);
@@ -4764,9 +4771,11 @@ fn canonicalizeTypeAnnoRecord(
     }
 
     const field_anno_idxs = try self.env.store.annoRecordFieldSpanFrom(scratch_top);
-    const fields_type_range = try self.env.types.appendRecordFields(
-        self.scratch_record_fields.sliceFromStart(scratch_record_fields_top),
-    );
+
+    // Should we be sorting here?
+    const record_fields_scratch = self.scratch_record_fields.sliceFromStart(scratch_record_fields_top);
+    std.mem.sort(types.RecordField, record_fields_scratch, &self.env.idents, comptime types.RecordField.sortByNameAsc);
+    const fields_type_range = try self.env.types.appendRecordFields(record_fields_scratch);
 
     const content = blk: {
         if (type_anno_ctx.isTypeDeclAndHasUnderscore()) {
@@ -4831,7 +4840,10 @@ fn canonicalizeTypeAnnoTagUnion(
     }
 
     const tag_anno_idxs = try self.env.store.typeAnnoSpanFrom(scratch_annos_top);
-    const tags_var_range = self.scratch_tags.sliceFromStart(scratch_tags_top);
+
+    // Should we be sorting here?
+    const tags_slice = self.scratch_tags.sliceFromStart(scratch_tags_top);
+    std.mem.sort(types.Tag, tags_slice, &self.env.idents, comptime types.Tag.sortByNameAsc);
 
     // Canonicalize the ext, if it exists
     const mb_ext_anno = if (tag_union.open_anno) |open_idx| blk: {
@@ -4857,7 +4869,7 @@ fn canonicalizeTypeAnnoTagUnion(
             };
 
             // Make type system tag union
-            break :blk try self.env.types.mkTagUnion(tags_var_range, ext_var);
+            break :blk try self.env.types.mkTagUnion(tags_slice, ext_var);
         }
     };
 
@@ -5331,25 +5343,6 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             // Extract type variables from the AST annotation
             try self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
 
-            // Enter a new scope for type variables
-            try self.scopeEnter(self.env.gpa, false);
-            defer self.scopeExit(self.env.gpa) catch {};
-
-            // Introduce type variables into scope (if we have any)
-            if (self.scratch_idents.top() > type_vars_top) {
-                for (self.scratch_idents.sliceFromStart(type_vars_top)) |type_var| {
-                    // Get the proper region for this type variable from the AST
-                    const type_var_anno = try self.env.addTypeAnnoAndTypeVar(
-                        .{ .ty_var = .{ .name = type_var } },
-                        .{ .rigid_var = type_var },
-                        self.getTypeVarRegionFromAST(ta.anno, type_var) orelse region,
-                    );
-                    try self.scopeIntroduceTypeVar(type_var, type_var_anno);
-                }
-                // Shrink the scratch vars list to the original size
-                self.scratch_idents.clearFrom(type_vars_top);
-            }
-
             // Now canonicalize the annotation with type variables in scope
             const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .inline_anno);
 
@@ -5358,6 +5351,10 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             const where_clauses = if (ta.where) |where_coll| blk: {
                 const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
                 const where_start = self.env.store.scratchWhereClauseTop();
+
+                // Enter a new scope for where clause
+                try self.scopeEnter(self.env.gpa, false);
+                defer self.scopeExit(self.env.gpa) catch {};
 
                 for (where_slice) |where_idx| {
                     const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);

@@ -249,8 +249,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @9.1-9.12 (type "UserId, UserName, UserAge -> { id: UserId, name: UserName, age: UserAge }"))
-		(patt @12.1-12.14 (type "{ id: UserId, name: UserName, age: UserAge } -> UserName"))
+		(patt @9.1-9.12 (type "UserId, UserName, UserAge -> { age: UserAge, id: UserId, name: UserName }"))
+		(patt @12.1-12.14 (type "{ age: UserAge, id: UserId, name: UserName } -> UserName"))
 		(patt @14.1-14.6 (type "_arg -> UserName")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
@@ -262,7 +262,7 @@ NO CHANGE
 		(alias @6.1-6.55 (type "User")
 			(ty-header @6.1-6.5 (name "User"))))
 	(expressions
-		(expr @9.15-9.48 (type "UserId, UserName, UserAge -> { id: UserId, name: UserName, age: UserAge }"))
-		(expr @12.17-12.33 (type "{ id: UserId, name: UserName, age: UserAge } -> UserName"))
+		(expr @9.15-9.48 (type "UserId, UserName, UserAge -> { age: UserAge, id: UserId, name: UserName }"))
+		(expr @12.17-12.33 (type "{ age: UserAge, id: UserId, name: UserName } -> UserName"))
 		(expr @14.9-17.2 (type "_arg -> UserName"))))
 ~~~

@@ -51,7 +51,7 @@ The tag is:
     _Ok_
 
 But it should be one of:
-    _[Ok(ok), Err(err)]_
+    _[Err(err), Ok(ok)]_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the second branch of this `match` differs from previous ones:
@@ -86,7 +86,7 @@ The tag is:
     _Ok_
 
 But it should be one of:
-    _[Ok(ok), Err(err)]_
+    _[Err(err), Ok(ok)]_
 
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
@@ -100,7 +100,7 @@ The tag is:
     _Err_
 
 But it should be one of:
-    _[Ok(ok), Err(err)]_
+    _[Err(err), Ok(ok)]_
 
 # TOKENS
 ~~~zig

@@ -27,7 +27,7 @@ It is of type:
     _{ name: Str, age: Num(_size) }_
 
 But you are trying to use it as:
-    _{ name: Str, age: U64 }_
+    _{ age: U64, name: Str }_
 
 # TOKENS
 ~~~zig
@@ -131,9 +131,9 @@ main! = |_| getName({ name: "luke", age: 21 })
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "{ name: Str, age: U64 } -> Str"))
+		(patt @4.1-4.8 (type "{ age: U64, name: Str } -> Str"))
 		(patt @6.1-6.6 (type "_arg -> Str")))
 	(expressions
-		(expr @4.11-4.28 (type "{ name: Str, age: U64 } -> Str"))
+		(expr @4.11-4.28 (type "{ age: U64, name: Str } -> Str"))
 		(expr @6.9-6.44 (type "_arg -> Str"))))
 ~~~

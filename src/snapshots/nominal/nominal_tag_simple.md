@@ -30,7 +30,7 @@ The tag is:
     _Yellow_
 
 But it should be one of:
-    _[Red, Green, Blue]_
+    _[Blue, Green, Red]_
 
 # TOKENS
 ~~~zig
