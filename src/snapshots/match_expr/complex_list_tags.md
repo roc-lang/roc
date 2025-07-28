@@ -78,8 +78,8 @@ UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:7:7:7:9
 PARSE ERROR - complex_list_tags.md:7:10:7:10
 UNDEFINED VARIABLE - complex_list_tags.md:1:7:1:13
 UNKNOWN OPERATOR - complex_list_tags.md:3:22:3:53
-UNUSED VARIABLE - complex_list_tags.md:3:15:3:16
 UNUSED VARIABLE - complex_list_tags.md:3:12:3:13
+UNUSED VARIABLE - complex_list_tags.md:3:15:3:16
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `string_expected_close_interpolation`
@@ -836,18 +836,6 @@ This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNUSED VARIABLE**
-Variable `y` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
-**complex_list_tags.md:3:15:3:16:**
-```roc
-    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-```
-              ^
-
-
-**UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
@@ -857,6 +845,18 @@ The unused variable is declared here:
     [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
 ```
            ^
+
+
+**UNUSED VARIABLE**
+Variable `y` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:3:15:3:16:**
+```roc
+    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
+```
+              ^
 
 
 # TOKENS
