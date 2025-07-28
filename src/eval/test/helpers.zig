@@ -4,7 +4,7 @@ const parse = @import("parse");
 const types = @import("types");
 const base = @import("base");
 const compile = @import("compile");
-const canonicalize = @import("can");
+const Can = @import("can");
 
 const eval = @import("../interpreter.zig");
 const check_types = @import("../../check/check_types.zig");
@@ -217,7 +217,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
-    can: *canonicalize,
+    can: *Can,
     checker: *check_types,
     expr_idx: ModuleEnv.Expr.Idx,
 } {
@@ -238,9 +238,10 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "test");
 
-    // Create canonicalizer
-    const can = try allocator.create(canonicalize);
-    can.* = try canonicalize.init(module_env, parse_ast, null);
+    // Create czer
+    //
+    const can = try allocator.create(Can);
+    can.* = try Can.init(module_env, parse_ast, null);
 
     // Canonicalize the expression
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);

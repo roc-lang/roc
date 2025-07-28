@@ -19,7 +19,7 @@ const parse = @import("parse");
 const reporting = @import("reporting");
 const types = @import("types");
 const compile = @import("compile");
-const can = @import("can");
+const Can = @import("can");
 
 const check_types = @import("check/check_types.zig");
 const WasmFilesystem = @import("playground/WasmFilesystem.zig");
@@ -348,10 +348,12 @@ fn compileSource(source: []const u8) !CompilerStageData {
     const can_ir = result.module_env;
     try can_ir.initCIRFields(allocator, "main");
 
-    var canonicalizer = try can.init(can_ir, &parse_ast, null);
-    defer canonicalizer.deinit();
+    var czer = try Can.init(can_ir, &parse_ast, null);
+    defer czer
+        .deinit();
 
-    canonicalizer.canonicalizeFile() catch {};
+    czer
+        .canonicalizeFile() catch {};
 
     // Debug: Log the spans after canonicalization
     const defs_count = can_ir.store.sliceDefs(can_ir.all_defs).len;

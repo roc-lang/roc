@@ -5,7 +5,7 @@ const base = @import("base");
 const compile = @import("compile");
 const parse = @import("parse");
 const types = @import("types");
-const canonicalize = @import("can");
+const Can = @import("can");
 
 const check_types = @import("../check/check_types.zig");
 const layout_store = @import("../layout/store.zig");
@@ -270,8 +270,9 @@ pub const Repl = struct {
         const cir = &module_env; // CIR is now just ModuleEnv
         try cir.initCIRFields(self.allocator, "repl");
 
-        // Create canonicalizer
-        var can = canonicalize.init(cir, &parse_ast, null) catch |err| {
+        // Create czer
+        //
+        var can = Can.init(cir, &parse_ast, null) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
         };
         defer can.deinit();
@@ -494,7 +495,7 @@ test "Repl - minimal interpreter integration" {
     try cir.initCIRFields(allocator, "test");
 
     // Step 4: Canonicalize
-    var can = try canonicalize.init(cir, &parse_ast, null);
+    var can = try Can.init(cir, &parse_ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);

@@ -4,14 +4,14 @@
 const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
-const canonicalize = @import("can");
+const Can = @import("can");
 const compile = @import("compile");
 
 const check_types = @import("check_types.zig");
 
 const testing = std.testing;
 const ModuleEnv = compile.ModuleEnv;
-const CanonicalizedExpr = canonicalize.CanonicalizedExpr;
+const CanonicalizedExpr = Can.CanonicalizedExpr;
 const test_allocator = testing.allocator;
 
 /// Helper to run parsing, canonicalization, and type checking on an expression
@@ -19,7 +19,7 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
     cir: *ModuleEnv,
-    can: *canonicalize,
+    can: *Can,
     checker: *check_types,
     has_type_errors: bool,
 } {
@@ -46,8 +46,8 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
     // Canonicalize - CIR is an alias for ModuleEnv, so we use the same module_env
     const cir = module_env;
 
-    const can = try allocator.create(canonicalize);
-    can.* = try canonicalize.init(cir, parse_ast, null);
+    const can = try allocator.create(Can);
+    can.* = try Can.init(cir, parse_ast, null);
 
     // Run canonicalization - for expressions
     var canon_expr_idx: ?CanonicalizedExpr = null;
@@ -85,7 +85,7 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
     cir: *ModuleEnv,
-    can: *canonicalize,
+    can: *Can,
     checker: *check_types,
     has_type_errors: bool,
 } {
@@ -113,8 +113,8 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
     const cir = try allocator.create(ModuleEnv);
     cir.* = try ModuleEnv.init(module_env);
 
-    const can = try allocator.create(canonicalize);
-    can.* = try canonicalize.init(cir, parse_ast, null);
+    const can = try allocator.create(Can);
+    can.* = try Can.init(cir, parse_ast, null);
 
     // Run canonicalization - for files
     // Check if we have a valid file structure first
@@ -157,7 +157,7 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
     cir: *ModuleEnv,
-    can: *canonicalize,
+    can: *Can,
     checker: *check_types,
     has_type_errors: bool,
 } {
@@ -184,8 +184,8 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
     // Canonicalize - CIR is an alias for ModuleEnv, so we use the same module_env
     const cir = module_env;
 
-    const can = try allocator.create(canonicalize);
-    can.* = try canonicalize.init(cir, parse_ast, null);
+    const can = try allocator.create(Can);
+    can.* = try Can.init(cir, parse_ast, null);
 
     // Run canonicalization - for statements
     var canon_result: ?CanonicalizedExpr = null;

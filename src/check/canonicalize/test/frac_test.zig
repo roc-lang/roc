@@ -8,7 +8,7 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const parse = @import("parse");
-const canonicalize = @import("can");
+const Can = @import("can");
 const compile = @import("compile");
 const types = @import("types");
 const RocDec = @import("builtins").RocDec;
@@ -19,7 +19,7 @@ const ModuleEnv = compile.ModuleEnv;
 fn parseAndCreateFrac(allocator: std.mem.Allocator, source: []const u8) !struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
-    can: *canonicalize,
+    can: *Can,
     expr_idx: ModuleEnv.Expr.Idx,
 } {
     const module_env = try allocator.create(ModuleEnv);
@@ -33,8 +33,8 @@ fn parseAndCreateFrac(allocator: std.mem.Allocator, source: []const u8) !struct 
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "Test");
 
-    const can = try allocator.create(canonicalize);
-    can.* = try canonicalize.init(module_env, parse_ast, null);
+    const can = try allocator.create(Can);
+    can.* = try Can.init(module_env, parse_ast, null);
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
 

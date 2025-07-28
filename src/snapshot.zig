@@ -12,7 +12,7 @@ const parse = @import("parse");
 const compile = @import("compile");
 const types = @import("types");
 const reporting = @import("reporting");
-const canonicalize = @import("can");
+const Can = @import("can");
 
 const Solver = @import("check/check_types.zig");
 const types_problem_mod = @import("check/check_types/problem.zig");
@@ -1046,10 +1046,10 @@ fn processSnapshotContent(
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
     try can_ir.initCIRFields(allocator, module_name);
 
-    var can = try canonicalize.init(can_ir, &parse_ast, null);
+    var can = try Can.init(can_ir, &parse_ast, null);
     defer can.deinit();
 
-    var maybe_expr_idx: ?canonicalize.CanonicalizedExpr = null;
+    var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
 
     switch (content.meta.node_type) {
         .file => try can.canonicalizeFile(),
@@ -1167,8 +1167,8 @@ fn processSnapshotContent(
     try generateTokensSection(&output, &parse_ast, &content, &module_env);
     try generateParseSection(&output, &content, &parse_ast, &module_env);
     try generateFormattedSection(&output, &content, &parse_ast);
-    try generateCanonicalizeSection(&output, can_ir, canonicalize.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
-    try generateTypesSection(&output, can_ir, canonicalize.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
+    try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
+    try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
 
     try generateHtmlClosing(&output);
 

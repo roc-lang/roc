@@ -3,12 +3,10 @@
 const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
-const canonicalize = @import("can");
 
 const check_types = @import("../../check_types.zig");
 const types_mod = @import("../types");
 
-const CIR = canonicalize.CIR;
 const testing = std.testing;
 const test_allocator = testing.allocator;
 

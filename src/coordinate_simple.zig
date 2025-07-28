@@ -7,7 +7,7 @@ const base = @import("base");
 const parse = @import("parse");
 const reporting = @import("reporting");
 const compile = @import("compile");
-const canonicalize = @import("can");
+const Can = @import("can");
 
 const tracy = @import("tracy");
 const Solver = @import("check/check_types.zig");
@@ -252,9 +252,11 @@ fn processSourceInternal(
 
     // Create scope for semantic analysis
     // Canonicalize the AST
-    var canonicalizer = try canonicalize.init(cir, &parse_ast, null);
-    defer canonicalizer.deinit();
-    try canonicalizer.canonicalizeFile();
+    var czer = try Can.init(cir, &parse_ast, null);
+    defer czer
+        .deinit();
+    try czer
+        .canonicalizeFile();
 
     collectTiming(config, &timer, &timing_info, "canonicalize_ns");
 

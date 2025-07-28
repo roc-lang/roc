@@ -10,7 +10,7 @@ const testing = std.testing;
 const base = @import("base");
 const parse = @import("parse");
 const compile = @import("compile");
-const canonicalize = @import("can");
+const Can = @import("can");
 
 const ModuleEnv = compile.ModuleEnv;
 const expectEqual = testing.expectEqual;
@@ -20,7 +20,7 @@ const collections = @import("collections");
 fn parseAndCanonicalizeSource(allocator: std.mem.Allocator, source: []const u8, module_envs: ?*std.StringHashMap(*ModuleEnv)) !struct {
     parse_env: *ModuleEnv,
     ast: *parse.AST,
-    can: *canonicalize,
+    can: *Can,
 } {
     const parse_env = try allocator.create(ModuleEnv);
     parse_env.* = try ModuleEnv.init(allocator, source);
@@ -31,8 +31,8 @@ fn parseAndCanonicalizeSource(allocator: std.mem.Allocator, source: []const u8, 
     // Initialize CIR fields
     try parse_env.initCIRFields(allocator, "Test");
 
-    const can = try allocator.create(canonicalize);
-    can.* = try canonicalize.init(parse_env, ast, module_envs);
+    const can = try allocator.create(Can);
+    can.* = try Can.init(parse_env, ast, module_envs);
 
     return .{
         .parse_env = parse_env,
@@ -123,7 +123,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     try parse_env.initCIRFields(allocator, "Test");
 
     // Canonicalize with module validation
-    var can = try canonicalize.init(parse_env, &ast, &module_envs);
+    var can = try Can.init(parse_env, &ast, &module_envs);
     defer can.deinit();
 
     _ = try can.canonicalizeFile();
@@ -207,8 +207,9 @@ test "import validation - no module_envs provided" {
     // Initialize CIR fields
     try parse_env.initCIRFields(allocator, "Test");
 
-    // Create canonicalizer with null module_envs
-    var can = try canonicalize.init(parse_env, &ast, null);
+    // Create czer
+    //  with null module_envs
+    var can = try Can.init(parse_env, &ast, null);
     defer can.deinit();
 
     _ = try can.canonicalizeFile();

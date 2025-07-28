@@ -7,13 +7,11 @@ const base = @import("base");
 const types = @import("types");
 const parse = @import("parse");
 const compile = @import("compile");
-const canonicalize = @import("can");
 
-const check_types = @import("../check_types.zig");
 const instantiate = @import("instantiate.zig");
+const check_types = @import("../check_types.zig");
 
 const TypesStore = types.Store;
-const CIR = canonicalize.CIR;
 const ModuleEnv = compile.ModuleEnv;
 const testing = std.testing;
 const test_allocator = testing.allocator;

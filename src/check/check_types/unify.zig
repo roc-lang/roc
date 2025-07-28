@@ -46,7 +46,6 @@ const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
 const compile = @import("compile");
-const can = @import("can");
 
 const problem_mod = @import("./problem.zig");
 const occurs = @import("./occurs.zig");
