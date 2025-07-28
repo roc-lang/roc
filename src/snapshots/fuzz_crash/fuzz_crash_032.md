@@ -31,8 +31,8 @@ NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_032.md:6:25:6:30
 INVALID PATTERN - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_032.md:10:3:10:4
-EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:13:1:14
 EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:9:1:12
+EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:13:1:14
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **=** is not expected in an expression.
@@ -134,7 +134,7 @@ This feature is not yet implemented: statement type in block
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
-Nothing is named `Color` in this scope.
+Nothing is named `color` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **fuzz_crash_032.md:6:25:6:30:**
@@ -148,7 +148,7 @@ olor = |color| { import Color.RGB
 This pattern contains invalid syntax or uses unsupported features.
 
 **UNDEFINED VARIABLE**
-Nothing is named `B` in this scope.
+Nothing is named `b` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **fuzz_crash_032.md:10:3:10:4:**
@@ -159,16 +159,6 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `r` is exposed, but it is not defined anywhere in this module.
-
-**fuzz_crash_032.md:1:13:1:14:**
-```roc
-module [tus,r]
-```
-            ^
-You can fix this by either defining `r` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
 The module header says that `tus` is exposed, but it is not defined anywhere in this module.
 
 **fuzz_crash_032.md:1:9:1:12:**
@@ -177,6 +167,16 @@ module [tus,r]
 ```
         ^^^
 You can fix this by either defining `tus` in this module, or by removing it from the list of exposed values.
+
+**EXPOSED BUT NOT DEFINED**
+The module header says that `r` is exposed, but it is not defined anywhere in this module.
+
+**fuzz_crash_032.md:1:13:1:14:**
+```roc
+module [tus,r]
+```
+            ^
+You can fix this by either defining `r` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -311,7 +311,7 @@ olor = |color| {
 		(ty-header @3.1-3.12 (name "LocalStatus"))
 		(ty-fn @3.14-3.24 (effectful true)
 			(ty-var @3.14-3.17 (name "lue"))
-			(ty @3.21-3.24 (name "Loc")))))
+			(ty @3.21-3.24 (name "loc")))))
 ~~~
 # TYPES
 ~~~clojure

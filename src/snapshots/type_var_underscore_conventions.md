@@ -215,9 +215,9 @@ NO CHANGE
 		(annotation @5.1-5.11
 			(declared-type
 				(ty-fn @4.14-4.31 (effectful false)
-					(ty-apply @4.14-4.24 (symbol "List")
+					(ty-apply @4.14-4.24 (symbol "list")
 						(ty-var @4.19-4.23 (name "elem")))
-					(ty @4.28-4.31 (name "Str"))))))
+					(ty @4.28-4.31 (name "str"))))))
 	(d-let
 		(p-assign @9.1-9.18 (ident "ending_underscore"))
 		(e-lambda @9.21-9.37
@@ -228,7 +228,7 @@ NO CHANGE
 		(annotation @9.1-9.18
 			(declared-type
 				(ty-fn @8.21-8.41 (effectful false)
-					(ty-apply @8.21-8.32 (symbol "List")
+					(ty-apply @8.21-8.32 (symbol "list")
 						(ty-var @8.26-8.31 (name "elem_")))
 					(ty-var @8.36-8.41 (name "elem_"))))))
 	(d-let
@@ -241,9 +241,9 @@ NO CHANGE
 		(annotation @13.1-13.13
 			(declared-type
 				(ty-fn @12.16-12.33 (effectful false)
-					(ty-apply @12.16-12.26 (symbol "List")
+					(ty-apply @12.16-12.26 (symbol "list")
 						(ty-var @12.21-12.25 (name "bad_")))
-					(ty @12.30-12.33 (name "Str"))))))
+					(ty @12.30-12.33 (name "str"))))))
 	(d-let
 		(p-assign @17.1-17.13 (ident "valid_single"))
 		(e-lambda @17.16-17.27
@@ -254,9 +254,9 @@ NO CHANGE
 		(annotation @17.1-17.13
 			(declared-type
 				(ty-fn @16.16-16.34 (effectful false)
-					(ty-apply @16.16-16.27 (symbol "List")
+					(ty-apply @16.16-16.27 (symbol "list")
 						(ty-var @16.21-16.26 (name "_elem")))
-					(ty @16.31-16.34 (name "Str"))))))
+					(ty @16.31-16.34 (name "str"))))))
 	(d-let
 		(p-assign @20.1-20.12 (ident "valid_multi"))
 		(e-lambda @20.15-20.22
@@ -270,7 +270,7 @@ NO CHANGE
 			(declared-type
 				(ty-fn @19.15-19.33 (effectful false)
 					(ty-var @19.15-19.19 (name "elem"))
-					(ty-apply @19.23-19.33 (symbol "List")
+					(ty-apply @19.23-19.33 (symbol "list")
 						(ty-var @19.28-19.32 (name "elem")))))))
 	(d-let
 		(p-assign @22.1-22.5 (ident "main"))

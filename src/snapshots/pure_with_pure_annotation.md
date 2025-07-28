@@ -109,9 +109,9 @@ NO CHANGE
 		(annotation @5.1-5.4
 			(declared-type
 				(ty-fn @4.7-4.22 (effectful false)
-					(ty @4.7-4.10 (name "I32"))
-					(ty @4.12-4.15 (name "I32"))
-					(ty @4.19-4.22 (name "I32"))))))
+					(ty @4.7-4.10 (name "i32"))
+					(ty @4.12-4.15 (name "i32"))
+					(ty @4.19-4.22 (name "i32"))))))
 	(d-let
 		(p-assign @9.1-9.7 (ident "double"))
 		(e-closure @9.10-9.23
@@ -130,8 +130,8 @@ NO CHANGE
 		(annotation @9.1-9.7
 			(declared-type
 				(ty-fn @8.10-8.20 (effectful false)
-					(ty @8.10-8.13 (name "I32"))
-					(ty @8.17-8.20 (name "I32"))))))
+					(ty @8.10-8.13 (name "i32"))
+					(ty @8.17-8.20 (name "i32"))))))
 	(d-let
 		(p-assign @11.1-11.6 (ident "main!"))
 		(e-call @11.9-11.18

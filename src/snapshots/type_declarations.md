@@ -26,8 +26,8 @@ UNDECLARED TYPE - type_declarations.md:5:8:5:11
 UNDECLARED TYPE - type_declarations.md:5:13:5:16
 UNDECLARED TYPE - type_declarations.md:7:19:7:21
 UNDECLARED TYPE - type_declarations.md:7:32:7:41
-EXPOSED BUT NOT DEFINED - type_declarations.md:1:51:1:56
 EXPOSED BUT NOT DEFINED - type_declarations.md:1:42:1:49
+EXPOSED BUT NOT DEFINED - type_declarations.md:1:51:1:56
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
@@ -74,16 +74,6 @@ Some(a) : { foo : Ok(a), bar : Something }
 
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `main!` is exposed, but it is not defined anywhere in this module.
-
-**type_declarations.md:1:51:1:56:**
-```roc
-module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
-```
-                                                  ^^^^^
-You can fix this by either defining `main!` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
 The module header says that `add_one` is exposed, but it is not defined anywhere in this module.
 
 **type_declarations.md:1:42:1:49:**
@@ -92,6 +82,16 @@ module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
 ```
                                          ^^^^^^^
 You can fix this by either defining `add_one` in this module, or by removing it from the list of exposed values.
+
+**EXPOSED BUT NOT DEFINED**
+The module header says that `main!` is exposed, but it is not defined anywhere in this module.
+
+**type_declarations.md:1:51:1:56:**
+```roc
+module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
+```
+                                                  ^^^^^
+You can fix this by either defining `main!` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -109,11 +109,11 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
 (file @1.1-15.24
 	(module @1.1-1.57
 		(exposes @1.8-1.57
-			(exposed-upper-ident @1.9-1.12 (text "Map"))
-			(exposed-upper-ident @1.14-1.17 (text "Foo"))
-			(exposed-upper-ident @1.19-1.23 (text "Some"))
-			(exposed-upper-ident @1.25-1.30 (text "Maybe"))
-			(exposed-upper-ident @1.32-1.40 (text "SomeFunc"))
+			(exposed-upper-ident @1.9-1.12 (text "map"))
+			(exposed-upper-ident @1.14-1.17 (text "foo"))
+			(exposed-upper-ident @1.19-1.23 (text "some"))
+			(exposed-upper-ident @1.25-1.30 (text "maybe"))
+			(exposed-upper-ident @1.32-1.40 (text "someFunc"))
 			(exposed-lower-ident @1.42-1.49
 				(text "add_one"))
 			(exposed-lower-ident @1.51-1.56
@@ -195,55 +195,55 @@ NO CHANGE
 				(ty-var @3.5-3.6 (name "a"))
 				(ty-var @3.8-3.9 (name "b"))))
 		(ty-fn @3.13-3.41 (effectful false)
-			(ty-apply @3.13-3.20 (symbol "List")
+			(ty-apply @3.13-3.20 (symbol "list")
 				(ty-var @3.18-3.19 (name "a")))
 			(ty-parens @3.22-3.30
 				(ty-fn @3.23-3.29 (effectful false)
 					(ty-var @3.23-3.24 (name "a"))
 					(ty-var @3.28-3.29 (name "b"))))
-			(ty-apply @3.34-3.41 (symbol "List")
+			(ty-apply @3.34-3.41 (symbol "list")
 				(ty-var @3.39-3.40 (name "b")))))
 	(s-alias-decl @5.1-5.17
 		(ty-header @5.1-5.4 (name "Foo"))
 		(ty-tuple @5.7-5.17
-			(ty @5.8-5.11 (name "Bar"))
-			(ty @5.13-5.16 (name "Baz"))))
+			(ty @5.8-5.11 (name "bar"))
+			(ty @5.13-5.16 (name "baz"))))
 	(s-alias-decl @7.1-7.43
 		(ty-header @7.1-7.8 (name "Some")
 			(ty-args
 				(ty-var @7.6-7.7 (name "a"))))
 		(ty-record @7.11-7.43
 			(field (field "foo")
-				(ty-apply @7.19-7.24 (symbol "Ok")
+				(ty-apply @7.19-7.24 (symbol "ok")
 					(ty-var @7.22-7.23 (name "a"))))
 			(field (field "bar")
-				(ty @7.32-7.41 (name "Something")))))
+				(ty @7.32-7.41 (name "something")))))
 	(s-alias-decl @9.1-9.27
 		(ty-header @9.1-9.9 (name "Maybe")
 			(ty-args
 				(ty-var @9.7-9.8 (name "a"))))
 		(ty-tag-union @9.12-9.27
-			(ty-apply @9.13-9.20 (symbol "Some")
+			(ty-apply @9.13-9.20 (symbol "some")
 				(ty-var @9.18-9.19 (name "a")))
-			(ty @9.22-9.26 (name "None"))))
+			(ty @9.22-9.26 (name "none"))))
 	(s-alias-decl @11.1-11.38
 		(ty-header @11.1-11.12 (name "SomeFunc")
 			(ty-args
 				(ty-var @11.10-11.11 (name "a"))))
 		(ty-fn @11.15-11.38 (effectful false)
-			(ty-apply @11.15-11.23 (symbol "Maybe")
+			(ty-apply @11.15-11.23 (symbol "maybe")
 				(ty-var @11.21-11.22 (name "a")))
 			(ty-var @11.25-11.26 (name "a"))
-			(ty-apply @11.30-11.38 (symbol "Maybe")
+			(ty-apply @11.30-11.38 (symbol "maybe")
 				(ty-var @11.36-11.37 (name "a")))))
 	(s-alias-decl @13.1-13.13
 		(ty-header @13.1-13.7 (name "MyType"))
-		(ty @13.10-13.13 (name "U64")))
+		(ty @13.10-13.13 (name "u64")))
 	(s-alias-decl @15.1-15.24
 		(ty-header @15.1-15.8 (name "MyType2"))
 		(ty-lookup-external @15.11-15.24
-			(ext-decl @15.11-15.24 (ident "Module.Thingy") (kind "type"))))
-	(ext-decl @15.11-15.24 (ident "Module.Thingy") (kind "type")))
+			(ext-decl @15.11-15.24 (ident "module.Thingy") (kind "type"))))
+	(ext-decl @15.11-15.24 (ident "module.Thingy") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

@@ -165,8 +165,21 @@ pub fn deinit(
     const gpa = self.env.gpa;
 
     self.exposed_scope.deinit(gpa);
+
+    // Free all the allocated strings in exposed_ident_texts
+    var ident_iter = self.exposed_ident_texts.iterator();
+    while (ident_iter.next()) |entry| {
+        gpa.free(entry.key_ptr.*);
+    }
     self.exposed_ident_texts.deinit(gpa);
+
+    // Free all the allocated strings in exposed_type_texts
+    var type_iter = self.exposed_type_texts.iterator();
+    while (type_iter.next()) |entry| {
+        gpa.free(entry.key_ptr.*);
+    }
     self.exposed_type_texts.deinit(gpa);
+
     self.unqualified_nominal_tags.deinit(gpa);
 
     for (0..self.scopes.items.len) |i| {
@@ -275,7 +288,8 @@ fn addBuiltin(self: *Self, ir: *ModuleEnv, ident_text: []const u8, idx: Pattern.
     const gpa = ir.gpa;
     const ident_add = try ir.idents.insert(gpa, base.Ident.for_text(ident_text));
     const pattern_idx_add = try ir.addPatternAndTypeVar(Pattern{ .assign = .{ .ident = ident_add } }, Content{ .flex_var = null }, Region.zero());
-    _ = try self.scopeIntroduceInternal(gpa, .ident, ident_add, pattern_idx_add, false, true);
+    // Builtins are module identifiers (like List, Dict, etc.)
+    _ = try self.scopeIntroduceModuleIdent(gpa, ident_add, pattern_idx_add);
     std.debug.assert(idx == pattern_idx_add);
 }
 
@@ -315,7 +329,7 @@ fn addBuiltinType(self: *Self, ir: *ModuleEnv, type_name: []const u8, content: t
 
     // Add to scope without any error checking (built-ins are always valid)
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-    try current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
+    try current_scope.type_decls.put(gpa, type_ident, type_decl_idx);
 
     return type_decl_idx;
 }
@@ -368,7 +382,7 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void 
 
     // Add to scope without any error checking (built-ins are always valid)
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-    try current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
+    try current_scope.type_decls.put(gpa, type_ident, type_decl_idx);
 
     try ir.redirectTypeTo(Pattern.Idx, BUILTIN_BOOL, ModuleEnv.varFrom(type_decl_idx));
 
@@ -577,7 +591,22 @@ pub fn canonicalizeFile(
 
                 // Remove from exposed_type_texts since the type is now fully defined
                 const type_text = self.env.idents.getLowercase(type_header.name);
-                _ = self.exposed_type_texts.remove(type_text);
+                if (self.exposed_type_texts.fetchRemove(type_text)) |kv| {
+                    self.env.gpa.free(kv.key);
+                }
+
+                // Also remove from exposed_scope if it was exposed
+                // We need to find the exposed type by comparing lowercase text since
+                // the exposed identifier index might be different from the type declaration index
+                var iter = self.exposed_scope.type_decls.iterator();
+                while (iter.next()) |entry| {
+                    const exposed_text = self.env.idents.getLowercase(entry.key_ptr.*);
+                    const decl_text = self.env.idents.getLowercase(type_header.name);
+                    if (std.mem.eql(u8, exposed_text, decl_text)) {
+                        _ = self.exposed_scope.type_decls.remove(entry.key_ptr.*);
+                        break;
+                    }
+                }
             },
             else => {
                 // Skip non-type-declaration statements in first pass
@@ -641,7 +670,14 @@ pub fn canonicalizeFile(
                         try self.env.exposed_items.setNodeIndexById(self.env.gpa, @bitCast(idx), def_idx_u16);
                     }
 
-                    _ = self.exposed_ident_texts.remove(ident_text);
+                    if (self.exposed_ident_texts.fetchRemove(ident_text)) |kv| {
+                        self.env.gpa.free(kv.key);
+                    }
+
+                    // Also remove from exposed_scope if it was exposed
+                    if (self.parse_ir.tokens.resolveIdentifier(@intCast(pattern.ident.ident_tok))) |resolved_ident| {
+                        _ = self.exposed_scope.value_idents.remove(resolved_ident);
+                    }
                 }
             },
             .@"var" => |var_stmt| {
@@ -888,6 +924,19 @@ fn createExposedScope(
     self.exposed_scope.deinit(gpa);
     self.exposed_scope = Scope.init(false);
 
+    // Clear and free any existing exposed texts
+    var ident_iter = self.exposed_ident_texts.iterator();
+    while (ident_iter.next()) |entry| {
+        gpa.free(entry.key_ptr.*);
+    }
+    self.exposed_ident_texts.clearRetainingCapacity();
+
+    var type_iter = self.exposed_type_texts.iterator();
+    while (type_iter.next()) |entry| {
+        gpa.free(entry.key_ptr.*);
+    }
+    self.exposed_type_texts.clearRetainingCapacity();
+
     const collection = self.parse_ir.store.getCollection(exposes);
     const exposed_items = self.parse_ir.store.exposedItemSlice(.{ .span = collection.span });
 
@@ -905,102 +954,112 @@ fn createExposedScope(
         const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
         switch (exposed) {
             .lower_ident => |ident| {
-                // Get the text for tracking redundant exposures
-                const token_region = self.parse_ir.tokens.resolve(@intCast(ident.ident));
-                const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
-
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
+                    // Get the text for tracking redundant exposures
+                    const token_region = self.parse_ir.tokens.resolve(@intCast(ident.ident));
+                    const ident_text_original = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
+
+                    // Convert to lowercase for case-insensitive comparison
+                    const ident_text = try std.ascii.allocLowerString(gpa, ident_text_original);
+                    errdefer gpa.free(ident_text);
+
                     // Add to exposed_items for permanent storage (unconditionally)
                     try self.env.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
 
                     // Use a dummy pattern index - we just need to track that it's exposed
                     const dummy_idx = @as(Pattern.Idx, @enumFromInt(0));
-                    try self.exposed_scope.put(gpa, .ident, ident_idx, dummy_idx);
-                }
+                    try self.exposed_scope.value_idents.put(gpa, ident_idx, dummy_idx);
 
-                // Store by text in a temporary hash map, since indices may change
-                const region = self.parse_ir.tokenizedRegionToRegion(ident.region);
+                    // Store by text in a temporary hash map, since indices may change
+                    const region = self.parse_ir.tokenizedRegionToRegion(ident.region);
 
-                // Check if this identifier was already exposed
-                if (self.exposed_ident_texts.get(ident_text)) |original_region| {
-                    // Report redundant exposed entry error
-                    if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
+                    // Check if this identifier was already exposed
+                    if (self.exposed_ident_texts.get(ident_text)) |original_region| {
+                        // Free the string since we're not storing it
+                        gpa.free(ident_text);
+                        // Report redundant exposed entry error
                         const diag = Diagnostic{ .redundant_exposed = .{
                             .ident = ident_idx,
                             .region = region,
                             .original_region = original_region,
                         } };
                         try self.env.pushDiagnostic(diag);
+                    } else {
+                        try self.exposed_ident_texts.put(gpa, ident_text, region);
                     }
-                } else {
-                    try self.exposed_ident_texts.put(gpa, ident_text, region);
                 }
             },
             .upper_ident => |type_name| {
-                // Get the text for tracking redundant exposures
-                const token_region = self.parse_ir.tokens.resolve(@intCast(type_name.ident));
-                const type_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
-
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
+                    // Get the text for tracking redundant exposures
+                    const token_region = self.parse_ir.tokens.resolve(@intCast(type_name.ident));
+                    const type_text_original = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
+                    // Convert to lowercase for case-insensitive comparison
+                    const type_text = try std.ascii.allocLowerString(gpa, type_text_original);
+                    errdefer gpa.free(type_text);
+
                     // Add to exposed_items for permanent storage (unconditionally)
                     try self.env.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
 
                     // Use a dummy statement index - we just need to track that it's exposed
                     const dummy_idx = @as(Statement.Idx, @enumFromInt(0));
-                    try self.exposed_scope.put(gpa, .type_decl, ident_idx, dummy_idx);
-                }
+                    try self.exposed_scope.type_decls.put(gpa, ident_idx, dummy_idx);
 
-                // Store by text in a temporary hash map, since indices may change
-                const region = self.parse_ir.tokenizedRegionToRegion(type_name.region);
+                    // Store by text in a temporary hash map, since indices may change
+                    const region = self.parse_ir.tokenizedRegionToRegion(type_name.region);
 
-                // Check if this type was already exposed
-                if (self.exposed_type_texts.get(type_text)) |original_region| {
-                    // Report redundant exposed entry error
-                    if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
+                    // Check if this type was already exposed
+                    if (self.exposed_type_texts.get(type_text)) |original_region| {
+                        // Free the string since we're not storing it
+                        gpa.free(type_text);
+                        // Report redundant exposed entry error
                         const diag = Diagnostic{ .redundant_exposed = .{
                             .ident = ident_idx,
                             .region = region,
                             .original_region = original_region,
                         } };
                         try self.env.pushDiagnostic(diag);
+                    } else {
+                        try self.exposed_type_texts.put(gpa, type_text, region);
                     }
-                } else {
-                    try self.exposed_type_texts.put(gpa, type_text, region);
                 }
             },
             .upper_ident_star => |type_with_constructors| {
-                // Get the text for tracking redundant exposures
-                const token_region = self.parse_ir.tokens.resolve(@intCast(type_with_constructors.ident));
-                const type_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
-
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
+                    // Get the text for tracking redundant exposures
+                    const token_region = self.parse_ir.tokens.resolve(@intCast(type_with_constructors.ident));
+                    const type_text_original = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
+                    // Convert to lowercase for case-insensitive comparison
+                    const type_text = try std.ascii.allocLowerString(gpa, type_text_original);
+                    errdefer gpa.free(type_text);
+
                     // Add to exposed_items for permanent storage (unconditionally)
                     try self.env.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
 
                     // Use a dummy statement index - we just need to track that it's exposed
                     const dummy_idx = @as(Statement.Idx, @enumFromInt(0));
-                    try self.exposed_scope.put(gpa, .type_decl, ident_idx, dummy_idx);
-                }
+                    try self.exposed_scope.type_decls.put(gpa, ident_idx, dummy_idx);
 
-                // Store by text in a temporary hash map, since indices may change
-                const region = self.parse_ir.tokenizedRegionToRegion(type_with_constructors.region);
+                    // Store by text in a temporary hash map, since indices may change
+                    const region = self.parse_ir.tokenizedRegionToRegion(type_with_constructors.region);
 
-                // Check if this type was already exposed
-                if (self.exposed_type_texts.get(type_text)) |original_region| {
-                    // Report redundant exposed entry error
-                    if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
+                    // Check if this type was already exposed
+                    if (self.exposed_type_texts.get(type_text)) |original_region| {
+                        // Free the string since we're not storing it
+                        gpa.free(type_text);
+                        // Report redundant exposed entry error
                         const diag = Diagnostic{ .redundant_exposed = .{
                             .ident = ident_idx,
                             .region = region,
                             .original_region = original_region,
                         } };
                         try self.env.pushDiagnostic(diag);
+                    } else {
+                        try self.exposed_type_texts.put(gpa, type_text, region);
                     }
-                } else {
-                    try self.exposed_type_texts.put(gpa, type_text, region);
                 }
             },
             .malformed => |malformed| {
@@ -1012,37 +1071,47 @@ fn createExposedScope(
 }
 
 fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
-    const gpa = self.env.gpa;
 
-    // Check for remaining exposed identifiers
-    var ident_iter = self.exposed_ident_texts.iterator();
-    while (ident_iter.next()) |entry| {
-        const ident_text = entry.key_ptr.*;
-        const region = entry.value_ptr.*;
-        // Create an identifier for error reporting
-        const ident_idx = try self.env.idents.insert(gpa, base.Ident.for_text(ident_text));
+    // Check for remaining exposed identifiers that were never defined
+    var value_iter = self.exposed_scope.value_idents.iterator();
+    while (value_iter.next()) |entry| {
+        const ident_idx = entry.key_ptr.*;
+        const ident_text_original = self.env.idents.getLowercase(ident_idx);
 
-        // Report error: exposed identifier but not implemented
-        const diag = Diagnostic{ .exposed_but_not_implemented = .{
-            .ident = ident_idx,
-            .region = region,
-        } };
-        try self.env.pushDiagnostic(diag);
+        // Convert to lowercase to match how it was stored
+        var ident_text_buf: [256]u8 = undefined;
+        const ident_text = std.ascii.lowerString(&ident_text_buf, ident_text_original);
+
+        // Find the region from exposed_ident_texts
+        if (self.exposed_ident_texts.get(ident_text)) |region| {
+            // Report error: exposed identifier but not implemented
+            const diag = Diagnostic{ .exposed_but_not_implemented = .{
+                .ident = ident_idx,
+                .region = region,
+            } };
+            try self.env.pushDiagnostic(diag);
+        }
     }
 
-    // Check for remaining exposed types
-    var iter = self.exposed_type_texts.iterator();
-    while (iter.next()) |entry| {
-        const type_text = entry.key_ptr.*;
-        const region = entry.value_ptr.*;
-        // Create an identifier for error reporting
-        const ident_idx = try self.env.idents.insert(gpa, base.Ident.for_text(type_text));
+    // Check for remaining exposed types that were never defined
+    var type_iter = self.exposed_scope.type_decls.iterator();
+    while (type_iter.next()) |entry| {
+        const ident_idx = entry.key_ptr.*;
+        const type_text_original = self.env.idents.getLowercase(ident_idx);
 
-        // Report error: exposed type but not implemented
-        try self.env.pushDiagnostic(Diagnostic{ .exposed_but_not_implemented = .{
-            .ident = ident_idx,
-            .region = region,
-        } });
+        // Convert to lowercase to match how it was stored
+        var type_text_buf: [256]u8 = undefined;
+        const type_text = std.ascii.lowerString(&type_text_buf, type_text_original);
+
+        // Find the region from exposed_type_texts
+        if (self.exposed_type_texts.get(type_text)) |region| {
+            // Report error: exposed type but not implemented
+            const diag = Diagnostic{ .exposed_but_not_implemented = .{
+                .ident = ident_idx,
+                .region = region,
+            } };
+            try self.env.pushDiagnostic(diag);
+        }
     }
 }
 
@@ -1744,7 +1813,7 @@ pub fn canonicalizeExpr(
                 }
 
                 // Not a module-qualified lookup, or qualifier not found, proceed with normal lookup
-                switch (self.scopeLookup(.ident, ident)) {
+                switch (self.scopeLookupValueIdent(ident)) {
                     .found => |pattern_idx| {
                         // Mark this pattern as used for unused variable checking
                         try self.used_patterns.put(self.env.gpa, pattern_idx, {});
@@ -3028,7 +3097,7 @@ fn canonicalizePattern(
                 } }, .{ .flex_var = null }, region);
 
                 // Introduce the identifier into scope mapping to this pattern node
-                switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
+                switch (try self.scopeIntroduceValueIdent(self.env.gpa, ident_idx, pattern_idx, false, true)) {
                     .success => {},
                     .shadowing_warning => |shadowed_pattern_idx| {
                         const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
@@ -3324,7 +3393,7 @@ fn canonicalizePattern(
                         try self.env.store.addScratchRecordDestruct(destruct_idx);
 
                         // Introduce the identifier into scope
-                        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, field_name_ident, assign_pattern_idx, false, true)) {
+                        switch (try self.scopeIntroduceValueIdent(self.env.gpa, field_name_ident, assign_pattern_idx, false, true)) {
                             .success => {},
                             .shadowing_warning => |shadowed_pattern_idx| {
                                 const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
@@ -3457,7 +3526,7 @@ fn canonicalizePattern(
                             } }, Content{ .flex_var = null }, name_region);
 
                             // Introduce the identifier into scope
-                            switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, assign_idx, false, true)) {
+                            switch (try self.scopeIntroduceValueIdent(self.env.gpa, ident_idx, assign_idx, false, true)) {
                                 .success => {},
                                 .shadowing_warning => |shadowed_pattern_idx| {
                                     const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
@@ -3604,7 +3673,7 @@ fn canonicalizePattern(
                 const pattern_idx = try self.env.addPatternAndTypeVar(as_pattern, .{ .flex_var = null }, region);
 
                 // Introduce the identifier into scope
-                switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
+                switch (try self.scopeIntroduceValueIdent(self.env.gpa, ident_idx, pattern_idx, false, true)) {
                     .success => {},
                     .shadowing_warning => |shadowed_pattern_idx| {
                         const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
@@ -3928,7 +3997,7 @@ fn scopeIntroduceIdent(
     region: Region,
     comptime T: type,
 ) !T {
-    const result = try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true);
+    const result = try self.scopeIntroduceValueIdent(self.env.gpa, ident_idx, pattern_idx, false, true);
 
     switch (result) {
         .success => {
@@ -3970,7 +4039,7 @@ fn scopeIntroduceVar(
     is_declaration: bool,
     comptime T: type,
 ) std.mem.Allocator.Error!T {
-    const result = try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, true, is_declaration);
+    const result = try self.scopeIntroduceValueIdent(self.env.gpa, ident_idx, pattern_idx, true, is_declaration);
 
     switch (result) {
         .success => {
@@ -4832,7 +4901,7 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
                     const region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(d.pattern).to_tokenized_region());
 
                     // Check if this identifier exists and is a var
-                    switch (self.scopeLookup(.ident, ident_idx)) {
+                    switch (self.scopeLookupValueIdent(ident_idx)) {
                         .found => |existing_pattern_idx| {
                             // Check if this is a var reassignment across function boundaries
                             if (self.isVarReassignmentAcrossFunctionBoundary(existing_pattern_idx)) {
@@ -5186,19 +5255,17 @@ pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) !Expr.Idx
     return expr_idx;
 }
 
-/// Check if an identifier is in scope
-fn scopeContains(
+/// Check if a VALUE identifier is in scope
+fn scopeContainsValueIdent(
     self: *Self,
-    comptime item_kind: Scope.ItemKind,
     name: base.Ident.Idx,
 ) ?Pattern.Idx {
     var scope_idx = self.scopes.items.len;
     while (scope_idx > 0) {
         scope_idx -= 1;
         const scope = &self.scopes.items[scope_idx];
-        const map = scope.itemsConst(item_kind);
 
-        var iter = map.iterator();
+        var iter = scope.value_idents.iterator();
         while (iter.next()) |entry| {
             if (name.idx == entry.key_ptr.idx) {
                 return entry.value_ptr.*;
@@ -5208,13 +5275,105 @@ fn scopeContains(
     return null;
 }
 
-/// Look up an identifier in the scope
-fn scopeLookup(
+/// Check if a MODULE identifier is in scope
+fn scopeContainsModuleIdent(
     self: *Self,
-    comptime item_kind: Scope.ItemKind,
+    name: base.Ident.Idx,
+) ?Pattern.Idx {
+    var scope_idx = self.scopes.items.len;
+    while (scope_idx > 0) {
+        scope_idx -= 1;
+        const scope = &self.scopes.items[scope_idx];
+
+        var iter = scope.module_idents.iterator();
+        while (iter.next()) |entry| {
+            if (name.idx == entry.key_ptr.idx) {
+                return entry.value_ptr.*;
+            }
+        }
+    }
+    return null;
+}
+
+/// Check if an ALIAS is in scope
+fn scopeContainsAlias(
+    self: *Self,
+    name: base.Ident.Idx,
+) ?Pattern.Idx {
+    var scope_idx = self.scopes.items.len;
+    while (scope_idx > 0) {
+        scope_idx -= 1;
+        const scope = &self.scopes.items[scope_idx];
+
+        var iter = scope.aliases.iterator();
+        while (iter.next()) |entry| {
+            if (name.idx == entry.key_ptr.idx) {
+                return entry.value_ptr.*;
+            }
+        }
+    }
+    return null;
+}
+
+/// Introduce a new ALIAS to the current scope level
+fn scopeIntroduceAlias(
+    self: *Self,
+    gpa: std.mem.Allocator,
+    ident_idx: base.Ident.Idx,
+    pattern_idx: Pattern.Idx,
+) std.mem.Allocator.Error!Scope.IntroduceResult {
+    // Check for existing ALIAS in any scope level for shadowing detection
+    if (self.scopeContainsAlias(ident_idx)) |existing_pattern| {
+        // Regular shadowing case - produce warning but still introduce
+        try self.scopes.items[self.scopes.items.len - 1].aliases.put(gpa, ident_idx, pattern_idx);
+        return Scope.IntroduceResult{ .shadowing_warning = existing_pattern };
+    }
+
+    // Check the current level for duplicates
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+    var iter = current_scope.aliases.iterator();
+    while (iter.next()) |entry| {
+        if (ident_idx.idx == entry.key_ptr.idx) {
+            // Duplicate in same scope - still introduce but return shadowing warning
+            try self.scopes.items[self.scopes.items.len - 1].aliases.put(gpa, ident_idx, pattern_idx);
+            return Scope.IntroduceResult{ .shadowing_warning = entry.value_ptr.* };
+        }
+    }
+
+    // No conflicts, introduce successfully
+    try self.scopes.items[self.scopes.items.len - 1].aliases.put(gpa, ident_idx, pattern_idx);
+    return Scope.IntroduceResult{ .success = {} };
+}
+
+/// Look up a VALUE identifier in the scope
+fn scopeLookupValueIdent(
+    self: *Self,
     name: base.Ident.Idx,
 ) Scope.LookupResult {
-    if (self.scopeContains(item_kind, name)) |pattern| {
+    if (self.scopeContainsValueIdent(name)) |pattern| {
+        return Scope.LookupResult{ .found = pattern };
+    }
+    return Scope.LookupResult{ .not_found = {} };
+}
+
+/// Look up a MODULE identifier in the scope
+fn scopeLookupModuleIdent(
+    self: *Self,
+    name: base.Ident.Idx,
+) Scope.LookupResult {
+    if (self.scopeContainsModuleIdent(name)) |pattern| {
+        return Scope.LookupResult{ .found = pattern };
+    }
+    return Scope.LookupResult{ .not_found = {} };
+}
+
+/// Look up an ALIAS in the scope
+fn scopeLookupAlias(
+    self: *Self,
+    name: base.Ident.Idx,
+) Scope.LookupResult {
+    if (self.scopeContainsAlias(name)) |pattern| {
         return Scope.LookupResult{ .found = pattern };
     }
     return Scope.LookupResult{ .not_found = {} };
@@ -5452,11 +5611,10 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
     }
 }
 
-/// Introduce a new identifier to the current scope level
-fn scopeIntroduceInternal(
+/// Introduce a new VALUE identifier to the current scope level
+fn scopeIntroduceValueIdent(
     self: *Self,
     gpa: std.mem.Allocator,
-    comptime item_kind: Scope.ItemKind,
     ident_idx: base.Ident.Idx,
     pattern_idx: Pattern.Idx,
     is_var: bool,
@@ -5467,8 +5625,8 @@ fn scopeIntroduceInternal(
         return Scope.IntroduceResult{ .top_level_var_error = {} };
     }
 
-    // Check for existing identifier in any scope level for shadowing detection
-    if (self.scopeContains(item_kind, ident_idx)) |existing_pattern| {
+    // Check for existing VALUE identifier in any scope level for shadowing detection
+    if (self.scopeContainsValueIdent(ident_idx)) |existing_pattern| {
         // If it's a var reassignment (not declaration), check function boundaries
         if (is_var and !is_declaration) {
             // Find the scope where the var was declared and check for function boundaries
@@ -5479,9 +5637,8 @@ fn scopeIntroduceInternal(
             while (scope_idx > 0) {
                 scope_idx -= 1;
                 const scope = &self.scopes.items[scope_idx];
-                const map = scope.itemsConst(item_kind);
 
-                var iter = map.iterator();
+                var iter = scope.value_idents.iterator();
                 while (iter.next()) |entry| {
                     if (ident_idx.idx == entry.key_ptr.idx) {
                         declaration_scope_idx = scope_idx;
@@ -5511,7 +5668,7 @@ fn scopeIntroduceInternal(
                     return Scope.IntroduceResult{ .var_across_function_boundary = existing_pattern };
                 } else {
                     // Same function, allow reassignment without warning
-                    try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+                    try self.scopes.items[self.scopes.items.len - 1].value_idents.put(gpa, ident_idx, pattern_idx);
                     return Scope.IntroduceResult{ .success = {} };
                 }
             }
@@ -5523,25 +5680,55 @@ fn scopeIntroduceInternal(
 
         // For non-var declarations, we should still report shadowing
         // Regular shadowing case - produce warning but still introduce
-        try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+        try self.scopes.items[self.scopes.items.len - 1].value_idents.put(gpa, ident_idx, pattern_idx);
         return Scope.IntroduceResult{ .shadowing_warning = existing_pattern };
     }
 
     // Check the current level for duplicates
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-    const map = current_scope.itemsConst(item_kind);
 
-    var iter = map.iterator();
+    var iter = current_scope.value_idents.iterator();
     while (iter.next()) |entry| {
         if (ident_idx.idx == entry.key_ptr.idx) {
             // Duplicate in same scope - still introduce but return shadowing warning
-            try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+            try self.scopes.items[self.scopes.items.len - 1].value_idents.put(gpa, ident_idx, pattern_idx);
             return Scope.IntroduceResult{ .shadowing_warning = entry.value_ptr.* };
         }
     }
 
     // No conflicts, introduce successfully
-    try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+    try self.scopes.items[self.scopes.items.len - 1].value_idents.put(gpa, ident_idx, pattern_idx);
+    return Scope.IntroduceResult{ .success = {} };
+}
+
+/// Introduce a new MODULE identifier to the current scope level
+fn scopeIntroduceModuleIdent(
+    self: *Self,
+    gpa: std.mem.Allocator,
+    ident_idx: base.Ident.Idx,
+    pattern_idx: Pattern.Idx,
+) std.mem.Allocator.Error!Scope.IntroduceResult {
+    // Check for existing MODULE identifier in any scope level for shadowing detection
+    if (self.scopeContainsModuleIdent(ident_idx)) |existing_pattern| {
+        // Regular shadowing case - produce warning but still introduce
+        try self.scopes.items[self.scopes.items.len - 1].module_idents.put(gpa, ident_idx, pattern_idx);
+        return Scope.IntroduceResult{ .shadowing_warning = existing_pattern };
+    }
+
+    // Check the current level for duplicates
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+    var iter = current_scope.module_idents.iterator();
+    while (iter.next()) |entry| {
+        if (ident_idx.idx == entry.key_ptr.idx) {
+            // Duplicate in same scope - still introduce but return shadowing warning
+            try self.scopes.items[self.scopes.items.len - 1].module_idents.put(gpa, ident_idx, pattern_idx);
+            return Scope.IntroduceResult{ .shadowing_warning = entry.value_ptr.* };
+        }
+    }
+
+    // No conflicts, introduce successfully
+    try self.scopes.items[self.scopes.items.len - 1].module_idents.put(gpa, ident_idx, pattern_idx);
     return Scope.IntroduceResult{ .success = {} };
 }
 
@@ -5569,7 +5756,7 @@ fn checkUsedUnderscoreVariable(
 
 fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Allocator.Error!void {
     // Iterate through all identifiers in this scope
-    var iterator = scope.idents.iterator();
+    var iterator = scope.value_idents.iterator();
     while (iterator.next()) |entry| {
         const ident_idx = entry.key_ptr.*;
         const pattern_idx = entry.value_ptr.*;
@@ -5812,9 +5999,17 @@ fn scopeLookupExposedItem(self: *const Self, item_name: Ident.Idx) ?Scope.Expose
         i -= 1;
         const scope = &self.scopes.items[i];
 
-        switch (scope.lookupExposedItem(item_name)) {
-            .found => |item_info| return item_info,
-            .not_found => continue,
+        // Check if it's a type or value based on identifier case
+        if (self.isTypeIdentifier(item_name)) {
+            switch (scope.lookupExposedType(item_name)) {
+                .found => |item_info| return item_info,
+                .not_found => continue,
+            }
+        } else {
+            switch (scope.lookupExposedValue(item_name)) {
+                .found => |item_info| return item_info,
+                .not_found => continue,
+            }
         }
     }
 
@@ -5822,23 +6017,44 @@ fn scopeLookupExposedItem(self: *const Self, item_name: Ident.Idx) ?Scope.Expose
 }
 
 /// Introduce an exposed item into the current scope
+/// Check if an identifier represents a type (starts with uppercase letter)
+fn isTypeIdentifier(self: *const Self, ident_idx: Ident.Idx) bool {
+    const text = self.env.idents.getLowercase(ident_idx);
+    // If empty or doesn't start with a letter, it's not a type
+    if (text.len == 0) return false;
+
+    // Check if first character is a lowercase letter
+    // If it is, then the original was uppercase (due to case normalization)
+    // Types in Roc start with uppercase letters
+    return text[0] >= 'a' and text[0] <= 'z';
+}
+
 fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope.ExposedItemInfo) std.mem.Allocator.Error!void {
+    // Determine if this is a type or value based on the identifier
+    if (self.isTypeIdentifier(item_name)) {
+        try self.scopeIntroduceExposedType(item_name, item_info);
+    } else {
+        try self.scopeIntroduceExposedValue(item_name, item_info);
+    }
+}
+
+fn scopeIntroduceExposedValue(self: *Self, item_name: Ident.Idx, item_info: Scope.ExposedItemInfo) std.mem.Allocator.Error!void {
     const gpa = self.env.gpa;
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
     // Simplified introduction without parent lookup for now
-    const result = try current_scope.introduceExposedItem(gpa, item_name, item_info, null);
+    const result = try current_scope.introduceExposedValue(gpa, item_name, item_info, null);
 
     switch (result) {
         .success => {},
         .shadowing_warning => |shadowed_info| {
-            // Create diagnostic for exposed item shadowing
+            // Create diagnostic for exposed value shadowing
             const item_text = self.env.idents.getLowercase(item_name);
             const shadowed_module_text = self.env.idents.getLowercase(shadowed_info.module_name);
             const current_module_text = self.env.idents.getLowercase(item_info.module_name);
 
             // For now, just add a simple diagnostic message
-            const message = try std.fmt.allocPrint(gpa, "Exposed item '{s}' from module '{s}' shadows item from module '{s}'", .{ item_text, current_module_text, shadowed_module_text });
+            const message = try std.fmt.allocPrint(gpa, "Exposed value '{s}' from module '{s}' shadows value from module '{s}'", .{ item_text, current_module_text, shadowed_module_text });
             const message_str = try self.env.strings.insert(gpa, message);
             gpa.free(message);
 
@@ -5850,12 +6066,59 @@ fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope
             });
         },
         .already_in_scope => |existing_info| {
-            // Create diagnostic for duplicate exposed item
+            // Create diagnostic for duplicate exposed value
             const item_text = self.env.idents.getLowercase(item_name);
             const existing_module_text = self.env.idents.getLowercase(existing_info.module_name);
             const new_module_text = self.env.idents.getLowercase(item_info.module_name);
 
-            const message = try std.fmt.allocPrint(gpa, "Exposed item '{s}' already imported from module '{s}', cannot import again from module '{s}'", .{ item_text, existing_module_text, new_module_text });
+            const message = try std.fmt.allocPrint(gpa, "Exposed value '{s}' already imported from module '{s}', cannot import again from module '{s}'", .{ item_text, existing_module_text, new_module_text });
+            const message_str = try self.env.strings.insert(gpa, message);
+            gpa.free(message);
+
+            try self.env.pushDiagnostic(Diagnostic{
+                .not_implemented = .{
+                    .feature = message_str,
+                    .region = Region.zero(), // TODO: Get proper region from import statement
+                },
+            });
+        },
+    }
+}
+
+fn scopeIntroduceExposedType(self: *Self, item_name: Ident.Idx, item_info: Scope.ExposedItemInfo) std.mem.Allocator.Error!void {
+    const gpa = self.env.gpa;
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+    // Simplified introduction without parent lookup for now
+    const result = try current_scope.introduceExposedType(gpa, item_name, item_info, null);
+
+    switch (result) {
+        .success => {},
+        .shadowing_warning => |shadowed_info| {
+            // Create diagnostic for exposed type shadowing
+            const item_text = self.env.idents.getLowercase(item_name);
+            const shadowed_module_text = self.env.idents.getLowercase(shadowed_info.module_name);
+            const current_module_text = self.env.idents.getLowercase(item_info.module_name);
+
+            // For now, just add a simple diagnostic message
+            const message = try std.fmt.allocPrint(gpa, "Exposed type '{s}' from module '{s}' shadows type from module '{s}'", .{ item_text, current_module_text, shadowed_module_text });
+            const message_str = try self.env.strings.insert(gpa, message);
+            gpa.free(message);
+
+            try self.env.pushDiagnostic(Diagnostic{
+                .not_implemented = .{
+                    .feature = message_str,
+                    .region = Region.zero(), // TODO: Get proper region from import statement
+                },
+            });
+        },
+        .already_in_scope => |existing_info| {
+            // Create diagnostic for duplicate exposed type
+            const item_text = self.env.idents.getLowercase(item_name);
+            const existing_module_text = self.env.idents.getLowercase(existing_info.module_name);
+            const new_module_text = self.env.idents.getLowercase(item_info.module_name);
+
+            const message = try std.fmt.allocPrint(gpa, "Exposed type '{s}' already imported from module '{s}', cannot import again from module '{s}'", .{ item_text, existing_module_text, new_module_text });
             const message_str = try self.env.strings.insert(gpa, message);
             gpa.free(message);
 
@@ -5879,9 +6142,17 @@ fn scopeLookupExposedItemInParentScopes(self: *const Self, item_name: Ident.Idx)
         i -= 1;
         const scope = &self.scopes.items[i];
 
-        switch (scope.lookupExposedItem(&self.env.idents, item_name)) {
-            .found => |item_info| return item_info,
-            .not_found => continue,
+        // Check if it's a type or value based on identifier case
+        if (self.isTypeIdentifier(item_name)) {
+            switch (scope.lookupExposedType(item_name)) {
+                .found => |item_info| return item_info,
+                .not_found => continue,
+            }
+        } else {
+            switch (scope.lookupExposedValue(item_name)) {
+                .found => |item_info| return item_info,
+                .not_found => continue,
+            }
         }
     }
 
@@ -6765,7 +7036,7 @@ test "empty scope has no items" {
     defer ctx.deinit();
 
     const foo_ident = try ctx.module_env.idents.insert(gpa, base.Ident.for_text("foo"));
-    const result = ctx.self.scopeLookup(.ident, foo_ident);
+    const result = ctx.self.scopeLookupValueIdent(foo_ident);
 
     try std.testing.expectEqual(Scope.LookupResult{ .not_found = {} }, result);
 }
@@ -6782,15 +7053,15 @@ test "can add and lookup idents at top level" {
     const bar_pattern: Pattern.Idx = @enumFromInt(2);
 
     // Add identifiers
-    const foo_result = ctx.self.scopeIntroduceInternal(gpa, .ident, foo_ident, foo_pattern, false, true);
-    const bar_result = ctx.self.scopeIntroduceInternal(gpa, .ident, bar_ident, bar_pattern, false, true);
+    const foo_result = ctx.self.scopeIntroduceValueIdent(gpa, foo_ident, foo_pattern, false, true);
+    const bar_result = ctx.self.scopeIntroduceValueIdent(gpa, bar_ident, bar_pattern, false, true);
 
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, foo_result);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, bar_result);
 
     // Lookup should find them
-    const foo_lookup = ctx.self.scopeLookup(.ident, foo_ident);
-    const bar_lookup = ctx.self.scopeLookup(.ident, bar_ident);
+    const foo_lookup = ctx.self.scopeLookupValueIdent(foo_ident);
+    const bar_lookup = ctx.self.scopeLookupValueIdent(bar_ident);
 
     try std.testing.expectEqual(Scope.LookupResult{ .found = foo_pattern }, foo_lookup);
     try std.testing.expectEqual(Scope.LookupResult{ .found = bar_pattern }, bar_lookup);
@@ -6807,29 +7078,29 @@ test "nested scopes shadow outer scopes" {
     const inner_pattern: Pattern.Idx = @enumFromInt(2);
 
     // Add x to outer scope
-    const outer_result = ctx.self.scopeIntroduceInternal(gpa, .ident, x_ident, outer_pattern, false, true);
+    const outer_result = ctx.self.scopeIntroduceValueIdent(gpa, x_ident, outer_pattern, false, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, outer_result);
 
     // Enter new scope
     try ctx.self.scopeEnter(gpa, false);
 
     // x from outer scope should still be visible
-    const outer_lookup = ctx.self.scopeLookup(.ident, x_ident);
+    const outer_lookup = ctx.self.scopeLookupValueIdent(x_ident);
     try std.testing.expectEqual(Scope.LookupResult{ .found = outer_pattern }, outer_lookup);
 
     // Add x to inner scope (shadows outer)
-    const inner_result = ctx.self.scopeIntroduceInternal(gpa, .ident, x_ident, inner_pattern, false, true);
+    const inner_result = ctx.self.scopeIntroduceValueIdent(gpa, x_ident, inner_pattern, false, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .shadowing_warning = outer_pattern }, inner_result);
 
     // Now x should resolve to inner scope
-    const inner_lookup = ctx.self.scopeLookup(.ident, x_ident);
+    const inner_lookup = ctx.self.scopeLookupValueIdent(x_ident);
     try std.testing.expectEqual(Scope.LookupResult{ .found = inner_pattern }, inner_lookup);
 
     // Exit inner scope
     try ctx.self.scopeExit(gpa);
 
     // x should resolve to outer scope again
-    const after_exit_lookup = ctx.self.scopeLookup(.ident, x_ident);
+    const after_exit_lookup = ctx.self.scopeLookupValueIdent(x_ident);
     try std.testing.expectEqual(Scope.LookupResult{ .found = outer_pattern }, after_exit_lookup);
 }
 
@@ -6843,7 +7114,7 @@ test "top level var error" {
     const pattern: Pattern.Idx = @enumFromInt(1);
 
     // Should fail to introduce var at top level
-    const result = ctx.self.scopeIntroduceInternal(gpa, .ident, var_ident, pattern, true, true);
+    const result = ctx.self.scopeIntroduceValueIdent(gpa, var_ident, pattern, true, true);
 
     try std.testing.expectEqual(Scope.IntroduceResult{ .top_level_var_error = {} }, result);
 }
@@ -6860,7 +7131,7 @@ test "type variables are tracked separately from value identifiers" {
     const type_anno: TypeAnno.Idx = @enumFromInt(1);
 
     // Introduce 'a' as a value identifier
-    const value_result = ctx.self.scopeIntroduceInternal(gpa, .ident, a_ident, pattern, false, true);
+    const value_result = ctx.self.scopeIntroduceValueIdent(gpa, a_ident, pattern, false, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, value_result);
 
     // Introduce 'a' as a type variable - should succeed because they're in separate namespaces
@@ -6869,7 +7140,7 @@ test "type variables are tracked separately from value identifiers" {
     try std.testing.expectEqual(Scope.TypeVarIntroduceResult{ .success = {} }, type_result);
 
     // Lookup 'a' as value should find the pattern
-    const value_lookup = ctx.self.scopeLookup(.ident, a_ident);
+    const value_lookup = ctx.self.scopeLookupValueIdent(a_ident);
     try std.testing.expectEqual(Scope.LookupResult{ .found = pattern }, value_lookup);
 
     // Lookup 'a' as type variable should find the type annotation
@@ -6891,15 +7162,15 @@ test "var reassignment within same function" {
     const pattern2: Pattern.Idx = @enumFromInt(2);
 
     // Declare var
-    const declare_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern1, true, true);
+    const declare_result = ctx.self.scopeIntroduceValueIdent(gpa, count_ident, pattern1, true, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, declare_result);
 
     // Reassign var (not a declaration)
-    const reassign_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern2, true, false);
+    const reassign_result = ctx.self.scopeIntroduceValueIdent(gpa, count_ident, pattern2, true, false);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, reassign_result);
 
     // Should resolve to the reassigned value
-    const lookup_result = ctx.self.scopeLookup(.ident, count_ident);
+    const lookup_result = ctx.self.scopeLookupValueIdent(count_ident);
     try std.testing.expectEqual(Scope.LookupResult{ .found = pattern2 }, lookup_result);
 }
 
@@ -6917,14 +7188,14 @@ test "var reassignment across function boundary fails" {
     const pattern2: Pattern.Idx = @enumFromInt(2);
 
     // Declare var in first function
-    const declare_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern1, true, true);
+    const declare_result = ctx.self.scopeIntroduceValueIdent(gpa, count_ident, pattern1, true, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, declare_result);
 
     // Enter second function scope (function boundary)
     try ctx.self.scopeEnter(gpa, true);
 
     // Try to reassign var from different function - should fail
-    const reassign_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern2, true, false);
+    const reassign_result = ctx.self.scopeIntroduceValueIdent(gpa, count_ident, pattern2, true, false);
     try std.testing.expectEqual(Scope.IntroduceResult{ .var_across_function_boundary = pattern1 }, reassign_result);
 }
 
@@ -6943,16 +7214,16 @@ test "identifiers with and without underscores are different" {
     try ctx.self.scopeEnter(gpa, true);
 
     // Introduce regular identifier
-    const regular_result = ctx.self.scopeIntroduceInternal(gpa, .ident, sum_ident, pattern1, false, true);
+    const regular_result = ctx.self.scopeIntroduceValueIdent(gpa, sum_ident, pattern1, false, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, regular_result);
 
     // Introduce var with underscore - should not conflict
-    const var_result = ctx.self.scopeIntroduceInternal(gpa, .ident, sum_underscore_ident, pattern2, true, true);
+    const var_result = ctx.self.scopeIntroduceValueIdent(gpa, sum_underscore_ident, pattern2, true, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, var_result);
 
     // Both should be found independently
-    const regular_lookup = ctx.self.scopeLookup(.ident, sum_ident);
-    const var_lookup = ctx.self.scopeLookup(.ident, sum_underscore_ident);
+    const regular_lookup = ctx.self.scopeLookupValueIdent(sum_ident);
+    const var_lookup = ctx.self.scopeLookupValueIdent(sum_underscore_ident);
 
     try std.testing.expectEqual(Scope.LookupResult{ .found = pattern1 }, regular_lookup);
     try std.testing.expectEqual(Scope.LookupResult{ .found = pattern2 }, var_lookup);
@@ -6969,15 +7240,15 @@ test "aliases work separately from idents" {
     const alias_pattern: Pattern.Idx = @enumFromInt(2);
 
     // Add as both ident and alias (they're in separate namespaces)
-    const ident_result = ctx.self.scopeIntroduceInternal(gpa, .ident, foo_ident, ident_pattern, false, true);
-    const alias_result = ctx.self.scopeIntroduceInternal(gpa, .alias, foo_ident, alias_pattern, false, true);
+    const ident_result = ctx.self.scopeIntroduceValueIdent(gpa, foo_ident, ident_pattern, false, true);
+    const alias_result = ctx.self.scopeIntroduceAlias(gpa, foo_ident, alias_pattern);
 
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, ident_result);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, alias_result);
 
     // Both should be found in their respective namespaces
-    const ident_lookup = ctx.self.scopeLookup(.ident, foo_ident);
-    const alias_lookup = ctx.self.scopeLookup(.alias, foo_ident);
+    const ident_lookup = ctx.self.scopeLookupValueIdent(foo_ident);
+    const alias_lookup = ctx.self.scopeLookupAlias(foo_ident);
 
     try std.testing.expectEqual(Scope.LookupResult{ .found = ident_pattern }, ident_lookup);
     try std.testing.expectEqual(Scope.LookupResult{ .found = alias_pattern }, alias_lookup);

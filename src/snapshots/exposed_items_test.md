@@ -51,8 +51,8 @@ NO CHANGE
 		(e-int @5.8-5.10 (value "42")))
 	(s-import @3.1-3.42 (module "pf.Stdout") (qualifier "pf")
 		(exposes
-			(exposed (name "line!") (wildcard false))
-			(exposed (name "write!") (wildcard false)))))
+			(exposed (name "Line!") (wildcard false))
+			(exposed (name "Write!") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

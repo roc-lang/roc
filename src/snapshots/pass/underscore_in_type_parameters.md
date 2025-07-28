@@ -170,7 +170,7 @@ MultiType(_, _, c) : c
 		(ty-header @4.1-4.10 (name "MyType")
 			(ty-args
 				(ty-underscore @4.8-4.9)))
-		(ty @4.13-4.16 (name "Str")))
+		(ty @4.13-4.16 (name "str")))
 	(s-alias-decl @7.1-7.18
 		(ty-header @7.1-7.14 (name "MyType2")
 			(ty-args

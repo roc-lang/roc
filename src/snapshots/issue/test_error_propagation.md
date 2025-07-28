@@ -70,13 +70,13 @@ NO CHANGE
 			(e-literal @8.10-8.14 (string "test")))
 		(annotation @8.1-8.6
 			(declared-type
-				(ty @7.9-7.18 (name "GoodAlias")))))
+				(ty @7.9-7.18 (name "goodAlias")))))
 	(s-nominal-decl @3.1-3.13
 		(ty-header @3.1-3.8 (name "BadBase"))
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @5.1-5.21
 		(ty-header @5.1-5.10 (name "GoodAlias"))
-		(ty @5.14-5.21 (name "BadBase"))))
+		(ty @5.14-5.21 (name "badBase"))))
 ~~~
 # TYPES
 ~~~clojure

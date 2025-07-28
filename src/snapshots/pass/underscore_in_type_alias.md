@@ -210,7 +210,7 @@ TagType := [Some(_), None]
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @7.1-7.23
 		(ty-header @7.1-7.12 (name "ComplexType"))
-		(ty-apply @7.16-7.23 (symbol "List")
+		(ty-apply @7.16-7.23 (symbol "list")
 			(ty-underscore @7.21-7.21)))
 	(s-nominal-decl @9.1-9.39
 		(ty-header @9.1-9.11 (name "RecordType"))
@@ -218,7 +218,7 @@ TagType := [Some(_), None]
 			(field (field "field")
 				(ty-underscore @1.1-1.1))
 			(field (field "other")
-				(ty @9.34-9.37 (name "U32")))))
+				(ty @9.34-9.37 (name "u32")))))
 	(s-nominal-decl @11.1-11.23
 		(ty-header @11.1-11.13 (name "FunctionType"))
 		(ty-fn @11.17-11.23 (effectful false)
@@ -228,14 +228,14 @@ TagType := [Some(_), None]
 		(ty-header @13.1-13.10 (name "TupleType"))
 		(ty-tuple @13.14-13.25
 			(ty-underscore @13.15-13.15)
-			(ty @13.18-13.21 (name "U32"))
+			(ty @13.18-13.21 (name "u32"))
 			(ty-underscore @1.1-1.1)))
 	(s-nominal-decl @15.1-15.27
 		(ty-header @15.1-15.8 (name "TagType"))
 		(ty-tag-union @15.12-15.27
-			(ty-apply @15.13-15.20 (symbol "Some")
+			(ty-apply @15.13-15.20 (symbol "some")
 				(ty-underscore @15.18-15.18))
-			(ty @15.22-15.26 (name "None")))))
+			(ty @15.22-15.26 (name "none")))))
 ~~~
 # TYPES
 ~~~clojure

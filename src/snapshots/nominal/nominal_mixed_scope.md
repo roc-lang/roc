@@ -48,7 +48,7 @@ This feature is not yet implemented: statement type in block
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
-Nothing is named `Color` in this scope.
+Nothing is named `color` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **nominal_mixed_scope.md:9:12:9:17:**
@@ -59,7 +59,7 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `RGB` in this scope.
+Nothing is named `rGB` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **nominal_mixed_scope.md:12:9:12:12:**
@@ -70,7 +70,7 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `RGB` in this scope.
+Nothing is named `rGB` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **nominal_mixed_scope.md:13:9:13:12:**
@@ -81,7 +81,7 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `RGB` in this scope.
+Nothing is named `rGB` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **nominal_mixed_scope.md:14:9:14:12:**
@@ -110,7 +110,7 @@ CloseCurly(16:1-16:2),EndOfFile(16:2-16:2),
 (file @1.1-16.2
 	(module @1.1-1.35
 		(exposes @1.8-1.35
-			(exposed-upper-ident @1.9-1.20 (text "LocalStatus"))
+			(exposed-upper-ident @1.9-1.20 (text "localStatus"))
 			(exposed-lower-ident @1.22-1.34
 				(text "processColor"))))
 	(statements
@@ -209,12 +209,12 @@ processColor = |color| {
 			(declared-type
 				(ty-fn @5.16-5.32 (effectful false)
 					(ty-underscore @1.1-1.1)
-					(ty @5.21-5.32 (name "LocalStatus"))))))
+					(ty @5.21-5.32 (name "localStatus"))))))
 	(s-nominal-decl @3.1-3.35
 		(ty-header @3.1-3.12 (name "LocalStatus"))
 		(ty-tag-union @3.16-3.35
-			(ty @3.17-3.24 (name "Pending"))
-			(ty @3.26-3.34 (name "Complete")))))
+			(ty @3.17-3.24 (name "pending"))
+			(ty @3.26-3.34 (name "complete")))))
 ~~~
 # TYPES
 ~~~clojure

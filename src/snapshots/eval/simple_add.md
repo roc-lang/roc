@@ -83,9 +83,9 @@ NO CHANGE
 		(annotation @4.1-4.6
 			(declared-type
 				(ty-fn @3.9-3.21 (effectful false)
-					(ty @3.9-3.11 (name "U8"))
-					(ty @3.13-3.15 (name "U8"))
-					(ty @3.19-3.21 (name "U8"))))))
+					(ty @3.9-3.11 (name "u8"))
+					(ty @3.13-3.15 (name "u8"))
+					(ty @3.19-3.21 (name "u8"))))))
 	(s-expect @6.1-6.24
 		(e-binop @6.8-6.24 (op "eq")
 			(e-call @6.8-6.19

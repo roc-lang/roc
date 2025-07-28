@@ -174,7 +174,7 @@ main! = |_| {}
 		(annotation @5.1-5.8
 			(declared-type
 				(ty-fn @4.11-4.29 (effectful false)
-					(ty-apply @4.11-4.21 (symbol "List")
+					(ty-apply @4.11-4.21 (symbol "list")
 						(ty-var @4.16-4.20 (name "elem")))
 					(ty-var @4.25-4.29 (name "elem"))))))
 	(d-let

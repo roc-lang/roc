@@ -26,14 +26,14 @@ The module header says that `something` is exposed, but it is not defined anywhe
 You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `SomeType` is exposed, but it is not defined anywhere in this module.
+The module header says that `someType` is exposed, but it is not defined anywhere in this module.
 
 **module_multiline_with_comments.md:4:3:4:11:**
 ```roc
 		SomeType, # Comment after final exposed item
 ```
   ^^^^^^^^
-You can fix this by either defining `SomeType` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `someType` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -50,7 +50,7 @@ CloseSquare(5:2-5:3),EndOfFile(5:3-5:3),
 		(exposes @2.2-5.3
 			(exposed-lower-ident @3.3-3.12
 				(text "something"))
-			(exposed-upper-ident @4.3-4.11 (text "SomeType"))))
+			(exposed-upper-ident @4.3-4.11 (text "someType"))))
 	(statements))
 ~~~
 # FORMATTED

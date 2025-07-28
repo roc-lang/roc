@@ -148,7 +148,7 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 (file @1.1-12.2
 	(module @1.1-1.29
 		(exposes @1.8-1.29
-			(exposed-upper-ident @1.9-1.15 (text "Result"))
+			(exposed-upper-ident @1.9-1.15 (text "result"))
 			(exposed-lower-ident @1.17-1.28
 				(text "processData"))))
 	(statements
@@ -211,17 +211,17 @@ InnerModule :
 		(annotation @6.1-6.12
 			(declared-type
 				(ty-fn @5.15-5.25 (effectful false)
-					(ty @5.15-5.18 (name "Str"))
-					(ty @5.22-5.25 (name "Str"))))))
+					(ty @5.15-5.18 (name "str"))
+					(ty @5.22-5.25 (name "str"))))))
 	(s-alias-decl @3.1-3.31
 		(ty-header @3.1-3.13 (name "Result")
 			(ty-args
 				(ty-var @3.8-3.9 (name "a"))
 				(ty-var @3.11-3.12 (name "b"))))
 		(ty-tag-union @3.16-3.31
-			(ty-apply @3.17-3.22 (symbol "Ok")
+			(ty-apply @3.17-3.22 (symbol "ok")
 				(ty-var @3.20-3.21 (name "a")))
-			(ty-apply @3.24-3.30 (symbol "Err")
+			(ty-apply @3.24-3.30 (symbol "err")
 				(ty-var @3.28-3.29 (name "b")))))
 	(s-alias-decl @10.1-11.31
 		(ty-header @10.1-10.12 (name "InnerModule"))

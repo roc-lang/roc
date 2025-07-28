@@ -95,11 +95,11 @@ NO CHANGE
 		(annotation @4.1-4.12
 			(declared-type
 				(ty-fn @3.15-3.42 (effectful false)
-					(ty-apply @3.15-3.29 (symbol "Dict")
-						(ty @3.20-3.23 (name "Str"))
-						(ty @3.25-3.28 (name "U64")))
-					(ty-apply @3.33-3.42 (symbol "List")
-						(ty @3.38-3.41 (name "Str")))))))
+					(ty-apply @3.15-3.29 (symbol "dict")
+						(ty @3.20-3.23 (name "str"))
+						(ty @3.25-3.28 (name "u64")))
+					(ty-apply @3.33-3.42 (symbol "list")
+						(ty @3.38-3.41 (name "str")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-closure @6.9-6.55

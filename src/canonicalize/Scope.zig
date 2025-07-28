@@ -9,8 +9,10 @@ const Ident = base.Ident;
 
 const Scope = @This();
 
-/// Maps an Ident to a Pattern in the Can IR
-idents: std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Pattern.Idx),
+/// Maps VALUE identifiers to their Pattern in the Can IR
+value_idents: std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Pattern.Idx),
+/// Maps MODULE identifiers to their Pattern in the Can IR
+module_idents: std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Pattern.Idx),
 aliases: std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Pattern.Idx),
 /// Maps type names to their type declaration statements
 type_decls: std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Statement.Idx),
@@ -18,8 +20,12 @@ type_decls: std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Statement.Idx),
 type_vars: std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.TypeAnno.Idx),
 /// Maps module alias names to their full module names
 module_aliases: std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
-/// Maps exposed item names to their source modules and original names (for import resolution)
-exposed_items: std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
+/// Maps exposed VALUE names to their source modules and original names (for import resolution)
+exposed_values: std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
+/// Maps exposed TYPE names to their source modules and original names (for import resolution)
+exposed_types: std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
+/// Maps exposed MODULE names to their source modules and original names (for import resolution)
+exposed_modules: std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
 /// Maps module names to their Import.Idx for modules imported in this scope
 imported_modules: std.StringHashMapUnmanaged(ModuleEnv.Import.Idx),
 is_function_boundary: bool,
@@ -27,12 +33,15 @@ is_function_boundary: bool,
 /// Initialize the scope
 pub fn init(is_function_boundary: bool) Scope {
     return Scope{
-        .idents = std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Pattern.Idx){},
+        .value_idents = std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Pattern.Idx){},
+        .module_idents = std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Pattern.Idx){},
         .aliases = std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Pattern.Idx){},
         .type_decls = std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Statement.Idx){},
         .type_vars = std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.TypeAnno.Idx){},
         .module_aliases = std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx){},
-        .exposed_items = std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo){},
+        .exposed_values = std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo){},
+        .exposed_types = std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo){},
+        .exposed_modules = std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo){},
         .imported_modules = std.StringHashMapUnmanaged(ModuleEnv.Import.Idx){},
         .is_function_boundary = is_function_boundary,
     };
@@ -40,12 +49,15 @@ pub fn init(is_function_boundary: bool) Scope {
 
 /// Deinitialize the scope
 pub fn deinit(self: *Scope, gpa: std.mem.Allocator) void {
-    self.idents.deinit(gpa);
+    self.value_idents.deinit(gpa);
+    self.module_idents.deinit(gpa);
     self.aliases.deinit(gpa);
     self.type_decls.deinit(gpa);
     self.type_vars.deinit(gpa);
     self.module_aliases.deinit(gpa);
-    self.exposed_items.deinit(gpa);
+    self.exposed_values.deinit(gpa);
+    self.exposed_types.deinit(gpa);
+    self.exposed_modules.deinit(gpa);
     self.imported_modules.deinit(gpa);
 }
 
@@ -150,56 +162,6 @@ pub const ImportedModuleIntroduceResult = union(enum) {
     already_imported: ModuleEnv.Import.Idx, // The module was already imported in this scope
 };
 
-/// Item kinds in a scope
-pub const ItemKind = enum { ident, alias, type_decl, type_var, module_alias, exposed_item };
-
-/// Get the appropriate map for the given item kind
-pub fn items(scope: *Scope, comptime item_kind: ItemKind) switch (item_kind) {
-    .ident, .alias => *std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Pattern.Idx),
-    .type_decl => *std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Statement.Idx),
-    .type_var => *std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.TypeAnno.Idx),
-    .module_alias => *std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
-    .exposed_item => *std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
-} {
-    return switch (item_kind) {
-        .ident => &scope.idents,
-        .alias => &scope.aliases,
-        .type_decl => &scope.type_decls,
-        .type_var => &scope.type_vars,
-        .module_alias => &scope.module_aliases,
-        .exposed_item => &scope.exposed_items,
-    };
-}
-
-/// Get the appropriate map for the given item kind (const version)
-pub fn itemsConst(scope: *const Scope, comptime item_kind: ItemKind) switch (item_kind) {
-    .ident, .alias => *const std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Pattern.Idx),
-    .type_decl => *const std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.Statement.Idx),
-    .type_var => *const std.AutoHashMapUnmanaged(Ident.Idx, ModuleEnv.TypeAnno.Idx),
-    .module_alias => *const std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
-    .exposed_item => *const std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
-} {
-    return switch (item_kind) {
-        .ident => &scope.idents,
-        .alias => &scope.aliases,
-        .type_decl => &scope.type_decls,
-        .type_var => &scope.type_vars,
-        .module_alias => &scope.module_aliases,
-        .exposed_item => &scope.exposed_items,
-    };
-}
-
-/// Put an item in the scope, panics on OOM
-pub fn put(scope: *Scope, gpa: std.mem.Allocator, comptime item_kind: ItemKind, name: Ident.Idx, value: switch (item_kind) {
-    .ident, .alias => ModuleEnv.Pattern.Idx,
-    .type_decl => ModuleEnv.Statement.Idx,
-    .type_var => ModuleEnv.TypeAnno.Idx,
-    .module_alias => Ident.Idx,
-    .exposed_item => ExposedItemInfo,
-}) std.mem.Allocator.Error!void {
-    try scope.items(item_kind).put(gpa, name, value);
-}
-
 /// Introduce a type declaration into the scope
 pub fn introduceTypeDecl(
     scope: *Scope,
@@ -223,7 +185,7 @@ pub fn introduceTypeDecl(
         shadowed_stmt = lookup_fn(name);
     }
 
-    try scope.put(gpa, .type_decl, name, type_decl);
+    try scope.type_decls.put(gpa, name, type_decl);
 
     if (shadowed_stmt) |stmt| {
         return TypeIntroduceResult{ .shadowing_warning = stmt };
@@ -266,7 +228,7 @@ pub fn updateTypeDecl(
         }
     }
     // If not found, add it as a new entry
-    try scope.put(gpa, .type_decl, name, new_type_decl);
+    try scope.type_decls.put(gpa, name, new_type_decl);
 }
 
 /// Introduce a type variable into the scope
@@ -292,7 +254,7 @@ pub fn introduceTypeVar(
         shadowed_type_var = lookup_fn(name);
     }
 
-    try scope.put(gpa, .type_var, name, type_var_anno);
+    try scope.type_vars.put(gpa, name, type_var_anno);
 
     if (shadowed_type_var) |anno| {
         return TypeVarIntroduceResult{ .shadowing_warning = anno };
@@ -348,7 +310,7 @@ pub fn introduceModuleAlias(
         shadowed_module = lookup_fn(alias_name);
     }
 
-    try scope.put(gpa, .module_alias, alias_name, module_name);
+    try scope.module_aliases.put(gpa, alias_name, module_name);
 
     if (shadowed_module) |module| {
         return ModuleAliasIntroduceResult{ .shadowing_warning = module };
@@ -357,10 +319,10 @@ pub fn introduceModuleAlias(
     return ModuleAliasIntroduceResult{ .success = {} };
 }
 
-/// Look up an exposed item in this scope
-pub fn lookupExposedItem(scope: *const Scope, name: Ident.Idx) ExposedItemLookupResult {
+/// Look up an exposed value in this scope
+pub fn lookupExposedValue(scope: *const Scope, name: Ident.Idx) ExposedItemLookupResult {
     // Search by comparing text content, not identifier index
-    var iter = scope.exposed_items.iterator();
+    var iter = scope.exposed_values.iterator();
     while (iter.next()) |entry| {
         if (name.idx == entry.key_ptr.idx) {
             return ExposedItemLookupResult{ .found = entry.value_ptr.* };
@@ -369,8 +331,20 @@ pub fn lookupExposedItem(scope: *const Scope, name: Ident.Idx) ExposedItemLookup
     return ExposedItemLookupResult{ .not_found = {} };
 }
 
-/// Introduce an exposed item into this scope
-pub fn introduceExposedItem(
+/// Look up an exposed type in this scope
+pub fn lookupExposedType(scope: *const Scope, name: Ident.Idx) ExposedItemLookupResult {
+    // Search by comparing text content, not identifier index
+    var iter = scope.exposed_types.iterator();
+    while (iter.next()) |entry| {
+        if (name.idx == entry.key_ptr.idx) {
+            return ExposedItemLookupResult{ .found = entry.value_ptr.* };
+        }
+    }
+    return ExposedItemLookupResult{ .not_found = {} };
+}
+
+/// Introduce an exposed value into this scope
+pub fn introduceExposedValue(
     scope: *Scope,
     gpa: std.mem.Allocator,
     item_name: Ident.Idx,
@@ -378,10 +352,10 @@ pub fn introduceExposedItem(
     parent_lookup_fn: ?fn (Ident.Idx) ?ExposedItemInfo,
 ) std.mem.Allocator.Error!ExposedItemIntroduceResult {
     // Check if already exists in current scope by comparing text content
-    var iter = scope.exposed_items.iterator();
+    var iter = scope.exposed_values.iterator();
     while (iter.next()) |entry| {
         if (item_name.idx == entry.key_ptr.idx) {
-            // Exposed item already exists in this scope
+            // Exposed value already exists in this scope
             return ExposedItemIntroduceResult{ .already_in_scope = entry.value_ptr.* };
         }
     }
@@ -392,12 +366,84 @@ pub fn introduceExposedItem(
         shadowed_info = lookup_fn(item_name);
     }
 
-    try scope.put(gpa, .exposed_item, item_name, item_info);
+    try scope.exposed_values.put(gpa, item_name, item_info);
 
     if (shadowed_info) |info| {
         return ExposedItemIntroduceResult{ .shadowing_warning = info };
     }
 
+    return ExposedItemIntroduceResult{ .success = {} };
+}
+
+/// Introduce an exposed type into this scope
+pub fn introduceExposedType(
+    scope: *Scope,
+    gpa: std.mem.Allocator,
+    item_name: Ident.Idx,
+    item_info: ExposedItemInfo,
+    parent_lookup_fn: ?fn (Ident.Idx) ?ExposedItemInfo,
+) std.mem.Allocator.Error!ExposedItemIntroduceResult {
+    // Check if already exists in current scope by comparing text content
+    var iter = scope.exposed_types.iterator();
+    while (iter.next()) |entry| {
+        if (item_name.idx == entry.key_ptr.idx) {
+            // Exposed type already exists in this scope
+            return ExposedItemIntroduceResult{ .already_in_scope = entry.value_ptr.* };
+        }
+    }
+
+    // Check for shadowing in parent scopes
+    var shadowed_info: ?ExposedItemInfo = null;
+    if (parent_lookup_fn) |lookup_fn| {
+        shadowed_info = lookup_fn(item_name);
+    }
+
+    try scope.exposed_types.put(gpa, item_name, item_info);
+
+    if (shadowed_info) |info| {
+        return ExposedItemIntroduceResult{ .shadowing_warning = info };
+    }
+
+    return ExposedItemIntroduceResult{ .success = {} };
+}
+
+/// Look up an exposed module in this scope
+pub fn lookupExposedModule(scope: *const Scope, name: Ident.Idx) ExposedItemLookupResult {
+    // Search by comparing text content, not identifier index
+    var iter = scope.exposed_modules.iterator();
+    while (iter.next()) |entry| {
+        if (name.idx == entry.key_ptr.idx) {
+            return ExposedItemLookupResult{ .found = entry.value_ptr.* };
+        }
+    }
+    return ExposedItemLookupResult{ .not_found = {} };
+}
+
+/// Introduce an exposed module into this scope
+pub fn introduceExposedModule(
+    scope: *Scope,
+    gpa: std.mem.Allocator,
+    item_name: Ident.Idx,
+    item_info: ExposedItemInfo,
+    parent_lookup_fn: ?fn (Ident.Idx) ?ExposedItemInfo,
+) std.mem.Allocator.Error!ExposedItemIntroduceResult {
+    // Check if already exists in current scope by comparing text content
+    var iter = scope.exposed_modules.iterator();
+    while (iter.next()) |entry| {
+        if (item_name.idx == entry.key_ptr.idx) {
+            // Exposed module already exists in this scope
+            return ExposedItemIntroduceResult{ .already_in_scope = entry.value_ptr.* };
+        }
+    }
+    // Check for shadowing in parent scopes
+    var shadowed_info: ?ExposedItemInfo = null;
+    if (parent_lookup_fn) |lookup_fn| {
+        shadowed_info = lookup_fn(item_name);
+    }
+    try scope.exposed_modules.put(gpa, item_name, item_info);
+    if (shadowed_info) |info| {
+        return ExposedItemIntroduceResult{ .shadowing_warning = info };
+    }
     return ExposedItemIntroduceResult{ .success = {} };
 }
 

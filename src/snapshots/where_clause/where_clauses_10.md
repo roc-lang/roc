@@ -48,7 +48,7 @@ KwModule(9:5-9:11),NoSpaceOpenRound(9:11-9:12),LowerIdent(9:12-9:13),CloseRound(
 	(statements
 		(s-import @3.1-3.32 (raw "Decode")
 			(exposing
-				(exposed-upper-ident @3.25-3.31 (text "Decode"))))
+				(exposed-upper-ident @3.25-3.31 (text "decode"))))
 		(s-type-anno @5.1-9.21 (name "decodeThings")
 			(ty-fn @7.3-7.28
 				(ty-apply @7.3-7.17
@@ -69,18 +69,18 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import @3.1-3.32 (module "Decode")
+	(s-import @3.1-3.32 (module "decode")
 		(exposes
 			(exposed (name "Decode") (wildcard false))))
 	(s-type-anno @5.1-9.21 (name "decodeThings")
 		(ty-fn @7.3-7.28 (effectful false)
-			(ty-apply @7.3-7.17 (symbol "List")
-				(ty-apply @7.8-7.16 (symbol "List")
-					(ty @7.13-7.15 (name "U8"))))
-			(ty-apply @7.21-7.28 (symbol "List")
+			(ty-apply @7.3-7.17 (symbol "list")
+				(ty-apply @7.8-7.16 (symbol "list")
+					(ty @7.13-7.15 (name "u8"))))
+			(ty-apply @7.21-7.28 (symbol "list")
 				(ty-var @7.26-7.27 (name "a"))))
 		(where
-			(alias @9.5-9.21 (module-of "a") (ident "Decode"))))
+			(alias @9.5-9.21 (module-of "a") (ident "decode"))))
 	(ext-decl @9.5-9.21 (ident "module(a).Decode") (kind "type")))
 ~~~
 # TYPES

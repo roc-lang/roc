@@ -46,9 +46,9 @@ import S exposing [
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import @1.20-2.3 (module "S")
+	(s-import @1.20-2.3 (module "s")
 		(exposes
-			(exposed (name "c") (alias "f") (wildcard false)))))
+			(exposed (name "C") (alias "f") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

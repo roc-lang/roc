@@ -146,20 +146,20 @@ green = Green
 		(e-tag @6.7-6.10 (name "Red"))
 		(annotation @6.1-6.4
 			(declared-type
-				(ty @5.7-5.12 (name "Color")))))
+				(ty @5.7-5.12 (name "color")))))
 	(d-let
 		(p-assign @9.1-9.5 (ident "blue"))
 		(e-tag @9.8-9.12 (name "Blue"))
 		(annotation @9.1-9.5
 			(declared-type
-				(ty @8.8-8.13 (name "Color")))))
+				(ty @8.8-8.13 (name "color")))))
 	(d-let
 		(p-assign @12.1-12.6 (ident "green"))
 		(e-tag @12.9-12.14 (name "Green"))
 		(annotation @12.1-12.6
 			(declared-type
-				(ty @11.9-11.14 (name "Color")))))
-	(s-import @3.1-3.13 (module "Color")
+				(ty @11.9-11.14 (name "color")))))
+	(s-import @3.1-3.13 (module "color")
 		(exposes)))
 ~~~
 # TYPES

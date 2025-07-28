@@ -18,7 +18,7 @@ blue = CC.Color.RGB(0,0,255)
 UNDEFINED VARIABLE - nominal_tag_package_import.md:8:10:8:16
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `Color` in this scope.
+Nothing is named `color` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **nominal_tag_package_import.md:8:10:8:16:**
@@ -74,10 +74,10 @@ blue = CC.Color.RGB(0, 0, 255)
 		(annotation @8.1-8.5
 			(declared-type
 				(ty-lookup-external @7.8-7.14
-					(ext-decl @7.8-7.14 (ident "CC.RGB") (kind "type"))))))
-	(s-import @4.1-4.26 (module "styles.Color") (qualifier "styles") (alias "CC")
+					(ext-decl @7.8-7.14 (ident "cC.RGB") (kind "type"))))))
+	(s-import @4.1-4.26 (module "styles.Color") (qualifier "styles") (alias "cC")
 		(exposes))
-	(ext-decl @7.8-7.14 (ident "CC.RGB") (kind "type")))
+	(ext-decl @7.8-7.14 (ident "cC.RGB") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

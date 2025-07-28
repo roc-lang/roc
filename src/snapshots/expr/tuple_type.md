@@ -63,11 +63,11 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 	(s-type-anno @2.5-2.33 (name "f")
 		(ty-fn @2.9-2.33 (effectful false)
 			(ty-tuple @2.9-2.19
-				(ty @2.10-2.13 (name "Str"))
-				(ty @2.15-2.18 (name "Str")))
+				(ty @2.10-2.13 (name "str"))
+				(ty @2.15-2.18 (name "str")))
 			(ty-tuple @2.23-2.33
-				(ty @2.24-2.27 (name "Str"))
-				(ty @2.29-2.32 (name "Str")))))
+				(ty @2.24-2.27 (name "str"))
+				(ty @2.29-2.32 (name "str")))))
 	(s-let @3.5-3.14
 		(p-assign @3.5-3.6 (ident "f"))
 		(e-lambda @3.9-3.14

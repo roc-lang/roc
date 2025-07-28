@@ -99,8 +99,8 @@ NO CHANGE
 		(annotation @6.1-6.8
 			(declared-type
 				(ty-fn @5.11-5.24 (effectful false)
-					(ty @5.11-5.17 (name "UserId"))
-					(ty @5.21-5.24 (name "Str"))))))
+					(ty @5.11-5.17 (name "userId"))
+					(ty @5.21-5.24 (name "str"))))))
 	(d-let
 		(p-assign @8.1-8.6 (ident "main!"))
 		(e-closure @8.9-8.25
@@ -115,7 +115,7 @@ NO CHANGE
 					(e-int @8.21-8.24 (value "100"))))))
 	(s-alias-decl @3.1-3.13
 		(ty-header @3.1-3.7 (name "UserId"))
-		(ty @3.10-3.13 (name "U64"))))
+		(ty @3.10-3.13 (name "u64"))))
 ~~~
 # TYPES
 ~~~clojure

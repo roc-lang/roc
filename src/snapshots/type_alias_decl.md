@@ -47,8 +47,8 @@ main! = |_| {
 ~~~
 # EXPECTED
 TYPE REDECLARED - type_alias_decl.md:7:1:7:37
-UNUSED VARIABLE - type_alias_decl.md:33:5:33:11
 UNUSED VARIABLE - type_alias_decl.md:36:5:36:10
+UNUSED VARIABLE - type_alias_decl.md:33:5:33:11
 # PROBLEMS
 **TYPE REDECLARED**
 The type _Result_ is being redeclared.
@@ -69,18 +69,6 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 
 
 **UNUSED VARIABLE**
-Variable `person` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_person` to suppress this warning.
-The unused variable is declared here:
-**type_alias_decl.md:33:5:33:11:**
-```roc
-    person = { name: "Alice", age: 30 }
-```
-    ^^^^^^
-
-
-**UNUSED VARIABLE**
 Variable `color` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_color` to suppress this warning.
@@ -90,6 +78,18 @@ The unused variable is declared here:
     color = Red
 ```
     ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `person` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_person` to suppress this warning.
+The unused variable is declared here:
+**type_alias_decl.md:33:5:33:11:**
+```roc
+    person = { name: "Alice", age: 30 }
+```
+    ^^^^^^
 
 
 # TOKENS
@@ -280,12 +280,12 @@ main! = |_| {
 				(p-underscore @27.10-27.11))
 			(e-block @27.13-39.2
 				(s-type-anno @29.5-29.20 (name "userId")
-					(ty @29.14-29.20 (name "UserId")))
+					(ty @29.14-29.20 (name "userId")))
 				(s-let @30.5-30.17
 					(p-assign @30.5-30.11 (ident "userId"))
 					(e-int @30.14-30.17 (value "123")))
 				(s-type-anno @32.5-32.20 (name "person")
-					(ty @32.14-32.20 (name "Person")))
+					(ty @32.14-32.20 (name "person")))
 				(s-let @33.5-33.40
 					(p-assign @33.5-33.11 (ident "person"))
 					(e-record @33.14-33.40
@@ -296,7 +296,7 @@ main! = |_| {
 							(field (name "age")
 								(e-int @33.36-33.38 (value "30"))))))
 				(s-type-anno @35.5-35.18 (name "color")
-					(ty @35.13-35.18 (name "Color")))
+					(ty @35.13-35.18 (name "color")))
 				(s-let @36.5-36.16
 					(p-assign @36.5-36.10 (ident "color"))
 					(e-tag @36.13-36.16 (name "Red")))
@@ -304,24 +304,24 @@ main! = |_| {
 					(p-assign @30.5-30.11 (ident "userId"))))))
 	(s-alias-decl @4.1-4.13
 		(ty-header @4.1-4.7 (name "UserId"))
-		(ty @4.10-4.13 (name "U64")))
+		(ty @4.10-4.13 (name "u64")))
 	(s-alias-decl @7.1-7.37
 		(ty-header @7.1-7.16 (name "Result")
 			(ty-args
 				(ty-var @7.8-7.10 (name "ok"))
 				(ty-var @7.12-7.15 (name "err"))))
 		(ty-tag-union @7.19-7.37
-			(ty-apply @7.20-7.26 (symbol "Ok")
+			(ty-apply @7.20-7.26 (symbol "ok")
 				(ty-var @7.23-7.25 (name "ok")))
-			(ty-apply @7.28-7.36 (symbol "Err")
+			(ty-apply @7.28-7.36 (symbol "err")
 				(ty-var @7.32-7.35 (name "err")))))
 	(s-alias-decl @10.1-10.35
 		(ty-header @10.1-10.7 (name "Person"))
 		(ty-record @10.10-10.35
 			(field (field "name")
-				(ty @10.19-10.22 (name "Str")))
+				(ty @10.19-10.22 (name "str")))
 			(field (field "age")
-				(ty @10.30-10.33 (name "U64")))))
+				(ty @10.30-10.33 (name "u64")))))
 	(s-alias-decl @13.1-13.21
 		(ty-header @13.1-13.12 (name "MapFn")
 			(ty-args
@@ -334,33 +334,33 @@ main! = |_| {
 		(ty-header @16.1-16.18 (name "ApiResponse")
 			(ty-args
 				(ty-var @16.13-16.17 (name "data"))))
-		(ty-apply @16.21-16.38 (symbol "Result")
+		(ty-apply @16.21-16.38 (symbol "result")
 			(ty-var @16.28-16.32 (name "data"))
-			(ty @16.34-16.37 (name "Str"))))
+			(ty @16.34-16.37 (name "str"))))
 	(s-alias-decl @19.1-19.47
 		(ty-header @19.1-19.6 (name "Color"))
 		(ty-tag-union @19.9-19.47
-			(ty @19.10-19.13 (name "Red"))
-			(ty @19.15-19.20 (name "Green"))
-			(ty @19.22-19.26 (name "Blue"))
-			(ty-apply @19.28-19.46 (symbol "Custom")
-				(ty @19.35-19.37 (name "U8"))
-				(ty @19.39-19.41 (name "U8"))
-				(ty @19.43-19.45 (name "U8")))))
+			(ty @19.10-19.13 (name "red"))
+			(ty @19.15-19.20 (name "green"))
+			(ty @19.22-19.26 (name "blue"))
+			(ty-apply @19.28-19.46 (symbol "custom")
+				(ty @19.35-19.37 (name "u8"))
+				(ty @19.39-19.41 (name "u8"))
+				(ty @19.43-19.45 (name "u8")))))
 	(s-alias-decl @22.1-25.2
 		(ty-header @22.1-22.16 (name "Container")
 			(ty-args
 				(ty-var @22.11-22.15 (name "item"))))
 		(ty-record @22.19-25.2
 			(field (field "contents")
-				(ty-apply @23.16-23.26 (symbol "List")
+				(ty-apply @23.16-23.26 (symbol "list")
 					(ty-var @23.21-23.25 (name "item"))))
 			(field (field "metadata")
 				(ty-record @24.16-24.45
 					(field (field "size")
-						(ty @24.25-24.28 (name "U64")))
+						(ty @24.25-24.28 (name "u64")))
 					(field (field "created")
-						(ty @24.40-24.43 (name "Str"))))))))
+						(ty @24.40-24.43 (name "str"))))))))
 ~~~
 # TYPES
 ~~~clojure

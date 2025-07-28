@@ -33,7 +33,7 @@ module [foo, bar, MyType, OtherType, foo, MyType]
 You can remove the duplicate entry to fix this warning.
 
 **REDUNDANT EXPOSED**
-The identifier `MyType` is exposed multiple times in the module header.
+The identifier `myType` is exposed multiple times in the module header.
 
 **exposed_not_impl.md:1:43:1:49:**
 ```roc
@@ -53,14 +53,14 @@ module [foo, bar, MyType, OtherType, foo, MyType]
 You can fix this by either defining `bar` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `OtherType` is exposed, but it is not defined anywhere in this module.
+The module header says that `otherType` is exposed, but it is not defined anywhere in this module.
 
 **exposed_not_impl.md:1:27:1:36:**
 ```roc
 module [foo, bar, MyType, OtherType, foo, MyType]
 ```
                           ^^^^^^^^^
-You can fix this by either defining `OtherType` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `otherType` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -77,11 +77,11 @@ UpperIdent(10:1-10:7),OpColon(10:8-10:9),OpenSquare(10:10-10:11),UpperIdent(10:1
 				(text "foo"))
 			(exposed-lower-ident @1.14-1.17
 				(text "bar"))
-			(exposed-upper-ident @1.19-1.25 (text "MyType"))
-			(exposed-upper-ident @1.27-1.36 (text "OtherType"))
+			(exposed-upper-ident @1.19-1.25 (text "myType"))
+			(exposed-upper-ident @1.27-1.36 (text "otherType"))
 			(exposed-lower-ident @1.38-1.41
 				(text "foo"))
-			(exposed-upper-ident @1.43-1.49 (text "MyType"))))
+			(exposed-upper-ident @1.43-1.49 (text "myType"))))
 	(statements
 		(s-decl @8.1-8.9
 			(p-ident @8.1-8.4 (raw "foo"))
@@ -108,9 +108,9 @@ NO CHANGE
 	(s-alias-decl @10.1-10.19
 		(ty-header @10.1-10.7 (name "MyType"))
 		(ty-tag-union @10.10-10.19
-			(ty @10.11-10.12 (name "A"))
-			(ty @10.14-10.15 (name "B"))
-			(ty @10.17-10.18 (name "C")))))
+			(ty @10.11-10.12 (name "a"))
+			(ty @10.14-10.15 (name "b"))
+			(ty @10.17-10.18 (name "c")))))
 ~~~
 # TYPES
 ~~~clojure

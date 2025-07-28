@@ -183,10 +183,10 @@ main! = |_| {}
 			(declared-type
 				(ty-fn @3.11-3.35 (effectful false)
 					(ty-tag-union @3.11-3.28
-						(ty-apply @3.12-3.21 (symbol "Some")
-							(ty @3.17-3.20 (name "Str")))
-						(ty @3.23-3.27 (name "None")))
-					(ty @3.32-3.35 (name "Str"))))))
+						(ty-apply @3.12-3.21 (symbol "some")
+							(ty @3.17-3.20 (name "str")))
+						(ty @3.23-3.27 (name "none")))
+					(ty @3.32-3.35 (name "str"))))))
 	(d-let
 		(p-assign @7.1-7.27 (ident "is_ok_ret_unqualified_bool"))
 		(e-lambda @7.30-10.2
@@ -216,11 +216,11 @@ main! = |_| {}
 			(declared-type
 				(ty-fn @6.30-6.58 (effectful false)
 					(ty-tag-union @6.30-6.50
-						(ty-apply @6.31-6.38 (symbol "Ok")
+						(ty-apply @6.31-6.38 (symbol "ok")
 							(ty-var @6.34-6.37 (name "_ok")))
-						(ty-apply @6.40-6.49 (symbol "Err")
+						(ty-apply @6.40-6.49 (symbol "err")
 							(ty-var @6.44-6.48 (name "_err"))))
-					(ty @6.54-6.58 (name "Bool"))))))
+					(ty @6.54-6.58 (name "bool"))))))
 	(d-let
 		(p-assign @13.1-13.15 (ident "is_ok_ret_bool"))
 		(e-lambda @13.18-16.2
@@ -250,11 +250,11 @@ main! = |_| {}
 			(declared-type
 				(ty-fn @12.18-12.48 (effectful false)
 					(ty-tag-union @12.18-12.40
-						(ty-apply @12.19-12.27 (symbol "Ok")
+						(ty-apply @12.19-12.27 (symbol "ok")
 							(ty-var @12.22-12.26 (name "_ok2")))
-						(ty-apply @12.29-12.39 (symbol "Err")
+						(ty-apply @12.29-12.39 (symbol "err")
 							(ty-var @12.33-12.38 (name "_err2"))))
-					(ty @12.44-12.48 (name "Bool"))))))
+					(ty @12.44-12.48 (name "bool"))))))
 	(d-let
 		(p-assign @18.1-18.6 (ident "main!"))
 		(e-lambda @18.9-18.15

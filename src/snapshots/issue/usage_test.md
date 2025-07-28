@@ -80,7 +80,7 @@ NO CHANGE
 		(e-int @8.9-8.11 (value "42"))
 		(annotation @8.1-8.6
 			(declared-type
-				(ty @7.9-7.17 (name "UsedType")))))
+				(ty @7.9-7.17 (name "usedType")))))
 	(s-nominal-decl @3.1-3.16
 		(ty-header @3.1-3.11 (name "UnusedType"))
 		(ty-underscore @1.1-1.1))

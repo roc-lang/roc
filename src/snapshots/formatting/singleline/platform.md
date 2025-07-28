@@ -13,28 +13,28 @@ platform "pf"
 	provides [pr1, pr2]
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - platform.md:3:11:3:13
 EXPOSED BUT NOT DEFINED - platform.md:3:15:3:17
+EXPOSED BUT NOT DEFINED - platform.md:3:11:3:13
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
-The module header says that `E1` is exposed, but it is not defined anywhere in this module.
-
-**platform.md:3:11:3:13:**
-```roc
-	exposes [E1, E2]
-```
-          ^^
-You can fix this by either defining `E1` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `E2` is exposed, but it is not defined anywhere in this module.
+The module header says that `e2` is exposed, but it is not defined anywhere in this module.
 
 **platform.md:3:15:3:17:**
 ```roc
 	exposes [E1, E2]
 ```
               ^^
-You can fix this by either defining `E2` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `e2` in this module, or by removing it from the list of exposed values.
+
+**EXPOSED BUT NOT DEFINED**
+The module header says that `e1` is exposed, but it is not defined anywhere in this module.
+
+**platform.md:3:11:3:13:**
+```roc
+	exposes [E1, E2]
+```
+          ^^
+You can fix this by either defining `e1` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -49,8 +49,8 @@ KwProvides(6:2-6:10),OpenSquare(6:11-6:12),LowerIdent(6:12-6:15),Comma(6:15-6:16
 (file @1.1-6.21
 	(platform @1.1-6.21 (name "pf")
 		(rigids @2.11-2.21
-			(exposed-upper-ident @2.13-2.15 (text "R1"))
-			(exposed-upper-ident @2.17-2.19 (text "R2")))
+			(exposed-upper-ident @2.13-2.15 (text "r1"))
+			(exposed-upper-ident @2.17-2.19 (text "r2")))
 		(ty-record @2.22-2.54
 			(anno-record-field @2.24-2.37 (name "r1")
 				(ty-fn @2.29-2.37
@@ -61,8 +61,8 @@ KwProvides(6:2-6:10),OpenSquare(6:11-6:12),LowerIdent(6:12-6:15),Comma(6:15-6:16
 					(ty @2.44-2.46 (name "R1"))
 					(ty @2.50-2.52 (name "R2")))))
 		(exposes @3.10-3.18
-			(exposed-upper-ident @3.11-3.13 (text "E1"))
-			(exposed-upper-ident @3.15-3.17 (text "E2")))
+			(exposed-upper-ident @3.11-3.13 (text "e1"))
+			(exposed-upper-ident @3.15-3.17 (text "e2")))
 		(packages @4.11-4.37
 			(record-field @4.13-4.23 (name "pa1")
 				(e-string @4.18-4.23

@@ -13,14 +13,14 @@ package [
 EXPOSED BUT NOT DEFINED - main.md:2:5:2:10
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
-The module header says that `Color` is exposed, but it is not defined anywhere in this module.
+The module header says that `color` is exposed, but it is not defined anywhere in this module.
 
 **main.md:2:5:2:10:**
 ```roc
     Color,
 ```
     ^^^^^
-You can fix this by either defining `Color` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `color` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -34,7 +34,7 @@ EndOfFile(4:1-4:1),
 (file @1.1-3.5
 	(package @1.1-3.5
 		(exposes @1.9-3.2
-			(exposed-upper-ident @2.5-2.10 (text "Color")))
+			(exposed-upper-ident @2.5-2.10 (text "color")))
 		(packages @3.3-3.5))
 	(statements))
 ~~~

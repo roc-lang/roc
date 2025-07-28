@@ -322,7 +322,7 @@ UpperIdent(7:1-7:6),NoSpaceOpenRound(7:6-7:7),Underscore(7:7-7:8),Comma(7:8-7:9)
 	(statements
 		(s-import @3.1-3.30 (raw "Module")
 			(exposing
-				(exposed-upper-ident @3.25-3.29 (text "Pair"))))
+				(exposed-upper-ident @3.25-3.29 (text "pair"))))
 		(s-malformed @5.1-5.14 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @5.15-6.6 (tag "expected_colon_after_type_annotation"))
 		(e-tuple @6.6-6.12
@@ -349,7 +349,7 @@ import Module exposing [Pair]
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import @3.1-3.30 (module "Module")
+	(s-import @3.1-3.30 (module "module")
 		(exposes
 			(exposed (name "Pair") (wildcard false)))))
 ~~~

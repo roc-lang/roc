@@ -256,14 +256,14 @@ main = |_| "done"
 		(annotation @5.1-5.11
 			(declared-type
 				(ty-fn @4.14-4.52 (effectful false)
-					(ty-apply @4.14-4.26 (symbol "Result")
+					(ty-apply @4.14-4.26 (symbol "result")
 						(ty-var @4.21-4.22 (name "a"))
 						(ty-var @4.24-4.25 (name "e")))
 					(ty-parens @4.28-4.36
 						(ty-fn @4.29-4.35 (effectful false)
 							(ty-var @4.29-4.30 (name "a"))
 							(ty-var @4.34-4.35 (name "b"))))
-					(ty-apply @4.40-4.52 (symbol "Result")
+					(ty-apply @4.40-4.52 (symbol "result")
 						(ty-var @4.47-4.48 (name "b"))
 						(ty-var @4.50-4.51 (name "e")))))))
 	(d-let
@@ -311,9 +311,9 @@ main = |_| "done"
 		(annotation @22.1-22.12
 			(declared-type
 				(ty-fn @21.15-21.30 (effectful false)
-					(ty-apply @21.15-21.23 (symbol "List")
+					(ty-apply @21.15-21.23 (symbol "list")
 						(ty-var @21.20-21.22 (name "_a")))
-					(ty @21.27-21.30 (name "U64"))))))
+					(ty @21.27-21.30 (name "u64"))))))
 	(d-let
 		(p-assign @26.1-26.15 (ident "wrap_in_result"))
 		(e-lambda @26.18-26.39
@@ -329,11 +329,11 @@ main = |_| "done"
 			(declared-type
 				(ty-fn @25.18-25.50 (effectful false)
 					(ty-var @25.18-25.19 (name "a"))
-					(ty-apply @25.23-25.50 (symbol "Result")
-						(ty-apply @25.30-25.44 (symbol "Result")
+					(ty-apply @25.23-25.50 (symbol "result")
+						(ty-apply @25.30-25.44 (symbol "result")
 							(ty-var @25.37-25.38 (name "a"))
-							(ty @25.40-25.43 (name "Str")))
-						(ty @25.46-25.49 (name "Str")))))))
+							(ty @25.40-25.43 (name "str")))
+						(ty @25.46-25.49 (name "str")))))))
 	(d-let
 		(p-assign @28.1-28.5 (ident "main"))
 		(e-lambda @28.8-28.18

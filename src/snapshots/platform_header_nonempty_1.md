@@ -69,7 +69,7 @@ CloseSquare(21:3-21:4),EndOfFile(21:4-21:4),
 (file @1.1-21.4
 	(platform @1.1-21.4 (name "foo")
 		(rigids @4.3-6.4
-			(exposed-upper-ident @5.4-5.8 (text "Main")))
+			(exposed-upper-ident @5.4-5.8 (text "main")))
 		(ty-record @7.4-9.5
 			(anno-record-field @8.5-8.28 (name "main!")
 				(ty-fn @8.13-8.28

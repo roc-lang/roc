@@ -61,7 +61,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 	(s-type-anno @2.5-2.34 (name "launchTheNukes")
 		(ty-fn @2.22-2.34 (effectful true)
 			(ty-record @2.22-2.24)
-			(ty @2.28-2.34 (name "Result"))))
+			(ty @2.28-2.34 (name "result"))))
 	(s-expr @2.35-2.39
 		(e-tag @2.35-2.39 (name "Bool")))
 	(s-expr @2.40-2.53

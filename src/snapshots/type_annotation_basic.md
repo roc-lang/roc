@@ -226,8 +226,8 @@ main! = |_| {
 		(annotation @13.1-13.7
 			(declared-type
 				(ty-fn @12.10-12.20 (effectful false)
-					(ty @12.10-12.13 (name "U64"))
-					(ty @12.17-12.20 (name "U64"))))))
+					(ty @12.10-12.13 (name "u64"))
+					(ty @12.17-12.20 (name "u64"))))))
 	(d-let
 		(p-assign @15.1-15.6 (ident "main!"))
 		(e-closure @15.9-27.2

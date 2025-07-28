@@ -24,14 +24,14 @@ The module header says that `something` is exposed, but it is not defined anywhe
 You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `SomeType` is exposed, but it is not defined anywhere in this module.
+The module header says that `someType` is exposed, but it is not defined anywhere in this module.
 
 **package_header_nonempty_multiline_3.md:2:14:2:22:**
 ```roc
 	[something, SomeType,]
 ```
              ^^^^^^^^
-You can fix this by either defining `SomeType` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `someType` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -46,7 +46,7 @@ OpenCurly(3:2-3:3),LowerIdent(3:4-3:11),OpColon(3:11-3:12),StringStart(3:13-3:14
 		(exposes @2.2-2.24
 			(exposed-lower-ident @2.3-2.12
 				(text "something"))
-			(exposed-upper-ident @2.14-2.22 (text "SomeType")))
+			(exposed-upper-ident @2.14-2.22 (text "someType")))
 		(packages @3.2-3.29
 			(record-field @3.4-3.26 (name "somePkg")
 				(e-string @3.13-3.26

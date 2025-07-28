@@ -251,24 +251,24 @@ main! = |_| {
 		(annotation @5.1-5.13
 			(declared-type
 				(ty-fn @4.16-4.26 (effectful false)
-					(ty @4.16-4.19 (name "U64"))
-					(ty @4.23-4.26 (name "U64"))))))
+					(ty @4.16-4.19 (name "u64"))
+					(ty @4.23-4.26 (name "u64"))))))
 	(d-let
 		(p-assign @9.1-9.10 (ident "testCrash"))
 		(e-runtime-error (tag "lambda_body_not_canonicalized"))
 		(annotation @9.1-9.10
 			(declared-type
 				(ty-fn @8.13-8.23 (effectful false)
-					(ty @8.13-8.16 (name "U64"))
-					(ty @8.20-8.23 (name "U64"))))))
+					(ty @8.13-8.16 (name "u64"))
+					(ty @8.20-8.23 (name "u64"))))))
 	(d-let
 		(p-assign @13.1-13.16 (ident "testCrashSimple"))
 		(e-runtime-error (tag "lambda_body_not_canonicalized"))
 		(annotation @13.1-13.16
 			(declared-type
 				(ty-fn @12.19-12.29 (effectful false)
-					(ty @12.19-12.22 (name "U64"))
-					(ty @12.26-12.29 (name "U64"))))))
+					(ty @12.19-12.22 (name "u64"))
+					(ty @12.26-12.29 (name "u64"))))))
 	(d-let
 		(p-assign @15.1-15.6 (ident "main!"))
 		(e-closure @15.9-20.2

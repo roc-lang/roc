@@ -125,12 +125,12 @@ CloseCurly(39:5-39:6),EndOfFile(39:6-39:6),
 	(statements
 		(s-import @3.1-3.56 (raw "http.Client") (alias "Http")
 			(exposing
-				(exposed-upper-ident @3.38-3.45 (text "Request"))
-				(exposed-upper-ident @3.47-3.55 (text "Response"))))
+				(exposed-upper-ident @3.38-3.45 (text "request"))
+				(exposed-upper-ident @3.47-3.55 (text "response"))))
 		(s-import @4.1-4.17 (raw "json.Json"))
 		(s-import @5.1-5.38 (raw "utils.Result")
 			(exposing
-				(exposed-upper-ident @5.31-5.37 (text "Result"))))
+				(exposed-upper-ident @5.31-5.37 (text "result"))))
 		(s-type-anno @7.1-7.37 (name "processRequest")
 			(ty-fn @7.18-7.37
 				(ty @7.18-7.25 (name "Request"))
@@ -323,8 +323,8 @@ combineResults = |result1, result2|
 		(annotation @8.1-8.15
 			(declared-type
 				(ty-fn @7.18-7.37 (effectful false)
-					(ty @7.18-7.25 (name "Request"))
-					(ty @7.29-7.37 (name "Response"))))))
+					(ty @7.18-7.25 (name "request"))
+					(ty @7.29-7.37 (name "response"))))))
 	(d-let
 		(p-assign @11.1-11.10 (ident "parseJson"))
 		(e-lambda @11.13-11.38
@@ -339,9 +339,9 @@ combineResults = |result1, result2|
 		(annotation @11.1-11.10
 			(declared-type
 				(ty-fn @10.13-10.30 (effectful false)
-					(ty @10.13-10.16 (name "Str"))
+					(ty @10.13-10.16 (name "str"))
 					(ty-lookup-external @10.20-10.30
-						(ext-decl @10.20-10.30 (ident "Json.Value") (kind "type")))))))
+						(ext-decl @10.20-10.30 (ident "json.Value") (kind "type")))))))
 	(d-let
 		(p-assign @14.1-14.10 (ident "handleApi"))
 		(e-closure @14.13-20.2
@@ -394,12 +394,12 @@ combineResults = |result1, result2|
 			(declared-type
 				(ty-fn @13.13-13.62 (effectful false)
 					(ty-lookup-external @13.13-13.25
-						(ext-decl @13.13-13.25 (ident "Http.Request") (kind "type")))
-					(ty-apply @13.29-13.62 (symbol "Result")
+						(ext-decl @13.13-13.25 (ident "http.Request") (kind "type")))
+					(ty-apply @13.29-13.62 (symbol "result")
 						(ty-lookup-external @13.36-13.49
-							(ext-decl @13.36-13.49 (ident "Http.Response") (kind "type")))
+							(ext-decl @13.36-13.49 (ident "http.Response") (kind "type")))
 						(ty-lookup-external @13.51-13.61
-							(ext-decl @13.51-13.61 (ident "Json.Error") (kind "type"))))))))
+							(ext-decl @13.51-13.61 (ident "json.Error") (kind "type"))))))))
 	(d-let
 		(p-assign @23.1-23.7 (ident "config"))
 		(e-lookup-external @23.10-23.28
@@ -408,7 +408,7 @@ combineResults = |result1, result2|
 		(annotation @23.1-23.7
 			(declared-type
 				(ty-lookup-external @22.10-22.21
-					(ext-decl @22.10-22.21 (ident "Json.Config") (kind "type"))))))
+					(ext-decl @22.10-22.21 (ident "json.Config") (kind "type"))))))
 	(d-let
 		(p-assign @27.1-27.15 (ident "advancedParser"))
 		(e-lambda @27.18-27.82
@@ -427,13 +427,13 @@ combineResults = |result1, result2|
 			(declared-type
 				(ty-fn @26.18-26.82 (effectful false)
 					(ty-lookup-external @26.18-26.36
-						(ext-decl @26.18-26.36 (ident "Json.Parser.Config") (kind "type")))
-					(ty @26.38-26.41 (name "Str"))
-					(ty-apply @26.45-26.82 (symbol "Result")
+						(ext-decl @26.18-26.36 (ident "json.Parser.Config") (kind "type")))
+					(ty @26.38-26.41 (name "str"))
+					(ty-apply @26.45-26.82 (symbol "result")
 						(ty-lookup-external @26.52-26.62
-							(ext-decl @26.52-26.62 (ident "Json.Value") (kind "type")))
+							(ext-decl @26.52-26.62 (ident "json.Value") (kind "type")))
 						(ty-lookup-external @26.64-26.81
-							(ext-decl @26.64-26.81 (ident "Json.Parser.Error") (kind "type"))))))))
+							(ext-decl @26.64-26.81 (ident "json.Parser.Error") (kind "type"))))))))
 	(d-let
 		(p-assign @31.1-31.15 (ident "combineResults"))
 		(e-closure @31.18-39.6
@@ -497,18 +497,18 @@ combineResults = |result1, result2|
 		(annotation @31.1-31.15
 			(declared-type
 				(ty-fn @30.18-30.71 (effectful false)
-					(ty-apply @30.18-30.32 (symbol "Result")
+					(ty-apply @30.18-30.32 (symbol "result")
 						(ty-var @30.25-30.26 (name "a"))
 						(ty-var @30.28-30.31 (name "err")))
-					(ty-apply @30.34-30.48 (symbol "Result")
+					(ty-apply @30.34-30.48 (symbol "result")
 						(ty-var @30.41-30.42 (name "b"))
 						(ty-var @30.44-30.47 (name "err")))
-					(ty-apply @30.52-30.71 (symbol "Result")
+					(ty-apply @30.52-30.71 (symbol "result")
 						(ty-tuple @30.59-30.65
 							(ty-var @30.60-30.61 (name "a"))
 							(ty-var @30.63-30.64 (name "b")))
 						(ty-var @30.67-30.70 (name "err")))))))
-	(s-import @3.1-3.56 (module "http.Client") (qualifier "http") (alias "Http")
+	(s-import @3.1-3.56 (module "http.Client") (qualifier "http") (alias "http")
 		(exposes
 			(exposed (name "Request") (wildcard false))
 			(exposed (name "Response") (wildcard false))))
@@ -517,30 +517,30 @@ combineResults = |result1, result2|
 	(s-import @5.1-5.38 (module "utils.Result") (qualifier "utils")
 		(exposes
 			(exposed (name "Result") (wildcard false))))
-	(ext-decl @10.20-10.30 (ident "Json.Value") (kind "type"))
-	(ext-decl @13.13-13.25 (ident "Http.Request") (kind "type"))
-	(ext-decl @13.36-13.49 (ident "Http.Response") (kind "type"))
-	(ext-decl @13.51-13.61 (ident "Json.Error") (kind "type"))
-	(ext-decl @22.10-22.21 (ident "Json.Config") (kind "type"))
-	(ext-decl @26.18-26.36 (ident "Json.Parser.Config") (kind "type"))
-	(ext-decl @26.52-26.62 (ident "Json.Value") (kind "type"))
-	(ext-decl @26.64-26.81 (ident "Json.Parser.Error") (kind "type")))
+	(ext-decl @10.20-10.30 (ident "json.Value") (kind "type"))
+	(ext-decl @13.13-13.25 (ident "http.Request") (kind "type"))
+	(ext-decl @13.36-13.49 (ident "http.Response") (kind "type"))
+	(ext-decl @13.51-13.61 (ident "json.Error") (kind "type"))
+	(ext-decl @22.10-22.21 (ident "json.Config") (kind "type"))
+	(ext-decl @26.18-26.36 (ident "json.Parser.Config") (kind "type"))
+	(ext-decl @26.52-26.62 (ident "json.Value") (kind "type"))
+	(ext-decl @26.64-26.81 (ident "json.Parser.Error") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @8.1-8.15 (type "Error -> Error"))
-		(patt @11.1-11.10 (type "Str -> Json.Value"))
+		(patt @11.1-11.10 (type "Str -> json.Value"))
 		(patt @14.1-14.10 (type "{ body: _field } -> Error"))
 		(patt @23.1-23.7 (type "Error"))
-		(patt @27.1-27.15 (type "Json.Parser.Config, Str -> Error"))
+		(patt @27.1-27.15 (type "json.Parser.Config, Str -> Error"))
 		(patt @31.1-31.15 (type "Error, Error -> Error")))
 	(expressions
 		(expr @8.18-8.44 (type "Error -> Error"))
-		(expr @11.13-11.38 (type "Str -> Json.Value"))
+		(expr @11.13-11.38 (type "Str -> json.Value"))
 		(expr @14.13-20.2 (type "{ body: _field } -> Error"))
 		(expr @23.10-23.28 (type "Error"))
-		(expr @27.18-27.82 (type "Json.Parser.Config, Str -> Error"))
+		(expr @27.18-27.82 (type "json.Parser.Config, Str -> Error"))
 		(expr @31.18-39.6 (type "Error, Error -> Error"))))
 ~~~

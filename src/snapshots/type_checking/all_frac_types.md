@@ -64,19 +64,19 @@ NO CHANGE
 		(e-dec-small @4.5-4.9 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
 		(annotation @4.1-4.2
 			(declared-type
-				(ty @3.5-3.8 (name "F32")))))
+				(ty @3.5-3.8 (name "f32")))))
 	(d-let
 		(p-assign @7.1-7.2 (ident "b"))
 		(e-frac-dec @7.5-7.12 (value "2.71828"))
 		(annotation @7.1-7.2
 			(declared-type
-				(ty @6.5-6.8 (name "F64")))))
+				(ty @6.5-6.8 (name "f64")))))
 	(d-let
 		(p-assign @10.1-10.2 (ident "c"))
 		(e-frac-dec @10.5-10.12 (value "123.456"))
 		(annotation @10.1-10.2
 			(declared-type
-				(ty @9.5-9.8 (name "Dec"))))))
+				(ty @9.5-9.8 (name "dec"))))))
 ~~~
 # TYPES
 ~~~clojure

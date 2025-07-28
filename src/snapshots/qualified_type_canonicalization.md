@@ -161,7 +161,7 @@ import ModuleA.ModuleB exposing [TypeC]
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `Color` in this scope.
+Nothing is named `color` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **qualified_type_canonicalization.md:15:19:15:24:**
@@ -172,7 +172,7 @@ simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `DataType` in this scope.
+Nothing is named `dataType` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **qualified_type_canonicalization.md:19:26:19:35:**
@@ -194,7 +194,7 @@ multiLevelQualified = TypeC.new
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `Color` in this scope.
+Nothing is named `color` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **qualified_type_canonicalization.md:31:16:31:21:**
@@ -435,21 +435,21 @@ transform = |result|
 		(annotation @15.1-15.16
 			(declared-type
 				(ty-lookup-external @14.19-14.28
-					(ext-decl @14.19-14.28 (ident "Color.RGB") (kind "type"))))))
+					(ext-decl @14.19-14.28 (ident "color.RGB") (kind "type"))))))
 	(d-let
 		(p-assign @19.1-19.17 (ident "aliasedQualified"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @19.1-19.17
 			(declared-type
 				(ty-lookup-external @18.20-18.35
-					(ext-decl @18.20-18.35 (ident "ExtMod.DataType") (kind "type"))))))
+					(ext-decl @18.20-18.35 (ident "extMod.DataType") (kind "type"))))))
 	(d-let
 		(p-assign @23.1-23.20 (ident "multiLevelQualified"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @23.1-23.20
 			(declared-type
 				(ty-lookup-external @22.23-22.44
-					(ext-decl @22.23-22.44 (ident "ModuleA.ModuleB.TypeC") (kind "type"))))))
+					(ext-decl @22.23-22.44 (ident "moduleA.ModuleB.TypeC") (kind "type"))))))
 	(d-let
 		(p-assign @27.1-27.11 (ident "resultType"))
 		(e-nominal @27.14-27.20 (nominal "<malformed>")
@@ -458,9 +458,9 @@ transform = |result|
 					(e-int @27.24-27.26 (value "42")))))
 		(annotation @27.1-27.11
 			(declared-type
-				(ty-apply @26.14-26.37 (symbol "Result.Result")
-					(ty @26.28-26.31 (name "I32"))
-					(ty @26.33-26.36 (name "Str"))))))
+				(ty-apply @26.14-26.37 (symbol "result.Result")
+					(ty @26.28-26.31 (name "i32"))
+					(ty @26.33-26.36 (name "str"))))))
 	(d-let
 		(p-assign @31.1-31.9 (ident "getColor"))
 		(e-lambda @31.12-31.49
@@ -472,7 +472,7 @@ transform = |result|
 				(ty-fn @30.12-30.27 (effectful false)
 					(ty-record @30.12-30.14)
 					(ty-lookup-external @30.18-30.27
-						(ext-decl @30.18-30.27 (ident "Color.RGB") (kind "type")))))))
+						(ext-decl @30.18-30.27 (ident "color.RGB") (kind "type")))))))
 	(d-let
 		(p-assign @35.1-35.13 (ident "processColor"))
 		(e-lambda @35.16-36.22
@@ -484,8 +484,8 @@ transform = |result|
 			(declared-type
 				(ty-fn @34.16-34.32 (effectful false)
 					(ty-lookup-external @34.16-34.25
-						(ext-decl @34.16-34.25 (ident "Color.RGB") (kind "type")))
-					(ty @34.29-34.32 (name "Str"))))))
+						(ext-decl @34.16-34.25 (ident "color.RGB") (kind "type")))
+					(ty @34.29-34.32 (name "str"))))))
 	(d-let
 		(p-assign @40.1-40.10 (ident "transform"))
 		(e-closure @40.13-44.6
@@ -520,29 +520,29 @@ transform = |result|
 		(annotation @40.1-40.10
 			(declared-type
 				(ty-fn @39.13-39.76 (effectful false)
-					(ty-apply @39.13-39.51 (symbol "Result.Result")
+					(ty-apply @39.13-39.51 (symbol "result.Result")
 						(ty-lookup-external @39.27-39.36
-							(ext-decl @39.27-39.36 (ident "Color.RGB") (kind "type")))
+							(ext-decl @39.27-39.36 (ident "color.RGB") (kind "type")))
 						(ty-lookup-external @39.38-39.50
-							(ext-decl @39.38-39.50 (ident "ExtMod.Error") (kind "type"))))
+							(ext-decl @39.38-39.50 (ident "extMod.Error") (kind "type"))))
 					(ty-lookup-external @39.55-39.76
-						(ext-decl @39.55-39.76 (ident "ModuleA.ModuleB.TypeC") (kind "type")))))))
-	(s-import @9.1-9.13 (module "Color")
+						(ext-decl @39.55-39.76 (ident "moduleA.ModuleB.TypeC") (kind "type")))))))
+	(s-import @9.1-9.13 (module "color")
 		(exposes))
-	(s-import @10.1-10.15 (module "ModuleA")
+	(s-import @10.1-10.15 (module "moduleA")
 		(exposes))
-	(s-import @11.1-11.32 (module "ExternalModule") (alias "ExtMod")
+	(s-import @11.1-11.32 (module "externalModule") (alias "extMod")
 		(exposes))
-	(ext-decl @14.19-14.28 (ident "Color.RGB") (kind "type"))
-	(ext-decl @18.20-18.35 (ident "ExtMod.DataType") (kind "type"))
-	(ext-decl @22.23-22.44 (ident "ModuleA.ModuleB.TypeC") (kind "type"))
-	(ext-decl @26.14-26.27 (ident "Result.Result") (kind "type"))
-	(ext-decl @30.18-30.27 (ident "Color.RGB") (kind "type"))
-	(ext-decl @34.16-34.25 (ident "Color.RGB") (kind "type"))
-	(ext-decl @39.13-39.26 (ident "Result.Result") (kind "type"))
-	(ext-decl @39.27-39.36 (ident "Color.RGB") (kind "type"))
-	(ext-decl @39.38-39.50 (ident "ExtMod.Error") (kind "type"))
-	(ext-decl @39.55-39.76 (ident "ModuleA.ModuleB.TypeC") (kind "type")))
+	(ext-decl @14.19-14.28 (ident "color.RGB") (kind "type"))
+	(ext-decl @18.20-18.35 (ident "extMod.DataType") (kind "type"))
+	(ext-decl @22.23-22.44 (ident "moduleA.ModuleB.TypeC") (kind "type"))
+	(ext-decl @26.14-26.27 (ident "result.Result") (kind "type"))
+	(ext-decl @30.18-30.27 (ident "color.RGB") (kind "type"))
+	(ext-decl @34.16-34.25 (ident "color.RGB") (kind "type"))
+	(ext-decl @39.13-39.26 (ident "result.Result") (kind "type"))
+	(ext-decl @39.27-39.36 (ident "color.RGB") (kind "type"))
+	(ext-decl @39.38-39.50 (ident "extMod.Error") (kind "type"))
+	(ext-decl @39.55-39.76 (ident "moduleA.ModuleB.TypeC") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
@@ -553,7 +553,7 @@ transform = |result|
 		(patt @23.1-23.20 (type "Error"))
 		(patt @27.1-27.11 (type "Error"))
 		(patt @31.1-31.9 (type "{  } -> Error"))
-		(patt @35.1-35.13 (type "Color.RGB -> Str"))
+		(patt @35.1-35.13 (type "color.RGB -> Str"))
 		(patt @40.1-40.10 (type "Error -> Error")))
 	(expressions
 		(expr @15.19-15.24 (type "Error"))
@@ -561,6 +561,6 @@ transform = |result|
 		(expr @23.23-23.32 (type "Error"))
 		(expr @27.14-27.20 (type "Error"))
 		(expr @31.12-31.49 (type "{  } -> Error"))
-		(expr @35.16-36.22 (type "Color.RGB -> Str"))
+		(expr @35.16-36.22 (type "color.RGB -> Str"))
 		(expr @40.13-44.6 (type "Error -> Error"))))
 ~~~

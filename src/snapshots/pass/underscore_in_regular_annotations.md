@@ -401,9 +401,9 @@ transform = |_, b| b
 		(annotation @11.1-11.8
 			(declared-type
 				(ty-fn @10.11-10.25 (effectful false)
-					(ty-apply @10.11-10.18 (symbol "List")
+					(ty-apply @10.11-10.18 (symbol "list")
 						(ty-underscore @10.16-10.16))
-					(ty @10.22-10.25 (name "Str"))))))
+					(ty @10.22-10.25 (name "str"))))))
 	(d-let
 		(p-assign @15.1-15.9 (ident "get_data"))
 		(e-lambda @15.12-15.33
@@ -420,8 +420,8 @@ transform = |_, b| b
 						(field (field "field")
 							(ty-underscore @1.1-1.1))
 						(field (field "other")
-							(ty @14.31-14.34 (name "U32"))))
-					(ty @14.40-14.43 (name "U32"))))))
+							(ty @14.31-14.34 (name "u32"))))
+					(ty @14.40-14.43 (name "u32"))))))
 	(d-let
 		(p-assign @19.1-19.14 (ident "handle_result"))
 		(e-closure @19.17-23.6
@@ -453,10 +453,10 @@ transform = |_, b| b
 		(annotation @19.1-19.14
 			(declared-type
 				(ty-fn @18.17-18.38 (effectful false)
-					(ty-apply @18.17-18.31 (symbol "Result")
+					(ty-apply @18.17-18.31 (symbol "result")
 						(ty-underscore @18.24-18.24)
-						(ty @18.27-18.30 (name "Str")))
-					(ty @18.35-18.38 (name "Str"))))))
+						(ty @18.27-18.30 (name "str")))
+					(ty @18.35-18.38 (name "str"))))))
 	(d-let
 		(p-assign @31.1-31.10 (ident "transform"))
 		(e-lambda @31.13-31.21

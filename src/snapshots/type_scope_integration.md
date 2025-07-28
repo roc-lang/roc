@@ -65,8 +65,8 @@ UpperIdent(13:1-13:4),OpColon(13:5-13:6),UpperIdent(13:7-13:10),EndOfFile(13:10-
 (file @1.1-13.10
 	(module @1.1-1.18
 		(exposes @1.8-1.18
-			(exposed-upper-ident @1.9-1.12 (text "Foo"))
-			(exposed-upper-ident @1.14-1.17 (text "Bar"))))
+			(exposed-upper-ident @1.9-1.12 (text "foo"))
+			(exposed-upper-ident @1.14-1.17 (text "bar"))))
 	(statements
 		(s-type-decl @4.1-4.10
 			(header @4.1-4.4 (name "Foo")
@@ -94,16 +94,16 @@ NO CHANGE
 (can-ir
 	(s-alias-decl @4.1-4.10
 		(ty-header @4.1-4.4 (name "Foo"))
-		(ty @4.7-4.10 (name "U64")))
+		(ty @4.7-4.10 (name "u64")))
 	(s-alias-decl @7.1-7.10
 		(ty-header @7.1-7.4 (name "Foo"))
-		(ty @7.7-7.10 (name "Str")))
+		(ty @7.7-7.10 (name "str")))
 	(s-alias-decl @10.1-10.25
 		(ty-header @10.1-10.4 (name "Bar"))
-		(ty @10.7-10.25 (name "SomeUndeclaredType")))
+		(ty @10.7-10.25 (name "someUndeclaredType")))
 	(s-alias-decl @13.1-13.10
 		(ty-header @13.1-13.4 (name "Baz"))
-		(ty @13.7-13.10 (name "Foo"))))
+		(ty @13.7-13.10 (name "foo"))))
 ~~~
 # TYPES
 ~~~clojure

@@ -87,10 +87,10 @@ main! = |_| {}
 				(ty-fn @3.12-3.42 (effectful false)
 					(ty-record @3.12-3.35
 						(field (field "name")
-							(ty @3.20-3.23 (name "Str")))
+							(ty @3.20-3.23 (name "str")))
 						(field (field "age")
-							(ty @3.30-3.33 (name "U64"))))
-					(ty @3.39-3.42 (name "Str"))))))
+							(ty @3.30-3.33 (name "u64"))))
+					(ty @3.39-3.42 (name "str"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15

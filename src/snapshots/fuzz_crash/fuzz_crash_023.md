@@ -261,11 +261,11 @@ NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_023.md:193:4:193:13
 UNUSED VARIABLE - fuzz_crash_023.md:166:2:166:6
 UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
+UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
+UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
 UNUSED VARIABLE - fuzz_crash_023.md:165:2:165:14
 UNUSED VARIABLE - fuzz_crash_023.md:178:2:178:8
 UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
-UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
-UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
 UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 TYPE MISMATCH - fuzz_crash_023.md:67:11:67:14
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
@@ -447,12 +447,12 @@ This feature is not yet implemented: malformed import module name contains inval
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: Exposed item 'line!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
+This feature is not yet implemented: Exposed type 'line!' already imported from module 'pf.Stdout', cannot import again from module 'mALFORMED_IMPORT'
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: Exposed item 'write!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
+This feature is not yet implemented: Exposed type 'write!' already imported from module 'pf.Stdout', cannot import again from module 'mALFORMED_IMPORT'
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
@@ -723,6 +723,30 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
+Variable `tag_with_payload` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_tag_with_payload` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:164:2:164:18:**
+```roc
+	tag_with_payload = Ok(number)
+```
+ ^^^^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `bin_op_result` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_bin_op_result` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:188:2:188:15:**
+```roc
+	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+```
+ ^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
 Variable `interpolated` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_interpolated` to suppress this warning.
@@ -758,30 +782,6 @@ The unused variable is declared here:
  ^^^^^^^^^^^^^^^
 
 
-**UNUSED VARIABLE**
-Variable `bin_op_result` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_bin_op_result` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_023.md:188:2:188:15:**
-```roc
-	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-```
- ^^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `tag_with_payload` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_tag_with_payload` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_023.md:164:2:164:18:**
-```roc
-	tag_with_payload = Ok(number)
-```
- ^^^^^^^^^^^^^^^^
-
-
 **UNDECLARED TYPE**
 The type _Value_ is not declared in this scope.
 
@@ -802,10 +802,10 @@ add_one : U64 -> U64
           ^^^
 
 It is of type:
-    _U64_
+    _u64_
 
 But you are trying to use it as:
-    _Bool_
+    _Bool (from Bool)_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -1108,8 +1108,8 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 				(exposed-lower-ident @14.32-14.48
 					(text "func")
 					(as "function"))
-				(exposed-upper-ident @14.50-14.71 (text "Type") (as "ValueCategory"))
-				(exposed-upper-ident-star @14.73-14.81 (text "Custom"))))
+				(exposed-upper-ident @14.50-14.71 (text "type") (as "valueCategory"))
+				(exposed-upper-ident-star @14.73-14.81 (text "custom"))))
 		(s-import @16.1-16.27 (raw "BadName") (alias "GoodName"))
 		(s-import @17.1-20.20 (raw "BadNameMultiline") (alias "GoodNameMultiline"))
 		(s-type-decl @22.1-22.41
@@ -1863,8 +1863,8 @@ expect {
 		(annotation @68.1-68.8
 			(declared-type
 				(ty-fn @67.11-67.21 (effectful false)
-					(ty @67.11-67.14 (name "U64"))
-					(ty @67.18-67.21 (name "U64"))))))
+					(ty @67.11-67.14 (name "u64"))
+					(ty @67.18-67.21 (name "u64"))))))
 	(d-let
 		(p-assign @80.1-80.11 (ident "match_time"))
 		(e-closure @80.14-138.3
@@ -2249,9 +2249,9 @@ expect {
 		(annotation @144.1-144.6
 			(declared-type
 				(ty-fn @143.9-143.38 (effectful false)
-					(ty-apply @143.9-143.21 (symbol "List")
-						(ty @143.14-143.20 (name "String")))
-					(ty-apply @143.25-143.38 (symbol "Result")
+					(ty-apply @143.9-143.21 (symbol "list")
+						(ty @143.14-143.20 (name "string")))
+					(ty-apply @143.25-143.38 (symbol "result")
 						(ty-record @143.32-143.34)
 						(ty-underscore @1.1-1.1))))))
 	(d-let
@@ -2266,13 +2266,13 @@ expect {
 				(ty-var @22.5-22.6 (name "a"))
 				(ty-var @22.8-22.9 (name "b"))))
 		(ty-fn @22.13-22.41 (effectful false)
-			(ty-apply @22.13-22.20 (symbol "List")
+			(ty-apply @22.13-22.20 (symbol "list")
 				(ty-var @22.18-22.19 (name "a")))
 			(ty-parens @22.22-22.30
 				(ty-fn @22.23-22.29 (effectful false)
 					(ty-var @22.23-22.24 (name "a"))
 					(ty-var @22.28-22.29 (name "b"))))
-			(ty-apply @22.34-22.41 (symbol "List")
+			(ty-apply @22.34-22.41 (symbol "list")
 				(ty-var @22.39-22.40 (name "b")))))
 	(s-alias-decl @23.1-34.5
 		(ty-header @23.1-26.2 (name "MapML")
@@ -2280,96 +2280,96 @@ expect {
 				(ty-var @24.2-24.3 (name "a"))
 				(ty-var @25.2-25.3 (name "b"))))
 		(ty-fn @28.3-34.5 (effectful false)
-			(ty-apply @28.3-30.4 (symbol "List")
+			(ty-apply @28.3-30.4 (symbol "list")
 				(ty-var @29.4-29.5 (name "a")))
 			(ty-parens @31.3-31.11
 				(ty-fn @31.4-31.10 (effectful false)
 					(ty-var @31.4-31.5 (name "a"))
 					(ty-var @31.9-31.10 (name "b"))))
-			(ty-apply @32.4-34.5 (symbol "List")
+			(ty-apply @32.4-34.5 (symbol "list")
 				(ty-var @33.5-33.6 (name "b")))))
 	(s-alias-decl @36.1-36.17
 		(ty-header @36.1-36.4 (name "Foo"))
 		(ty-tuple @36.7-36.17
-			(ty @36.8-36.11 (name "Bar"))
-			(ty @36.13-36.16 (name "Baz"))))
+			(ty @36.8-36.11 (name "bar"))
+			(ty @36.13-36.16 (name "baz"))))
 	(s-alias-decl @38.1-41.2
 		(ty-header @38.1-38.13 (name "FooMultiline"))
 		(ty-tuple @38.16-41.2
-			(ty @39.2-39.5 (name "Bar"))
-			(ty @40.2-40.5 (name "Baz"))))
+			(ty @39.2-39.5 (name "bar"))
+			(ty @40.2-40.5 (name "baz"))))
 	(s-alias-decl @43.1-43.43
 		(ty-header @43.1-43.8 (name "Some")
 			(ty-args
 				(ty-var @43.6-43.7 (name "a"))))
 		(ty-record @43.11-43.43
 			(field (field "foo")
-				(ty-apply @43.19-43.24 (symbol "Ok")
+				(ty-apply @43.19-43.24 (symbol "ok")
 					(ty-var @43.22-43.23 (name "a"))))
 			(field (field "bar")
-				(ty @43.32-43.41 (name "Something")))))
+				(ty @43.32-43.41 (name "something")))))
 	(s-alias-decl @44.1-47.2
 		(ty-header @44.1-44.10 (name "SomeMl")
 			(ty-args
 				(ty-var @44.8-44.9 (name "a"))))
 		(ty-record @44.13-47.2
 			(field (field "foo")
-				(ty-apply @45.8-45.13 (symbol "Ok")
+				(ty-apply @45.8-45.13 (symbol "ok")
 					(ty-var @45.11-45.12 (name "a"))))
 			(field (field "bar")
-				(ty @46.8-46.17 (name "Something")))))
+				(ty @46.8-46.17 (name "something")))))
 	(s-alias-decl @49.1-54.2
 		(ty-header @49.1-49.17 (name "SomeMultiline")
 			(ty-args
 				(ty-var @49.15-49.16 (name "a"))))
 		(ty-record @49.20-54.2
 			(field (field "foo")
-				(ty-apply @52.4-52.9 (symbol "Ok")
+				(ty-apply @52.4-52.9 (symbol "ok")
 					(ty-var @52.7-52.8 (name "a"))))
 			(field (field "bar")
-				(ty @53.8-53.17 (name "Something")))))
+				(ty @53.8-53.17 (name "something")))))
 	(s-alias-decl @56.1-56.27
 		(ty-header @56.1-56.9 (name "Maybe")
 			(ty-args
 				(ty-var @56.7-56.8 (name "a"))))
 		(ty-tag-union @56.12-56.27
-			(ty-apply @56.13-56.20 (symbol "Some")
+			(ty-apply @56.13-56.20 (symbol "some")
 				(ty-var @56.18-56.19 (name "a")))
-			(ty @56.22-56.26 (name "None"))))
+			(ty @56.22-56.26 (name "none"))))
 	(s-alias-decl @58.1-61.2
 		(ty-header @58.1-58.18 (name "MaybeMultiline")
 			(ty-args
 				(ty-var @58.16-58.17 (name "a"))))
 		(ty-tag-union @58.21-61.2
-			(ty-apply @59.2-59.9 (symbol "Some")
+			(ty-apply @59.2-59.9 (symbol "some")
 				(ty-var @59.7-59.8 (name "a")))
-			(ty @60.2-60.6 (name "None"))))
+			(ty @60.2-60.6 (name "none"))))
 	(s-alias-decl @63.1-63.38
 		(ty-header @63.1-63.12 (name "SomeFunc")
 			(ty-args
 				(ty-var @63.10-63.11 (name "a"))))
 		(ty-fn @63.15-63.38 (effectful false)
-			(ty-apply @63.15-63.23 (symbol "Maybe")
+			(ty-apply @63.15-63.23 (symbol "maybe")
 				(ty-var @63.21-63.22 (name "a")))
 			(ty-var @63.25-63.26 (name "a"))
-			(ty-apply @63.30-63.38 (symbol "Maybe")
+			(ty-apply @63.30-63.38 (symbol "maybe")
 				(ty-var @63.36-63.37 (name "a")))))
 	(s-import @4.1-4.42 (module "pf.Stdout") (qualifier "pf")
 		(exposes
-			(exposed (name "line!") (wildcard false))
-			(exposed (name "write!") (wildcard false))))
-	(s-import @6.1-12.4 (module "MALFORMED_IMPORT") (qualifier "pf")
+			(exposed (name "Line!") (wildcard false))
+			(exposed (name "Write!") (wildcard false))))
+	(s-import @6.1-12.4 (module "mALFORMED_IMPORT") (qualifier "pf")
 		(exposes
-			(exposed (name "line!") (wildcard false))
-			(exposed (name "write!") (wildcard false))))
+			(exposed (name "Line!") (wildcard false))
+			(exposed (name "Write!") (wildcard false))))
 	(s-import @14.1-14.82 (module "pkg.Something") (qualifier "pkg")
 		(exposes
-			(exposed (name "func") (alias "function") (wildcard false))
-			(exposed (name "Type") (alias "ValueCategory") (wildcard false))
+			(exposed (name "Func") (alias "function") (wildcard false))
+			(exposed (name "Type") (alias "valueCategory") (wildcard false))
 			(exposed (name "Custom") (wildcard true))))
-	(s-import @16.1-16.27 (module "BadName") (alias "GoodName")
+	(s-import @16.1-16.27 (module "badName") (alias "goodName")
 		(exposes))
-	(s-import @17.1-20.20 (module "BadNameMultiline") (alias "GoodNameMultiline")
+	(s-import @17.1-20.20 (module "badNameMultiline") (alias "goodNameMultiline")
 		(exposes))
 	(s-expect @140.1-141.11
 		(e-binop @141.2-141.11 (op "eq")

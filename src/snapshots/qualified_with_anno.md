@@ -57,12 +57,12 @@ NO CHANGE
 			(e-tag @6.9-6.20 (name "TagA")))
 		(annotation @6.1-6.6
 			(declared-type
-				(ty @5.9-5.15 (name "MyType")))))
+				(ty @5.9-5.15 (name "myType")))))
 	(s-nominal-decl @3.1-3.23
 		(ty-header @3.1-3.7 (name "MyType"))
 		(ty-tag-union @3.11-3.23
-			(ty @3.12-3.16 (name "TagA"))
-			(ty @3.18-3.22 (name "TagB")))))
+			(ty @3.12-3.16 (name "tagA"))
+			(ty @3.18-3.22 (name "tagB")))))
 ~~~
 # TYPES
 ~~~clojure

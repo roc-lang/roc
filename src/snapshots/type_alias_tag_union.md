@@ -144,10 +144,10 @@ NO CHANGE
 		(annotation @8.1-8.8
 			(declared-type
 				(ty-fn @7.11-7.36 (effectful false)
-					(ty-apply @7.11-7.29 (symbol "MyResult")
-						(ty @7.20-7.23 (name "Str"))
-						(ty @7.25-7.28 (name "I32")))
-					(ty @7.33-7.36 (name "Str"))))))
+					(ty-apply @7.11-7.29 (symbol "myResult")
+						(ty @7.20-7.23 (name "str"))
+						(ty @7.25-7.28 (name "i32")))
+					(ty @7.33-7.36 (name "str"))))))
 	(d-let
 		(p-assign @15.1-15.10 (ident "getString"))
 		(e-lambda @15.13-15.29
@@ -158,9 +158,9 @@ NO CHANGE
 		(annotation @15.1-15.10
 			(declared-type
 				(ty-fn @14.13-14.31 (effectful false)
-					(ty-apply @14.13-14.24 (symbol "Option")
-						(ty @14.20-14.23 (name "Str")))
-					(ty @14.28-14.31 (name "Str"))))))
+					(ty-apply @14.13-14.24 (symbol "option")
+						(ty @14.20-14.23 (name "str")))
+					(ty @14.28-14.31 (name "str"))))))
 	(d-let
 		(p-assign @18.1-18.10 (ident "getNumber"))
 		(e-lambda @18.13-18.21
@@ -170,9 +170,9 @@ NO CHANGE
 		(annotation @18.1-18.10
 			(declared-type
 				(ty-fn @17.13-17.31 (effectful false)
-					(ty-apply @17.13-17.24 (symbol "Option")
-						(ty @17.20-17.23 (name "I32")))
-					(ty @17.28-17.31 (name "I32"))))))
+					(ty-apply @17.13-17.24 (symbol "option")
+						(ty @17.20-17.23 (name "i32")))
+					(ty @17.28-17.31 (name "i32"))))))
 	(d-let
 		(p-assign @20.1-20.6 (ident "main!"))
 		(e-lambda @20.9-20.15
@@ -185,18 +185,18 @@ NO CHANGE
 				(ty-var @4.10-4.12 (name "ok"))
 				(ty-var @4.14-4.17 (name "err"))))
 		(ty-tag-union @4.21-4.41
-			(ty-apply @4.22-4.30 (symbol "Good")
+			(ty-apply @4.22-4.30 (symbol "good")
 				(ty-var @4.27-4.29 (name "ok")))
-			(ty-apply @4.32-4.40 (symbol "Bad")
+			(ty-apply @4.32-4.40 (symbol "bad")
 				(ty-var @4.36-4.39 (name "err")))))
 	(s-alias-decl @11.1-11.28
 		(ty-header @11.1-11.10 (name "Option")
 			(ty-args
 				(ty-var @11.8-11.9 (name "a"))))
 		(ty-tag-union @11.13-11.28
-			(ty-apply @11.14-11.21 (symbol "Some")
+			(ty-apply @11.14-11.21 (symbol "some")
 				(ty-var @11.19-11.20 (name "a")))
-			(ty @11.23-11.27 (name "None")))))
+			(ty @11.23-11.27 (name "none")))))
 ~~~
 # TYPES
 ~~~clojure

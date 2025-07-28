@@ -121,11 +121,11 @@ UNUSED VARIABLE - everything.md:90:5:90:6
 UNUSED VARIABLE - everything.md:95:4:95:5
 UNUSED VARIABLE - everything.md:100:5:100:6
 UNUSED VARIABLE - everything.md:106:5:106:6
-UNUSED VARIABLE - everything.md:81:2:81:4
-UNUSED VARIABLE - everything.md:61:2:61:4
-UNUSED VARIABLE - everything.md:69:2:69:4
 UNUSED VARIABLE - everything.md:77:2:77:4
 UNUSED VARIABLE - everything.md:73:2:73:4
+UNUSED VARIABLE - everything.md:69:2:69:4
+UNUSED VARIABLE - everything.md:61:2:61:4
+UNUSED VARIABLE - everything.md:81:2:81:4
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
@@ -176,42 +176,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `h5` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
-The unused variable is declared here:
-**everything.md:81:2:81:4:**
-```roc
-	h5 = (
-```
- ^^
-
-
-**UNUSED VARIABLE**
-Variable `h1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h1` to suppress this warning.
-The unused variable is declared here:
-**everything.md:61:2:61:4:**
-```roc
-	h1 = {
-```
- ^^
-
-
-**UNUSED VARIABLE**
-Variable `h2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
-The unused variable is declared here:
-**everything.md:69:2:69:4:**
-```roc
-	h2 = h(
-```
- ^^
-
-
-**UNUSED VARIABLE**
 Variable `h4` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h4` to suppress this warning.
@@ -231,6 +195,42 @@ The unused variable is declared here:
 **everything.md:73:2:73:4:**
 ```roc
 	h3 = A(
+```
+ ^^
+
+
+**UNUSED VARIABLE**
+Variable `h2` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
+The unused variable is declared here:
+**everything.md:69:2:69:4:**
+```roc
+	h2 = h(
+```
+ ^^
+
+
+**UNUSED VARIABLE**
+Variable `h1` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h1` to suppress this warning.
+The unused variable is declared here:
+**everything.md:61:2:61:4:**
+```roc
+	h1 = {
+```
+ ^^
+
+
+**UNUSED VARIABLE**
+Variable `h5` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
+The unused variable is declared here:
+**everything.md:81:2:81:4:**
+```roc
+	h5 = (
 ```
  ^^
 
@@ -348,12 +348,12 @@ CloseCurly(110:1-110:2),EndOfFile(110:2-110:2),
 	(statements
 		(s-import @4.1-7.2 (raw "I1")
 			(exposing
-				(exposed-upper-ident @5.2-5.5 (text "I11"))
-				(exposed-upper-ident @6.2-6.5 (text "I12"))))
+				(exposed-upper-ident @5.2-5.5 (text "i11"))
+				(exposed-upper-ident @6.2-6.5 (text "i12"))))
 		(s-import @8.1-11.2 (raw "I2")
 			(exposing
-				(exposed-upper-ident @9.2-9.13 (text "I21") (as "Ias1"))
-				(exposed-upper-ident @10.2-10.13 (text "I22") (as "Ias2"))))
+				(exposed-upper-ident @9.2-9.13 (text "i21") (as "ias1"))
+				(exposed-upper-ident @10.2-10.13 (text "i22") (as "ias2"))))
 		(s-type-decl @14.1-23.11
 			(header @14.1-14.5 (name "A")
 				(args
@@ -617,13 +617,13 @@ NO CHANGE
 					(ty-tuple @16.18-19.4
 						(ty-var @17.4-17.5 (name "a"))
 						(ty-var @18.4-18.5 (name "a"))))
-				(ty @19.8-19.11 (name "Str")))
+				(ty @19.8-19.11 (name "str")))
 			(method @20.3-23.11 (module-of "a") (ident "a2")
 				(args
 					(ty-tuple @20.18-23.4
 						(ty-var @21.4-21.5 (name "a"))
 						(ty-var @22.4-22.5 (name "a"))))
-				(ty @23.8-23.11 (name "Str")))))
+				(ty @23.8-23.11 (name "str")))))
 	(s-alias-decl @24.1-33.11
 		(ty-header @24.1-24.5 (name "B")
 			(ty-args
@@ -635,13 +635,13 @@ NO CHANGE
 					(ty-tuple @26.18-29.4
 						(ty-var @27.4-27.5 (name "b"))
 						(ty-var @28.4-28.5 (name "b"))))
-				(ty @29.8-29.11 (name "Str")))
+				(ty @29.8-29.11 (name "str")))
 			(method @30.3-33.11 (module-of "b") (ident "b2")
 				(args
 					(ty-tuple @30.18-33.4
 						(ty-var @31.4-31.5 (name "b"))
 						(ty-var @32.4-32.5 (name "b"))))
-				(ty @33.8-33.11 (name "Str")))))
+				(ty @33.8-33.11 (name "str")))))
 	(s-alias-decl @35.1-41.2
 		(ty-header @35.1-38.2 (name "C")
 			(ty-args
@@ -655,36 +655,36 @@ NO CHANGE
 			(ty-args
 				(ty-var @43.2-43.3 (name "a"))
 				(ty-var @44.2-44.3 (name "b"))))
-		(ty-apply @45.5-48.2 (symbol "C")
+		(ty-apply @45.5-48.2 (symbol "c")
 			(ty-var @46.2-46.3 (name "a"))
 			(ty-var @47.2-47.3 (name "b"))))
 	(s-alias-decl @49.1-52.2
 		(ty-header @49.1-49.2 (name "E"))
 		(ty-record @49.5-52.2
 			(field (field "a")
-				(ty @50.6-50.9 (name "Str")))
+				(ty @50.6-50.9 (name "str")))
 			(field (field "b")
-				(ty @51.6-51.9 (name "Str")))))
+				(ty @51.6-51.9 (name "str")))))
 	(s-alias-decl @53.1-56.2
 		(ty-header @53.1-53.2 (name "F"))
 		(ty-tag-union @53.5-56.2
-			(ty @54.2-54.3 (name "A"))
-			(ty @55.2-55.3 (name "B"))))
-	(s-import @4.1-7.2 (module "I1")
+			(ty @54.2-54.3 (name "a"))
+			(ty @55.2-55.3 (name "b"))))
+	(s-import @4.1-7.2 (module "i1")
 		(exposes
 			(exposed (name "I11") (wildcard false))
 			(exposed (name "I12") (wildcard false))))
-	(s-import @8.1-11.2 (module "I2")
+	(s-import @8.1-11.2 (module "i2")
 		(exposes
-			(exposed (name "I21") (alias "Ias1") (wildcard false))
-			(exposed (name "I22") (alias "Ias2") (wildcard false))))
+			(exposed (name "I21") (alias "ias1") (wildcard false))
+			(exposed (name "I22") (alias "ias2") (wildcard false))))
 	(s-type-anno @58.1-58.42 (name "g")
 		(ty-fn @58.5-58.11 (effectful false)
 			(ty-var @58.5-58.6 (name "e"))
 			(ty-var @58.10-58.11 (name "e")))
 		(where
-			(alias @58.18-58.29 (module-of "e") (ident "A"))
-			(alias @58.31-58.42 (module-of "e") (ident "B"))))
+			(alias @58.18-58.29 (module-of "e") (ident "a"))
+			(alias @58.31-58.42 (module-of "e") (ident "b"))))
 	(ext-decl @16.3-19.11 (ident "module(a).a1") (kind "value"))
 	(ext-decl @20.3-23.11 (ident "module(a).a2") (kind "value"))
 	(ext-decl @26.3-29.11 (ident "module(b).b1") (kind "value"))
@@ -696,7 +696,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @60.1-60.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret")))
+		(patt @60.1-60.2 (type "[Z1((field, field2)), Z2(i, j), Z3(k), Z4(List(elem))]others, [Z1((field3, field4)), Z2(l, m), Z3(n), Z4(List(elem2))]others2 -> _ret")))
 	(type_decls
 		(alias @14.1-23.11 (type "A(a)")
 			(ty-header @14.1-14.5 (name "A")
@@ -721,5 +721,5 @@ NO CHANGE
 		(alias @53.1-56.2 (type "F")
 			(ty-header @53.1-53.2 (name "F"))))
 	(expressions
-		(expr @60.5-110.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret"))))
+		(expr @60.5-110.2 (type "[Z1((field, field2)), Z2(i, j), Z3(k), Z4(List(elem))]others, [Z1((field3, field4)), Z2(l, m), Z3(n), Z4(List(elem2))]others2 -> _ret"))))
 ~~~

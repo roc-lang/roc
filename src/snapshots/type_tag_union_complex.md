@@ -181,8 +181,8 @@ NO CHANGE
 		(annotation @18.1-18.14
 			(declared-type
 				(ty-fn @17.17-17.30 (effectful false)
-					(ty @17.17-17.23 (name "Result"))
-					(ty @17.27-17.30 (name "Str"))))))
+					(ty @17.17-17.23 (name "result"))
+					(ty @17.27-17.30 (name "str"))))))
 	(d-let
 		(p-assign @22.1-22.15 (ident "handleResponse"))
 		(e-lambda @22.18-22.39
@@ -193,8 +193,8 @@ NO CHANGE
 		(annotation @22.1-22.15
 			(declared-type
 				(ty-fn @21.18-21.33 (effectful false)
-					(ty @21.18-21.26 (name "Response"))
-					(ty @21.30-21.33 (name "Str"))))))
+					(ty @21.18-21.26 (name "response"))
+					(ty @21.30-21.33 (name "str"))))))
 	(d-let
 		(p-assign @24.1-24.6 (ident "main!"))
 		(e-lambda @24.9-24.15
@@ -204,41 +204,41 @@ NO CHANGE
 	(s-alias-decl @4.1-4.37
 		(ty-header @4.1-4.7 (name "Status"))
 		(ty-tag-union @4.10-4.37
-			(ty @4.11-4.18 (name "Loading"))
-			(ty @4.20-4.28 (name "Complete"))
-			(ty @4.30-4.36 (name "Failed"))))
+			(ty @4.11-4.18 (name "loading"))
+			(ty @4.20-4.28 (name "complete"))
+			(ty @4.30-4.36 (name "failed"))))
 	(s-alias-decl @7.1-7.55
 		(ty-header @7.1-7.7 (name "Result"))
 		(ty-tag-union @7.10-7.55
-			(ty-apply @7.11-7.23 (symbol "Success")
-				(ty @7.19-7.22 (name "Str")))
-			(ty-apply @7.25-7.35 (symbol "Error")
-				(ty @7.31-7.34 (name "Str")))
-			(ty-apply @7.37-7.54 (symbol "Warning")
-				(ty @7.45-7.48 (name "Str"))
-				(ty @7.50-7.53 (name "I32")))))
+			(ty-apply @7.11-7.23 (symbol "success")
+				(ty @7.19-7.22 (name "str")))
+			(ty-apply @7.25-7.35 (symbol "error")
+				(ty @7.31-7.34 (name "str")))
+			(ty-apply @7.37-7.54 (symbol "warning")
+				(ty @7.45-7.48 (name "str"))
+				(ty @7.50-7.53 (name "i32")))))
 	(s-alias-decl @10.1-10.50
 		(ty-header @10.1-10.9 (name "Response"))
 		(ty-tag-union @10.12-10.50
-			(ty-apply @10.13-10.23 (symbol "Ok")
-				(ty @10.16-10.22 (name "Result")))
-			(ty @10.25-10.37 (name "NetworkError"))
-			(ty @10.39-10.49 (name "ParseError"))))
+			(ty-apply @10.13-10.23 (symbol "ok")
+				(ty @10.16-10.22 (name "result")))
+			(ty @10.25-10.37 (name "networkError"))
+			(ty @10.39-10.49 (name "parseError"))))
 	(s-alias-decl @13.1-13.52
 		(ty-header @13.1-13.10 (name "UserState"))
 		(ty-tag-union @13.13-13.52
-			(ty-apply @13.14-13.25 (symbol "Active")
-				(ty @13.21-13.24 (name "Str")))
-			(ty @13.27-13.35 (name "Inactive"))
-			(ty-apply @13.37-13.51 (symbol "Suspended")
-				(ty @13.47-13.50 (name "Str")))))
+			(ty-apply @13.14-13.25 (symbol "active")
+				(ty @13.21-13.24 (name "str")))
+			(ty @13.27-13.35 (name "inactive"))
+			(ty-apply @13.37-13.51 (symbol "suspended")
+				(ty @13.47-13.50 (name "str")))))
 	(s-alias-decl @14.1-14.58
 		(ty-header @14.1-14.16 (name "ConnectionState"))
 		(ty-tag-union @14.19-14.58
-			(ty @14.20-14.26 (name "Active"))
-			(ty @14.28-14.40 (name "Disconnected"))
-			(ty-apply @14.42-14.57 (symbol "Connecting")
-				(ty @14.53-14.56 (name "Str"))))))
+			(ty @14.20-14.26 (name "active"))
+			(ty @14.28-14.40 (name "disconnected"))
+			(ty-apply @14.42-14.57 (symbol "connecting")
+				(ty @14.53-14.56 (name "str"))))))
 ~~~
 # TYPES
 ~~~clojure

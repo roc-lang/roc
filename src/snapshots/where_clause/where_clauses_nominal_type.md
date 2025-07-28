@@ -27,7 +27,7 @@ KwModule(5:3-5:9),NoSpaceOpenRound(5:9-5:10),LowerIdent(5:10-5:11),CloseRound(5:
 (file @1.1-5.28
 	(module @1.1-1.15
 		(exposes @1.8-1.15
-			(exposed-upper-ident @1.9-1.14 (text "Cache"))))
+			(exposed-upper-ident @1.9-1.14 (text "cache"))))
 	(statements
 		(s-type-decl @3.1-5.28
 			(header @3.1-3.12 (name "Cache")
@@ -56,14 +56,14 @@ NO CHANGE
 			(ty-args
 				(ty-var @3.7-3.8 (name "k"))
 				(ty-var @3.10-3.11 (name "v"))))
-		(ty-apply @3.16-3.28 (symbol "Dict")
-			(ty @3.21-3.24 (name "U64"))
+		(ty-apply @3.16-3.28 (symbol "dict")
+			(ty @3.21-3.24 (name "u64"))
 			(ty-var @3.26-3.27 (name "v")))
 		(where
 			(method @5.3-5.28 (module-of "k") (ident "hash")
 				(args
 					(ty-var @5.20-5.21 (name "k")))
-				(ty @5.25-5.28 (name "U64")))))
+				(ty @5.25-5.28 (name "u64")))))
 	(ext-decl @5.3-5.28 (ident "module(k).hash") (kind "value")))
 ~~~
 # TYPES

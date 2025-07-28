@@ -48,7 +48,7 @@ NO CHANGE
 			(e-literal @4.8-4.11 (string "one")))
 		(annotation @4.1-4.4
 			(declared-type
-				(ty @3.7-3.10 (name "Str"))))))
+				(ty @3.7-3.10 (name "str"))))))
 ~~~
 # TYPES
 ~~~clojure

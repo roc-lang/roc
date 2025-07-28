@@ -26,7 +26,7 @@ main! = |_| swapPair(1, 2)
             ^^^^^^^^
 
 It is of type:
-    _Pair(a, b) -> Pair(b, a)_
+    _pair(a, b) -> pair(b, a)_
 
 But you are trying to use it as:
     _Num(_size), Num(_size2) -> _ret_
@@ -116,10 +116,10 @@ NO CHANGE
 		(annotation @6.1-6.9
 			(declared-type
 				(ty-fn @5.12-5.36 (effectful false)
-					(ty-apply @5.12-5.22 (symbol "Pair")
+					(ty-apply @5.12-5.22 (symbol "pair")
 						(ty-var @5.17-5.18 (name "a"))
 						(ty-var @5.20-5.21 (name "b")))
-					(ty-apply @5.26-5.36 (symbol "Pair")
+					(ty-apply @5.26-5.36 (symbol "pair")
 						(ty-var @5.31-5.32 (name "b"))
 						(ty-var @5.34-5.35 (name "a")))))))
 	(d-let

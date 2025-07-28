@@ -22,14 +22,14 @@ package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main
 You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `SomeType` is exposed, but it is not defined anywhere in this module.
+The module header says that `someType` is exposed, but it is not defined anywhere in this module.
 
 **package_header_nonempty_singleline_1.md:1:21:1:29:**
 ```roc
 package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }
 ```
                     ^^^^^^^^
-You can fix this by either defining `SomeType` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `someType` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -42,7 +42,7 @@ KwPackage(1:1-1:8),OpenSquare(1:9-1:10),LowerIdent(1:10-1:19),Comma(1:19-1:20),U
 		(exposes @1.9-1.30
 			(exposed-lower-ident @1.10-1.19
 				(text "something"))
-			(exposed-upper-ident @1.21-1.29 (text "SomeType")))
+			(exposed-upper-ident @1.21-1.29 (text "someType")))
 		(packages @1.31-1.88
 			(record-field @1.33-1.55 (name "somePkg")
 				(e-string @1.42-1.55

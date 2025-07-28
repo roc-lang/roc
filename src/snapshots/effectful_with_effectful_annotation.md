@@ -83,7 +83,7 @@ NO CHANGE
 		(annotation @7.1-7.11
 			(declared-type
 				(ty-fn @6.14-6.23 (effectful true)
-					(ty @6.14-6.17 (name "Str"))
+					(ty @6.14-6.17 (name "str"))
 					(ty-record @6.21-6.23)))))
 	(d-let
 		(p-assign @9.1-9.6 (ident "main!"))

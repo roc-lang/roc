@@ -23,7 +23,7 @@ UNDEFINED VARIABLE - nominal_external_fully_qualified.md:9:23:9:36
 UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `MyResultType` in this scope.
+Nothing is named `myResultType` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **nominal_external_fully_qualified.md:8:23:8:36:**
@@ -34,7 +34,7 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `MyResultType` in this scope.
+Nothing is named `myResultType` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **nominal_external_fully_qualified.md:9:23:9:36:**
@@ -153,13 +153,13 @@ handleResult = |result| {
 		(annotation @6.1-6.13
 			(declared-type
 				(ty-fn @5.16-5.60 (effectful false)
-					(ty-apply @5.16-5.53 (symbol "MyResultModule.MyResultType")
-						(ty @5.44-5.47 (name "Str"))
-						(ty @5.49-5.52 (name "I32")))
-					(ty @5.57-5.60 (name "Str"))))))
-	(s-import @3.1-3.22 (module "MyResultModule")
+					(ty-apply @5.16-5.53 (symbol "myResultModule.MyResultType")
+						(ty @5.44-5.47 (name "str"))
+						(ty @5.49-5.52 (name "i32")))
+					(ty @5.57-5.60 (name "str"))))))
+	(s-import @3.1-3.22 (module "myResultModule")
 		(exposes))
-	(ext-decl @5.16-5.43 (ident "MyResultModule.MyResultType") (kind "type")))
+	(ext-decl @5.16-5.43 (ident "myResultModule.MyResultType") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

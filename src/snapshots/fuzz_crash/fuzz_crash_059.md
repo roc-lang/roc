@@ -58,7 +58,7 @@ if 0 {} else || 0
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import @1.20-2.2 (module "B") (alias "G")
+	(s-import @1.20-2.2 (module "b") (alias "g")
 		(exposes)))
 ~~~
 # TYPES

@@ -57,7 +57,7 @@ This expression is used in an unexpected way:
          ^^^^^^^^
 
 It is of type:
-    _Pair(a, b), Num(_size7) -> Num(_size8), Num(_size9) -> Num(_size10) -> Pair(c, d)_
+    _pair(a, b), Num(_size7) -> Num(_size8), Num(_size9) -> Num(_size10) -> pair(c, d)_
 
 But you are trying to use it as:
     _Num(_size), Num(_size2), Num(_size3) -> Num(_size4), Num(_size5) -> Num(_size6) -> _ret_
@@ -233,10 +233,10 @@ main = {
 		(annotation @8.1-8.10
 			(declared-type
 				(ty-fn @7.13-7.37 (effectful false)
-					(ty-apply @7.13-7.23 (symbol "Pair")
+					(ty-apply @7.13-7.23 (symbol "pair")
 						(ty-var @7.18-7.19 (name "a"))
 						(ty-var @7.21-7.22 (name "b")))
-					(ty-apply @7.27-7.37 (symbol "Pair")
+					(ty-apply @7.27-7.37 (symbol "pair")
 						(ty-var @7.32-7.33 (name "b"))
 						(ty-var @7.35-7.36 (name "a")))))))
 	(d-let
@@ -264,7 +264,7 @@ main = {
 		(annotation @12.1-12.9
 			(declared-type
 				(ty-fn @11.12-11.56 (effectful false)
-					(ty-apply @11.12-11.22 (symbol "Pair")
+					(ty-apply @11.12-11.22 (symbol "pair")
 						(ty-var @11.17-11.18 (name "a"))
 						(ty-var @11.20-11.21 (name "b")))
 					(ty-parens @11.24-11.32
@@ -275,7 +275,7 @@ main = {
 						(ty-fn @11.35-11.41 (effectful false)
 							(ty-var @11.35-11.36 (name "b"))
 							(ty-var @11.40-11.41 (name "d"))))
-					(ty-apply @11.46-11.56 (symbol "Pair")
+					(ty-apply @11.46-11.56 (symbol "pair")
 						(ty-var @11.51-11.52 (name "c"))
 						(ty-var @11.54-11.55 (name "d")))))))
 	(d-let

@@ -61,7 +61,7 @@ NO CHANGE
 		(e-int @6.7-6.9 (value "42"))
 		(annotation @6.1-6.4
 			(declared-type
-				(ty @5.7-5.14 (name "BadType")))))
+				(ty @5.7-5.14 (name "badType")))))
 	(s-nominal-decl @3.1-3.13
 		(ty-header @3.1-3.8 (name "BadType"))
 		(ty-underscore @1.1-1.1)))

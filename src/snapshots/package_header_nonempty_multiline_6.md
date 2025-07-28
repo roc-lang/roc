@@ -30,14 +30,14 @@ The module header says that `something` is exposed, but it is not defined anywhe
 You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `SomeType` is exposed, but it is not defined anywhere in this module.
+The module header says that `someType` is exposed, but it is not defined anywhere in this module.
 
 **package_header_nonempty_multiline_6.md:4:3:4:11:**
 ```roc
 		SomeType, # Comment after last exposed item
 ```
   ^^^^^^^^
-You can fix this by either defining `SomeType` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `someType` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -58,7 +58,7 @@ CloseCurly(9:2-9:3),EndOfFile(9:3-9:3),
 		(exposes @2.2-5.3
 			(exposed-lower-ident @3.3-3.12
 				(text "something"))
-			(exposed-upper-ident @4.3-4.11 (text "SomeType")))
+			(exposed-upper-ident @4.3-4.11 (text "someType")))
 		(packages @6.2-9.3
 			(record-field @7.3-7.25 (name "somePkg")
 				(e-string @7.12-7.25

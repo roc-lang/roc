@@ -117,8 +117,8 @@ main = {
 				(p-assign @8.5-8.12 (ident "decoded")))))
 	(s-import @3.1-3.43 (module "json.Json") (qualifier "json")
 		(exposes
-			(exposed (name "decode") (wildcard false))
-			(exposed (name "encode") (wildcard false)))))
+			(exposed (name "Decode") (wildcard false))
+			(exposed (name "Encode") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

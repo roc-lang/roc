@@ -65,10 +65,10 @@ process_user! : { name : Str, age :  } => Str
 		(ty-fn @1.17-1.54 (effectful true)
 			(ty-record @1.17-1.47
 				(field (field "name")
-					(ty @1.26-1.29 (name "Str")))
+					(ty @1.26-1.29 (name "str")))
 				(field (field "age")
 					(ty-malformed @1.37-1.45)))
-			(ty @1.51-1.54 (name "Str")))))
+			(ty @1.51-1.54 (name "str")))))
 ~~~
 # TYPES
 ~~~clojure

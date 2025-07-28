@@ -213,7 +213,7 @@ pub fn contains(self: *const Self, string: []const u8) bool {
     std.debug.assert(string.len > 0); // Should never check empty strings!
     std.debug.assert(!(string[0] >= '0' and string[0] <= '9')); // Identifiers cannot start with digits!
     // Check if we need to normalize the case
-    if (string.len > 0 and string[0] >= 'A' and string[0] <= 'Z') {
+    if (string[0] >= 'A' and string[0] <= 'Z') {
         // Need to check with normalized version
         var normalized: [256]u8 = undefined; // Stack buffer for small strings
         if (string.len > normalized.len) {
@@ -241,7 +241,10 @@ pub fn getLowercase(self: *const Self, idx: Idx) []u8 {
 /// Caller must free the returned slice if it was allocated.
 pub fn getUppercase(self: *const Self, allocator: std.mem.Allocator, idx: Idx) std.mem.Allocator.Error![]u8 {
     const text = self.getLowercase(idx);
-    std.debug.assert(text.len > 0); // Should never have empty identifiers!
+    // Handle empty identifiers gracefully
+    if (text.len == 0) {
+        return text;
+    }
     if (text[0] >= 'a' and text[0] <= 'z') {
         // Need to convert to uppercase
         const result = try allocator.alloc(u8, text.len);

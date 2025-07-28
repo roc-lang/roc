@@ -22,7 +22,7 @@ x = 500
     ^^^
 
 Its inferred type is:
-    _U8_
+    _u8_
 
 # TOKENS
 ~~~zig
@@ -54,7 +54,7 @@ NO CHANGE
 		(e-int @4.5-4.8 (value "500"))
 		(annotation @4.1-4.2
 			(declared-type
-				(ty @3.5-3.7 (name "U8"))))))
+				(ty @3.5-3.7 (name "u8"))))))
 ~~~
 # TYPES
 ~~~clojure

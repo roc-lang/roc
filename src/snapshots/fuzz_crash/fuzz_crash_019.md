@@ -945,7 +945,7 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 					(text "line!"))))
 		(s-import @6.1-8.6 (raw "Stdot")
 			(exposing
-				(exposed-upper-ident @8.1-8.5 (text "Cust"))))
+				(exposed-upper-ident @8.1-8.5 (text "cust"))))
 		(s-import @10.1-10.19 (raw "Bae") (alias "Gooe"))
 		(s-import @11.1-12.4 (raw "Ba"))
 		(s-type-decl @13.1-13.33
@@ -1708,24 +1708,24 @@ expect {
 				(ty-var @13.5-13.6 (name "a"))
 				(ty-var @13.8-13.9 (name "b"))))
 		(ty-fn @13.13-13.33 (effectful false)
-			(ty @13.13-13.16 (name "Lis"))
+			(ty @13.13-13.16 (name "lis"))
 			(ty-tuple @13.18-13.22
 				(ty-var @13.19-13.21 (name "ab")))
-			(ty-apply @13.26-13.33 (symbol "List")
+			(ty-apply @13.26-13.33 (symbol "list")
 				(ty-var @13.31-13.32 (name "b")))))
 	(s-alias-decl @14.1-20.15
 		(ty-header @14.1-15.2 (name "MapML"))
 		(ty-fn @17.3-20.15 (effectful false)
-			(ty-apply @17.3-18.4 (symbol "List"))
+			(ty-apply @17.3-18.4 (symbol "list"))
 			(ty-tuple @19.3-19.7
 				(ty-var @19.4-19.6 (name "ab")))
-			(ty-apply @20.4-20.15 (symbol "List")
+			(ty-apply @20.4-20.15 (symbol "list")
 				(ty-var @20.12-20.13 (name "b")))))
 	(s-alias-decl @24.1-24.27
 		(ty-header @24.1-24.4 (name "Som"))
 		(ty-record @24.7-24.27
 			(field (field "foo")
-				(ty @24.15-24.16 (name "O")))
+				(ty @24.15-24.16 (name "o")))
 			(field (field "bar")
 				(ty-var @24.24-24.25 (name "g")))))
 	(s-alias-decl @25.1-26.2
@@ -1743,7 +1743,7 @@ expect {
 			(ty-args
 				(ty-var @30.7-30.8 (name "a"))))
 		(ty-tag-union @30.12-30.19
-			(ty @30.13-30.18 (name "Somne"))))
+			(ty @30.13-30.18 (name "somne"))))
 	(s-alias-decl @32.1-33.2
 		(ty-header @32.1-32.10 (name "Mayine")
 			(ty-args
@@ -1751,13 +1751,13 @@ expect {
 		(ty-tag-union @32.13-33.2))
 	(s-import @4.1-4.34 (module "pf.Stdout") (qualifier "pf")
 		(exposes
-			(exposed (name "line!") (wildcard false))))
-	(s-import @6.1-8.6 (module "Stdot")
+			(exposed (name "Line!") (wildcard false))))
+	(s-import @6.1-8.6 (module "stdot")
 		(exposes
 			(exposed (name "Cust") (wildcard false))))
-	(s-import @10.1-10.19 (module "Bae") (alias "Gooe")
+	(s-import @10.1-10.19 (module "bae") (alias "gooe")
 		(exposes))
-	(s-import @11.1-12.4 (module "Ba")
+	(s-import @11.1-12.4 (module "ba")
 		(exposes))
 	(s-expect @71.1-72.4
 		(e-runtime-error (tag "ident_not_in_scope")))

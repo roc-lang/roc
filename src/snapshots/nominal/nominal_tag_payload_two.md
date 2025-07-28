@@ -39,7 +39,7 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 (file @1.1-12.2
 	(module @1.1-1.29
 		(exposes @1.8-1.29
-			(exposed-upper-ident @1.9-1.17 (text "MyResult"))
+			(exposed-upper-ident @1.9-1.17 (text "myResult"))
 			(exposed-lower-ident @1.19-1.21
 				(text "ok"))
 			(exposed-lower-ident @1.23-1.28
@@ -129,7 +129,7 @@ is_ok = |result| match result {
 			(declared-type
 				(ty-fn @5.6-5.27 (effectful false)
 					(ty-var @5.6-5.8 (name "ok"))
-					(ty-apply @5.12-5.27 (symbol "MyResult")
+					(ty-apply @5.12-5.27 (symbol "myResult")
 						(ty-var @5.21-5.23 (name "ok"))
 						(ty-underscore @1.1-1.1))))))
 	(d-let
@@ -162,19 +162,19 @@ is_ok = |result| match result {
 		(annotation @9.1-9.6
 			(declared-type
 				(ty-fn @8.9-8.36 (effectful false)
-					(ty-apply @8.9-8.28 (symbol "MyResult")
+					(ty-apply @8.9-8.28 (symbol "myResult")
 						(ty-var @8.18-8.21 (name "_ok"))
 						(ty-var @8.23-8.27 (name "_err")))
-					(ty @8.32-8.36 (name "Bool"))))))
+					(ty @8.32-8.36 (name "bool"))))))
 	(s-nominal-decl @3.1-3.40
 		(ty-header @3.1-3.18 (name "MyResult")
 			(ty-args
 				(ty-var @3.10-3.12 (name "ok"))
 				(ty-var @3.14-3.17 (name "err"))))
 		(ty-tag-union @3.22-3.40
-			(ty-apply @3.23-3.29 (symbol "Ok")
+			(ty-apply @3.23-3.29 (symbol "ok")
 				(ty-var @3.26-3.28 (name "ok")))
-			(ty-apply @3.31-3.39 (symbol "Err")
+			(ty-apply @3.31-3.39 (symbol "err")
 				(ty-var @3.35-3.38 (name "err"))))))
 ~~~
 # TYPES
