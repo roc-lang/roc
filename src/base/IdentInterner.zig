@@ -238,22 +238,17 @@ pub fn getLowercase(self: *const Self, idx: Idx) []u8 {
 }
 
 /// Get the text for an uppercase identifier (converts first char to uppercase if lowercase).
-/// Caller must free the returned slice if it was allocated.
-pub fn getUppercase(self: *const Self, allocator: std.mem.Allocator, idx: Idx) std.mem.Allocator.Error![]u8 {
+/// Returns the first character separate from the others, to avoid an allocation.
+pub fn getUppercase(self: *const Self, idx: Idx) std.mem.Allocator.Error!struct { first: u8, rest: []u8 } {
     const text = self.getLowercase(idx);
-    // Handle empty identifiers gracefully
-    if (text.len == 0) {
-        return text;
-    }
+    std.debug.assert(text.len > 0); // Should never be empty!
+
     if (text[0] >= 'a' and text[0] <= 'z') {
-        // Need to convert to uppercase
-        const result = try allocator.alloc(u8, text.len);
-        @memcpy(result, text);
-        result[0] = toUpperAscii(result[0]);
-        return result;
+        return .{ .first = toUpperAscii(text[0]), .rest = text[1..] };
     }
-    // Already uppercase or doesn't start with letter - return as-is (not owned)
-    return text;
+
+    // Not ASCII lowercase, so return as-is
+    return .{ .first = text[0], .rest = text[1..] };
 }
 
 /// Freeze the interner, preventing any new entries from being added.
@@ -643,22 +638,22 @@ test "IdentInterner case conversion" {
     try testing.expectEqualStrings("world", interner.getLowercase(idx3));
 
     // Test getUppercase - should convert back to uppercase
-    const type_text1 = try interner.getUppercase(gpa, idx1);
-    defer if (type_text1.ptr != interner.getLowercase(idx1).ptr) gpa.free(type_text1);
-    try testing.expectEqualStrings("Hello", type_text1);
+    const uppercase1 = try interner.getUppercase(idx1);
+    try testing.expectEqual(@as(u8, 'H'), uppercase1.first);
+    try testing.expectEqualStrings("ello", uppercase1.rest);
 
-    const tag_text1 = try interner.getUppercase(gpa, idx3);
-    defer if (tag_text1.ptr != interner.getLowercase(idx3).ptr) gpa.free(tag_text1);
-    try testing.expectEqualStrings("World", tag_text1);
+    const uppercase3 = try interner.getUppercase(idx3);
+    try testing.expectEqual(@as(u8, 'W'), uppercase3.first);
+    try testing.expectEqualStrings("orld", uppercase3.rest);
 
     // Test with already lowercase
     const idx5 = try interner.insert(gpa, "lowercase");
     try testing.expectEqualStrings("lowercase", interner.getLowercase(idx5));
 
     // getUppercase should still work even if already lowercase
-    const type_text2 = try interner.getUppercase(gpa, idx5);
-    defer if (type_text2.ptr != interner.getLowercase(idx5).ptr) gpa.free(type_text2);
-    try testing.expectEqualStrings("Lowercase", type_text2);
+    const uppercase5 = try interner.getUppercase(idx5);
+    try testing.expectEqual(@as(u8, 'L'), uppercase5.first);
+    try testing.expectEqualStrings("owercase", uppercase5.rest);
 
     // Test contains with case conversion
     try testing.expect(interner.contains("Hello"));

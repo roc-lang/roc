@@ -361,9 +361,9 @@ pub const TypeWriter = struct {
 
     /// Write an alias type
     fn writeAlias(self: *Self, alias: Alias, root_var: Var) std.mem.Allocator.Error!void {
-        const type_text = try self.env.idents.interner.getUppercase(self.buf.allocator, @enumFromInt(@as(u32, alias.ident.ident_idx.idx)));
-        defer if (type_text.ptr != self.env.idents.getLowercase(alias.ident.ident_idx).ptr) self.buf.allocator.free(type_text);
-        _ = try self.buf.writer().write(type_text);
+        const uppercase = try self.env.idents.interner.getUppercase(@enumFromInt(@as(u32, alias.ident.ident_idx.idx)));
+        _ = try self.buf.writer().writeByte(uppercase.first);
+        _ = try self.buf.writer().write(uppercase.rest);
         var args_iter = self.env.types.iterAliasArgs(alias);
         if (args_iter.count() > 0) {
             _ = try self.buf.writer().write("(");
@@ -456,9 +456,9 @@ pub const TypeWriter = struct {
 
     /// Write a nominal type
     fn writeNominalType(self: *Self, nominal_type: NominalType, root_var: Var) std.mem.Allocator.Error!void {
-        const type_text = try self.env.idents.interner.getUppercase(self.buf.allocator, @enumFromInt(@as(u32, nominal_type.ident.ident_idx.idx)));
-        defer if (type_text.ptr != self.env.idents.getLowercase(nominal_type.ident.ident_idx).ptr) self.buf.allocator.free(type_text);
-        _ = try self.buf.writer().write(type_text);
+        const uppercase = try self.env.idents.interner.getUppercase(@enumFromInt(@as(u32, nominal_type.ident.ident_idx.idx)));
+        _ = try self.buf.writer().writeByte(uppercase.first);
+        _ = try self.buf.writer().write(uppercase.rest);
 
         var args_iter = self.env.types.iterNominalArgs(nominal_type);
         if (args_iter.count() > 0) {
@@ -674,9 +674,9 @@ pub const TypeWriter = struct {
 
     /// Write a single tag
     fn writeTag(self: *Self, tag: Tag, root_var: Var) std.mem.Allocator.Error!void {
-        const tag_text = try self.env.idents.interner.getUppercase(self.buf.allocator, @enumFromInt(@as(u32, tag.name.idx)));
-        defer if (tag_text.ptr != self.env.idents.getLowercase(tag.name).ptr) self.buf.allocator.free(tag_text);
-        _ = try self.buf.writer().write(tag_text);
+        const uppercase = try self.env.idents.interner.getUppercase(@enumFromInt(@as(u32, tag.name.idx)));
+        _ = try self.buf.writer().writeByte(uppercase.first);
+        _ = try self.buf.writer().write(uppercase.rest);
         const args = self.env.types.sliceVars(tag.args);
         if (args.len > 0) {
             _ = try self.buf.writer().write("(");

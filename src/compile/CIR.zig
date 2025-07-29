@@ -102,9 +102,16 @@ pub const TypeHeader = struct {
         const region = cir.store.getRegionAt(node_idx);
         try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-        const type_text = try cir.idents.interner.getUppercase(tree.allocator, @enumFromInt(@as(u32, self.name.idx)));
-        defer if (type_text.ptr != cir.idents.getLowercase(self.name).ptr) tree.allocator.free(type_text);
-        try tree.pushStringPair("name", type_text);
+        if (self.name.idx == 0) {
+            try tree.pushStringPair("name", "<unnamed>");
+        } else {
+            const uppercase = try cir.idents.interner.getUppercase(@enumFromInt(@as(u32, self.name.idx)));
+            var name_buf = std.ArrayList(u8).init(tree.allocator);
+            defer name_buf.deinit();
+            try name_buf.append(uppercase.first);
+            try name_buf.appendSlice(uppercase.rest);
+            try tree.pushStringPair("name", name_buf.items);
+        }
 
         const attrs = tree.beginNode();
 
@@ -252,9 +259,16 @@ pub const ExposedItem = struct {
         const begin = tree.beginNode();
         try tree.pushStaticAtom("exposed");
 
-        const type_text = try cir.idents.interner.getUppercase(tree.allocator, @enumFromInt(@as(u32, self.name.idx)));
-        defer if (type_text.ptr != cir.idents.getLowercase(self.name).ptr) tree.allocator.free(type_text);
-        try tree.pushStringPair("name", type_text);
+        if (self.name.idx == 0) {
+            try tree.pushStringPair("name", "<unnamed>");
+        } else {
+            const uppercase = try cir.idents.interner.getUppercase(@enumFromInt(@as(u32, self.name.idx)));
+            var name_buf = std.ArrayList(u8).init(tree.allocator);
+            defer name_buf.deinit();
+            try name_buf.append(uppercase.first);
+            try name_buf.appendSlice(uppercase.rest);
+            try tree.pushStringPair("name", name_buf.items);
+        }
 
         if (self.alias) |alias_idx| {
             const alias_str = cir.idents.getLowercase(alias_idx);

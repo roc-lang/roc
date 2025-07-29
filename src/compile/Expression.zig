@@ -730,9 +730,16 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-tag");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const tag_text = try ir.idents.interner.getUppercase(tree.allocator, @enumFromInt(@as(u32, tag_expr.name.idx)));
-                defer if (tag_text.ptr != ir.idents.getLowercase(tag_expr.name).ptr) tree.allocator.free(tag_text);
-                try tree.pushStringPair("name", tag_text);
+                if (tag_expr.name.idx == 0) {
+                    try tree.pushStringPair("name", "<unnamed>");
+                } else {
+                    const uppercase = try ir.idents.interner.getUppercase(@enumFromInt(@as(u32, tag_expr.name.idx)));
+                    var name_buf = std.ArrayList(u8).init(tree.allocator);
+                    defer name_buf.deinit();
+                    try name_buf.append(uppercase.first);
+                    try name_buf.appendSlice(uppercase.rest);
+                    try tree.pushStringPair("name", name_buf.items);
+                }
                 const attrs = tree.beginNode();
 
                 if (tag_expr.args.span.len > 0) {
@@ -757,9 +764,16 @@ pub const Expr = union(enum) {
                 switch (stmt) {
                     .s_nominal_decl => |decl| {
                         const header = ir.store.getTypeHeader(decl.header);
-                        const type_text = try ir.idents.interner.getUppercase(tree.allocator, @enumFromInt(@as(u32, header.name.idx)));
-                        defer if (type_text.ptr != ir.idents.getLowercase(header.name).ptr) tree.allocator.free(type_text);
-                        try tree.pushStringPair("nominal", type_text);
+                        if (header.name.idx == 0) {
+                            try tree.pushStringPair("nominal", "<unnamed>");
+                        } else {
+                            const uppercase = try ir.idents.interner.getUppercase(@enumFromInt(@as(u32, header.name.idx)));
+                            var name_buf = std.ArrayList(u8).init(tree.allocator);
+                            defer name_buf.deinit();
+                            try name_buf.append(uppercase.first);
+                            try name_buf.appendSlice(uppercase.rest);
+                            try tree.pushStringPair("nominal", name_buf.items);
+                        }
                     },
                     else => {
                         // Handle malformed nominal type declaration by pushing error info

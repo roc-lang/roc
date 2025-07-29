@@ -870,7 +870,7 @@ pub const SnapshotWriter = struct {
     pub fn writeNominalType(self: *Self, nominal_type: SnapshotNominalType, root_idx: SnapshotContentIdx) Allocator.Error!void {
         // Get the lowercase text and convert first char to uppercase inline
         const lowercase_text = self.idents.getLowercase(nominal_type.ident.ident_idx);
-        if (lowercase_text.len > 0 and lowercase_text[0] >= 'a' and lowercase_text[0] <= 'z') {
+        if (lowercase_text[0] >= 'a' and lowercase_text[0] <= 'z') {
             // Write the first character as uppercase
             const first_char = lowercase_text[0] - ('a' - 'A');
             _ = try self.writer.write(&[_]u8{first_char});

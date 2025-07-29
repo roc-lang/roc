@@ -397,12 +397,15 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             break :blk report;
         },
         .undeclared_type => |data| blk: {
-            const type_name = try self.idents.interner.getUppercase(allocator, @enumFromInt(@as(u32, data.name.idx)));
-            defer if (type_name.ptr != self.idents.getLowercase(data.name).ptr) allocator.free(type_name);
+            const uppercase = try self.idents.interner.getUppercase(@enumFromInt(@as(u32, data.name.idx)));
+            var type_name_buf = std.ArrayList(u8).init(allocator);
+            defer type_name_buf.deinit();
+            try type_name_buf.append(uppercase.first);
+            try type_name_buf.appendSlice(uppercase.rest);
             const region_info = self.calcRegionInfo(data.region);
 
             var report = Report.init(allocator, "UNDECLARED TYPE", .runtime_error);
-            const owned_type_name = try report.addOwnedString(type_name);
+            const owned_type_name = try report.addOwnedString(type_name_buf.items);
             try report.document.addReflowingText("The type ");
             try report.document.addType(owned_type_name);
             try report.document.addReflowingText(" is not declared in this scope.");
@@ -423,13 +426,16 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             break :blk report;
         },
         .type_redeclared => |data| blk: {
-            const type_name = try self.idents.interner.getUppercase(allocator, @enumFromInt(@as(u32, data.name.idx)));
-            defer if (type_name.ptr != self.idents.getLowercase(data.name).ptr) allocator.free(type_name);
+            const uppercase = try self.idents.interner.getUppercase(@enumFromInt(@as(u32, data.name.idx)));
+            var type_name_buf = std.ArrayList(u8).init(allocator);
+            defer type_name_buf.deinit();
+            try type_name_buf.append(uppercase.first);
+            try type_name_buf.appendSlice(uppercase.rest);
             const original_region_info = self.calcRegionInfo(data.original_region);
             const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
 
             var report = Report.init(allocator, "TYPE REDECLARED", .runtime_error);
-            const owned_type_name = try report.addOwnedString(type_name);
+            const owned_type_name = try report.addOwnedString(type_name_buf.items);
             try report.document.addReflowingText("The type ");
             try report.document.addType(owned_type_name);
             try report.document.addReflowingText(" is being redeclared.");
