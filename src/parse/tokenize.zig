@@ -1718,9 +1718,49 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 }
             },
             .SingleQuote => {
-                try buf2.append(alloc, '\'');
-                try buf2.append(alloc, '~');
-                try buf2.append(alloc, '\'');
+                if (length == 3) {
+                    try buf2.append(alloc, '\'');
+                    try buf2.append(alloc, 'A');
+                    try buf2.append(alloc, '\'');
+                } else if (length == 4) {
+                    if (buf[region.start.offset + 1] == '\\') {
+                        try buf2.append(alloc, '\'');
+                        try buf2.append(alloc, '\\');
+                        try buf2.append(alloc, '\\');
+                        try buf2.append(alloc, '\'');
+                    } else {
+                        try buf2.append(alloc, '\'');
+                        // Å
+                        try buf2.append(alloc, 0xC3);
+                        try buf2.append(alloc, 0x85);
+                        try buf2.append(alloc, '\'');
+                    }
+                } else if (length == 5) {
+                    try buf2.append(alloc, '\'');
+                    // Ἀ
+                    try buf2.append(alloc, 0xE1);
+                    try buf2.append(alloc, 0xBC);
+                    try buf2.append(alloc, 0x88);
+                    try buf2.append(alloc, '\'');
+                } else if (length == 6) {
+                    try buf2.append(alloc, '\'');
+                    // 𐙝
+                    try buf2.append(alloc, 0xF0);
+                    try buf2.append(alloc, 0x90);
+                    try buf2.append(alloc, 0x99);
+                    try buf2.append(alloc, 0x9D);
+                    try buf2.append(alloc, '\'');
+                } else {
+                    try buf2.append(alloc, '\'');
+                    try buf2.append(alloc, '\\');
+                    try buf2.append(alloc, 'u');
+                    try buf2.append(alloc, '(');
+                    for (6..length) |_| {
+                        try buf2.append(alloc, 'A');
+                    }
+                    try buf2.append(alloc, ')');
+                    try buf2.append(alloc, '\'');
+                }
             },
             .StringStart, .StringEnd => {
                 try buf2.append(alloc, '"');
