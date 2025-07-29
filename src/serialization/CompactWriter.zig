@@ -110,6 +110,12 @@ pub const CompactWriter = struct {
         return answer;
     }
 
+    /// Never call this as the first append in the writer (e.g. always call appendAlloc first),
+    /// because that will result in this attempting to return a slice with an offset of 0,
+    /// which will be interpreted by Zig as an attempt to have a slice with a null pointer.
+    /// This is not allowed, and so will cause a panic in debug builds.
+    /// (In practice, this should never happen because we always write a struct as the very
+    /// first write in the writer, never an array.)
     pub fn appendSlice(
         self: *@This(),
         allocator: std.mem.Allocator,
@@ -117,10 +123,10 @@ pub const CompactWriter = struct {
     ) std.mem.Allocator.Error!@TypeOf(slice) {
         const SliceType = @TypeOf(slice);
         const info = @typeInfo(SliceType);
-        const child_info = @typeInfo(info.pointer.child);
-        
-        // Determine the actual element type
-        const T = if (child_info == .array) child_info.array.child else info.pointer.child;
+        const T = if (info == .pointer and info.pointer.size == .one)
+            std.meta.Child(std.meta.Child(SliceType))
+        else
+            std.meta.Child(SliceType);
         const size = @sizeOf(T);
         const alignment = @alignOf(T);
         const len = slice.len;
@@ -137,8 +143,10 @@ pub const CompactWriter = struct {
         self.total_bytes += size * len;
 
         // Return the same slice type as the input
-        const ptr_type = if (info.pointer.is_const) [*]const T else [*]T;
-        return @as(ptr_type, @ptrFromInt(offset))[0..len];
+        return if (info.pointer.is_const)
+            @as([*]const T, @ptrFromInt(offset))[0..len]
+        else
+            @as([*]T, @ptrFromInt(offset))[0..len];
     }
 
     fn padToAlignment(self: *@This(), allocator: std.mem.Allocator, alignment: usize) std.mem.Allocator.Error!void {
