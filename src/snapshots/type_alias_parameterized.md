@@ -116,10 +116,10 @@ NO CHANGE
 		(annotation @6.1-6.9
 			(declared-type
 				(ty-fn @5.12-5.36 (effectful false)
-					(ty-apply @5.12-5.22 (symbol "pair")
+					(ty-apply @5.12-5.22 (symbol "Pair")
 						(ty-var @5.17-5.18 (name "a"))
 						(ty-var @5.20-5.21 (name "b")))
-					(ty-apply @5.26-5.36 (symbol "pair")
+					(ty-apply @5.26-5.36 (symbol "Pair")
 						(ty-var @5.31-5.32 (name "b"))
 						(ty-var @5.34-5.35 (name "a")))))))
 	(d-let
@@ -136,7 +136,7 @@ NO CHANGE
 					(e-int @8.22-8.23 (value "1"))
 					(e-int @8.25-8.26 (value "2"))))))
 	(s-alias-decl @3.1-3.20
-		(ty-header @3.1-3.11 (name "Pair")
+		(ty-header @3.1-3.11 (name "pair")
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))
 				(ty-var @3.9-3.10 (name "b"))))
@@ -152,7 +152,7 @@ NO CHANGE
 		(patt @8.1-8.6 (type "_arg -> _ret")))
 	(type_decls
 		(alias @3.1-3.20 (type "Pair(a, b)")
-			(ty-header @3.1-3.11 (name "Pair")
+			(ty-header @3.1-3.11 (name "pair")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))
 					(ty-var @3.9-3.10 (name "b"))))))

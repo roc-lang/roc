@@ -110,8 +110,8 @@ NO CHANGE
 				(p-assign @8.2-8.9 (ident "decoded")))))
 	(s-import @3.1-3.65 (module "json.Json") (qualifier "json")
 		(exposes
-			(exposed (name "Decode") (alias "fromJson") (wildcard false))
-			(exposed (name "Encode") (alias "toJson") (wildcard false)))))
+			(exposed (name "decode") (alias "fromJson") (wildcard false))
+			(exposed (name "encode") (alias "toJson") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

@@ -217,7 +217,7 @@ EndOfFile(72:1-72:1),
 (file @1.1-71.2
 	(module @1.1-8.2
 		(exposes @1.8-8.2
-			(exposed-upper-ident @2.5-2.10 (text "color"))
+			(exposed-upper-ident @2.5-2.10 (text "Color"))
 			(exposed-lower-ident @3.5-3.11
 				(text "to_str"))
 			(exposed-lower-ident @4.5-4.8
@@ -682,10 +682,10 @@ is_named_color = |str| {
 		(annotation @18.1-18.4
 			(declared-type
 				(ty-fn @17.7-17.26 (effectful false)
-					(ty @17.7-17.9 (name "u8"))
-					(ty @17.11-17.13 (name "u8"))
-					(ty @17.15-17.17 (name "u8"))
-					(ty @17.21-17.26 (name "color"))))))
+					(ty @17.7-17.9 (name "U8"))
+					(ty @17.11-17.13 (name "U8"))
+					(ty @17.15-17.17 (name "U8"))
+					(ty @17.21-17.26 (name "Color"))))))
 	(d-let
 		(p-assign @21.1-21.5 (ident "rgba"))
 		(e-lambda @21.8-24.2
@@ -718,11 +718,11 @@ is_named_color = |str| {
 		(annotation @21.1-21.5
 			(declared-type
 				(ty-fn @20.8-20.31 (effectful false)
-					(ty @20.8-20.10 (name "u8"))
-					(ty @20.12-20.14 (name "u8"))
-					(ty @20.16-20.18 (name "u8"))
-					(ty @20.20-20.22 (name "u8"))
-					(ty @20.26-20.31 (name "color"))))))
+					(ty @20.8-20.10 (name "U8"))
+					(ty @20.12-20.14 (name "U8"))
+					(ty @20.16-20.18 (name "U8"))
+					(ty @20.20-20.22 (name "U8"))
+					(ty @20.26-20.31 (name "Color"))))))
 	(d-let
 		(p-assign @27.1-27.4 (ident "hex"))
 		(e-closure @27.7-46.2
@@ -875,12 +875,12 @@ is_named_color = |str| {
 		(annotation @27.1-27.4
 			(declared-type
 				(ty-fn @26.7-26.46 (effectful false)
-					(ty @26.7-26.10 (name "str"))
-					(ty-apply @26.14-26.46 (symbol "result")
-						(ty @26.21-26.26 (name "color"))
+					(ty @26.7-26.10 (name "Str"))
+					(ty-apply @26.14-26.46 (symbol "Result")
+						(ty @26.21-26.26 (name "Color"))
 						(ty-tag-union @26.28-26.45
-							(ty-apply @26.29-26.44 (symbol "invalidHex")
-								(ty @26.40-26.43 (name "str")))))))))
+							(ty-apply @26.29-26.44 (symbol "InvalidHex")
+								(ty @26.40-26.43 (name "Str")))))))))
 	(d-let
 		(p-assign @49.1-49.7 (ident "to_str"))
 		(e-closure @49.10-54.2
@@ -981,8 +981,8 @@ is_named_color = |str| {
 		(annotation @49.1-49.7
 			(declared-type
 				(ty-fn @48.10-48.22 (effectful false)
-					(ty @48.10-48.15 (name "color"))
-					(ty @48.19-48.22 (name "str"))))))
+					(ty @48.10-48.15 (name "Color"))
+					(ty @48.19-48.22 (name "Str"))))))
 	(d-let
 		(p-assign @61.1-61.6 (ident "named"))
 		(e-lambda @61.9-65.50
@@ -1016,12 +1016,12 @@ is_named_color = |str| {
 		(annotation @61.1-61.6
 			(declared-type
 				(ty-fn @60.9-60.50 (effectful false)
-					(ty @60.9-60.12 (name "str"))
-					(ty-apply @60.16-60.50 (symbol "result")
-						(ty @60.23-60.28 (name "color"))
+					(ty @60.9-60.12 (name "Str"))
+					(ty-apply @60.16-60.50 (symbol "Result")
+						(ty @60.23-60.28 (name "Color"))
 						(ty-tag-union @60.30-60.49
-							(ty-apply @60.31-60.48 (symbol "unknownColor")
-								(ty @60.44-60.47 (name "str")))))))))
+							(ty-apply @60.31-60.48 (symbol "UnknownColor")
+								(ty @60.44-60.47 (name "Str")))))))))
 	(d-let
 		(p-assign @67.1-67.15 (ident "is_named_color"))
 		(e-lambda @67.18-71.2
@@ -1048,21 +1048,21 @@ is_named_color = |str| {
 						(e-lookup-local @70.21-70.24
 							(p-assign @67.19-67.22 (ident "str"))))))))
 	(s-nominal-decl @10.1-15.2
-		(ty-header @10.1-10.6 (name "Color"))
+		(ty-header @10.1-10.6 (name "color"))
 		(ty-tag-union @10.10-15.2
-			(ty-apply @11.5-11.20 (symbol "rGB")
-				(ty @11.9-11.11 (name "u8"))
-				(ty @11.13-11.15 (name "u8"))
-				(ty @11.17-11.19 (name "u8")))
-			(ty-apply @12.5-12.26 (symbol "rGBA")
-				(ty @12.10-12.12 (name "u8"))
-				(ty @12.14-12.16 (name "u8"))
-				(ty @12.18-12.20 (name "u8"))
-				(ty @12.22-12.25 (name "dec")))
-			(ty-apply @13.5-13.15 (symbol "named")
-				(ty @13.11-13.14 (name "str")))
-			(ty-apply @14.5-14.13 (symbol "hex")
-				(ty @14.9-14.12 (name "str")))))
+			(ty-apply @11.5-11.20 (symbol "RGB")
+				(ty @11.9-11.11 (name "U8"))
+				(ty @11.13-11.15 (name "U8"))
+				(ty @11.17-11.19 (name "U8")))
+			(ty-apply @12.5-12.26 (symbol "RGBA")
+				(ty @12.10-12.12 (name "U8"))
+				(ty @12.14-12.16 (name "U8"))
+				(ty @12.18-12.20 (name "U8"))
+				(ty @12.22-12.25 (name "Dec")))
+			(ty-apply @13.5-13.15 (symbol "Named")
+				(ty @13.11-13.14 (name "Str")))
+			(ty-apply @14.5-14.13 (symbol "Hex")
+				(ty @14.9-14.12 (name "Str")))))
 	(s-expect @56.1-56.57
 		(e-binop @56.8-56.57 (op "eq")
 			(e-dot-access @56.8-56.34 (field "to_str")
@@ -1119,7 +1119,7 @@ is_named_color = |str| {
 		(patt @67.1-67.15 (type "_arg -> _ret")))
 	(type_decls
 		(nominal @10.1-15.2 (type "Color")
-			(ty-header @10.1-10.6 (name "Color"))))
+			(ty-header @10.1-10.6 (name "color"))))
 	(expressions
 		(expr @18.7-18.35 (type "Error, Error, Error -> Color"))
 		(expr @21.8-24.2 (type "Error, Error, Error, Error -> Color"))

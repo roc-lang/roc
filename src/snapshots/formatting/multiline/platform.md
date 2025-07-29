@@ -79,8 +79,8 @@ CloseSquare(21:2-21:3),EndOfFile(21:3-21:3),
 (file @1.1-21.3
 	(platform @1.1-21.3 (name "pf")
 		(rigids @2.11-5.3
-			(exposed-upper-ident @3.3-3.5 (text "r1"))
-			(exposed-upper-ident @4.3-4.5 (text "r2")))
+			(exposed-upper-ident @3.3-3.5 (text "R1"))
+			(exposed-upper-ident @4.3-4.5 (text "R2")))
 		(ty-record @5.4-8.3
 			(anno-record-field @6.3-6.16 (name "r1")
 				(ty-fn @6.8-6.16
@@ -91,8 +91,8 @@ CloseSquare(21:2-21:3),EndOfFile(21:3-21:3),
 					(ty @7.8-7.10 (name "R1"))
 					(ty @7.14-7.16 (name "R2")))))
 		(exposes @9.10-12.3
-			(exposed-upper-ident @10.3-10.5 (text "e1"))
-			(exposed-upper-ident @11.3-11.5 (text "e2")))
+			(exposed-upper-ident @10.3-10.5 (text "E1"))
+			(exposed-upper-ident @11.3-11.5 (text "E2")))
 		(packages @13.11-16.3
 			(record-field @14.3-14.13 (name "pa1")
 				(e-string @14.8-14.13

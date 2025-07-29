@@ -190,12 +190,12 @@ CloseCurly(31:1-31:2),EndOfFile(31:2-31:2),
 	(statements
 		(s-import @4.1-4.30 (raw "I1")
 			(exposing
-				(exposed-upper-ident @4.21-4.24 (text "i11"))
-				(exposed-upper-ident @4.26-4.29 (text "i12"))))
+				(exposed-upper-ident @4.21-4.24 (text "I11"))
+				(exposed-upper-ident @4.26-4.29 (text "I12"))))
 		(s-import @5.1-5.46 (raw "I2")
 			(exposing
-				(exposed-upper-ident @5.21-5.32 (text "i21") (as "ias1"))
-				(exposed-upper-ident @5.34-5.45 (text "i22") (as "ias2"))))
+				(exposed-upper-ident @5.21-5.32 (text "I21") (as "Ias1"))
+				(exposed-upper-ident @5.34-5.45 (text "I22") (as "Ias2"))))
 		(s-type-decl @8.1-8.74
 			(header @8.1-8.5 (name "A")
 				(args
@@ -449,7 +449,7 @@ NO CHANGE
 										(e-lookup-local @29.17-29.18
 											(p-assign @29.7-29.8 (ident "a"))))))))))))
 	(s-alias-decl @8.1-8.74
-		(ty-header @8.1-8.5 (name "A")
+		(ty-header @8.1-8.5 (name "a")
 			(ty-args
 				(ty-var @8.3-8.4 (name "a"))))
 		(ty-var @8.8-8.9 (name "a"))
@@ -459,15 +459,15 @@ NO CHANGE
 					(ty-tuple @8.31-8.37
 						(ty-var @8.32-8.33 (name "a"))
 						(ty-var @8.35-8.36 (name "a"))))
-				(ty @8.41-8.44 (name "str")))
+				(ty @8.41-8.44 (name "Str")))
 			(method @8.46-8.74 (module-of "a") (ident "a2")
 				(args
 					(ty-tuple @8.61-8.67
 						(ty-var @8.62-8.63 (name "a"))
 						(ty-var @8.65-8.66 (name "a"))))
-				(ty @8.71-8.74 (name "str")))))
+				(ty @8.71-8.74 (name "Str")))))
 	(s-alias-decl @9.1-9.74
-		(ty-header @9.1-9.5 (name "B")
+		(ty-header @9.1-9.5 (name "b")
 			(ty-args
 				(ty-var @9.3-9.4 (name "b"))))
 		(ty-var @9.8-9.9 (name "b"))
@@ -477,15 +477,15 @@ NO CHANGE
 					(ty-tuple @9.31-9.37
 						(ty-var @9.32-9.33 (name "b"))
 						(ty-var @9.35-9.36 (name "b"))))
-				(ty @9.41-9.44 (name "str")))
+				(ty @9.41-9.44 (name "Str")))
 			(method @9.46-9.74 (module-of "b") (ident "b2")
 				(args
 					(ty-tuple @9.61-9.67
 						(ty-var @9.62-9.63 (name "b"))
 						(ty-var @9.65-9.66 (name "b"))))
-				(ty @9.71-9.74 (name "str")))))
+				(ty @9.71-9.74 (name "Str")))))
 	(s-alias-decl @11.1-11.17
-		(ty-header @11.1-11.8 (name "C")
+		(ty-header @11.1-11.8 (name "c")
 			(ty-args
 				(ty-var @11.3-11.4 (name "a"))
 				(ty-var @11.6-11.7 (name "b"))))
@@ -493,33 +493,33 @@ NO CHANGE
 			(ty-var @11.12-11.13 (name "a"))
 			(ty-var @11.15-11.16 (name "b"))))
 	(s-alias-decl @12.1-12.18
-		(ty-header @12.1-12.8 (name "D")
+		(ty-header @12.1-12.8 (name "d")
 			(ty-args
 				(ty-var @12.3-12.4 (name "a"))
 				(ty-var @12.6-12.7 (name "b"))))
-		(ty-apply @12.11-12.18 (symbol "c")
+		(ty-apply @12.11-12.18 (symbol "C")
 			(ty-var @12.13-12.14 (name "a"))
 			(ty-var @12.16-12.17 (name "b"))))
 	(s-alias-decl @13.1-13.25
-		(ty-header @13.1-13.2 (name "E"))
+		(ty-header @13.1-13.2 (name "e"))
 		(ty-record @13.5-13.25
 			(field (field "a")
-				(ty @13.11-13.14 (name "str")))
+				(ty @13.11-13.14 (name "Str")))
 			(field (field "b")
-				(ty @13.20-13.23 (name "str")))))
+				(ty @13.20-13.23 (name "Str")))))
 	(s-alias-decl @14.1-14.11
-		(ty-header @14.1-14.2 (name "F"))
+		(ty-header @14.1-14.2 (name "f"))
 		(ty-tag-union @14.5-14.11
-			(ty @14.6-14.7 (name "a"))
-			(ty @14.9-14.10 (name "b"))))
-	(s-import @4.1-4.30 (module "i1")
+			(ty @14.6-14.7 (name "A"))
+			(ty @14.9-14.10 (name "B"))))
+	(s-import @4.1-4.30 (module "I1")
 		(exposes
-			(exposed (name "I11") (wildcard false))
-			(exposed (name "I12") (wildcard false))))
-	(s-import @5.1-5.46 (module "i2")
+			(exposed (name "i11") (wildcard false))
+			(exposed (name "i12") (wildcard false))))
+	(s-import @5.1-5.46 (module "I2")
 		(exposes
-			(exposed (name "I21") (alias "ias1") (wildcard false))
-			(exposed (name "I22") (alias "ias2") (wildcard false))))
+			(exposed (name "i21") (alias "ias1") (wildcard false))
+			(exposed (name "i22") (alias "ias2") (wildcard false))))
 	(s-type-anno @16.1-16.42 (name "g")
 		(ty-fn @16.5-16.11 (effectful false)
 			(ty-var @16.5-16.6 (name "e"))
@@ -541,27 +541,27 @@ NO CHANGE
 		(patt @18.1-18.2 (type "[Z1((field, field2)), Z2(i, j), Z3(k), Z4(List(elem))]others, [Z1((field3, field4)), Z2(l, m), Z3(n), Z4(List(elem2))]others2 -> _ret")))
 	(type_decls
 		(alias @8.1-8.74 (type "A(a)")
-			(ty-header @8.1-8.5 (name "A")
+			(ty-header @8.1-8.5 (name "a")
 				(ty-args
 					(ty-var @8.3-8.4 (name "a")))))
 		(alias @9.1-9.74 (type "B(b)")
-			(ty-header @9.1-9.5 (name "B")
+			(ty-header @9.1-9.5 (name "b")
 				(ty-args
 					(ty-var @9.3-9.4 (name "b")))))
 		(alias @11.1-11.17 (type "C(a, b)")
-			(ty-header @11.1-11.8 (name "C")
+			(ty-header @11.1-11.8 (name "c")
 				(ty-args
 					(ty-var @11.3-11.4 (name "a"))
 					(ty-var @11.6-11.7 (name "b")))))
 		(alias @12.1-12.18 (type "D(a, b)")
-			(ty-header @12.1-12.8 (name "D")
+			(ty-header @12.1-12.8 (name "d")
 				(ty-args
 					(ty-var @12.3-12.4 (name "a"))
 					(ty-var @12.6-12.7 (name "b")))))
 		(alias @13.1-13.25 (type "E")
-			(ty-header @13.1-13.2 (name "E")))
+			(ty-header @13.1-13.2 (name "e")))
 		(alias @14.1-14.11 (type "F")
-			(ty-header @14.1-14.2 (name "F"))))
+			(ty-header @14.1-14.2 (name "f"))))
 	(expressions
 		(expr @18.5-31.2 (type "[Z1((field, field2)), Z2(i, j), Z3(k), Z4(List(elem))]others, [Z1((field3, field4)), Z2(l, m), Z3(n), Z4(List(elem2))]others2 -> _ret"))))
 ~~~

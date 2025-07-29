@@ -512,3 +512,76 @@ test "exposed_items handles identifiers with different attributes" {
     const foo_effectful_u32 = @as(u32, @bitCast(foo_effectful_idx));
     try testing.expect(foo_u32 != foo_effectful_u32);
 }
+
+test "exposed items SExpr output distinguishes types from values" {
+    const allocator = testing.allocator;
+    
+    const source =
+        \\module [get, post, Get, Post]
+        \\
+        \\get = "value get"
+        \\post = "value post"
+        \\Get : [A, B]
+        \\Post : [X, Y]
+    ;
+    
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    
+    try env.initCIRFields(allocator, "Test");
+    
+    var ast = try parse.parse(&env);
+    defer ast.deinit(allocator);
+    
+    // Create SExprTree for testing
+    var tree = compile.SExprTree.init(allocator);
+    defer tree.deinit();
+    
+    // Get the exposed items from the AST
+    const module_header = ast.store.getNode(ast.root_node_idx);
+    if (module_header.data.module_header) |header_idx| {
+        const header = ast.store.getModuleHeader(header_idx);
+        const exposed_items = ast.store.exposedItemSlice(header.exposes);
+        
+        // Process each exposed item
+        for (exposed_items) |item_idx| {
+            const item = ast.store.getExposedItem(item_idx);
+            const name_str = env.idents.getLowercase(item.name);
+            
+            // Create a CIR exposed item
+            const cir_item = compile.CIR.ExposedItem{
+                .name = item.name,
+                .alias = item.alias,
+                .is_wildcard = false,
+            };
+            
+            // Push to SExpr tree
+            try cir_item.pushToSExprTree(undefined, &env, &tree);
+            
+            // Get the string representation
+            var buffer = std.ArrayList(u8).init(allocator);
+            defer buffer.deinit();
+            try tree.printToWriter(buffer.writer());
+            
+            // Check the output
+            const output = buffer.items;
+            if (std.mem.eql(u8, name_str, "get") or std.mem.eql(u8, name_str, "post")) {
+                // Values should use "exposed" and lowercase names
+                try testing.expect(std.mem.indexOf(u8, output, "(exposed") != null);
+                try testing.expect(std.mem.indexOf(u8, output, name_str) != null);
+            } else {
+                // Types should use "exposed-type" and uppercase names
+                try testing.expect(std.mem.indexOf(u8, output, "(exposed-type") != null);
+                // The uppercase version should be in the output
+                const uppercase = try env.idents.getUppercase(item.name);
+                var uppercase_buf = std.ArrayList(u8).init(allocator);
+                defer uppercase_buf.deinit();
+                try uppercase_buf.append(uppercase.first);
+                try uppercase_buf.appendSlice(uppercase.rest);
+                try testing.expect(std.mem.indexOf(u8, output, uppercase_buf.items) != null);
+            }
+            
+            tree.clear();
+        }
+    }
+}

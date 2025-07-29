@@ -70,13 +70,13 @@ NO CHANGE
 			(e-literal @8.10-8.14 (string "test")))
 		(annotation @8.1-8.6
 			(declared-type
-				(ty @7.9-7.18 (name "goodAlias")))))
+				(ty @7.9-7.18 (name "GoodAlias")))))
 	(s-nominal-decl @3.1-3.13
-		(ty-header @3.1-3.8 (name "BadBase"))
+		(ty-header @3.1-3.8 (name "badBase"))
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @5.1-5.21
-		(ty-header @5.1-5.10 (name "GoodAlias"))
-		(ty @5.14-5.21 (name "badBase"))))
+		(ty-header @5.1-5.10 (name "goodAlias"))
+		(ty @5.14-5.21 (name "BadBase"))))
 ~~~
 # TYPES
 ~~~clojure
@@ -85,9 +85,9 @@ NO CHANGE
 		(patt @8.1-8.6 (type "Error")))
 	(type_decls
 		(nominal @3.1-3.13 (type "Error")
-			(ty-header @3.1-3.8 (name "BadBase")))
+			(ty-header @3.1-3.8 (name "badBase")))
 		(nominal @5.1-5.21 (type "Error")
-			(ty-header @5.1-5.10 (name "GoodAlias"))))
+			(ty-header @5.1-5.10 (name "goodAlias"))))
 	(expressions
 		(expr @8.9-8.15 (type "Error"))))
 ~~~

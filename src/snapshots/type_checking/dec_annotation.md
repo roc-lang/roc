@@ -44,7 +44,7 @@ NO CHANGE
 		(e-frac-dec @4.5-4.12 (value "123.456"))
 		(annotation @4.1-4.2
 			(declared-type
-				(ty @3.5-3.8 (name "dec"))))))
+				(ty @3.5-3.8 (name "Dec"))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -150,11 +150,11 @@ foo = |num| {
 		(annotation @4.1-4.4
 			(declared-type
 				(ty-fn @3.7-3.35 (effectful false)
-					(ty @3.7-3.10 (name "u64"))
-					(ty-apply @3.14-3.35 (symbol "result")
-						(ty @3.21-3.24 (name "str"))
+					(ty @3.7-3.10 (name "U64"))
+					(ty-apply @3.14-3.35 (symbol "Result")
+						(ty @3.21-3.24 (name "Str"))
 						(ty-tag-union @3.26-3.34
-							(ty @3.27-3.33 (name "tooBig")))))))))
+							(ty @3.27-3.33 (name "TooBig")))))))))
 ~~~
 # TYPES
 ~~~clojure

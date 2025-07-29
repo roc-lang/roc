@@ -126,17 +126,17 @@ kind = |color| match color {
 		(annotation @6.1-6.5
 			(declared-type
 				(ty-fn @5.8-5.20 (effectful false)
-					(ty @5.8-5.13 (name "color"))
-					(ty @5.17-5.20 (name "str"))))))
+					(ty @5.8-5.13 (name "Color"))
+					(ty @5.17-5.20 (name "Str"))))))
 	(s-alias-decl @3.1-3.51
-		(ty-header @3.1-3.6 (name "Color"))
+		(ty-header @3.1-3.6 (name "color"))
 		(ty-tag-union @3.9-3.51
-			(ty @3.10-3.13 (name "red"))
-			(ty @3.15-3.20 (name "green"))
-			(ty @3.22-3.26 (name "blue"))
-			(ty @3.28-3.34 (name "yellow"))
-			(ty @3.36-3.42 (name "orange"))
-			(ty @3.44-3.50 (name "purple")))))
+			(ty @3.10-3.13 (name "Red"))
+			(ty @3.15-3.20 (name "Green"))
+			(ty @3.22-3.26 (name "Blue"))
+			(ty @3.28-3.34 (name "Yellow"))
+			(ty @3.36-3.42 (name "Orange"))
+			(ty @3.44-3.50 (name "Purple")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -145,7 +145,7 @@ kind = |color| match color {
 		(patt @6.1-6.5 (type "Color -> Str")))
 	(type_decls
 		(alias @3.1-3.51 (type "Color")
-			(ty-header @3.1-3.6 (name "Color"))))
+			(ty-header @3.1-3.6 (name "color"))))
 	(expressions
 		(expr @6.8-9.2 (type "Color -> Str"))))
 ~~~

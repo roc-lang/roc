@@ -68,16 +68,16 @@ NO CHANGE
 			(declared-type
 				(ty-fn @3.13-3.21 (effectful false)
 					(ty-var @3.13-3.14 (name "a"))
-					(ty @3.18-3.21 (name "str"))))))
+					(ty @3.18-3.21 (name "Str"))))))
 	(s-type-anno @3.1-3.55 (name "stringify")
 		(ty-fn @3.13-3.21 (effectful false)
 			(ty-var @3.13-3.14 (name "a"))
-			(ty @3.18-3.21 (name "str")))
+			(ty @3.18-3.21 (name "Str")))
 		(where
 			(method @3.28-3.55 (module-of "a") (ident "to_str")
 				(args
 					(ty-var @3.47-3.48 (name "a")))
-				(ty @3.52-3.55 (name "str")))))
+				(ty @3.52-3.55 (name "Str")))))
 	(ext-decl @3.28-3.55 (ident "module(a).to_str") (kind "value")))
 ~~~
 # TYPES

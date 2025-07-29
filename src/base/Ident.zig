@@ -124,8 +124,9 @@ pub const Store = struct {
 
     /// Get the text with first char converted to uppercase if lowercase.
     /// Returns the first character separate from the others, to avoid an allocation.
-    pub fn getUppercase(self: *const Store, idx: Idx) !struct { first: u8, rest: []u8 } {
-        return self.interner.getUppercase(@enumFromInt(@as(u32, idx.idx)));
+    pub fn getUppercase(self: *const Store, idx: Idx) std.mem.Allocator.Error!struct { first: u8, rest: []u8 } {
+        const result = try self.interner.getUppercase(@enumFromInt(@as(u32, idx.idx)));
+        return .{ .first = result.first, .rest = result.rest };
     }
 
     /// Check if an identifier text already exists in the store.

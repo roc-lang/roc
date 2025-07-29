@@ -42,7 +42,7 @@ KwWhere(6:2-6:7),KwModule(6:8-6:14),NoSpaceOpenRound(6:14-6:15),LowerIdent(6:15-
 	(statements
 		(s-import @3.1-3.32 (raw "Decode")
 			(exposing
-				(exposed-upper-ident @3.25-3.31 (text "decode"))))
+				(exposed-upper-ident @3.25-3.31 (text "Decode"))))
 		(s-type-anno @5.1-6.24 (name "decodeThings")
 			(ty-fn @5.16-5.41
 				(ty-apply @5.16-5.30
@@ -63,15 +63,15 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import @3.1-3.32 (module "decode")
+	(s-import @3.1-3.32 (module "Decode")
 		(exposes
-			(exposed (name "Decode") (wildcard false))))
+			(exposed (name "decode") (wildcard false))))
 	(s-type-anno @5.1-6.24 (name "decodeThings")
 		(ty-fn @5.16-5.41 (effectful false)
-			(ty-apply @5.16-5.30 (symbol "list")
-				(ty-apply @5.21-5.29 (symbol "list")
-					(ty @5.26-5.28 (name "u8"))))
-			(ty-apply @5.34-5.41 (symbol "list")
+			(ty-apply @5.16-5.30 (symbol "List")
+				(ty-apply @5.21-5.29 (symbol "List")
+					(ty @5.26-5.28 (name "U8"))))
+			(ty-apply @5.34-5.41 (symbol "List")
 				(ty-var @5.39-5.40 (name "a"))))
 		(where
 			(alias @6.8-6.24 (module-of "a") (ident "decode"))))

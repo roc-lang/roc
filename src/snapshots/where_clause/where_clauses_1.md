@@ -32,8 +32,8 @@ UpperIdent(8:1-8:7),NoSpaceOpenRound(8:7-8:8),LowerIdent(8:8-8:9),CloseRound(8:9
 (file @1.1-8.53
 	(module @1.1-1.22
 		(exposes @1.8-1.22
-			(exposed-upper-ident @1.9-1.13 (text "hash"))
-			(exposed-upper-ident @1.15-1.21 (text "decode"))))
+			(exposed-upper-ident @1.9-1.13 (text "Hash"))
+			(exposed-upper-ident @1.15-1.21 (text "Decode"))))
 	(statements
 		(s-type-decl @3.1-6.24
 			(header @3.1-3.16 (name "Hash")
@@ -68,7 +68,7 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-alias-decl @3.1-6.24
-		(ty-header @3.1-3.16 (name "Hash")
+		(ty-header @3.1-3.16 (name "hash")
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))
 				(ty-var @3.9-3.15 (name "hasher"))))
@@ -80,15 +80,15 @@ NO CHANGE
 				(ty-var @5.30-5.36 (name "hasher")))
 			(alias @6.3-6.24 (module-of "hasher") (ident "hasher"))))
 	(s-alias-decl @8.1-8.53
-		(ty-header @8.1-8.10 (name "Decode")
+		(ty-header @8.1-8.10 (name "decode")
 			(ty-args
 				(ty-var @8.8-8.9 (name "a"))))
 		(ty-var @8.13-8.14 (name "a"))
 		(where
 			(method @8.21-8.53 (module-of "a") (ident "decode")
 				(args
-					(ty-apply @8.40-8.48 (symbol "list")
-						(ty @8.45-8.47 (name "u8"))))
+					(ty-apply @8.40-8.48 (symbol "List")
+						(ty @8.45-8.47 (name "U8"))))
 				(ty-var @8.52-8.53 (name "a")))))
 	(ext-decl @5.3-5.36 (ident "module(a).hash") (kind "value"))
 	(ext-decl @6.3-6.24 (ident "module(hasher).Hasher") (kind "type"))
@@ -100,12 +100,12 @@ NO CHANGE
 	(defs)
 	(type_decls
 		(alias @3.1-6.24 (type "Hash(a, hasher)")
-			(ty-header @3.1-3.16 (name "Hash")
+			(ty-header @3.1-3.16 (name "hash")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))
 					(ty-var @3.9-3.15 (name "hasher")))))
 		(alias @8.1-8.53 (type "Decode(a)")
-			(ty-header @8.1-8.10 (name "Decode")
+			(ty-header @8.1-8.10 (name "decode")
 				(ty-args
 					(ty-var @8.8-8.9 (name "a"))))))
 	(expressions))

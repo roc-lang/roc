@@ -235,8 +235,8 @@ getUser = |id| if  "big" else "l"
 				(p-assign @6.12-6.14 (ident "id")))
 			(e-runtime-error (tag "if_condition_not_canonicalized"))))
 	(s-alias-decl @3.1-3.13
-		(ty-header @3.1-3.7 (name "UserId"))
-		(ty @3.10-3.13 (name "u64"))))
+		(ty-header @3.1-3.7 (name "userId"))
+		(ty @3.10-3.13 (name "U64"))))
 ~~~
 # TYPES
 ~~~clojure
@@ -245,7 +245,7 @@ getUser = |id| if  "big" else "l"
 		(patt @6.1-6.8 (type "_arg -> Error")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
-			(ty-header @3.1-3.7 (name "UserId"))))
+			(ty-header @3.1-3.7 (name "userId"))))
 	(expressions
 		(expr @6.11-6.43 (type "_arg -> Error"))))
 ~~~

@@ -48,7 +48,7 @@ CloseRound(16:3-16:4),OpArrow(16:5-16:7),LowerIdent(16:8-16:9),EndOfFile(16:9-16
 (file @1.1-16.9
 	(module @1.1-1.14
 		(exposes @1.8-1.14
-			(exposed-upper-ident @1.9-1.13 (text "hash"))))
+			(exposed-upper-ident @1.9-1.13 (text "Hash"))))
 	(statements
 		(s-type-decl @3.1-10.26
 			(header @3.1-3.16 (name "Hash")
@@ -96,7 +96,7 @@ Decode(a) : a
 ~~~clojure
 (can-ir
 	(s-alias-decl @3.1-10.26
-		(ty-header @3.1-3.16 (name "Hash")
+		(ty-header @3.1-3.16 (name "hash")
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))
 				(ty-var @3.9-3.15 (name "hasher"))))
@@ -108,15 +108,15 @@ Decode(a) : a
 				(ty-var @9.7-9.13 (name "hasher")))
 			(alias @10.5-10.26 (module-of "hasher") (ident "hasher"))))
 	(s-alias-decl @12.1-16.9
-		(ty-header @12.1-12.10 (name "Decode")
+		(ty-header @12.1-12.10 (name "decode")
 			(ty-args
 				(ty-var @12.8-12.9 (name "a"))))
 		(ty-var @12.13-12.14 (name "a"))
 		(where
 			(method @14.3-16.9 (module-of "a") (ident "decode")
 				(args
-					(ty-apply @15.4-15.12 (symbol "list")
-						(ty @15.9-15.11 (name "u8"))))
+					(ty-apply @15.4-15.12 (symbol "List")
+						(ty @15.9-15.11 (name "U8"))))
 				(ty-var @16.8-16.9 (name "a")))))
 	(ext-decl @7.5-9.13 (ident "module(a).hash") (kind "value"))
 	(ext-decl @10.5-10.26 (ident "module(hasher).Hasher") (kind "type"))
@@ -128,12 +128,12 @@ Decode(a) : a
 	(defs)
 	(type_decls
 		(alias @3.1-10.26 (type "Hash(a, hasher)")
-			(ty-header @3.1-3.16 (name "Hash")
+			(ty-header @3.1-3.16 (name "hash")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))
 					(ty-var @3.9-3.15 (name "hasher")))))
 		(alias @12.1-16.9 (type "Decode(a)")
-			(ty-header @12.1-12.10 (name "Decode")
+			(ty-header @12.1-12.10 (name "decode")
 				(ty-args
 					(ty-var @12.8-12.9 (name "a"))))))
 	(expressions))

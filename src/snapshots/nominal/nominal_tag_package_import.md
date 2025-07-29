@@ -75,7 +75,7 @@ blue = CC.Color.RGB(0, 0, 255)
 			(declared-type
 				(ty-lookup-external @7.8-7.14
 					(ext-decl @7.8-7.14 (ident "cC.RGB") (kind "type"))))))
-	(s-import @4.1-4.26 (module "styles.Color") (qualifier "styles") (alias "cC")
+	(s-import @4.1-4.26 (module "styles.Color") (qualifier "styles") (alias "CC")
 		(exposes))
 	(ext-decl @7.8-7.14 (ident "cC.RGB") (kind "type")))
 ~~~

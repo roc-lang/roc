@@ -81,8 +81,8 @@ foo = |a| {
 		(annotation @4.1-4.4
 			(declared-type
 				(ty-fn @3.7-3.19 (effectful false)
-					(ty @3.7-3.11 (name "bool"))
-					(ty @3.15-3.19 (name "bool")))))))
+					(ty @3.7-3.11 (name "Bool"))
+					(ty @3.15-3.19 (name "Bool")))))))
 ~~~
 # TYPES
 ~~~clojure

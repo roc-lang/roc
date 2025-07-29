@@ -110,7 +110,7 @@ CloseCurly(16:1-16:2),EndOfFile(16:2-16:2),
 (file @1.1-16.2
 	(module @1.1-1.35
 		(exposes @1.8-1.35
-			(exposed-upper-ident @1.9-1.20 (text "localStatus"))
+			(exposed-upper-ident @1.9-1.20 (text "LocalStatus"))
 			(exposed-lower-ident @1.22-1.34
 				(text "processColor"))))
 	(statements
@@ -209,12 +209,12 @@ processColor = |color| {
 			(declared-type
 				(ty-fn @5.16-5.32 (effectful false)
 					(ty-underscore @1.1-1.1)
-					(ty @5.21-5.32 (name "localStatus"))))))
+					(ty @5.21-5.32 (name "LocalStatus"))))))
 	(s-nominal-decl @3.1-3.35
-		(ty-header @3.1-3.12 (name "LocalStatus"))
+		(ty-header @3.1-3.12 (name "localStatus"))
 		(ty-tag-union @3.16-3.35
-			(ty @3.17-3.24 (name "pending"))
-			(ty @3.26-3.34 (name "complete")))))
+			(ty @3.17-3.24 (name "Pending"))
+			(ty @3.26-3.34 (name "Complete")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -223,7 +223,7 @@ processColor = |color| {
 		(patt @6.1-6.13 (type "Error -> LocalStatus")))
 	(type_decls
 		(nominal @3.1-3.35 (type "LocalStatus")
-			(ty-header @3.1-3.12 (name "LocalStatus"))))
+			(ty-header @3.1-3.12 (name "localStatus"))))
 	(expressions
 		(expr @6.16-16.2 (type "Error -> LocalStatus"))))
 ~~~

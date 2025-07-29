@@ -28,7 +28,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:17),NoSpaceDotUpperIdent(
 (file @1.1-6.21
 	(module @1.1-1.25
 		(exposes @1.8-1.25
-			(exposed-upper-ident @1.9-1.17 (text "consList"))
+			(exposed-upper-ident @1.9-1.17 (text "ConsList"))
 			(exposed-lower-ident @1.19-1.24
 				(text "empty"))))
 	(statements
@@ -65,16 +65,16 @@ NO CHANGE
 			(e-tag @6.9-6.21 (name "Nil")))
 		(annotation @6.1-6.6
 			(declared-type
-				(ty-apply @5.9-5.21 (symbol "consList")
+				(ty-apply @5.9-5.21 (symbol "ConsList")
 					(ty-var @5.18-5.20 (name "_a"))))))
 	(s-nominal-decl @3.1-3.40
-		(ty-header @3.1-3.12 (name "ConsList")
+		(ty-header @3.1-3.12 (name "consList")
 			(ty-args
 				(ty-var @3.10-3.11 (name "a"))))
 		(ty-tag-union @3.16-3.40
-			(ty @3.17-3.20 (name "nil"))
-			(ty-apply @3.22-3.39 (symbol "node")
-				(ty-apply @3.27-3.38 (symbol "consList")
+			(ty @3.17-3.20 (name "Nil"))
+			(ty-apply @3.22-3.39 (symbol "Node")
+				(ty-apply @3.27-3.38 (symbol "ConsList")
 					(ty-var @3.36-3.37 (name "a")))))))
 ~~~
 # TYPES
@@ -84,7 +84,7 @@ NO CHANGE
 		(patt @6.1-6.6 (type "ConsList(a)")))
 	(type_decls
 		(nominal @3.1-3.40 (type "ConsList(a)")
-			(ty-header @3.1-3.12 (name "ConsList")
+			(ty-header @3.1-3.12 (name "consList")
 				(ty-args
 					(ty-var @3.10-3.11 (name "a"))))))
 	(expressions

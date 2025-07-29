@@ -153,11 +153,11 @@ handleResult = |result| {
 		(annotation @6.1-6.13
 			(declared-type
 				(ty-fn @5.16-5.60 (effectful false)
-					(ty-apply @5.16-5.53 (symbol "myResultModule.MyResultType")
-						(ty @5.44-5.47 (name "str"))
-						(ty @5.49-5.52 (name "i32")))
-					(ty @5.57-5.60 (name "str"))))))
-	(s-import @3.1-3.22 (module "myResultModule")
+					(ty-apply @5.16-5.53 (symbol "MyResultModule.MyResultType")
+						(ty @5.44-5.47 (name "Str"))
+						(ty @5.49-5.52 (name "I32")))
+					(ty @5.57-5.60 (name "Str"))))))
+	(s-import @3.1-3.22 (module "MyResultModule")
 		(exposes))
 	(ext-decl @5.16-5.43 (ident "myResultModule.MyResultType") (kind "type")))
 ~~~

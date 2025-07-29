@@ -48,7 +48,7 @@ import
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import @1.9-2.2 (module "s")
+	(s-import @1.9-2.2 (module "S")
 		(exposes)))
 ~~~
 # TYPES

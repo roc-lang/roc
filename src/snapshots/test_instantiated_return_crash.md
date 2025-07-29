@@ -94,9 +94,9 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 			(ty-fn @5.21-5.40 (effectful false)
 				(ty-parens @5.21-5.33
 					(ty-fn @5.22-5.32 (effectful false)
-						(ty @5.22-5.25 (name "str"))
-						(ty @5.29-5.32 (name "str"))))
-				(ty @5.37-5.40 (name "str")))))
+						(ty @5.22-5.25 (name "Str"))
+						(ty @5.29-5.32 (name "Str"))))
+				(ty @5.37-5.40 (name "Str")))))
 	(s-let @6.5-6.36
 		(p-assign @6.5-6.17 (ident "needs_string"))
 		(e-lambda @6.20-6.36

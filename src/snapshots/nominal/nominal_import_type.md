@@ -62,7 +62,7 @@ NO CHANGE
 			(declared-type
 				(ty-lookup-external @5.7-5.16
 					(ext-decl @5.7-5.16 (ident "color.RGB") (kind "type"))))))
-	(s-import @3.1-3.13 (module "color")
+	(s-import @3.1-3.13 (module "Color")
 		(exposes))
 	(ext-decl @5.7-5.16 (ident "color.RGB") (kind "type")))
 ~~~

@@ -156,10 +156,10 @@ NO CHANGE
 		(annotation @9.1-9.12
 			(declared-type
 				(ty-fn @8.15-8.48 (effectful false)
-					(ty @8.15-8.21 (name "userId"))
-					(ty @8.23-8.31 (name "userName"))
-					(ty @8.33-8.40 (name "userAge"))
-					(ty @8.44-8.48 (name "user"))))))
+					(ty @8.15-8.21 (name "UserId"))
+					(ty @8.23-8.31 (name "UserName"))
+					(ty @8.33-8.40 (name "UserAge"))
+					(ty @8.44-8.48 (name "User"))))))
 	(d-let
 		(p-assign @12.1-12.14 (ident "get_user_name"))
 		(e-lambda @12.17-12.33
@@ -172,8 +172,8 @@ NO CHANGE
 		(annotation @12.1-12.14
 			(declared-type
 				(ty-fn @11.17-11.33 (effectful false)
-					(ty @11.17-11.21 (name "user"))
-					(ty @11.25-11.33 (name "userName"))))))
+					(ty @11.17-11.21 (name "User"))
+					(ty @11.25-11.33 (name "UserName"))))))
 	(d-let
 		(p-assign @14.1-14.6 (ident "main!"))
 		(e-closure @14.9-17.2
@@ -199,23 +199,23 @@ NO CHANGE
 						(e-lookup-local @16.16-16.20
 							(p-assign @15.2-15.6 (ident "user"))))))))
 	(s-alias-decl @3.1-3.13
-		(ty-header @3.1-3.7 (name "UserId"))
-		(ty @3.10-3.13 (name "u64")))
+		(ty-header @3.1-3.7 (name "userId"))
+		(ty @3.10-3.13 (name "U64")))
 	(s-alias-decl @4.1-4.15
-		(ty-header @4.1-4.9 (name "UserName"))
-		(ty @4.12-4.15 (name "str")))
+		(ty-header @4.1-4.9 (name "userName"))
+		(ty @4.12-4.15 (name "Str")))
 	(s-alias-decl @5.1-5.13
-		(ty-header @5.1-5.8 (name "UserAge"))
-		(ty @5.11-5.13 (name "u8")))
+		(ty-header @5.1-5.8 (name "userAge"))
+		(ty @5.11-5.13 (name "U8")))
 	(s-alias-decl @6.1-6.55
-		(ty-header @6.1-6.5 (name "User"))
+		(ty-header @6.1-6.5 (name "user"))
 		(ty-record @6.8-6.55
 			(field (field "id")
-				(ty @6.15-6.21 (name "userId")))
+				(ty @6.15-6.21 (name "UserId")))
 			(field (field "name")
-				(ty @6.30-6.38 (name "userName")))
+				(ty @6.30-6.38 (name "UserName")))
 			(field (field "age")
-				(ty @6.46-6.53 (name "userAge"))))))
+				(ty @6.46-6.53 (name "UserAge"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -226,13 +226,13 @@ NO CHANGE
 		(patt @14.1-14.6 (type "_arg -> UserName")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
-			(ty-header @3.1-3.7 (name "UserId")))
+			(ty-header @3.1-3.7 (name "userId")))
 		(alias @4.1-4.15 (type "UserName")
-			(ty-header @4.1-4.9 (name "UserName")))
+			(ty-header @4.1-4.9 (name "userName")))
 		(alias @5.1-5.13 (type "UserAge")
-			(ty-header @5.1-5.8 (name "UserAge")))
+			(ty-header @5.1-5.8 (name "userAge")))
 		(alias @6.1-6.55 (type "User")
-			(ty-header @6.1-6.5 (name "User"))))
+			(ty-header @6.1-6.5 (name "user"))))
 	(expressions
 		(expr @9.15-9.48 (type "UserId, UserName, UserAge -> User"))
 		(expr @12.17-12.33 (type "User -> UserName"))

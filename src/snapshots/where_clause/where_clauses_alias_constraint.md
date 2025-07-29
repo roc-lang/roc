@@ -30,7 +30,7 @@ LowerIdent(7:1-7:5),OpAssign(7:6-7:7),TripleDot(7:8-7:11),EndOfFile(7:11-7:11),
 (file @1.1-7.11
 	(module @1.1-1.20
 		(exposes @1.8-1.20
-			(exposed-upper-ident @1.9-1.13 (text "sort"))
+			(exposed-upper-ident @1.9-1.13 (text "Sort"))
 			(exposed-lower-ident @1.15-1.19
 				(text "sort"))))
 	(statements
@@ -77,12 +77,12 @@ NO CHANGE
 		(annotation @7.1-7.5
 			(declared-type
 				(ty-fn @6.8-6.32 (effectful false)
-					(ty-apply @6.8-6.18 (symbol "list")
+					(ty-apply @6.8-6.18 (symbol "List")
 						(ty-var @6.13-6.17 (name "elem")))
-					(ty-apply @6.22-6.32 (symbol "list")
+					(ty-apply @6.22-6.32 (symbol "List")
 						(ty-var @6.27-6.31 (name "elem")))))))
 	(s-alias-decl @3.1-4.48
-		(ty-header @3.1-3.8 (name "Sort")
+		(ty-header @3.1-3.8 (name "sort")
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))))
 		(ty-var @3.11-3.12 (name "a"))
@@ -93,14 +93,14 @@ NO CHANGE
 						(ty-var @4.27-4.28 (name "a"))
 						(ty-var @4.30-4.31 (name "a"))))
 				(ty-tag-union @4.36-4.48
-					(ty @4.37-4.39 (name "lT"))
-					(ty @4.41-4.43 (name "eQ"))
-					(ty @4.45-4.47 (name "gT"))))))
+					(ty @4.37-4.39 (name "LT"))
+					(ty @4.41-4.43 (name "EQ"))
+					(ty @4.45-4.47 (name "GT"))))))
 	(s-type-anno @6.1-6.56 (name "sort")
 		(ty-fn @6.8-6.32 (effectful false)
-			(ty-apply @6.8-6.18 (symbol "list")
+			(ty-apply @6.8-6.18 (symbol "List")
 				(ty-var @6.13-6.17 (name "elem")))
-			(ty-apply @6.22-6.32 (symbol "list")
+			(ty-apply @6.22-6.32 (symbol "List")
 				(ty-var @6.27-6.31 (name "elem"))))
 		(where
 			(alias @6.39-6.56 (module-of "elem") (ident "sort"))))
@@ -114,7 +114,7 @@ NO CHANGE
 		(patt @7.1-7.5 (type "Error -> Error")))
 	(type_decls
 		(alias @3.1-4.48 (type "Sort(a)")
-			(ty-header @3.1-3.8 (name "Sort")
+			(ty-header @3.1-3.8 (name "sort")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))))))
 	(expressions

@@ -115,8 +115,8 @@ extract_age = |person| {
 				(ty-fn @3.15-3.35 (effectful false)
 					(ty-record @3.15-3.28
 						(field (field "age")
-							(ty @3.23-3.26 (name "u64"))))
-					(ty @3.32-3.35 (name "u64")))))))
+							(ty @3.23-3.26 (name "U64"))))
+					(ty @3.32-3.35 (name "U64")))))))
 ~~~
 # TYPES
 ~~~clojure

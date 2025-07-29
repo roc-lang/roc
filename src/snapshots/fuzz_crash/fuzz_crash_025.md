@@ -313,49 +313,49 @@ j = -17011687303715884105728
 		(e-int @4.5-4.8 (value "255"))
 		(annotation @4.1-4.2
 			(declared-type
-				(ty @3.5-3.7 (name "u8")))))
+				(ty @3.5-3.7 (name "U8")))))
 	(d-let
 		(p-assign @7.1-7.2 (ident "b"))
 		(e-int @7.5-7.10 (value "65535"))
 		(annotation @7.1-7.2
 			(declared-type
-				(ty @6.5-6.8 (name "u16")))))
+				(ty @6.5-6.8 (name "U16")))))
 	(d-let
 		(p-assign @10.1-10.2 (ident "c"))
 		(e-int @10.5-10.14 (value "429496729"))
 		(annotation @10.1-10.2
 			(declared-type
-				(ty @9.5-9.8 (name "u32")))))
+				(ty @9.5-9.8 (name "U32")))))
 	(d-let
 		(p-assign @14.1-14.2 (ident "e"))
 		(e-frac-f64 @14.5-14.48 (value "3.4028236692093846e39"))
 		(annotation @14.1-14.2
 			(declared-type
-				(ty @13.5-13.9 (name "u128")))))
+				(ty @13.5-13.9 (name "U128")))))
 	(d-let
 		(p-assign @18.1-18.2 (ident "g"))
 		(e-int @18.5-18.11 (value "-32768"))
 		(annotation @18.1-18.2
 			(declared-type
-				(ty @17.5-17.8 (name "i16")))))
+				(ty @17.5-17.8 (name "I16")))))
 	(d-let
 		(p-assign @21.1-21.2 (ident "h"))
 		(e-int @21.5-21.12 (value "-483648"))
 		(annotation @21.1-21.2
 			(declared-type
-				(ty @20.5-20.8 (name "i32")))))
+				(ty @20.5-20.8 (name "I32")))))
 	(d-let
 		(p-assign @24.1-24.2 (ident "i"))
 		(e-int @24.5-24.17 (value "-92233725808"))
 		(annotation @24.1-24.2
 			(declared-type
-				(ty @23.5-23.8 (name "i64")))))
+				(ty @23.5-23.8 (name "I64")))))
 	(d-let
 		(p-assign @27.1-27.2 (ident "j"))
 		(e-int @27.5-27.29 (value "-17011687303715884105728"))
 		(annotation @27.1-27.2
 			(declared-type
-				(ty @26.5-26.9 (name "i128"))))))
+				(ty @26.5-26.9 (name "I128"))))))
 ~~~
 # TYPES
 ~~~clojure

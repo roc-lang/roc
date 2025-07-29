@@ -308,10 +308,10 @@ olor = |color| {
 					(ty-underscore @1.1-1.1)
 					(ty-var @5.13-5.16 (name "tus"))))))
 	(s-alias-decl @3.1-3.24
-		(ty-header @3.1-3.12 (name "LocalStatus"))
+		(ty-header @3.1-3.12 (name "localStatus"))
 		(ty-fn @3.14-3.24 (effectful true)
 			(ty-var @3.14-3.17 (name "lue"))
-			(ty @3.21-3.24 (name "loc")))))
+			(ty @3.21-3.24 (name "Loc")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -320,7 +320,7 @@ olor = |color| {
 		(patt @6.1-6.5 (type "Error -> Error")))
 	(type_decls
 		(alias @3.1-3.24 (type "LocalStatus")
-			(ty-header @3.1-3.12 (name "LocalStatus"))))
+			(ty-header @3.1-3.12 (name "localStatus"))))
 	(expressions
 		(expr @6.8-12.2 (type "Error -> Error"))))
 ~~~

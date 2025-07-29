@@ -102,16 +102,8 @@ pub const TypeHeader = struct {
         const region = cir.store.getRegionAt(node_idx);
         try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-        if (self.name.idx == 0) {
-            try tree.pushStringPair("name", "<unnamed>");
-        } else {
-            const uppercase = try cir.idents.interner.getUppercase(@enumFromInt(@as(u32, self.name.idx)));
-            var name_buf = std.ArrayList(u8).init(tree.allocator);
-            defer name_buf.deinit();
-            try name_buf.append(uppercase.first);
-            try name_buf.appendSlice(uppercase.rest);
-            try tree.pushStringPair("name", name_buf.items);
-        }
+        const name_str = cir.idents.getLowercase(self.name);
+        try tree.pushStringPair("name", name_str);
 
         const attrs = tree.beginNode();
 
@@ -257,17 +249,23 @@ pub const ExposedItem = struct {
 
     pub fn pushToSExprTree(self: *const ExposedItem, _: anytype, cir: anytype, tree: anytype) !void {
         const begin = tree.beginNode();
-        try tree.pushStaticAtom("exposed");
-
-        if (self.name.idx == 0) {
-            try tree.pushStringPair("name", "<unnamed>");
-        } else {
-            const uppercase = try cir.idents.interner.getUppercase(@enumFromInt(@as(u32, self.name.idx)));
+        
+        // Determine if this is a type based on the identifier
+        const name_str = cir.idents.getLowercase(self.name);
+        const is_type = name_str.len > 0 and name_str[0] >= 'a' and name_str[0] <= 'z';
+        
+        if (is_type) {
+            try tree.pushStaticAtom("exposed-type");
+            // For types, capitalize the first letter
+            const uppercase = try cir.idents.getUppercase(self.name);
             var name_buf = std.ArrayList(u8).init(tree.allocator);
             defer name_buf.deinit();
             try name_buf.append(uppercase.first);
             try name_buf.appendSlice(uppercase.rest);
             try tree.pushStringPair("name", name_buf.items);
+        } else {
+            try tree.pushStaticAtom("exposed");
+            try tree.pushStringPair("name", name_str);
         }
 
         if (self.alias) |alias_idx| {

@@ -74,8 +74,8 @@ NO CHANGE
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.21 (effectful false)
-					(ty @3.11-3.14 (name "u64"))
-					(ty @3.18-3.21 (name "u64"))))))
+					(ty @3.11-3.14 (name "U64"))
+					(ty @3.18-3.21 (name "U64"))))))
 	(d-let
 		(p-assign @7.1-7.10 (ident "my_number"))
 		(e-call @7.13-7.24
@@ -84,7 +84,7 @@ NO CHANGE
 			(e-int @7.21-7.23 (value "42")))
 		(annotation @7.1-7.10
 			(declared-type
-				(ty @6.13-6.16 (name "u64"))))))
+				(ty @6.13-6.16 (name "U64"))))))
 ~~~
 # TYPES
 ~~~clojure

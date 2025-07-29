@@ -46,7 +46,7 @@ LowerIdent(9:1-9:7),OpAssign(9:8-9:9),UpperIdent(9:10-9:15),NoSpaceDotUpperIdent
 (file @1.1-9.22
 	(module @1.1-1.21
 		(exposes @1.8-1.21
-			(exposed-upper-ident @1.9-1.14 (text "color"))
+			(exposed-upper-ident @1.9-1.14 (text "Color"))
 			(exposed-lower-ident @1.16-1.20
 				(text "blue"))))
 	(statements
@@ -82,20 +82,20 @@ NO CHANGE
 			(e-tag @6.8-6.18 (name "Blue")))
 		(annotation @6.1-6.5
 			(declared-type
-				(ty @5.8-5.13 (name "color")))))
+				(ty @5.8-5.13 (name "Color")))))
 	(d-let
 		(p-assign @9.1-9.7 (ident "yellow"))
 		(e-nominal @9.10-9.15 (nominal "Color")
 			(e-tag @9.10-9.22 (name "Yellow")))
 		(annotation @9.1-9.7
 			(declared-type
-				(ty @8.10-8.15 (name "color")))))
+				(ty @8.10-8.15 (name "Color")))))
 	(s-nominal-decl @3.1-3.28
-		(ty-header @3.1-3.6 (name "Color"))
+		(ty-header @3.1-3.6 (name "color"))
 		(ty-tag-union @3.10-3.28
-			(ty @3.11-3.14 (name "red"))
-			(ty @3.16-3.21 (name "green"))
-			(ty @3.23-3.27 (name "blue")))))
+			(ty @3.11-3.14 (name "Red"))
+			(ty @3.16-3.21 (name "Green"))
+			(ty @3.23-3.27 (name "Blue")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -105,7 +105,7 @@ NO CHANGE
 		(patt @9.1-9.7 (type "Error")))
 	(type_decls
 		(nominal @3.1-3.28 (type "Error")
-			(ty-header @3.1-3.6 (name "Color"))))
+			(ty-header @3.1-3.6 (name "color"))))
 	(expressions
 		(expr @6.8-6.13 (type "Error"))
 		(expr @9.10-9.15 (type "Error"))))

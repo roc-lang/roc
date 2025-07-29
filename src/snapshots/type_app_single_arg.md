@@ -91,9 +91,9 @@ main! = |_| processList(["one", "two"])
 		(annotation @4.1-4.12
 			(declared-type
 				(ty-fn @3.15-3.31 (effectful false)
-					(ty-apply @3.15-3.24 (symbol "list")
-						(ty @3.20-3.23 (name "str")))
-					(ty @3.28-3.31 (name "u64"))))))
+					(ty-apply @3.15-3.24 (symbol "List")
+						(ty @3.20-3.23 (name "Str")))
+					(ty @3.28-3.31 (name "U64"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-closure @6.9-6.39

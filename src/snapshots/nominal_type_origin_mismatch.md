@@ -60,7 +60,7 @@ LowerIdent(10:5-10:18),NoSpaceOpenRound(10:18-10:19),StringStart(10:19-10:20),St
 	(statements
 		(s-import @3.1-3.30 (raw "Data")
 			(exposing
-				(exposed-upper-ident @3.23-3.29 (text "person"))))
+				(exposed-upper-ident @3.23-3.29 (text "Person"))))
 		(s-type-anno @5.1-5.30 (name "expectsPerson")
 			(ty-fn @5.17-5.30
 				(ty @5.17-5.23 (name "Person"))
@@ -105,8 +105,8 @@ main =
 		(annotation @6.1-6.14
 			(declared-type
 				(ty-fn @5.17-5.30 (effectful false)
-					(ty @5.17-5.23 (name "person"))
-					(ty @5.27-5.30 (name "str"))))))
+					(ty @5.17-5.23 (name "Person"))
+					(ty @5.27-5.30 (name "Str"))))))
 	(d-let
 		(p-assign @8.1-8.5 (ident "main"))
 		(e-call @10.5-10.34
@@ -114,9 +114,9 @@ main =
 				(p-assign @6.1-6.14 (ident "expectsPerson")))
 			(e-string @10.19-10.33
 				(e-literal @10.20-10.32 (string "not a person")))))
-	(s-import @3.1-3.30 (module "data")
+	(s-import @3.1-3.30 (module "Data")
 		(exposes
-			(exposed (name "Person") (wildcard false)))))
+			(exposed (name "person") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

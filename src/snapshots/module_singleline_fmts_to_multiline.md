@@ -42,7 +42,7 @@ KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:18),Comma(1:18-1:19),Uppe
 		(exposes @1.8-1.30
 			(exposed-lower-ident @1.9-1.18
 				(text "something"))
-			(exposed-upper-ident @1.20-1.28 (text "someType"))))
+			(exposed-upper-ident @1.20-1.28 (text "SomeType"))))
 	(statements))
 ~~~
 # FORMATTED

@@ -115,13 +115,13 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.39 (effectful false)
-					(ty-apply @3.11-3.18 (symbol "list")
+					(ty-apply @3.11-3.18 (symbol "List")
 						(ty-var @3.16-3.17 (name "a")))
 					(ty-parens @3.20-3.28
 						(ty-fn @3.21-3.27 (effectful false)
 							(ty-var @3.21-3.22 (name "a"))
 							(ty-var @3.26-3.27 (name "b"))))
-					(ty-apply @3.32-3.39 (symbol "list")
+					(ty-apply @3.32-3.39 (symbol "List")
 						(ty-var @3.37-3.38 (name "b")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))

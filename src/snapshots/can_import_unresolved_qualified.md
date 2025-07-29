@@ -166,7 +166,7 @@ parser = Json.create
 				(ty-fn @10.13-10.36 (effectful false)
 					(ty-lookup-external @10.13-10.29
 						(ext-decl @10.13-10.29 (ident "json.InvalidType") (kind "type")))
-					(ty @10.33-10.36 (name "str"))))))
+					(ty @10.33-10.36 (name "Str"))))))
 	(d-let
 		(p-assign @15.1-15.15 (ident "processRequest"))
 		(e-lambda @15.18-15.51
@@ -206,7 +206,7 @@ parser = Json.create
 			(target-node-idx "0")))
 	(s-import @3.1-3.17 (module "json.Json") (qualifier "json")
 		(exposes))
-	(s-import @4.1-4.27 (module "http.Client") (qualifier "http") (alias "http")
+	(s-import @4.1-4.27 (module "http.Client") (qualifier "http") (alias "Http")
 		(exposes))
 	(ext-decl @10.13-10.29 (ident "json.InvalidType") (kind "type"))
 	(ext-decl @14.18-14.37 (ident "http.Server.Request") (kind "type"))

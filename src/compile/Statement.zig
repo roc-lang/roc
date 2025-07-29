@@ -267,14 +267,31 @@ pub const Statement = union(enum) {
                 try tree.pushStaticAtom("s-import");
                 const region = ir.store.getStatementRegion(stmt_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("module", ir.idents.getLowercase(s.module_name_tok));
+                if (s.qualifier_tok) |_| {
+                    // When there's a qualifier, use lowercase for the module name
+                    const lowercase = ir.idents.getLowercase(s.module_name_tok);
+                    try tree.pushStringPair("module", lowercase);
+                } else {
+                    // When there's no qualifier, use uppercase for the module name
+                    const uppercase = try ir.idents.getUppercase(s.module_name_tok);
+                    var module_buf = std.ArrayList(u8).init(tree.allocator);
+                    defer module_buf.deinit();
+                    try module_buf.append(uppercase.first);
+                    try module_buf.appendSlice(uppercase.rest);
+                    try tree.pushStringPair("module", module_buf.items);
+                }
 
                 if (s.qualifier_tok) |qualifier| {
                     try tree.pushStringPair("qualifier", ir.getIdentText(qualifier));
                 }
 
                 if (s.alias_tok) |alias| {
-                    try tree.pushStringPair("alias", ir.getIdentText(alias));
+                    const alias_uppercase = try ir.idents.getUppercase(alias);
+                    var alias_buf = std.ArrayList(u8).init(tree.allocator);
+                    defer alias_buf.deinit();
+                    try alias_buf.append(alias_uppercase.first);
+                    try alias_buf.appendSlice(alias_uppercase.rest);
+                    try tree.pushStringPair("alias", alias_buf.items);
                 }
 
                 const attrs = tree.beginNode();

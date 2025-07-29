@@ -77,11 +77,11 @@ UpperIdent(10:1-10:7),OpColon(10:8-10:9),OpenSquare(10:10-10:11),UpperIdent(10:1
 				(text "foo"))
 			(exposed-lower-ident @1.14-1.17
 				(text "bar"))
-			(exposed-upper-ident @1.19-1.25 (text "myType"))
-			(exposed-upper-ident @1.27-1.36 (text "otherType"))
+			(exposed-upper-ident @1.19-1.25 (text "MyType"))
+			(exposed-upper-ident @1.27-1.36 (text "OtherType"))
 			(exposed-lower-ident @1.38-1.41
 				(text "foo"))
-			(exposed-upper-ident @1.43-1.49 (text "myType"))))
+			(exposed-upper-ident @1.43-1.49 (text "MyType"))))
 	(statements
 		(s-decl @8.1-8.9
 			(p-ident @8.1-8.4 (raw "foo"))
@@ -106,11 +106,11 @@ NO CHANGE
 		(p-assign @8.1-8.4 (ident "foo"))
 		(e-int @8.7-8.9 (value "42")))
 	(s-alias-decl @10.1-10.19
-		(ty-header @10.1-10.7 (name "MyType"))
+		(ty-header @10.1-10.7 (name "myType"))
 		(ty-tag-union @10.10-10.19
-			(ty @10.11-10.12 (name "a"))
-			(ty @10.14-10.15 (name "b"))
-			(ty @10.17-10.18 (name "c")))))
+			(ty @10.11-10.12 (name "A"))
+			(ty @10.14-10.15 (name "B"))
+			(ty @10.17-10.18 (name "C")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -119,7 +119,7 @@ NO CHANGE
 		(patt @8.1-8.4 (type "Num(_size)")))
 	(type_decls
 		(alias @10.1-10.19 (type "MyType")
-			(ty-header @10.1-10.7 (name "MyType"))))
+			(ty-header @10.1-10.7 (name "myType"))))
 	(expressions
 		(expr @8.7-8.9 (type "Num(_size)"))))
 ~~~

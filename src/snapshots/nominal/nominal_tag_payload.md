@@ -39,7 +39,7 @@ LowerIdent(13:1-13:6),OpAssign(13:7-13:8),UpperIdent(13:9-13:14),NoSpaceDotUpper
 (file @1.1-13.19
 	(module @1.1-1.43
 		(exposes @1.8-1.43
-			(exposed-upper-ident @1.9-1.14 (text "maybe"))
+			(exposed-upper-ident @1.9-1.14 (text "Maybe"))
 			(exposed-lower-ident @1.16-1.21
 				(text "some1"))
 			(exposed-lower-ident @1.23-1.28
@@ -113,7 +113,7 @@ NO CHANGE
 			(declared-type
 				(ty-fn @5.9-5.22 (effectful false)
 					(ty-var @5.9-5.10 (name "a"))
-					(ty-apply @5.14-5.22 (symbol "maybe")
+					(ty-apply @5.14-5.22 (symbol "Maybe")
 						(ty-var @5.20-5.21 (name "a")))))))
 	(d-let
 		(p-assign @9.1-9.6 (ident "none1"))
@@ -121,7 +121,7 @@ NO CHANGE
 			(e-tag @9.9-9.19 (name "None")))
 		(annotation @9.1-9.6
 			(declared-type
-				(ty-apply @8.9-8.18 (symbol "maybe")
+				(ty-apply @8.9-8.18 (symbol "Maybe")
 					(ty-var @8.15-8.17 (name "_a"))))))
 	(d-let
 		(p-assign @11.1-11.6 (ident "some2"))
@@ -138,13 +138,13 @@ NO CHANGE
 		(e-nominal @13.9-13.14 (nominal "Maybe")
 			(e-tag @13.9-13.19 (name "None"))))
 	(s-nominal-decl @3.1-3.28
-		(ty-header @3.1-3.9 (name "Maybe")
+		(ty-header @3.1-3.9 (name "maybe")
 			(ty-args
 				(ty-var @3.7-3.8 (name "a"))))
 		(ty-tag-union @3.13-3.28
-			(ty-apply @3.14-3.21 (symbol "some")
+			(ty-apply @3.14-3.21 (symbol "Some")
 				(ty-var @3.19-3.20 (name "a")))
-			(ty @3.23-3.27 (name "none")))))
+			(ty @3.23-3.27 (name "None")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -156,7 +156,7 @@ NO CHANGE
 		(patt @13.1-13.6 (type "Maybe(a)")))
 	(type_decls
 		(nominal @3.1-3.28 (type "Maybe(a)")
-			(ty-header @3.1-3.9 (name "Maybe")
+			(ty-header @3.1-3.9 (name "maybe")
 				(ty-args
 					(ty-var @3.7-3.8 (name "a"))))))
 	(expressions

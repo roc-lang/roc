@@ -54,7 +54,7 @@ NO CHANGE
 		(e-int @4.5-4.7 (value "-1"))
 		(annotation @4.1-4.2
 			(declared-type
-				(ty @3.5-3.7 (name "u8"))))))
+				(ty @3.5-3.7 (name "U8"))))))
 ~~~
 # TYPES
 ~~~clojure

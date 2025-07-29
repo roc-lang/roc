@@ -34,7 +34,7 @@ EndOfFile(4:1-4:1),
 (file @1.1-3.5
 	(package @1.1-3.5
 		(exposes @1.9-3.2
-			(exposed-upper-ident @2.5-2.10 (text "color")))
+			(exposed-upper-ident @2.5-2.10 (text "Color")))
 		(packages @3.3-3.5))
 	(statements))
 ~~~

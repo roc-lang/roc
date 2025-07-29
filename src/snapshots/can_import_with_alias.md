@@ -44,7 +44,7 @@ NO CHANGE
 		(e-lookup-external @5.8-5.21
 			(module-idx "0")
 			(target-node-idx "0")))
-	(s-import @3.1-3.27 (module "json.Json") (qualifier "json") (alias "myJson")
+	(s-import @3.1-3.27 (module "json.Json") (qualifier "json") (alias "MyJson")
 		(exposes)))
 ~~~
 # TYPES

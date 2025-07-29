@@ -149,7 +149,7 @@ answer = composed([42])
 						(field (field "value")
 							(ty-var @5.29-5.30 (name "a")))
 						(field (field "tag")
-							(ty @5.37-5.40 (name "str"))))))))
+							(ty @5.37-5.40 (name "Str"))))))))
 	(d-let
 		(p-assign @9.1-9.10 (ident "get_value"))
 		(e-lambda @9.13-9.24
@@ -166,7 +166,7 @@ answer = composed([42])
 						(field (field "value")
 							(ty-var @8.22-8.23 (name "a")))
 						(field (field "tag")
-							(ty @8.30-8.33 (name "str"))))
+							(ty @8.30-8.33 (name "Str"))))
 					(ty-var @8.39-8.40 (name "a"))))))
 	(d-let
 		(p-assign @12.1-12.9 (ident "composed"))
@@ -188,9 +188,9 @@ answer = composed([42])
 		(annotation @12.1-12.9
 			(declared-type
 				(ty-fn @11.12-11.26 (effectful false)
-					(ty-apply @11.12-11.19 (symbol "list")
+					(ty-apply @11.12-11.19 (symbol "List")
 						(ty-var @11.17-11.18 (name "a")))
-					(ty @11.23-11.26 (name "str"))))))
+					(ty @11.23-11.26 (name "Str"))))))
 	(d-let
 		(p-assign @14.1-14.7 (ident "answer"))
 		(e-call @14.10-14.24

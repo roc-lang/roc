@@ -458,9 +458,9 @@ transform = |result|
 					(e-int @27.24-27.26 (value "42")))))
 		(annotation @27.1-27.11
 			(declared-type
-				(ty-apply @26.14-26.37 (symbol "result.Result")
-					(ty @26.28-26.31 (name "i32"))
-					(ty @26.33-26.36 (name "str"))))))
+				(ty-apply @26.14-26.37 (symbol "Result.Result")
+					(ty @26.28-26.31 (name "I32"))
+					(ty @26.33-26.36 (name "Str"))))))
 	(d-let
 		(p-assign @31.1-31.9 (ident "getColor"))
 		(e-lambda @31.12-31.49
@@ -485,7 +485,7 @@ transform = |result|
 				(ty-fn @34.16-34.32 (effectful false)
 					(ty-lookup-external @34.16-34.25
 						(ext-decl @34.16-34.25 (ident "color.RGB") (kind "type")))
-					(ty @34.29-34.32 (name "str"))))))
+					(ty @34.29-34.32 (name "Str"))))))
 	(d-let
 		(p-assign @40.1-40.10 (ident "transform"))
 		(e-closure @40.13-44.6
@@ -520,18 +520,18 @@ transform = |result|
 		(annotation @40.1-40.10
 			(declared-type
 				(ty-fn @39.13-39.76 (effectful false)
-					(ty-apply @39.13-39.51 (symbol "result.Result")
+					(ty-apply @39.13-39.51 (symbol "Result.Result")
 						(ty-lookup-external @39.27-39.36
 							(ext-decl @39.27-39.36 (ident "color.RGB") (kind "type")))
 						(ty-lookup-external @39.38-39.50
 							(ext-decl @39.38-39.50 (ident "extMod.Error") (kind "type"))))
 					(ty-lookup-external @39.55-39.76
 						(ext-decl @39.55-39.76 (ident "moduleA.ModuleB.TypeC") (kind "type")))))))
-	(s-import @9.1-9.13 (module "color")
+	(s-import @9.1-9.13 (module "Color")
 		(exposes))
-	(s-import @10.1-10.15 (module "moduleA")
+	(s-import @10.1-10.15 (module "ModuleA")
 		(exposes))
-	(s-import @11.1-11.32 (module "externalModule") (alias "extMod")
+	(s-import @11.1-11.32 (module "ExternalModule") (alias "ExtMod")
 		(exposes))
 	(ext-decl @14.19-14.28 (ident "color.RGB") (kind "type"))
 	(ext-decl @18.20-18.35 (ident "extMod.DataType") (kind "type"))

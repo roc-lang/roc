@@ -90,7 +90,12 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStaticAtom("ty-apply");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("symbol", ir.getIdentText(a.symbol));
+                const uppercase = try ir.idents.getUppercase(a.symbol);
+                var symbol_buf = std.ArrayList(u8).init(tree.allocator);
+                defer symbol_buf.deinit();
+                try symbol_buf.append(uppercase.first);
+                try symbol_buf.appendSlice(uppercase.rest);
+                try tree.pushStringPair("symbol", symbol_buf.items);
                 const attrs = tree.beginNode();
 
                 const args_slice = ir.store.sliceTypeAnnos(a.args);
@@ -122,7 +127,12 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStaticAtom("ty");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("name", ir.getIdentText(t.symbol));
+                const uppercase = try ir.idents.getUppercase(t.symbol);
+                var name_buf = std.ArrayList(u8).init(tree.allocator);
+                defer name_buf.deinit();
+                try name_buf.append(uppercase.first);
+                try name_buf.appendSlice(uppercase.rest);
+                try tree.pushStringPair("name", name_buf.items);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },

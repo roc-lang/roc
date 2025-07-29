@@ -257,8 +257,8 @@ main! = |_| {
 		(annotation @5.1-5.4
 			(declared-type
 				(ty-fn @4.7-4.17 (effectful false)
-					(ty @4.7-4.10 (name "u64"))
-					(ty @4.14-4.17 (name "u64"))))))
+					(ty @4.7-4.10 (name "U64"))
+					(ty @4.14-4.17 (name "U64"))))))
 	(d-let
 		(p-assign @9.1-9.9 (ident "multiply"))
 		(e-lambda @9.12-9.33
@@ -271,8 +271,8 @@ main! = |_| {
 		(annotation @9.1-9.9
 			(declared-type
 				(ty-fn @8.12-8.22 (effectful false)
-					(ty @8.12-8.15 (name "u64"))
-					(ty @8.19-8.22 (name "u64"))))))
+					(ty @8.12-8.15 (name "U64"))
+					(ty @8.19-8.22 (name "U64"))))))
 	(d-let
 		(p-assign @13.1-13.8 (ident "process"))
 		(e-lambda @13.11-13.23
@@ -282,8 +282,8 @@ main! = |_| {
 		(annotation @13.1-13.8
 			(declared-type
 				(ty-fn @12.11-12.21 (effectful false)
-					(ty @12.11-12.14 (name "u64"))
-					(ty @12.18-12.21 (name "u64"))))))
+					(ty @12.11-12.14 (name "U64"))
+					(ty @12.18-12.21 (name "U64"))))))
 	(d-let
 		(p-assign @17.1-17.7 (ident "double"))
 		(e-lambda @17.10-17.27
@@ -296,8 +296,8 @@ main! = |_| {
 		(annotation @17.1-17.7
 			(declared-type
 				(ty-fn @16.10-16.20 (effectful false)
-					(ty @16.10-16.13 (name "u64"))
-					(ty @16.17-16.20 (name "u64"))))))
+					(ty @16.10-16.13 (name "U64"))
+					(ty @16.17-16.20 (name "U64"))))))
 	(d-let
 		(p-assign @19.1-19.6 (ident "main!"))
 		(e-closure @19.9-25.2

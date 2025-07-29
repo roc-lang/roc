@@ -233,10 +233,10 @@ main = {
 		(annotation @8.1-8.10
 			(declared-type
 				(ty-fn @7.13-7.37 (effectful false)
-					(ty-apply @7.13-7.23 (symbol "pair")
+					(ty-apply @7.13-7.23 (symbol "Pair")
 						(ty-var @7.18-7.19 (name "a"))
 						(ty-var @7.21-7.22 (name "b")))
-					(ty-apply @7.27-7.37 (symbol "pair")
+					(ty-apply @7.27-7.37 (symbol "Pair")
 						(ty-var @7.32-7.33 (name "b"))
 						(ty-var @7.35-7.36 (name "a")))))))
 	(d-let
@@ -264,7 +264,7 @@ main = {
 		(annotation @12.1-12.9
 			(declared-type
 				(ty-fn @11.12-11.56 (effectful false)
-					(ty-apply @11.12-11.22 (symbol "pair")
+					(ty-apply @11.12-11.22 (symbol "Pair")
 						(ty-var @11.17-11.18 (name "a"))
 						(ty-var @11.20-11.21 (name "b")))
 					(ty-parens @11.24-11.32
@@ -275,7 +275,7 @@ main = {
 						(ty-fn @11.35-11.41 (effectful false)
 							(ty-var @11.35-11.36 (name "b"))
 							(ty-var @11.40-11.41 (name "d"))))
-					(ty-apply @11.46-11.56 (symbol "pair")
+					(ty-apply @11.46-11.56 (symbol "Pair")
 						(ty-var @11.51-11.52 (name "c"))
 						(ty-var @11.54-11.55 (name "d")))))))
 	(d-let
@@ -314,7 +314,7 @@ main = {
 			(e-lookup-local @25.5-25.7
 				(p-assign @23.5-23.7 (ident "p2")))))
 	(s-alias-decl @4.1-4.20
-		(ty-header @4.1-4.11 (name "Pair")
+		(ty-header @4.1-4.11 (name "pair")
 			(ty-args
 				(ty-var @4.6-4.7 (name "a"))
 				(ty-var @4.9-4.10 (name "b"))))
@@ -331,7 +331,7 @@ main = {
 		(patt @17.1-17.5 (type "_e")))
 	(type_decls
 		(alias @4.1-4.20 (type "Pair(a, b)")
-			(ty-header @4.1-4.11 (name "Pair")
+			(ty-header @4.1-4.11 (name "pair")
 				(ty-args
 					(ty-var @4.6-4.7 (name "a"))
 					(ty-var @4.9-4.10 (name "b"))))))

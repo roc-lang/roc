@@ -1108,8 +1108,8 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 				(exposed-lower-ident @14.32-14.48
 					(text "func")
 					(as "function"))
-				(exposed-upper-ident @14.50-14.71 (text "type") (as "valueCategory"))
-				(exposed-upper-ident-star @14.73-14.81 (text "custom"))))
+				(exposed-upper-ident @14.50-14.71 (text "Type") (as "ValueCategory"))
+				(exposed-upper-ident-star @14.73-14.81 (text "Custom"))))
 		(s-import @16.1-16.27 (raw "BadName") (alias "GoodName"))
 		(s-import @17.1-20.20 (raw "BadNameMultiline") (alias "GoodNameMultiline"))
 		(s-type-decl @22.1-22.41
@@ -1863,8 +1863,8 @@ expect {
 		(annotation @68.1-68.8
 			(declared-type
 				(ty-fn @67.11-67.21 (effectful false)
-					(ty @67.11-67.14 (name "u64"))
-					(ty @67.18-67.21 (name "u64"))))))
+					(ty @67.11-67.14 (name "U64"))
+					(ty @67.18-67.21 (name "U64"))))))
 	(d-let
 		(p-assign @80.1-80.11 (ident "match_time"))
 		(e-closure @80.14-138.3
@@ -2249,9 +2249,9 @@ expect {
 		(annotation @144.1-144.6
 			(declared-type
 				(ty-fn @143.9-143.38 (effectful false)
-					(ty-apply @143.9-143.21 (symbol "list")
-						(ty @143.14-143.20 (name "string")))
-					(ty-apply @143.25-143.38 (symbol "result")
+					(ty-apply @143.9-143.21 (symbol "List")
+						(ty @143.14-143.20 (name "String")))
+					(ty-apply @143.25-143.38 (symbol "Result")
 						(ty-record @143.32-143.34)
 						(ty-underscore @1.1-1.1))))))
 	(d-let
@@ -2261,115 +2261,115 @@ expect {
 			(declared-type
 				(ty-record @198.9-198.11))))
 	(s-alias-decl @22.1-22.41
-		(ty-header @22.1-22.10 (name "Map")
+		(ty-header @22.1-22.10 (name "map")
 			(ty-args
 				(ty-var @22.5-22.6 (name "a"))
 				(ty-var @22.8-22.9 (name "b"))))
 		(ty-fn @22.13-22.41 (effectful false)
-			(ty-apply @22.13-22.20 (symbol "list")
+			(ty-apply @22.13-22.20 (symbol "List")
 				(ty-var @22.18-22.19 (name "a")))
 			(ty-parens @22.22-22.30
 				(ty-fn @22.23-22.29 (effectful false)
 					(ty-var @22.23-22.24 (name "a"))
 					(ty-var @22.28-22.29 (name "b"))))
-			(ty-apply @22.34-22.41 (symbol "list")
+			(ty-apply @22.34-22.41 (symbol "List")
 				(ty-var @22.39-22.40 (name "b")))))
 	(s-alias-decl @23.1-34.5
-		(ty-header @23.1-26.2 (name "MapML")
+		(ty-header @23.1-26.2 (name "mapML")
 			(ty-args
 				(ty-var @24.2-24.3 (name "a"))
 				(ty-var @25.2-25.3 (name "b"))))
 		(ty-fn @28.3-34.5 (effectful false)
-			(ty-apply @28.3-30.4 (symbol "list")
+			(ty-apply @28.3-30.4 (symbol "List")
 				(ty-var @29.4-29.5 (name "a")))
 			(ty-parens @31.3-31.11
 				(ty-fn @31.4-31.10 (effectful false)
 					(ty-var @31.4-31.5 (name "a"))
 					(ty-var @31.9-31.10 (name "b"))))
-			(ty-apply @32.4-34.5 (symbol "list")
+			(ty-apply @32.4-34.5 (symbol "List")
 				(ty-var @33.5-33.6 (name "b")))))
 	(s-alias-decl @36.1-36.17
-		(ty-header @36.1-36.4 (name "Foo"))
+		(ty-header @36.1-36.4 (name "foo"))
 		(ty-tuple @36.7-36.17
-			(ty @36.8-36.11 (name "bar"))
-			(ty @36.13-36.16 (name "baz"))))
+			(ty @36.8-36.11 (name "Bar"))
+			(ty @36.13-36.16 (name "Baz"))))
 	(s-alias-decl @38.1-41.2
-		(ty-header @38.1-38.13 (name "FooMultiline"))
+		(ty-header @38.1-38.13 (name "fooMultiline"))
 		(ty-tuple @38.16-41.2
-			(ty @39.2-39.5 (name "bar"))
-			(ty @40.2-40.5 (name "baz"))))
+			(ty @39.2-39.5 (name "Bar"))
+			(ty @40.2-40.5 (name "Baz"))))
 	(s-alias-decl @43.1-43.43
-		(ty-header @43.1-43.8 (name "Some")
+		(ty-header @43.1-43.8 (name "some")
 			(ty-args
 				(ty-var @43.6-43.7 (name "a"))))
 		(ty-record @43.11-43.43
 			(field (field "foo")
-				(ty-apply @43.19-43.24 (symbol "ok")
+				(ty-apply @43.19-43.24 (symbol "Ok")
 					(ty-var @43.22-43.23 (name "a"))))
 			(field (field "bar")
-				(ty @43.32-43.41 (name "something")))))
+				(ty @43.32-43.41 (name "Something")))))
 	(s-alias-decl @44.1-47.2
-		(ty-header @44.1-44.10 (name "SomeMl")
+		(ty-header @44.1-44.10 (name "someMl")
 			(ty-args
 				(ty-var @44.8-44.9 (name "a"))))
 		(ty-record @44.13-47.2
 			(field (field "foo")
-				(ty-apply @45.8-45.13 (symbol "ok")
+				(ty-apply @45.8-45.13 (symbol "Ok")
 					(ty-var @45.11-45.12 (name "a"))))
 			(field (field "bar")
-				(ty @46.8-46.17 (name "something")))))
+				(ty @46.8-46.17 (name "Something")))))
 	(s-alias-decl @49.1-54.2
-		(ty-header @49.1-49.17 (name "SomeMultiline")
+		(ty-header @49.1-49.17 (name "someMultiline")
 			(ty-args
 				(ty-var @49.15-49.16 (name "a"))))
 		(ty-record @49.20-54.2
 			(field (field "foo")
-				(ty-apply @52.4-52.9 (symbol "ok")
+				(ty-apply @52.4-52.9 (symbol "Ok")
 					(ty-var @52.7-52.8 (name "a"))))
 			(field (field "bar")
-				(ty @53.8-53.17 (name "something")))))
+				(ty @53.8-53.17 (name "Something")))))
 	(s-alias-decl @56.1-56.27
-		(ty-header @56.1-56.9 (name "Maybe")
+		(ty-header @56.1-56.9 (name "maybe")
 			(ty-args
 				(ty-var @56.7-56.8 (name "a"))))
 		(ty-tag-union @56.12-56.27
-			(ty-apply @56.13-56.20 (symbol "some")
+			(ty-apply @56.13-56.20 (symbol "Some")
 				(ty-var @56.18-56.19 (name "a")))
-			(ty @56.22-56.26 (name "none"))))
+			(ty @56.22-56.26 (name "None"))))
 	(s-alias-decl @58.1-61.2
-		(ty-header @58.1-58.18 (name "MaybeMultiline")
+		(ty-header @58.1-58.18 (name "maybeMultiline")
 			(ty-args
 				(ty-var @58.16-58.17 (name "a"))))
 		(ty-tag-union @58.21-61.2
-			(ty-apply @59.2-59.9 (symbol "some")
+			(ty-apply @59.2-59.9 (symbol "Some")
 				(ty-var @59.7-59.8 (name "a")))
-			(ty @60.2-60.6 (name "none"))))
+			(ty @60.2-60.6 (name "None"))))
 	(s-alias-decl @63.1-63.38
-		(ty-header @63.1-63.12 (name "SomeFunc")
+		(ty-header @63.1-63.12 (name "someFunc")
 			(ty-args
 				(ty-var @63.10-63.11 (name "a"))))
 		(ty-fn @63.15-63.38 (effectful false)
-			(ty-apply @63.15-63.23 (symbol "maybe")
+			(ty-apply @63.15-63.23 (symbol "Maybe")
 				(ty-var @63.21-63.22 (name "a")))
 			(ty-var @63.25-63.26 (name "a"))
-			(ty-apply @63.30-63.38 (symbol "maybe")
+			(ty-apply @63.30-63.38 (symbol "Maybe")
 				(ty-var @63.36-63.37 (name "a")))))
 	(s-import @4.1-4.42 (module "pf.Stdout") (qualifier "pf")
 		(exposes
-			(exposed (name "Line!") (wildcard false))
-			(exposed (name "Write!") (wildcard false))))
+			(exposed (name "line!") (wildcard false))
+			(exposed (name "write!") (wildcard false))))
 	(s-import @6.1-12.4 (module "mALFORMED_IMPORT") (qualifier "pf")
 		(exposes
-			(exposed (name "Line!") (wildcard false))
-			(exposed (name "Write!") (wildcard false))))
+			(exposed (name "line!") (wildcard false))
+			(exposed (name "write!") (wildcard false))))
 	(s-import @14.1-14.82 (module "pkg.Something") (qualifier "pkg")
 		(exposes
-			(exposed (name "Func") (alias "function") (wildcard false))
-			(exposed (name "Type") (alias "valueCategory") (wildcard false))
-			(exposed (name "Custom") (wildcard true))))
-	(s-import @16.1-16.27 (module "badName") (alias "goodName")
+			(exposed (name "func") (alias "function") (wildcard false))
+			(exposed (name "type") (alias "valueCategory") (wildcard false))
+			(exposed (name "custom") (wildcard true))))
+	(s-import @16.1-16.27 (module "BadName") (alias "GoodName")
 		(exposes))
-	(s-import @17.1-20.20 (module "badNameMultiline") (alias "goodNameMultiline")
+	(s-import @17.1-20.20 (module "BadNameMultiline") (alias "GoodNameMultiline")
 		(exposes))
 	(s-expect @140.1-141.11
 		(e-binop @141.2-141.11 (op "eq")
@@ -2400,41 +2400,41 @@ expect {
 		(patt @199.1-199.6 (type "{}")))
 	(type_decls
 		(alias @22.1-22.41 (type "Map(a, b)")
-			(ty-header @22.1-22.10 (name "Map")
+			(ty-header @22.1-22.10 (name "map")
 				(ty-args
 					(ty-var @22.5-22.6 (name "a"))
 					(ty-var @22.8-22.9 (name "b")))))
 		(alias @23.1-34.5 (type "MapML(a, b)")
-			(ty-header @23.1-26.2 (name "MapML")
+			(ty-header @23.1-26.2 (name "mapML")
 				(ty-args
 					(ty-var @24.2-24.3 (name "a"))
 					(ty-var @25.2-25.3 (name "b")))))
 		(alias @36.1-36.17 (type "Foo")
-			(ty-header @36.1-36.4 (name "Foo")))
+			(ty-header @36.1-36.4 (name "foo")))
 		(alias @38.1-41.2 (type "FooMultiline")
-			(ty-header @38.1-38.13 (name "FooMultiline")))
+			(ty-header @38.1-38.13 (name "fooMultiline")))
 		(alias @43.1-43.43 (type "Some(a)")
-			(ty-header @43.1-43.8 (name "Some")
+			(ty-header @43.1-43.8 (name "some")
 				(ty-args
 					(ty-var @43.6-43.7 (name "a")))))
 		(alias @44.1-47.2 (type "SomeMl(a)")
-			(ty-header @44.1-44.10 (name "SomeMl")
+			(ty-header @44.1-44.10 (name "someMl")
 				(ty-args
 					(ty-var @44.8-44.9 (name "a")))))
 		(alias @49.1-54.2 (type "SomeMultiline(a)")
-			(ty-header @49.1-49.17 (name "SomeMultiline")
+			(ty-header @49.1-49.17 (name "someMultiline")
 				(ty-args
 					(ty-var @49.15-49.16 (name "a")))))
 		(alias @56.1-56.27 (type "Maybe(a)")
-			(ty-header @56.1-56.9 (name "Maybe")
+			(ty-header @56.1-56.9 (name "maybe")
 				(ty-args
 					(ty-var @56.7-56.8 (name "a")))))
 		(alias @58.1-61.2 (type "MaybeMultiline(a)")
-			(ty-header @58.1-58.18 (name "MaybeMultiline")
+			(ty-header @58.1-58.18 (name "maybeMultiline")
 				(ty-args
 					(ty-var @58.16-58.17 (name "a")))))
 		(alias @63.1-63.38 (type "SomeFunc(a)")
-			(ty-header @63.1-63.12 (name "SomeFunc")
+			(ty-header @63.1-63.12 (name "someFunc")
 				(ty-args
 					(ty-var @63.10-63.11 (name "a"))))))
 	(expressions

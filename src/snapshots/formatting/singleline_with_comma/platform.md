@@ -49,8 +49,8 @@ KwProvides(6:2-6:10),OpenSquare(6:11-6:12),LowerIdent(6:12-6:15),Comma(6:15-6:16
 (file @1.1-6.22
 	(platform @1.1-6.22 (name "pf")
 		(rigids @2.11-2.22
-			(exposed-upper-ident @2.13-2.15 (text "r1"))
-			(exposed-upper-ident @2.17-2.19 (text "r2")))
+			(exposed-upper-ident @2.13-2.15 (text "R1"))
+			(exposed-upper-ident @2.17-2.19 (text "R2")))
 		(ty-record @2.23-2.56
 			(anno-record-field @2.25-2.38 (name "r1")
 				(ty-fn @2.30-2.38
@@ -61,8 +61,8 @@ KwProvides(6:2-6:10),OpenSquare(6:11-6:12),LowerIdent(6:12-6:15),Comma(6:15-6:16
 					(ty @2.45-2.47 (name "R1"))
 					(ty @2.51-2.53 (name "R2")))))
 		(exposes @3.10-3.19
-			(exposed-upper-ident @3.11-3.13 (text "e1"))
-			(exposed-upper-ident @3.15-3.17 (text "e2")))
+			(exposed-upper-ident @3.11-3.13 (text "E1"))
+			(exposed-upper-ident @3.15-3.17 (text "E2")))
 		(packages @4.11-4.38
 			(record-field @4.13-4.23 (name "pa1")
 				(e-string @4.18-4.23

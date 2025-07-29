@@ -91,10 +91,10 @@ main! = |_| getName({ name: "luke", age: 21 })
 				(ty-fn @3.11-3.41 (effectful false)
 					(ty-record @3.11-3.34
 						(field (field "name")
-							(ty @3.19-3.22 (name "str")))
+							(ty @3.19-3.22 (name "Str")))
 						(field (field "age")
-							(ty @3.29-3.32 (name "u64"))))
-					(ty @3.38-3.41 (name "str"))))))
+							(ty @3.29-3.32 (name "U64"))))
+					(ty @3.38-3.41 (name "Str"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-closure @6.9-6.44

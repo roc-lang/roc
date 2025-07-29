@@ -110,26 +110,26 @@ NO CHANGE
 			(e-literal @8.10-8.14 (string "test")))
 		(annotation @8.1-8.6
 			(declared-type
-				(ty @7.9-7.19 (name "badDerived")))))
+				(ty @7.9-7.19 (name "BadDerived")))))
 	(d-let
 		(p-assign @15.1-15.10 (ident "goodValue"))
 		(e-string @15.13-15.19
 			(e-literal @15.14-15.18 (string "test")))
 		(annotation @15.1-15.10
 			(declared-type
-				(ty @14.13-14.24 (name "goodDerived")))))
+				(ty @14.13-14.24 (name "GoodDerived")))))
 	(s-nominal-decl @3.1-3.13
-		(ty-header @3.1-3.8 (name "BadBase"))
+		(ty-header @3.1-3.8 (name "badBase"))
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @5.1-5.22
-		(ty-header @5.1-5.11 (name "BadDerived"))
-		(ty @5.15-5.22 (name "badBase")))
+		(ty-header @5.1-5.11 (name "badDerived"))
+		(ty @5.15-5.22 (name "BadBase")))
 	(s-nominal-decl @10.1-10.16
-		(ty-header @10.1-10.9 (name "GoodBase"))
-		(ty @10.13-10.16 (name "str")))
+		(ty-header @10.1-10.9 (name "goodBase"))
+		(ty @10.13-10.16 (name "Str")))
 	(s-nominal-decl @12.1-12.24
-		(ty-header @12.1-12.12 (name "GoodDerived"))
-		(ty @12.16-12.24 (name "goodBase"))))
+		(ty-header @12.1-12.12 (name "goodDerived"))
+		(ty @12.16-12.24 (name "GoodBase"))))
 ~~~
 # TYPES
 ~~~clojure
@@ -139,13 +139,13 @@ NO CHANGE
 		(patt @15.1-15.10 (type "Error")))
 	(type_decls
 		(nominal @3.1-3.13 (type "Error")
-			(ty-header @3.1-3.8 (name "BadBase")))
+			(ty-header @3.1-3.8 (name "badBase")))
 		(nominal @5.1-5.22 (type "Error")
-			(ty-header @5.1-5.11 (name "BadDerived")))
+			(ty-header @5.1-5.11 (name "badDerived")))
 		(nominal @10.1-10.16 (type "GoodBase")
-			(ty-header @10.1-10.9 (name "GoodBase")))
+			(ty-header @10.1-10.9 (name "goodBase")))
 		(nominal @12.1-12.24 (type "Error")
-			(ty-header @12.1-12.12 (name "GoodDerived"))))
+			(ty-header @12.1-12.12 (name "goodDerived"))))
 	(expressions
 		(expr @8.9-8.15 (type "Error"))
 		(expr @15.13-15.19 (type "Error"))))

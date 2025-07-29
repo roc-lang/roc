@@ -58,7 +58,7 @@ CloseCurly(9:2-9:3),EndOfFile(9:3-9:3),
 		(exposes @2.2-5.3
 			(exposed-lower-ident @3.3-3.12
 				(text "something"))
-			(exposed-upper-ident @4.3-4.11 (text "someType")))
+			(exposed-upper-ident @4.3-4.11 (text "SomeType")))
 		(packages @6.2-9.3
 			(record-field @7.3-7.25 (name "somePkg")
 				(e-string @7.12-7.25

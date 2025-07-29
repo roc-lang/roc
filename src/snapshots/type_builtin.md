@@ -25,8 +25,8 @@ UpperIdent(4:1-4:9),OpColon(4:10-4:11),UpperIdent(4:12-4:15),EndOfFile(4:15-4:15
 (file @1.1-4.15
 	(module @1.1-1.28
 		(exposes @1.8-1.28
-			(exposed-upper-ident @1.9-1.17 (text "myNumber"))
-			(exposed-upper-ident @1.19-1.27 (text "myString"))))
+			(exposed-upper-ident @1.9-1.17 (text "MyNumber"))
+			(exposed-upper-ident @1.19-1.27 (text "MyString"))))
 	(statements
 		(s-type-decl @3.1-3.15
 			(header @3.1-3.9 (name "MyNumber")
@@ -45,11 +45,11 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-alias-decl @3.1-3.15
-		(ty-header @3.1-3.9 (name "MyNumber"))
-		(ty @3.12-3.15 (name "u64")))
+		(ty-header @3.1-3.9 (name "myNumber"))
+		(ty @3.12-3.15 (name "U64")))
 	(s-alias-decl @4.1-4.15
-		(ty-header @4.1-4.9 (name "MyString"))
-		(ty @4.12-4.15 (name "str"))))
+		(ty-header @4.1-4.9 (name "myString"))
+		(ty @4.12-4.15 (name "Str"))))
 ~~~
 # TYPES
 ~~~clojure
@@ -57,8 +57,8 @@ NO CHANGE
 	(defs)
 	(type_decls
 		(alias @3.1-3.15 (type "MyNumber")
-			(ty-header @3.1-3.9 (name "MyNumber")))
+			(ty-header @3.1-3.9 (name "myNumber")))
 		(alias @4.1-4.15 (type "MyString")
-			(ty-header @4.1-4.9 (name "MyString"))))
+			(ty-header @4.1-4.9 (name "myString"))))
 	(expressions))
 ~~~

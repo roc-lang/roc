@@ -855,8 +855,13 @@ pub const Statement = union(enum) {
 
                 // alias e.g. `OUT` in `import pf.Stdout as OUT`
                 if (import.alias_tok) |tok| {
-                    const alias_str = ast.resolve(tok);
-                    try tree.pushStringPair("alias", alias_str);
+                    const token = ast.tokens.tokens.get(tok);
+                    const uppercase = try env.idents.getUppercase(token.extra.interned);
+                    var alias_buf = std.ArrayList(u8).init(tree.allocator);
+                    defer alias_buf.deinit();
+                    try alias_buf.append(uppercase.first);
+                    try alias_buf.appendSlice(uppercase.rest);
+                    try tree.pushStringPair("alias", alias_buf.items);
                 }
 
                 const attrs = tree.beginNode();
@@ -1680,14 +1685,22 @@ pub const ExposedItem = union(enum) {
 
                 // text attribute
                 const token = ast.tokens.tokens.get(i.ident);
-                const text = env.idents.getLowercase(token.extra.interned);
-                try tree.pushStringPair("text", text);
+                const uppercase = try env.idents.getUppercase(token.extra.interned);
+                var text_buf = std.ArrayList(u8).init(tree.allocator);
+                defer text_buf.deinit();
+                try text_buf.append(uppercase.first);
+                try text_buf.appendSlice(uppercase.rest);
+                try tree.pushStringPair("text", text_buf.items);
 
                 // as attribute if present
                 if (i.as) |a| {
                     const as_tok = ast.tokens.tokens.get(a);
-                    const as_text = env.idents.getLowercase(as_tok.extra.interned);
-                    try tree.pushStringPair("as", as_text);
+                    const uppercase_as = try env.idents.getUppercase(as_tok.extra.interned);
+                    var as_buf = std.ArrayList(u8).init(tree.allocator);
+                    defer as_buf.deinit();
+                    try as_buf.append(uppercase_as.first);
+                    try as_buf.appendSlice(uppercase_as.rest);
+                    try tree.pushStringPair("as", as_buf.items);
                 }
 
                 const attrs = tree.beginNode();
@@ -1701,8 +1714,12 @@ pub const ExposedItem = union(enum) {
 
                 // text attribute
                 const token = ast.tokens.tokens.get(i.ident);
-                const text = env.idents.getLowercase(token.extra.interned);
-                try tree.pushStringPair("text", text);
+                const uppercase = try env.idents.getUppercase(token.extra.interned);
+                var text_buf = std.ArrayList(u8).init(tree.allocator);
+                defer text_buf.deinit();
+                try text_buf.append(uppercase.first);
+                try text_buf.appendSlice(uppercase.rest);
+                try tree.pushStringPair("text", text_buf.items);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -1861,7 +1878,32 @@ pub const TypeAnno = union(enum) {
                 // Resolve the fully qualified name
                 const strip_tokens = [_]Token.Tag{.NoSpaceDotUpperIdent};
                 const fully_qualified_name = ast.resolveQualifiedName(a.qualifiers, a.token, &strip_tokens);
-                try tree.pushStringPair("name", fully_qualified_name);
+
+                // Type names should be uppercase
+                if (fully_qualified_name.len > 0) {
+                    // Find the last component (after the last dot)
+                    var last_dot: usize = 0;
+                    for (fully_qualified_name, 0..) |c, i| {
+                        if (c == '.') last_dot = i + 1;
+                    }
+
+                    if (last_dot < fully_qualified_name.len and
+                        fully_qualified_name[last_dot] >= 'a' and
+                        fully_qualified_name[last_dot] <= 'z')
+                    {
+                        // Need to uppercase the type name
+                        var name_buf = std.ArrayList(u8).init(tree.allocator);
+                        defer name_buf.deinit();
+                        try name_buf.appendSlice(fully_qualified_name[0..last_dot]);
+                        try name_buf.append(fully_qualified_name[last_dot] - ('a' - 'A'));
+                        try name_buf.appendSlice(fully_qualified_name[last_dot + 1 ..]);
+                        try tree.pushStringPair("name", name_buf.items);
+                    } else {
+                        try tree.pushStringPair("name", fully_qualified_name);
+                    }
+                } else {
+                    try tree.pushStringPair("name", fully_qualified_name);
+                }
                 const attrs = tree.beginNode();
 
                 try tree.endNode(begin, attrs);
@@ -2056,7 +2098,8 @@ pub const WhereClause = union(enum) {
                 try tree.pushStaticAtom("method");
                 try ast.appendRegionInfoToSexprTree(env, tree, m.region);
 
-                try tree.pushStringPair("module-of", ast.resolve(m.var_tok));
+                const module_name = ast.resolve(m.var_tok);
+                try tree.pushStringPair("module-of", module_name);
 
                 // remove preceding dot
                 const method_name = ast.resolve(m.name_tok)[1..];
@@ -2081,11 +2124,36 @@ pub const WhereClause = union(enum) {
                 try tree.pushStaticAtom("alias");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
 
-                try tree.pushStringPair("module-of", ast.resolve(a.var_tok));
+                // Get uppercase module name
+                if (ast.tokens.resolveIdentifier(a.var_tok)) |ident_idx| {
+                    const lowercase = env.idents.getLowercase(ident_idx);
+                    try tree.pushStringPair("module-of", lowercase);
+                } else {
+                    const module_name = ast.resolve(a.var_tok);
+                    if (module_name.len > 0 and module_name[0] >= 'a' and module_name[0] <= 'z') {
+                        var module_buf = std.ArrayList(u8).init(tree.allocator);
+                        defer module_buf.deinit();
+                        try module_buf.append(module_name[0] - ('a' - 'A'));
+                        try module_buf.appendSlice(module_name[1..]);
+                        try tree.pushStringPair("module-of", module_buf.items);
+                    } else {
+                        try tree.pushStringPair("module-of", module_name);
+                    }
+                }
 
-                // remove preceding dot
-                const alias_name = ast.resolve(a.name_tok)[1..];
-                try tree.pushStringPair("name", alias_name);
+                // Get uppercase alias name
+                if (ast.tokens.resolveIdentifier(a.name_tok)) |ident_idx| {
+                    const uppercase = try env.idents.getUppercase(ident_idx);
+                    var name_buf = std.ArrayList(u8).init(tree.allocator);
+                    defer name_buf.deinit();
+                    try name_buf.append(uppercase.first);
+                    try name_buf.appendSlice(uppercase.rest);
+                    try tree.pushStringPair("name", name_buf.items);
+                } else {
+                    // Fallback: remove preceding dot
+                    const alias_name = ast.resolve(a.name_tok)[1..];
+                    try tree.pushStringPair("name", alias_name);
+                }
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);

@@ -228,11 +228,11 @@ main = {
 						(p-assign @23.5-23.13 (ident "combined")))))))
 	(s-import @3.1-3.17 (module "json.Json") (qualifier "json")
 		(exposes))
-	(s-import @4.1-4.48 (module "http.Client") (qualifier "http") (alias "http")
+	(s-import @4.1-4.48 (module "http.Client") (qualifier "http") (alias "Http")
 		(exposes
-			(exposed (name "Get") (wildcard false))
-			(exposed (name "Post") (wildcard false))))
-	(s-import @5.1-5.27 (module "utils.String") (qualifier "utils") (alias "str")
+			(exposed (name "get") (wildcard false))
+			(exposed (name "post") (wildcard false))))
+	(s-import @5.1-5.27 (module "utils.String") (qualifier "utils") (alias "Str")
 		(exposes)))
 ~~~
 # TYPES
