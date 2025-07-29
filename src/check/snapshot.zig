@@ -387,10 +387,6 @@ pub const Store = struct {
         return self.record_fields.sliceRange(range);
     }
 
-    // pub fn getTagsSlice(self: *const Self, range: SnapshotTagSafeList.Range) []const SnapshotTag {
-    //     return self.tags.sliceRange(range);
-    // }
-
     pub fn getContent(self: *const Self, idx: SnapshotContentIdx) SnapshotContent {
         return self.contents.get(idx).*;
     }
