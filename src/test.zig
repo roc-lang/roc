@@ -8,8 +8,8 @@ const std = @import("std");
 const testing = std.testing;
 
 test {
-    // TODO FIX THIS -- this is not running the tests in base
     testing.refAllDecls(@import("base"));
+    testing.refAllDecls(@import("base/test/base_test.zig"));
 
     testing.refAllDeclsRecursive(@import("builtins"));
 
