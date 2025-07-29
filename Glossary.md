@@ -678,4 +678,20 @@ TODO
 
 TODO
 
-TODO
+## Algebraic Data Type
+
+(ADT)
+
+A custom type that can combine these simpler types:
+- Sum Types: a value can be one of several options, for example, with [Result](https://www.roc-lang.org/builtins/Result/) it can be either:
+  - `Ok(something)`
+  - `Err(some_error)`
+- Product Types: multiple pieces of data together, for example, A `Person` record might contain both a `name` and an `age`.
+
+An example of a combination:
+```roc
+NonEmptyList : [Head { x : U64, y : U64 }, Tail (List { x : U64, y : U64 })]
+```
+A `NonEmptyList` value has to be of the type `Head` or `Tail` (Sum) and `{ x : U64, y : U64 }` combines two `U64` (Product).
+
+Note: a sum or product type by itself is also an Algebraic Data Type.
