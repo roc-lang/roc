@@ -3,16 +3,16 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const check = @import("check");
+const Check = @import("check");
 
 const TypesStore = types.TypesStore;
 const Content = types.Content;
 const Var = types.Var;
 const Num = types.Num;
-const unify = check.unify;
-const problem = check.problem;
-const snapshot = check.snapshot;
-const occurs = check.occurs;
+const unify = Check.unify;
+const problem = Check.problem;
+const snapshot = Check.snapshot;
+const occurs = Check.occurs;
 
 test "integer literal 255 fits in U8" {
     return error.SkipZigTest;

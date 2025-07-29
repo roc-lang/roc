@@ -8,7 +8,7 @@ const parse = @import("parse");
 const reporting = @import("reporting");
 const compile = @import("compile");
 const Can = @import("can");
-const Solver = @import("check");
+const Check = @import("check");
 const tracy = @import("tracy");
 
 const Filesystem = @import("fs/Filesystem.zig");
@@ -20,7 +20,7 @@ const CacheManager = cache_mod.CacheManager;
 const CacheConfig = cache_mod.CacheConfig;
 const CacheResult = cache_mod.CacheResult;
 const CacheHit = cache_mod.CacheHit;
-const types_problem_mod = Solver.problem;
+const types_problem_mod = Check.problem;
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
@@ -275,7 +275,7 @@ fn processSourceInternal(
 
     // Type checking
     const empty_modules: []const *ModuleEnv = &.{};
-    var solver = try Solver.init(gpa, &cir.types, cir, empty_modules, &cir.store.regions);
+    var solver = try Check.init(gpa, &cir.types, cir, empty_modules, &cir.store.regions);
     defer solver.deinit();
 
     // Check for type errors

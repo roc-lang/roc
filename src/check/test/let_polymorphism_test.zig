@@ -8,13 +8,13 @@ const types = @import("types");
 const parse = @import("parse");
 const compile = @import("compile");
 
-const check_types = @import("check");
+const Check = @import("check");
 
 const TypesStore = types.Store;
 const ModuleEnv = compile.ModuleEnv;
 const testing = std.testing;
 const test_allocator = testing.allocator;
-const instantiate = check_types.instantiate;
+const instantiate = Check.instantiate;
 
 const TestEnv = struct {
     module_env: *ModuleEnv,

@@ -13,7 +13,7 @@ const compile = @import("compile");
 const types = @import("types");
 const reporting = @import("reporting");
 const Can = @import("can");
-const Solver = @import("check");
+const Check = @import("check");
 
 const cache = @import("cache/mod.zig");
 const fmt = @import("fmt.zig");
@@ -24,7 +24,7 @@ const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const AST = parse.AST;
 const Report = reporting.Report;
-const types_problem_mod = Solver.problem;
+const types_problem_mod = Check.problem;
 const tokenize = parse.tokenize;
 const parallel = base.parallel;
 
@@ -439,7 +439,7 @@ fn generateAllReports(
     allocator: std.mem.Allocator,
     parse_ast: *AST,
     can_ir: *ModuleEnv,
-    solver: *Solver,
+    solver: *Check,
     snapshot_path: []const u8,
     module_env: *ModuleEnv,
 ) !std.ArrayList(reporting.Report) {
@@ -1076,7 +1076,7 @@ fn processSnapshotContent(
 
     // Types
     const empty_modules: []const *ModuleEnv = &.{};
-    var solver = try Solver.init(
+    var solver = try Check.init(
         allocator,
         &can_ir.types,
         can_ir,

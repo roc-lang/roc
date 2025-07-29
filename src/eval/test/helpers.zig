@@ -5,7 +5,7 @@ const types = @import("types");
 const base = @import("base");
 const compile = @import("compile");
 const Can = @import("can");
-const check_types = @import("check");
+const Check = @import("check");
 
 const eval = @import("../interpreter.zig");
 const stack = @import("../stack.zig");
@@ -218,7 +218,7 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
     can: *Can,
-    checker: *check_types,
+    checker: *Check,
     expr_idx: ModuleEnv.Expr.Idx,
 } {
     // Initialize the ModuleEnv
@@ -251,8 +251,8 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
             .feature = try module_env.strings.insert(allocator, "canonicalization failed"),
             .region = base.Region.zero(),
         } });
-        const checker = try allocator.create(check_types);
-        checker.* = try check_types.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions);
+        const checker = try allocator.create(Check);
+        checker.* = try Check.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions);
         return .{
             .module_env = module_env,
             .parse_ast = parse_ast,
@@ -265,8 +265,8 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
     };
 
     // Create type checker
-    const checker = try allocator.create(check_types);
-    checker.* = try check_types.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions);
+    const checker = try allocator.create(Check);
+    checker.* = try Check.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions);
 
     // Type check the expression
     _ = try checker.checkExpr(canonical_expr_idx.get_idx());

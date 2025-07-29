@@ -4,17 +4,17 @@ const std = @import("std");
 const base = @import("base");
 const types_mod = @import("types");
 const compile = @import("compile");
-const check_types = @import("check");
+const Check = @import("check");
 
 const ModuleEnv = compile.ModuleEnv;
 const CIR = ModuleEnv.CIR;
 const Var = types_mod.Var;
 const Content = types_mod.Content;
 const Ident = base.Ident;
-const unifier = check_types.unifier;
-const problem = check_types.problem;
-const snapshot = check_types.snapshot;
-const occurs = check_types.occurs;
+const unifier = Check.unifier;
+const problem = Check.problem;
+const snapshot = Check.snapshot;
+const occurs = Check.occurs;
 const testing = std.testing;
 
 test "cross-module type checking - monomorphic function" {
@@ -68,7 +68,7 @@ test "cross-module type checking - monomorphic function" {
     try modules.append(module_b_cir);
 
     // Type check module B
-    var checker = try check_types.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
+    var checker = try Check.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
     defer checker.deinit();
 
     _ = try checker.checkExpr(external_lookup_expr);
@@ -145,7 +145,7 @@ test "cross-module type checking - polymorphic function" {
     try modules.append(module_b_cir);
 
     // Type check module B
-    var checker = try check_types.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
+    var checker = try Check.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
     defer checker.deinit();
 
     _ = try checker.checkExpr(external_lookup_expr);
@@ -238,7 +238,7 @@ test "cross-module type checking - record type" {
     try modules.append(module_b_cir);
 
     // Type check module B
-    var checker = try check_types.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
+    var checker = try Check.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
     defer checker.deinit();
 
     _ = try checker.checkExpr(external_lookup_expr);
@@ -324,7 +324,7 @@ test "cross-module type checking - type mismatch error" {
     try modules.append(module_b_cir);
 
     // Type check module B
-    var checker = try check_types.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
+    var checker = try Check.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
     defer checker.deinit();
 
     _ = try checker.checkExpr(external_lookup_expr);
@@ -410,7 +410,7 @@ test "cross-module type checking - polymorphic instantiation" {
     try modules.append(module_b_cir);
 
     // Type check module B
-    var checker = try check_types.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
+    var checker = try Check.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
     defer checker.deinit();
 
     _ = try checker.checkExpr(external_lookup_expr);
@@ -489,7 +489,7 @@ test "cross-module type checking - preserves module A types" {
     try modules.append(module_b_cir);
 
     // Type check module B
-    var checker = try check_types.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
+    var checker = try Check.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
     defer checker.deinit();
 
     _ = try checker.checkExpr(external_lookup_expr);
@@ -578,13 +578,13 @@ test "cross-module type checking - three module chain monomorphic" {
     try modules.append(module_c_cir);
 
     // Type check module B
-    var checker_b = try check_types.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
+    var checker_b = try Check.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
     defer checker_b.deinit();
 
     _ = try checker_b.checkExpr(b_lookup_expr);
 
     // Type check module C
-    var checker_c = try check_types.init(allocator, &module_c_env.types, module_c_cir, modules.items, &module_c_cir.store.regions);
+    var checker_c = try Check.init(allocator, &module_c_env.types, module_c_cir, modules.items, &module_c_cir.store.regions);
     defer checker_c.deinit();
 
     _ = try checker_c.checkExpr(c_lookup_expr);
@@ -675,13 +675,13 @@ test "cross-module type checking - three module chain polymorphic" {
     try modules.append(module_c_cir);
 
     // Type check module B
-    var checker_b = try check_types.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
+    var checker_b = try Check.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
     defer checker_b.deinit();
 
     _ = try checker_b.checkExpr(b_lookup_expr);
 
     // Type check module C
-    var checker_c = try check_types.init(allocator, &module_c_env.types, module_c_cir, modules.items, &module_c_cir.store.regions);
+    var checker_c = try Check.init(allocator, &module_c_env.types, module_c_cir, modules.items, &module_c_cir.store.regions);
     defer checker_c.deinit();
 
     _ = try checker_c.checkExpr(c_lookup_expr);
@@ -804,14 +804,14 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     try modules.append(module_c_cir);
 
     // Type check module B
-    var checker_b = try check_types.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
+    var checker_b = try Check.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
     defer checker_b.deinit();
 
     _ = try checker_b.checkExpr(b_lookup_expr);
     _ = try checker_b.checkExpr(map_i32_expr_idx);
 
     // Type check module C
-    var checker_c = try check_types.init(allocator, &module_c_env.types, module_c_cir, modules.items, &module_c_cir.store.regions);
+    var checker_c = try Check.init(allocator, &module_c_env.types, module_c_cir, modules.items, &module_c_cir.store.regions);
     defer checker_c.deinit();
 
     _ = try checker_c.checkExpr(c_lookup_expr);
@@ -950,13 +950,13 @@ test "cross-module type checking - record type chain" {
     try modules.append(module_c_cir);
 
     // Type check module B
-    var checker_b = try check_types.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
+    var checker_b = try Check.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
     defer checker_b.deinit();
 
     _ = try checker_b.checkExpr(b_lookup_expr);
 
     // Type check module C
-    var checker_c = try check_types.init(allocator, &module_c_env.types, module_c_cir, modules.items, &module_c_cir.store.regions);
+    var checker_c = try Check.init(allocator, &module_c_env.types, module_c_cir, modules.items, &module_c_cir.store.regions);
     defer checker_c.deinit();
 
     _ = try checker_c.checkExpr(c_lookup_expr);
@@ -1092,14 +1092,14 @@ test "cross-module type checking - polymorphic record chain" {
     try modules.append(module_c_cir);
 
     // Type check module B
-    var checker_b = try check_types.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
+    var checker_b = try Check.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
     defer checker_b.deinit();
 
     _ = try checker_b.checkExpr(b_lookup_expr);
     _ = try checker_b.checkExpr(str_record_expr_idx);
 
     // Type check module C
-    var checker_c = try check_types.init(allocator, &module_c_env.types, module_c_cir, modules.items, &module_c_cir.store.regions);
+    var checker_c = try Check.init(allocator, &module_c_env.types, module_c_cir, modules.items, &module_c_cir.store.regions);
     defer checker_c.deinit();
 
     _ = try checker_c.checkExpr(c_lookup_expr);
@@ -1241,14 +1241,14 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     try modules.append(module_c_cir);
 
     // Type check module B
-    var checker_b = try check_types.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
+    var checker_b = try Check.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
     defer checker_b.deinit();
 
     _ = try checker_b.checkExpr(b_lookup_expr);
     _ = try checker_b.checkExpr(compose_str_expr_idx);
 
     // Type check module C
-    var checker_c = try check_types.init(allocator, &module_c_env.types, module_c_cir, modules.items, &module_c_cir.store.regions);
+    var checker_c = try Check.init(allocator, &module_c_env.types, module_c_cir, modules.items, &module_c_cir.store.regions);
     defer checker_c.deinit();
 
     _ = try checker_c.checkExpr(c_lookup_expr);
@@ -1393,7 +1393,7 @@ test "cross-module type checking - type mismatch with proper error message" {
     try modules.append(module_a_cir);
 
     // Type check module B
-    var checker = try check_types.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
+    var checker = try Check.init(allocator, &module_b_env.types, module_b_cir, modules.items, &module_b_cir.store.regions);
     defer checker.deinit();
 
     // Check the import expression - this will copy the type from module A

@@ -3,12 +3,12 @@
 const std = @import("std");
 const base = @import("base");
 const types_mod = @import("types");
-const check = @import("check");
+const Check = @import("check");
 
 const Ident = base.Ident;
 const testing = std.testing;
 const test_allocator = testing.allocator;
-const snapshot = check.snapshot;
+const snapshot = Check.snapshot;
 
 test "nominal type origin - displays origin in snapshot writer" {
     // Create a simple test environment

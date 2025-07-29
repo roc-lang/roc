@@ -6,7 +6,7 @@ const base = @import("base");
 const parse = @import("parse");
 const Can = @import("can");
 const compile = @import("compile");
-const check_types = @import("check");
+const Check = @import("check");
 
 const ModuleEnv = compile.ModuleEnv;
 const CanonicalizedExpr = Can.CanonicalizedExpr;
@@ -19,7 +19,7 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
     parse_ast: *parse.AST,
     cir: *ModuleEnv,
     can: *Can,
-    checker: *check_types,
+    checker: *Check,
     has_type_errors: bool,
 } {
     // Set up module environment
@@ -56,10 +56,10 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
     }
 
     // Type check - continue even if there are parse errors
-    const checker = try allocator.create(check_types);
+    const checker = try allocator.create(Check);
     const empty_modules: []const *ModuleEnv = &.{};
 
-    checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules, &cir.store.regions);
+    checker.* = try Check.init(allocator, &module_env.types, cir, empty_modules, &cir.store.regions);
 
     // For expressions, check the expression directly
     if (canon_expr_idx) |expr_idx| {
@@ -85,7 +85,7 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
     parse_ast: *parse.AST,
     cir: *ModuleEnv,
     can: *Can,
-    checker: *check_types,
+    checker: *Check,
     has_type_errors: bool,
 } {
     // Set up module environment
@@ -131,10 +131,10 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
     try can.canonicalizeFile();
 
     // Type check - continue even if there are parse errors
-    const checker = try allocator.create(check_types);
+    const checker = try allocator.create(Check);
     const empty_modules: []const *ModuleEnv = &.{};
 
-    checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules, &cir.store.regions);
+    checker.* = try Check.init(allocator, &module_env.types, cir, empty_modules, &cir.store.regions);
 
     try checker.checkDefs();
 
@@ -157,7 +157,7 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
     parse_ast: *parse.AST,
     cir: *ModuleEnv,
     can: *Can,
-    checker: *check_types,
+    checker: *Check,
     has_type_errors: bool,
 } {
     // Set up module environment
@@ -194,10 +194,10 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
     }
 
     // Type check - continue even if there are parse errors
-    const checker = try allocator.create(check_types);
+    const checker = try allocator.create(Check);
     const empty_modules: []const *ModuleEnv = &.{};
 
-    checker.* = try check_types.init(allocator, &module_env.types, cir, empty_modules, &cir.store.regions);
+    checker.* = try Check.init(allocator, &module_env.types, cir, empty_modules, &cir.store.regions);
 
     // Check if we have any defs to check
     if (cir.all_defs.span.len > 0) {

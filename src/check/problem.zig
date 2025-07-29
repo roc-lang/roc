@@ -7,9 +7,9 @@ const collections = @import("collections");
 const types_mod = @import("types");
 const compile = @import("compile");
 const reporting = @import("reporting");
-const check = @import("check");
+const Check = @import("check");
 
-const snapshot = check.snapshot;
+const snapshot = Check.snapshot;
 
 const Allocator = std.mem.Allocator;
 
