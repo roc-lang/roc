@@ -199,16 +199,11 @@ pub const RocList = extern struct {
         return (ptr - 1)[0];
     }
 
-    pub fn makeUniqueExtra(self: RocList, alignment: u32, element_width: usize, elements_refcounted: bool, dec: Dec, update_mode: UpdateMode) RocList {
+    pub fn makeUniqueExtra(self: RocList, alignment: u32, element_width: usize, elements_refcounted: bool, inc: Inc, dec: Dec, update_mode: UpdateMode) RocList {
         if (update_mode == .InPlace) {
             return self;
         } else {
-            _ = dec;
-            _ = alignment;
-            _ = element_width;
-            _ = elements_refcounted;
-            // return self.makeUnique(alignment, element_width, elements_refcounted, dec);
-            @panic("TODO FIX error: member function expected 5 argument(s), found 4");
+            return self.makeUnique(alignment, element_width, elements_refcounted, inc, dec);
         }
     }
 
