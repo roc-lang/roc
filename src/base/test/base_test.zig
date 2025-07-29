@@ -95,7 +95,7 @@ test "Ident.Store empty CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -156,7 +156,7 @@ test "Ident.Store basic CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -223,7 +223,7 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -282,7 +282,7 @@ test "Ident.Store frozen state CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -358,7 +358,7 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -437,7 +437,7 @@ test "Ident.Store multiple stores CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -721,7 +721,7 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -789,7 +789,7 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -861,7 +861,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -929,7 +929,7 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -998,7 +998,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -1070,7 +1070,7 @@ test "SmallStringInterner multiple interners CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -1178,7 +1178,7 @@ test "StringLiteral.Store empty CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -1229,7 +1229,7 @@ test "StringLiteral.Store basic CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -1294,7 +1294,7 @@ test "StringLiteral.Store comprehensive CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -1351,7 +1351,7 @@ test "StringLiteral.Store frozen state CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -1417,7 +1417,7 @@ test "StringLiteral.Store multiple stores CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -1495,7 +1495,7 @@ test "StringLiteral.Store edge case indices CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
