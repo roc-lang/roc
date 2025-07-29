@@ -116,28 +116,86 @@ pub const CompactWriter = struct {
         slice: anytype,
     ) std.mem.Allocator.Error!@TypeOf(slice) {
         const SliceType = @TypeOf(slice);
-        const T = std.meta.Child(SliceType);
-        const size = @sizeOf(T);
-        const alignment = @alignOf(T);
-        const len = slice.len;
-
-        // Pad up front to the alignment of T
-        try self.padToAlignment(allocator, alignment);
-
-        const offset = self.total_bytes;
-
-        try self.iovecs.append(allocator, .{
-            .iov_base = @ptrCast(@as([*]const u8, @ptrCast(slice.ptr))),
-            .iov_len = size * len,
-        });
-        self.total_bytes += size * len;
-
-        // Return the same slice type as the input
         const info = @typeInfo(SliceType);
-        return if (info.pointer.is_const)
-            @as([*]const T, @ptrFromInt(offset))[0..len]
-        else
-            @as([*]T, @ptrFromInt(offset))[0..len];
+
+        // Handle different input types
+        switch (info) {
+            .pointer => |ptr_info| switch (ptr_info.size) {
+                .one => {
+                    // It's a pointer to an array
+                    const T = ptr_info.child;
+                    const array_info = @typeInfo(T);
+                    const elem_type = array_info.array.child;
+                    const alignment = @alignOf(elem_type);
+                    const len = array_info.array.len;
+
+                    // Pad up front to the alignment
+                    try self.padToAlignment(allocator, alignment);
+
+                    // If offset would be 0, add minimum padding to avoid null pointer
+                    if (self.total_bytes == 0) {
+                        try self.padToAlignment(allocator, ALIGNMENT);
+                        if (self.total_bytes == 0) {
+                            // Force at least ALIGNMENT bytes to avoid null
+                            try self.iovecs.append(allocator, .{
+                                .iov_base = @ptrCast(@as([*]const u8, &ZEROS)),
+                                .iov_len = ALIGNMENT,
+                            });
+                            self.total_bytes = ALIGNMENT;
+                        }
+                    }
+
+                    const offset = self.total_bytes;
+
+                    try self.iovecs.append(allocator, .{
+                        .iov_base = @ptrCast(@as([*]const u8, @ptrCast(slice))),
+                        .iov_len = @sizeOf(elem_type) * len,
+                    });
+                    self.total_bytes += @sizeOf(elem_type) * len;
+
+                    // Return a pointer to array (stored as offset)
+                    return @ptrFromInt(offset);
+                },
+                .slice => {
+                    // It's a slice
+                    const elem_type = ptr_info.child;
+                    const alignment = @alignOf(elem_type);
+                    const len = slice.len;
+
+                    // Pad up front to the alignment
+                    try self.padToAlignment(allocator, alignment);
+
+                    // If offset would be 0, add minimum padding to avoid null pointer
+                    if (self.total_bytes == 0) {
+                        try self.padToAlignment(allocator, ALIGNMENT);
+                        if (self.total_bytes == 0) {
+                            // Force at least ALIGNMENT bytes to avoid null
+                            try self.iovecs.append(allocator, .{
+                                .iov_base = @ptrCast(@as([*]const u8, &ZEROS)),
+                                .iov_len = ALIGNMENT,
+                            });
+                            self.total_bytes = ALIGNMENT;
+                        }
+                    }
+
+                    const offset = self.total_bytes;
+
+                    try self.iovecs.append(allocator, .{
+                        .iov_base = @ptrCast(@as([*]const u8, @ptrCast(slice.ptr))),
+                        .iov_len = @sizeOf(elem_type) * len,
+                    });
+                    self.total_bytes += @sizeOf(elem_type) * len;
+
+                    // Return a slice (with offset as ptr)
+                    var result: @TypeOf(slice) = undefined;
+                    result.ptr = @ptrFromInt(offset);
+                    result.len = len;
+                    return result;
+                },
+                else => @compileError("Unsupported pointer type"),
+            },
+            else => @compileError("appendSlice expects a pointer or slice type"),
+        }
     }
 
     fn padToAlignment(self: *@This(), allocator: std.mem.Allocator, alignment: usize) std.mem.Allocator.Error!void {
