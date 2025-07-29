@@ -909,10 +909,10 @@ pub const SnapshotWriter = struct {
             if (len > 0 and current_module_lower[0] >= 'A' and current_module_lower[0] <= 'Z') {
                 current_module_lower[0] = current_module_lower[0] + ('a' - 'A');
             }
-            
+
             if (!std.mem.eql(u8, origin_module_name, current_module_lower[0..len])) {
                 _ = try self.writer.write(" (from ");
-                
+
                 // Convert module name to uppercase if needed (for display)
                 if (origin_module_name.len > 0 and origin_module_name[0] >= 'a' and origin_module_name[0] <= 'z') {
                     // Write the first character as uppercase
@@ -926,7 +926,7 @@ pub const SnapshotWriter = struct {
                     // Already uppercase or doesn't start with a letter
                     _ = try self.writer.write(origin_module_name);
                 }
-                
+
                 _ = try self.writer.write(")");
             }
         }

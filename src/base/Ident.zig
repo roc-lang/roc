@@ -92,7 +92,6 @@ pub const Attributes = packed struct(u3) {
 pub const Store = struct {
     interner: IdentInterner,
     attributes: collections.SafeList(Attributes) = .{},
-    next_unique_name: u32 = 0,
 
     /// Initialize the memory for an `Ident.Store` with a specific capaicty.
     pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!Store {
@@ -117,51 +116,16 @@ pub const Store = struct {
         };
     }
 
-    /// Generate a new identifier that is unique within this module.
-    ///
-    /// We keep a counter per `Ident.Store` that gets incremented each
-    /// time this method is called. The new ident is named based on said
-    /// counter, which cannot overlap with user-defined idents since those
-    /// cannot start with a digit.
-    pub fn genUnique(self: *Store, gpa: std.mem.Allocator) std.mem.Allocator.Error!Idx {
-        var id = self.next_unique_name;
-        self.next_unique_name += 1;
-
-        // Manually render the text into a buffer to avoid allocating
-        // a string, as the string interner will copy the text anyway.
-
-        var digit_index: u8 = 9;
-        // The max u32 value is 4294967295 which is 10 digits
-        var str_buffer = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-        while (id > 0) {
-            const digit = id % 10;
-            str_buffer[digit_index] = @as(u8, @intCast(digit)) + '0';
-
-            id = (id - digit) / 10;
-            digit_index -= 1;
-        }
-
-        const name = str_buffer[digit_index + 1 ..];
-
-        const idx = try self.interner.insert(gpa, name);
-
-        const attributes = Attributes{
-            .effectful = false,
-            .ignored = false,
-            .reassignable = false,
-        };
-
-        _ = try self.attributes.append(gpa, attributes);
-
-        return Idx{
-            .attributes = attributes,
-            .idx = @truncate(@intFromEnum(idx)),
-        };
-    }
-
-    /// Get the text for an identifier.
+    /// Get the text for an identifier. (They are always stored as lowercase,
+    /// so this is more efficient than getUppercase, which must do a conversion.)
     pub fn getLowercase(self: *const Store, idx: Idx) []u8 {
         return self.interner.getLowercase(@enumFromInt(@as(u32, idx.idx)));
+    }
+
+    /// Get the text with first char converted to uppercase if lowercase.
+    /// Caller must free the returned slice if it was allocated.
+    pub fn getUppercase(self: *const Store, allocator: std.mem.Allocator, idx: Idx) ![]u8 {
+        return self.interner.getUppercase(allocator, @enumFromInt(@as(u32, idx.idx)));
     }
 
     /// Check if an identifier text already exists in the store.
@@ -196,8 +160,6 @@ pub const Store = struct {
         size += self.interner.bytes.len(); // bytes data
         size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
 
-        size += @sizeOf(u32); // next_unique_name
-
         // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
         return std.mem.alignForward(usize, size, serialization.SERIALIZATION_ALIGNMENT);
     }
@@ -218,10 +180,6 @@ pub const Store = struct {
             offset += bytes_len;
         }
         offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Serialize next_unique_name
-        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = self.next_unique_name;
-        offset += @sizeOf(u32);
 
         _ = gpa; // suppress unused parameter warning
 
@@ -251,10 +209,6 @@ pub const Store = struct {
         }
         offset = std.mem.alignForward(usize, offset, @alignOf(u32));
 
-        // Deserialize next_unique_name
-        if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
-        const next_unique_name = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-
         // Create empty hash table
         const hash_table = collections.SafeList(IdentInterner.Idx){};
 
@@ -268,7 +222,6 @@ pub const Store = struct {
 
         return Store{
             .interner = interner,
-            .next_unique_name = next_unique_name,
         };
     }
 
@@ -288,7 +241,6 @@ pub const Store = struct {
         offset_self.* = .{
             .interner = (try self.interner.serialize(allocator, writer)).*,
             .attributes = (try self.attributes.serialize(allocator, writer)).*,
-            .next_unique_name = self.next_unique_name,
         };
 
         return @constCast(offset_self);
@@ -392,10 +344,8 @@ test "Ident.Store empty CompactWriter roundtrip" {
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify empty
-    try testing.expectEqual(@as(usize, 0), deserialized.interner.bytes.len());
-    try testing.expectEqual(@as(usize, 0), deserialized.interner.strings.count());
+    try testing.expectEqual(@as(usize, 1), deserialized.interner.bytes.len());
     try testing.expectEqual(@as(usize, 0), deserialized.attributes.len());
-    try testing.expectEqual(@as(u32, 0), deserialized.next_unique_name);
 }
 
 test "Ident.Store basic CompactWriter roundtrip" {
@@ -458,77 +408,8 @@ test "Ident.Store basic CompactWriter roundtrip" {
     try testing.expectEqualStrings("world!", deserialized.getLowercase(idx2));
     try testing.expectEqualStrings("_ignored", deserialized.getLowercase(idx3));
 
-    // Verify next_unique_name is preserved
-    try testing.expectEqual(original.next_unique_name, deserialized.next_unique_name);
-
     // Verify the interner's hash map is empty after deserialization
     try testing.expectEqual(@as(usize, 0), deserialized.interner.strings.count());
-}
-
-test "Ident.Store with genUnique CompactWriter roundtrip" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    // Create store and generate unique identifiers
-    var original = try Store.initCapacity(gpa, 10);
-    defer original.deinit(gpa);
-
-    // Add some regular identifiers
-    const ident1 = Ident.for_text("regular");
-    const idx1 = try original.insert(gpa, ident1);
-
-    // Generate unique identifiers
-    const unique1 = try original.genUnique(gpa);
-    const unique2 = try original.genUnique(gpa);
-    const unique3 = try original.genUnique(gpa);
-
-    // Verify unique names are correct
-    try testing.expectEqualStrings("0", original.getLowercase(unique1));
-    try testing.expectEqualStrings("1", original.getLowercase(unique2));
-    try testing.expectEqualStrings("2", original.getLowercase(unique3));
-
-    // Verify next_unique_name was incremented
-    try testing.expectEqual(@as(u32, 3), original.next_unique_name);
-
-    // Create a temp file
-    const tmp_dir = testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    const file = try tmp_dir.dir.createFile("test_unique_store.dat", .{ .read = true });
-    defer file.close();
-
-    // Serialize
-    var writer = collections.CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-    };
-    defer writer.deinit(gpa);
-
-    _ = try original.serialize(gpa, &writer);
-
-    // Write to file
-    try writer.writeGather(gpa, file);
-
-    // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
-    defer gpa.free(buffer);
-
-    _ = try file.read(buffer);
-
-    // Cast and relocate
-    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Store))));
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-
-    // Verify all identifiers
-    try testing.expectEqualStrings("regular", deserialized.getLowercase(idx1));
-    try testing.expectEqualStrings("0", deserialized.getLowercase(unique1));
-    try testing.expectEqualStrings("1", deserialized.getLowercase(unique2));
-    try testing.expectEqualStrings("2", deserialized.getLowercase(unique3));
-
-    // Verify next_unique_name is preserved
-    try testing.expectEqual(@as(u32, 3), deserialized.next_unique_name);
 }
 
 test "Ident.Store frozen state CompactWriter roundtrip" {
@@ -620,9 +501,9 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
         try testing.expectEqual(test_ident.expected_idx, idx.idx);
     }
 
-    // Add some unique names
-    const unique1 = try original.genUnique(gpa);
-    const unique2 = try original.genUnique(gpa);
+    // Add some hardcoded names
+    const unique1 = try original.insert(gpa, Ident.for_text("unique1"));
+    const unique2 = try original.insert(gpa, Ident.for_text("unique2"));
 
     // Verify the interner's hash map is populated
     try testing.expect(original.interner.strings.count() > 0);
@@ -666,14 +547,11 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     }
 
     // Verify unique names
-    try testing.expectEqualStrings("0", deserialized.getLowercase(unique1));
-    try testing.expectEqualStrings("1", deserialized.getLowercase(unique2));
+    try testing.expectEqualStrings("unique1", deserialized.getLowercase(unique1));
+    try testing.expectEqualStrings("unique2", deserialized.getLowercase(unique2));
 
     // Verify the interner's hash map is empty after deserialization
     try testing.expectEqual(@as(usize, 0), deserialized.interner.strings.count());
-
-    // Verify next_unique_name
-    try testing.expectEqual(@as(u32, 2), deserialized.next_unique_name);
 }
 
 test "Ident.Store multiple stores CompactWriter roundtrip" {
@@ -692,7 +570,7 @@ test "Ident.Store multiple stores CompactWriter roundtrip" {
 
     // Populate stores differently
     const idx1_1 = try store1.insert(gpa, Ident.for_text("store1_ident"));
-    _ = try store1.genUnique(gpa);
+    _ = try store1.insert(gpa, Ident.for_text("store1_unique"));
 
     const idx2_1 = try store2.insert(gpa, Ident.for_text("store2_ident!"));
     const idx2_2 = try store2.insert(gpa, Ident.for_text("_store2_ignored"));
@@ -746,7 +624,6 @@ test "Ident.Store multiple stores CompactWriter roundtrip" {
 
     // Verify store 1
     try testing.expectEqualStrings("store1_ident", deserialized1.getLowercase(idx1_1));
-    try testing.expectEqual(@as(u32, 1), deserialized1.next_unique_name);
 
     // Verify store 2 (frozen)
     try testing.expectEqualStrings("store2_ident!", deserialized2.getLowercase(idx2_1));

@@ -361,7 +361,7 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void 
             types.TypeIdent{ .ident_idx = type_ident },
             anno_var,
             &.{},
-            if (ir.module_name.len > 0) try ir.idents.insert(gpa, base.Ident.for_text(ir.module_name)) else try ir.idents.genUnique(gpa),
+            try ir.idents.insert(gpa, base.Ident.for_text("Bool")),
         ),
         Region.zero(),
     );

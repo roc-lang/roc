@@ -111,14 +111,14 @@ pub fn findStringOrSlot(self: *const Self, string: []const u8) struct { idx: ?Id
 /// Returns the Idx if found, or null if not found.
 fn findString(self: *const Self, string: []const u8) ?Idx {
     var offset: u32 = 1; // Skip the first null byte
-    
+
     while (offset < self.bytes.len()) {
         // Find the next null terminator
         const start = offset;
         while (offset < self.bytes.len() and self.bytes.items.items[offset] != 0) {
             offset += 1;
         }
-        
+
         if (offset <= self.bytes.len()) {
             const stored_string = self.bytes.items.items[start..offset];
             if (std.mem.eql(u8, string, stored_string)) {
@@ -128,7 +128,7 @@ fn findString(self: *const Self, string: []const u8) ?Idx {
             offset += 1;
         }
     }
-    
+
     return null;
 }
 
@@ -241,6 +241,7 @@ pub fn getLowercase(self: *const Self, idx: Idx) []u8 {
 /// Caller must free the returned slice if it was allocated.
 pub fn getUppercase(self: *const Self, allocator: std.mem.Allocator, idx: Idx) std.mem.Allocator.Error![]u8 {
     const text = self.getLowercase(idx);
+    std.debug.assert(text.len > 0); // Should never have empty identifiers!
     if (text[0] >= 'a' and text[0] <= 'z') {
         // Need to convert to uppercase
         const result = try allocator.alloc(u8, text.len);
