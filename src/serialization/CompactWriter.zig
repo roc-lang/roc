@@ -74,13 +74,18 @@ pub const CompactWriter = struct {
         }
     }
 
-    /// Appends a pointer the writer, after adding padding for alignment as necessary.
-    pub fn append(
+    /// Allocates some undefined memory with the same size and alignment as the given value,
+    /// appends (a pointer to) that memory to the writer, and returns the pointer.
+    ///
+    /// Since this is returning a pointer to uninitialized memory, it's up to the caller to
+    /// mutate it in-place to turn its nested pointers' memory addresses into offsets for serialization.
+    ///
+    /// Note: Padding is added BEFORE the data to ensure proper alignment for the type.
+    pub fn appendAlloc(
         self: *@This(),
         allocator: std.mem.Allocator,
-        ptr: anytype,
-    ) std.mem.Allocator.Error!void {
-        const T = std.meta.Child(@TypeOf(ptr));
+        comptime T: type,
+    ) std.mem.Allocator.Error!*T {
         const size = @sizeOf(T);
         const alignment = @alignOf(T);
 
@@ -91,12 +96,18 @@ pub const CompactWriter = struct {
         // Pad up front to the alignment of T
         try self.padToAlignment(allocator, alignment);
 
-        // Add the pointer to the iovecs.
+        // Allocate a single item of type T
+        const items = try allocator.alignedAlloc(T, alignment, 1);
+        const answer = &items[0];
+
+        // Add the pointer to uninitialized memory to the iovecs for later.
         try self.iovecs.append(allocator, .{
-            .iov_base = @ptrCast(@as([*]u8, @ptrCast(ptr))),
+            .iov_base = @ptrCast(@as([*]u8, @ptrCast(answer))),
             .iov_len = size,
         });
         self.total_bytes += size;
+
+        return answer;
     }
 
     pub fn appendSlice(
@@ -105,7 +116,11 @@ pub const CompactWriter = struct {
         slice: anytype,
     ) std.mem.Allocator.Error!@TypeOf(slice) {
         const SliceType = @TypeOf(slice);
-        const T = std.meta.Child(SliceType);
+        const info = @typeInfo(SliceType);
+        const child_info = @typeInfo(info.pointer.child);
+        
+        // Determine the actual element type
+        const T = if (child_info == .array) child_info.array.child else info.pointer.child;
         const size = @sizeOf(T);
         const alignment = @alignOf(T);
         const len = slice.len;
@@ -122,11 +137,8 @@ pub const CompactWriter = struct {
         self.total_bytes += size * len;
 
         // Return the same slice type as the input
-        const info = @typeInfo(SliceType);
-        return if (info.pointer.is_const)
-            @as([*]const T, @ptrFromInt(offset))[0..len]
-        else
-            @as([*]T, @ptrFromInt(offset))[0..len];
+        const ptr_type = if (info.pointer.is_const) [*]const T else [*]T;
+        return @as(ptr_type, @ptrFromInt(offset))[0..len];
     }
 
     fn padToAlignment(self: *@This(), allocator: std.mem.Allocator, alignment: usize) std.mem.Allocator.Error!void {
