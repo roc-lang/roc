@@ -1148,7 +1148,7 @@ const Formatter = struct {
                 _ = try fmt.formatExpr(d.expr);
             },
             .block => |b| {
-                try fmt.formatBody(b);
+                try fmt.formatBlock(b);
             },
             .ellipsis => |_| {
                 try fmt.pushAll("...");
@@ -1650,19 +1650,18 @@ const Formatter = struct {
         return fmt.ast.store.nodes.items.items(.region)[idx];
     }
 
-    fn formatBody(fmt: *Formatter, body: AST.Body) !void {
-        const multiline = fmt.ast.regionIsMultiline(body.region);
-        if (multiline or body.statements.span.len > 1) {
+    fn formatBlock(fmt: *Formatter, block: AST.Block) !void {
+        if (block.statements.span.len > 0) {
             fmt.curr_indent += 1;
             try fmt.push('{');
-            for (fmt.ast.store.statementSlice(body.statements), 0..) |s, i| {
+            for (fmt.ast.store.statementSlice(block.statements), 0..) |s, i| {
                 const region = fmt.nodeRegion(@intFromEnum(s));
                 _ = try fmt.flushCommentsBefore(region.start);
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
                 try fmt.formatStatement(s);
 
-                if (i == body.statements.span.len - 1) {
+                if (i == block.statements.span.len - 1) {
                     _ = try fmt.flushCommentsBefore(region.end);
                 }
             }
@@ -1670,10 +1669,6 @@ const Formatter = struct {
             fmt.curr_indent -= 1;
             try fmt.pushIndent();
             try fmt.push('}');
-        } else if (body.statements.span.len == 1) {
-            for (fmt.ast.store.statementSlice(body.statements)) |s| {
-                try fmt.formatStatement(s);
-            }
         } else {
             try fmt.pushAll("{}");
         }

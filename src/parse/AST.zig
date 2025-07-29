@@ -1017,13 +1017,13 @@ pub const Statement = union(enum) {
     }
 };
 
-/// Represents a Body, or a block of statements.
-pub const Body = struct {
+/// Represents a block of statements.
+pub const Block = struct {
     /// The statements that constitute the block
     statements: Statement.Span,
     region: TokenizedRegion,
 
-    /// Push this Body to the SExprTree stack
+    /// Push this Block to the SExprTree stack
     pub fn pushToSExprTree(self: @This(), env: ModuleEnv, ast: *AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         const begin = tree.beginNode();
         try tree.pushStaticAtom("e-block");
@@ -2187,7 +2187,7 @@ pub const Expr = union(enum) {
     ellipsis: struct {
         region: TokenizedRegion,
     },
-    block: Body,
+    block: Block,
     malformed: struct {
         reason: Diagnostic.Tag,
         region: TokenizedRegion,
@@ -2479,7 +2479,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .block => |block| {
-                // Delegate to Body.pushToSExprTree
+                // Delegate to Block.pushToSExprTree
                 try block.pushToSExprTree(env, ast, tree);
             },
             .bin_op => |a| {
