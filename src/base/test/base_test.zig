@@ -4,6 +4,10 @@ const serialization = @import("serialization");
 
 const Ident = base.Ident;
 const CompactWriter = serialization.CompactWriter;
+const DataSpan = base.DataSpan;
+const PackedDataSpan = base.PackedDataSpan;
+const FunctionArgs = base.FunctionArgs;
+const SmallCollections = base.SmallCollections;
 
 test "from_bytes validates empty text" {
     const result = Ident.from_bytes("");
@@ -460,4 +464,99 @@ test "Ident.Store multiple stores CompactWriter roundtrip" {
     try std.testing.expectEqual(@as(usize, 0), deserialized1.interner.entry_count);
     try std.testing.expectEqual(@as(usize, 0), deserialized2.interner.entry_count);
     try std.testing.expectEqual(@as(usize, 0), deserialized3.interner.entry_count);
+}
+
+test "PackedDataSpan basic functionality" {
+    const Packed = PackedDataSpan(16, 16);
+
+    // Test creation and conversion
+    const original = DataSpan{ .start = 1000, .len = 50 };
+    const packed_span = try Packed.fromDataSpan(original);
+    const restored = packed_span.toDataSpan();
+
+    try std.testing.expectEqual(original.start, restored.start);
+    try std.testing.expectEqual(original.len, restored.len);
+}
+
+test "PackedDataSpan limits" {
+    const Packed = PackedDataSpan(16, 16);
+
+    // Test max values work
+    try std.testing.expectEqual(@as(u32, 65535), Packed.MAX_START);
+    try std.testing.expectEqual(@as(u32, 65535), Packed.MAX_LENGTH);
+
+    const max_span = DataSpan{ .start = 65535, .len = 65535 };
+    const packed_span = try Packed.fromDataSpan(max_span);
+    const restored = packed_span.toDataSpan();
+
+    try std.testing.expectEqual(max_span.start, restored.start);
+    try std.testing.expectEqual(max_span.len, restored.len);
+}
+
+test "PackedDataSpan overflow detection" {
+    const Packed = PackedDataSpan(16, 16);
+
+    // Test start overflow
+    const start_overflow = DataSpan{ .start = 65536, .len = 0 };
+    try std.testing.expectError(error.StartTooLarge, Packed.fromDataSpan(start_overflow));
+
+    // Test length overflow
+    const len_overflow = DataSpan{ .start = 0, .len = 65536 };
+    try std.testing.expectError(error.LengthTooLarge, Packed.fromDataSpan(len_overflow));
+}
+
+test "PackedDataSpan canFit" {
+    const Packed = PackedDataSpan(16, 16);
+
+    try std.testing.expect(Packed.canFit(DataSpan{ .start = 1000, .len = 50 }));
+    try std.testing.expect(Packed.canFit(DataSpan{ .start = 65535, .len = 65535 }));
+    try std.testing.expect(!Packed.canFit(DataSpan{ .start = 65536, .len = 0 }));
+    try std.testing.expect(!Packed.canFit(DataSpan{ .start = 0, .len = 65536 }));
+}
+
+test "PackedDataSpan u32 conversion" {
+    const Packed = PackedDataSpan(16, 16);
+
+    const original = DataSpan{ .start = 1000, .len = 50 };
+    const packed_span = try Packed.fromDataSpan(original);
+    const raw = packed_span.toU32();
+    const restored_packed = Packed.fromU32(raw);
+    const restored = restored_packed.toDataSpan();
+
+    try std.testing.expectEqual(original.start, restored.start);
+    try std.testing.expectEqual(original.len, restored.len);
+}
+
+test "PackedDataSpan different configurations" {
+    // Test FunctionArgs configuration (20, 12)
+    const func_span = DataSpan{ .start = 1000000, .len = 100 };
+    try std.testing.expect(FunctionArgs.canFit(func_span));
+
+    const packed_func = try FunctionArgs.fromDataSpan(func_span);
+    const restored_func = packed_func.toDataSpan();
+    try std.testing.expectEqual(func_span.start, restored_func.start);
+    try std.testing.expectEqual(func_span.len, restored_func.len);
+
+    // Test SmallCollections configuration (24, 8)
+    const small_span = DataSpan{ .start = 10000000, .len = 50 };
+    try std.testing.expect(SmallCollections.canFit(small_span));
+
+    const packed_small = try SmallCollections.fromDataSpan(small_span);
+    const restored_small = packed_small.toDataSpan();
+    try std.testing.expectEqual(small_span.start, restored_small.start);
+    try std.testing.expectEqual(small_span.len, restored_small.len);
+}
+
+test "PackedDataSpan compile-time validation" {
+    // These should compile fine
+    _ = PackedDataSpan(16, 16);
+    _ = PackedDataSpan(20, 12);
+    _ = PackedDataSpan(24, 8);
+    _ = PackedDataSpan(1, 31);
+    _ = PackedDataSpan(31, 1);
+
+    // These would cause compile errors if uncommented:
+    // _ = PackedDataSpan(16, 15); // doesn't sum to 32
+    // _ = PackedDataSpan(0, 32);  // zero bits not allowed
+    // _ = PackedDataSpan(33, 0);  // doesn't fit in u32
 }
