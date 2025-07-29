@@ -1057,10 +1057,10 @@ fn unifyCallWithFunc(
     // unification process handle the arity mismatch error
     if (inst_args.len == arg_vars.len) {
         for (inst_args, arg_vars) |inst_arg, actual_arg| {
-            _ = try self.unify(inst_arg, actual_arg);
+            _ = try self.unify(actual_arg, inst_arg);
         }
         // The call's type is the instantiated return type
-        _ = try self.unify(func.ret, call_var);
+        _ = try self.unify(call_var, func.ret);
     } else {
         // Fall back to normal unification to get proper error message
         // Use the original func_var to avoid issues with instantiated variables in error reporting
@@ -1160,12 +1160,14 @@ fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region
 
             // Create a fresh number variable for the operation
             const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
-            const num_var = try self.freshFromContent(num_content, expr_region);
+            const num_var_lhs = try self.freshFromContent(num_content, expr_region);
+            const num_var_rhs = try self.freshFromContent(num_content, expr_region);
+            const num_var_result = try self.freshFromContent(num_content, expr_region);
 
             // Unify lhs, rhs, and result with the number type
-            _ = try self.unify(lhs_var, num_var);
-            _ = try self.unify(rhs_var, num_var);
-            _ = try self.unify(result_var, num_var);
+            _ = try self.unify(num_var_lhs, lhs_var);
+            _ = try self.unify(num_var_rhs, rhs_var);
+            _ = try self.unify(result_var, num_var_result);
         },
         .lt, .gt, .le, .ge, .eq, .ne => {
             // Comparison operators always return Bool

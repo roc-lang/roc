@@ -36,7 +36,6 @@ INVALID STATEMENT - crash_and_ellipsis_test.md:13:29:13:35
 UNUSED VARIABLE - crash_and_ellipsis_test.md:17:5:17:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:18:5:18:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:16:5:16:12
-TYPE MISMATCH - crash_and_ellipsis_test.md:16:28:16:30
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **crash** is not expected in an expression.
@@ -125,20 +124,6 @@ The unused variable is declared here:
 ```
     ^^^^^^^
 
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**crash_and_ellipsis_test.md:16:28:16:30:**
-```roc
-    result1 = testEllipsis(42)
-```
-                           ^^
-
-It is of type:
-    _Num(_size)_
-
-But you are trying to use it as:
-    _U64_
 
 # TOKENS
 ~~~zig
