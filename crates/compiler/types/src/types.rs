@@ -4452,6 +4452,10 @@ pub fn gather_tags_slices(
 
     result.sort_by(|(a, _), (b, _)| a.cmp(b));
 
+    // Deduplicate tags to prevent issues with type alias expansion
+    // This removes duplicate tags that can occur when type aliases expand to include the same tag multiple times
+    result.dedup_by(|(a, _), (b, _)| a == b);
+
     Ok((result, ext))
 }
 
@@ -4469,6 +4473,10 @@ pub fn gather_tags(
         .collect();
 
     result.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    // Deduplicate tags to prevent issues with type alias expansion
+    // This removes duplicate tags that can occur when type aliases expand to include the same tag multiple times
+    result.dedup_by(|(a, _), (b, _)| a == b);
 
     Ok(TagUnionStructure {
         fields: result,
