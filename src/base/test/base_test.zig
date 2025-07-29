@@ -13,6 +13,7 @@ const SafeList = collections.SafeList;
 const RegionInfo = base.RegionInfo;
 const SmallStringInterner = base.SmallStringInterner;
 const StringLiteral = base.StringLiteral;
+const TargetUsize = base.target.TargetUsize;
 
 test "from_bytes validates empty text" {
     const result = Ident.from_bytes("");
@@ -1508,4 +1509,9 @@ test "StringLiteral.Store edge case indices CompactWriter roundtrip" {
     try std.testing.expectEqualStrings("second", deserialized.get(idx2));
     try std.testing.expectEqualStrings("", deserialized.get(idx3));
     try std.testing.expectEqualStrings(long_str, deserialized.get(idx4));
+}
+
+test "TargetUsize conversion to usize" {
+    try std.testing.expectEqual(TargetUsize.u32.size(), 4);
+    try std.testing.expectEqual(TargetUsize.u64.size(), 8);
 }
