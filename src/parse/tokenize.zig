@@ -1857,8 +1857,16 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .Int => {
                 if (buf[region.start.offset] == '-') {
                     try buf2.append(alloc, '-');
-                    for (1..length) |_| {
-                        try buf2.append(alloc, '1');
+                    if (length >= 4) {
+                        try buf2.append(alloc, '0');
+                        try buf2.append(alloc, 'x');
+                        for (3..length) |_| {
+                            try buf2.append(alloc, '1');
+                        }
+                    } else {
+                        for (1..length) |_| {
+                            try buf2.append(alloc, '1');
+                        }
                     }
                 } else if (length >= 3) {
                     // To ensure this value when reprinted tokenizes as an int, add a base if the number is 3 or more characters.
