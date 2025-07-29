@@ -280,7 +280,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
         },
         .ident_not_in_scope => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
-            const ident_name = self.idents.getText(data.ident);
+            const ident_name = self.idents.getLowercase(data.ident);
 
             var report = Report.init(allocator, "UNDEFINED VARIABLE", .runtime_error);
             const owned_ident = try report.addOwnedString(ident_name);
@@ -311,7 +311,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             var report = Report.init(allocator, "EXPOSED BUT NOT DEFINED", .runtime_error);
 
-            const ident_name = self.idents.getText(data.ident);
+            const ident_name = self.idents.getLowercase(data.ident);
             const owned_ident = try report.addOwnedString(ident_name);
 
             try report.document.addReflowingText("The module header says that ");
@@ -332,7 +332,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
         },
         .unused_variable => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
-            const ident_name = self.idents.getText(data.ident);
+            const ident_name = self.idents.getLowercase(data.ident);
 
             var report = Report.init(allocator, "UNUSED VARIABLE", .warning);
             const owned_ident = try report.addOwnedString(ident_name);
@@ -397,7 +397,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             break :blk report;
         },
         .undeclared_type => |data| blk: {
-            const type_name = self.idents.getText(data.name);
+            const type_name = try self.idents.interner.getUppercase(allocator, @enumFromInt(@as(u32, data.name.idx)));
+            defer if (type_name.ptr != self.idents.getLowercase(data.name).ptr) allocator.free(type_name);
             const region_info = self.calcRegionInfo(data.region);
 
             var report = Report.init(allocator, "UNDECLARED TYPE", .runtime_error);
@@ -422,7 +423,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             break :blk report;
         },
         .type_redeclared => |data| blk: {
-            const type_name = self.idents.getText(data.name);
+            const type_name = try self.idents.interner.getUppercase(allocator, @enumFromInt(@as(u32, data.name.idx)));
+            defer if (type_name.ptr != self.idents.getLowercase(data.name).ptr) allocator.free(type_name);
             const original_region_info = self.calcRegionInfo(data.original_region);
             const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
 
@@ -486,7 +488,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             break :blk report;
         },
         .used_underscore_variable => |data| blk: {
-            const ident_name = self.idents.getText(data.ident);
+            const ident_name = self.idents.getLowercase(data.ident);
             const region_info = self.calcRegionInfo(data.region);
 
             var report = Report.init(allocator, "UNDERSCORE VARIABLE USED", .warning);
@@ -571,7 +573,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             break :blk report;
         },
         .duplicate_record_field => |data| blk: {
-            const field_name = self.idents.getText(data.field_name);
+            const field_name = self.idents.getLowercase(data.field_name);
             const duplicate_region_info = self.calcRegionInfo(data.duplicate_region);
             const original_region_info = self.calcRegionInfo(data.original_region);
 
@@ -615,7 +617,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             break :blk report;
         },
         .redundant_exposed => |data| blk: {
-            const ident_name = self.idents.getText(data.ident);
+            const ident_name = self.idents.getLowercase(data.ident);
             const region_info = self.calcRegionInfo(data.region);
             const original_region_info = self.calcRegionInfo(data.original_region);
 
@@ -645,7 +647,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             break :blk report;
         },
         .undeclared_type_var => |data| blk: {
-            const type_var_name = self.idents.getText(data.name);
+            const type_var_name = self.idents.getLowercase(data.name);
             const region_info = self.calcRegionInfo(data.region);
 
             var report = Report.init(allocator, "UNDECLARED TYPE VARIABLE", .runtime_error);
@@ -732,7 +734,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             break :blk report;
         },
         .shadowing_warning => |data| blk: {
-            const ident_name = self.idents.getText(data.ident);
+            const ident_name = self.idents.getLowercase(data.ident);
             const new_region_info = self.calcRegionInfo(data.region);
             const original_region_info = self.calcRegionInfo(data.original_region);
 
@@ -1264,7 +1266,7 @@ pub fn sliceExternalDecls(self: *const Self, span: ExternalDecl.Span) []const Ex
 
 /// Retrieves the text of an identifier by its index
 pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
-    return self.idents.getText(idx);
+    return self.idents.getLowercase(idx);
 }
 
 /// Helper to format pattern index for s-expr output

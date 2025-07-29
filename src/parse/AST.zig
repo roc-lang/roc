@@ -1655,7 +1655,7 @@ pub const ExposedItem = union(enum) {
                     try tree.endNode(begin, attrs);
                     return;
                 };
-                const text = env.idents.getText(ident_idx);
+                const text = env.idents.getLowercase(ident_idx);
                 try tree.pushString(text);
                 const attrs2 = tree.beginNode();
                 try tree.endNode(text_begin, attrs2);
@@ -1667,7 +1667,7 @@ pub const ExposedItem = union(enum) {
                         try tree.endNode(begin, attrs);
                         return;
                     };
-                    const as_text = env.idents.getText(as_ident);
+                    const as_text = env.idents.getLowercase(as_ident);
                     try tree.pushStringPair("as", as_text);
                 }
 
@@ -1680,13 +1680,13 @@ pub const ExposedItem = union(enum) {
 
                 // text attribute
                 const token = ast.tokens.tokens.get(i.ident);
-                const text = env.idents.getText(token.extra.interned);
+                const text = env.idents.getLowercase(token.extra.interned);
                 try tree.pushStringPair("text", text);
 
                 // as attribute if present
                 if (i.as) |a| {
                     const as_tok = ast.tokens.tokens.get(a);
-                    const as_text = env.idents.getText(as_tok.extra.interned);
+                    const as_text = env.idents.getLowercase(as_tok.extra.interned);
                     try tree.pushStringPair("as", as_text);
                 }
 
@@ -1701,7 +1701,7 @@ pub const ExposedItem = union(enum) {
 
                 // text attribute
                 const token = ast.tokens.tokens.get(i.ident);
-                const text = env.idents.getText(token.extra.interned);
+                const text = env.idents.getLowercase(token.extra.interned);
                 try tree.pushStringPair("text", text);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -1871,8 +1871,8 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStaticAtom("ty-mod");
                 const attrs = tree.beginNode();
 
-                const mod_text = env.idents.getText(a.mod_ident);
-                const type_text = env.idents.getText(a.ty_ident);
+                const mod_text = env.idents.getLowercase(a.mod_ident);
+                const type_text = env.idents.getLowercase(a.ty_ident);
 
                 // module attribute
                 const module_begin = tree.beginNode();

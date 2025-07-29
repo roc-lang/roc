@@ -267,7 +267,7 @@ pub const Statement = union(enum) {
                 try tree.pushStaticAtom("s-import");
                 const region = ir.store.getStatementRegion(stmt_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("module", ir.idents.getText(s.module_name_tok));
+                try tree.pushStringPair("module", ir.idents.getLowercase(s.module_name_tok));
 
                 if (s.qualifier_tok) |qualifier| {
                     try tree.pushStringPair("qualifier", ir.getIdentText(qualifier));

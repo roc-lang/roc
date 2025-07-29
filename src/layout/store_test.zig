@@ -1294,18 +1294,18 @@ test "addTypeVar - record field ordering stability" {
                             // All should have same field order
                             var i: usize = 0;
                             while (i < 3) : (i += 1) {
-                                const name1 = module_env.idents.getText(fields_1.items(.name)[i]);
-                                const name2 = module_env.idents.getText(fields_2.items(.name)[i]);
-                                const name3 = module_env.idents.getText(fields_3.items(.name)[i]);
+                                const name1 = module_env.idents.getLowercase(fields_1.items(.name)[i]);
+                                const name2 = module_env.idents.getLowercase(fields_2.items(.name)[i]);
+                                const name3 = module_env.idents.getLowercase(fields_3.items(.name)[i]);
 
                                 try testing.expectEqualStrings(name1, name2);
                                 try testing.expectEqualStrings(name2, name3);
                             }
 
                             // Verify correct alphabetical order
-                            try testing.expectEqualStrings("aaa", module_env.idents.getText(fields_1.items(.name)[0]));
-                            try testing.expectEqualStrings("bbb", module_env.idents.getText(fields_1.items(.name)[1]));
-                            try testing.expectEqualStrings("ccc", module_env.idents.getText(fields_1.items(.name)[2]));
+                            try testing.expectEqualStrings("aaa", module_env.idents.getLowercase(fields_1.items(.name)[0]));
+                            try testing.expectEqualStrings("bbb", module_env.idents.getLowercase(fields_1.items(.name)[1]));
+                            try testing.expectEqualStrings("ccc", module_env.idents.getLowercase(fields_1.items(.name)[2]));
                         },
                         else => try testing.expect(false),
                     }
@@ -1415,7 +1415,7 @@ test "addTypeVar - record alignment edge cases" {
             // Verify order: align16, align8, align4, align2, align1
             const expected_order = [_][]const u8{ "align16", "align8", "align4", "align2", "align1" };
             for (expected_order, 0..) |expected_name, i| {
-                const actual_name = module_env.idents.getText(rec_fields.items(.name)[i]);
+                const actual_name = module_env.idents.getLowercase(rec_fields.items(.name)[i]);
                 try testing.expectEqualStrings(expected_name, actual_name);
             }
         },
@@ -2511,7 +2511,7 @@ test "addTypeVar - record field alignments differ between targets" {
             var u8_layout: ?layout.Layout = null;
 
             for (record_fields.items(.name), record_fields.items(.layout)) |name, layout_idx| {
-                const field_name = module_env.idents.getText(name);
+                const field_name = module_env.idents.getLowercase(name);
                 const field_layout = layout_store.getLayout(layout_idx);
 
                 if (std.mem.eql(u8, field_name, "str_field")) {
@@ -2612,7 +2612,7 @@ test "addTypeVar - record field sorting follows alignment then name order" {
             for (record_fields.items(.layout), record_fields.items(.name)) |field_layout_idx, field_name| {
                 const field_layout = layout_store.getLayout(field_layout_idx);
                 const field_alignment = field_layout.alignment(native_target);
-                const field_name_str = module_env.idents.getText(field_name);
+                const field_name_str = module_env.idents.getLowercase(field_name);
 
                 if (prev_alignment) |prev| {
                     // Alignment should be descending or equal
@@ -2898,8 +2898,8 @@ test "addTypeVar - mixed container types" {
 
     // Fields should be sorted by alignment then name
     // Both str and list have pointer alignment, so should be sorted by name (a, b)
-    const field_0_name = module_env.idents.getText(rec_fields.items(.name)[0]);
-    const field_1_name = module_env.idents.getText(rec_fields.items(.name)[1]);
+    const field_0_name = module_env.idents.getLowercase(rec_fields.items(.name)[0]);
+    const field_1_name = module_env.idents.getLowercase(rec_fields.items(.name)[1]);
     try testing.expectEqualStrings("a", field_0_name);
     try testing.expectEqualStrings("b", field_1_name);
 
@@ -2971,15 +2971,15 @@ test "addTypeVar - record size calculation with padding" {
             try testing.expectEqual(3, rec_fields.len);
 
             // First field should be 'b' (u64, 8-byte alignment)
-            const field_0_name = module_env.idents.getText(rec_fields.items(.name)[0]);
+            const field_0_name = module_env.idents.getLowercase(rec_fields.items(.name)[0]);
             try testing.expectEqualStrings("b", field_0_name);
 
             // Second field should be 'c' (u16, 2-byte alignment)
-            const field_1_name = module_env.idents.getText(rec_fields.items(.name)[1]);
+            const field_1_name = module_env.idents.getLowercase(rec_fields.items(.name)[1]);
             try testing.expectEqualStrings("c", field_1_name);
 
             // Third field should be 'a' (u8, 1-byte alignment)
-            const field_2_name = module_env.idents.getText(rec_fields.items(.name)[2]);
+            const field_2_name = module_env.idents.getLowercase(rec_fields.items(.name)[2]);
             try testing.expectEqualStrings("a", field_2_name);
         },
         else => try testing.expect(false),

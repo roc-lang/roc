@@ -974,8 +974,8 @@ test "cross-module type checking - record type chain" {
     try testing.expectEqual(@as(usize, 2), fields.len);
 
     // Check field names and types
-    try testing.expectEqualSlices(u8, "x", module_c_env.idents.getText(fields.items(.name)[0]));
-    try testing.expectEqualSlices(u8, "y", module_c_env.idents.getText(fields.items(.name)[1]));
+    try testing.expectEqualSlices(u8, "x", module_c_env.idents.getLowercase(fields.items(.name)[0]));
+    try testing.expectEqualSlices(u8, "y", module_c_env.idents.getLowercase(fields.items(.name)[1]));
 
     // Check field x is I32
     const x_resolved = module_c_env.types.resolveVar(fields.items(.var_)[0]);
@@ -1117,8 +1117,8 @@ test "cross-module type checking - polymorphic record chain" {
     try testing.expectEqual(@as(usize, 2), fields.len);
 
     // Check field names and types
-    try testing.expectEqualSlices(u8, "value", module_c_env.idents.getText(fields.items(.name)[0]));
-    try testing.expectEqualSlices(u8, "next", module_c_env.idents.getText(fields.items(.name)[1]));
+    try testing.expectEqualSlices(u8, "value", module_c_env.idents.getLowercase(fields.items(.name)[0]));
+    try testing.expectEqualSlices(u8, "next", module_c_env.idents.getLowercase(fields.items(.name)[1]));
 
     // Check field value is Str
     const value_resolved = module_c_env.types.resolveVar(fields.items(.var_)[0]);

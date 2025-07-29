@@ -493,10 +493,10 @@ pub const Interpreter = struct {
                 const result_ptr = (try self.pushStackValue(expr_layout)).?;
 
                 const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
-                const tag_name = self.env.idents.getText(tag.name);
-                if (std.mem.eql(u8, tag_name, "True")) {
+                const tag_name = self.env.idents.getLowercase(tag.name);
+                if (std.mem.eql(u8, tag_name, "true")) {
                     tag_ptr.* = 1;
-                } else if (std.mem.eql(u8, tag_name, "False")) {
+                } else if (std.mem.eql(u8, tag_name, "false")) {
                     tag_ptr.* = 0;
                 } else {
                     tag_ptr.* = 0; // TODO: get actual tag discriminant
@@ -605,7 +605,7 @@ pub const Interpreter = struct {
                             .assign => |a| a.ident,
                             else => return error.LayoutError,
                         };
-                        const capture_name_text = self.env.idents.getText(ident_idx);
+                        const capture_name_text = self.env.idents.getLowercase(ident_idx);
 
                         if (captures_layout.tag == .record) {
                             const record_data = self.layout_cache.getRecordData(captures_layout.data.record.idx);
@@ -675,10 +675,10 @@ pub const Interpreter = struct {
 
                 // For now, handle boolean tags (True/False) as u8
                 const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
-                const tag_name = self.env.idents.getText(tag.name);
-                if (std.mem.eql(u8, tag_name, "True")) {
+                const tag_name = self.env.idents.getLowercase(tag.name);
+                if (std.mem.eql(u8, tag_name, "true")) {
                     tag_ptr.* = 1;
-                } else if (std.mem.eql(u8, tag_name, "False")) {
+                } else if (std.mem.eql(u8, tag_name, "false")) {
                     tag_ptr.* = 0;
                 } else {
                     tag_ptr.* = 0; // TODO: get actual tag discriminant
@@ -1194,7 +1194,7 @@ pub const Interpreter = struct {
                 const src_ptr = @as([*]const u8, @ptrCast(prev_field_value.ptr.?));
                 std.mem.copyForwards(u8, dest_ptr[0..prev_field_size], src_ptr[0..prev_field_size]);
 
-                self.traceInfo("Copied field '{s}' (size={}) to offset {}", .{ self.env.idents.getText(prev_field_layout_info.name), prev_field_size, prev_field_offset });
+                self.traceInfo("Copied field '{s}' (size={}) to offset {}", .{ self.env.idents.getLowercase(prev_field_layout_info.name), prev_field_size, prev_field_offset });
             }
         }
 
@@ -1231,7 +1231,7 @@ pub const Interpreter = struct {
 
             const current_field_value_expr_idx = value_expr_idx orelse {
                 // This should be impossible if the CIR and layout are consistent.
-                self.traceError("Could not find value for field '{s}'", .{self.env.idents.getText(current_field_name)});
+                self.traceError("Could not find value for field '{s}'", .{self.env.idents.getLowercase(current_field_name)});
                 return error.LayoutError;
             };
 
@@ -1517,7 +1517,7 @@ pub const Interpreter = struct {
                     .layout = value.layout,
                 };
                 self.traceInfo("Binding '{s}' (pattern_idx={}) to ptr {}", .{
-                    self.env.idents.getText(assign_pattern.ident),
+                    self.env.idents.getLowercase(assign_pattern.ident),
                     @intFromEnum(pattern_idx),
                     @intFromPtr(binding.value_ptr),
                 });
@@ -1538,13 +1538,13 @@ pub const Interpreter = struct {
                 // For each field in the pattern
                 for (destructs) |destruct_idx| {
                     const destruct = self.env.store.getRecordDestruct(destruct_idx);
-                    const field_name = self.env.idents.getText(destruct.label);
+                    const field_name = self.env.idents.getLowercase(destruct.label);
                     // Find the field in the record layout by name
                     var field_index: ?usize = null;
 
                     for (0..record_fields.len) |idx| {
                         const field = record_fields.get(idx);
-                        if (std.mem.eql(u8, self.env.idents.getText(field.name), field_name)) {
+                        if (std.mem.eql(u8, self.env.idents.getLowercase(field.name), field_name)) {
                             field_index = idx;
                             break;
                         }
@@ -1824,7 +1824,7 @@ pub const Interpreter = struct {
         const pattern = self.env.store.getPattern(pattern_idx);
         switch (pattern) {
             .assign => |assign_pattern| {
-                return self.env.idents.getText(assign_pattern.ident);
+                return self.env.idents.getLowercase(assign_pattern.ident);
             },
             else => return null,
         }

@@ -1040,7 +1040,7 @@ pub const ReportBuilder = struct {
         std.debug.assert(actual_content.structure == .tag_union);
         std.debug.assert(actual_content.structure.tag_union.tags.len() == 1);
         const actual_tag = self.snapshots.tags.get(actual_content.structure.tag_union.tags.start);
-        const tag_name_bytes = self.can_ir.idents.getText(actual_tag.name);
+        const tag_name_bytes = self.can_ir.idents.getLowercase(actual_tag.name);
         const tag_name = try report.addOwnedString(tag_name_bytes);
 
         // Add description

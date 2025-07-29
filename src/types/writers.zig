@@ -200,7 +200,7 @@ pub const TypeWriter = struct {
         var i: u32 = 0;
         while (i < self.env.idents.interner.outer_indices.items.len) : (i += 1) {
             const ident_idx = Ident.Idx{ .idx = @truncate(i), .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
-            const existing_name = self.env.idents.getText(ident_idx);
+            const existing_name = self.env.idents.getLowercase(ident_idx);
             if (std.mem.eql(u8, existing_name, candidate_name)) {
                 exists = true;
                 break;
@@ -328,7 +328,7 @@ pub const TypeWriter = struct {
                 switch (resolved.desc.content) {
                     .flex_var => |mb_ident_idx| {
                         if (mb_ident_idx) |ident_idx| {
-                            _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
+                            _ = try self.buf.writer().write(self.env.idents.getLowercase(ident_idx));
                         } else {
                             // Check if this variable appears multiple times
                             const occurrences = self.countVarOccurrences(var_, root_var);
@@ -339,7 +339,7 @@ pub const TypeWriter = struct {
                         }
                     },
                     .rigid_var => |ident_idx| {
-                        _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
+                        _ = try self.buf.writer().write(self.env.idents.getLowercase(ident_idx));
                     },
                     .alias => |alias| {
                         try self.writeAlias(alias, root_var);
@@ -361,7 +361,9 @@ pub const TypeWriter = struct {
 
     /// Write an alias type
     fn writeAlias(self: *Self, alias: Alias, root_var: Var) std.mem.Allocator.Error!void {
-        _ = try self.buf.writer().write(self.env.idents.getText(alias.ident.ident_idx));
+        const type_text = try self.env.idents.interner.getUppercase(self.buf.allocator, @enumFromInt(@as(u32, alias.ident.ident_idx.idx)));
+        defer if (type_text.ptr != self.env.idents.getLowercase(alias.ident.ident_idx).ptr) self.buf.allocator.free(type_text);
+        _ = try self.buf.writer().write(type_text);
         var args_iter = self.env.types.iterAliasArgs(alias);
         if (args_iter.count() > 0) {
             _ = try self.buf.writer().write("(");
@@ -454,7 +456,9 @@ pub const TypeWriter = struct {
 
     /// Write a nominal type
     fn writeNominalType(self: *Self, nominal_type: NominalType, root_var: Var) std.mem.Allocator.Error!void {
-        _ = try self.buf.writer().write(self.env.idents.getText(nominal_type.ident.ident_idx));
+        const type_text = try self.env.idents.interner.getUppercase(self.buf.allocator, @enumFromInt(@as(u32, nominal_type.ident.ident_idx.idx)));
+        defer if (type_text.ptr != self.env.idents.getLowercase(nominal_type.ident.ident_idx).ptr) self.buf.allocator.free(type_text);
+        _ = try self.buf.writer().write(type_text);
 
         var args_iter = self.env.types.iterNominalArgs(nominal_type);
         if (args_iter.count() > 0) {
@@ -485,14 +489,14 @@ pub const TypeWriter = struct {
         const fields_slice = self.env.types.getRecordFieldsSlice(fields);
 
         // Write first field - we already verified that there's at least one field
-        _ = try self.buf.writer().write(self.env.idents.getText(fields_slice.items(.name)[0]));
+        _ = try self.buf.writer().write(self.env.idents.getLowercase(fields_slice.items(.name)[0]));
         _ = try self.buf.writer().write(": ");
         try self.writeVarWithContext(fields_slice.items(.var_)[0], .RecordFieldContent, root_var);
 
         // Write remaining fields
         for (fields_slice.items(.name)[1..], fields_slice.items(.var_)[1..]) |name, var_| {
             _ = try self.buf.writer().write(", ");
-            _ = try self.buf.writer().write(self.env.idents.getText(name));
+            _ = try self.buf.writer().write(self.env.idents.getLowercase(name));
             _ = try self.buf.writer().write(": ");
             try self.writeVarWithContext(var_, .RecordFieldContent, root_var);
         }
@@ -528,7 +532,7 @@ pub const TypeWriter = struct {
         _ = try self.buf.writer().write("{ ");
         for (fields.items(.name), fields.items(.var_), 0..) |field_name, field_var, i| {
             if (i > 0) _ = try self.buf.writer().write(", ");
-            _ = try self.buf.writer().write(self.env.idents.getText(field_name));
+            _ = try self.buf.writer().write(self.env.idents.getLowercase(field_name));
             _ = try self.buf.writer().write(": ");
             try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
         }
@@ -543,7 +547,7 @@ pub const TypeWriter = struct {
                     const ext_fields = self.env.types.getRecordFieldsSlice(ext_record.fields);
                     for (ext_fields.items(.name), ext_fields.items(.var_)) |field_name, field_var| {
                         if (fields.len > 0 or ext_fields.len > 0) _ = try self.buf.writer().write(", ");
-                        _ = try self.buf.writer().write(self.env.idents.getText(field_name));
+                        _ = try self.buf.writer().write(self.env.idents.getLowercase(field_name));
                         _ = try self.buf.writer().write(": ");
                         try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
                     }
@@ -567,7 +571,7 @@ pub const TypeWriter = struct {
                 // Show rigid vars with .. syntax
                 if (fields.len > 0) _ = try self.buf.writer().write(", ");
                 _ = try self.buf.writer().write("..");
-                _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
+                _ = try self.buf.writer().write(self.env.idents.getLowercase(ident_idx));
             },
             else => {
                 if (fields.len > 0) _ = try self.buf.writer().write(", ");
@@ -589,7 +593,7 @@ pub const TypeWriter = struct {
                     const ext_fields = self.env.types.getRecordFieldsSlice(ext_record.fields);
                     for (ext_fields.items(.name), ext_fields.items(.var_)) |field_name, field_var| {
                         _ = try self.buf.writer().write(", ");
-                        _ = try self.buf.writer().write(self.env.idents.getText(field_name));
+                        _ = try self.buf.writer().write(self.env.idents.getLowercase(field_name));
                         _ = try self.buf.writer().write(": ");
                         try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
                     }
@@ -613,7 +617,7 @@ pub const TypeWriter = struct {
                 // Show rigid vars with .. syntax
                 if (num_fields > 0) _ = try self.buf.writer().write(", ");
                 _ = try self.buf.writer().write("..");
-                _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
+                _ = try self.buf.writer().write(self.env.idents.getLowercase(ident_idx));
             },
             else => {
                 // Show other types (aliases, errors, etc)
@@ -643,7 +647,7 @@ pub const TypeWriter = struct {
         switch (ext_resolved.desc.content) {
             .flex_var => |mb_ident_idx| {
                 if (mb_ident_idx) |ident_idx| {
-                    _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
+                    _ = try self.buf.writer().write(self.env.idents.getLowercase(ident_idx));
                 } else {
                     // Check if this variable appears multiple times
                     const occurrences = self.countVarOccurrences(tag_union.ext, root_var);
@@ -660,7 +664,7 @@ pub const TypeWriter = struct {
                 },
             },
             .rigid_var => |ident_idx| {
-                _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
+                _ = try self.buf.writer().write(self.env.idents.getLowercase(ident_idx));
             },
             else => {
                 try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
@@ -670,7 +674,9 @@ pub const TypeWriter = struct {
 
     /// Write a single tag
     fn writeTag(self: *Self, tag: Tag, root_var: Var) std.mem.Allocator.Error!void {
-        _ = try self.buf.writer().write(self.env.idents.getText(tag.name));
+        const tag_text = try self.env.idents.interner.getUppercase(self.buf.allocator, @enumFromInt(@as(u32, tag.name.idx)));
+        defer if (tag_text.ptr != self.env.idents.getLowercase(tag.name).ptr) self.buf.allocator.free(tag_text);
+        _ = try self.buf.writer().write(tag_text);
         const args = self.env.types.sliceVars(tag.args);
         if (args.len > 0) {
             _ = try self.buf.writer().write("(");

@@ -102,8 +102,9 @@ pub const TypeHeader = struct {
         const region = cir.store.getRegionAt(node_idx);
         try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-        const name_str = cir.idents.getText(self.name);
-        try tree.pushStringPair("name", name_str);
+        const type_text = try cir.idents.interner.getUppercase(tree.allocator, @enumFromInt(@as(u32, self.name.idx)));
+        defer if (type_text.ptr != cir.idents.getLowercase(self.name).ptr) tree.allocator.free(type_text);
+        try tree.pushStringPair("name", type_text);
 
         const attrs = tree.beginNode();
 
@@ -154,10 +155,10 @@ pub const WhereClause = union(enum) {
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 // Add module-of and ident information
-                const var_name_str = cir.idents.getText(method.var_name);
+                const var_name_str = cir.idents.getLowercase(method.var_name);
                 try tree.pushStringPair("module-of", var_name_str);
 
-                const method_name_str = cir.idents.getText(method.method_name);
+                const method_name_str = cir.idents.getLowercase(method.method_name);
                 try tree.pushStringPair("ident", method_name_str);
 
                 const attrs = tree.beginNode();
@@ -184,10 +185,10 @@ pub const WhereClause = union(enum) {
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                const var_name_str = cir.idents.getText(alias.var_name);
+                const var_name_str = cir.idents.getLowercase(alias.var_name);
                 try tree.pushStringPair("module-of", var_name_str);
 
-                const alias_name_str = cir.idents.getText(alias.alias_name);
+                const alias_name_str = cir.idents.getLowercase(alias.alias_name);
                 try tree.pushStringPair("ident", alias_name_str);
 
                 const attrs = tree.beginNode();
@@ -251,11 +252,12 @@ pub const ExposedItem = struct {
         const begin = tree.beginNode();
         try tree.pushStaticAtom("exposed");
 
-        const name_str = cir.idents.getText(self.name);
-        try tree.pushStringPair("name", name_str);
+        const type_text = try cir.idents.interner.getUppercase(tree.allocator, @enumFromInt(@as(u32, self.name.idx)));
+        defer if (type_text.ptr != cir.idents.getLowercase(self.name).ptr) tree.allocator.free(type_text);
+        try tree.pushStringPair("name", type_text);
 
         if (self.alias) |alias_idx| {
-            const alias_str = cir.idents.getText(alias_idx);
+            const alias_str = cir.idents.getLowercase(alias_idx);
             try tree.pushStringPair("alias", alias_str);
         }
 
@@ -383,7 +385,7 @@ pub const RecordField = struct {
     pub fn pushToSExprTree(self: *const RecordField, cir: anytype, tree: anytype) !void {
         const begin = tree.beginNode();
         try tree.pushStaticAtom("field");
-        try tree.pushStringPair("name", cir.idents.getText(self.name));
+        try tree.pushStringPair("name", cir.idents.getLowercase(self.name));
         const attrs = tree.beginNode();
         try cir.store.getExpr(self.value).pushToSExprTree(cir, tree, self.value);
         try tree.endNode(begin, attrs);
@@ -416,7 +418,7 @@ pub const ExternalDecl = struct {
         try cir.appendRegionInfoToSExprTreeFromRegion(tree, self.region);
 
         // Add fully qualified name
-        try tree.pushStringPair("ident", cir.idents.getText(self.qualified_name));
+        try tree.pushStringPair("ident", cir.idents.getLowercase(self.qualified_name));
 
         // Add kind
         switch (self.kind) {
@@ -434,7 +436,7 @@ pub const ExternalDecl = struct {
         try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
         // Add fully qualified name
-        try tree.pushStringPair("ident", cir.idents.getText(self.qualified_name));
+        try tree.pushStringPair("ident", cir.idents.getLowercase(self.qualified_name));
 
         // Add kind
         switch (self.kind) {

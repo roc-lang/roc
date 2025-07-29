@@ -107,28 +107,29 @@ pub fn findStringOrSlot(self: *const Self, string: []const u8) struct { idx: ?Id
     }
 }
 
-/// Resize the hash table when it gets too full.
-fn resizeHashTable(self: *Self, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
-    const old_table = self.hash_table;
-    const new_size = old_table.len() * 2;
-
-    // Create new hash table initialized to zeros
-    self.hash_table = try collections.SafeList(Idx).initCapacity(gpa, new_size);
-    try self.hash_table.items.ensureTotalCapacityPrecise(gpa, new_size);
-    self.hash_table.items.items.len = new_size;
-    @memset(self.hash_table.items.items, .unused);
-
-    // Rehash all existing entries
-    for (old_table.items.items) |idx| {
-        if (idx != .unused) {
-            // Get the string for this index
-            const string = self.getText(idx);
-            const result = self.findStringOrSlot(string);
-            self.hash_table.items.items[result.slot] = idx;
+/// Find a string by linearly searching through all interned strings.
+/// Returns the Idx if found, or null if not found.
+fn findString(self: *const Self, string: []const u8) ?Idx {
+    var offset: u32 = 1; // Skip the first null byte
+    
+    while (offset < self.bytes.len()) {
+        // Find the next null terminator
+        const start = offset;
+        while (offset < self.bytes.len() and self.bytes.items.items[offset] != 0) {
+            offset += 1;
+        }
+        
+        if (offset <= self.bytes.len()) {
+            const stored_string = self.bytes.items.items[start..offset];
+            if (std.mem.eql(u8, string, stored_string)) {
+                return @enumFromInt(start);
+            }
+            // Move past the null terminator
+            offset += 1;
         }
     }
-
-    @constCast(&old_table).deinit(gpa);
+    
+    return null;
 }
 
 /// Convert an ASCII uppercase letter to lowercase.
@@ -147,34 +148,27 @@ fn toUpperAscii(c: u8) u8 {
     return c;
 }
 
-/// Add a string to this interner, returning a unique, serial index.
-/// If the string starts with an uppercase ASCII letter, it will be converted to lowercase.
+/// Add a nonempty string to this interner, returning a unique, serial index.
+/// If the string starts with an uppercase ASCII letter, it will be converted to lowercase internally.
+/// Empty strings may not be passed to this function, and it will panic in debug builds if this happens!
+/// This saves memory because it means we don't store duplicates of e.g. "Serializer" and "serializer",
+/// when identifiers are always known to be either lowercase or uppercase based on context (e.g. variables
+/// and record fields and packages are always lowercase, modules and types and tags are always uppercase).
 pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
-    if (std.debug.runtime_safety) {
-        std.debug.assert(!self.frozen); // Should not insert into a frozen interner
-    }
+    std.debug.assert(string.len > 0); // Should never be asked to intern empty strings!
+    std.debug.assert(!(string[0] >= '0' and string[0] <= '9')); // Identifiers cannot start with digits!
+    std.debug.assert(!self.frozen); // Should not insert into a frozen interner
 
-    // Check if we need to resize the hash table (when 80% full = entry_count * 5 >= hash_table.len() * 4)
-    if (self.entry_count * 5 >= self.hash_table.len() * 4) {
-        try self.resizeHashTable(gpa);
-    }
-
-    // Check if we need to normalize the case
-    var needs_case_conversion = false;
-    if (string.len > 0 and string[0] >= 'A' and string[0] <= 'Z') {
-        needs_case_conversion = true;
-    }
-
-    if (needs_case_conversion) {
+    // Normalize to lowercase
+    if (string[0] >= 'A' and string[0] <= 'Z') {
         // Create a normalized version with lowercase first character
         var normalized = try gpa.alloc(u8, string.len);
         defer gpa.free(normalized);
         @memcpy(normalized, string);
         normalized[0] = toLowerAscii(normalized[0]);
-        
-        // Find the normalized string or the slot where it should be inserted
-        const result = self.findStringOrSlot(normalized);
 
+        // Find the normalized string using linear search
+        const result = self.findStringOrSlot(normalized);
         if (result.idx) |existing_idx| {
             // String already exists
             return existing_idx;
@@ -194,7 +188,6 @@ pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8) std.mem.A
     } else {
         // No case conversion needed
         const result = self.findStringOrSlot(string);
-
         if (result.idx) |existing_idx| {
             // String already exists
             return existing_idx;
@@ -217,6 +210,8 @@ pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8) std.mem.A
 /// Check if a string is already interned in this interner, used for generating unique names.
 /// This checks for the normalized version (lowercase first char if uppercase).
 pub fn contains(self: *const Self, string: []const u8) bool {
+    std.debug.assert(string.len > 0); // Should never check empty strings!
+    std.debug.assert(!(string[0] >= '0' and string[0] <= '9')); // Identifiers cannot start with digits!
     // Check if we need to normalize the case
     if (string.len > 0 and string[0] >= 'A' and string[0] <= 'Z') {
         // Need to check with normalized version
@@ -236,17 +231,17 @@ pub fn contains(self: *const Self, string: []const u8) bool {
     }
 }
 
-/// Get a reference to the text for an interned string.
-pub fn getText(self: *const Self, idx: Idx) []u8 {
+/// Get a reference to the lowercase text for an interned string.
+pub fn getLowercase(self: *const Self, idx: Idx) []u8 {
     const bytes_slice = self.bytes.items.items;
     return std.mem.sliceTo(bytes_slice[@intFromEnum(idx)..], 0);
 }
 
-/// Get the text for a type identifier (converts first char to uppercase if lowercase).
+/// Get the text for an uppercase identifier (converts first char to uppercase if lowercase).
 /// Caller must free the returned slice if it was allocated.
-pub fn getTypeText(self: *const Self, allocator: std.mem.Allocator, idx: Idx) ![]u8 {
-    const text = self.getText(idx);
-    if (text.len > 0 and text[0] >= 'a' and text[0] <= 'z') {
+pub fn getUppercase(self: *const Self, allocator: std.mem.Allocator, idx: Idx) std.mem.Allocator.Error![]u8 {
+    const text = self.getLowercase(idx);
+    if (text[0] >= 'a' and text[0] <= 'z') {
         // Need to convert to uppercase
         const result = try allocator.alloc(u8, text.len);
         @memcpy(result, text);
@@ -255,12 +250,6 @@ pub fn getTypeText(self: *const Self, allocator: std.mem.Allocator, idx: Idx) ![
     }
     // Already uppercase or doesn't start with letter - return as-is (not owned)
     return text;
-}
-
-/// Get the text for a tag identifier (converts first char to uppercase if lowercase).
-/// Caller must free the returned slice if it was allocated.
-pub fn getTagText(self: *const Self, allocator: std.mem.Allocator, idx: Idx) ![]u8 {
-    return self.getTypeText(allocator, idx); // Tags use same logic as types
 }
 
 /// Freeze the interner, preventing any new entries from being added.
@@ -411,7 +400,7 @@ test "IdentInterner basic CompactWriter roundtrip" {
     // Verify all strings are accessible and correct
     for (test_strings[0..9], 0..) |expected_str, i| {
         const idx = indices.items[i];
-        const actual_str = deserialized.getText(idx);
+        const actual_str = deserialized.getLowercase(idx);
         try testing.expectEqualStrings(expected_str, actual_str);
     }
 
@@ -485,14 +474,14 @@ test "IdentInterner with populated hashmap CompactWriter roundtrip" {
     try testing.expectEqual(original_entry_count, deserialized.entry_count);
 
     // But all strings should still be accessible
-    try testing.expectEqualStrings("first", deserialized.getText(@enumFromInt(0)));
-    try testing.expectEqualStrings("second", deserialized.getText(@enumFromInt(6)));
-    try testing.expectEqualStrings("third", deserialized.getText(@enumFromInt(13)));
-    try testing.expectEqualStrings("fourth", deserialized.getText(@enumFromInt(19)));
-    try testing.expectEqualStrings("fifth", deserialized.getText(@enumFromInt(26)));
-    try testing.expectEqualStrings("sixth", deserialized.getText(@enumFromInt(32)));
-    try testing.expectEqualStrings("seventh", deserialized.getText(@enumFromInt(38)));
-    try testing.expectEqualStrings("eighth", deserialized.getText(@enumFromInt(46)));
+    try testing.expectEqualStrings("first", deserialized.getLowercase(@enumFromInt(0)));
+    try testing.expectEqualStrings("second", deserialized.getLowercase(@enumFromInt(6)));
+    try testing.expectEqualStrings("third", deserialized.getLowercase(@enumFromInt(13)));
+    try testing.expectEqualStrings("fourth", deserialized.getLowercase(@enumFromInt(19)));
+    try testing.expectEqualStrings("fifth", deserialized.getLowercase(@enumFromInt(26)));
+    try testing.expectEqualStrings("sixth", deserialized.getLowercase(@enumFromInt(32)));
+    try testing.expectEqualStrings("seventh", deserialized.getLowercase(@enumFromInt(38)));
+    try testing.expectEqualStrings("eighth", deserialized.getLowercase(@enumFromInt(46)));
 
     // Log to confirm the original had entries
     if (original_entry_count == 0) {
@@ -556,8 +545,8 @@ test "IdentInterner frozen state CompactWriter roundtrip" {
     }
 
     // Verify strings are still accessible
-    try testing.expectEqualStrings("test1", deserialized.getText(@enumFromInt(0)));
-    try testing.expectEqualStrings("test2", deserialized.getText(@enumFromInt(6)));
+    try testing.expectEqualStrings("test1", deserialized.getLowercase(@enumFromInt(0)));
+    try testing.expectEqualStrings("test2", deserialized.getLowercase(@enumFromInt(6)));
 }
 
 test "IdentInterner edge cases CompactWriter roundtrip" {
@@ -623,7 +612,7 @@ test "IdentInterner edge cases CompactWriter roundtrip" {
     // Verify all edge cases
     for (edge_cases, 0..) |expected_str, i| {
         const idx = indices.items[i];
-        const actual_str = deserialized.getText(idx);
+        const actual_str = deserialized.getLowercase(idx);
         try testing.expectEqualStrings(expected_str, actual_str);
     }
 }
@@ -640,33 +629,33 @@ test "IdentInterner case conversion" {
     const idx2 = try interner.insert(gpa, "hello");
     const idx3 = try interner.insert(gpa, "World");
     const idx4 = try interner.insert(gpa, "world");
-    
+
     // These should be the same due to case normalization
     try testing.expectEqual(idx1, idx2);
     try testing.expectEqual(idx3, idx4);
-    
+
     // The stored text should be lowercase
-    try testing.expectEqualStrings("hello", interner.getText(idx1));
-    try testing.expectEqualStrings("world", interner.getText(idx3));
-    
-    // Test getTypeText/getTagText - should convert back to uppercase
-    const type_text1 = try interner.getTypeText(gpa, idx1);
-    defer if (type_text1.ptr != interner.getText(idx1).ptr) gpa.free(type_text1);
+    try testing.expectEqualStrings("hello", interner.getLowercase(idx1));
+    try testing.expectEqualStrings("world", interner.getLowercase(idx3));
+
+    // Test getUppercase - should convert back to uppercase
+    const type_text1 = try interner.getUppercase(gpa, idx1);
+    defer if (type_text1.ptr != interner.getLowercase(idx1).ptr) gpa.free(type_text1);
     try testing.expectEqualStrings("Hello", type_text1);
-    
-    const tag_text1 = try interner.getTagText(gpa, idx3);
-    defer if (tag_text1.ptr != interner.getText(idx3).ptr) gpa.free(tag_text1);
+
+    const tag_text1 = try interner.getUppercase(gpa, idx3);
+    defer if (tag_text1.ptr != interner.getLowercase(idx3).ptr) gpa.free(tag_text1);
     try testing.expectEqualStrings("World", tag_text1);
-    
+
     // Test with already lowercase
     const idx5 = try interner.insert(gpa, "lowercase");
-    try testing.expectEqualStrings("lowercase", interner.getText(idx5));
-    
-    // getTypeText should still work even if already lowercase
-    const type_text2 = try interner.getTypeText(gpa, idx5);
-    defer if (type_text2.ptr != interner.getText(idx5).ptr) gpa.free(type_text2);
+    try testing.expectEqualStrings("lowercase", interner.getLowercase(idx5));
+
+    // getUppercase should still work even if already lowercase
+    const type_text2 = try interner.getUppercase(gpa, idx5);
+    defer if (type_text2.ptr != interner.getLowercase(idx5).ptr) gpa.free(type_text2);
     try testing.expectEqualStrings("Lowercase", type_text2);
-    
+
     // Test contains with case conversion
     try testing.expect(interner.contains("Hello"));
     try testing.expect(interner.contains("hello"));
@@ -747,20 +736,20 @@ test "IdentInterner multiple interners CompactWriter roundtrip" {
     deserialized3.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify interner 1
-    try testing.expectEqualStrings("interner1_string1", deserialized1.getText(idx1_1));
-    try testing.expectEqualStrings("interner1_string2", deserialized1.getText(idx1_2));
+    try testing.expectEqualStrings("interner1_string1", deserialized1.getLowercase(idx1_1));
+    try testing.expectEqualStrings("interner1_string2", deserialized1.getLowercase(idx1_2));
     try testing.expectEqual(@as(u32, 2), deserialized1.entry_count);
 
     // Verify interner 2 (frozen)
-    try testing.expectEqualStrings("interner2_string1", deserialized2.getText(idx2_1));
-    try testing.expectEqualStrings("interner2_string2", deserialized2.getText(idx2_2));
-    try testing.expectEqualStrings("interner2_string3", deserialized2.getText(idx2_3));
+    try testing.expectEqualStrings("interner2_string1", deserialized2.getLowercase(idx2_1));
+    try testing.expectEqualStrings("interner2_string2", deserialized2.getLowercase(idx2_2));
+    try testing.expectEqualStrings("interner2_string3", deserialized2.getLowercase(idx2_3));
     try testing.expectEqual(@as(u32, 3), deserialized2.entry_count);
     if (std.debug.runtime_safety) {
         try testing.expect(deserialized2.frozen);
     }
 
     // Verify interner 3
-    try testing.expectEqualStrings("interner3_string1", deserialized3.getText(idx3_1));
+    try testing.expectEqualStrings("interner3_string1", deserialized3.getLowercase(idx3_1));
     try testing.expectEqual(@as(u32, 1), deserialized3.entry_count);
 }

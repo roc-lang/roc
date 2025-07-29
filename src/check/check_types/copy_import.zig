@@ -88,7 +88,7 @@ fn copyAlias(
 ) std.mem.Allocator.Error!Alias {
 
     // Translate the type name ident
-    const type_name_str = source_idents.getText(source_alias.ident.ident_idx);
+    const type_name_str = source_idents.getLowercase(source_alias.ident.ident_idx);
     const translated_ident = try dest_idents.insert(allocator, base.Ident.for_text(type_name_str));
 
     var dest_args = std.ArrayList(Var).init(dest_store.gpa);
@@ -234,7 +234,7 @@ fn copyRecordFields(
     defer fresh_fields.deinit();
 
     for (source_fields.items(.name), source_fields.items(.var_)) |name, var_| {
-        const name_str = source_idents.getText(name);
+        const name_str = source_idents.getLowercase(name);
         const translated_name = try dest_idents.insert(allocator, base.Ident.for_text(name_str));
         _ = try fresh_fields.append(.{
             .name = translated_name, // Field names are local to the record type
@@ -297,7 +297,7 @@ fn copyTagUnion(
 
         const dest_args_range = try dest_store.appendVars(dest_args.items);
 
-        const name_str = source_idents.getText(name);
+        const name_str = source_idents.getLowercase(name);
         const translated_name = try dest_idents.insert(allocator, base.Ident.for_text(name_str));
 
         _ = try fresh_tags.append(.{
@@ -324,11 +324,11 @@ fn copyNominalType(
 ) std.mem.Allocator.Error!NominalType {
 
     // Translate the type name ident
-    const type_name_str = source_idents.getText(source_nominal.ident.ident_idx);
+    const type_name_str = source_idents.getLowercase(source_nominal.ident.ident_idx);
     const translated_ident = try dest_idents.insert(allocator, base.Ident.for_text(type_name_str));
 
     // Translate the origin module ident
-    const origin_str = source_idents.getText(source_nominal.origin_module);
+    const origin_str = source_idents.getLowercase(source_nominal.origin_module);
     const translated_origin = try dest_idents.insert(allocator, base.Ident.for_text(origin_str));
 
     var dest_args = std.ArrayList(Var).init(dest_store.gpa);

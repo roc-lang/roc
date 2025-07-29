@@ -160,8 +160,8 @@ pub const Store = struct {
     }
 
     /// Get the text for an identifier.
-    pub fn getText(self: *const Store, idx: Idx) []u8 {
-        return self.interner.getText(@enumFromInt(@as(u32, idx.idx)));
+    pub fn getLowercase(self: *const Store, idx: Idx) []u8 {
+        return self.interner.getLowercase(@enumFromInt(@as(u32, idx.idx)));
     }
 
     /// Check if an identifier text already exists in the store.
@@ -454,9 +454,9 @@ test "Ident.Store basic CompactWriter roundtrip" {
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify the identifiers are accessible
-    try testing.expectEqualStrings("hello", deserialized.getText(idx1));
-    try testing.expectEqualStrings("world!", deserialized.getText(idx2));
-    try testing.expectEqualStrings("_ignored", deserialized.getText(idx3));
+    try testing.expectEqualStrings("hello", deserialized.getLowercase(idx1));
+    try testing.expectEqualStrings("world!", deserialized.getLowercase(idx2));
+    try testing.expectEqualStrings("_ignored", deserialized.getLowercase(idx3));
 
     // Verify next_unique_name is preserved
     try testing.expectEqual(original.next_unique_name, deserialized.next_unique_name);
@@ -483,9 +483,9 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     const unique3 = try original.genUnique(gpa);
 
     // Verify unique names are correct
-    try testing.expectEqualStrings("0", original.getText(unique1));
-    try testing.expectEqualStrings("1", original.getText(unique2));
-    try testing.expectEqualStrings("2", original.getText(unique3));
+    try testing.expectEqualStrings("0", original.getLowercase(unique1));
+    try testing.expectEqualStrings("1", original.getLowercase(unique2));
+    try testing.expectEqualStrings("2", original.getLowercase(unique3));
 
     // Verify next_unique_name was incremented
     try testing.expectEqual(@as(u32, 3), original.next_unique_name);
@@ -522,10 +522,10 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify all identifiers
-    try testing.expectEqualStrings("regular", deserialized.getText(idx1));
-    try testing.expectEqualStrings("0", deserialized.getText(unique1));
-    try testing.expectEqualStrings("1", deserialized.getText(unique2));
-    try testing.expectEqualStrings("2", deserialized.getText(unique3));
+    try testing.expectEqualStrings("regular", deserialized.getLowercase(idx1));
+    try testing.expectEqualStrings("0", deserialized.getLowercase(unique1));
+    try testing.expectEqualStrings("1", deserialized.getLowercase(unique2));
+    try testing.expectEqualStrings("2", deserialized.getLowercase(unique3));
 
     // Verify next_unique_name is preserved
     try testing.expectEqual(@as(u32, 3), deserialized.next_unique_name);
@@ -661,13 +661,13 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     // Verify all identifiers (skip duplicate at end)
     for (test_idents[0..10], 0..) |test_ident, i| {
         const idx = indices.items[i];
-        const text = deserialized.getText(idx);
+        const text = deserialized.getLowercase(idx);
         try testing.expectEqualStrings(test_ident.text, text);
     }
 
     // Verify unique names
-    try testing.expectEqualStrings("0", deserialized.getText(unique1));
-    try testing.expectEqualStrings("1", deserialized.getText(unique2));
+    try testing.expectEqualStrings("0", deserialized.getLowercase(unique1));
+    try testing.expectEqualStrings("1", deserialized.getLowercase(unique2));
 
     // Verify the interner's hash map is empty after deserialization
     try testing.expectEqual(@as(usize, 0), deserialized.interner.strings.count());
@@ -745,18 +745,18 @@ test "Ident.Store multiple stores CompactWriter roundtrip" {
     deserialized3.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify store 1
-    try testing.expectEqualStrings("store1_ident", deserialized1.getText(idx1_1));
+    try testing.expectEqualStrings("store1_ident", deserialized1.getLowercase(idx1_1));
     try testing.expectEqual(@as(u32, 1), deserialized1.next_unique_name);
 
     // Verify store 2 (frozen)
-    try testing.expectEqualStrings("store2_ident!", deserialized2.getText(idx2_1));
-    try testing.expectEqualStrings("_store2_ignored", deserialized2.getText(idx2_2));
+    try testing.expectEqualStrings("store2_ident!", deserialized2.getLowercase(idx2_1));
+    try testing.expectEqualStrings("_store2_ignored", deserialized2.getLowercase(idx2_2));
     if (std.debug.runtime_safety) {
         try testing.expect(deserialized2.interner.frozen);
     }
 
     // Verify store 3
-    try testing.expectEqualStrings("store3", deserialized3.getText(idx3_1));
+    try testing.expectEqualStrings("store3", deserialized3.getLowercase(idx3_1));
 
     // Verify all have empty hash maps
     try testing.expectEqual(@as(usize, 0), deserialized1.interner.strings.count());

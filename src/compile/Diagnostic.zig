@@ -1079,7 +1079,7 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) !Report {
-        const ident_name = ident_store.getText(diagnostic.ident);
+        const ident_name = ident_store.getLowercase(diagnostic.ident);
 
         var report = Report.init(gpa, "UNUSED VARIABLE", .warning);
         const owned_ident = try report.addOwnedString(ident_name);
@@ -1128,7 +1128,7 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) !Report {
-        const ident_name = ident_store.getText(diagnostic.ident);
+        const ident_name = ident_store.getLowercase(diagnostic.ident);
 
         var report = Report.init(gpa, "UNDERSCORE VARIABLE USED", .warning);
         const owned_ident = try report.addOwnedString(ident_name);

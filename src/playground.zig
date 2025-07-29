@@ -783,7 +783,7 @@ fn findTypeInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier:
             switch (pattern) {
                 .assign => |assign| {
                     // Get the identifier text
-                    const ident_text = cir.idents.getText(assign.ident);
+                    const ident_text = cir.idents.getLowercase(assign.ident);
 
                     // Check if this matches our target identifier
                     if (std.mem.eql(u8, ident_text, identifier)) {

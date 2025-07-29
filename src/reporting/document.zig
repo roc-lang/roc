@@ -213,7 +213,7 @@ pub const DocumentElement = union(enum) {
     },
 
     /// Get the text content if this is a text element, null otherwise.
-    pub fn getText(self: DocumentElement) ?[]const u8 {
+    pub fn getLowercase(self: DocumentElement) ?[]const u8 {
         return switch (self) {
             .text => |t| t,
             .annotated => |a| a.content,

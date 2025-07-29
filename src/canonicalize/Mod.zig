@@ -361,7 +361,7 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void 
             types.TypeIdent{ .ident_idx = type_ident },
             anno_var,
             &.{},
-            try ir.idents.insert(gpa, base.Ident.for_text(ir.module_name)),
+            if (ir.module_name.len > 0) try ir.idents.insert(gpa, base.Ident.for_text(ir.module_name)) else try ir.idents.genUnique(gpa),
         ),
         Region.zero(),
     );
@@ -374,8 +374,9 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void 
 
     // Add True and False to unqualified_nominal_tags
     // TODO: in the future, we should have hardcoded constants for these.
-    try self.unqualified_nominal_tags.put(gpa, "True", type_decl_idx);
-    try self.unqualified_nominal_tags.put(gpa, "False", type_decl_idx);
+    // Note: We use lowercase because tag names are stored as lowercase in the interner
+    try self.unqualified_nominal_tags.put(gpa, "true", type_decl_idx);
+    try self.unqualified_nominal_tags.put(gpa, "false", type_decl_idx);
 }
 
 const Self = @This();
@@ -575,7 +576,7 @@ pub fn canonicalizeFile(
                 try self.scopeUpdateTypeDecl(type_header.name, type_decl_stmt_idx);
 
                 // Remove from exposed_type_texts since the type is now fully defined
-                const type_text = self.env.idents.getText(type_header.name);
+                const type_text = self.env.idents.getLowercase(type_header.name);
                 _ = self.exposed_type_texts.remove(type_text);
             },
             else => {
@@ -1198,7 +1199,7 @@ fn canonicalizeImportStatement(
     const alias = try self.resolveModuleAlias(import_stmt.alias_tok, module_name) orelse return null;
 
     // 3. Get or create Import.Idx for this module
-    const module_name_text = self.env.idents.getText(module_name);
+    const module_name_text = self.env.idents.getLowercase(module_name);
     const module_import_idx = try self.env.imports.getOrPut(self.env.gpa, &self.env.strings, module_name_text);
 
     // 4. Add to scope: alias -> module_name mapping
@@ -1255,8 +1256,8 @@ fn createQualifiedName(
     module_name: Ident.Idx,
     field_name: Ident.Idx,
 ) Ident.Idx {
-    const module_text = self.env.idents.getText(module_name);
-    const field_text = self.env.idents.getText(field_name);
+    const module_text = self.env.idents.getLowercase(module_name);
+    const field_text = self.env.idents.getLowercase(field_name);
 
     // Allocate space for "module.field" - this case still needs allocation since we're combining
     // module name from import with field name from usage site
@@ -1360,7 +1361,7 @@ fn introduceExposedItemsIntoScope(
 
     // If we have module_envs, validate the imports
     if (self.module_envs) |envs_map| {
-        const module_name_text = self.env.idents.getText(module_name);
+        const module_name_text = self.env.idents.getLowercase(module_name);
 
         // Check if the module exists
         if (!envs_map.contains(module_name_text)) {
@@ -1378,7 +1379,7 @@ fn introduceExposedItemsIntoScope(
         // Validate each exposed item
         for (exposed_items_slice) |exposed_item_idx| {
             const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
-            const item_name_text = self.env.idents.getText(exposed_item.name);
+            const item_name_text = self.env.idents.getLowercase(exposed_item.name);
 
             // Check if the item is exposed by the module
             // We need to look up by string because the identifiers are from different modules
@@ -1699,7 +1700,7 @@ pub fn canonicalizeExpr(
                         // Check if this is a module alias
                         if (self.scopeLookupModule(module_alias)) |module_name| {
                             // This is a module-qualified lookup
-                            const module_text = self.env.idents.getText(module_name);
+                            const module_text = self.env.idents.getLowercase(module_name);
 
                             // Check if this module is imported in the current scope
                             const import_idx = self.scopeLookupImportedModule(module_text) orelse {
@@ -1715,7 +1716,7 @@ pub fn canonicalizeExpr(
 
                             // Look up the target node index in the module's exposed_items
                             // Need to convert identifier from current module to target module
-                            const field_text = self.env.idents.getText(ident);
+                            const field_text = self.env.idents.getLowercase(ident);
                             const target_node_idx = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
                                     if (module_env.idents.findByString(field_text)) |target_ident| {
@@ -1765,7 +1766,7 @@ pub fn canonicalizeExpr(
                         // Check if this identifier is an exposed item from an import
                         if (self.scopeLookupExposedItem(ident)) |exposed_info| {
                             // Get the Import.Idx for the module this item comes from
-                            const module_text = self.env.idents.getText(exposed_info.module_name);
+                            const module_text = self.env.idents.getLowercase(exposed_info.module_name);
                             const import_idx = self.scopeLookupImportedModule(module_text) orelse {
                                 // This shouldn't happen if imports are properly tracked, but handle it gracefully
                                 return CanonicalizedExpr{
@@ -1779,7 +1780,7 @@ pub fn canonicalizeExpr(
 
                             // Look up the target node index in the module's exposed_items
                             // Need to convert identifier from current module to target module
-                            const field_text = self.env.idents.getText(exposed_info.original_name);
+                            const field_text = self.env.idents.getLowercase(exposed_info.original_name);
                             const target_node_idx = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
                                     if (module_env.idents.findByString(field_text)) |target_ident| {
@@ -2873,7 +2874,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
     const tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse @panic("tag token is not an ident");
-    const tag_name_text = self.parse_ir.env.idents.getText(tag_name);
+    const tag_name_text = self.parse_ir.env.idents.getLowercase(tag_name);
 
     var args_span = Expr.Span{ .span = DataSpan.empty() };
 
@@ -4093,7 +4094,7 @@ fn collectTypeVarProblems(ident: Ident.Idx, is_single_use: bool, ast_anno: AST.T
 fn reportTypeVarProblems(self: *Self, problems: []const TypeVarProblem) std.mem.Allocator.Error!void {
     for (problems) |problem| {
         const region = self.getTypeVarRegionFromAST(problem.ast_anno, problem.ident) orelse Region.zero();
-        const name_text = self.env.idents.getText(problem.ident);
+        const name_text = self.env.idents.getLowercase(problem.ident);
 
         switch (problem.problem) {
             .type_var_ending_in_underscore => {
@@ -4165,7 +4166,7 @@ fn processCollectedTypeVars(self: *Self) std.mem.Allocator.Error!void {
     const problems = self.scratch_type_var_problems.slice(problems_start, self.scratch_type_var_problems.top());
     // Report problems with zero regions since we don't have AST context
     for (problems) |problem| {
-        const name_text = self.env.idents.getText(problem.ident);
+        const name_text = self.env.idents.getLowercase(problem.ident);
 
         switch (problem.problem) {
             .type_var_ending_in_underscore => {
@@ -4755,7 +4756,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, can_intro
 
                 // Create type variable annotation for this parameter
                 // Check for underscore in type parameter
-                const param_name = self.parse_ir.env.idents.getText(param_ident);
+                const param_name = self.parse_ir.env.idents.getLowercase(param_ident);
                 if (param_name.len > 0 and param_name[0] == '_') {
                     try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                         .is_alias = true,
@@ -5832,9 +5833,9 @@ fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope
         .success => {},
         .shadowing_warning => |shadowed_info| {
             // Create diagnostic for exposed item shadowing
-            const item_text = self.env.idents.getText(item_name);
-            const shadowed_module_text = self.env.idents.getText(shadowed_info.module_name);
-            const current_module_text = self.env.idents.getText(item_info.module_name);
+            const item_text = self.env.idents.getLowercase(item_name);
+            const shadowed_module_text = self.env.idents.getLowercase(shadowed_info.module_name);
+            const current_module_text = self.env.idents.getLowercase(item_info.module_name);
 
             // For now, just add a simple diagnostic message
             const message = try std.fmt.allocPrint(gpa, "Exposed item '{s}' from module '{s}' shadows item from module '{s}'", .{ item_text, current_module_text, shadowed_module_text });
@@ -5850,9 +5851,9 @@ fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope
         },
         .already_in_scope => |existing_info| {
             // Create diagnostic for duplicate exposed item
-            const item_text = self.env.idents.getText(item_name);
-            const existing_module_text = self.env.idents.getText(existing_info.module_name);
-            const new_module_text = self.env.idents.getText(item_info.module_name);
+            const item_text = self.env.idents.getLowercase(item_name);
+            const existing_module_text = self.env.idents.getLowercase(existing_info.module_name);
+            const new_module_text = self.env.idents.getLowercase(item_info.module_name);
 
             const message = try std.fmt.allocPrint(gpa, "Exposed item '{s}' already imported from module '{s}', cannot import again from module '{s}'", .{ item_text, existing_module_text, new_module_text });
             const message_str = try self.env.strings.insert(gpa, message);
@@ -5906,7 +5907,7 @@ fn scopeLookupImportedModule(self: *const Self, module_name: []const u8) ?Import
 
 /// Extract the module name from a full qualified name (e.g., "Json" from "json.Json")
 fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) std.mem.Allocator.Error!Ident.Idx {
-    const module_text = self.env.idents.getText(module_name_ident);
+    const module_text = self.env.idents.getLowercase(module_name_ident);
 
     // Find the last dot and extract the part after it
     if (std.mem.lastIndexOf(u8, module_text, ".")) |last_dot_idx| {
@@ -6067,7 +6068,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, can_
             // Create external declaration for where clause method constraint
             // This represents the requirement that type variable must come from a module
             // that provides the specified method
-            const var_name_text = self.env.idents.getText(var_ident);
+            const var_name_text = self.env.idents.getLowercase(var_ident);
 
             // Create qualified name: "module(a).method"
             const qualified_text = try std.fmt.allocPrint(self.env.gpa, "module({s}).{s}", .{ var_name_text, method_name_clean });
@@ -6111,7 +6112,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, can_
             // Create external declaration for where clause alias constraint
             // This represents the requirement that type variable must come from a module
             // that provides the specified type alias
-            const var_name_text = self.env.idents.getText(var_ident);
+            const var_name_text = self.env.idents.getLowercase(var_ident);
 
             // Create qualified name: "module(a).Alias"
             const qualified_text = try std.fmt.allocPrint(self.env.gpa, "module({s}).{s}", .{ var_name_text, alias_name_clean });
@@ -6543,7 +6544,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
 
     // Check if this is a module alias
     const module_name = self.scopeLookupModule(module_alias) orelse return null;
-    const module_text = self.env.idents.getText(module_name);
+    const module_text = self.env.idents.getLowercase(module_name);
 
     // Check if this module is imported in the current scope
     const import_idx = self.scopeLookupImportedModule(module_text) orelse {
@@ -6567,7 +6568,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
 
     // Look up the target node index in the module's exposed_items
     // Need to convert identifier from current module to target module
-    const field_text = self.env.idents.getText(field_name);
+    const field_text = self.env.idents.getLowercase(field_name);
     const target_node_idx = if (self.module_envs) |envs_map| blk: {
         if (envs_map.get(module_text)) |module_env| {
             if (module_env.idents.findByString(field_text)) |target_ident| {
@@ -7759,7 +7760,7 @@ test "record literal uses record_unbound" {
 
                     // Check the field
                     const fields_slice = env.types.getRecordFieldsSlice(fields);
-                    const field_name = env.idents.getText(fields_slice.get(0).name);
+                    const field_name = env.idents.getLowercase(fields_slice.get(0).name);
                     try testing.expectEqualStrings("value", field_name);
                 },
                 else => return error.ExpectedRecordUnbound,
@@ -7803,8 +7804,8 @@ test "record_unbound basic functionality" {
 
                 // Check field names
                 const field_slice = env.types.getRecordFieldsSlice(fields);
-                try testing.expectEqualStrings("x", env.idents.getText(field_slice.get(0).name));
-                try testing.expectEqualStrings("y", env.idents.getText(field_slice.get(1).name));
+                try testing.expectEqualStrings("x", env.idents.getLowercase(field_slice.get(0).name));
+                try testing.expectEqualStrings("y", env.idents.getLowercase(field_slice.get(1).name));
             },
             else => return error.ExpectedRecordUnbound,
         },
@@ -7844,9 +7845,9 @@ test "record_unbound with multiple fields" {
 
                 // Check field names
                 const field_slice = env.types.getRecordFieldsSlice(fields);
-                try testing.expectEqualStrings("a", env.idents.getText(field_slice.get(0).name));
-                try testing.expectEqualStrings("b", env.idents.getText(field_slice.get(1).name));
-                try testing.expectEqualStrings("c", env.idents.getText(field_slice.get(2).name));
+                try testing.expectEqualStrings("a", env.idents.getLowercase(field_slice.get(0).name));
+                try testing.expectEqualStrings("b", env.idents.getLowercase(field_slice.get(1).name));
+                try testing.expectEqualStrings("c", env.idents.getLowercase(field_slice.get(2).name));
             },
             else => return error.ExpectedRecordUnbound,
         },

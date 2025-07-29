@@ -182,8 +182,8 @@ pub const TypeIdent = struct {
 
     /// Get the ordering of how a compares to b
     pub fn order(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.ident_idx);
-        const b_text = store.getText(b.ident_idx);
+        const a_text = store.getLowercase(a.ident_idx);
+        const b_text = store.getLowercase(b.ident_idx);
         return std.mem.order(u8, a_text, b_text);
     }
 };
@@ -588,8 +588,8 @@ pub const RecordField = struct {
 
     /// Get the ordering of how a compares to b
     pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.name);
-        const b_text = store.getText(b.name);
+        const a_text = store.getLowercase(a.name);
+        const b_text = store.getLowercase(b.name);
         return std.mem.order(u8, a_text, b_text);
     }
 
@@ -637,8 +637,8 @@ pub const Tag = struct {
 
     /// Get the ordering of how a compares to b
     pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.name);
-        const b_text = store.getText(b.name);
+        const a_text = store.getLowercase(a.name);
+        const b_text = store.getLowercase(b.name);
         return std.mem.order(u8, a_text, b_text);
     }
 

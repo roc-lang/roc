@@ -839,7 +839,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                         if (dot_access.args) |args_span| {
                             // Method call with arguments
                             // Get the origin module path
-                            const origin_module_path = self.cir.idents.getText(nominal.origin_module);
+                            const origin_module_path = self.cir.idents.getLowercase(nominal.origin_module);
 
                             // Find which imported module matches this path
                             var origin_module_idx: ?ModuleEnv.Import.Idx = null;
@@ -862,7 +862,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                             if (origin_module) |module| {
                                 // Look up the method in the origin module's exports
                                 // Need to convert identifier from current module to target module
-                                const method_name_str = self.cir.idents.getText(dot_access.field_name);
+                                const method_name_str = self.cir.idents.getLowercase(dot_access.field_name);
 
                                 // Search through the module's exposed items
                                 const node_idx_opt = if (module.idents.findByString(method_name_str)) |target_ident|

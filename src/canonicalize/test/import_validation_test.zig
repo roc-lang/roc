@@ -143,21 +143,21 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         switch (diagnostic) {
             .module_not_found => |d| {
                 module_not_found_count += 1;
-                const module_name = parse_env.idents.getText(d.module_name);
+                const module_name = parse_env.idents.getLowercase(d.module_name);
                 if (std.mem.eql(u8, module_name, "NonExistent")) {
                     found_non_existent = true;
                 }
             },
             .value_not_exposed => |d| {
                 value_not_exposed_count += 1;
-                const value_name = parse_env.idents.getText(d.value_name);
+                const value_name = parse_env.idents.getLowercase(d.value_name);
                 if (std.mem.eql(u8, value_name, "doesNotExist")) {
                     found_does_not_exist = true;
                 }
             },
             .type_not_exposed => |d| {
                 type_not_exposed_count += 1;
-                const type_name = parse_env.idents.getText(d.type_name);
+                const type_name = parse_env.idents.getLowercase(d.type_name);
                 if (std.mem.eql(u8, type_name, "InvalidType")) {
                     found_invalid_type = true;
                 }

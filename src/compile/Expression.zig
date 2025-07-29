@@ -730,7 +730,9 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-tag");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("name", ir.idents.getText(tag_expr.name));
+                const tag_text = try ir.idents.interner.getUppercase(tree.allocator, @enumFromInt(@as(u32, tag_expr.name.idx)));
+                defer if (tag_text.ptr != ir.idents.getLowercase(tag_expr.name).ptr) tree.allocator.free(tag_text);
+                try tree.pushStringPair("name", tag_text);
                 const attrs = tree.beginNode();
 
                 if (tag_expr.args.span.len > 0) {
@@ -755,7 +757,9 @@ pub const Expr = union(enum) {
                 switch (stmt) {
                     .s_nominal_decl => |decl| {
                         const header = ir.store.getTypeHeader(decl.header);
-                        try tree.pushStringPair("nominal", ir.idents.getText(header.name));
+                        const type_text = try ir.idents.interner.getUppercase(tree.allocator, @enumFromInt(@as(u32, header.name.idx)));
+                        defer if (type_text.ptr != ir.idents.getLowercase(header.name).ptr) tree.allocator.free(type_text);
+                        try tree.pushStringPair("nominal", type_text);
                     },
                     else => {
                         // Handle malformed nominal type declaration by pushing error info
