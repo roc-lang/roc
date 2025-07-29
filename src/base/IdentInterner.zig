@@ -1,10 +1,10 @@
-//! An interner for short and likely repeated strings in in a Roc file.
+//! An interner for identifiers in a Roc file.
 //!
-//! This interner deduplicates its string values because they are
-//! expected to be small and often repeated since they tend to represent
-//! the same value being referenced in many places. The indices assigned
-//! to each interned string are serial, meaning they can be used for
-//! arrays with values corresponding 1-to-1 to interned values, e.g. regions.
+//! This interner deduplicates identifiers and normalizes their case.
+//! When an identifier starting with an uppercase ASCII letter is interned,
+//! it is converted to lowercase for storage. This optimization takes advantage
+//! of the fact that uppercase and lowercase identifiers are used in
+//! non-overlapping contexts in Roc (e.g., types vs values).
 
 const std = @import("std");
 const mod = @import("mod.zig");
@@ -34,7 +34,7 @@ pub const Idx = enum(u32) {
     _,
 };
 
-/// Initialize a `SmallStringInterner` with the specified capacity.
+/// Initialize an `IdentInterner` with the specified capacity.
 pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!Self {
     // TODO: tune this. Rough assumption that average small string is 4 bytes.
     const bytes_per_string = 4;
@@ -131,7 +131,24 @@ fn resizeHashTable(self: *Self, gpa: std.mem.Allocator) std.mem.Allocator.Error!
     @constCast(&old_table).deinit(gpa);
 }
 
+/// Convert an ASCII uppercase letter to lowercase.
+fn toLowerAscii(c: u8) u8 {
+    if (c >= 'A' and c <= 'Z') {
+        return c + ('a' - 'A');
+    }
+    return c;
+}
+
+/// Convert an ASCII lowercase letter to uppercase.
+fn toUpperAscii(c: u8) u8 {
+    if (c >= 'a' and c <= 'z') {
+        return c - ('a' - 'A');
+    }
+    return c;
+}
+
 /// Add a string to this interner, returning a unique, serial index.
+/// If the string starts with an uppercase ASCII letter, it will be converted to lowercase.
 pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
     if (std.debug.runtime_safety) {
         std.debug.assert(!self.frozen); // Should not insert into a frozen interner
@@ -142,37 +159,108 @@ pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8) std.mem.A
         try self.resizeHashTable(gpa);
     }
 
-    // Find the string or the slot where it should be inserted
-    const result = self.findStringOrSlot(string);
+    // Check if we need to normalize the case
+    var needs_case_conversion = false;
+    if (string.len > 0 and string[0] >= 'A' and string[0] <= 'Z') {
+        needs_case_conversion = true;
+    }
 
-    if (result.idx) |existing_idx| {
-        // String already exists
-        return existing_idx;
+    if (needs_case_conversion) {
+        // Create a normalized version with lowercase first character
+        var normalized = try gpa.alloc(u8, string.len);
+        defer gpa.free(normalized);
+        @memcpy(normalized, string);
+        normalized[0] = toLowerAscii(normalized[0]);
+        
+        // Find the normalized string or the slot where it should be inserted
+        const result = self.findStringOrSlot(normalized);
+
+        if (result.idx) |existing_idx| {
+            // String already exists
+            return existing_idx;
+        } else {
+            // String doesn't exist, add normalized version to bytes
+            const new_offset: Idx = @enumFromInt(self.bytes.len());
+
+            _ = try self.bytes.appendSlice(gpa, normalized);
+            _ = try self.bytes.append(gpa, 0);
+
+            // Add to hash table
+            self.hash_table.items.items[result.slot] = new_offset;
+            self.entry_count += 1;
+
+            return new_offset;
+        }
     } else {
-        // String doesn't exist, add it to bytes
-        const new_offset: Idx = @enumFromInt(self.bytes.len());
+        // No case conversion needed
+        const result = self.findStringOrSlot(string);
 
-        _ = try self.bytes.appendSlice(gpa, string);
-        _ = try self.bytes.append(gpa, 0);
+        if (result.idx) |existing_idx| {
+            // String already exists
+            return existing_idx;
+        } else {
+            // String doesn't exist, add it to bytes
+            const new_offset: Idx = @enumFromInt(self.bytes.len());
 
-        // Add to hash table
-        self.hash_table.items.items[result.slot] = new_offset;
-        self.entry_count += 1;
+            _ = try self.bytes.appendSlice(gpa, string);
+            _ = try self.bytes.append(gpa, 0);
 
-        return new_offset;
+            // Add to hash table
+            self.hash_table.items.items[result.slot] = new_offset;
+            self.entry_count += 1;
+
+            return new_offset;
+        }
     }
 }
 
 /// Check if a string is already interned in this interner, used for generating unique names.
+/// This checks for the normalized version (lowercase first char if uppercase).
 pub fn contains(self: *const Self, string: []const u8) bool {
-    const result = self.findStringOrSlot(string);
-    return result.idx != null;
+    // Check if we need to normalize the case
+    if (string.len > 0 and string[0] >= 'A' and string[0] <= 'Z') {
+        // Need to check with normalized version
+        var normalized: [256]u8 = undefined; // Stack buffer for small strings
+        if (string.len > normalized.len) {
+            // String too long for stack buffer, just check as-is
+            const result = self.findStringOrSlot(string);
+            return result.idx != null;
+        }
+        @memcpy(normalized[0..string.len], string);
+        normalized[0] = toLowerAscii(normalized[0]);
+        const result = self.findStringOrSlot(normalized[0..string.len]);
+        return result.idx != null;
+    } else {
+        const result = self.findStringOrSlot(string);
+        return result.idx != null;
+    }
 }
 
 /// Get a reference to the text for an interned string.
 pub fn getText(self: *const Self, idx: Idx) []u8 {
     const bytes_slice = self.bytes.items.items;
     return std.mem.sliceTo(bytes_slice[@intFromEnum(idx)..], 0);
+}
+
+/// Get the text for a type identifier (converts first char to uppercase if lowercase).
+/// Caller must free the returned slice if it was allocated.
+pub fn getTypeText(self: *const Self, allocator: std.mem.Allocator, idx: Idx) ![]u8 {
+    const text = self.getText(idx);
+    if (text.len > 0 and text[0] >= 'a' and text[0] <= 'z') {
+        // Need to convert to uppercase
+        const result = try allocator.alloc(u8, text.len);
+        @memcpy(result, text);
+        result[0] = toUpperAscii(result[0]);
+        return result;
+    }
+    // Already uppercase or doesn't start with letter - return as-is (not owned)
+    return text;
+}
+
+/// Get the text for a tag identifier (converts first char to uppercase if lowercase).
+/// Caller must free the returned slice if it was allocated.
+pub fn getTagText(self: *const Self, allocator: std.mem.Allocator, idx: Idx) ![]u8 {
+    return self.getTypeText(allocator, idx); // Tags use same logic as types
 }
 
 /// Freeze the interner, preventing any new entries from being added.
@@ -212,11 +300,11 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.hash_table.relocate(offset);
 }
 
-test "SmallStringInterner empty CompactWriter roundtrip" {
+test "IdentInterner empty CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    // Create an empty SmallStringInterner
+    // Create an empty IdentInterner
     var original = Self{};
     defer original.deinit(gpa);
 
@@ -256,7 +344,7 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     try testing.expectEqual(@as(u32, 0), deserialized.entry_count);
 }
 
-test "SmallStringInterner basic CompactWriter roundtrip" {
+test "IdentInterner basic CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -331,7 +419,7 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
     try testing.expectEqual(@as(u32, 9), deserialized.entry_count);
 }
 
-test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
+test "IdentInterner with populated hashmap CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -412,7 +500,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     }
 }
 
-test "SmallStringInterner frozen state CompactWriter roundtrip" {
+test "IdentInterner frozen state CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -472,7 +560,7 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
     try testing.expectEqualStrings("test2", deserialized.getText(@enumFromInt(6)));
 }
 
-test "SmallStringInterner edge cases CompactWriter roundtrip" {
+test "IdentInterner edge cases CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -540,7 +628,54 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     }
 }
 
-test "SmallStringInterner multiple interners CompactWriter roundtrip" {
+test "IdentInterner case conversion" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var interner = try Self.initCapacity(gpa, 10);
+    defer interner.deinit(gpa);
+
+    // Test uppercase to lowercase conversion
+    const idx1 = try interner.insert(gpa, "Hello");
+    const idx2 = try interner.insert(gpa, "hello");
+    const idx3 = try interner.insert(gpa, "World");
+    const idx4 = try interner.insert(gpa, "world");
+    
+    // These should be the same due to case normalization
+    try testing.expectEqual(idx1, idx2);
+    try testing.expectEqual(idx3, idx4);
+    
+    // The stored text should be lowercase
+    try testing.expectEqualStrings("hello", interner.getText(idx1));
+    try testing.expectEqualStrings("world", interner.getText(idx3));
+    
+    // Test getTypeText/getTagText - should convert back to uppercase
+    const type_text1 = try interner.getTypeText(gpa, idx1);
+    defer if (type_text1.ptr != interner.getText(idx1).ptr) gpa.free(type_text1);
+    try testing.expectEqualStrings("Hello", type_text1);
+    
+    const tag_text1 = try interner.getTagText(gpa, idx3);
+    defer if (tag_text1.ptr != interner.getText(idx3).ptr) gpa.free(tag_text1);
+    try testing.expectEqualStrings("World", tag_text1);
+    
+    // Test with already lowercase
+    const idx5 = try interner.insert(gpa, "lowercase");
+    try testing.expectEqualStrings("lowercase", interner.getText(idx5));
+    
+    // getTypeText should still work even if already lowercase
+    const type_text2 = try interner.getTypeText(gpa, idx5);
+    defer if (type_text2.ptr != interner.getText(idx5).ptr) gpa.free(type_text2);
+    try testing.expectEqualStrings("Lowercase", type_text2);
+    
+    // Test contains with case conversion
+    try testing.expect(interner.contains("Hello"));
+    try testing.expect(interner.contains("hello"));
+    try testing.expect(interner.contains("World"));
+    try testing.expect(interner.contains("world"));
+    try testing.expect(!interner.contains("NotThere"));
+}
+
+test "IdentInterner multiple interners CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
 

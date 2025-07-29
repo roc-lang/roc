@@ -56,7 +56,7 @@ const ModuleEnv = compile.ModuleEnv;
 const Region = base.Region;
 const Ident = base.Ident;
 
-const SmallStringInterner = collections.SmallStringInterner;
+const IdentInterner = collections.IdentInterner;
 
 const Slot = types_mod.Slot;
 const ResolvedVarDesc = types_mod.ResolvedVarDesc;

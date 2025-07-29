@@ -11,7 +11,7 @@ pub const Idx = enum(u32) { _ };
 
 /// An interner for string literals.
 ///
-/// We avoid using the SmallStringInterner for string literals since
+/// We avoid using the IdentInterner for string literals since
 /// they are expected to be almost all unique and also larger, meaning
 /// not worth the equality checking cost for depuplicating.
 pub const Store = struct {

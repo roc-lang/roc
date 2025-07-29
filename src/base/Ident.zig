@@ -11,7 +11,7 @@ const Region = @import("Region.zig");
 const serialization = @import("serialization");
 const collections = @import("collections");
 
-const SmallStringInterner = mod.SmallStringInterner;
+const IdentInterner = mod.IdentInterner;
 
 const Ident = @This();
 
@@ -90,14 +90,14 @@ pub const Attributes = packed struct(u3) {
 
 /// An interner for identifier names.
 pub const Store = struct {
-    interner: SmallStringInterner,
+    interner: IdentInterner,
     attributes: collections.SafeList(Attributes) = .{},
     next_unique_name: u32 = 0,
 
     /// Initialize the memory for an `Ident.Store` with a specific capaicty.
     pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!Store {
         return .{
-            .interner = try SmallStringInterner.initCapacity(gpa, capacity),
+            .interner = try IdentInterner.initCapacity(gpa, capacity),
         };
     }
 
@@ -191,7 +191,7 @@ pub const Store = struct {
     pub fn serializedSize(self: *const Store) usize {
         var size: usize = 0;
 
-        // SmallStringInterner components
+        // IdentInterner components
         size += @sizeOf(u32); // bytes_len
         size += self.interner.bytes.len(); // bytes data
         size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
@@ -256,10 +256,10 @@ pub const Store = struct {
         const next_unique_name = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
 
         // Create empty hash table
-        const hash_table = collections.SafeList(SmallStringInterner.Idx){};
+        const hash_table = collections.SafeList(IdentInterner.Idx){};
 
         // Construct the interner
-        const interner = SmallStringInterner{
+        const interner = IdentInterner{
             .bytes = bytes,
             .hash_table = hash_table,
             .entry_count = 0,
