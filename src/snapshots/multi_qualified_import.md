@@ -280,7 +280,7 @@ import json.Core
 [Encoder]
 
 json_encoder : Encoder
-json_encoder = Json.defaultEncoder
+json_encoder = Json.Core.Utf8.defaultEncoder
 
 # Test with qualified type in annotation
 process : json.Core.Utf8.Encoder -> Str

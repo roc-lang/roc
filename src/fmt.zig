@@ -854,10 +854,15 @@ const Formatter = struct {
                 try fmt.pushTokenText(s.token);
             },
             .ident => |i| {
-                // Extract first qualifier from span if any
                 const qualifier_tokens = fmt.ast.store.tokenSlice(i.qualifiers);
-                const qualifier = if (qualifier_tokens.len > 0) qualifier_tokens[0] else null;
-                try fmt.formatIdent(i.token, qualifier);
+
+                for (qualifier_tokens) |tok_idx| {
+                    const tok = @as(Token.Idx, @intCast(tok_idx));
+                    try fmt.pushTokenText(tok);
+                    try fmt.push('.');
+                }
+
+                try fmt.pushTokenText(i.token);
             },
             .field_access => |fa| {
                 _ = try fmt.formatExpr(fa.left);
@@ -1044,10 +1049,11 @@ const Formatter = struct {
 
                 for (qualifier_tokens) |tok_idx| {
                     const tok = @as(Token.Idx, @intCast(tok_idx));
-                    try fmt.pushAll(fmt.ast.resolve(tok));
+                    try fmt.pushTokenText(tok);
+                    try fmt.push('.');
                 }
 
-                try fmt.pushAll(fmt.ast.resolve(t.token));
+                try fmt.pushTokenText(t.token);
             },
             .if_then_else => |i| {
                 try fmt.pushAll("if");
@@ -1838,10 +1844,11 @@ const Formatter = struct {
 
                 for (qualifier_tokens) |tok_idx| {
                     const tok = @as(Token.Idx, @intCast(tok_idx));
-                    try fmt.pushAll(fmt.ast.resolve(tok));
+                    try fmt.pushTokenText(tok);
+                    try fmt.push('.');
                 }
 
-                try fmt.pushAll(fmt.ast.resolve(t.token));
+                try fmt.pushTokenText(t.token);
             },
             .mod_ty => |t| {
                 try fmt.pushTokenText(t.region.start);
