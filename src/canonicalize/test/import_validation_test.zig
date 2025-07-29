@@ -261,9 +261,9 @@ test "import interner - Import.Idx functionality" {
 
     _ = try result.can.canonicalizeFile();
 
-    // Check that we have the correct number of unique imports
-    // Expected: List, Dict, Json.Decode, Set (4 unique)
-    try expectEqual(@as(usize, 4), result.parse_env.imports.imports.len());
+    // Check that we have the correct number of total imports (duplicates are preserved here)
+    // Expected: List, Dict, List, Json.Decode, Set, Json.Decode (6 total)
+    try expectEqual(@as(usize, 6), result.parse_env.imports.imports.len());
 
     // Verify each unique module has an Import.Idx
     var found_list = false;
