@@ -9,18 +9,61 @@ app[]{f:platform""}{
 o:0}0
 ~~~
 # EXPECTED
-INVALID STATEMENT - fuzz_crash_043.md:1:20:2:5
+PARSE ERROR - fuzz_crash_043.md:1:20:1:21
+UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_043.md:2:3:2:4
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_043.md:2:4:2:5
+MALFORMED TYPE - :0:0:0:0
+INVALID STATEMENT - fuzz_crash_043.md:2:4:2:5
 INVALID STATEMENT - fuzz_crash_043.md:2:5:2:6
 # PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_043.md:1:20:1:21:**
+```roc
+app[]{f:platform""}{
+```
+                   ^
+
+
+**UNEXPECTED TOKEN IN TYPE ANNOTATION**
+The token **0** is not expected in a type annotation.
+Type annotations should contain types like _Str_, _Num a_, or _List U64_.
+
+Here is the problematic code:
+**fuzz_crash_043.md:2:3:2:4:**
+```roc
+o:0}0
+```
+  ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_043.md:2:4:2:5:**
+```roc
+o:0}0
+```
+   ^
+
+
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
+
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_043.md:1:20:2:5:**
+**fuzz_crash_043.md:2:4:2:5:**
 ```roc
-app[]{f:platform""}{
 o:0}0
 ```
+   ^
 
 
 **INVALID STATEMENT**
@@ -52,17 +95,17 @@ LowerIdent(2:1-2:2),OpColon(2:2-2:3),Int(2:3-2:4),CloseCurly(2:4-2:5),Int(2:5-2:
 				(e-string @1.17-1.19
 					(e-string-part @1.18-1.18 (raw ""))))))
 	(statements
-		(e-record @1.20-2.5
-			(field (field "o")
-				(e-int @2.3-2.4 (raw "0"))))
+		(s-malformed @1.20-1.21 (tag "statement_unexpected_token"))
+		(s-type-anno @2.1-2.4 (name "o")
+			(ty-malformed @2.3-2.4 (tag "ty_anno_unexpected_token")))
+		(e-malformed @2.4-2.5 (reason "expr_unexpected_token"))
 		(e-int @2.5-2.6 (raw "0"))))
 ~~~
 # FORMATTED
 ~~~roc
 app [] { f: platform "" }
-{
-	o: 0,
-}
+
+o : 
 0
 ~~~
 # CANONICALIZE

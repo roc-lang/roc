@@ -1204,6 +1204,9 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) std.mem.Allocato
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
+            } else if (statementType == .top_level and isCurly) {
+                // Blocks not allowed as top level statements
+                return try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, start);
             }
         },
         else => {},

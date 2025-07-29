@@ -15,13 +15,13 @@ foo =
 ASCII CONTROL CHARACTER - :0:0:0:0
 UNCLOSED STRING - :0:0:0:0
 MISSING HEADER - fuzz_crash_010.md:1:1:1:2
-PARSE ERROR - fuzz_crash_010.md:2:6:2:7
-PARSE ERROR - fuzz_crash_010.md:3:1:3:4
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_010.md:3:5:3:6
+PARSE ERROR - fuzz_crash_010.md:1:2:1:3
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_010.md:1:4:1:5
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_010.md:2:6:2:7
 PARSE ERROR - fuzz_crash_010.md:5:35:5:35
-INVALID STATEMENT - fuzz_crash_010.md:1:2:3:4
-INVALID STATEMENT - fuzz_crash_010.md:3:5:3:6
-INVALID STATEMENT - fuzz_crash_010.md:5:5:5:35
+INVALID STATEMENT - fuzz_crash_010.md:1:3:1:4
+INVALID STATEMENT - fuzz_crash_010.md:1:4:1:5
+INVALID STATEMENT - fuzz_crash_010.md:2:6:2:7
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -46,8 +46,32 @@ H{o,
 
 
 **PARSE ERROR**
-A parsing error occurred: `expected_expr_record_field_name`
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_010.md:1:2:1:3:**
+```roc
+H{o,
+```
+ ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_010.md:1:4:1:5:**
+```roc
+H{o,
+```
+   ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
 **fuzz_crash_010.md:2:6:2:7:**
@@ -55,30 +79,6 @@ Here is the problematic code:
     ]
 ```
      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly_or_comma`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**fuzz_crash_010.md:3:1:3:4:**
-```roc
-foo =
-```
-^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_010.md:3:5:3:6:**
-```roc
-foo =
-```
-    ^
 
 
 **PARSE ERROR**
@@ -97,34 +97,33 @@ Here is the problematic code:
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_010.md:1:2:3:4:**
+**fuzz_crash_010.md:1:3:1:4:**
 ```roc
 H{o,
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_010.md:1:4:1:5:**
+```roc
+H{o,
+```
+   ^
+
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_010.md:2:6:2:7:**
+```roc
     ]
-foo =
 ```
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_010.md:3:5:3:6:**
-```roc
-foo =
-```
-    ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_010.md:5:5:5:35:**
-```roc
-    "on        (string 'onmo %')))
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     ^
 
 
 # TOKENS
@@ -139,24 +138,37 @@ StringStart(5:5-5:6),StringPart(5:6-5:35),EndOfFile(5:35-5:35),
 (file @1.1-5.35
 	(malformed-header @1.1-1.2 (tag "missing_header"))
 	(statements
-		(e-malformed @3.1-3.4 (reason "expected_expr_close_curly_or_comma"))
-		(e-malformed @3.5-3.6 (reason "expr_unexpected_token"))
-		(e-string @5.5-5.35
-			(e-string-part @5.6-5.35 (raw "on        (string 'onmo %')))")))))
+		(s-malformed @1.2-1.3 (tag "statement_unexpected_token"))
+		(e-ident @1.3-1.4 (raw "o"))
+		(e-malformed @1.4-1.5 (reason "expr_unexpected_token"))
+		(e-malformed @2.6-2.7 (reason "expr_unexpected_token"))
+		(s-decl @3.1-5.35
+			(p-ident @3.1-3.4 (raw "foo"))
+			(e-string @5.5-5.35
+				(e-string-part @5.6-5.35 (raw "on        (string 'onmo %')))"))))))
 ~~~
 # FORMATTED
 ~~~roc
+o
 
 
-"on        (string 'onmo %')))"
+foo = 
+
+	"on        (string 'onmo %')))"
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(d-let
+		(p-assign @3.1-3.4 (ident "foo"))
+		(e-string @5.5-5.35
+			(e-literal @5.6-5.35 (string "on        (string 'onmo %')))")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt @3.1-3.4 (type "Str")))
+	(expressions
+		(expr @5.5-5.35 (type "Str"))))
 ~~~

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Higher-order function type annotation without outer parentheses
+description=fuzz crash
 type=file
 ~~~
 # SOURCE
