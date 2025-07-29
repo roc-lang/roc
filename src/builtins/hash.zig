@@ -33,11 +33,8 @@ const primes = [_]u64{
 };
 
 fn read_bytes(comptime bytes: u8, data: []const u8) u64 {
-    _ = bytes;
-    _ = data;
-    //     const T = std.meta.Int(.unsigned, 8 * bytes);
-    //     return mem.readIntLittle(T, data[0..bytes]);
-    @panic("TODO FIX error: root source file struct 'mem' has no member named 'readIntLittle'");
+    const T = std.meta.Int(.unsigned, 8 * bytes);
+    return mem.readInt(T, data[0..bytes], .little);
 }
 
 fn read_8bytes_swapped(data: []const u8) u64 {
@@ -91,7 +88,7 @@ const WyhashStateless = struct {
 
         var off: usize = 0;
         while (off < b.len) : (off += 32) {
-            @call(.{ .modifier = .always_inline }, self.round, .{b[off .. off + 32]});
+            @call(.always_inline, WyhashStateless.round, .{ self, b[off .. off + 32] });
         }
 
         self.msg_len += b.len;
@@ -143,14 +140,13 @@ const WyhashStateless = struct {
         return mum(self.seed ^ self.msg_len, primes[4]);
     }
 
-    // TODO FIXME
-    // pub fn hash(seed: u64, input: []const u8) u64 {
-    //     const aligned_len = input.len - (input.len % 32);
+    pub fn hash(seed: u64, input: []const u8) u64 {
+        const aligned_len = input.len - (input.len % 32);
 
-    //     const c = WyhashStateless.init(seed);
-    //     @call(.{ .modifier = .always_inline }, c.update, .{input[0..aligned_len]});
-    //     return @call(.{ .modifier = .always_inline }, c.final, .{input[aligned_len..]});
-    // }
+        var c = WyhashStateless.init(seed);
+        @call(.always_inline, WyhashStateless.update, .{ &c, input[0..aligned_len] });
+        return @call(.always_inline, WyhashStateless.final, .{ &c, input[aligned_len..] });
+    }
 };
 
 /// Fast non-cryptographic 64bit hash function.
@@ -169,24 +165,24 @@ pub const Wyhash = struct {
         };
     }
 
-    // TODO FIXME
-    // pub fn update(self: *Wyhash, b: []const u8) void {
-    //     var off: usize = 0;
+    pub fn update(self: *Wyhash, b: []const u8) void {
+        var off: usize = 0;
 
-    //     if (self.buf_len != 0 and self.buf_len + b.len >= 32) {
-    //         off += 32 - self.buf_len;
-    //         mem.copy(u8, self.buf[self.buf_len..], b[0..off]);
-    //         self.state.update(self.buf[0..]);
-    //         self.buf_len = 0;
-    //     }
+        if (self.buf_len != 0 and self.buf_len + b.len >= 32) {
+            off += 32 - self.buf_len;
+            @memcpy(self.buf[self.buf_len..][0..off], b[0..off]);
+            self.state.update(self.buf[0..]);
+            self.buf_len = 0;
+        }
 
-    //     const remain_len = b.len - off;
-    //     const aligned_len = remain_len - (remain_len % 32);
-    //     self.state.update(b[off .. off + aligned_len]);
+        const remain_len = b.len - off;
+        const aligned_len = remain_len - (remain_len % 32);
+        self.state.update(b[off .. off + aligned_len]);
 
-    //     mem.copy(u8, self.buf[self.buf_len..], b[off + aligned_len ..]);
-    //     self.buf_len += @as(u8, @intCast(b[off + aligned_len ..].len));
-    // }
+        const remaining = b[off + aligned_len ..];
+        @memcpy(self.buf[self.buf_len..][0..remaining.len], remaining);
+        self.buf_len += @as(u8, @intCast(b[off + aligned_len ..].len));
+    }
 
     pub fn final(self: *Wyhash) u64 {
         // const seed = self.state.seed;
@@ -197,11 +193,7 @@ pub const Wyhash = struct {
     }
 
     pub fn hash(seed: u64, input: []const u8) u64 {
-        _ = seed;
-        _ = input;
-
-        // return WyhashStateless.hash(seed, input);
-        @panic("TODO FIX ME");
+        return WyhashStateless.hash(seed, input);
     }
 };
 
@@ -221,8 +213,6 @@ test "test vectors" {
     try expectEqual(hash(4, "abcdefghijklmnopqrstuvwxyz"), 0xd0b270e1d8a7019c);
     try expectEqual(hash(5, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"), 0x602a1894d3bbfe7f);
     try expectEqual(hash(6, "12345678901234567890123456789012345678901234567890123456789012345678901234567890"), 0x829e9c148b75970e);
-
-    @panic("ASDF");
 }
 
 test "test vectors streaming" {
@@ -247,7 +237,7 @@ test "test vectors streaming" {
 
 test "iterative non-divisible update" {
     var buf: [8192]u8 = undefined;
-    for (buf, 0..) |*e, i| {
+    for (&buf, 0..) |*e, i| {
         e.* = @as(u8, @truncate(i));
     }
 
@@ -260,7 +250,7 @@ test "iterative non-divisible update" {
         var wy = Wyhash.init(seed);
         var i: usize = 0;
         while (i < end) : (i += 33) {
-            wy.update(buf[i..std.math.min(i + 33, end)]);
+            wy.update(buf[i..@min(i + 33, end)]);
         }
         const iterative_hash = wy.final();
 
