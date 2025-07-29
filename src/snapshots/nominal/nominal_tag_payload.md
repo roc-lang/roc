@@ -20,82 +20,9 @@ some2 = |a| Maybe.Some(a)
 none2 = Maybe.None
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_tag_payload.md:6:13:6:23
-INVALID NOMINAL TAG - nominal_tag_payload.md:6:13:6:13
-TYPE MISMATCH - nominal_tag_payload.md:9:9:9:19
-TYPE MISMATCH - nominal_tag_payload.md:11:13:11:23
-TYPE MISMATCH - nominal_tag_payload.md:13:9:13:19
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_tag_payload.md:6:13:6:23:**
-```roc
-some1 = |a| Maybe.Some(a)
-```
-            ^^^^^^^^^^
-
-It is of type:
-    _Maybe(a)_
-
-But you are trying to use it as:
-    _Maybe(a)_
-
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
-**nominal_tag_payload.md:6:13:**
-```roc
-some1 = |a| Maybe.Some(a)
-```
-            ^^^^^^^^^^
-
-The tag is:
-    _Some_
-
-But it should be one of:
-    _[None, Some(a)]_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_tag_payload.md:9:9:9:19:**
-```roc
-none1 = Maybe.None
-```
-        ^^^^^^^^^^
-
-It is of type:
-    _Maybe(a)_
-
-But you are trying to use it as:
-    _Maybe(a)_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_tag_payload.md:11:13:11:23:**
-```roc
-some2 = |a| Maybe.Some(a)
-```
-            ^^^^^^^^^^
-
-It is of type:
-    _Maybe(a)_
-
-But you are trying to use it as:
-    _Maybe(a)_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_tag_payload.md:13:9:13:19:**
-```roc
-none2 = Maybe.None
-```
-        ^^^^^^^^^^
-
-It is of type:
-    _Maybe(a)_
-
-But you are trying to use it as:
-    _Maybe(a)_
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),Comma(1:14-1:15),LowerIdent(1:16-1:21),Comma(1:21-1:22),LowerIdent(1:23-1:28),Comma(1:28-1:29),LowerIdent(1:30-1:35),Comma(1:35-1:36),LowerIdent(1:37-1:42),CloseSquare(1:42-1:43),
@@ -223,18 +150,18 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.6 (type "a -> Error"))
-		(patt @9.1-9.6 (type "Error"))
-		(patt @11.1-11.6 (type "_arg -> Error"))
-		(patt @13.1-13.6 (type "Error")))
+		(patt @6.1-6.6 (type "a -> Maybe(a)"))
+		(patt @9.1-9.6 (type "Maybe(a)"))
+		(patt @11.1-11.6 (type "_arg -> Maybe(a)"))
+		(patt @13.1-13.6 (type "Maybe(a)")))
 	(type_decls
 		(nominal @3.1-3.28 (type "Maybe(a)")
 			(ty-header @3.1-3.9 (name "Maybe")
 				(ty-args
 					(ty-var @3.7-3.8 (name "a"))))))
 	(expressions
-		(expr @6.9-6.26 (type "a -> Error"))
-		(expr @9.9-9.19 (type "Error"))
-		(expr @11.9-11.26 (type "_arg -> Error"))
-		(expr @13.9-13.19 (type "Error"))))
+		(expr @6.9-6.26 (type "a -> Maybe(a)"))
+		(expr @9.9-9.19 (type "Maybe(a)"))
+		(expr @11.9-11.26 (type "_arg -> Maybe(a)"))
+		(expr @13.9-13.19 (type "Maybe(a)"))))
 ~~~

@@ -907,7 +907,7 @@ is_named_color = |str| {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @50.5-50.10
+										(p-nominal @50.5-50.23
 											(p-applied-tag @50.5-50.23))))
 								(value
 									(e-string @50.27-50.86
@@ -933,7 +933,7 @@ is_named_color = |str| {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @51.5-51.10
+										(p-nominal @51.5-51.27
 											(p-applied-tag @51.5-51.27))))
 								(value
 									(e-string @51.31-51.109
@@ -965,7 +965,7 @@ is_named_color = |str| {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @52.5-52.10
+										(p-nominal @52.5-52.23
 											(p-applied-tag @52.5-52.23))))
 								(value
 									(e-lookup-local @52.27-52.32
@@ -973,7 +973,7 @@ is_named_color = |str| {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @53.5-53.10
+										(p-nominal @53.5-53.21
 											(p-applied-tag @53.5-53.21))))
 								(value
 									(e-lookup-local @53.25-53.30

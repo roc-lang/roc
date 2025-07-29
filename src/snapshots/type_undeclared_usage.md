@@ -18,7 +18,7 @@ AnotherType : SomeModule.MissingType
 ~~~
 # EXPECTED
 UNDECLARED TYPE - type_undeclared_usage.md:3:10:3:21
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/type_undeclared_usage.md:0:0:0:0
+MODULE NOT IMPORTED - type_undeclared_usage.md:10:15:10:37
 UNDECLARED TYPE - type_undeclared_usage.md:5:16:5:32
 UNUSED VARIABLE - type_undeclared_usage.md:6:17:6:22
 # PROBLEMS
@@ -33,11 +33,16 @@ MyType : UnknownType
          ^^^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**MODULE NOT IMPORTED**
+There is no module with the name `SomeModule` imported into this Roc file.
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/type_undeclared_usage.md:0:0:0:0**
+You're attempting to use this module here:
+**type_undeclared_usage.md:10:15:10:37:**
+```roc
+AnotherType : SomeModule.MissingType
+```
+              ^^^^^^^^^^^^^^^^^^^^^^
+
 
 **UNDECLARED TYPE**
 The type _UndeclaredResult_ is not declared in this scope.

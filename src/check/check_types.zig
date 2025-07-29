@@ -158,11 +158,10 @@ const InstantiateRegionBehavior = union(enum) {
     use_last_var,
 };
 
-/// Instantiate a variable, writing su
+/// Instantiate a variable
 fn instantiateVar(
     self: *Self,
     var_to_instantiate: Var,
-    mode: instantiate.InstantiationMode,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
     self.var_map.clearRetainingCapacity();
@@ -173,7 +172,7 @@ fn instantiateVar(
         var_to_instantiate,
         &self.cir.idents,
         &self.var_map,
-        mode,
+        .{ .generalize_rigid_to_flex = &self.rigid_var_map },
     );
 
     const root_instantiated_region = self.regions.get(@enumFromInt(@intFromEnum(var_to_instantiate))).*;
@@ -320,11 +319,7 @@ fn checkDef(self: *Self, def_idx: ModuleEnv.Def.Idx) std.mem.Allocator.Error!voi
         const expr = self.cir.store.getExpr(def.expr);
 
         const anno_var = ModuleEnv.varFrom(annotation.type_anno);
-        const anno_instantiated_var = try self.instantiateVar(
-            anno_var,
-            .{ .generalize_rigid_to_flex = &self.rigid_var_map },
-            .use_last_var,
-        );
+        const anno_instantiated_var = try self.instantiateVar(anno_var, .use_last_var);
 
         // If the expression is a lambda and we have an annotation, pass the expected type
         if (expr == .e_lambda) {
@@ -395,7 +390,7 @@ pub fn checkPattern(self: *Self, pattern_idx: ModuleEnv.Pattern.Idx) std.mem.All
 
             // Then, instantiate the nominal types backing var, for unification
             const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
-            const instantiated_backing_var = try self.instantiateVar(nominal_backing_var, .copy, .{ .explicit = pattern_region });
+            const instantiated_backing_var = try self.instantiateVar(nominal_backing_var, .{ .explicit = pattern_region });
 
             // Then, unify the nominal type's backing var against the CIR backing var
             const result = try self.unify(instantiated_backing_var, pattern_backing_var);
@@ -404,7 +399,7 @@ pub fn checkPattern(self: *Self, pattern_idx: ModuleEnv.Pattern.Idx) std.mem.All
             switch (result) {
                 .ok => {
                     // Then, instantiate the nominal type
-                    const instantiated_qualified_var = try self.instantiateVar(nominal_var, .copy, .{ .explicit = pattern_region });
+                    const instantiated_qualified_var = try self.instantiateVar(nominal_var, .{ .explicit = pattern_region });
 
                     // Unify - this should always succeed pattern_var should be flex var
                     _ = try self.unify(pattern_var, instantiated_qualified_var);
@@ -500,7 +495,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                     try self.import_cache.put(self.gpa, cache_key, new_copy);
                     break :blk new_copy;
                 };
-                const instantiated_copy = try self.instantiateVar(copied_var, .copy, .use_last_var);
+                const instantiated_copy = try self.instantiateVar(copied_var, .use_last_var);
 
                 // Unify our expression with the copied type
                 const result = try self.unify(expr_var, instantiated_copy);
@@ -596,11 +591,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                         .fn_effectful => |_| {
                             does_fx = true;
                             if (self.types.needsInstantiation(current_func_var)) {
-                                const instantiated_var = try self.instantiateVar(
-                                    current_func_var,
-                                    .{ .generalize_rigid_to_flex = &self.rigid_var_map },
-                                    .{ .explicit = expr_region },
-                                );
+                                const instantiated_var = try self.instantiateVar(current_func_var, .{ .explicit = expr_region });
                                 const resolved_inst = self.types.resolveVar(instantiated_var);
                                 std.debug.assert(resolved_inst.desc.content == .structure);
                                 std.debug.assert(resolved_inst.desc.content.structure == .fn_effectful);
@@ -611,11 +602,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                         },
                         .fn_pure => |_| {
                             if (self.types.needsInstantiation(current_func_var)) {
-                                const instantiated_var = try self.instantiateVar(
-                                    current_func_var,
-                                    .{ .generalize_rigid_to_flex = &self.rigid_var_map },
-                                    .{ .explicit = expr_region },
-                                );
+                                const instantiated_var = try self.instantiateVar(current_func_var, .{ .explicit = expr_region });
                                 const resolved_inst = self.types.resolveVar(instantiated_var);
                                 std.debug.assert(resolved_inst.desc.content == .structure);
                                 std.debug.assert(resolved_inst.desc.content.structure == .fn_pure);
@@ -627,11 +614,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                         .fn_unbound => |_| {
                             // Create TypeWriter for converting types to strings
                             if (self.types.needsInstantiation(current_func_var)) {
-                                const instantiated_var = try self.instantiateVar(
-                                    current_func_var,
-                                    .{ .generalize_rigid_to_flex = &self.rigid_var_map },
-                                    .{ .explicit = expr_region },
-                                );
+                                const instantiated_var = try self.instantiateVar(current_func_var, .{ .explicit = expr_region });
                                 const resolved_inst = self.types.resolveVar(instantiated_var);
                                 std.debug.assert(resolved_inst.desc.content == .structure);
                                 std.debug.assert(resolved_inst.desc.content.structure == .fn_unbound);
@@ -758,7 +741,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
 
             // Then, instantiate the nominal types backing var, for unification
             const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
-            const instantiated_backing_var = try self.instantiateVar(nominal_backing_var, .copy, .{ .explicit = expr_region });
+            const instantiated_backing_var = try self.instantiateVar(nominal_backing_var, .{ .explicit = expr_region });
 
             // Then, unify the nominal type's backing var against the CIR backing var
             const result = try self.unify(instantiated_backing_var, expr_backing_var);
@@ -767,7 +750,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
             switch (result) {
                 .ok => {
                     // Then, instantiate the nominal type
-                    const instantiated_qualified_var = try self.instantiateVar(nominal_var, .copy, .{ .explicit = expr_region });
+                    const instantiated_qualified_var = try self.instantiateVar(nominal_var, .{ .explicit = expr_region });
 
                     // Unify - this should always succeed expr_var should be flex var
                     _ = try self.unify(expr_var, instantiated_qualified_var);
@@ -925,7 +908,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                                         try self.import_cache.put(self.gpa, cache_key, new_copy);
                                         break :blk new_copy;
                                     };
-                                    const method_instantiated = try self.instantiateVar(method_var, .copy, .use_last_var);
+                                    const method_instantiated = try self.instantiateVar(method_var, .use_last_var);
 
                                     // Check all arguments
                                     var i: u32 = 0;
@@ -1187,11 +1170,11 @@ fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region
         .lt, .gt, .le, .ge, .eq, .ne => {
             // Comparison operators always return Bool
             const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-            const fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .copy, .{ .explicit = expr_region });
+            const fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             _ = try self.unify(expr_var, fresh_bool);
         },
         .@"and" => {
-            const lhs_fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .copy, .{ .explicit = expr_region });
+            const lhs_fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -1200,7 +1183,7 @@ fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region
             } });
 
             if (lhs_result.isOk()) {
-                const rhs_fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .copy, .{ .explicit = expr_region });
+                const rhs_fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
                 const rhs_result = try self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
@@ -1210,7 +1193,7 @@ fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region
             }
         },
         .@"or" => {
-            const lhs_fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .copy, .{ .explicit = expr_region });
+            const lhs_fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -1219,7 +1202,7 @@ fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region
             } });
 
             if (lhs_result.isOk()) {
-                const rhs_fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .copy, .{ .explicit = expr_region });
+                const rhs_fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
                 const rhs_result = try self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
@@ -1281,7 +1264,7 @@ fn checkIfElseExpr(
     // Check the condition of the 1st branch
     var does_fx = try self.checkExpr(first_branch.cond);
     const first_cond_var: Var = @enumFromInt(@intFromEnum(first_branch.cond));
-    const bool_var = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .copy, .{ .explicit = expr_region });
+    const bool_var = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
     const first_cond_result = try self.unify(bool_var, first_cond_var);
     self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
 
@@ -1301,7 +1284,7 @@ fn checkIfElseExpr(
         // Check the branches condition
         does_fx = try self.checkExpr(branch.cond) or does_fx;
         const cond_var: Var = @enumFromInt(@intFromEnum(branch.cond));
-        const branch_bool_var = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .copy, .{ .explicit = expr_region });
+        const branch_bool_var = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
         const cond_result = try self.unify(branch_bool_var, cond_var);
         self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
 
@@ -1324,7 +1307,7 @@ fn checkIfElseExpr(
                 does_fx = try self.checkExpr(remaining_branch.cond) or does_fx;
                 const remaining_cond_var: Var = @enumFromInt(@intFromEnum(remaining_branch.cond));
 
-                const fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .copy, .{ .explicit = expr_region });
+                const fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
                 const remaining_cond_result = try self.unify(fresh_bool, remaining_cond_var);
                 self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
 

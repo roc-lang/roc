@@ -32,9 +32,9 @@ INVALID STATEMENT - multi_qualified_import.md:3:23:3:31
 INVALID STATEMENT - multi_qualified_import.md:3:32:3:41
 UNDECLARED TYPE - multi_qualified_import.md:5:16:5:23
 UNDEFINED VARIABLE - multi_qualified_import.md:6:16:6:45
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/multi_qualified_import.md:0:0:0:0
+MODULE NOT IMPORTED - multi_qualified_import.md:9:11:9:33
 UNUSED VARIABLE - multi_qualified_import.md:10:12:10:19
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/multi_qualified_import.md:0:0:0:0
+MODULE NOT IMPORTED - multi_qualified_import.md:13:8:13:34
 UNDEFINED VARIABLE - multi_qualified_import.md:14:8:14:12
 INVALID STATEMENT - multi_qualified_import.md:14:12:14:17
 INVALID STATEMENT - multi_qualified_import.md:14:17:14:22
@@ -167,11 +167,24 @@ json_encoder = Json.Core.Utf8.defaultEncoder
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**MODULE NOT IMPORTED**
+There is no module with the name `module [json_encoder]
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/multi_qualified_import.md:0:0:0:0**
+import json.Core.Utf8 exposing [Encoder]
+
+json_encoder : Encoder
+json_encoder = Json.Core.Utf8.defaultEncoder
+
+# Test with qualified type in annotation
+process : json.Core.Utf8` imported into this Roc file.
+
+You're attempting to use this module here:
+**multi_qualified_import.md:9:11:9:33:**
+```roc
+process : json.Core.Utf8.Encoder -> Str
+```
+          ^^^^^^^^^^^^^^^^^^^^^^
+
 
 **UNUSED VARIABLE**
 Variable `encoder` is not used anywhere in your code.
@@ -185,11 +198,28 @@ process = |encoder| "processing"
            ^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**MODULE NOT IMPORTED**
+There is no module with the name `module [json_encoder]
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/multi_qualified_import.md:0:0:0:0**
+import json.Core.Utf8 exposing [Encoder]
+
+json_encoder : Encoder
+json_encoder = Json.Core.Utf8.defaultEncoder
+
+# Test with qualified type in annotation
+process : json.Core.Utf8.Encoder -> Str
+process = |encoder| "processing"
+
+# Test with multiple qualifiers
+data : json.Core.Utf8` imported into this Roc file.
+
+You're attempting to use this module here:
+**multi_qualified_import.md:13:8:13:34:**
+```roc
+data : json.Core.Utf8.EncodedData
+```
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `json` in this scope.

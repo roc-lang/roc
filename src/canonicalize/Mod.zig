@@ -846,7 +846,7 @@ fn collectBoundVars(self: *Self, pattern_idx: Pattern.Idx, bound_vars: *std.Auto
                 }
             }
         },
-        .int_literal, .small_dec_literal, .dec_literal, .str_literal, .underscore, .nominal, .runtime_error => {},
+        .int_literal, .small_dec_literal, .dec_literal, .str_literal, .underscore, .nominal, .nominal_external, .runtime_error => {},
     }
 }
 
@@ -2886,7 +2886,6 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
 
     // Create a single tag, open tag union for this variable
     // Use a placeholder ext_var that will be handled during type checking
-    // TODO(jared): Parent
     const ext_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar);
     const tag = try self.env.types.mkTag(tag_name, @ptrCast(self.env.store.sliceExpr(args_span)));
     const tag_union = try self.env.types.mkTagUnion(&[_]Tag{tag}, ext_var);
@@ -3273,6 +3272,7 @@ fn canonicalizePattern(
         },
         .tag => |e| {
             const tag_name = self.parse_ir.tokens.resolveIdentifier(e.tag_tok) orelse return null;
+            const tag_name_text = self.parse_ir.env.idents.getText(tag_name);
 
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
@@ -3307,40 +3307,136 @@ fn canonicalizePattern(
                 },
             }, tag_union_type, region);
 
+            // TODO: Support external tag patterns
+            // Should be similar to tag exprs
+
             if (e.qualifiers.span.len == 0) {
-                // If this is a tag without a prefix, then is it an
-                // anonymous tag and we can just return it
+                // Check if this is an unqualified nominal tag (e.g. True or False are in scope unqualified by default)
+                if (self.unqualified_nominal_tags.get(tag_name_text)) |nominal_type_decl| {
+                    // Get the type variable for the nominal type declaration (e.g., Bool type)
+                    const nominal_type_var = ModuleEnv.castIdx(Statement.Idx, TypeVar, nominal_type_decl);
+                    const nominal_pattern_idx = try self.env.addPatternAndTypeVarRedirect(ModuleEnv.Pattern{
+                        .nominal = .{
+                            .nominal_type_decl = nominal_type_decl,
+                            .backing_pattern = tag_pattern_idx,
+                            .backing_type = .tag,
+                        },
+                    }, nominal_type_var, region);
+                    return nominal_pattern_idx;
+                }
+
+                // If this is a tag without a prefix and not in unqualified_nominal_tags,
+                // then it is an anonymous tag and we can just return it
                 return tag_pattern_idx;
-            } else {
-                // If this is a tag with a prefix, then is it a nominal tag.
-                //
-                // TODO: Currently this just get the last qualified, then
-                // looks up the associated type. Is this right?
+            } else if (e.qualifiers.span.len == 1) {
+                // If this is a tag with a single, then is it a nominal tag and the qualifier is the type
 
                 // Get the last token of the qualifiers
                 const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
-                const type_tok_idx = qualifier_toks[e.qualifiers.span.len - 1];
-                const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
+                const type_tok_idx = qualifier_toks[0];
                 const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
+                const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
 
-                // Lookup last token (assumed to be a type decl) in scope
+                // Lookup the type ident in scope
                 const nominal_type_decl = self.scopeLookupTypeDecl(type_tok_ident) orelse
                     return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .undeclared_type = .{
                         .name = type_tok_ident,
                         .region = type_tok_region,
                     } });
+                const nominal_type_var = ModuleEnv.castIdx(Statement.Idx, TypeVar, nominal_type_decl);
 
-                // Create the nominal pattern
-                // In type checking, this will be unified with the nominal type if the `tag` is valid
-                const pattern_idx = try self.env.addPatternAndTypeVar(Pattern{
+                const pattern_idx = try self.env.addPatternAndTypeVarRedirect(ModuleEnv.Pattern{
                     .nominal = .{
                         .nominal_type_decl = nominal_type_decl,
                         .backing_pattern = tag_pattern_idx,
                         .backing_type = .tag,
                     },
-                }, Content{ .flex_var = null }, type_tok_region);
+                }, nominal_type_var, region);
 
                 return pattern_idx;
+            } else {
+                // If this is a tag with more than 1 qualifier, then it is an imported
+                // nominal type where the last qualifier is the type name, then the other
+                // are the module
+
+                // Get the last token of the qualifiers
+                const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
+
+                // Get the type from the last qualifier
+                const type_tok_idx = qualifier_toks[qualifier_toks.len - 1];
+                const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
+                const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
+                const type_tok_text = self.env.idents.getText(type_tok_ident);
+
+                // Get the fully resolved module name from all but the last qualifier
+                const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
+                const module_alias_text = self.parse_ir.resolveQualifiedName(
+                    .{ .span = .{ .start = 0, .len = @intCast(qualifier_toks.len - 2) } },
+                    qualifier_toks[qualifier_toks.len - 2],
+                    &strip_tokens,
+                );
+                const module_alias = try self.env.idents.insert(self.env.gpa, base.Ident.for_text(module_alias_text));
+
+                // Check if this is a module alias
+                const module_name = self.scopeLookupModule(module_alias) orelse {
+                    // Module is not in current scope
+                    return try self.env.pushMalformed(Pattern.Idx, ModuleEnv.Diagnostic{ .module_not_imported = .{
+                        .module_name = module_alias,
+                        .region = region,
+                    } });
+                };
+                const module_name_text = self.env.idents.getText(module_name);
+
+                // Check if this module is imported in the current scope
+                const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
+                    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .module_not_imported = .{
+                        .module_name = module_name,
+                        .region = region,
+                    } });
+                };
+
+                // Look up the target node index in the module's exposed_nodes
+                const target_node_idx, const type_content = blk: {
+                    const envs_map = self.module_envs orelse {
+                        break :blk .{ 0, Content.err };
+                    };
+
+                    const module_env = envs_map.get(module_name_text) orelse {
+                        break :blk .{ 0, Content.err };
+                    };
+
+                    const target_ident = module_env.idents.findByString(type_tok_text) orelse {
+                        // Type is not exposed by the module
+                        return try self.env.pushMalformed(Pattern.Idx, ModuleEnv.Diagnostic{ .type_not_exposed = .{
+                            .module_name = module_name,
+                            .type_name = type_tok_ident,
+                            .region = type_tok_region,
+                        } });
+                    };
+
+                    const other_module_node_id = module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse {
+                        // Type is not exposed by the module
+                        return try self.env.pushMalformed(Pattern.Idx, ModuleEnv.Diagnostic{ .type_not_exposed = .{
+                            .module_name = module_name,
+                            .type_name = type_tok_ident,
+                            .region = type_tok_region,
+                        } });
+                    };
+
+                    // Successfully found the target node
+                    break :blk .{ other_module_node_id, Content{ .flex_var = null } };
+                };
+
+                const nominal_pattern_idx = try self.env.addPatternAndTypeVar(ModuleEnv.Pattern{
+                    .nominal_external = .{
+                        .module_idx = import_idx,
+                        .target_node_idx = target_node_idx,
+                        .backing_pattern = tag_pattern_idx,
+                        .backing_type = .tag,
+                    },
+                }, type_content, region);
+
+                return nominal_pattern_idx;
             }
         },
         .record => |e| {

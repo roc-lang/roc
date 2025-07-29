@@ -62,13 +62,13 @@ INVALID STATEMENT - qualified_type_canonicalization.md:10:24:10:32
 INVALID STATEMENT - qualified_type_canonicalization.md:10:33:10:40
 MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
 UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0
+MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0
+MODULE NOT IMPORTED - qualified_type_canonicalization.md:26:14:26:27
 UNDECLARED TYPE - qualified_type_canonicalization.md:31:16:31:21
 UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0
+MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:13:39:26
+MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:55:39:76
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:42:27:42:42
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:43:28:43:41
 UNUSED VARIABLE - qualified_type_canonicalization.md:43:20:43:23
@@ -210,11 +210,37 @@ simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
                   ^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**MODULE NOT IMPORTED**
+There is no module with the name `module [
+    Color,
+    ModuleA.ModuleB.TypeC,
+    Result,
+    ExternalModule,
+]
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0**
+import Basics.Result
+import Color
+import ModuleA.ModuleB exposing [TypeC]
+import ExternalModule as ExtMod
+
+# Simple qualified type
+simpleQualified : Color.RGB
+simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
+
+# Aliased qualified type
+aliasedQualified : ExtMod.DataType
+aliasedQualified = ExtMod.DataType.Default
+
+# Multi-level qualified type
+multiLevelQualified : ModuleA.ModuleB` imported into this Roc file.
+
+You're attempting to use this module here:
+**qualified_type_canonicalization.md:22:23:22:44:**
+```roc
+multiLevelQualified : ModuleA.ModuleB.TypeC
+```
+                      ^^^^^^^^^^^^^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `new` in this scope.
@@ -227,11 +253,16 @@ multiLevelQualified = TypeC.new
                       ^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**MODULE NOT IMPORTED**
+There is no module with the name `Result` imported into this Roc file.
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0**
+You're attempting to use this module here:
+**qualified_type_canonicalization.md:26:14:26:27:**
+```roc
+resultType : Result.Result(I32, Str)
+```
+             ^^^^^^^^^^^^^
+
 
 **UNDECLARED TYPE**
 The type _Color_ is not declared in this scope.
@@ -256,17 +287,65 @@ processColor = |color|
                 ^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**MODULE NOT IMPORTED**
+There is no module with the name `Result` imported into this Roc file.
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0**
+You're attempting to use this module here:
+**qualified_type_canonicalization.md:39:13:39:26:**
+```roc
+transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+```
+            ^^^^^^^^^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/qualified_type_canonicalization.md:0:0:0:0**
+**MODULE NOT IMPORTED**
+There is no module with the name `module [
+    Color,
+    ModuleA.ModuleB.TypeC,
+    Result,
+    ExternalModule,
+]
+
+import Basics.Result
+import Color
+import ModuleA.ModuleB exposing [TypeC]
+import ExternalModule as ExtMod
+
+# Simple qualified type
+simpleQualified : Color.RGB
+simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
+
+# Aliased qualified type
+aliasedQualified : ExtMod.DataType
+aliasedQualified = ExtMod.DataType.Default
+
+# Multi-level qualified type
+multiLevelQualified : ModuleA.ModuleB.TypeC
+multiLevelQualified = TypeC.new
+
+# Using qualified type with generics
+resultType : Result.Result(I32, Str)
+resultType = Result.Ok(42)
+
+# Function returning qualified type
+getColor : {} -> Color.RGB
+getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
+
+# Function accepting qualified type
+processColor : Color.RGB -> Str
+processColor = |color|
+    "Color processed"
+
+# Multiple qualified types in a function signature
+transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB` imported into this Roc file.
+
+You're attempting to use this module here:
+**qualified_type_canonicalization.md:39:55:39:76:**
+```roc
+transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+```
+                                                      ^^^^^^^^^^^^^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `fromColor` in this scope.
@@ -559,7 +638,7 @@ transform = |result|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @42.9-42.15
+										(p-nominal @42.9-42.23
 											(p-applied-tag @42.9-42.23))))
 								(value
 									(e-call @42.27-42.47
@@ -569,7 +648,7 @@ transform = |result|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @43.9-43.15
+										(p-nominal @43.9-43.24
 											(p-applied-tag @43.9-43.24))))
 								(value
 									(e-runtime-error (tag "ident_not_in_scope")))))))))

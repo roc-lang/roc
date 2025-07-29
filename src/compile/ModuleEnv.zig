@@ -955,6 +955,34 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             break :blk report;
         },
+        .module_not_imported => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MODULE NOT IMPORTED", .runtime_error);
+
+            const module_name_bytes = self.idents.getText(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            // Format the message to match origin/main
+            try report.document.addText("There is no module with the name ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(" imported into this Roc file.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting to use this module here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
+            break :blk report;
+        },
         else => {
             // For unhandled diagnostics, create a generic report
             const diagnostic_name = @tagName(diagnostic);
@@ -1099,6 +1127,16 @@ pub fn addStatementAndTypeVar(self: *Self, expr: Statement, content: types_mod.C
 pub fn addPatternAndTypeVar(self: *Self, expr: Pattern, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Pattern.Idx {
     const expr_idx = try self.store.addPattern(expr, region);
     const expr_var = try self.types.freshFromContent(content);
+    debugAssertIdxsEql("addPatternAndTypeVar", expr_idx, expr_var);
+    self.debugAssertArraysInSync();
+    return expr_idx;
+}
+
+/// Add a new expression and type variable.
+/// This function asserts that the types array and the nodes are in sync.
+pub fn addPatternAndTypeVarRedirect(self: *Self, expr: Pattern, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!Pattern.Idx {
+    const expr_idx = try self.store.addPattern(expr, region);
+    const expr_var = try self.types.freshRedirect(redirect_to);
     debugAssertIdxsEql("addPatternAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;

@@ -52,8 +52,8 @@ MODULE NOT FOUND - can_import_type_annotations.md:5:1:5:38
 UNDECLARED TYPE - can_import_type_annotations.md:7:18:7:25
 UNDECLARED TYPE - can_import_type_annotations.md:7:29:7:37
 UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0
+MODULE NOT IMPORTED - can_import_type_annotations.md:26:18:26:36
+MODULE NOT IMPORTED - can_import_type_annotations.md:26:64:26:81
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `http.Client` was not found in this Roc project.
@@ -122,17 +122,77 @@ processRequest = |req| Http.defaultResponse
                   ^^^
 
 
-**COMPILER DIAGNOSTIC**
+**MODULE NOT IMPORTED**
+There is no module with the name `module []
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
+import http.Client as Http exposing [Request, Response]
+import json.Json
+import utils.Result exposing [Result]
 
-**COMPILER DIAGNOSTIC**
+processRequest : Request -> Response
+processRequest = |req| Http.defaultResponse
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_type_annotations.md:0:0:0:0**
+parseJson : Str -> Json.Value
+parseJson = |input| Json.parse(input)
+
+handleApi : Http.Request -> Result(Http.Response, Json.Error)
+handleApi = |request| {
+    result = Json.decode(request.body)
+    match result {
+        Ok(data) => Ok(Http.success(data))
+        Err(err) => Err(err)
+    }
+}
+
+config : Json.Config
+config = Json.defaultConfig
+
+# Test nested type qualification
+advancedParser : Json.Parser` imported into this Roc file.
+
+You're attempting to use this module here:
+**can_import_type_annotations.md:26:18:26:36:**
+```roc
+advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
+```
+                 ^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `module []
+
+import http.Client as Http exposing [Request, Response]
+import json.Json
+import utils.Result exposing [Result]
+
+processRequest : Request -> Response
+processRequest = |req| Http.defaultResponse
+
+parseJson : Str -> Json.Value
+parseJson = |input| Json.parse(input)
+
+handleApi : Http.Request -> Result(Http.Response, Json.Error)
+handleApi = |request| {
+    result = Json.decode(request.body)
+    match result {
+        Ok(data) => Ok(Http.success(data))
+        Err(err) => Err(err)
+    }
+}
+
+config : Json.Config
+config = Json.defaultConfig
+
+# Test nested type qualification
+advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser` imported into this Roc file.
+
+You're attempting to use this module here:
+**can_import_type_annotations.md:26:64:26:81:**
+```roc
+advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
+```
+                                                               ^^^^^^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

@@ -26,7 +26,7 @@ UNDECLARED TYPE - type_declarations.md:5:8:5:11
 UNDECLARED TYPE - type_declarations.md:5:13:5:16
 UNDECLARED TYPE - type_declarations.md:7:19:7:21
 UNDECLARED TYPE - type_declarations.md:7:32:7:41
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/type_declarations.md:0:0:0:0
+MODULE NOT IMPORTED - type_declarations.md:15:11:15:24
 EXPOSED BUT NOT DEFINED - type_declarations.md:1:51:1:56
 EXPOSED BUT NOT DEFINED - type_declarations.md:1:42:1:49
 # PROBLEMS
@@ -74,11 +74,16 @@ Some(a) : { foo : Ok(a), bar : Something }
                                ^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**MODULE NOT IMPORTED**
+There is no module with the name `Module` imported into this Roc file.
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/type_declarations.md:0:0:0:0**
+You're attempting to use this module here:
+**type_declarations.md:15:11:15:24:**
+```roc
+MyType2 : Module.Thingy
+```
+          ^^^^^^^^^^^^^
+
 
 **EXPOSED BUT NOT DEFINED**
 The module header says that `main!` is exposed, but it is not defined anywhere in this module.

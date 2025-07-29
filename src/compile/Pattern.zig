@@ -77,6 +77,21 @@ pub const Pattern = union(enum) {
         backing_pattern: Pattern.Idx,
         backing_type: Expr.NominalBackingType,
     },
+    /// Pattern that matches a nominal type
+    /// Used for pattern matching nominal types.
+    ///
+    /// ```roc
+    /// MyModule.Result.Ok("success")       # Tags
+    /// MyModule.Config.{ optimize : Bool}  # Records
+    /// MyModule.Point.(1.0, 2.0)           # Tuples
+    /// MyModule.Point.(1.0)                # Values
+    /// ```
+    nominal_external: struct {
+        module_idx: ModuleEnv.Import.Idx,
+        target_node_idx: u16,
+        backing_pattern: Pattern.Idx,
+        backing_type: Expr.NominalBackingType,
+    },
     /// Pattern that destructures a record, extracting specific fields including nested records.
     ///
     /// ```roc
@@ -299,6 +314,25 @@ pub const Pattern = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-nominal");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+
+                const attrs = tree.beginNode();
+                try ir.store.getPattern(n.backing_pattern).pushToSExprTree(ir, tree, n.backing_pattern);
+                try tree.endNode(begin, attrs);
+            },
+            .nominal_external => |n| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-nominal-external");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+
+                // Add module index
+                var buf: [32]u8 = undefined;
+                const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(n.module_idx)}) catch unreachable;
+                try tree.pushStringPair("module-idx", module_idx_str);
+
+                // Add target node index
+                var buf2: [32]u8 = undefined;
+                const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{n.target_node_idx}) catch unreachable;
+                try tree.pushStringPair("target-node-idx", target_idx_str);
 
                 const attrs = tree.beginNode();
                 try ir.store.getPattern(n.backing_pattern).pushToSExprTree(ir, tree, n.backing_pattern);

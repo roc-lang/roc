@@ -19,8 +19,6 @@ handleResult = |result| {
 ~~~
 # EXPECTED
 MODULE NOT FOUND - nominal_external_fully_qualified.md:3:1:3:22
-UNDECLARED TYPE - nominal_external_fully_qualified.md:8:23:8:36
-UNDECLARED TYPE - nominal_external_fully_qualified.md:9:23:9:36
 UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45
 # PROBLEMS
 **MODULE NOT FOUND**
@@ -32,28 +30,6 @@ You're attempting to use this module here:
 import MyResultModule
 ```
 ^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _MyResultType_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_external_fully_qualified.md:8:23:8:36:**
-```roc
-        MyResultModule.MyResultType.Ok(value) => value
-```
-                      ^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _MyResultType_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_external_fully_qualified.md:9:23:9:36:**
-```roc
-        MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
-```
-                      ^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -151,14 +127,16 @@ handleResult = |result| {
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-runtime-error @8.23-8.36 (tag "undeclared_type"))))
+											(p-nominal-external @8.9-8.46 (module-idx "0") (target-node-idx "0")
+												(p-applied-tag @8.9-8.46))))
 									(value
 										(e-lookup-local @8.50-8.55
 											(p-assign @8.40-8.45 (ident "value")))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-runtime-error @9.23-9.36 (tag "undeclared_type"))))
+											(p-nominal-external @9.9-9.46 (module-idx "0") (target-node-idx "0")
+												(p-applied-tag @9.9-9.46))))
 									(value
 										(e-string @9.50-9.74
 											(e-literal @9.51-9.73 (string "Error: $(code.toStr())")))))))))))

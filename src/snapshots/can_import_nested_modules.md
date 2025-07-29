@@ -50,18 +50,18 @@ INVALID STATEMENT - can_import_nested_modules.md:5:13:5:20
 INVALID STATEMENT - can_import_nested_modules.md:5:20:5:27
 INVALID STATEMENT - can_import_nested_modules.md:5:28:5:36
 INVALID STATEMENT - can_import_nested_modules.md:5:37:5:46
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0
+MODULE NOT IMPORTED - can_import_nested_modules.md:8:15:8:30
 UNDEFINED VARIABLE - can_import_nested_modules.md:9:26:9:41
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0
+MODULE NOT IMPORTED - can_import_nested_modules.md:12:28:12:42
 UNDEFINED VARIABLE - can_import_nested_modules.md:13:29:13:43
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0
+MODULE NOT IMPORTED - can_import_nested_modules.md:16:15:16:37
+MODULE NOT IMPORTED - can_import_nested_modules.md:16:58:16:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:18:5:18:37
 UNDEFINED VARIABLE - can_import_nested_modules.md:22:23:22:30
 UNDEFINED VARIABLE - can_import_nested_modules.md:22:37:22:58
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0
+MODULE NOT IMPORTED - can_import_nested_modules.md:25:16:25:36
+MODULE NOT IMPORTED - can_import_nested_modules.md:25:47:25:61
+MODULE NOT IMPORTED - can_import_nested_modules.md:25:63:25:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:26:24:26:41
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -270,11 +270,16 @@ import utils.String.Format exposing [padLeft]
                                     ^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**MODULE NOT IMPORTED**
+There is no module with the name `Config` imported into this Roc file.
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0**
+You're attempting to use this module here:
+**can_import_nested_modules.md:8:15:8:30:**
+```roc
+parseConfig : Config.Settings -> Str
+```
+              ^^^^^^^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `toString` in this scope.
@@ -287,11 +292,16 @@ parseConfig = |settings| Config.toString(settings)
                          ^^^^^^^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**MODULE NOT IMPORTED**
+There is no module with the name `HttpAuth` imported into this Roc file.
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0**
+You're attempting to use this module here:
+**can_import_nested_modules.md:12:28:12:42:**
+```roc
+authenticate : Str, Str -> HttpAuth.Token
+```
+                           ^^^^^^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `login` in this scope.
@@ -304,17 +314,57 @@ authenticate = |user, pass| HttpAuth.login(user, pass)
                             ^^^^^^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**MODULE NOT IMPORTED**
+There is no module with the name `module []
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0**
+import json.Parser.Config
+import http.Client.Auth as HttpAuth
+import utils.String.Format exposing [padLeft]
 
-**COMPILER DIAGNOSTIC**
+# Test multi-level type qualification
+parseConfig : Config.Settings -> Str
+parseConfig = |settings| Config.toString(settings)
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0**
+# Test multi-level value qualification
+authenticate : Str, Str -> HttpAuth.Token
+authenticate = |user, pass| HttpAuth.login(user, pass)
+
+# Test deeply nested qualification
+processData : Config.Parser` imported into this Roc file.
+
+You're attempting to use this module here:
+**can_import_nested_modules.md:16:15:16:37:**
+```roc
+processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
+```
+              ^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `module []
+
+import json.Parser.Config
+import http.Client.Auth as HttpAuth
+import utils.String.Format exposing [padLeft]
+
+# Test multi-level type qualification
+parseConfig : Config.Settings -> Str
+parseConfig = |settings| Config.toString(settings)
+
+# Test multi-level value qualification
+authenticate : Str, Str -> HttpAuth.Token
+authenticate = |user, pass| HttpAuth.login(user, pass)
+
+# Test deeply nested qualification
+processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser` imported into this Roc file.
+
+You're attempting to use this module here:
+**can_import_nested_modules.md:16:58:16:77:**
+```roc
+processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
+```
+                                                         ^^^^^^^^^^^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `parseWith` in this scope.
@@ -349,23 +399,38 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
                                     ^^^^^^^^^^^^^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**MODULE NOT IMPORTED**
+There is no module with the name `HttpAuth` imported into this Roc file.
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0**
+You're attempting to use this module here:
+**can_import_nested_modules.md:25:16:25:36:**
+```roc
+validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
+```
+               ^^^^^^^^^^^^^^^^^^^^
 
-**COMPILER DIAGNOSTIC**
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0**
+**MODULE NOT IMPORTED**
+There is no module with the name `HttpAuth` imported into this Roc file.
 
-**COMPILER DIAGNOSTIC**
+You're attempting to use this module here:
+**can_import_nested_modules.md:25:47:25:61:**
+```roc
+validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
+```
+                                              ^^^^^^^^^^^^^^
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_nested_modules.md:0:0:0:0**
+
+**MODULE NOT IMPORTED**
+There is no module with the name `HttpAuth` imported into this Roc file.
+
+You're attempting to use this module here:
+**can_import_nested_modules.md:25:63:25:77:**
+```roc
+validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
+```
+                                                              ^^^^^^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `validate` in this scope.

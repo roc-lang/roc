@@ -36,8 +36,8 @@ parser = Json.Parser.Advanced.NonExistent.create
 # EXPECTED
 MODULE NOT FOUND - can_import_unresolved_qualified.md:3:1:3:17
 MODULE NOT FOUND - can_import_unresolved_qualified.md:4:1:4:27
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_unresolved_qualified.md:0:0:0:0
-COMPILER DIAGNOSTIC - /Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_unresolved_qualified.md:0:0:0:0
+MODULE NOT IMPORTED - can_import_unresolved_qualified.md:14:18:14:37
+MODULE NOT IMPORTED - can_import_unresolved_qualified.md:14:41:14:61
 UNUSED VARIABLE - can_import_unresolved_qualified.md:15:19:15:22
 # PROBLEMS
 **MODULE NOT FOUND**
@@ -62,17 +62,53 @@ import http.Client as Http
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**COMPILER DIAGNOSTIC**
+**MODULE NOT IMPORTED**
+There is no module with the name `module []
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_unresolved_qualified.md:0:0:0:0**
+import json.Json
+import http.Client as Http
 
-**COMPILER DIAGNOSTIC**
+# Test unresolved qualified value
+main = Json.NonExistent.method
 
-**Compiler Diagnostic**
-Diagnostic type 'module_not_imported' is not yet handled in report generation.
-**/Users/jaredramirez/dev/github/roc-lang/roc/src/snapshots/can_import_unresolved_qualified.md:0:0:0:0**
+# Test unresolved qualified type in annotation
+parseData : Json.InvalidType -> Str
+parseData = |data| Json.stringify(data)
+
+# Test unresolved nested qualification
+processRequest : Http.Server` imported into this Roc file.
+
+You're attempting to use this module here:
+**can_import_unresolved_qualified.md:14:18:14:37:**
+```roc
+processRequest : Http.Server.Request -> Http.Server.Response
+```
+                 ^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `module []
+
+import json.Json
+import http.Client as Http
+
+# Test unresolved qualified value
+main = Json.NonExistent.method
+
+# Test unresolved qualified type in annotation
+parseData : Json.InvalidType -> Str
+parseData = |data| Json.stringify(data)
+
+# Test unresolved nested qualification
+processRequest : Http.Server.Request -> Http.Server` imported into this Roc file.
+
+You're attempting to use this module here:
+**can_import_unresolved_qualified.md:14:41:14:61:**
+```roc
+processRequest : Http.Server.Request -> Http.Server.Response
+```
+                                        ^^^^^^^^^^^^^^^^^^^^
+
 
 **UNUSED VARIABLE**
 Variable `req` is not used anywhere in your code.

@@ -110,7 +110,7 @@ pub const MODULEENV_STATEMENT_NODE_COUNT = 13;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
-pub const MODULEENV_PATTERN_NODE_COUNT = 13;
+pub const MODULEENV_PATTERN_NODE_COUNT = 14;
 
 comptime {
     // Check the number of ModuleEnv.Diagnostic nodes
@@ -800,6 +800,24 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
             return ModuleEnv.Pattern{
                 .nominal = .{
                     .nominal_type_decl = nominal_type_decl,
+                    .backing_pattern = backing_pattern,
+                    .backing_type = backing_type,
+                },
+            };
+        },
+        .pattern_nominal_external => {
+            const module_idx: ModuleEnv.Import.Idx = @enumFromInt(node.data_1);
+            const target_node_idx: u16 = @intCast(node.data_2);
+
+            const extra_data_idx = node.data_3;
+            const extra_data = store.extra_data.items.items[extra_data_idx..][0..2];
+            const backing_pattern: ModuleEnv.Pattern.Idx = @enumFromInt(extra_data[0]);
+            const backing_type: ModuleEnv.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
+
+            return ModuleEnv.Pattern{
+                .nominal_external = .{
+                    .module_idx = module_idx,
+                    .target_node_idx = target_node_idx,
                     .backing_pattern = backing_pattern,
                     .backing_type = backing_type,
                 },
@@ -1689,6 +1707,14 @@ pub fn addPattern(store: *NodeStore, pattern: ModuleEnv.Pattern, region: base.Re
             node.data_1 = @intFromEnum(n.nominal_type_decl);
             node.data_2 = @intFromEnum(n.backing_pattern);
             node.data_3 = @intFromEnum(n.backing_type);
+        },
+        .nominal_external => |n| {
+            node.tag = .pattern_nominal_external;
+            node.data_1 = @intFromEnum(n.module_idx);
+            node.data_2 = @intCast(n.target_node_idx);
+            node.data_3 = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(n.backing_pattern));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(n.backing_type));
         },
         .record_destructure => |p| {
             node.tag = .pattern_record_destructure;
