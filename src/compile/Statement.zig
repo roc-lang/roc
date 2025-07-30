@@ -132,7 +132,6 @@ pub const Statement = union(enum) {
     s_alias_decl: struct {
         header: ModuleEnv.TypeHeader.Idx,
         anno: ModuleEnv.TypeAnno.Idx,
-        where: ?ModuleEnv.WhereClause.Span,
     },
     /// A nominal type declaration, e.g., `Foo := (U64, Str)`
     ///
@@ -140,7 +139,6 @@ pub const Statement = union(enum) {
     s_nominal_decl: struct {
         header: ModuleEnv.TypeHeader.Idx,
         anno: ModuleEnv.TypeAnno.Idx,
-        where: ?ModuleEnv.WhereClause.Span,
     },
     /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
     ///
@@ -298,18 +296,6 @@ pub const Statement = union(enum) {
                 try ir.store.getTypeHeader(s.header).pushToSExprTree(ir, tree, s.header);
                 try ir.store.getTypeAnno(s.anno).pushToSExprTree(ir, tree, s.anno);
 
-                if (s.where) |where_span| {
-                    const where_begin = tree.beginNode();
-                    try tree.pushStaticAtom("where");
-                    const where_attrs = tree.beginNode();
-                    const where_clauses = ir.store.sliceWhereClauses(where_span);
-                    for (where_clauses) |clause_idx| {
-                        const clause = ir.store.getWhereClause(clause_idx);
-                        try clause.pushToSExprTree(ir, tree, clause_idx);
-                    }
-                    try tree.endNode(where_begin, where_attrs);
-                }
-
                 try tree.endNode(begin, attrs);
             },
             .s_nominal_decl => |s| {
@@ -321,18 +307,6 @@ pub const Statement = union(enum) {
 
                 try ir.store.getTypeHeader(s.header).pushToSExprTree(ir, tree, s.header);
                 try ir.store.getTypeAnno(s.anno).pushToSExprTree(ir, tree, s.anno);
-
-                if (s.where) |where_span| {
-                    const where_begin = tree.beginNode();
-                    try tree.pushStaticAtom("where");
-                    const where_attrs = tree.beginNode();
-                    const where_clauses = ir.store.sliceWhereClauses(where_span);
-                    for (where_clauses) |clause_idx| {
-                        const clause = ir.store.getWhereClause(clause_idx);
-                        try clause.pushToSExprTree(ir, tree, clause_idx);
-                    }
-                    try tree.endNode(where_begin, where_attrs);
-                }
 
                 try tree.endNode(begin, attrs);
             },

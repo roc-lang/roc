@@ -299,11 +299,7 @@ fn addBuiltinType(self: *Self, ir: *ModuleEnv, type_name: []const u8, content: t
 
     // Create the type declaration statement
     const type_decl_stmt = Statement{
-        .s_alias_decl = .{
-            .header = header_idx,
-            .anno = anno_idx,
-            .where = null,
-        },
+        .s_alias_decl = .{ .header = header_idx, .anno = anno_idx },
     };
 
     const type_decl_idx = try ir.addStatementAndTypeVar(
@@ -346,11 +342,7 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void 
 
     // Create the type declaration statement
     const type_decl_stmt = Statement{
-        .s_nominal_decl = .{
-            .header = header_idx,
-            .anno = anno_idx,
-            .where = null,
-        },
+        .s_nominal_decl = .{ .header = header_idx, .anno = anno_idx },
     };
 
     const type_decl_idx = try ir.addStatementAndTypeVar(
@@ -446,14 +438,12 @@ pub fn canonicalizeFile(
                         .s_alias_decl = .{
                             .header = header_idx,
                             .anno = @enumFromInt(0), // placeholder - will be replaced
-                            .where = null,
                         },
                     },
                     .nominal => Statement{
                         .s_nominal_decl = .{
                             .header = header_idx,
                             .anno = @enumFromInt(0), // placeholder - will be replaced
-                            .where = null,
                         },
                     },
                 };
@@ -490,25 +480,11 @@ pub fn canonicalizeFile(
                 const type_ident = types.TypeIdent{ .ident_idx = type_header.name };
 
                 // Canonicalize where clauses if present
-                // TODO: Disallow where clauses in type annotations
-                const where_clauses = if (type_decl.where) |where_coll| blk: {
-                    const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
-                    const where_start = self.env.store.scratchWhereClauseTop();
-
-                    // Enter a new scope for where clause
-                    try self.scopeEnter(self.env.gpa, false);
-                    defer self.scopeExit(self.env.gpa) catch {};
-
-                    // Introduce type parameters from the header into the scope
-                    try self.introduceTypeParametersFromHeader(header_idx);
-
-                    for (where_slice) |where_idx| {
-                        const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .type_decl_anno);
-                        try self.env.store.addScratchWhereClause(canonicalized_where);
-                    }
-
-                    break :blk try self.env.store.whereClauseSpanFrom(where_start);
-                } else null;
+                if (type_decl.where) |_| {
+                    try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
+                        .region = region,
+                    } });
+                }
 
                 // Create the real CIR type declaration statement with the canonicalized annotation
                 const real_cir_type_decl, const type_decl_content = blk: {
@@ -524,7 +500,6 @@ pub fn canonicalizeFile(
                                     .s_alias_decl = .{
                                         .header = header_idx,
                                         .anno = anno_idx,
-                                        .where = where_clauses,
                                     },
                                 },
                                 alias_content,
@@ -546,7 +521,6 @@ pub fn canonicalizeFile(
                                     .s_nominal_decl = .{
                                         .header = header_idx,
                                         .anno = anno_idx,
-                                        .where = where_clauses,
                                     },
                                 },
                                 nominal_content,
@@ -2864,6 +2838,8 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
 
     var args_span = Expr.Span{ .span = DataSpan.empty() };
 
+    const free_vars_start = self.scratch_free_vars.top();
+
     if (mb_args) |args| {
         if (args.span.len > 0) {
             // Canonicalize all arguments
@@ -2943,7 +2919,11 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
             },
         }, nominal_type_var, region);
 
-        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+        const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+        return CanonicalizedExpr{
+            .idx = expr_idx,
+            .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null,
+        };
     } else {
         // If this is a tag with more than 1 qualifier, then it is an imported
         // nominal type where the last qualifier is the type name, then the other
@@ -3026,7 +3006,11 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
             },
         }, type_content, region);
 
-        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+        const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+        return CanonicalizedExpr{
+            .idx = expr_idx,
+            .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null,
+        };
     }
 }
 
@@ -5538,7 +5522,6 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .inline_anno);
 
             // Canonicalize where clauses if present
-            // TODO: Disallow where clauses in type annotations
             const where_clauses = if (ta.where) |where_coll| blk: {
                 const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
                 const where_start = self.env.store.scratchWhereClauseTop();

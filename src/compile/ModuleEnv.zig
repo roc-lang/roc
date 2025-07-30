@@ -983,6 +983,31 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             break :blk report;
         },
+        .where_clause_not_allowed_in_type_decl => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION", .warning);
+
+            // Format the message to match origin/main
+            try report.document.addText("You cannot define a ");
+            try report.document.addInlineCode("where");
+            try report.document.addReflowingText(" clause inside a type declaration.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting do this here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
+            break :blk report;
+        },
         else => {
             // For unhandled diagnostics, create a generic report
             const diagnostic_name = @tagName(diagnostic);
