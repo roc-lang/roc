@@ -26,6 +26,7 @@ UNDECLARED TYPE - type_declarations.md:5:8:5:11
 UNDECLARED TYPE - type_declarations.md:5:13:5:16
 UNDECLARED TYPE - type_declarations.md:7:19:7:21
 UNDECLARED TYPE - type_declarations.md:7:32:7:41
+MODULE NOT IMPORTED - type_declarations.md:15:11:15:24
 EXPOSED BUT NOT DEFINED - type_declarations.md:1:51:1:56
 EXPOSED BUT NOT DEFINED - type_declarations.md:1:42:1:49
 # PROBLEMS
@@ -71,6 +72,17 @@ This type is referenced here:
 Some(a) : { foo : Ok(a), bar : Something }
 ```
                                ^^^^^^^^^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `Module` imported into this Roc file.
+
+You're attempting to use this module here:
+**type_declarations.md:15:11:15:24:**
+```roc
+MyType2 : Module.Thingy
+```
+          ^^^^^^^^^^^^^
 
 
 **EXPOSED BUT NOT DEFINED**
@@ -241,9 +253,7 @@ NO CHANGE
 		(ty @13.10-13.13 (name "U64")))
 	(s-alias-decl @15.1-15.24
 		(ty-header @15.1-15.8 (name "MyType2"))
-		(ty-lookup-external @15.11-15.24
-			(ext-decl @15.11-15.24 (ident "Module.Thingy") (kind "type"))))
-	(ext-decl @15.11-15.24 (ident "Module.Thingy") (kind "type")))
+		(ty-malformed @15.11-15.24)))
 ~~~
 # TYPES
 ~~~clojure
@@ -271,7 +281,7 @@ NO CHANGE
 					(ty-var @11.10-11.11 (name "a")))))
 		(alias @13.1-13.13 (type "MyType")
 			(ty-header @13.1-13.7 (name "MyType")))
-		(alias @15.1-15.24 (type "MyType2")
+		(alias @15.1-15.24 (type "Error")
 			(ty-header @15.1-15.8 (name "MyType2"))))
 	(expressions))
 ~~~

@@ -98,14 +98,14 @@ C : k
 (can-ir
 	(s-alias-decl @1.9-1.12
 		(ty-header @1.9-1.10 (name "C"))
-		(ty-var @1.11-1.12 (name "k"))))
+		(ty-malformed @1.11-1.12)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @1.9-1.12 (type "C")
+		(alias @1.9-1.12 (type "Error")
 			(ty-header @1.9-1.10 (name "C"))))
 	(expressions))
 ~~~

@@ -132,7 +132,6 @@ test "NodeStore round trip - Statements" {
         .s_alias_decl = .{
             .header = rand_idx(ModuleEnv.TypeHeader.Idx),
             .anno = rand_idx(ModuleEnv.TypeAnno.Idx),
-            .anno_var = rand_idx(TypeVar),
             .where = null,
         },
     });
@@ -141,7 +140,6 @@ test "NodeStore round trip - Statements" {
         .s_nominal_decl = .{
             .header = rand_idx(ModuleEnv.TypeHeader.Idx),
             .anno = rand_idx(ModuleEnv.TypeAnno.Idx),
-            .anno_var = rand_idx(TypeVar),
             .where = null,
         },
     });
@@ -345,6 +343,17 @@ test "NodeStore round trip - Expressions" {
         .e_frac_dec = .{
             .value = ModuleEnv.RocDec{ .num = 123456789 },
         },
+    });
+    try expressions.append(ModuleEnv.Expr{
+        .e_nominal_external = .{
+            .module_idx = rand_idx_u16(ModuleEnv.Import.Idx),
+            .target_node_idx = rand.random().int(u16),
+            .backing_expr = rand_idx(ModuleEnv.Expr.Idx),
+            .backing_type = .tag,
+        },
+    });
+    try expressions.append(ModuleEnv.Expr{
+        .e_ellipsis = .{},
     });
 
     for (expressions.items, 0..) |expr, i| {
@@ -780,7 +789,8 @@ test "NodeStore round trip - TypeAnno" {
 
     try type_annos.append(ModuleEnv.TypeAnno{
         .ty_lookup_external = .{
-            .external_decl = rand_idx(ModuleEnv.ExternalDecl.Idx),
+            .module_idx = rand_idx(ModuleEnv.Import.Idx),
+            .target_node_idx = rand.random().int(u16),
         },
     });
 
@@ -838,6 +848,21 @@ test "NodeStore round trip - Pattern" {
         },
     });
     try patterns.append(ModuleEnv.Pattern{
+        .nominal = .{
+            .nominal_type_decl = rand_idx(ModuleEnv.Statement.Idx),
+            .backing_pattern = rand_idx(ModuleEnv.Pattern.Idx),
+            .backing_type = .tag,
+        },
+    });
+    try patterns.append(ModuleEnv.Pattern{
+        .nominal_external = .{
+            .module_idx = rand_idx_u16(ModuleEnv.Import.Idx),
+            .target_node_idx = rand.random().int(u16),
+            .backing_pattern = rand_idx(ModuleEnv.Pattern.Idx),
+            .backing_type = .tag,
+        },
+    });
+    try patterns.append(ModuleEnv.Pattern{
         .record_destructure = .{
             .whole_var = rand_idx(TypeVar),
             .ext_var = rand_idx(TypeVar),
@@ -881,23 +906,15 @@ test "NodeStore round trip - Pattern" {
             .literal = rand_idx(StringLiteral.Idx),
         },
     });
-
     try patterns.append(ModuleEnv.Pattern{ .underscore = {} });
     try patterns.append(ModuleEnv.Pattern{
         .runtime_error = .{
             .diagnostic = rand_idx(ModuleEnv.Diagnostic.Idx),
         },
     });
-    try patterns.append(ModuleEnv.Pattern{
-        .nominal = .{
-            .nominal_type_decl = rand_idx(ModuleEnv.Statement.Idx),
-            .backing_pattern = rand_idx(ModuleEnv.Pattern.Idx),
-            .backing_type = .tag,
-        },
-    });
 
     // Test the round-trip for all patterns with their original regions
-    var regions = [_]base.Region{undefined} ** 13;
+    var regions = [_]base.Region{undefined} ** NodeStore.MODULEENV_PATTERN_NODE_COUNT;
     for (&regions) |*region| {
         region.* = rand_region();
     }

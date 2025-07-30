@@ -27,8 +27,6 @@ WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:10:8
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:6:5:6:24
 INVALID STATEMENT - where_clauses_error_cases.md:6:25:6:26
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:10:3:10:8
-UNDECLARED TYPE VARIABLE - where_clauses_error_cases.md:15:24:15:25
-UNDECLARED TYPE VARIABLE - where_clauses_error_cases.md:15:29:15:30
 EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:9:1:19
 EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:21:1:31
 EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:33:1:43
@@ -92,32 +90,6 @@ This where clause could not be parsed correctly.
   ^^^^^
 
 Check the syntax of your where clause.
-
-**UNDECLARED TYPE VARIABLE**
-The type variable _c_ is not declared in this scope.
-
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**where_clauses_error_cases.md:15:24:15:25:**
-```roc
-    module(c).method : c -> d
-```
-                       ^
-
-
-**UNDECLARED TYPE VARIABLE**
-The type variable _d_ is not declared in this scope.
-
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**where_clauses_error_cases.md:15:29:15:30:**
-```roc
-    module(c).method : c -> d
-```
-                            ^
-
 
 **EXPOSED BUT NOT DEFINED**
 The module header says that `broken_fn1` is exposed, but it is not defined anywhere in this module.

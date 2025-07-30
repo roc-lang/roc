@@ -7,16 +7,19 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const instantiate = @import("./instantiate.zig");
+const Check = @import("check");
 
 const Store = types.Store;
+const instantiate = Check.instantiate;
 
 test "rigid variables need instantiation - multiple type parameters" {
-    var store = try Store.init(std.testing.allocator);
+    const gpa = std.testing.allocator;
+
+    var store = try Store.init(gpa);
     defer store.deinit();
 
-    var regions = try base.Region.List.initCapacity(std.testing.allocator, 256);
-    defer regions.deinit(std.testing.allocator);
+    var regions = try base.Region.List.initCapacity(gpa, 256);
+    defer regions.deinit(gpa);
 
     // Create rigid type variables 'a' and 'b' (like in `swap : (a, b) -> (b, a)`)
     const rigid_a = try store.fresh();
@@ -45,18 +48,25 @@ test "rigid variables need instantiation - multiple type parameters" {
     // Verify the function needs instantiation
     try std.testing.expect(store.needsInstantiation(func_var));
 
+    var empty_store = try base.Ident.Store.initCapacity(gpa, 10);
+    defer empty_store.deinit(gpa);
+
     // Instantiate for first use
-    const inst1_var = try instantiate.instantiateVarAlloc(&store, func_var, std.testing.allocator);
+    const inst1_var = try types.instantiate.instantiateVarAlloc(&store, func_var, &empty_store, .copy, gpa);
     try std.testing.expect(inst1_var != func_var);
 
     // Instantiate for second use
-    const inst2_var = try instantiate.instantiateVarAlloc(&store, func_var, std.testing.allocator);
+    const inst2_var = try types.instantiate.instantiateVarAlloc(&store, func_var, &empty_store, .copy, gpa);
     try std.testing.expect(inst2_var != func_var);
     try std.testing.expect(inst2_var != inst1_var);
+
+    // TODO: Test different rigid instantiation behavior
 }
 
 test "rigid vs flex variable instantiation behavior" {
-    var store = try Store.init(std.testing.allocator);
+    const gpa = std.testing.allocator;
+
+    var store = try Store.init(gpa);
     defer store.deinit();
 
     // Test that both rigid and flex variables need instantiation

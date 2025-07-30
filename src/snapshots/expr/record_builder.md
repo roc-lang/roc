@@ -17,8 +17,8 @@ UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:2:9:2:10
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:3:8:3:9
 UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:3:10
 UNDEFINED VARIABLE - record_builder.md:1:3:1:14
-MALFORMED TYPE - :0:0:0:0
-MALFORMED TYPE - :0:0:0:0
+MALFORMED TYPE - record_builder.md:2:8:2:9
+MALFORMED TYPE - record_builder.md:3:8:3:9
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<-** is not expected in an expression.
@@ -94,8 +94,22 @@ Is there an `import` or `exposing` missing up-top?
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
+**record_builder.md:2:8:2:9:**
+```roc
+    x: 5,
+```
+       ^
+
+
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
+
+**record_builder.md:3:8:3:9:**
+```roc
+    y: 0,
+```
+       ^
+
 
 # TOKENS
 ~~~zig
@@ -120,7 +134,7 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 # FORMATTED
 ~~~roc
 {
-	Foo.baz
+	Foo.Bar.baz
 	
 	x : 
 	

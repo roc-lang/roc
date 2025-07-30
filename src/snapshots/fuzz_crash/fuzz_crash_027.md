@@ -166,18 +166,12 @@ expect {
 }
 ~~~
 # EXPECTED
-OVER CLOSED BRACE - :0:0:0:0
 LEADING ZERO - :0:0:0:0
 UNCLOSED STRING - :0:0:0:0
-MISMATCHED BRACE - :0:0:0:0
-MISMATCHED BRACE - :0:0:0:0
-MISMATCHED BRACE - :0:0:0:0
+PARSE ERROR - fuzz_crash_027.md:40:5:40:6
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:40:7:40:8
 PARSE ERROR - fuzz_crash_027.md:122:3:122:10
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:125:4:125:5
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:125:9:125:10
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:126:2:126:3
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:148:1:148:2
-PARSE ERROR - fuzz_crash_027.md:159:2:159:2
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:125:3:125:4
 UNDECLARED TYPE - fuzz_crash_027.md:26:8:26:11
 UNDECLARED TYPE - fuzz_crash_027.md:26:13:26:16
 UNDECLARED TYPE - fuzz_crash_027.md:32:19:32:21
@@ -186,8 +180,15 @@ UNDECLARED TYPE - fuzz_crash_027.md:34:8:34:11
 UNDECLARED TYPE - fuzz_crash_027.md:38:8:38:11
 UNDECLARED TYPE - fuzz_crash_027.md:43:11:43:16
 UNDECLARED TYPE - fuzz_crash_027.md:43:26:43:31
+MODULE NOT FOUND - fuzz_crash_027.md:4:1:4:38
+MODULE NOT FOUND - fuzz_crash_027.md:6:1:8:4
+MODULE NOT FOUND - fuzz_crash_027.md:10:1:10:46
+MODULE NOT FOUND - fuzz_crash_027.md:12:1:12:19
+MODULE NOT FOUND - fuzz_crash_027.md:13:1:14:4
 UNDECLARED TYPE - fuzz_crash_027.md:29:2:29:5
 UNDECLARED TYPE - fuzz_crash_027.md:30:2:30:5
+INVALID STATEMENT - fuzz_crash_027.md:40:7:40:8
+INVALID STATEMENT - fuzz_crash_027.md:40:9:41:2
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_027.md:52:1:52:3
 UNDEFINED VARIABLE - fuzz_crash_027.md:65:4:65:5
 UNDEFINED VARIABLE - fuzz_crash_027.md:65:6:65:7
@@ -215,36 +216,59 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
 UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_027.md:145:4:145:13
-UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
 UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
 UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
-UNUSED VARIABLE - fuzz_crash_027.md:151:1:151:6
 UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
 UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
+UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TYPE MISMATCH - fuzz_crash_027.md:47:11:47:14
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 TYPE MISMATCH - fuzz_crash_027.md:111:2:111:12
 # PROBLEMS
-**OVER CLOSED BRACE**
-There are too many closing braces here.
-
 **LEADING ZERO**
 Numbers cannot have leading zeros.
 
 **UNCLOSED STRING**
 This string is missing a closing quote.
 
-**MISMATCHED BRACE**
-This brace does not match the corresponding opening brace.
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
 
-**MISMATCHED BRACE**
-This brace does not match the corresponding opening brace.
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
-**MISMATCHED BRACE**
-This brace does not match the corresponding opening brace.
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+Here is the problematic code:
+**fuzz_crash_027.md:40:5:40:6:**
+```roc
+Maya) : [ #
+```
+    ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **:** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_027.md:40:7:40:8:**
+```roc
+Maya) : [ #
+```
+      ^
+
 
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_apply_close_round`
@@ -259,63 +283,15 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
+The token **)** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_027.md:125:4:125:5:**
+**fuzz_crash_027.md:125:3:125:4:**
 ```roc
 		),	456, # ee
 ```
-   ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_027.md:125:9:125:10:**
-```roc
-		),	456, # ee
-```
-        ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **]** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_027.md:126:2:126:3:**
-```roc
-	]
-```
- ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_027.md:148:1:148:2:**
-```roc
-} # Commenl decl
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**fuzz_crash_027.md:159:2:159:2:**
-```roc
-}
-```
- 
+  ^
 
 
 **UNDECLARED TYPE**
@@ -408,6 +384,62 @@ Func(a) : Maybe(a), a -> Maybe(a)
                          ^^^^^
 
 
+**MODULE NOT FOUND**
+The module `pf.Stdout` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:4:1:4:38:**
+```roc
+import pf.Stdout exposing [line!, e!]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Stdot` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:6:1:8:4:**
+```roc
+import Stdot
+		exposing [ #tem
+		] # Cose
+```
+
+
+**MODULE NOT FOUND**
+The module `pkg.S` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:10:1:10:46:**
+```roc
+import pkg.S exposing [func as fry, Custom.*]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Bae` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:12:1:12:19:**
+```roc
+import Bae as Gooe
+```
+^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Ba` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:13:1:14:4:**
+```roc
+import
+	Ba
+```
+
+
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
 
@@ -428,6 +460,28 @@ This type is referenced here:
 	Baz, #m
 ```
  ^^^
+
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_027.md:40:7:40:8:**
+```roc
+Maya) : [ #
+```
+      ^
+
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_027.md:40:9:41:2:**
+```roc
+Maya) : [ #
+] #se
+```
 
 
 **EMPTY TUPLE NOT ALLOWED**
@@ -690,17 +744,6 @@ Is there an `import` or `exposing` missing up-top?
    ^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Value_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:153:9:153:14:**
-```roc
-tuple : Value((a, b, c))
-```
-        ^^^^^
-
-
 **UNUSED VARIABLE**
 Variable `record` is not used anywhere in your code.
 
@@ -735,18 +778,6 @@ The unused variable is declared here:
 	stale = some_fn(arg1)?.statod()?.ned()?.recd?
 ```
  ^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `empty` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_empty` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:151:1:151:6:**
-```roc
-empty = {}
-```
-^^^^^
 
 
 **UNUSED VARIABLE**
@@ -795,6 +826,17 @@ The unused variable is declared here:
 	list = [
 ```
  ^^^^
+
+
+**UNDECLARED TYPE**
+The type _Value_ is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_027.md:153:9:153:14:**
+```roc
+tuple : Value((a, b, c))
+```
+        ^^^^^
 
 
 **TYPE MISMATCH**
@@ -906,7 +948,7 @@ CloseCurly(35:1-35:2),
 UpperIdent(37:1-37:6),NoSpaceOpenRound(37:6-37:7),LowerIdent(37:7-37:8),CloseRound(37:8-37:9),OpColon(37:10-37:11),OpenCurly(37:12-37:13),
 LowerIdent(38:2-38:5),OpColon(38:6-38:7),UpperIdent(38:8-38:11),
 CloseCurly(39:1-39:2),
-UpperIdent(40:1-40:5),OpColon(40:7-40:8),OpenSquare(40:9-40:10),
+UpperIdent(40:1-40:5),CloseRound(40:5-40:6),OpColon(40:7-40:8),OpenSquare(40:9-40:10),
 CloseSquare(41:1-41:2),
 UpperIdent(43:1-43:5),NoSpaceOpenRound(43:5-43:6),LowerIdent(43:6-43:7),CloseRound(43:7-43:8),OpColon(43:9-43:10),UpperIdent(43:11-43:16),NoSpaceOpenRound(43:16-43:17),LowerIdent(43:17-43:18),CloseRound(43:18-43:19),Comma(43:19-43:20),LowerIdent(43:21-43:22),OpArrow(43:23-43:25),UpperIdent(43:26-43:31),NoSpaceOpenRound(43:31-43:32),LowerIdent(43:32-43:33),CloseRound(43:33-43:34),
 LowerIdent(45:1-45:4),OpAssign(45:5-45:6),OpBar(45:7-45:8),LowerIdent(45:8-45:11),OpBar(45:11-45:12),KwIf(45:13-45:15),LowerIdent(45:16-45:19),Int(45:20-45:21),KwElse(45:22-45:26),Int(45:27-45:28),
@@ -980,8 +1022,8 @@ LowerIdent(121:2-121:6),OpAssign(121:7-121:8),OpenSquare(121:9-121:10),
 LowerIdent(122:3-122:10),NoSpaceOpenRound(122:10-122:11),
 KwDbg(123:4-123:7),
 LowerIdent(124:1-124:2),OpenSquare(124:2-124:3),Comma(124:3-124:4),
-CloseSquare(125:3-125:4),Comma(125:4-125:5),Int(125:6-125:9),Comma(125:9-125:10),
-CloseRound(126:2-126:3),
+CloseRound(125:3-125:4),Comma(125:4-125:5),Int(125:6-125:9),Comma(125:9-125:10),
+CloseSquare(126:2-126:3),
 KwFor(127:2-127:5),LowerIdent(127:6-127:7),KwIn(127:8-127:10),LowerIdent(127:11-127:15),OpenCurly(127:16-127:17),
 LowerIdent(128:2-128:7),NoSpaceOpenRound(128:7-128:8),StringStart(128:8-128:9),StringPart(128:9-128:16),OpenStringInterpolation(128:16-128:18),LowerIdent(128:18-128:19),CloseStringInterpolation(128:19-128:20),StringPart(128:20-128:24),OpenStringInterpolation(128:24-128:26),LowerIdent(128:26-128:32),CloseStringInterpolation(128:32-128:33),StringPart(128:33-128:33),StringEnd(128:33-128:34),CloseRound(128:34-128:35),
 LowerIdent(129:3-129:9),OpAssign(129:10-129:11),LowerIdent(129:12-129:18),OpPlus(129:19-129:20),LowerIdent(129:21-129:22),
@@ -1003,7 +1045,7 @@ StringStart(144:3-144:4),StringPart(144:4-144:14),OpenStringInterpolation(144:14
 UpperIdent(145:4-145:7),NoSpaceDotLowerIdent(145:7-145:13),NoSpaceOpenRound(145:13-145:14),LowerIdent(145:14-145:20),CloseRound(145:20-145:21),
 CloseStringInterpolation(146:3-146:4),StringPart(146:4-146:9),StringEnd(146:9-146:10),Comma(146:10-146:11),
 CloseRound(147:2-147:3),
-CloseSquare(148:1-148:2),
+CloseCurly(148:1-148:2),
 LowerIdent(150:1-150:6),OpColon(150:7-150:8),OpenCurly(150:9-150:10),CloseCurly(150:10-150:11),
 LowerIdent(151:1-151:6),OpAssign(151:7-151:8),OpenCurly(151:9-151:10),CloseCurly(151:10-151:11),
 LowerIdent(153:1-153:6),OpColon(153:7-153:8),UpperIdent(153:9-153:14),NoSpaceOpenRound(153:14-153:15),NoSpaceOpenRound(153:15-153:16),LowerIdent(153:16-153:17),Comma(153:17-153:18),LowerIdent(153:19-153:20),Comma(153:20-153:21),LowerIdent(153:22-153:23),CloseRound(153:23-153:24),CloseRound(153:24-153:25),
@@ -1107,11 +1149,9 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 			(ty-record @37.12-39.2
 				(anno-record-field @38.2-38.11 (name "bar")
 					(ty @38.8-38.11 (name "Som")))))
-		(s-type-decl @40.1-41.2
-			(header @40.1-40.5 (name "Maya")
-				(args))
-			(ty-tag-union @40.9-41.2
-				(tags)))
+		(s-malformed @40.1-40.6 (tag "expected_colon_after_type_annotation"))
+		(e-malformed @40.7-40.8 (reason "expr_unexpected_token"))
+		(e-list @40.9-41.2)
 		(s-type-decl @43.1-43.34
 			(header @43.1-43.8 (name "Func")
 				(args
@@ -1280,12 +1320,12 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 					(ty @99.25-99.31 (name "Result"))
 					(ty-record @99.32-99.34)
 					(_))))
-		(s-decl @100.1-159.2
+		(s-decl @100.1-148.2
 			(p-ident @100.1-100.6 (raw "main!"))
-			(e-lambda @100.9-159.2
+			(e-lambda @100.9-148.2
 				(args
 					(p-underscore))
-				(e-block @100.13-159.2
+				(e-block @100.13-148.2
 					(statements
 						(s-decl @101.2-101.17
 							(p-ident @101.2-101.7 (raw "world"))
@@ -1324,14 +1364,12 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 								(e-string-part @120.10-120.17 (raw "Hello, "))
 								(e-ident @120.19-120.24 (raw "world"))
 								(e-string-part @120.25-120.25 (raw ""))))
-						(s-decl @121.2-125.4
+						(s-decl @121.2-126.3
 							(p-ident @121.2-121.6 (raw "list"))
-							(e-list @121.9-125.4
-								(e-malformed @122.3-124.3 (reason "expected_expr_apply_close_round"))))
-						(e-malformed @125.4-125.5 (reason "expr_unexpected_token"))
-						(e-int @125.6-125.9 (raw "456"))
-						(e-malformed @125.9-125.10 (reason "expr_unexpected_token"))
-						(e-malformed @126.2-126.3 (reason "expr_unexpected_token"))
+							(e-list @121.9-126.3
+								(e-malformed @122.3-124.3 (reason "expected_expr_apply_close_round"))
+								(e-malformed @125.3-125.4 (reason "expr_unexpected_token"))
+								(e-int @125.6-125.9 (raw "456"))))
 						(s-for @127.2-130.3
 							(p-ident @127.6-127.7 (raw "n"))
 							(e-ident @127.11-127.15 (raw "list"))
@@ -1452,32 +1490,31 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 								(e-apply @145.4-145.21
 									(e-ident @145.4-145.13 (raw "Num.toStr"))
 									(e-ident @145.14-145.20 (raw "number")))
-								(e-string-part @146.4-146.9 (raw " as a"))))
-						(e-malformed @148.1-148.2 (reason "expr_unexpected_token"))
-						(s-type-anno @150.1-150.11 (name "empty")
-							(ty-record @150.9-150.11))
-						(s-decl @151.1-151.11
-							(p-ident @151.1-151.6 (raw "empty"))
-							(e-record @151.9-151.11))
-						(s-type-anno @153.1-153.25 (name "tuple")
-							(ty-apply @153.9-153.25
-								(ty @153.9-153.14 (name "Value"))
-								(ty-tuple @153.15-153.24
-									(ty-var @153.16-153.17 (raw "a"))
-									(ty-var @153.19-153.20 (raw "b"))
-									(ty-var @153.22-153.23 (raw "c")))))
-						(s-expect @155.1-159.2
-							(e-block @155.8-159.2
-								(statements
-									(s-decl @156.2-156.9
-										(p-ident @156.2-156.5 (raw "foo"))
-										(e-int @156.8-156.9 (raw "1")))
-									(s-decl @157.2-157.10
-										(p-ident @157.2-157.6 (raw "blah"))
-										(e-int @157.9-157.10 (raw "1")))
-									(e-binop @158.2-158.13 (op "==")
-										(e-ident @158.2-158.6 (raw "blah"))
-										(e-ident @158.10-158.13 (raw "foo"))))))))))))
+								(e-string-part @146.4-146.9 (raw " as a"))))))))
+		(s-type-anno @150.1-150.11 (name "empty")
+			(ty-record @150.9-150.11))
+		(s-decl @151.1-151.11
+			(p-ident @151.1-151.6 (raw "empty"))
+			(e-record @151.9-151.11))
+		(s-type-anno @153.1-153.25 (name "tuple")
+			(ty-apply @153.9-153.25
+				(ty @153.9-153.14 (name "Value"))
+				(ty-tuple @153.15-153.24
+					(ty-var @153.16-153.17 (raw "a"))
+					(ty-var @153.19-153.20 (raw "b"))
+					(ty-var @153.22-153.23 (raw "c")))))
+		(s-expect @155.1-159.2
+			(e-block @155.8-159.2
+				(statements
+					(s-decl @156.2-156.9
+						(p-ident @156.2-156.5 (raw "foo"))
+						(e-int @156.8-156.9 (raw "1")))
+					(s-decl @157.2-157.10
+						(p-ident @157.2-157.6 (raw "blah"))
+						(e-int @157.9-157.10 (raw "1")))
+					(e-binop @158.2-158.13 (op "==")
+						(e-ident @158.2-158.6 (raw "blah"))
+						(e-ident @158.10-158.13 (raw "foo"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -1517,7 +1554,7 @@ Ml(a) : { # d
 Soine(a) : { # d
 	bar : Som,
 }
-Maya : [] # se
+[] # se
 
 Func(a) : Maybe(a), a -> Maybe(a)
 
@@ -1603,11 +1640,9 @@ main! = |_| { # Yeah Ie
 	ited = "Hello, ${world}"
 	list = [
 		, # afarg
+		,
+		456, # ee
 	]
-	
-	456
-	 # ee
-	
 	for n in list {
 		line!("Adding ${n} to ${number}")
 		number = number + n
@@ -1629,18 +1664,17 @@ main! = |_| { # Yeah Ie
 			Num.toStr(number) # on expr
 		} as a",
 	)
-	 # Commenl decl
+} # Commenl decl
 
-	empty : {}
-	empty = {}
+empty : {}
+empty = {}
 
-	tuple : Value((a, b, c))
+tuple : Value((a, b, c))
 
-	expect {
-		foo = 1 # Thio
-		blah = 1
-		blah == foo
-	}
+expect {
+	foo = 1 # Thio
+	blah = 1
+	blah == foo
 }
 ~~~
 # CANONICALIZE
@@ -1850,14 +1884,14 @@ main! = |_| { # Yeah Ie
 								(e-int @93.14-93.20 (value "121000")))))))))
 	(d-let
 		(p-assign @100.1-100.6 (ident "main!"))
-		(e-closure @100.9-159.2
+		(e-closure @100.9-148.2
 			(captures
 				(capture @60.1-60.11 (ident "match_time"))
 				(capture @132.2-132.7 (ident "tuple")))
-			(e-lambda @100.9-159.2
+			(e-lambda @100.9-148.2
 				(args
 					(p-underscore @100.10-100.11))
-				(e-block @100.13-159.2
+				(e-block @100.13-148.2
 					(s-let @101.2-101.17
 						(p-assign @101.2-101.7 (ident "world"))
 						(e-string @101.10-101.17
@@ -1901,11 +1935,11 @@ main! = |_| { # Yeah Ie
 							(e-lookup-local @120.19-120.24
 								(p-assign @101.2-101.7 (ident "world")))
 							(e-literal @120.25-120.25 (string ""))))
-					(s-let @121.2-125.4
+					(s-let @121.2-126.3
 						(p-assign @121.2-121.6 (ident "list"))
-						(e-empty_list @121.9-125.4))
-					(s-expr @125.6-125.9
-						(e-int @125.6-125.9 (value "456")))
+						(e-list @121.9-126.3
+							(elems
+								(e-int @125.6-125.9 (value "456")))))
 					(s-let @131.2-131.71
 						(p-assign @131.2-131.8 (ident "record"))
 						(e-record @131.11-131.71
@@ -2008,41 +2042,15 @@ main! = |_| { # Yeah Ie
 										(e-dot-access @142.10-142.34 (field "unknown")
 											(receiver
 												(e-runtime-error (tag "not_implemented")))))))))
-					(s-expr @143.2-147.3
-						(e-tag @143.2-143.11 (name "Stdoline!")
-							(args
-								(e-string @144.3-146.10
-									(e-literal @144.4-144.14 (string "How about "))
-									(e-call @145.4-145.21
-										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local @145.14-145.20
-											(p-assign @102.2-102.18 (ident "number"))))
-									(e-literal @146.4-146.9 (string " as a"))))))
-					(s-type-anno @150.1-150.11 (name "empty")
-						(ty-record @150.9-150.11))
-					(s-let @151.1-151.11
-						(p-assign @151.1-151.6 (ident "empty"))
-						(e-empty_record @151.9-151.11))
-					(s-type-anno @153.1-153.25 (name "tuple")
-						(ty-apply @153.9-153.25 (symbol "Value")
-							(ty-tuple @153.15-153.24
-								(ty-var @153.16-153.17 (name "a"))
-								(ty-var @153.19-153.20 (name "b"))
-								(ty-var @153.22-153.23 (name "c")))))
-					(s-expect @155.1-159.2
-						(e-block @155.8-159.2
-							(s-let @156.2-156.9
-								(p-assign @156.2-156.5 (ident "foo"))
-								(e-int @156.8-156.9 (value "1")))
-							(s-let @157.2-157.10
-								(p-assign @157.2-157.6 (ident "blah"))
-								(e-int @157.9-157.10 (value "1")))
-							(e-binop @158.2-158.13 (op "eq")
-								(e-lookup-local @158.2-158.6
-									(p-assign @157.2-157.6 (ident "blah")))
-								(e-lookup-local @158.10-158.13
-									(p-assign @156.2-156.5 (ident "foo"))))))
-					(e-empty_record @100.13-159.2))))
+					(e-tag @143.2-143.11 (name "Stdoline!")
+						(args
+							(e-string @144.3-146.10
+								(e-literal @144.4-144.14 (string "How about "))
+								(e-call @145.4-145.21
+									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-lookup-local @145.14-145.20
+										(p-assign @102.2-102.18 (ident "number"))))
+								(e-literal @146.4-146.9 (string " as a"))))))))
 		(annotation @100.1-100.6
 			(declared-type
 				(ty-fn @99.9-99.38 (effectful false)
@@ -2051,6 +2059,12 @@ main! = |_| { # Yeah Ie
 					(ty-apply @99.25-99.38 (symbol "Result")
 						(ty-record @99.32-99.34)
 						(ty-underscore @1.1-1.1))))))
+	(d-let
+		(p-assign @151.1-151.6 (ident "empty"))
+		(e-empty_record @151.9-151.11)
+		(annotation @151.1-151.6
+			(declared-type
+				(ty-record @150.9-150.11))))
 	(s-alias-decl @15.1-15.41
 		(ty-header @15.1-15.10 (name "Map")
 			(ty-args
@@ -2092,7 +2106,7 @@ main! = |_| { # Yeah Ie
 				(ty-apply @32.19-32.24 (symbol "Ok")
 					(ty-var @32.22-32.23 (name "a"))))
 			(field (field "bar")
-				(ty-var @32.32-32.33 (name "g")))))
+				(ty-malformed @32.32-32.33))))
 	(s-alias-decl @33.1-35.2
 		(ty-header @33.1-33.6 (name "Ml")
 			(ty-args
@@ -2107,9 +2121,6 @@ main! = |_| { # Yeah Ie
 		(ty-record @37.12-39.2
 			(field (field "bar")
 				(ty @38.8-38.11 (name "Som")))))
-	(s-alias-decl @40.1-41.2
-		(ty-header @40.1-40.5 (name "Maya"))
-		(ty-tag-union @40.9-41.2))
 	(s-alias-decl @43.1-43.34
 		(ty-header @43.1-43.8 (name "Func")
 			(ty-args
@@ -2137,16 +2148,30 @@ main! = |_| { # Yeah Ie
 	(s-expect @96.1-97.11
 		(e-binop @97.2-97.11 (op "eq")
 			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-int @97.10-97.11 (value "1")))))
+			(e-int @97.10-97.11 (value "1"))))
+	(s-expect @155.1-159.2
+		(e-block @155.8-159.2
+			(s-let @156.2-156.9
+				(p-assign @156.2-156.5 (ident "foo"))
+				(e-int @156.8-156.9 (value "1")))
+			(s-let @157.2-157.10
+				(p-assign @157.2-157.6 (ident "blah"))
+				(e-int @157.9-157.10 (value "1")))
+			(e-binop @158.2-158.13 (op "eq")
+				(e-lookup-local @158.2-158.6
+					(p-assign @157.2-157.6 (ident "blah")))
+				(e-lookup-local @158.10-158.13
+					(p-assign @156.2-156.5 (ident "foo")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @45.1-45.4 (type "Bool -> Num(_size)"))
-		(patt @48.1-48.8 (type "Error -> Error"))
+		(patt @48.1-48.8 (type "Error -> U64"))
 		(patt @60.1-60.11 (type "Error"))
-		(patt @100.1-100.6 (type "Error -> Error")))
+		(patt @100.1-100.6 (type "Error -> Error"))
+		(patt @151.1-151.6 (type "{}")))
 	(type_decls
 		(alias @15.1-15.41 (type "Map(a, b)")
 			(ty-header @15.1-15.10 (name "Map")
@@ -2172,15 +2197,14 @@ main! = |_| { # Yeah Ie
 			(ty-header @37.1-37.9 (name "Soine")
 				(ty-args
 					(ty-var @37.7-37.8 (name "a")))))
-		(alias @40.1-41.2 (type "Maya")
-			(ty-header @40.1-40.5 (name "Maya")))
 		(alias @43.1-43.34 (type "Func(a)")
 			(ty-header @43.1-43.8 (name "Func")
 				(ty-args
 					(ty-var @43.6-43.7 (name "a"))))))
 	(expressions
 		(expr @45.7-45.28 (type "Bool -> Num(_size)"))
-		(expr @48.11-58.2 (type "Error -> Error"))
+		(expr @48.11-58.2 (type "Error -> U64"))
 		(expr @60.14-94.3 (type "Error"))
-		(expr @100.9-159.2 (type "Error -> Error"))))
+		(expr @100.9-148.2 (type "Error -> Error"))
+		(expr @151.9-151.11 (type "{}"))))
 ~~~

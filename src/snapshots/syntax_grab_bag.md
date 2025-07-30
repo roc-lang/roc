@@ -224,9 +224,14 @@ UNDECLARED TYPE - syntax_grab_bag.md:45:8:45:10
 UNDECLARED TYPE - syntax_grab_bag.md:46:8:46:17
 UNDECLARED TYPE - syntax_grab_bag.md:52:4:52:6
 UNDECLARED TYPE - syntax_grab_bag.md:53:8:53:17
+MODULE NOT FOUND - syntax_grab_bag.md:4:1:4:42
 NOT IMPLEMENTED - :0:0:0:0
 NOT IMPLEMENTED - :0:0:0:0
 NOT IMPLEMENTED - :0:0:0:0
+MODULE NOT FOUND - syntax_grab_bag.md:6:1:12:4
+MODULE NOT FOUND - syntax_grab_bag.md:14:1:14:82
+MODULE NOT FOUND - syntax_grab_bag.md:16:1:16:27
+MODULE NOT FOUND - syntax_grab_bag.md:17:1:20:20
 UNDEFINED VARIABLE - syntax_grab_bag.md:72:4:72:13
 UNUSED VARIABLE - syntax_grab_bag.md:97:3:97:8
 UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
@@ -265,6 +270,7 @@ UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
 TYPE MISMATCH - syntax_grab_bag.md:67:11:67:14
 INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
 TYPE MISMATCH - syntax_grab_bag.md:155:2:155:12
+INCOMPATIBLE LIST ELEMENTS - syntax_grab_bag.md:167:3:167:3
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
@@ -376,6 +382,17 @@ This type is referenced here:
        ^^^^^^^^^
 
 
+**MODULE NOT FOUND**
+The module `pf.Stdout` was not found in this Roc project.
+
+You're attempting to use this module here:
+**syntax_grab_bag.md:4:1:4:42:**
+```roc
+import pf.Stdout exposing [line!, write!]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented: malformed import module name contains invalid control characters
 
@@ -390,6 +407,57 @@ This error doesn't have a proper diagnostic report yet. Let us know if you want 
 This feature is not yet implemented: Exposed item 'write!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+**MODULE NOT FOUND**
+The module `MALFORMED_IMPORT` was not found in this Roc project.
+
+You're attempting to use this module here:
+**syntax_grab_bag.md:6:1:12:4:**
+```roc
+import # Comment after import keyword
+	pf # Comment after qualifier
+		.StdoutMultiline # Comment after ident
+		exposing [ # Comment after exposing open
+			line!, # Comment after exposed item
+			write!, # Another after exposed item
+		] # Comment after exposing close
+```
+
+
+**MODULE NOT FOUND**
+The module `pkg.Something` was not found in this Roc project.
+
+You're attempting to use this module here:
+**syntax_grab_bag.md:14:1:14:82:**
+```roc
+import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `BadName` was not found in this Roc project.
+
+You're attempting to use this module here:
+**syntax_grab_bag.md:16:1:16:27:**
+```roc
+import BadName as GoodName
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `BadNameMultiline` was not found in this Roc project.
+
+You're attempting to use this module here:
+**syntax_grab_bag.md:17:1:20:20:**
+```roc
+import
+	BadNameMultiline
+		as
+		GoodNameMultiline
+```
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
@@ -835,6 +903,29 @@ It is of type:
 
 But you are trying to use it as:
     __arg -> _ret_
+
+**INCOMPATIBLE LIST ELEMENTS**
+The first two elements in this list have incompatible types:
+**syntax_grab_bag.md:167:3:**
+```roc
+		add_one(
+			dbg # After dbg in list
+				number, # after dbg expr as arg
+		), # Comment one
+		456, # Comment two
+```
+  ^^^
+
+The first element has this type:
+    _U64_
+
+However, the second element has this type:
+    _Num(_size)_
+
+All elements in a list must have compatible types.
+
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -1815,9 +1906,9 @@ expect {
 		(p-assign @80.1-80.11 (ident "match_time"))
 		(e-closure @80.14-138.3
 			(captures
+				(capture @86.4-86.5 (ident "x"))
 				(capture @94.5-94.6 (ident "x"))
-				(capture @136.11-136.15 (ident "dude"))
-				(capture @86.4-86.5 (ident "x")))
+				(capture @136.11-136.15 (ident "dude")))
 			(e-lambda @80.14-138.3
 				(args
 					(p-assign @81.2-81.3 (ident "a"))
@@ -2029,9 +2120,9 @@ expect {
 		(p-assign @144.1-144.6 (ident "main!"))
 		(e-closure @144.9-196.2
 			(captures
-				(capture @80.1-80.11 (ident "match_time"))
 				(capture @68.1-68.8 (ident "add_one"))
-				(capture @179.2-179.7 (ident "tuple")))
+				(capture @179.2-179.7 (ident "tuple"))
+				(capture @80.1-80.11 (ident "match_time")))
 			(e-lambda @144.9-196.2
 				(args
 					(p-underscore @144.10-144.11))

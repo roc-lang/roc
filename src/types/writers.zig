@@ -10,6 +10,8 @@ const base = @import("base");
 const types = @import("types.zig");
 const ModuleEnv = @import("compile").ModuleEnv;
 
+const TypesStore = @import("store.zig").Store;
+
 const Allocator = std.mem.Allocator;
 const Desc = types.Descriptor;
 const Var = types.Var;
@@ -52,7 +54,8 @@ const TypeContext = enum {
 pub const TypeWriter = struct {
     const Self = @This();
 
-    env: *const ModuleEnv,
+    types: *const TypesStore,
+    idents: *const Ident.Store,
     buf: std.ArrayList(u8),
     seen: std.ArrayList(Var),
     next_name_index: u32,
@@ -60,8 +63,14 @@ pub const TypeWriter = struct {
 
     /// Initialize a TypeWriter with an immutable ModuleEnv reference.
     pub fn init(gpa: std.mem.Allocator, env: *const ModuleEnv) std.mem.Allocator.Error!Self {
+        return TypeWriter.initFromParts(gpa, &env.types, &env.idents);
+    }
+
+    /// Initialize a TypeWriter with immutable types and idents references.
+    pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, idents: *const Ident.Store) std.mem.Allocator.Error!Self {
         return .{
-            .env = env,
+            .types = types_store,
+            .idents = idents,
             .buf = try std.ArrayList(u8).initCapacity(gpa, 32),
             .seen = try std.ArrayList(Var).initCapacity(gpa, 16),
             .next_name_index = 0,
@@ -89,7 +98,7 @@ pub const TypeWriter = struct {
         // Generate name: a, b, ..., z, aa, ab, ..., az, ba, ...
         // Skip any names that already exist in the identifier store
         // We need at most one more name than the number of existing identifiers
-        const max_attempts = self.env.idents.interner.entry_count + 1;
+        const max_attempts = self.idents.interner.entry_count + 1;
         var attempts: usize = 0;
         while (attempts < max_attempts) : (attempts += 1) {
             var n = self.next_name_index;
@@ -112,7 +121,7 @@ pub const TypeWriter = struct {
 
             // Check if this name already exists in the identifier store
             const candidate_name = name_buf[0..name_len];
-            const exists = self.env.idents.interner.contains(candidate_name);
+            const exists = self.idents.interner.contains(candidate_name);
 
             if (!exists) {
                 // This name is available, write it to the buffer
@@ -153,7 +162,7 @@ pub const TypeWriter = struct {
         var found = false;
 
         // We need at most as many attempts as there are existing identifiers
-        const max_attempts = self.env.idents.interner.entry_count;
+        const max_attempts = self.idents.interner.entry_count;
         var attempts: usize = 0;
         while (!found and attempts < max_attempts) : (attempts += 1) {
             var buf: [32]u8 = undefined;
@@ -169,7 +178,7 @@ pub const TypeWriter = struct {
             };
 
             // Check if this name already exists in the identifier store
-            const exists = self.env.idents.interner.contains(candidate_name);
+            const exists = self.idents.interner.contains(candidate_name);
 
             if (!exists) {
                 // This name is available, write it to the buffer
@@ -198,9 +207,9 @@ pub const TypeWriter = struct {
 
         // Check all identifiers in the store
         var i: u32 = 0;
-        while (i < self.env.idents.interner.outer_indices.items.len) : (i += 1) {
+        while (i < self.idents.interner.outer_indices.items.len) : (i += 1) {
             const ident_idx = Ident.Idx{ .idx = @truncate(i), .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
-            const existing_name = self.env.idents.getText(ident_idx);
+            const existing_name = self.idents.getText(ident_idx);
             if (std.mem.eql(u8, existing_name, candidate_name)) {
                 exists = true;
                 break;
@@ -238,14 +247,14 @@ pub const TypeWriter = struct {
             count.* += 1;
         }
 
-        if (@intFromEnum(current_var) >= self.env.types.slots.backing.len()) return;
+        if (@intFromEnum(current_var) >= self.types.slots.backing.len()) return;
 
-        const resolved = self.env.types.resolveVar(current_var);
+        const resolved = self.types.resolveVar(current_var);
         switch (resolved.desc.content) {
             .flex_var, .rigid_var, .err => {},
             .alias => |alias| {
                 // For aliases, we only count occurrences in the type arguments
-                var args_iter = self.env.types.iterAliasArgs(alias);
+                var args_iter = self.types.iterAliasArgs(alias);
                 while (args_iter.next()) |arg_var| {
                     self.countVar(search_var, arg_var, count);
                 }
@@ -263,33 +272,33 @@ pub const TypeWriter = struct {
             .list => |sub_var| self.countVar(search_var, sub_var, count),
             .list_unbound, .num => {},
             .tuple => |tuple| {
-                const elems = self.env.types.sliceVars(tuple.elems);
+                const elems = self.types.sliceVars(tuple.elems);
                 for (elems) |elem| {
                     self.countVar(search_var, elem, count);
                 }
             },
             .nominal_type => |nominal_type| {
-                var args_iter = self.env.types.iterNominalArgs(nominal_type);
+                var args_iter = self.types.iterNominalArgs(nominal_type);
                 while (args_iter.next()) |arg_var| {
                     self.countVar(search_var, arg_var, count);
                 }
             },
             .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                const args = self.env.types.sliceVars(func.args);
+                const args = self.types.sliceVars(func.args);
                 for (args) |arg| {
                     self.countVar(search_var, arg, count);
                 }
                 self.countVar(search_var, func.ret, count);
             },
             .record => |record| {
-                const fields = self.env.types.getRecordFieldsSlice(record.fields);
+                const fields = self.types.getRecordFieldsSlice(record.fields);
                 for (fields.items(.var_)) |field_var| {
                     self.countVar(search_var, field_var, count);
                 }
                 self.countVar(search_var, record.ext, count);
             },
             .record_unbound => |fields| {
-                const fields_slice = self.env.types.getRecordFieldsSlice(fields);
+                const fields_slice = self.types.getRecordFieldsSlice(fields);
                 for (fields_slice.items(.var_)) |field_var| {
                     self.countVar(search_var, field_var, count);
                 }
@@ -301,8 +310,8 @@ pub const TypeWriter = struct {
             .tag_union => |tag_union| {
                 var iter = tag_union.tags.iterIndices();
                 while (iter.next()) |tag_idx| {
-                    const tag = self.env.types.tags.get(tag_idx);
-                    const args = self.env.types.sliceVars(tag.args);
+                    const tag = self.types.tags.get(tag_idx);
+                    const args = self.types.sliceVars(tag.args);
                     for (args) |arg_var| {
                         self.countVar(search_var, arg_var, count);
                     }
@@ -314,11 +323,11 @@ pub const TypeWriter = struct {
 
     /// Convert a var to a type string
     fn writeVarWithContext(self: *Self, var_: Var, context: TypeContext, root_var: Var) std.mem.Allocator.Error!void {
-        if (@intFromEnum(var_) >= self.env.types.slots.backing.len()) {
+        if (@intFromEnum(var_) >= self.types.slots.backing.len()) {
             // Debug assert that the variable is in bounds - if not, we have a bug in type checking
             _ = try self.buf.writer().write("invalid_type");
         } else {
-            const resolved = self.env.types.resolveVar(var_);
+            const resolved = self.types.resolveVar(var_);
             if (self.hasSeenVar(var_)) {
                 _ = try self.buf.writer().write("...");
             } else {
@@ -328,7 +337,7 @@ pub const TypeWriter = struct {
                 switch (resolved.desc.content) {
                     .flex_var => |mb_ident_idx| {
                         if (mb_ident_idx) |ident_idx| {
-                            _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
+                            _ = try self.buf.writer().write(self.idents.getText(ident_idx));
                         } else {
                             // Check if this variable appears multiple times
                             const occurrences = self.countVarOccurrences(var_, root_var);
@@ -339,7 +348,7 @@ pub const TypeWriter = struct {
                         }
                     },
                     .rigid_var => |ident_idx| {
-                        _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
+                        _ = try self.buf.writer().write(self.idents.getText(ident_idx));
                     },
                     .alias => |alias| {
                         try self.writeAlias(alias, root_var);
@@ -361,8 +370,8 @@ pub const TypeWriter = struct {
 
     /// Write an alias type
     fn writeAlias(self: *Self, alias: Alias, root_var: Var) std.mem.Allocator.Error!void {
-        _ = try self.buf.writer().write(self.env.idents.getText(alias.ident.ident_idx));
-        var args_iter = self.env.types.iterAliasArgs(alias);
+        _ = try self.buf.writer().write(self.idents.getText(alias.ident.ident_idx));
+        var args_iter = self.types.iterAliasArgs(alias);
         if (args_iter.count() > 0) {
             _ = try self.buf.writer().write("(");
 
@@ -443,7 +452,7 @@ pub const TypeWriter = struct {
 
     /// Write a tuple type
     fn writeTuple(self: *Self, tuple: Tuple, root_var: Var) std.mem.Allocator.Error!void {
-        const elems = self.env.types.sliceVars(tuple.elems);
+        const elems = self.types.sliceVars(tuple.elems);
         _ = try self.buf.writer().write("(");
         for (elems, 0..) |elem, i| {
             if (i > 0) _ = try self.buf.writer().write(", ");
@@ -454,9 +463,9 @@ pub const TypeWriter = struct {
 
     /// Write a nominal type
     fn writeNominalType(self: *Self, nominal_type: NominalType, root_var: Var) std.mem.Allocator.Error!void {
-        _ = try self.buf.writer().write(self.env.idents.getText(nominal_type.ident.ident_idx));
+        _ = try self.buf.writer().write(self.idents.getText(nominal_type.ident.ident_idx));
 
-        var args_iter = self.env.types.iterNominalArgs(nominal_type);
+        var args_iter = self.types.iterNominalArgs(nominal_type);
         if (args_iter.count() > 0) {
             _ = try self.buf.writer().write("(");
 
@@ -482,17 +491,17 @@ pub const TypeWriter = struct {
 
         _ = try self.buf.writer().write("{ ");
 
-        const fields_slice = self.env.types.getRecordFieldsSlice(fields);
+        const fields_slice = self.types.getRecordFieldsSlice(fields);
 
         // Write first field - we already verified that there's at least one field
-        _ = try self.buf.writer().write(self.env.idents.getText(fields_slice.items(.name)[0]));
+        _ = try self.buf.writer().write(self.idents.getText(fields_slice.items(.name)[0]));
         _ = try self.buf.writer().write(": ");
         try self.writeVarWithContext(fields_slice.items(.var_)[0], .RecordFieldContent, root_var);
 
         // Write remaining fields
         for (fields_slice.items(.name)[1..], fields_slice.items(.var_)[1..]) |name, var_| {
             _ = try self.buf.writer().write(", ");
-            _ = try self.buf.writer().write(self.env.idents.getText(name));
+            _ = try self.buf.writer().write(self.idents.getText(name));
             _ = try self.buf.writer().write(": ");
             try self.writeVarWithContext(var_, .RecordFieldContent, root_var);
         }
@@ -502,7 +511,7 @@ pub const TypeWriter = struct {
 
     /// Write a function type with a specific arrow (`->` or `=>`)
     fn writeFuncWithArrow(self: *Self, func: Func, arrow: []const u8, root_var: Var) std.mem.Allocator.Error!void {
-        const args = self.env.types.sliceVars(func.args);
+        const args = self.types.sliceVars(func.args);
 
         // Write arguments
         if (args.len == 0) {
@@ -523,27 +532,27 @@ pub const TypeWriter = struct {
 
     /// Write a record type
     fn writeRecord(self: *Self, record: Record, root_var: Var) std.mem.Allocator.Error!void {
-        const fields = self.env.types.getRecordFieldsSlice(record.fields);
+        const fields = self.types.getRecordFieldsSlice(record.fields);
 
         _ = try self.buf.writer().write("{ ");
         for (fields.items(.name), fields.items(.var_), 0..) |field_name, field_var, i| {
             if (i > 0) _ = try self.buf.writer().write(", ");
-            _ = try self.buf.writer().write(self.env.idents.getText(field_name));
+            _ = try self.buf.writer().write(self.idents.getText(field_name));
             _ = try self.buf.writer().write(": ");
             try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
         }
 
         // Show extension variable if it's not empty
-        const ext_resolved = self.env.types.resolveVar(record.ext);
+        const ext_resolved = self.types.resolveVar(record.ext);
         switch (ext_resolved.desc.content) {
             .structure => |flat_type| switch (flat_type) {
                 .empty_record => {}, // Don't show empty extension
                 .record => |ext_record| {
                     // Flatten nested record extensions
-                    const ext_fields = self.env.types.getRecordFieldsSlice(ext_record.fields);
+                    const ext_fields = self.types.getRecordFieldsSlice(ext_record.fields);
                     for (ext_fields.items(.name), ext_fields.items(.var_)) |field_name, field_var| {
                         if (fields.len > 0 or ext_fields.len > 0) _ = try self.buf.writer().write(", ");
-                        _ = try self.buf.writer().write(self.env.idents.getText(field_name));
+                        _ = try self.buf.writer().write(self.idents.getText(field_name));
                         _ = try self.buf.writer().write(": ");
                         try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
                     }
@@ -567,7 +576,7 @@ pub const TypeWriter = struct {
                 // Show rigid vars with .. syntax
                 if (fields.len > 0) _ = try self.buf.writer().write(", ");
                 _ = try self.buf.writer().write("..");
-                _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
+                _ = try self.buf.writer().write(self.idents.getText(ident_idx));
             },
             else => {
                 if (fields.len > 0) _ = try self.buf.writer().write(", ");
@@ -580,16 +589,16 @@ pub const TypeWriter = struct {
 
     /// Helper to write record extension, handling nested records
     fn writeRecordExtension(self: *Self, ext_var: Var, num_fields: usize, root_var: Var) std.mem.Allocator.Error!void {
-        const ext_resolved = self.env.types.resolveVar(ext_var);
+        const ext_resolved = self.types.resolveVar(ext_var);
         switch (ext_resolved.desc.content) {
             .structure => |flat_type| switch (flat_type) {
                 .empty_record => {}, // Don't show empty extension
                 .record => |ext_record| {
                     // Flatten nested record extensions
-                    const ext_fields = self.env.types.getRecordFieldsSlice(ext_record.fields);
+                    const ext_fields = self.types.getRecordFieldsSlice(ext_record.fields);
                     for (ext_fields.items(.name), ext_fields.items(.var_)) |field_name, field_var| {
                         _ = try self.buf.writer().write(", ");
-                        _ = try self.buf.writer().write(self.env.idents.getText(field_name));
+                        _ = try self.buf.writer().write(self.idents.getText(field_name));
                         _ = try self.buf.writer().write(": ");
                         try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
                     }
@@ -613,7 +622,7 @@ pub const TypeWriter = struct {
                 // Show rigid vars with .. syntax
                 if (num_fields > 0) _ = try self.buf.writer().write(", ");
                 _ = try self.buf.writer().write("..");
-                _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
+                _ = try self.buf.writer().write(self.idents.getText(ident_idx));
             },
             else => {
                 // Show other types (aliases, errors, etc)
@@ -632,18 +641,18 @@ pub const TypeWriter = struct {
                 _ = try self.buf.writer().write(", ");
             }
 
-            const tag = self.env.types.tags.get(tag_idx);
+            const tag = self.types.tags.get(tag_idx);
             try self.writeTag(tag, root_var);
         }
 
         _ = try self.buf.writer().write("]");
 
         // Show extension variable if it's not empty
-        const ext_resolved = self.env.types.resolveVar(tag_union.ext);
+        const ext_resolved = self.types.resolveVar(tag_union.ext);
         switch (ext_resolved.desc.content) {
             .flex_var => |mb_ident_idx| {
                 if (mb_ident_idx) |ident_idx| {
-                    _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
+                    _ = try self.buf.writer().write(self.idents.getText(ident_idx));
                 } else {
                     // Check if this variable appears multiple times
                     const occurrences = self.countVarOccurrences(tag_union.ext, root_var);
@@ -660,7 +669,8 @@ pub const TypeWriter = struct {
                 },
             },
             .rigid_var => |ident_idx| {
-                _ = try self.buf.writer().write(self.env.idents.getText(ident_idx));
+                _ = try self.buf.writer().write(self.idents.getText(ident_idx));
+                _ = try self.buf.writer().write("(r)");
             },
             else => {
                 try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
@@ -670,8 +680,8 @@ pub const TypeWriter = struct {
 
     /// Write a single tag
     fn writeTag(self: *Self, tag: Tag, root_var: Var) std.mem.Allocator.Error!void {
-        _ = try self.buf.writer().write(self.env.idents.getText(tag.name));
-        const args = self.env.types.sliceVars(tag.args);
+        _ = try self.buf.writer().write(self.idents.getText(tag.name));
+        const args = self.types.sliceVars(tag.args);
         if (args.len > 0) {
             _ = try self.buf.writer().write("(");
             for (args, 0..) |arg, i| {

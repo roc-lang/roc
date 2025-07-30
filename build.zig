@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const modules = @import("build/modules.zig");
+const modules = @import("src/build/modules.zig");
 const Dependency = std.Build.Dependency;
 const Import = std.Build.Module.Import;
 const InstallDir = std.Build.InstallDir;

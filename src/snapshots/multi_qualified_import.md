@@ -26,12 +26,15 @@ UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:3:23:3:31
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:12:14:17
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:17:14:22
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:22:14:29
+MODULE NOT FOUND - multi_qualified_import.md:3:1:3:17
 INVALID STATEMENT - multi_qualified_import.md:3:17:3:22
 INVALID STATEMENT - multi_qualified_import.md:3:23:3:31
 INVALID STATEMENT - multi_qualified_import.md:3:32:3:41
 UNDECLARED TYPE - multi_qualified_import.md:5:16:5:23
 UNDEFINED VARIABLE - multi_qualified_import.md:6:16:6:45
+MODULE NOT IMPORTED - multi_qualified_import.md:9:11:9:33
 UNUSED VARIABLE - multi_qualified_import.md:10:12:10:19
+MODULE NOT IMPORTED - multi_qualified_import.md:13:8:13:34
 UNDEFINED VARIABLE - multi_qualified_import.md:14:8:14:12
 INVALID STATEMENT - multi_qualified_import.md:14:12:14:17
 INVALID STATEMENT - multi_qualified_import.md:14:17:14:22
@@ -98,6 +101,17 @@ data = json.Core.Utf8.encode("hello")
                      ^^^^^^^
 
 
+**MODULE NOT FOUND**
+The module `json.Core` was not found in this Roc project.
+
+You're attempting to use this module here:
+**multi_qualified_import.md:3:1:3:17:**
+```roc
+import json.Core.Utf8 exposing [Encoder]
+```
+^^^^^^^^^^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -153,6 +167,25 @@ json_encoder = Json.Core.Utf8.defaultEncoder
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
+**MODULE NOT IMPORTED**
+There is no module with the name `module [json_encoder]
+
+import json.Core.Utf8 exposing [Encoder]
+
+json_encoder : Encoder
+json_encoder = Json.Core.Utf8.defaultEncoder
+
+# Test with qualified type in annotation
+process : json.Core.Utf8` imported into this Roc file.
+
+You're attempting to use this module here:
+**multi_qualified_import.md:9:11:9:33:**
+```roc
+process : json.Core.Utf8.Encoder -> Str
+```
+          ^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable `encoder` is not used anywhere in your code.
 
@@ -163,6 +196,29 @@ The unused variable is declared here:
 process = |encoder| "processing"
 ```
            ^^^^^^^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `module [json_encoder]
+
+import json.Core.Utf8 exposing [Encoder]
+
+json_encoder : Encoder
+json_encoder = Json.Core.Utf8.defaultEncoder
+
+# Test with qualified type in annotation
+process : json.Core.Utf8.Encoder -> Str
+process = |encoder| "processing"
+
+# Test with multiple qualifiers
+data : json.Core.Utf8` imported into this Roc file.
+
+You're attempting to use this module here:
+**multi_qualified_import.md:13:8:13:34:**
+```roc
+data : json.Core.Utf8.EncodedData
+```
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -280,7 +336,7 @@ import json.Core
 [Encoder]
 
 json_encoder : Encoder
-json_encoder = Json.defaultEncoder
+json_encoder = Json.Core.Utf8.defaultEncoder
 
 # Test with qualified type in annotation
 process : json.Core.Utf8.Encoder -> Str
@@ -310,30 +366,26 @@ data = json
 		(annotation @10.1-10.8
 			(declared-type
 				(ty-fn @9.11-9.40 (effectful false)
-					(ty-lookup-external @9.11-9.33
-						(ext-decl @9.11-9.33 (ident "json.Core.Utf8.Encoder") (kind "type")))
+					(ty-malformed @9.11-9.33)
 					(ty @9.37-9.40 (name "Str"))))))
 	(d-let
 		(p-assign @14.1-14.5 (ident "data"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @14.1-14.5
 			(declared-type
-				(ty-lookup-external @13.8-13.34
-					(ext-decl @13.8-13.34 (ident "json.Core.Utf8.EncodedData") (kind "type"))))))
+				(ty-malformed @13.8-13.34))))
 	(s-import @3.1-3.17 (module "json.Core") (qualifier "json")
-		(exposes))
-	(ext-decl @9.11-9.33 (ident "json.Core.Utf8.Encoder") (kind "type"))
-	(ext-decl @13.8-13.34 (ident "json.Core.Utf8.EncodedData") (kind "type")))
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @6.1-6.13 (type "Error"))
-		(patt @10.1-10.8 (type "json.Core.Utf8.Encoder -> Str"))
+		(patt @10.1-10.8 (type "Error -> Str"))
 		(patt @14.1-14.5 (type "Error")))
 	(expressions
 		(expr @6.16-6.45 (type "Error"))
-		(expr @10.11-10.33 (type "json.Core.Utf8.Encoder -> Str"))
+		(expr @10.11-10.33 (type "Error -> Str"))
 		(expr @14.8-14.12 (type "Error"))))
 ~~~

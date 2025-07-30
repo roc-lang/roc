@@ -18,30 +18,18 @@ handleResult = |result| {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - nominal_external_fully_qualified.md:8:23:8:36
-UNDEFINED VARIABLE - nominal_external_fully_qualified.md:9:23:9:36
+MODULE NOT FOUND - nominal_external_fully_qualified.md:3:1:3:22
 UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `MyResultType` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**MODULE NOT FOUND**
+The module `MyResultModule` was not found in this Roc project.
 
-**nominal_external_fully_qualified.md:8:23:8:36:**
+You're attempting to use this module here:
+**nominal_external_fully_qualified.md:3:1:3:22:**
 ```roc
-        MyResultModule.MyResultType.Ok(value) => value
+import MyResultModule
 ```
-                      ^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `MyResultType` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**nominal_external_fully_qualified.md:9:23:9:36:**
-```roc
-        MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
-```
-                      ^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -139,27 +127,28 @@ handleResult = |result| {
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-runtime-error @8.23-8.36 (tag "ident_not_in_scope"))))
+											(p-nominal-external @8.9-8.46 (module-idx "0") (target-node-idx "0")
+												(p-applied-tag @8.9-8.46))))
 									(value
 										(e-lookup-local @8.50-8.55
 											(p-assign @8.40-8.45 (ident "value")))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-runtime-error @9.23-9.36 (tag "ident_not_in_scope"))))
+											(p-nominal-external @9.9-9.46 (module-idx "0") (target-node-idx "0")
+												(p-applied-tag @9.9-9.46))))
 									(value
 										(e-string @9.50-9.74
 											(e-literal @9.51-9.73 (string "Error: $(code.toStr())")))))))))))
 		(annotation @6.1-6.13
 			(declared-type
 				(ty-fn @5.16-5.60 (effectful false)
-					(ty-apply @5.16-5.53 (symbol "MyResultModule.MyResultType")
-						(ty @5.44-5.47 (name "Str"))
-						(ty @5.49-5.52 (name "I32")))
+					(ty-apply-external @5.16-5.53
+						(module-idx "0")
+						(target-node-idx "0"))
 					(ty @5.57-5.60 (name "Str"))))))
 	(s-import @3.1-3.22 (module "MyResultModule")
-		(exposes))
-	(ext-decl @5.16-5.43 (ident "MyResultModule.MyResultType") (kind "type")))
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure

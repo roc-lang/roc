@@ -233,8 +233,8 @@ main! = |_| {
 		(e-closure @15.9-27.2
 			(captures
 				(capture @9.1-9.8 (ident "combine"))
-				(capture @5.1-5.9 (ident "identity"))
-				(capture @13.1-13.7 (ident "addOne")))
+				(capture @13.1-13.7 (ident "addOne"))
+				(capture @5.1-5.9 (ident "identity")))
 			(e-lambda @15.9-27.2
 				(args
 					(p-underscore @15.10-15.11))

@@ -25,10 +25,10 @@ processColor = |color| {
 # EXPECTED
 IMPORT MUST BE TOP LEVEL - nominal_mixed_scope.md:9:5:9:11
 NOT IMPLEMENTED - :0:0:0:0
-UNDEFINED VARIABLE - nominal_mixed_scope.md:9:12:9:17
-UNDEFINED VARIABLE - nominal_mixed_scope.md:12:9:12:12
-UNDEFINED VARIABLE - nominal_mixed_scope.md:13:9:13:12
-UNDEFINED VARIABLE - nominal_mixed_scope.md:14:9:14:12
+UNDECLARED TYPE - nominal_mixed_scope.md:9:12:9:17
+UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
+UNDECLARED TYPE - nominal_mixed_scope.md:13:9:13:12
+UNDECLARED TYPE - nominal_mixed_scope.md:14:9:14:12
 # PROBLEMS
 **IMPORT MUST BE TOP LEVEL**
 Import statements must appear at the top level of a module.
@@ -47,10 +47,10 @@ This feature is not yet implemented: statement type in block
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
-**UNDEFINED VARIABLE**
-Nothing is named `Color` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNDECLARED TYPE**
+The type _Color_ is not declared in this scope.
 
+This type is referenced here:
 **nominal_mixed_scope.md:9:12:9:17:**
 ```roc
     import Color.RGB
@@ -58,10 +58,10 @@ Is there an `import` or `exposing` missing up-top?
            ^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `RGB` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNDECLARED TYPE**
+The type _RGB_ is not declared in this scope.
 
+This type is referenced here:
 **nominal_mixed_scope.md:12:9:12:12:**
 ```roc
         RGB.Red => LocalStatus.Pending
@@ -69,10 +69,10 @@ Is there an `import` or `exposing` missing up-top?
         ^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `RGB` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNDECLARED TYPE**
+The type _RGB_ is not declared in this scope.
 
+This type is referenced here:
 **nominal_mixed_scope.md:13:9:13:12:**
 ```roc
         RGB.Green => LocalStatus.Complete
@@ -80,10 +80,10 @@ Is there an `import` or `exposing` missing up-top?
         ^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `RGB` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNDECLARED TYPE**
+The type _RGB_ is not declared in this scope.
 
+This type is referenced here:
 **nominal_mixed_scope.md:14:9:14:12:**
 ```roc
         RGB.Blue => LocalStatus.Pending
@@ -177,7 +177,7 @@ processColor = |color| {
 				(p-assign @6.17-6.22 (ident "color")))
 			(e-block @6.24-16.2
 				(s-expr @9.12-9.21
-					(e-runtime-error (tag "ident_not_in_scope")))
+					(e-runtime-error (tag "undeclared_type")))
 				(e-match @11.5-15.6
 					(match @11.5-15.6
 						(cond
@@ -187,23 +187,23 @@ processColor = |color| {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-runtime-error @12.9-12.12 (tag "ident_not_in_scope"))))
+										(p-runtime-error @12.9-12.12 (tag "undeclared_type"))))
 								(value
-									(e-nominal @12.20-12.31 (nominal "LocalStatus")
+									(e-nominal @12.20-12.39 (nominal "LocalStatus")
 										(e-tag @12.20-12.39 (name "Pending")))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-runtime-error @13.9-13.12 (tag "ident_not_in_scope"))))
+										(p-runtime-error @13.9-13.12 (tag "undeclared_type"))))
 								(value
-									(e-nominal @13.22-13.33 (nominal "LocalStatus")
+									(e-nominal @13.22-13.42 (nominal "LocalStatus")
 										(e-tag @13.22-13.42 (name "Complete")))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-runtime-error @14.9-14.12 (tag "ident_not_in_scope"))))
+										(p-runtime-error @14.9-14.12 (tag "undeclared_type"))))
 								(value
-									(e-nominal @14.21-14.32 (nominal "LocalStatus")
+									(e-nominal @14.21-14.40 (nominal "LocalStatus")
 										(e-tag @14.21-14.40 (name "Pending"))))))))))
 		(annotation @6.1-6.13
 			(declared-type
