@@ -134,7 +134,7 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 # FORMATTED
 ~~~roc
 {
-	Foo.baz
+	Foo.Bar.baz
 	
 	x : 
 	

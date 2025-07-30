@@ -1051,6 +1051,70 @@ pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
     return self.source[line_start..line_end];
 }
 
+/// Serialize this ModuleEnv to the given CompactWriter.
+/// IMPORTANT: The returned pointer points to memory inside the writer!
+/// Attempting to dereference this pointer or calling any methods on it
+/// is illegal behavior!
+pub fn serialize(
+    self: *const Self,
+    allocator: std.mem.Allocator,
+    writer: *collections.CompactWriter,
+) std.mem.Allocator.Error!*const Self {
+    // First, write the ModuleEnv struct itself
+    const offset_self = try writer.appendAlloc(allocator, Self);
+
+    // Then serialize the sub-structures and update the struct
+    offset_self.* = .{
+        .gpa = undefined, // Will be set when deserializing
+        .idents = (try self.idents.serialize(allocator, writer)).*,
+        .ident_ids_for_slicing = (try self.ident_ids_for_slicing.serialize(allocator, writer)).*,
+        .strings = (try self.strings.serialize(allocator, writer)).*,
+        .types = (try self.types.serialize(allocator, writer)).*,
+        .exposed_items = (try self.exposed_items.serialize(allocator, writer)).*,
+        .line_starts = (try self.line_starts.serialize(allocator, writer)).*,
+        .source = "", // Will be set when deserializing
+        .all_defs = self.all_defs,
+        .all_statements = self.all_statements,
+        .external_decls = (try self.external_decls.serialize(allocator, writer)).*,
+        .imports = (try self.imports.serialize(allocator, writer)).*,
+        .module_name = "", // Will be set when deserializing
+        .diagnostics = self.diagnostics,
+        .store = (try self.store.serialize(allocator, writer)).*,
+    };
+
+    // IMPORTANT: Set gpa field to all zeros as requested
+    @memset(@as([*]u8, @ptrCast(&offset_self.gpa))[0..@sizeOf(@TypeOf(offset_self.gpa))], 0);
+
+    return @constCast(offset_self);
+}
+
+/// Add the given offset to the memory addresses of all pointers in `self`.
+/// IMPORTANT: The gpa, source, and module_name fields must be manually set before calling this function.
+pub fn relocate(self: *Self, offset: isize) void {
+    // IMPORTANT: gpa, source, and module_name are not relocated - they should be set manually before calling relocate
+
+    // Relocate all sub-structures
+    self.idents.relocate(offset);
+    self.ident_ids_for_slicing.relocate(offset);
+    self.strings.relocate(offset);
+    self.types.relocate(offset);
+    self.exposed_items.relocate(offset);
+    self.line_starts.relocate(offset);
+
+    // Note: source is not relocated - it should be set manually
+
+    // Note: all_defs and all_statements are just spans with numeric values, no pointers to relocate
+
+    self.external_decls.relocate(offset);
+    self.imports.relocate(offset);
+
+    // Note: module_name is not relocated - it should be set manually
+
+    // Note: diagnostics is just a span with numeric values, no pointers to relocate
+
+    self.store.relocate(offset);
+}
+
 /// Convert a type into a node index
 pub fn nodeIdxFrom(idx: anytype) Node.Idx {
     return @enumFromInt(@intFromEnum(idx));
@@ -1462,21 +1526,191 @@ pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree)
     }
 }
 
-/// Append region information to an S-expression node for a given index.
-pub fn appendRegionInfoToSexprNode(self: *const Self, node: *SExpr, idx: anytype) std.mem.Allocator.Error!void {
-    const region = self.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
-    try self.appendRegionInfoToSexprNodeFromRegion(node, region);
+test "ModuleEnv with types CompactWriter roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create ModuleEnv
+    var original = try Self.init(gpa, "");
+    defer original.deinit();
+
+    // Initialize CIR fields
+    try original.initCIRFields(gpa, "test.Types");
+
+    // Add some type variables
+    const var1 = try original.types.freshFromContent(.empty);
+    const var2 = try original.types.freshFromContent(.{ .structure = .{ .record = .{ .tags = .{} } } });
+    const var3 = try original.types.freshFromContent(.{ .alias = .{ .name = .placeholder, .type_arguments = .{}, .real = var1, .lambda_sets = .{} } });
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_types_module_env.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize
+    var writer = collections.CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*Self, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Self))));
+
+    // Set gpa, source, and module_name before relocating
+    deserialized.gpa = gpa;
+    deserialized.source = "";
+    deserialized.module_name = "test.Types";
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify we have the right number of types
+    try testing.expectEqual(@as(usize, 3), deserialized.types.len());
+
+    // Verify type contents (basic check)
+    const content1 = deserialized.types.getContent(var1);
+    try testing.expectEqual(types_mod.Content.empty, content1.*);
+
+    const content2 = deserialized.types.getContent(var2);
+    try testing.expectEqual(@as(types_mod.Content.Tag, .structure), std.meta.activeTag(content2.*));
+
+    const content3 = deserialized.types.getContent(var3);
+    try testing.expectEqual(@as(types_mod.Content.Tag, .alias), std.meta.activeTag(content3.*));
 }
 
-/// Append region information to an S-expression node from a specific region.
-pub fn appendRegionInfoToSexprNodeFromRegion(self: *const Self, node: *SExpr, region: Region) std.mem.Allocator.Error!void {
-    const info = self.getRegionInfo(region);
-    try node.appendByteRange(
-        self.gpa,
-        info,
-        region.start.offset,
-        region.end.offset,
-    );
+test "ModuleEnv empty CompactWriter roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create an empty ModuleEnv
+    var original = try Self.init(gpa, "");
+    defer original.deinit();
+
+    // Initialize CIR fields
+    try original.initCIRFields(gpa, "test.Empty");
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_empty_module_env.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize using CompactWriter
+    var writer = collections.CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*Self, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Self))));
+
+    // Set gpa, source, and module_name before relocating
+    deserialized.gpa = gpa;
+    deserialized.source = "";
+    deserialized.module_name = "test.Types";
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify empty state
+    try testing.expectEqualStrings("", deserialized.source);
+    try testing.expectEqualStrings("test.Empty", deserialized.module_name);
+    try testing.expectEqual(@as(usize, 0), deserialized.all_defs.span.len);
+    try testing.expectEqual(@as(usize, 0), deserialized.all_statements.span.len);
+    try testing.expectEqual(@as(usize, 0), deserialized.external_decls.len());
+    try testing.expectEqual(@as(usize, 0), deserialized.imports.imports.len());
+}
+
+test "ModuleEnv with source code CompactWriter roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const source =
+        \\app [main] {
+        \\    main = \{} ->
+        \\        "Hello, World!"
+        \\}
+    ;
+
+    // Create ModuleEnv with source
+    var original = try Self.init(gpa, source);
+    defer original.deinit();
+
+    // Initialize CIR fields
+    try original.initCIRFields(gpa, "test.Hello");
+
+    // Calculate line starts
+    try original.calcLineStarts();
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_source_module_env.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize
+    var writer = collections.CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*Self, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Self))));
+
+    // Set gpa, source, and module_name before relocating
+    deserialized.gpa = gpa;
+    deserialized.source = "";
+    deserialized.module_name = "test.Types";
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify source and module name
+    try testing.expectEqualStrings(source, deserialized.source);
+    try testing.expectEqualStrings("test.Hello", deserialized.module_name);
+
+    // Verify line starts were preserved
+    try testing.expectEqual(original.line_starts.items.items.len, deserialized.line_starts.items.items.len);
 }
 
 /// Append region information to an S-expression node for a given index.

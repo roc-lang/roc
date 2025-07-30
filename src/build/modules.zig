@@ -3,6 +3,7 @@ const Build = std.Build;
 const Module = Build.Module;
 const Step = Build.Step;
 
+/// TODO
 pub const RocModules = struct {
     serialization: *Module,
     collections: *Module,
@@ -13,6 +14,7 @@ pub const RocModules = struct {
     reporting: *Module,
     parse: *Module,
     can: *Module,
+    check: *Module,
     tracy: *Module,
     build_options: *Module,
 
@@ -27,6 +29,7 @@ pub const RocModules = struct {
             .reporting = b.addModule("reporting", .{ .root_source_file = b.path("src/reporting/mod.zig") }),
             .parse = b.addModule("parse", .{ .root_source_file = b.path("src/parse/mod.zig") }),
             .can = b.addModule("can", .{ .root_source_file = b.path("src/canonicalize/Mod.zig") }),
+            .check = b.addModule("check", .{ .root_source_file = b.path("src/check/Mod.zig") }),
             .tracy = b.addModule("tracy", .{ .root_source_file = b.path("src/tracy.zig") }),
             .build_options = b.addModule("build_options", .{ .root_source_file = build_options_step.getOutput() }),
         };
@@ -39,6 +42,7 @@ pub const RocModules = struct {
         self.base.addImport("collections", self.collections);
         self.base.addImport("types", self.types);
 
+        self.types.addImport("types", self.types);
         self.types.addImport("serialization", self.serialization);
         self.types.addImport("base", self.base);
         self.types.addImport("collections", self.collections);
@@ -71,6 +75,16 @@ pub const RocModules = struct {
         self.can.addImport("builtins", self.builtins);
         self.can.addImport("tracy", self.tracy);
 
+        self.check.addImport("check", self.check);
+        self.check.addImport("base", self.base);
+        self.check.addImport("tracy", self.tracy);
+        self.check.addImport("collections", self.collections);
+        self.check.addImport("types", self.types);
+        self.check.addImport("can", self.can);
+        self.check.addImport("compile", self.compile);
+        self.check.addImport("builtins", self.builtins);
+        self.check.addImport("reporting", self.reporting);
+
         return self;
     }
 
@@ -83,6 +97,7 @@ pub const RocModules = struct {
         step.root_module.addImport("reporting", self.reporting);
         step.root_module.addImport("parse", self.parse);
         step.root_module.addImport("can", self.can);
+        step.root_module.addImport("check", self.check);
         step.root_module.addImport("tracy", self.tracy);
         step.root_module.addImport("builtins", self.builtins);
         step.root_module.addImport("build_options", self.build_options);
@@ -97,6 +112,7 @@ pub const RocModules = struct {
         step.root_module.addImport("reporting", self.reporting);
         step.root_module.addImport("parse", self.parse);
         step.root_module.addImport("can", self.can);
+        step.root_module.addImport("check", self.check);
         step.root_module.addImport("tracy", self.tracy);
         step.root_module.addImport("builtins", self.builtins);
         step.root_module.addImport("build_options", self.build_options);

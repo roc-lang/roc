@@ -15,19 +15,15 @@
 //! are reset before returning. Other descriptor state remains unchanged.
 
 const std = @import("std");
-
 const base = @import("base");
 const collections = @import("collections");
 const types = @import("types");
 
 const Ident = base.Ident;
-
 const MkSafeList = collections.SafeList;
-
 const Store = types.Store;
 const DescStoreIdx = types.DescStoreIdx;
 const ResolvedVarDesc = types.ResolvedVarDesc;
-
 const Desc = types.Descriptor;
 const Content = types.Content;
 const Mark = types.Mark;

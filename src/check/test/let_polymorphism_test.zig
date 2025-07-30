@@ -7,14 +7,13 @@ const base = @import("base");
 const types = @import("types");
 const parse = @import("parse");
 const compile = @import("compile");
-
-const instantiate = types.instantiate;
-const check_types = @import("../check_types.zig");
+const Check = @import("check");
 
 const TypesStore = types.Store;
 const ModuleEnv = compile.ModuleEnv;
 const testing = std.testing;
 const test_allocator = testing.allocator;
+const instantiate = Check.instantiate;
 
 const TestEnv = struct {
     module_env: *ModuleEnv,

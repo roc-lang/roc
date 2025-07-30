@@ -28,10 +28,6 @@ pub const NodeStore = @import("NodeStore.zig");
 /// Represents the intermediate representation or Abstract Syntax Tree (AST) of a parsed Roc file.
 pub const AST = @import("AST.zig");
 
-test {
-    _ = @import("test/ast_node_store_test.zig");
-}
-
 fn runParse(env: *ModuleEnv, parserCall: *const fn (*Parser) std.mem.Allocator.Error!u32) std.mem.Allocator.Error!AST {
     const trace = tracy.trace(@src());
     defer trace.end();

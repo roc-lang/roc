@@ -574,7 +574,7 @@ authenticate = |user, pass| HttpAuth.login(user, pass)
 # Test deeply nested qualification
 processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 processData = |advancedConfig, input|
-	Config.parseWith(advancedConfig, input)
+	Config.Parser.Advanced.parseWith(advancedConfig, input)
 
 # Test mixed qualification (exposed item + qualified)
 formatOutput : Str -> Str

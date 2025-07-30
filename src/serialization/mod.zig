@@ -173,7 +173,3 @@ test "serialization interface detection" {
     try std_testing.expect(hasSerializationInterface(TestType));
     try std_testing.expect(!hasSerializationWithAllocatorInterface(TestType));
 }
-
-test {
-    _ = @import("test/compact_writer_test.zig");
-}

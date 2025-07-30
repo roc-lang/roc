@@ -10,10 +10,6 @@ pub const store = @import("store.zig");
 pub const writers = @import("writers.zig");
 pub const instantiate = @import("instantiate.zig");
 
-test {
-    _ = @import("test/rigid_instantiation.zig");
-}
-
 pub const Alias = types.Alias;
 pub const Content = types.Content;
 pub const FlatType = types.FlatType;

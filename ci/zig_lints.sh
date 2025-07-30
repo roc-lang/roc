@@ -38,7 +38,7 @@ fi
 
 # Check for top level comments in new Zig files
 
-NEW_ZIG_FILES=$(git diff --name-only --diff-filter=A origin/main HEAD | grep 'src/' | grep '\.zig$' || echo "")
+NEW_ZIG_FILES=$(git diff --name-only --diff-filter=A origin/main HEAD -- | grep 'src/' | grep '\.zig$' || echo "")
 
 if [ -z "$NEW_ZIG_FILES" ]; then
     # No new Zig files found

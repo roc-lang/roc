@@ -778,7 +778,8 @@ test "NodeStore round trip - TypeAnno" {
 
     try type_annos.append(ModuleEnv.TypeAnno{
         .ty_lookup_external = .{
-            .external_decl = rand_idx(ModuleEnv.ExternalDecl.Idx),
+            .module_idx = rand_idx(ModuleEnv.Import.Idx),
+            .target_node_idx = rand.random().int(u16),
         },
     });
 

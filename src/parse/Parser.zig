@@ -1158,12 +1158,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) std.mem.Allocato
             }
         },
         .OpenCurly, .OpenRound => {
-            const open_token = self.peek();
-            const close_token: AST.Token.Tag = switch (open_token) {
-                .OpenCurly => .CloseCurly,
-                .OpenRound => .CloseRound,
-                else => return try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos),
-            };
+            const isCurly = self.peek() == .OpenCurly;
 
             const start = self.pos;
 
@@ -1173,9 +1168,9 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) std.mem.Allocato
             var depth: u32 = 0;
             while (lookahead_pos < self.tok_buf.tokens.len) {
                 const tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
-                if (tok == open_token) {
+                if ((isCurly and tok == .OpenCurly) or (!isCurly and (tok == .OpenRound or tok == .NoSpaceOpenRound))) {
                     depth += 1;
-                } else if (tok == close_token) {
+                } else if ((isCurly and tok == .CloseCurly) or (!isCurly and tok == .CloseRound)) {
                     if (depth == 0) {
                         const token_after_close_curly = self.tok_buf.tokens.items(.tag)[lookahead_pos + 1];
                         if (token_after_close_curly == .OpAssign) {
@@ -1209,6 +1204,9 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) std.mem.Allocato
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
+            } else if (statementType == .top_level and isCurly) {
+                // Blocks not allowed as top level statements
+                return try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, start);
             }
         },
         else => {},
