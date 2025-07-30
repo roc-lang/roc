@@ -133,12 +133,18 @@ pub const Store = struct {
         var digit_index: u8 = 9;
         // The max u32 value is 4294967295 which is 10 digits
         var str_buffer = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-        while (id > 0) {
-            const digit = id % 10;
-            str_buffer[digit_index] = @as(u8, @intCast(digit)) + '0';
-
-            id = (id - digit) / 10;
+        // Special case for 0
+        if (id == 0) {
+            str_buffer[digit_index] = '0';
             digit_index -= 1;
+        } else {
+            while (id > 0) {
+                const digit = id % 10;
+                str_buffer[digit_index] = @as(u8, @intCast(digit)) + '0';
+
+                id = (id - digit) / 10;
+                digit_index -= 1;
+            }
         }
 
         const name = str_buffer[digit_index + 1 ..];
@@ -283,6 +289,8 @@ pub const Store = struct {
     ) std.mem.Allocator.Error!*const Store {
         // First, write the Store struct itself
         const offset_self = try writer.appendAlloc(allocator, Store);
+
+
 
         // Then serialize the sub-structures and update the struct
         offset_self.* = .{

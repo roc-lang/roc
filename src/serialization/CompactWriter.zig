@@ -53,6 +53,17 @@ pub const CompactWriter = struct {
             }
 
             const n = try std.posix.pwritev(file.handle, adjusted_iovecs, bytes_written);
+            
+            // If all remaining iovecs are empty, we're done
+            var has_data = false;
+            for (adjusted_iovecs) |iovec| {
+                if (iovec.len > 0) {
+                    has_data = true;
+                    break;
+                }
+            }
+            if (!has_data) break;
+            
             if (n == 0) return error.UnexpectedEof;
 
             // Update position tracking
@@ -143,10 +154,14 @@ pub const CompactWriter = struct {
         self.total_bytes += size * len;
 
         // Return the same slice type as the input
-        return if (info.pointer.is_const)
+        const result = if (info.pointer.is_const)
             @as([*]const T, @ptrFromInt(offset))[0..len]
         else
             @as([*]T, @ptrFromInt(offset))[0..len];
+            
+
+        
+        return result;
     }
 
     fn padToAlignment(self: *@This(), allocator: std.mem.Allocator, alignment: usize) std.mem.Allocator.Error!void {

@@ -488,11 +488,11 @@ test "two integer literals with different requirements unify to most restrictive
         .structure => |structure| switch (structure) {
             .num => |num| switch (num) {
                 .num_poly => |requirements| {
-                    try std.testing.expectEqual(@as(u8, 8), requirements.requirements.bits_needed);
+                    try std.testing.expectEqual(@as(u8, @intFromEnum(Num.Int.BitsNeeded.@"8")), requirements.requirements.bits_needed);
                     try std.testing.expectEqual(false, requirements.requirements.sign_needed);
                 },
                 .int_poly => |requirements| {
-                    try std.testing.expectEqual(@as(u8, 8), requirements.requirements.bits_needed);
+                    try std.testing.expectEqual(@as(u8, @intFromEnum(Num.Int.BitsNeeded.@"8")), requirements.requirements.bits_needed);
                     try std.testing.expectEqual(false, requirements.requirements.sign_needed);
                 },
                 else => return error.UnexpectedNumType,
@@ -573,11 +573,11 @@ test "positive and negative literals unify with sign requirement" {
             .num => |num| switch (num) {
                 .num_poly => |requirements| {
                     try std.testing.expectEqual(true, requirements.requirements.sign_needed);
-                    try std.testing.expectEqual(@as(u8, 7), requirements.requirements.bits_needed);
+                    try std.testing.expectEqual(@as(u8, @intFromEnum(Num.Int.BitsNeeded.@"7")), requirements.requirements.bits_needed);
                 },
                 .int_poly => |requirements| {
                     try std.testing.expectEqual(true, requirements.requirements.sign_needed);
-                    try std.testing.expectEqual(@as(u8, 7), requirements.requirements.bits_needed);
+                    try std.testing.expectEqual(@as(u8, @intFromEnum(Num.Int.BitsNeeded.@"7")), requirements.requirements.bits_needed);
                 },
                 else => return error.UnexpectedNumType,
             },

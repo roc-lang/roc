@@ -193,10 +193,14 @@ pub fn SafeList(comptime T: type) type {
             writer: *CompactWriter,
         ) Allocator.Error!*const SafeList(T) {
             const items = self.items.items;
+
             const offset_self = try writer.appendAlloc(allocator, SafeList(T));
+
+            const slice = try writer.appendSlice(allocator, items);
+            
             offset_self.* = .{
                 .items = .{
-                    .items = try writer.appendSlice(allocator, items),
+                    .items = slice,
                     .capacity = items.len,
                 },
             };
@@ -209,7 +213,8 @@ pub fn SafeList(comptime T: type) type {
             if (self.items.capacity == 0) return;
 
             const old_addr: isize = @intCast(@intFromPtr(self.items.items.ptr));
-            self.items.items.ptr = @ptrFromInt(@as(usize, @intCast(old_addr + offset)));
+            const new_addr = @as(usize, @intCast(old_addr + offset));
+            self.items.items.ptr = @ptrFromInt(new_addr);
         }
 
         /// Returns the size needed to serialize this list
