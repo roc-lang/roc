@@ -36,6 +36,8 @@ pub const CompactWriter = struct {
         while (bytes_written < total_size) {
             // Create adjusted iovec array for partial writes
             const remaining_iovecs = self.iovecs.items.len - current_iovec;
+            if (remaining_iovecs == 0) break;
+
             var adjusted_iovecs = try allocator.alloc(std.posix.iovec_const, remaining_iovecs);
             defer allocator.free(adjusted_iovecs);
 
@@ -55,8 +57,6 @@ pub const CompactWriter = struct {
                 }
             }
 
-            const n = try std.posix.pwritev(file.handle, adjusted_iovecs, bytes_written);
-
             // If all remaining iovecs are empty, we're done
             var has_data = false;
             for (adjusted_iovecs) |iovec| {
@@ -66,6 +66,8 @@ pub const CompactWriter = struct {
                 }
             }
             if (!has_data) break;
+
+            const n = try std.posix.pwritev(file.handle, adjusted_iovecs, bytes_written);
 
             if (n == 0) return error.UnexpectedEof;
 
