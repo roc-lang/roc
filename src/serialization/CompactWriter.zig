@@ -30,6 +30,9 @@ pub const CompactWriter = struct {
         var iovec_offset: usize = 0;
         const total_size = self.total_bytes;
 
+        // Early return if nothing to write
+        if (total_size == 0 or self.iovecs.items.len == 0) return;
+
         while (bytes_written < total_size) {
             // Create adjusted iovec array for partial writes
             const remaining_iovecs = self.iovecs.items.len - current_iovec;
