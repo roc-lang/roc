@@ -290,8 +290,6 @@ pub const Store = struct {
         // First, write the Store struct itself
         const offset_self = try writer.appendAlloc(allocator, Store);
 
-
-
         // Then serialize the sub-structures and update the struct
         offset_self.* = .{
             .interner = (try self.interner.serialize(allocator, writer)).*,

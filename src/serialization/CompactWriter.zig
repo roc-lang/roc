@@ -53,7 +53,7 @@ pub const CompactWriter = struct {
             }
 
             const n = try std.posix.pwritev(file.handle, adjusted_iovecs, bytes_written);
-            
+
             // If all remaining iovecs are empty, we're done
             var has_data = false;
             for (adjusted_iovecs) |iovec| {
@@ -63,7 +63,7 @@ pub const CompactWriter = struct {
                 }
             }
             if (!has_data) break;
-            
+
             if (n == 0) return error.UnexpectedEof;
 
             // Update position tracking
@@ -158,9 +158,7 @@ pub const CompactWriter = struct {
             @as([*]const T, @ptrFromInt(offset))[0..len]
         else
             @as([*]T, @ptrFromInt(offset))[0..len];
-            
 
-        
         return result;
     }
 

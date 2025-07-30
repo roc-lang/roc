@@ -197,7 +197,7 @@ pub fn SafeList(comptime T: type) type {
             const offset_self = try writer.appendAlloc(allocator, SafeList(T));
 
             const slice = try writer.appendSlice(allocator, items);
-            
+
             offset_self.* = .{
                 .items = .{
                     .items = slice,

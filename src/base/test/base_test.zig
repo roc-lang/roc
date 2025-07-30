@@ -1,3 +1,9 @@
+//! Unit tests for the base module.
+//!
+//! Note these previously were included in the files, but we moved them
+//! here because they weren't running once we changed base to a zig module
+//! and we were unable to use `testing.refAllDeclsRecursive` to run them.
+
 const std = @import("std");
 const base = @import("base");
 const serialization = @import("serialization");
@@ -27,80 +33,74 @@ fn serializeWithArena(
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     // Create and use CompactWriter
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
     defer writer.deinit(arena_allocator);
-    
+
     _ = try value.serialize(arena_allocator, &writer);
-    
+
     const total_bytes = writer.total_bytes;
-    
+
     // Write to file
     try writer.writeGather(arena_allocator, file);
-    
+
     return total_bytes;
 }
 
 test "SafeList simple serialization" {
     const gpa = std.testing.allocator;
-    
+
     // Create a simple SafeList
     var list = try collections.SafeList(u8).initCapacity(gpa, 10);
     defer list.deinit(gpa);
-    
+
     _ = try list.append(gpa, 'H');
     _ = try list.append(gpa, 'e');
     _ = try list.append(gpa, 'l');
     _ = try list.append(gpa, 'l');
     _ = try list.append(gpa, 'o');
-    
+
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     const file = try tmp_dir.dir.createFile("test_safelist.dat", .{ .read = true });
     defer file.close();
-    
+
     // Use arena allocator for serialization
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     // Serialize
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
     defer writer.deinit(arena_allocator);
-    
-    _ = try list.serialize(arena_allocator, &writer);
-    
 
-    
+    _ = try list.serialize(arena_allocator, &writer);
+
     // Write to file
     try writer.writeGather(arena_allocator, file);
-    
+
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
-    
+
     _ = try file.read(buffer);
-    
+
     // Cast and relocate
     // The SafeList struct should be at the beginning (it was appended first)
     const deserialized = @as(*collections.SafeList(u8), @ptrCast(@alignCast(buffer.ptr)));
-    
 
-    
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-    
 
-    
     // Verify
     try std.testing.expectEqual(@as(u32, 5), deserialized.len());
     try std.testing.expectEqual(@as(u8, 'H'), deserialized.get(@enumFromInt(0)).*);
@@ -179,7 +179,7 @@ test "Ident.Store empty CompactWriter roundtrip" {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
@@ -187,8 +187,6 @@ test "Ident.Store empty CompactWriter roundtrip" {
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
-    
-
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -196,21 +194,20 @@ test "Ident.Store empty CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    
+
     // Ensure file size matches what we wrote
     try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
-    
+
     const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     const bytes_read = try file.read(buffer);
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
-    
     // Cast and relocate
     // The Store struct should be at the beginning (it was appended first)
     const deserialized = @as(*Ident.Store, @ptrCast(@alignCast(buffer.ptr)));
-    
+
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify empty - interner always has at least 1 byte (0) to ensure Idx.unused doesn't point to valid data
@@ -254,7 +251,7 @@ test "Ident.Store basic CompactWriter roundtrip" {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
@@ -262,8 +259,6 @@ test "Ident.Store basic CompactWriter roundtrip" {
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
-    
-
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -271,27 +266,26 @@ test "Ident.Store basic CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    
+
     // Ensure file size matches what we wrote
     try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
-    
+
     const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     const bytes_read = try file.read(buffer);
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
-    
     // Cast and relocate
     // The Store struct should be at the beginning (it was appended first)
     const deserialized = @as(*Ident.Store, @ptrCast(@alignCast(buffer.ptr)));
-    
+
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Check the bytes length for validation
     const bytes_len = deserialized.interner.bytes.len();
     const idx1_value = @intFromEnum(@as(SmallStringInterner.Idx, @enumFromInt(@as(u32, idx1.idx))));
-    
+
     // Verify the index is valid
     if (bytes_len <= idx1_value) {
         return error.InvalidIndex;
@@ -344,7 +338,7 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
@@ -352,8 +346,6 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
-    
-
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -361,25 +353,24 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    
+
     // Ensure file size matches what we wrote
     try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
-    
+
     const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     const bytes_read = try file.read(buffer);
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
-    
     // Cast and relocate
     // The Store struct should be at the beginning (it was appended first)
     const deserialized = @as(*Ident.Store, @ptrCast(@alignCast(buffer.ptr)));
-    
+
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify all identifiers
-    
+
     try std.testing.expectEqualStrings("regular", deserialized.getText(idx1));
     try std.testing.expectEqualStrings("0", deserialized.getText(unique1));
     try std.testing.expectEqualStrings("1", deserialized.getText(unique2));
@@ -418,7 +409,7 @@ test "Ident.Store frozen state CompactWriter roundtrip" {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
@@ -426,8 +417,6 @@ test "Ident.Store frozen state CompactWriter roundtrip" {
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
-    
-
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -435,21 +424,20 @@ test "Ident.Store frozen state CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    
+
     // Ensure file size matches what we wrote
     try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
-    
+
     const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     const bytes_read = try file.read(buffer);
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
-    
     // Cast and relocate
     // The Store struct should be at the beginning (it was appended first)
     const deserialized = @as(*Ident.Store, @ptrCast(@alignCast(buffer.ptr)));
-    
+
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify frozen state is preserved
@@ -510,7 +498,7 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
@@ -518,8 +506,6 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
-    
-
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -527,21 +513,20 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    
+
     // Ensure file size matches what we wrote
     try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
-    
+
     const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     const bytes_read = try file.read(buffer);
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
-    
     // Cast and relocate
     // The Store struct should be at the beginning (it was appended first)
     const deserialized = @as(*Ident.Store, @ptrCast(@alignCast(buffer.ptr)));
-    
+
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify all identifiers (skip duplicate at end)
@@ -618,7 +603,7 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
 
 //     const offset3 = offset2_end; // Third store starts where second ended
 //     _ = try store3.serialize(arena_allocator, &writer);
-//     
+//
 
 //     // Write to file
 //     try writer.writeGather(arena_allocator, file);
@@ -899,7 +884,7 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
@@ -907,8 +892,6 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
-    
-
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -974,7 +957,7 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
@@ -982,8 +965,6 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
-    
-
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -1020,7 +1001,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
 
     // Insert many strings to ensure the hash map is well populated
     const test_data = [_]struct { str: []const u8, expected_idx: u32 }{
-        .{ .str = "first", .expected_idx = 1 },   // First string starts at index 1 (after initial 0 byte)
+        .{ .str = "first", .expected_idx = 1 }, // First string starts at index 1 (after initial 0 byte)
         .{ .str = "second", .expected_idx = 7 },
         .{ .str = "third", .expected_idx = 14 },
         .{ .str = "first", .expected_idx = 1 }, // duplicate
@@ -1052,7 +1033,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
@@ -1060,8 +1041,6 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
-    
-
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -1125,7 +1104,7 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
@@ -1133,8 +1112,6 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
-    
-
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -1201,7 +1178,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
@@ -1209,8 +1186,6 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
-    
-
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -1231,7 +1206,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     for (edge_cases, 0..) |expected_str, i| {
         const idx = indices.items[i];
         const actual_str = deserialized.getText(idx);
-        
+
         // Special case: strings starting with null byte will be truncated to empty string
         // This is a limitation of null-terminated string storage
         if (expected_str.len > 0 and expected_str[0] == '\x00') {
@@ -1404,7 +1379,7 @@ test "StringLiteral.Store empty CompactWriter roundtrip" {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
@@ -1412,8 +1387,6 @@ test "StringLiteral.Store empty CompactWriter roundtrip" {
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
-    
-
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -1461,7 +1434,7 @@ test "StringLiteral.Store basic CompactWriter roundtrip" {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
@@ -1469,8 +1442,6 @@ test "StringLiteral.Store basic CompactWriter roundtrip" {
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
-    
-
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -1532,7 +1503,7 @@ test "StringLiteral.Store comprehensive CompactWriter roundtrip" {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
@@ -1540,8 +1511,6 @@ test "StringLiteral.Store comprehensive CompactWriter roundtrip" {
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
-    
-
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -1595,7 +1564,7 @@ test "StringLiteral.Store frozen state CompactWriter roundtrip" {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
@@ -1603,8 +1572,6 @@ test "StringLiteral.Store frozen state CompactWriter roundtrip" {
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
-    
-
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -1681,7 +1648,7 @@ test "StringLiteral.Store frozen state CompactWriter roundtrip" {
 
 //     const offset3 = offset2_end; // Third store starts where second ended
 //     _ = try store3.serialize(arena_allocator, &writer);
-//     
+//
 
 //     // Write to file
 //     try writer.writeGather(arena_allocator, file);
@@ -1756,7 +1723,7 @@ test "StringLiteral.Store edge case indices CompactWriter roundtrip" {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
-    
+
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
@@ -1764,8 +1731,6 @@ test "StringLiteral.Store edge case indices CompactWriter roundtrip" {
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
-    
-
 
     // Write to file
     try writer.writeGather(arena_allocator, file);

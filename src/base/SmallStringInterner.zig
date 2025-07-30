@@ -176,7 +176,6 @@ pub fn getText(self: *const Self, idx: Idx) []u8 {
     const bytes_slice = self.bytes.items.items;
     const start = @intFromEnum(idx);
 
-    
     return std.mem.sliceTo(bytes_slice[start..], 0);
 }
 
@@ -199,21 +198,16 @@ pub fn serialize(
     // First, write the struct
     const offset_self = try writer.appendAlloc(allocator, Self);
 
-
-
     // Then serialize the bytes and hash_table SafeLists and update the struct
     const serialized_bytes = try self.bytes.serialize(allocator, writer);
     const serialized_hash_table = try self.hash_table.serialize(allocator, writer);
-    
 
-    
     offset_self.* = .{
         .bytes = serialized_bytes.*,
         .hash_table = serialized_hash_table.*,
         .entry_count = self.entry_count,
         .frozen = self.frozen,
     };
-
 
     // Return the version of Self that's in the writer's buffer
     return @constCast(offset_self);
