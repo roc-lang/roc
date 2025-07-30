@@ -40,16 +40,16 @@
 //! subsequent unification runs.
 
 const std = @import("std");
-
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
 const compile = @import("compile");
+const Check = @import("check");
 
-const problem_mod = @import("./problem.zig");
-const occurs = @import("./occurs.zig");
-const snapshot_mod = @import("./snapshot.zig");
+const problem_mod = Check.problem;
+const occurs = Check.occurs;
+const snapshot_mod = Check.snapshot;
 
 const ModuleEnv = compile.ModuleEnv;
 
@@ -100,7 +100,7 @@ pub const Result = union(enum) {
     const Self = @This();
 
     ok,
-    problem: Problem.SafeMultiList.Idx,
+    problem: Problem.Idx,
 
     pub fn isOk(self: Self) bool {
         return self == .ok;

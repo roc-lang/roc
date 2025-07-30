@@ -4,10 +4,13 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const types = @import("types");
-const RocDec = @import("builtins").RocDec;
-const Node = @import("../Node.zig");
-const NodeStore = @import("../NodeStore.zig");
-const AST = @import("../AST.zig");
+const parse = @import("parse");
+const builtins = @import("builtins");
+
+const RocDec = builtins.RocDec;
+const Node = parse.Node;
+const NodeStore = parse.NodeStore;
+const AST = parse.AST;
 
 var rand = std.Random.DefaultPrng.init(1234);
 

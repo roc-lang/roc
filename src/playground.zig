@@ -20,15 +20,15 @@ const reporting = @import("reporting");
 const types = @import("types");
 const compile = @import("compile");
 const Can = @import("can");
+const Check = @import("check");
 
-const check_types = @import("check/check_types.zig");
 const WasmFilesystem = @import("playground/WasmFilesystem.zig");
 const snapshot = @import("snapshot.zig");
-const problem = @import("check/check_types/problem.zig");
 
 const SExprTree = base.SExprTree;
 const ModuleEnv = compile.ModuleEnv;
 const Allocator = std.mem.Allocator;
+const problem = Check.problem;
 
 const allocator: Allocator = .{
     .ptr = undefined,
@@ -103,7 +103,7 @@ const Diagnostic = struct {
 const CompilerStageData = struct {
     module_env: *ModuleEnv,
     parse_ast: ?parse.AST = null,
-    solver: ?check_types = null,
+    solver: ?Check = null,
 
     // Diagnostic reports from each stage
     tokenize_reports: std.ArrayList(reporting.Report),
@@ -375,7 +375,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         const type_can_ir = result.module_env;
         const empty_modules: []const *ModuleEnv = &.{};
         // Use pointer to the stored CIR to ensure solver references valid memory
-        var solver = try check_types.init(allocator, &type_can_ir.types, type_can_ir, empty_modules, &type_can_ir.store.regions);
+        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, empty_modules, &type_can_ir.store.regions);
         result.solver = solver;
 
         solver.checkDefs() catch {};
@@ -391,9 +391,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         );
         defer report_builder.deinit();
 
-        var iter = solver.problems.problems.iterIndices();
-        while (iter.next()) |idx| {
-            const type_problem = solver.problems.problems.get(idx);
+        for (solver.problems.problems.items) |type_problem| {
             const report = report_builder.build(type_problem) catch continue;
             result.type_reports.append(report) catch continue;
         }

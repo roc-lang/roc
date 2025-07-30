@@ -8,10 +8,9 @@ const parse = @import("parse");
 const reporting = @import("reporting");
 const compile = @import("compile");
 const Can = @import("can");
-
+const Check = @import("check");
 const tracy = @import("tracy");
-const Solver = @import("check/check_types.zig");
-const types_problem_mod = @import("check/check_types/problem.zig");
+
 const Filesystem = @import("fs/Filesystem.zig");
 const cache_mod = @import("cache/mod.zig");
 
@@ -21,6 +20,7 @@ const CacheManager = cache_mod.CacheManager;
 const CacheConfig = cache_mod.CacheConfig;
 const CacheResult = cache_mod.CacheResult;
 const CacheHit = cache_mod.CacheHit;
+const types_problem_mod = Check.problem;
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
@@ -275,7 +275,7 @@ fn processSourceInternal(
 
     // Type checking
     const empty_modules: []const *ModuleEnv = &.{};
-    var solver = try Solver.init(gpa, &cir.types, cir, empty_modules, &cir.store.regions);
+    var solver = try Check.init(gpa, &cir.types, cir, empty_modules, &cir.store.regions);
     defer solver.deinit();
 
     // Check for type errors
@@ -297,9 +297,7 @@ fn processSourceInternal(
     );
     defer report_builder.deinit();
 
-    var problems_itr = solver.problems.problems.iterIndices();
-    while (problems_itr.next()) |problem_idx| {
-        const problem = solver.problems.problems.get(problem_idx);
+    for (solver.problems.problems.items) |problem| {
         const report = report_builder.build(problem) catch continue;
         reports.append(report) catch continue;
     }

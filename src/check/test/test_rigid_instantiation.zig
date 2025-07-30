@@ -7,9 +7,10 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const instantiate = @import("./instantiate.zig");
+const Check = @import("check");
 
 const Store = types.Store;
+const instantiate = Check.instantiate;
 
 test "rigid variables need instantiation - multiple type parameters" {
     var store = try Store.init(std.testing.allocator);

@@ -10,12 +10,18 @@ const types_mod = @import("types");
 const Can = @import("can");
 const compile = @import("compile");
 
-const unifier = @import("check_types/unify.zig");
-const occurs = @import("check_types/occurs.zig");
-const problem = @import("check_types/problem.zig");
-const snapshot = @import("check_types/snapshot.zig");
-const instantiate = @import("check_types/instantiate.zig");
-const copy_import = @import("check_types/copy_import.zig");
+const copy_import = @import("copy_import.zig");
+
+/// **Hindley-Milner+ Unification**
+pub const unifier = @import("unify.zig");
+/// **Type Instantiation**
+pub const instantiate = @import("instantiate.zig");
+/// **Type Snapshot**
+pub const snapshot = @import("snapshot.zig");
+/// **Recursion Checking**
+pub const occurs = @import("occurs.zig");
+/// **Problem Reporting**
+pub const problem = @import("problem.zig");
 
 const ModuleEnv = compile.ModuleEnv;
 const testing = std.testing;
@@ -1455,14 +1461,14 @@ fn setDetailIfTypeMismatch(self: *Self, result: unifier.Result, mismatch_detail:
 /// This allows us to show the user nice, more specific errors than a generic
 /// type mismatch
 fn setProblemTypeMismatchDetail(self: *Self, problem_idx: problem.Problem.Idx, mismatch_detail: problem.TypeMismatchDetail) void {
-    switch (self.problems.problems.get(problem_idx)) {
+    switch (self.problems.problems.items[@intFromEnum(problem_idx)]) {
         .type_mismatch => |mismatch| {
-            self.problems.problems.set(problem_idx, .{
+            self.problems.problems.items[@intFromEnum(problem_idx)] = .{
                 .type_mismatch = .{
                     .types = mismatch.types,
                     .detail = mismatch_detail,
                 },
-            });
+            };
         },
         else => {
             // For other problem types (e.g., number_does_not_fit), the
@@ -1995,8 +2001,4 @@ test "call site unification order matters for concrete vs flexible types" {
             else => return error.TestUnexpectedResult,
         }
     }
-}
-
-test {
-    _ = @import("check_types/cross_module_test.zig");
 }
