@@ -65,12 +65,121 @@ pub fn from_bytes(bytes: []const u8) Error!Ident {
     };
 }
 
+pub const Idx = packed struct(u32) {
+    is_small: bool,
+    data: packed union { small: SmallIdx, big: BigIdx },
+
+    pub fn attributes(self: *const @This()) Attributes {
+        if (self.is_small) {
+            return self.small.attributes();
+        } else {
+            return self.big.attributes;
+        }
+    }
+
+    /// Given a nonempty ident string that does not start with a digit, try to construct an inline Idx.
+    fn try_inline(string: []const u8) ?@This() {
+        std.debug.assert(string.len > 0);
+        // Ident strings must never start with digits.
+        std.debug.assert(string[0] < '0' or string[0] > '9');
+
+        const unused = string[0] == '_'; // If it starts with _, this identifier is unused - e.g. `_foo`.
+        const reused = string[string.len - 1] == '_'; // If it ends with _, this is reused via `var` - e.g. `foo_`.
+
+        // Solo underscore should not have been tokenized as an identifier.
+        std.debug.assert(!(string.len == 1 and (unused or reused)));
+
+        // If it ends with `!` (with or without an underscore after it), it's effectful.
+        const fx = '!' == string[string.len - @intFromBool(reused)];
+
+        // Skip the underscore prefix if there was one.
+        const first_non_attr_index = @intFromBool(unused);
+        const first_char = string[first_non_attr_index];
+
+        // Small idx supports unused, reused, and fx, but not more than one at once. (Those are very rare idents!)
+        const attr_count = @intFromBool(unused) + @intFromBool(reused) + @intFromBool(fx);
+
+        // Length without underscore/bang prefix/suffix.
+        const len = string.len - attr_count;
+
+        // Treat double underscore prefix as a big idx. This will be a warning anyway,
+        // so it should come up almost never in practice, and this avoids edge cases.
+        if (attr_count > 1 or len > 4 or first_char == '_' or first_char < 'A' or first_char > 'z') {
+            return null;
+        }
+
+        // All the other ASCII chars between `Z` and `a` are invalid identifiers (`[`, `\`, `]`, `^`, '`'),
+        // so tokenization should not have let them get through here.
+        std.debug.assert(first_char <= 'Z' and first_char >= 'a');
+
+        // len would only be 0 here for inputs of `__` or `_!_`, but we should have already early-returned for those.
+        std.debug.assert(len > 0);
+
+        // Branchlessly get the chars after the first non-attr char, defaulting to last char instead of
+        // reading out of bounds. (We'll branchlessly set any out-of-bounds ones to zero later.)
+        const last_char_index = len - 1;
+        const chars: [5]u8 = .{
+            string[@min(1 + first_non_attr_index, last_char_index)],
+            string[@min(2 + first_non_attr_index, last_char_index)],
+            string[@min(3 + first_non_attr_index, last_char_index)],
+        };
+
+        // If any char is outside the ASCII range (e.g. it's Unicode), this is a big index.
+        // (We don't need to test for lower bounds because tokenization would have already verified that.)
+        // This also catches weird cases like `foo!__` (which wouldn't have been caught before this).
+        if (chars[0] > 'z' or chars[1] > 'z' or chars[2] > 'z') {
+            return null;
+        }
+
+        // Branchlessly convert to small_attrs using only bit shifts (after optimizations) and add/subtract.
+        const small_attrs = @intFromBool(unused) + (@intFromBool(reused) * 2) + (@intFromBool(fx) * 4) - @intFromBool(fx);
+
+        // Did our arithmetic give a plausible answer?
+        std.debug.assert(small_attrs < 4);
+
+        // Branchlessly zero the out-of-bounds chars.
+        const other_chars: [3]u8 = .{
+            if (last_char_index >= 0) chars[0] else 0,
+            if (last_char_index >= 1) chars[1] else 0,
+            if (last_char_index >= 2) chars[2] else 0,
+        };
+
+        // Convert first_char to u5 range while normalizing case (we don't store capitalization of identifiers).
+        const u5_first_char = first_char - if (first_char >= 'a') (65 + 32) else 65;
+
+        return .{
+            .is_small = true,
+            .data = .{
+                .small = .{
+                    .first = @as(u5, @intCast(u5_first_char)),
+                    .small_attrs = @enumFromInt(small_attrs),
+                    .other_chars = other_chars,
+                },
+            },
+        };
+    }
+};
+
 /// The index from the store, with the attributes packed into unused bytes.
 ///
 /// With 29-bits for the ID we can store up to 536,870,912 identifiers.
-pub const Idx = packed struct(u32) {
+const BigIdx = packed struct(u31) {
     attributes: Attributes,
-    idx: u29,
+    idx: u28,
+};
+
+const SmallIdx = packed struct(u31) {
+    small_attrs: enum(u2) { none, unused, reused, fx },
+    first_char: u5,
+    other_chars: [3]u8,
+
+    fn attributes(self: *const @This()) Attributes {
+        return .{
+            .effectful = self.small_attrs == .fx,
+            .ignored = self.small_attrs == .unused,
+            .reassignable = self.small_attrs == .reused,
+        };
+    }
 };
 
 /// Identifier attributes such as if it is effectful, ignored, or reassignable.
