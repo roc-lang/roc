@@ -711,7 +711,7 @@ pub fn addPatternRecordField(store: *NodeStore, field: AST.PatternRecordField) s
 }
 
 /// TODO
-pub fn getPatternRecordField(store: *NodeStore, field: AST.PatternRecordField.Idx) AST.PatternRecordField {
+pub fn getPatternRecordField(store: *const NodeStore, field: AST.PatternRecordField.Idx) AST.PatternRecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(field)));
     return .{
         .name = node.main_token,
@@ -943,7 +943,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
 // ------------------------------------------------------------------------
 
 /// TODO
-pub fn getFile(store: *NodeStore) AST.File {
+pub fn getFile(store: *const NodeStore) AST.File {
     const node = store.nodes.get(@enumFromInt(0));
     const header_ed_idx = @as(usize, @intCast(node.data.lhs + node.data.rhs));
     const header = store.extra_data.items[header_ed_idx];
@@ -955,7 +955,7 @@ pub fn getFile(store: *NodeStore) AST.File {
 }
 
 /// Retrieves collection data from a stored collection node.
-pub fn getCollection(store: *NodeStore, collection_idx: AST.Collection.Idx) AST.Collection {
+pub fn getCollection(store: *const NodeStore, collection_idx: AST.Collection.Idx) AST.Collection {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(collection_idx)));
     return .{
         .span = .{
@@ -967,7 +967,7 @@ pub fn getCollection(store: *NodeStore, collection_idx: AST.Collection.Idx) AST.
 }
 
 /// Retrieves header data from a stored header node, reconstructing the appropriate header type.
-pub fn getHeader(store: *NodeStore, header_idx: AST.Header.Idx) AST.Header {
+pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
     switch (node.tag) {
         .app_header => {
@@ -1024,7 +1024,7 @@ pub fn getHeader(store: *NodeStore, header_idx: AST.Header.Idx) AST.Header {
 }
 
 /// Retrieves exposed item data from a stored exposed item node.
-pub fn getExposedItem(store: *NodeStore, exposed_item_idx: AST.ExposedItem.Idx) AST.ExposedItem {
+pub fn getExposedItem(store: *const NodeStore, exposed_item_idx: AST.ExposedItem.Idx) AST.ExposedItem {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(exposed_item_idx)));
     switch (node.tag) {
         .exposed_item_lower => {
@@ -1074,7 +1074,7 @@ pub fn getExposedItem(store: *NodeStore, exposed_item_idx: AST.ExposedItem.Idx) 
 }
 
 /// Retrieves statement data from a stored statement node, reconstructing the appropriate statement type.
-pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Statement {
+pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) AST.Statement {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(statement_idx)));
     switch (node.tag) {
         .decl => {
@@ -1199,7 +1199,7 @@ pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Sta
 }
 
 /// Retrieves pattern data from a stored pattern node, reconstructing the appropriate pattern type.
-pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
+pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(pattern_idx)));
     switch (node.tag) {
         .ident_patt => {
@@ -1321,7 +1321,7 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
 }
 
 /// Retrieves expression data from a stored expression node, reconstructing the appropriate expression type.
-pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
+pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(expr_idx)));
     switch (node.tag) {
         .int => {
@@ -1538,7 +1538,7 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
 }
 
 /// Retrieves record field data from a stored record field node.
-pub fn getRecordField(store: *NodeStore, field_idx: AST.RecordField.Idx) AST.RecordField {
+pub fn getRecordField(store: *const NodeStore, field_idx: AST.RecordField.Idx) AST.RecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(field_idx)));
     const name = node.main_token;
     const value: ?AST.Expr.Idx = if (node.tag == .malformed) null else if (node.data.lhs > 0) @enumFromInt(node.data.lhs) else null;
@@ -1551,7 +1551,7 @@ pub fn getRecordField(store: *NodeStore, field_idx: AST.RecordField.Idx) AST.Rec
 }
 
 /// Retrieves when branch data from a stored when branch node.
-pub fn getBranch(store: *NodeStore, branch_idx: AST.MatchBranch.Idx) AST.MatchBranch {
+pub fn getBranch(store: *const NodeStore, branch_idx: AST.MatchBranch.Idx) AST.MatchBranch {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(branch_idx)));
     return .{
         .region = node.region,
@@ -1561,7 +1561,7 @@ pub fn getBranch(store: *NodeStore, branch_idx: AST.MatchBranch.Idx) AST.MatchBr
 }
 
 /// Retrieves type header data from a stored type header node.
-pub fn getTypeHeader(store: *NodeStore, header_idx: AST.TypeHeader.Idx) AST.TypeHeader {
+pub fn getTypeHeader(store: *const NodeStore, header_idx: AST.TypeHeader.Idx) AST.TypeHeader {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
     std.debug.assert(node.tag == .ty_header);
     return .{
@@ -1575,7 +1575,7 @@ pub fn getTypeHeader(store: *NodeStore, header_idx: AST.TypeHeader.Idx) AST.Type
 }
 
 /// Retrieves annotation record field data from a stored annotation record field node.
-pub fn getAnnoRecordField(store: *NodeStore, anno_record_field_idx: AST.AnnoRecordField.Idx) !AST.AnnoRecordField {
+pub fn getAnnoRecordField(store: *const NodeStore, anno_record_field_idx: AST.AnnoRecordField.Idx) !AST.AnnoRecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(anno_record_field_idx)));
 
     if (node.tag == .malformed) {
@@ -1590,7 +1590,7 @@ pub fn getAnnoRecordField(store: *NodeStore, anno_record_field_idx: AST.AnnoReco
 }
 
 /// Get a WhereClause node from the store, using a type-safe index to the node.
-pub fn getWhereClause(store: *NodeStore, where_clause_idx: AST.WhereClause.Idx) AST.WhereClause {
+pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause.Idx) AST.WhereClause {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(where_clause_idx)));
     switch (node.tag) {
         .where_mod_method => {
@@ -1626,7 +1626,7 @@ pub fn getWhereClause(store: *NodeStore, where_clause_idx: AST.WhereClause.Idx) 
 }
 
 /// Retrieves type annotation data from a stored type annotation node, reconstructing the appropriate annotation type.
-pub fn getTypeAnno(store: *NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnno {
+pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnno {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(ty_anno_idx)));
 
     switch (node.tag) {
@@ -1785,7 +1785,7 @@ pub fn clearScratchExprsFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new ExprIter so that the caller can iterate through
 /// all items in the span.
-pub fn exprSlice(store: *NodeStore, span: AST.Expr.Span) []AST.Expr.Idx {
+pub fn exprSlice(store: *const NodeStore, span: AST.Expr.Span) []AST.Expr.Idx {
     return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
 }
 
@@ -1823,7 +1823,7 @@ pub fn clearScratchStatementsFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new Statement slice so that the caller can iterate through
 /// all items in the span.
-pub fn statementSlice(store: *NodeStore, span: AST.Statement.Span) []AST.Statement.Idx {
+pub fn statementSlice(store: *const NodeStore, span: AST.Statement.Span) []AST.Statement.Idx {
     return store.sliceFromSpan(AST.Statement.Idx, span.span);
 }
 
@@ -1860,19 +1860,19 @@ pub fn clearScratchPatternsFrom(store: *NodeStore, start: u32) void {
 }
 
 /// Creates a slice corresponding to a span.
-pub fn sliceFromSpan(store: *NodeStore, comptime T: type, span: base.DataSpan) []T {
+pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) []T {
     return @ptrCast(store.extra_data.items[span.start..][0..span.len]);
 }
 
 /// Returns a new Pattern slice so that the caller can iterate through
 /// all items in the span.
-pub fn patternSlice(store: *NodeStore, span: AST.Pattern.Span) []AST.Pattern.Idx {
+pub fn patternSlice(store: *const NodeStore, span: AST.Pattern.Span) []AST.Pattern.Idx {
     return store.sliceFromSpan(AST.Pattern.Idx, span.span);
 }
 
 /// Returns a new AST.PatternRecordFieldIter so that the caller can iterate through
 /// all items in the span.
-pub fn patternRecordFieldSlice(store: *NodeStore, span: AST.PatternRecordField.Span) []AST.PatternRecordField.Idx {
+pub fn patternRecordFieldSlice(store: *const NodeStore, span: AST.PatternRecordField.Span) []AST.PatternRecordField.Idx {
     return store.sliceFromSpan(AST.PatternRecordField.Idx, span.span);
 }
 /// Returns the start position for a new Span of patternRecordFieldIdxs in scratch
@@ -1908,8 +1908,8 @@ pub fn clearScratchPatternRecordFieldsFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new RecordField slice so that the caller can iterate through
 /// all items in the span.
-pub fn recordFieldSlice(store: *NodeStore, span: AST.RecordField.Span) []AST.RecordField.Idx {
-    return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
+pub fn recordFieldSlice(store: *const NodeStore, span: AST.RecordField.Span) []AST.RecordField.Idx {
+    return sliceFromSpan(store, AST.RecordField.Idx, span.span);
 }
 /// Returns the start position for a new Span of recordFieldIdxs in scratch
 pub fn scratchRecordFieldTop(store: *NodeStore) u32 {
@@ -1975,7 +1975,7 @@ pub fn clearScratchMatchBranchesFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new WhenBranch slice so that the caller can iterate through
 /// all items in the span.
-pub fn matchBranchSlice(store: *NodeStore, span: AST.MatchBranch.Span) []AST.MatchBranch.Idx {
+pub fn matchBranchSlice(store: *const NodeStore, span: AST.MatchBranch.Span) []AST.MatchBranch.Idx {
     return store.sliceFromSpan(AST.MatchBranch.Idx, span.span);
 }
 
@@ -2012,7 +2012,7 @@ pub fn clearScratchTypeAnnosFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new TypeAnno slice so that the caller can iterate through
 /// all items in the span.
-pub fn typeAnnoSlice(store: *NodeStore, span: AST.TypeAnno.Span) []AST.TypeAnno.Idx {
+pub fn typeAnnoSlice(store: *const NodeStore, span: AST.TypeAnno.Span) []AST.TypeAnno.Idx {
     return store.sliceFromSpan(AST.TypeAnno.Idx, span.span);
 }
 
@@ -2049,7 +2049,7 @@ pub fn clearScratchAnnoRecordFieldsFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new AnnoRecordField slice so that the caller can iterate through
 /// all items in the span.
-pub fn annoRecordFieldSlice(store: *NodeStore, span: AST.AnnoRecordField.Span) []AST.AnnoRecordField.Idx {
+pub fn annoRecordFieldSlice(store: *const NodeStore, span: AST.AnnoRecordField.Span) []AST.AnnoRecordField.Idx {
     return store.sliceFromSpan(AST.AnnoRecordField.Idx, span.span);
 }
 
@@ -2086,7 +2086,7 @@ pub fn clearScratchTokensFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new Token slice so that the caller can iterate through
 /// all items in the span.
-pub fn tokenSlice(store: *NodeStore, span: Token.Span) []Token.Idx {
+pub fn tokenSlice(store: *const NodeStore, span: Token.Span) []Token.Idx {
     return store.sliceFromSpan(Token.Idx, span.span);
 }
 
@@ -2123,7 +2123,7 @@ pub fn clearScratchExposedItemsFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new ExposedItem slice so that the caller can iterate through
 /// all items in the span.
-pub fn exposedItemSlice(store: *NodeStore, span: AST.ExposedItem.Span) []AST.ExposedItem.Idx {
+pub fn exposedItemSlice(store: *const NodeStore, span: AST.ExposedItem.Span) []AST.ExposedItem.Idx {
     return store.sliceFromSpan(AST.ExposedItem.Idx, span.span);
 }
 
@@ -2160,6 +2160,6 @@ pub fn clearScratchWhereClausesFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new WhereClause slice so that the caller can iterate through
 /// all items in the span.
-pub fn whereClauseSlice(store: *NodeStore, span: AST.WhereClause.Span) []AST.WhereClause.Idx {
+pub fn whereClauseSlice(store: *const NodeStore, span: AST.WhereClause.Span) []AST.WhereClause.Idx {
     return store.sliceFromSpan(AST.WhereClause.Idx, span.span);
 }

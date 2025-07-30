@@ -29,6 +29,9 @@ const Allocator = std.mem.Allocator;
 const ModuleEnv = compile.ModuleEnv;
 const tokenize = parse.tokenize;
 
+pub const toSExprHtml = @import("HTML.zig").toSExprHtml;
+pub const tokensToHtml = @import("HTML.zig").tokensToHtml;
+
 const AST = @This();
 
 env: *ModuleEnv,
@@ -628,7 +631,7 @@ pub const TokenizedRegion = struct {
 };
 
 /// Resolve a token index to a string slice from the source code.
-pub fn resolve(self: *AST, token: Token.Idx) []const u8 {
+pub fn resolve(self: *const AST, token: Token.Idx) []const u8 {
     const range = self.tokens.resolve(token);
     return self.env.source[@intCast(range.start.offset)..@intCast(range.end.offset)];
 }
@@ -637,7 +640,7 @@ pub fn resolve(self: *AST, token: Token.Idx) []const u8 {
 /// If there are qualifiers, returns a slice from the first qualifier to the final token.
 /// Otherwise, returns the final token text with any leading dot stripped based on the token type.
 pub fn resolveQualifiedName(
-    self: *AST,
+    self: *const AST,
     qualifiers: Token.Span,
     final_token: Token.Idx,
     strip_dot_from_tokens: []const Token.Tag,
@@ -703,18 +706,6 @@ pub fn toSExprStr(ast: *@This(), env: ModuleEnv, writer: std.io.AnyWriter) !void
     try file.pushToSExprTree(env, ast, &tree);
 
     try tree.toStringPretty(writer);
-}
-
-/// Helper function to convert the AST to a human friendly representation in HTML format
-pub fn toSExprHtml(ast: *@This(), env: ModuleEnv, writer: std.io.AnyWriter) !void {
-    const file = ast.store.getFile();
-
-    var tree = SExprTree.init(env.gpa);
-    defer tree.deinit();
-
-    try file.pushToSExprTree(env, ast, &tree);
-
-    try tree.toHtml(writer);
 }
 
 /// The kind of the type declaration represented, either:
