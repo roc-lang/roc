@@ -1354,11 +1354,7 @@ fn introduceExposedItemsIntoScope(
 
         // Check if the module exists
         if (!envs_map.contains(module_name_text)) {
-            // Module not found - create diagnostic
-            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-                .module_name = module_name,
-                .region = import_region,
-            } });
+            // so there is no need to create another diagnostic here for module_not_found
             return;
         }
 
