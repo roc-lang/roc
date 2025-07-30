@@ -405,13 +405,6 @@ test "NodeStore round trip - TypeAnno" {
         },
     });
     try ty_annos.append(AST.TypeAnno{
-        .mod_ty = .{
-            .mod_ident = rand_ident_idx(),
-            .ty_ident = rand_ident_idx(),
-            .region = rand_region(),
-        },
-    });
-    try ty_annos.append(AST.TypeAnno{
         .tag_union = .{
             .open_anno = rand_idx(AST.TypeAnno.Idx),
             .tags = AST.TypeAnno.Span{ .span = rand_span() },

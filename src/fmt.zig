@@ -1845,11 +1845,6 @@ const Formatter = struct {
 
                 try fmt.pushTokenText(t.token);
             },
-            .mod_ty => |t| {
-                try fmt.pushTokenText(t.region.start);
-                try fmt.pushAll(".");
-                try fmt.pushTokenText(t.region.end - 1);
-            },
             .tuple => |t| {
                 region = t.region;
                 try fmt.formatCollection(t.region, .round, AST.TypeAnno.Idx, fmt.ast.store.typeAnnoSlice(t.annos), Formatter.formatTypeAnno);

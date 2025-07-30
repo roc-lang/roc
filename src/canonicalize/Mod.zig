@@ -4407,9 +4407,6 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
         .ty => |ty| {
             return (try self.canonicalizeTypeAnnoBasicType(ty)).anno_idx;
         },
-        .mod_ty => |_| {
-            @panic("TODO mod_ty");
-        },
         .underscore => |underscore| {
             type_anno_ctx.found_underscore = true;
 
@@ -5765,7 +5762,7 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
                 try self.extractTypeVarIdentsFromASTAnno(field.ty, idents_start_idx);
             }
         },
-        .ty, .underscore, .mod_ty, .tag_union, .malformed => {
+        .ty, .underscore, .tag_union, .malformed => {
             // These don't contain type variables to extract
         },
     }
@@ -5841,7 +5838,7 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
             }
             return null;
         },
-        .ty, .underscore, .mod_ty, .malformed => {
+        .ty, .underscore, .malformed => {
             // These don't contain type variables
             return null;
         },
