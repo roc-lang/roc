@@ -3288,9 +3288,6 @@ fn canonicalizePattern(
                 },
             }, tag_union_type, region);
 
-            // TODO: Support external tag patterns
-            // Should be similar to tag exprs
-
             if (e.qualifiers.span.len == 0) {
                 // Check if this is an unqualified nominal tag (e.g. True or False are in scope unqualified by default)
                 if (self.unqualified_nominal_tags.get(tag_name_text)) |nominal_type_decl| {
@@ -4332,9 +4329,8 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                                 .name = name_ident,
                             } }, content, region);
 
-                            // Add to scope (simplified - ignoring result for now)
-                            // TODO: Handle possible errors (shadowing, since by this point we know this var isn't already in scope)
-                            _ = try scope.introduceTypeVar(self.env.gpa, name_ident, new_anno_idx, null);
+                            // Add to scope
+                            _ = try self.scopeIntroduceTypeVar(name_ident, new_anno_idx);
 
                             return new_anno_idx;
                         },
@@ -4392,9 +4388,8 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                                 .name = name_ident,
                             } }, content, region);
 
-                            // Add to scope (simplified - ignoring result for now)
-                            // TODO: Handle possible errors (shadowing, since by this point we know this var isn't already in scope)
-                            _ = try scope.introduceTypeVar(self.env.gpa, name_ident, new_anno_idx, null);
+                            // Add to scope
+                            _ = try self.scopeIntroduceTypeVar(name_ident, new_anno_idx);
 
                             return new_anno_idx;
                         },
