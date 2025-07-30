@@ -1354,6 +1354,7 @@ fn introduceExposedItemsIntoScope(
 
         // Check if the module exists
         if (!envs_map.contains(module_name_text)) {
+            // Module not found - Module existence check is already done in canonicalizeImportStatement,
             // so there is no need to create another diagnostic here for module_not_found
             return;
         }
