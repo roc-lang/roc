@@ -257,8 +257,8 @@ test "cross-module type checking - record type" {
     try testing.expectEqual(@as(usize, 2), fields.len);
 
     // Check field names and types
-    try testing.expectEqual(x_ident.getIdx(), fields.items(.name)[0].getIdx());
-    try testing.expectEqual(y_ident.getIdx(), fields.items(.name)[1].getIdx());
+    try testing.expect(x_ident.eql(fields.items(.name)[0]));
+    try testing.expect(y_ident.eql(fields.items(.name)[1]));
 
     const x_resolved = module_b_env.types.resolveVar(fields.items(.var_)[0]);
     try testing.expect(x_resolved.desc.content == .structure);
@@ -504,7 +504,10 @@ test "cross-module type checking - preserves module A types" {
     // Module A's type should remain unchanged (still a flex var)
     const module_a_after = module_a_env.types.resolveVar(flex_var_a).desc.content;
     try testing.expect(module_a_after == .flex_var);
-    try testing.expectEqual(original_content, module_a_after);
+    // Both should be flex_var with the same name (if any)
+    try testing.expect(original_content.flex_var == null and module_a_after.flex_var == null or
+        (original_content.flex_var != null and module_a_after.flex_var != null and
+         original_content.flex_var.?.eql(module_a_after.flex_var.?)));
 
     // Module B's imported type should be I32
     const module_b_resolved = module_b_env.types.resolveVar(external_var);

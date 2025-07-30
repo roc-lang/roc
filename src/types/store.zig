@@ -1058,7 +1058,7 @@ fn expectEqualFlatType(expected: FlatType, actual: FlatType) !void {
         },
         .tuple => |expected_tuple| try expectEqualTuple(expected_tuple, actual.tuple),
         .num => |expected_num| try std.testing.expectEqual(expected_num, actual.num),
-        .nominal_type => |expected_nom| try std.testing.expectEqual(expected_nom, actual.nominal_type),
+        .nominal_type => |expected_nom| try expectEqualNominalType(expected_nom, actual.nominal_type),
         .fn_pure, .fn_effectful, .fn_unbound => |expected_func| {
             const actual_func = switch (actual) {
                 .fn_pure => |f| f,
@@ -1102,6 +1102,15 @@ fn expectEqualTagUnion(expected: TagUnion, actual: TagUnion) !void {
     try std.testing.expectEqual(expected.ext, actual.ext);
     // Note: We can't directly compare the tags ranges because they contain Tag with Ident.Idx
     // The serialization test verifies the content is correct through other means
+}
+
+fn expectEqualNominalType(expected: NominalType, actual: NominalType) !void {
+    // Compare TypeIdent using eql
+    try std.testing.expect(expected.ident.ident_idx.eql(actual.ident.ident_idx));
+    // Compare vars
+    try std.testing.expectEqual(expected.vars, actual.vars);
+    // Compare origin_module using eql
+    try std.testing.expect(expected.origin_module.eql(actual.origin_module));
 }
 
 test "resolveVarAndCompressPath - flattens redirect chain to flex_var" {
@@ -1411,7 +1420,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     try expectEqualContent(Content{ .structure = .{ .str = {} } }, deser_str.desc.content);
 
     const deser_list = deserialized.resolveVar(list_var);
-    try std.testing.expectEqual(FlatType{ .list = list_elem }, deser_list.desc.content.structure);
+    try expectEqualFlatType(FlatType{ .list = list_elem }, deser_list.desc.content.structure);
 
     const deser_func = deserialized.resolveVar(func_var);
     switch (deser_func.desc.content.structure) {
@@ -1430,8 +1439,8 @@ test "Store comprehensive CompactWriter roundtrip" {
         .record => |record| {
             const fields_slice = deserialized.getRecordFieldsSlice(record.fields);
             try std.testing.expectEqual(@as(usize, 2), fields_slice.len);
-            try std.testing.expectEqual(@as(u32, 100), @intFromEnum(fields_slice.items(.name)[0]));
-            try std.testing.expectEqual(@as(u32, 200), @intFromEnum(fields_slice.items(.name)[1]));
+            try std.testing.expectEqual(@as(u32, 100), fields_slice.items(.name)[0].getIdx());
+            try std.testing.expectEqual(@as(u32, 200), fields_slice.items(.name)[1].getIdx());
             try std.testing.expectEqual(field1_var, fields_slice.items(.var_)[0]);
             try std.testing.expectEqual(field2_var, fields_slice.items(.var_)[1]);
             try std.testing.expectEqual(false, fields_slice.items(.is_optional)[0]);

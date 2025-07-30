@@ -65,9 +65,10 @@ pub fn from_bytes(bytes: []const u8) Error!Ident {
     };
 }
 
+pub const IdxData = packed union { small: SmallIdx, big: BigIdx };
 pub const Idx = packed struct(u32) {
     is_small: bool,
-    data: packed union { small: SmallIdx, big: BigIdx },
+    data: IdxData,
 
     pub fn attributes(self: *const @This()) Attributes {
         if (self.is_small) {
@@ -77,7 +78,7 @@ pub const Idx = packed struct(u32) {
             return self.data.big.attributes;
         }
     }
-    
+
     pub fn getIdx(self: *const @This()) u28 {
         if (self.is_small) {
             // Small identifiers don't have a real index in the store
@@ -91,6 +92,23 @@ pub const Idx = packed struct(u32) {
         // Since Idx is a packed struct(u32), we can compare the bit representation directly
         return @as(u32, @bitCast(self)) == @as(u32, @bitCast(other));
     }
+
+    // Support for std.testing.expectEqual by implementing format
+    pub fn format(
+        self: Idx,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+        // Format as the underlying u32 value for debugging
+        try writer.print("Ident.Idx({d})", .{self.getIdx()});
+    }
+
+    // Custom equality comparison for testing
+    // Note: std.meta.eql doesn't work well with packed unions, so we provide
+    // a direct bit comparison through the eql method above
 
     /// Given a nonempty ident string that does not start with a digit, try to construct an inline Idx.
     fn try_inline(string: []const u8) ?@This() {

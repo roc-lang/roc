@@ -1431,7 +1431,9 @@ test "ModuleEnv with types CompactWriter roundtrip" {
 
     // Verify type contents (basic check)
     const content1 = deserialized.types.getContent(var1);
-    try testing.expectEqual(types_mod.Content.empty, content1.*);
+    try testing.expectEqual(@as(types_mod.Content.Tag, .flex_var), std.meta.activeTag(content1.*));
+    // Check that flex_var is null (can't use expectEqual with Ident.Idx untagged union)
+    try testing.expect(content1.flex_var == null);
 
     const content2 = deserialized.types.getContent(var2);
     try testing.expectEqual(@as(types_mod.Content.Tag, .structure), std.meta.activeTag(content2.*));

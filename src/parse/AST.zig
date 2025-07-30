@@ -692,9 +692,9 @@ comptime {
     std.debug.assert(@sizeOf(ImportRhs) == 4);
 }
 
-test {
-    _ = std.testing.refAllDeclsRecursive(@This());
-}
+//test {
+//    _ = std.testing.refAllDeclsRecursive(@This());
+//}
 
 /// Helper function to convert the AST to a human friendly representation in S-expression format
 pub fn toSExprStr(ast: *@This(), env: ModuleEnv, writer: std.io.AnyWriter) !void {

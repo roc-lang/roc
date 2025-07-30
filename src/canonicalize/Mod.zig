@@ -8183,6 +8183,92 @@ test "pattern literal type transitions" {
     }
 }
 
+/// Helper function to compare Content values for testing
+fn expectEqualContent(expected: types.Content, actual: types.Content) !void {
+    // First check that the tags match
+    try std.testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
+    
+    // Then compare based on the tag
+    switch (expected) {
+        .flex_var => |expected_name| {
+            const actual_name = actual.flex_var;
+            if (expected_name != null and actual_name != null) {
+                try std.testing.expect(expected_name.?.eql(actual_name.?));
+            } else {
+                try std.testing.expectEqual(expected_name == null, actual_name == null);
+            }
+        },
+        .rigid_var => |expected_ident| {
+            try std.testing.expect(expected_ident.eql(actual.rigid_var));
+        },
+        .alias => |expected_alias| {
+            const actual_alias = actual.alias;
+            // Compare TypeIdent fields using eql
+            try std.testing.expect(expected_alias.ident.ident_idx.eql(actual_alias.ident.ident_idx));
+            // Compare vars
+            try std.testing.expectEqual(expected_alias.vars, actual_alias.vars);
+        },
+        .structure => |expected_flat| {
+            // Need to carefully compare FlatType since some variants contain Ident.Idx
+            try expectEqualFlatType(expected_flat, actual.structure);
+        },
+        .err => {
+            // Nothing to compare
+        },
+    }
+}
+
+/// Helper function to compare FlatType values for testing
+fn expectEqualFlatType(expected: types.FlatType, actual: types.FlatType) !void {
+    try std.testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
+    
+    switch (expected) {
+        .str, .list_unbound, .empty_record, .empty_tag_union => {},
+        .box => |expected_var| try std.testing.expectEqual(expected_var, actual.box),
+        .list => |expected_var| try std.testing.expectEqual(expected_var, actual.list),
+        .record_unbound => |expected_range| try std.testing.expectEqual(expected_range, actual.record_unbound),
+        .record_poly => |expected_poly| {
+            // Can't compare record fields directly as they contain Ident.Idx
+            try std.testing.expectEqual(expected_poly.record.fields.len(), actual.record_poly.record.fields.len());
+            try std.testing.expectEqual(expected_poly.record.ext, actual.record_poly.record.ext);
+            try std.testing.expectEqual(expected_poly.var_, actual.record_poly.var_);
+        },
+        .tuple => |expected_tuple| {
+            try std.testing.expectEqual(expected_tuple.elems, actual.tuple.elems);
+        },
+        .num => |expected_num| try std.testing.expectEqual(expected_num, actual.num),
+        .nominal_type => |expected_nom| {
+            // Compare TypeIdent using eql
+            try std.testing.expect(expected_nom.ident.ident_idx.eql(actual.nominal_type.ident.ident_idx));
+            // Compare vars
+            try std.testing.expectEqual(expected_nom.vars, actual.nominal_type.vars);
+            // Compare origin_module using eql
+            try std.testing.expect(expected_nom.origin_module.eql(actual.nominal_type.origin_module));
+        },
+        .fn_pure, .fn_effectful, .fn_unbound => |expected_func| {
+            const actual_func = switch (actual) {
+                .fn_pure => |f| f,
+                .fn_effectful => |f| f,
+                .fn_unbound => |f| f,
+                else => unreachable,
+            };
+            try std.testing.expectEqual(expected_func.args, actual_func.args);
+            try std.testing.expectEqual(expected_func.ret, actual_func.ret);
+            try std.testing.expectEqual(expected_func.needs_instantiation, actual_func.needs_instantiation);
+        },
+        .record => |expected_record| {
+            // Can't compare record fields directly as they contain Ident.Idx
+            try std.testing.expectEqual(expected_record.fields.len(), actual.record.fields.len());
+            try std.testing.expectEqual(expected_record.ext, actual.record.ext);
+        },
+        .tag_union => |expected_union| {
+            // Can't compare tags directly as they contain Ident.Idx
+            try std.testing.expectEqual(expected_union.tags.len(), actual.tag_union.tags.len());
+            try std.testing.expectEqual(expected_union.ext, actual.tag_union.ext);
+        },
+    }
+}
+
 test "pattern type inference with numeric literals" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
@@ -8252,7 +8338,8 @@ test "pattern type inference with numeric literals" {
             const resolved = env.types.resolveVar(pattern_var);
 
             // Compare the resolved type with expected
-            try std.testing.expectEqual(test_case.expected_type, resolved.desc.content);
+            // Use a custom comparison since Content might contain Ident.Idx
+            try expectEqualContent(test_case.expected_type, resolved.desc.content);
         }
     }
 
