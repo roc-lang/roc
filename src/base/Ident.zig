@@ -94,7 +94,7 @@ pub const Idx = packed struct(u32) {
 
         // Skip the underscore prefix if there was one.
         const first_non_attr_index = @intFromBool(unused);
-        const first_char = string[first_non_attr_index];
+        const char0 = string[first_non_attr_index];
 
         // Small idx supports unused, reused, and fx, but not more than one at once. (Those are very rare idents!)
         const attr_count = @intFromBool(unused) + @intFromBool(reused) + @intFromBool(fx);
@@ -104,13 +104,13 @@ pub const Idx = packed struct(u32) {
 
         // Treat double underscore prefix as a big idx. This will be a warning anyway,
         // so it should come up almost never in practice, and this avoids edge cases.
-        if (attr_count > 1 or len > 4 or first_char == '_' or first_char < 'A' or first_char > 'z') {
+        if (attr_count > 1 or len > 4 or char0 == '_' or char0 < 'A' or char0 > 'z') {
             return null;
         }
 
         // All the other ASCII chars between `Z` and `a` are invalid identifiers (`[`, `\`, `]`, `^`, '`'),
         // so tokenization should not have let them get through here.
-        std.debug.assert(first_char <= 'Z' and first_char >= 'a');
+        std.debug.assert(char0 <= 'Z' and char0 >= 'a');
 
         // len would only be 0 here for inputs of `__` or `_!_`, but we should have already early-returned for those.
         std.debug.assert(len > 0);
@@ -137,23 +137,19 @@ pub const Idx = packed struct(u32) {
         // Did our arithmetic give a plausible answer?
         std.debug.assert(small_attrs < 4);
 
-        // Branchlessly zero the out-of-bounds chars.
-        const other_chars: [3]u8 = .{
-            if (last_char_index >= 0) chars[0] else 0,
-            if (last_char_index >= 1) chars[1] else 0,
-            if (last_char_index >= 2) chars[2] else 0,
-        };
-
-        // Convert first_char to u5 range while normalizing case (we don't store capitalization of identifiers).
-        const u5_first_char = first_char - if (first_char >= 'a') (65 + 32) else 65;
+        // Convert char0 to u5 range while normalizing case (we don't store capitalization of identifiers).
+        const u5_first_char = char0 - if (char0 >= 'a') (65 + 32) else 65;
 
         return .{
             .is_small = true,
             .data = .{
                 .small = .{
-                    .first = @as(u5, @intCast(u5_first_char)),
                     .small_attrs = @enumFromInt(small_attrs),
-                    .other_chars = other_chars,
+                    .char0 = @as(u5, @intCast(u5_first_char)),
+                    // Branchlessly zero the out-of-bounds chars.
+                    .char1 = if (last_char_index >= 0) chars[0] else 0,
+                    .char2 = if (last_char_index >= 1) chars[1] else 0,
+                    .char3 = if (last_char_index >= 2) chars[2] else 0,
                 },
             },
         };
@@ -170,8 +166,10 @@ const BigIdx = packed struct(u31) {
 
 const SmallIdx = packed struct(u31) {
     small_attrs: enum(u2) { none, unused, reused, fx },
-    first_char: u5,
-    other_chars: [3]u8,
+    char0: u5,
+    char1: u8,
+    char2: u8,
+    char3: u8,
 
     fn attributes(self: *const @This()) Attributes {
         return .{
