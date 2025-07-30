@@ -14,6 +14,7 @@ main! = |_| processDict(Dict.empty().insert("one", 1))
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - type_app_multiple_args.md:6:25:6:35
+TOO MANY ARGS - type_app_multiple_args.md:3:15:3:29
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `empty` in this scope.
@@ -24,6 +25,16 @@ Is there an `import` or `exposing` missing up-top?
 main! = |_| processDict(Dict.empty().insert("one", 1))
 ```
                         ^^^^^^^^^^
+
+
+**TOO MANY ARGS**
+The type _Dict_ expects 0 argument, but got 2 instead.
+**type_app_multiple_args.md:3:15:3:29:**
+```roc
+processDict : Dict(Str, U64) -> List(Str)
+```
+              ^^^^^^^^^^^^^^
+
 
 
 # TOKENS
@@ -124,9 +135,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.12 (type "Error -> Error"))
-		(patt @6.1-6.6 (type "_arg -> Error")))
+		(patt @4.1-4.12 (type "Error -> List(Str)"))
+		(patt @6.1-6.6 (type "_arg -> List(Str)")))
 	(expressions
-		(expr @4.15-4.25 (type "Error -> Error"))
-		(expr @6.9-6.55 (type "_arg -> Error"))))
+		(expr @4.15-4.25 (type "Error -> List(Str)"))
+		(expr @6.9-6.55 (type "_arg -> List(Str)"))))
 ~~~

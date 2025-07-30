@@ -265,6 +265,13 @@ pub const Pattern = union(enum) {
             /// ```
             SubPattern: Pattern.Idx,
 
+            pub fn toPatternIdx(kind: Kind) Pattern.Idx {
+                switch (kind) {
+                    .Required => |p_idx| return p_idx,
+                    .SubPattern => |p_idx| return p_idx,
+                }
+            }
+
             pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree) std.mem.Allocator.Error!void {
                 switch (self.*) {
                     .Required => |pattern_idx| {

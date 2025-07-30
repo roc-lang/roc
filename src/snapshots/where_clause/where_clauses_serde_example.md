@@ -105,7 +105,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.12 (type "Error -> Error")))
+		(patt @5.1-5.12 (type "List(U8) -> Result(a, [DecodeErr])")))
 	(expressions
-		(expr @5.15-5.22 (type "Error -> Error"))))
+		(expr @5.15-5.22 (type "List(U8) -> Result(a, [DecodeErr])"))))
 ~~~

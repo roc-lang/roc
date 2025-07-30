@@ -156,7 +156,7 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 					(e-int @3.22-3.24 (value "92"))
 					(e-int @3.26-3.28 (value "78")))))
 		(field (name "status")
-			(e-tag @4.13-4.19 (name "Active")
+			(e-tag @4.13-4.44 (name "Active")
 				(args
 					(e-record @4.20-4.43
 						(fields
@@ -169,30 +169,31 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 					(field (name "theme")
 						(e-tag @5.27-5.31 (name "Dark")))
 					(field (name "notifications")
-						(e-tag @5.48-5.53 (name "Email")
+						(e-tag @5.48-5.74 (name "Email")
 							(args
 								(e-string @5.54-5.73
 									(e-literal @5.55-5.72 (string "alice@example.com")))))))))
 		(field (name "metadata")
-			(e-tag @6.15-6.17 (name "Ok")
-				(args
-					(e-record @6.18-9.6
-						(fields
-							(field (name "tags")
-								(e-list @7.15-7.51
-									(elems
-										(e-string @7.16-7.27
-											(e-literal @7.17-7.26 (string "developer")))
-										(e-string @7.29-7.37
-											(e-literal @7.30-7.36 (string "senior")))
-										(e-string @7.39-7.50
-											(e-literal @7.40-7.49 (string "fullstack"))))))
-							(field (name "permissions")
-								(e-list @8.22-8.42
-									(elems
-										(e-tag @8.23-8.27 (name "Read"))
-										(e-tag @8.29-8.34 (name "Write"))
-										(e-tag @8.36-8.41 (name "Admin"))))))))))
+			(e-nominal @6.15-9.7 (nominal "Result")
+				(e-tag @6.15-9.7 (name "Ok")
+					(args
+						(e-record @6.18-9.6
+							(fields
+								(field (name "tags")
+									(e-list @7.15-7.51
+										(elems
+											(e-string @7.16-7.27
+												(e-literal @7.17-7.26 (string "developer")))
+											(e-string @7.29-7.37
+												(e-literal @7.30-7.36 (string "senior")))
+											(e-string @7.39-7.50
+												(e-literal @7.40-7.49 (string "fullstack"))))))
+								(field (name "permissions")
+									(e-list @8.22-8.42
+										(elems
+											(e-tag @8.23-8.27 (name "Read"))
+											(e-tag @8.29-8.34 (name "Write"))
+											(e-tag @8.36-8.41 (name "Admin")))))))))))
 		(field (name "callback")
 			(e-lambda @10.15-10.24
 				(args
@@ -207,17 +208,17 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 					(field (name "items")
 						(e-list @12.16-12.52
 							(elems
-								(e-tag @12.17-12.21 (name "Some")
+								(e-tag @12.17-12.30 (name "Some")
 									(args
 										(e-string @12.22-12.29
 											(e-literal @12.23-12.28 (string "first")))))
 								(e-tag @12.32-12.36 (name "None"))
-								(e-tag @12.38-12.42 (name "Some")
+								(e-tag @12.38-12.51 (name "Some")
 									(args
 										(e-string @12.43-12.50
 											(e-literal @12.44-12.49 (string "third"))))))))
 					(field (name "result")
-						(e-tag @13.17-13.24 (name "Success")
+						(e-tag @13.17-13.70 (name "Success")
 							(args
 								(e-record @13.25-13.69
 									(fields
@@ -233,5 +234,5 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-15.2 (type "{ name: Str, scores: List(Num(_size)), status: [Active({ since: Str })]_others, preferences: { theme: [Dark]_others2, notifications: [Email(Str)]_others3 }, metadata: [Ok({ tags: List(Str), permissions: List([Read]_others4) })]_others5, callback: Num(_size2) -> Num(_size3), nested: { items: List([Some(Str)][None]_others6), result: [Success({ data: List(Num(_size4)), timestamp: Str })]_others7 } }"))
+(expr @1.1-15.2 (type "{ name: Str, scores: List(Num(_size)), status: [Active({ since: Str })]_others, preferences: { theme: [Dark]_others2, notifications: [Email(Str)]_others3 }, metadata: Result({ tags: List(Str), permissions: List([Read]_others4) }, err), callback: Num(_size2) -> Num(_size3), nested: { items: List([Some(Str)][None]_others5), result: [Success({ data: List(Num(_size4)), timestamp: Str })]_others6 } }"))
 ~~~

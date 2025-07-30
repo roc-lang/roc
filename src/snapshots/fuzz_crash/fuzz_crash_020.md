@@ -1610,7 +1610,8 @@ expect {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @68.3-68.10)))
+									(p-nominal @68.3-68.10
+										(p-applied-tag @68.3-68.10))))
 							(value
 								(e-int @68.14-68.16 (value "12")))))))))
 	(d-let
@@ -1674,9 +1675,10 @@ expect {
 								(field (name "baz")
 									(e-runtime-error (tag "ident_not_in_scope")))
 								(field (name "qux")
-									(e-tag @96.44-96.46 (name "Ok")
-										(args
-											(e-runtime-error (tag "ident_not_in_scope")))))
+									(e-nominal @96.44-96.53 (nominal "Result")
+										(e-tag @96.44-96.53 (name "Ok")
+											(args
+												(e-runtime-error (tag "ident_not_in_scope"))))))
 								(field (name "ned")
 									(e-runtime-error (tag "ident_not_in_scope"))))))
 					(s-let @97.2-97.48
@@ -1747,7 +1749,7 @@ expect {
 										(e-dot-access @105.55-105.72 (field "unknown")
 											(receiver
 												(e-runtime-error (tag "not_implemented")))))))))
-					(e-tag @106.2-106.7 (name "Stdo!")
+					(e-tag @106.2-110.3 (name "Stdo!")
 						(args
 							(e-string @107.3-109.6
 								(e-literal @107.4-107.6 (string "Ho"))

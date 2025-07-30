@@ -104,8 +104,8 @@ NO CHANGE
 		(e-lambda @6.9-6.26
 			(args
 				(p-assign @6.10-6.11 (ident "a")))
-			(e-nominal @6.13-6.23 (nominal "Maybe")
-				(e-tag @6.13-6.23 (name "Some")
+			(e-nominal @6.13-6.26 (nominal "Maybe")
+				(e-tag @6.13-6.26 (name "Some")
 					(args
 						(e-lookup-local @6.24-6.25
 							(p-assign @6.10-6.11 (ident "a")))))))
@@ -128,8 +128,8 @@ NO CHANGE
 		(e-lambda @11.9-11.26
 			(args
 				(p-assign @11.10-11.11 (ident "a")))
-			(e-nominal @11.13-11.23 (nominal "Maybe")
-				(e-tag @11.13-11.23 (name "Some")
+			(e-nominal @11.13-11.26 (nominal "Maybe")
+				(e-tag @11.13-11.26 (name "Some")
 					(args
 						(e-lookup-local @11.24-11.25
 							(p-assign @11.10-11.11 (ident "a"))))))))
@@ -152,7 +152,7 @@ NO CHANGE
 	(defs
 		(patt @6.1-6.6 (type "a -> Maybe(a)"))
 		(patt @9.1-9.6 (type "Maybe(a)"))
-		(patt @11.1-11.6 (type "_arg -> Maybe(a)"))
+		(patt @11.1-11.6 (type "a -> Maybe(a)"))
 		(patt @13.1-13.6 (type "Maybe(a)")))
 	(type_decls
 		(nominal @3.1-3.28 (type "Maybe(a)")
@@ -162,6 +162,6 @@ NO CHANGE
 	(expressions
 		(expr @6.9-6.26 (type "a -> Maybe(a)"))
 		(expr @9.9-9.19 (type "Maybe(a)"))
-		(expr @11.9-11.26 (type "_arg -> Maybe(a)"))
+		(expr @11.9-11.26 (type "a -> Maybe(a)"))
 		(expr @13.9-13.19 (type "Maybe(a)"))))
 ~~~

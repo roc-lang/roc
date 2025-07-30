@@ -272,10 +272,9 @@ UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
 UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
 UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
 UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
-TYPE MISMATCH - fuzz_crash_023.md:67:11:67:14
+INVALID IF CONDITION - fuzz_crash_023.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
-TYPE MISMATCH - fuzz_crash_023.md:155:2:155:12
-INCOMPATIBLE LIST ELEMENTS - fuzz_crash_023.md:167:3:167:3
+TYPE MISMATCH - fuzz_crash_023.md:155:2:157:3
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_record_field_name`
@@ -868,19 +867,18 @@ tuple : Value((a, b, c))
         ^^^^^
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_023.md:67:11:67:14:**
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**fuzz_crash_023.md:70:5:**
 ```roc
-add_one : U64 -> U64
+	if num {
 ```
-          ^^^
+    ^^^
 
-It is of type:
+Right now, it has the type:
     _U64_
 
-But you are trying to use it as:
-    _Bool_
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -956,40 +954,18 @@ All patterns in an `match` must have compatible types.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**fuzz_crash_023.md:155:2:155:12:**
+**fuzz_crash_023.md:155:2:157:3:**
 ```roc
 	match_time(
+		..., # Single args with comment
+	)
 ```
- ^^^^^^^^^^
 
 It is of type:
-    _[Red][Blue, Green]_others, _arg2 -> Error_
-
-But you are trying to use it as:
     __arg -> _ret_
 
-**INCOMPATIBLE LIST ELEMENTS**
-The first two elements in this list have incompatible types:
-**fuzz_crash_023.md:167:3:**
-```roc
-		add_one(
-			dbg # After dbg in list
-				number, # after dbg expr as arg
-		), # Comment one
-		456, # Comment two
-```
-  ^^^
-
-The first element has this type:
-    _U64_
-
-However, the second element has this type:
-    _Num(_size)_
-
-All elements in a list must have compatible types.
-
-Note: You can wrap each element in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+But you are trying to use it as:
+    _[Red][Blue, Green]_others, _arg2 -> Error_
 
 # TOKENS
 ~~~zig
@@ -1967,8 +1943,8 @@ expect {
 		(p-assign @80.1-80.11 (ident "match_time"))
 		(e-closure @80.14-138.3
 			(captures
-				(capture @86.4-86.5 (ident "x"))
 				(capture @94.5-94.6 (ident "x"))
+				(capture @86.4-86.5 (ident "x"))
 				(capture @136.11-136.15 (ident "dude")))
 			(e-lambda @80.14-138.3
 				(args
@@ -2161,13 +2137,15 @@ expect {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @135.3-135.10)))
+										(p-nominal @135.3-135.10
+											(p-applied-tag @135.3-135.10))))
 								(value
 									(e-int @135.14-135.17 (value "123"))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @136.3-136.17)))
+										(p-nominal @136.3-136.17
+											(p-applied-tag @136.3-136.17))))
 								(value
 									(e-lookup-local @136.21-136.25
 										(p-assign @136.11-136.15 (ident "dude")))))
@@ -2181,9 +2159,9 @@ expect {
 		(p-assign @144.1-144.6 (ident "main!"))
 		(e-closure @144.9-196.2
 			(captures
+				(capture @80.1-80.11 (ident "match_time"))
 				(capture @68.1-68.8 (ident "add_one"))
-				(capture @179.2-179.7 (ident "tuple"))
-				(capture @80.1-80.11 (ident "match_time")))
+				(capture @179.2-179.7 (ident "tuple")))
 			(e-lambda @144.9-196.2
 				(args
 					(p-underscore @144.10-144.11))
@@ -2220,10 +2198,11 @@ expect {
 					(s-crash @162.2-163.17 (msg "Unreachable!"))
 					(s-let @164.2-164.31
 						(p-assign @164.2-164.18 (ident "tag_with_payload"))
-						(e-tag @164.21-164.23 (name "Ok")
-							(args
-								(e-lookup-local @164.24-164.30
-									(p-assign @146.2-146.18 (ident "number"))))))
+						(e-nominal @164.21-164.31 (nominal "Result")
+							(e-tag @164.21-164.31 (name "Ok")
+								(args
+									(e-lookup-local @164.24-164.30
+										(p-assign @146.2-146.18 (ident "number")))))))
 					(s-let @165.2-165.34
 						(p-assign @165.2-165.14 (ident "interpolated"))
 						(e-string @165.17-165.34
@@ -2257,10 +2236,11 @@ expect {
 									(e-literal @179.17-179.22 (string "World")))
 								(e-lookup-local @179.25-179.28
 									(p-assign @148.2-148.5 (ident "tag")))
-								(e-tag @179.30-179.32 (name "Ok")
-									(args
-										(e-lookup-local @179.33-179.38
-											(p-assign @145.2-145.7 (ident "world")))))
+								(e-nominal @179.30-179.39 (nominal "Result")
+									(e-tag @179.30-179.39 (name "Ok")
+										(args
+											(e-lookup-local @179.33-179.38
+												(p-assign @145.2-145.7 (ident "world"))))))
 								(e-tuple @179.41-179.56
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
@@ -2279,10 +2259,11 @@ expect {
 								(e-string @182.3-182.10
 									(e-literal @182.4-182.9 (string "World")))
 								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-tag @184.3-184.5 (name "Ok")
-									(args
-										(e-lookup-local @184.6-184.11
-											(p-assign @145.2-145.7 (ident "world")))))
+								(e-nominal @184.3-184.12 (nominal "Result")
+									(e-tag @184.3-184.12 (name "Ok")
+										(args
+											(e-lookup-local @184.6-184.11
+												(p-assign @145.2-145.7 (ident "world"))))))
 								(e-tuple @185.3-185.18
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
@@ -2298,9 +2279,10 @@ expect {
 						(e-binop @188.18-188.86 (op "or")
 							(e-binop @188.18-188.40 (op "gt")
 								(e-binop @188.18-188.32 (op "null_coalesce")
-									(e-tag @188.18-188.21 (name "Err")
-										(args
-											(e-runtime-error (tag "ident_not_in_scope"))))
+									(e-nominal @188.18-188.26 (nominal "Result")
+										(e-tag @188.18-188.26 (name "Err")
+											(args
+												(e-runtime-error (tag "ident_not_in_scope")))))
 									(e-int @188.30-188.32 (value "12")))
 								(e-binop @188.35-188.40 (op "mul")
 									(e-int @188.35-188.36 (value "5"))
@@ -2493,8 +2475,8 @@ expect {
 	(defs
 		(patt @65.1-65.16 (type "Bool -> Num(_size)"))
 		(patt @68.1-68.8 (type "Error -> Error"))
-		(patt @80.1-80.11 (type "Error"))
-		(patt @144.1-144.6 (type "Error -> Error"))
+		(patt @80.1-80.11 (type "[Red][Blue, Green]_others, _arg -> Error"))
+		(patt @144.1-144.6 (type "List(Error) -> Result({  }, _d)"))
 		(patt @199.1-199.6 (type "{}")))
 	(type_decls
 		(alias @22.1-22.41 (type "Map(a, b)")
@@ -2538,7 +2520,7 @@ expect {
 	(expressions
 		(expr @65.19-65.40 (type "Bool -> Num(_size)"))
 		(expr @68.11-78.2 (type "Error -> Error"))
-		(expr @80.14-138.3 (type "Error"))
-		(expr @144.9-196.2 (type "Error -> Error"))
+		(expr @80.14-138.3 (type "[Red][Blue, Green]_others, _arg -> Error"))
+		(expr @144.9-196.2 (type "List(Error) -> Result({  }, _d)"))
 		(expr @199.9-199.11 (type "{}"))))
 ~~~

@@ -26,10 +26,10 @@ main! = |_| swapPair(1, 2)
             ^^^^^^^^
 
 It is of type:
-    _(a, b) -> (b, a)_
+    _Num(_size), Num(_size2) -> _ret_
 
 But you are trying to use it as:
-    _Num(_size), Num(_size2) -> _ret_
+    _Pair(a, a) -> Pair(a, a)_
 
 # TOKENS
 ~~~zig
@@ -148,7 +148,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.9 (type "Error"))
+		(patt @6.1-6.9 (type "Pair(a, a) -> Pair(a, a)"))
 		(patt @8.1-8.6 (type "_arg -> _ret")))
 	(type_decls
 		(alias @3.1-3.20 (type "Pair(a, b)")
@@ -157,6 +157,6 @@ NO CHANGE
 					(ty-var @3.6-3.7 (name "a"))
 					(ty-var @3.9-3.10 (name "b"))))))
 	(expressions
-		(expr @6.12-6.27 (type "Error"))
+		(expr @6.12-6.27 (type "Pair(a, a) -> Pair(a, a)"))
 		(expr @8.9-8.27 (type "_arg -> _ret"))))
 ~~~

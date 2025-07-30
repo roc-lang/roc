@@ -135,18 +135,20 @@ foo = |num| {
 									(e-int @5.21-5.23 (value "10")))
 								(e-block @5.25-7.6
 									(s-return @6.9-6.27
-										(e-tag @6.16-6.19 (name "Err")
-											(args
-												(e-tag @6.20-6.26 (name "TooBig")))))
+										(e-nominal @6.16-6.27 (nominal "Result")
+											(e-tag @6.16-6.27 (name "Err")
+												(args
+													(e-tag @6.20-6.26 (name "TooBig"))))))
 									(e-empty_record @5.25-7.6))))
 						(if-else
 							(e-block @7.12-9.6
 								(e-string @8.9-8.16
 									(e-literal @8.10-8.15 (string "SMALL")))))))
-				(e-tag @10.5-10.7 (name "Ok")
-					(args
-						(e-lookup-local @10.8-10.11
-							(p-assign @5.5-5.8 (ident "str")))))))
+				(e-nominal @10.5-10.12 (nominal "Result")
+					(e-tag @10.5-10.12 (name "Ok")
+						(args
+							(e-lookup-local @10.8-10.11
+								(p-assign @5.5-5.8 (ident "str"))))))))
 		(annotation @4.1-4.4
 			(declared-type
 				(ty-fn @3.7-3.35 (effectful false)
@@ -160,7 +162,7 @@ foo = |num| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "U64 -> Error")))
+		(patt @4.1-4.4 (type "U64 -> Result(Error, [TooBig])")))
 	(expressions
-		(expr @4.7-11.2 (type "U64 -> Error"))))
+		(expr @4.7-11.2 (type "U64 -> Result(Error, [TooBig])"))))
 ~~~

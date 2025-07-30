@@ -16,11 +16,11 @@ yellow : Color
 yellow = Color.Yellow
 ~~~
 # EXPECTED
-INVALID NOMINAL TAG - nominal_tag_simple.md:9:10:9:10
+INVALID NOMINAL TAG - nominal_tag_simple.md:9:10:9:22
 # PROBLEMS
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
-**nominal_tag_simple.md:9:10:**
+**nominal_tag_simple.md:9:10:9:22:**
 ```roc
 yellow = Color.Yellow
 ```

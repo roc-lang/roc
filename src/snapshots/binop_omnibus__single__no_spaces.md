@@ -68,9 +68,10 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10
 (e-binop @1.1-1.34 (op "or")
 	(e-binop @1.1-1.17 (op "gt")
 		(e-binop @1.1-1.13 (op "null_coalesce")
-			(e-tag @1.1-1.4 (name "Err")
-				(args
-					(e-runtime-error (tag "ident_not_in_scope"))))
+			(e-nominal @1.1-1.9 (nominal "Result")
+				(e-tag @1.1-1.9 (name "Err")
+					(args
+						(e-runtime-error (tag "ident_not_in_scope")))))
 			(e-int @1.11-1.13 (value "12")))
 		(e-binop @1.14-1.17 (op "mul")
 			(e-int @1.14-1.15 (value "5"))

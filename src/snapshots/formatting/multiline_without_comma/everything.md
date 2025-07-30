@@ -687,11 +687,11 @@ h = |x, y| {
 		(p-assign @60.1-60.2 (ident "h"))
 		(e-closure @60.5-110.2
 			(captures
-				(capture @99.5-99.6 (ident "a"))
-				(capture @89.5-89.6 (ident "a"))
 				(capture @60.1-60.2 (ident "h"))
-				(capture @105.5-105.6 (ident "a"))
-				(capture @94.4-94.5 (ident "a")))
+				(capture @89.5-89.6 (ident "a"))
+				(capture @99.5-99.6 (ident "a"))
+				(capture @94.4-94.5 (ident "a"))
+				(capture @105.5-105.6 (ident "a")))
 			(e-lambda @60.5-110.2
 				(args
 					(p-assign @60.6-60.7 (ident "x"))
@@ -727,7 +727,7 @@ h = |x, y| {
 								(p-assign @60.9-60.10 (ident "y")))))
 					(s-let @73.2-76.3
 						(p-assign @73.2-73.4 (ident "h3"))
-						(e-tag @73.7-73.8 (name "A")
+						(e-tag @73.7-76.3 (name "A")
 							(args
 								(e-lookup-local @74.3-74.4
 									(p-assign @60.6-60.7 (ident "x")))

@@ -27,10 +27,10 @@ main = swap(1, 2)
        ^^^^
 
 It is of type:
-    _(a, b) -> (b, a)_
+    _Num(_size), Num(_size2) -> _ret_
 
 But you are trying to use it as:
-    _Num(_size), Num(_size2) -> _ret_
+    _(a, b) -> (b, a)_
 
 # TOKENS
 ~~~zig
@@ -121,9 +121,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "Error"))
+		(patt @5.1-5.5 (type "(a, b) -> (b, a)"))
 		(patt @9.1-9.5 (type "_c")))
 	(expressions
-		(expr @5.8-5.23 (type "Error"))
+		(expr @5.8-5.23 (type "(a, b) -> (b, a)"))
 		(expr @9.8-9.18 (type "_c"))))
 ~~~

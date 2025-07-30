@@ -457,8 +457,8 @@ combineResults = |result1, result2|
 		(p-assign @14.1-14.10 (ident "handleApi"))
 		(e-closure @14.13-20.2
 			(captures
-				(capture @17.12-17.16 (ident "data"))
-				(capture @18.13-18.16 (ident "err")))
+				(capture @18.13-18.16 (ident "err"))
+				(capture @17.12-17.16 (ident "data")))
 			(e-lambda @14.13-20.2
 				(args
 					(p-assign @14.14-14.21 (ident "request")))
@@ -482,25 +482,29 @@ combineResults = |result1, result2|
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-applied-tag @17.9-17.17)))
+											(p-nominal @17.9-17.17
+												(p-applied-tag @17.9-17.17))))
 									(value
-										(e-tag @17.21-17.23 (name "Ok")
-											(args
-												(e-call @17.24-17.42
-													(e-lookup-external @17.24-17.36
-														(module-idx "0")
-														(target-node-idx "0"))
-													(e-lookup-local @17.37-17.41
-														(p-assign @17.12-17.16 (ident "data"))))))))
+										(e-nominal @17.21-17.43 (nominal "Result")
+											(e-tag @17.21-17.43 (name "Ok")
+												(args
+													(e-call @17.24-17.42
+														(e-lookup-external @17.24-17.36
+															(module-idx "0")
+															(target-node-idx "0"))
+														(e-lookup-local @17.37-17.41
+															(p-assign @17.12-17.16 (ident "data")))))))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-applied-tag @18.9-18.17)))
+											(p-nominal @18.9-18.17
+												(p-applied-tag @18.9-18.17))))
 									(value
-										(e-tag @18.21-18.24 (name "Err")
-											(args
-												(e-lookup-local @18.25-18.28
-													(p-assign @18.13-18.16 (ident "err")))))))))))))
+										(e-nominal @18.21-18.29 (nominal "Result")
+											(e-tag @18.21-18.29 (name "Err")
+												(args
+													(e-lookup-local @18.25-18.28
+														(p-assign @18.13-18.16 (ident "err"))))))))))))))
 		(annotation @14.1-14.10
 			(declared-type
 				(ty-fn @13.13-13.62 (effectful false)
@@ -554,8 +558,8 @@ combineResults = |result1, result2|
 			(captures
 				(capture @36.21-36.24 (ident "err"))
 				(capture @35.20-35.26 (ident "value2"))
-				(capture @33.12-33.18 (ident "value1"))
-				(capture @38.13-38.16 (ident "err")))
+				(capture @38.13-38.16 (ident "err"))
+				(capture @33.12-33.18 (ident "value1")))
 			(e-lambda @31.18-39.6
 				(args
 					(p-assign @31.19-31.26 (ident "result1"))
@@ -569,7 +573,8 @@ combineResults = |result1, result2|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @33.9-33.19)))
+										(p-nominal @33.9-33.19
+											(p-applied-tag @33.9-33.19))))
 								(value
 									(e-match @34.13-37.14
 										(match @34.13-37.14
@@ -580,34 +585,40 @@ combineResults = |result1, result2|
 												(branch
 													(patterns
 														(pattern (degenerate false)
-															(p-applied-tag @35.17-35.27)))
+															(p-nominal @35.17-35.27
+																(p-applied-tag @35.17-35.27))))
 													(value
-														(e-tag @35.31-35.33 (name "Ok")
-															(args
-																(e-tuple @35.34-35.50
-																	(elems
-																		(e-lookup-local @35.35-35.41
-																			(p-assign @33.12-33.18 (ident "value1")))
-																		(e-lookup-local @35.43-35.49
-																			(p-assign @35.20-35.26 (ident "value2")))))))))
+														(e-nominal @35.31-35.51 (nominal "Result")
+															(e-tag @35.31-35.51 (name "Ok")
+																(args
+																	(e-tuple @35.34-35.50
+																		(elems
+																			(e-lookup-local @35.35-35.41
+																				(p-assign @33.12-33.18 (ident "value1")))
+																			(e-lookup-local @35.43-35.49
+																				(p-assign @35.20-35.26 (ident "value2"))))))))))
 												(branch
 													(patterns
 														(pattern (degenerate false)
-															(p-applied-tag @36.17-36.25)))
+															(p-nominal @36.17-36.25
+																(p-applied-tag @36.17-36.25))))
 													(value
-														(e-tag @36.29-36.32 (name "Err")
-															(args
-																(e-lookup-local @36.33-36.36
-																	(p-assign @36.21-36.24 (ident "err"))))))))))))
+														(e-nominal @36.29-36.37 (nominal "Result")
+															(e-tag @36.29-36.37 (name "Err")
+																(args
+																	(e-lookup-local @36.33-36.36
+																		(p-assign @36.21-36.24 (ident "err")))))))))))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @38.9-38.17)))
+										(p-nominal @38.9-38.17
+											(p-applied-tag @38.9-38.17))))
 								(value
-									(e-tag @38.21-38.24 (name "Err")
-										(args
-											(e-lookup-local @38.25-38.28
-												(p-assign @38.13-38.16 (ident "err"))))))))))))
+									(e-nominal @38.21-38.29 (nominal "Result")
+										(e-tag @38.21-38.29 (name "Err")
+											(args
+												(e-lookup-local @38.25-38.28
+													(p-assign @38.13-38.16 (ident "err")))))))))))))
 		(annotation @31.1-31.15
 			(declared-type
 				(ty-fn @30.18-30.71 (effectful false)
@@ -638,15 +649,15 @@ combineResults = |result1, result2|
 	(defs
 		(patt @8.1-8.15 (type "Error -> Error"))
 		(patt @11.1-11.10 (type "Str -> Error"))
-		(patt @14.1-14.10 (type "Error -> Error"))
+		(patt @14.1-14.10 (type "Error -> Result(Error, Error)"))
 		(patt @23.1-23.7 (type "Error"))
-		(patt @27.1-27.15 (type "Error, Str -> Error"))
-		(patt @31.1-31.15 (type "Error, Error -> Error")))
+		(patt @27.1-27.15 (type "Error, Str -> Result(Error, Error)"))
+		(patt @31.1-31.15 (type "Result(ok, err), Result(ok, err) -> Result((ok, ok), err)")))
 	(expressions
 		(expr @8.18-8.44 (type "Error -> Error"))
 		(expr @11.13-11.38 (type "Str -> Error"))
-		(expr @14.13-20.2 (type "Error -> Error"))
+		(expr @14.13-20.2 (type "Error -> Result(Error, Error)"))
 		(expr @23.10-23.28 (type "Error"))
-		(expr @27.18-27.82 (type "Error, Str -> Error"))
-		(expr @31.18-39.6 (type "Error, Error -> Error"))))
+		(expr @27.18-27.82 (type "Error, Str -> Result(Error, Error)"))
+		(expr @31.18-39.6 (type "Result(ok, err), Result(ok, err) -> Result((ok, ok), err)"))))
 ~~~

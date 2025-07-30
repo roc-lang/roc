@@ -6,6 +6,7 @@
 //! interned (and deduplicated) data instead of storing the values themselves.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
@@ -420,6 +421,38 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 self.source,
                 self.line_starts.items.items,
             );
+
+            break :blk report;
+        },
+        .type_alias_but_needed_nominal => |data| blk: {
+            const type_name = self.idents.getText(data.name);
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "EXPECTED NOMINAL TYPE", .runtime_error);
+            const owned_type_name = try report.addOwnedString(type_name);
+            try report.document.addReflowingText("You are using the type ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" like a nominal type, but it is an alias.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("This type is referenced here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" You can declare this type with ");
+            try report.document.addInlineCode(":=");
+            try report.document.addReflowingText(" to make it nominal.");
 
             break :blk report;
         },
@@ -1244,7 +1277,7 @@ pub fn varFrom(idx: anytype) TypeVar {
 
 /// Assert that nodes, regions and types are all in sync
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
-    if (std.debug.runtime_safety) {
+    if (builtin.mode == .Debug) {
         const cir_nodes = self.store.nodes.items.len;
         const region_nodes = self.store.regions.len();
         const type_nodes = self.types.len();
@@ -1260,7 +1293,7 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
 
 /// Assert that nodes, regions and types are all in sync
 inline fn debugAssertIdxsEql(comptime desc: []const u8, idx1: anytype, idx2: anytype) void {
-    if (std.debug.runtime_safety) {
+    if (builtin.mode == .Debug) {
         const idx1_int = @intFromEnum(idx1);
         const idx2_int = @intFromEnum(idx2);
 
