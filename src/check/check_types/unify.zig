@@ -2781,6 +2781,60 @@ pub const Scratch = struct {
 
 const RootModule = @This();
 
+/// Helper function to compare slices of Ident.Idx for testing
+fn expectEqualIdentSlices(expected: []const Ident.Idx, actual: []const Ident.Idx) !void {
+    try std.testing.expectEqual(expected.len, actual.len);
+    for (expected, actual) |e, a| {
+        try std.testing.expect(e.eql(a));
+    }
+}
+
+/// Helper function to compare Content values for testing
+fn expectEqualContent(expected: Content, actual: Content) !void {
+    // First check that the tags match
+    try std.testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
+    
+    // Then compare based on the tag
+    switch (expected) {
+        .flex_var => |expected_name| {
+            const actual_name = actual.flex_var;
+            if (expected_name != null and actual_name != null) {
+                try std.testing.expect(expected_name.?.eql(actual_name.?));
+            } else {
+                try std.testing.expectEqual(expected_name == null, actual_name == null);
+            }
+        },
+        .rigid_var => |expected_ident| {
+            try std.testing.expect(expected_ident.eql(actual.rigid_var));
+        },
+        .alias => |expected_alias| {
+            const actual_alias = actual.alias;
+            // Compare TypeIdent fields
+            try std.testing.expect(expected_alias.ident.ident_idx.eql(actual_alias.ident.ident_idx));
+            // Compare vars
+            try std.testing.expectEqual(expected_alias.vars, actual_alias.vars);
+        },
+        .structure => |expected_flat| {
+            try std.testing.expectEqualDeep(expected_flat, actual.structure);
+        },
+        .err => {
+            // Nothing to compare
+        },
+    }
+}
+
+/// Helper function to compare RecordField values for testing
+fn expectEqualRecordField(expected: RecordField, actual: RecordField) !void {
+    try std.testing.expect(expected.name.eql(actual.name));
+    try std.testing.expectEqual(expected.var_, actual.var_);
+}
+
+/// Helper function to compare Tag values for testing
+fn expectEqualTag(expected: Tag, actual: Tag) !void {
+    try std.testing.expect(expected.name.eql(actual.name));
+    try std.testing.expectEqual(expected.args, actual.args);
+}
+
 /// A lightweight test harness used in unification and type inference tests.
 ///
 /// `TestEnv` bundles together the following components:
@@ -2994,7 +3048,15 @@ const TestEnv = struct {
             try self.mkTypeIdent(name),
             backing_var,
             args,
-            Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+            Ident.Idx{ 
+                .is_small = false,
+                .data = .{
+                    .big = .{
+                        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, 
+                        .idx = 0,
+                    },
+                },
+            },
         );
     }
 
@@ -3137,7 +3199,7 @@ test "rigid_var - unifies with flex_var" {
     const result = try env.unify(a, b);
     try std.testing.expectEqual(true, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(rigid, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(rigid, (try env.getDescForRootVar(b)).content);
 }
 
 test "rigid_var - unifies with flex_var (other way)" {
@@ -3152,7 +3214,7 @@ test "rigid_var - unifies with flex_var (other way)" {
     const result = try env.unify(a, b);
     try std.testing.expectEqual(true, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(rigid, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(rigid, (try env.getDescForRootVar(b)).content);
 }
 
 test "rigid_var - cannot unify with alias (fail)" {
@@ -3203,7 +3265,7 @@ test "unify - alias with same args" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(b_alias, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(b_alias, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - aliases with different names but same backing" {
@@ -3226,8 +3288,8 @@ test "unify - aliases with different names but same backing" {
     const result = try env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(a_alias, (try env.getDescForRootVar(a)).content);
-    try std.testing.expectEqual(b_alias, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(a_alias, (try env.getDescForRootVar(a)).content);
+    try expectEqualContent(b_alias, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - alias with different args (fail)" {
@@ -3252,7 +3314,7 @@ test "unify - alias with different args (fail)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - alias with flex" {
@@ -3273,7 +3335,7 @@ test "unify - alias with flex" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(a_alias, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(a_alias, (try env.getDescForRootVar(b)).content);
 }
 
 // unification - structure/flex_vars
@@ -3293,7 +3355,7 @@ test "unify - a is builtin and b is flex_var" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(str, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - a is flex_var and b is builtin" {
@@ -3311,7 +3373,7 @@ test "unify - a is flex_var and b is builtin" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(str, (try env.getDescForRootVar(b)).content);
 }
 
 // unification - structure/structure - builtin
@@ -3331,7 +3393,7 @@ test "unify - a & b are both str" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(str, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - a & b are diff (fail)" {
@@ -3350,7 +3412,7 @@ test "unify - a & b are diff (fail)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - a & b box with same arg unify" {
@@ -3371,7 +3433,7 @@ test "unify - a & b box with same arg unify" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(box_str, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(box_str, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - a & b box with diff args (fail)" {
@@ -3396,7 +3458,7 @@ test "unify - a & b box with diff args (fail)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - a & b list with same arg unify" {
@@ -3417,7 +3479,7 @@ test "unify - a & b list with same arg unify" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(list_str, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(list_str, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - a & b list with diff args (fail)" {
@@ -3442,7 +3504,7 @@ test "unify - a & b list with diff args (fail)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 // unification - structure/structure - tuple
@@ -3468,7 +3530,7 @@ test "unify - a & b are same tuple" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(tuple_str_bool, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(tuple_str_bool, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - a & b are tuples with args flipped (fail)" {
@@ -3493,7 +3555,7 @@ test "unify - a & b are tuples with args flipped (fail)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 // unification - structure/structure - compact/compact
@@ -3512,7 +3574,7 @@ test "unify - two compact ints" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(int_i32, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(int_i32, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - two compact ints (fail)" {
@@ -3528,7 +3590,7 @@ test "unify - two compact ints (fail)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - two compact fracs" {
@@ -3545,7 +3607,7 @@ test "unify - two compact fracs" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(frac_f32, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(frac_f32, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - two compact fracs (fail)" {
@@ -3561,7 +3623,7 @@ test "unify - two compact fracs (fail)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 // unification - structure/structure - poly/poly
@@ -3594,7 +3656,7 @@ test "unify - two poly ints (fail)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - two poly fracs" {
@@ -3625,7 +3687,7 @@ test "unify - two poly fracs (fail)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 // unification - structure/structure - poly/compact_int
@@ -3644,7 +3706,7 @@ test "unify - Num(flex) and compact int" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(int_i32, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(int_i32, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - Num(Int(flex)) and compact int" {
@@ -3661,7 +3723,7 @@ test "unify - Num(Int(flex)) and compact int" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(int_i32, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(int_i32, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - Num(Int(U8)) and compact int U8" {
@@ -3678,7 +3740,7 @@ test "unify - Num(Int(U8)) and compact int U8" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(int_u8, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(int_u8, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - Num(Int(U8)) and compact int I32 (fails)" {
@@ -3695,7 +3757,7 @@ test "unify - Num(Int(U8)) and compact int I32 (fails)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 // unification - structure/structure - poly/compact_frac
@@ -3714,7 +3776,7 @@ test "unify - Num(flex) and compact frac" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(frac_f32, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(frac_f32, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - Num(Frac(flex)) and compact frac" {
@@ -3731,7 +3793,7 @@ test "unify - Num(Frac(flex)) and compact frac" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(frac_f32, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(frac_f32, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - Num(Frac(Dec)) and compact frac Dec" {
@@ -3748,7 +3810,7 @@ test "unify - Num(Frac(Dec)) and compact frac Dec" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(frac_dec, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(frac_dec, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - Num(Frac(F32)) and compact frac Dec (fails)" {
@@ -3765,7 +3827,7 @@ test "unify - Num(Frac(F32)) and compact frac Dec (fails)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 // unification - structure/structure - compact_int/poly
@@ -3784,7 +3846,7 @@ test "unify - compact int and Num(flex)" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(int_i32, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(int_i32, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - compact int and Num(Int(flex))" {
@@ -3801,7 +3863,7 @@ test "unify - compact int and Num(Int(flex))" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(int_i32, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(int_i32, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - compact int and U8 Num(Int(U8))" {
@@ -3818,7 +3880,7 @@ test "unify - compact int and U8 Num(Int(U8))" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(int_u8, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(int_u8, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - compact int U8 and  Num(Int(I32)) (fails)" {
@@ -3835,7 +3897,7 @@ test "unify - compact int U8 and  Num(Int(I32)) (fails)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 // unification - structure/structure - compact_frac/poly
@@ -3854,7 +3916,7 @@ test "unify - compact frac and Num(flex)" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(frac_f32, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(frac_f32, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - compact frac and Num(Frac(flex))" {
@@ -3871,7 +3933,7 @@ test "unify - compact frac and Num(Frac(flex))" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(frac_f32, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(frac_f32, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - compact frac and Dec Num(Frac(Dec))" {
@@ -3888,7 +3950,7 @@ test "unify - compact frac and Dec Num(Frac(Dec))" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(frac_dec, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(frac_dec, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - compact frac Dec and Num(Frac(F32)) (fails)" {
@@ -3905,7 +3967,7 @@ test "unify - compact frac Dec and Num(Frac(F32)) (fails)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 // unification - structure/structure - poly/poly rigid
@@ -3929,7 +3991,7 @@ test "unify - Num(rigid) and Num(rigid)" {
 
     try std.testing.expectEqual(true, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(num, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(num, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - Num(rigid_a) and Num(rigid_b)" {
@@ -3952,7 +4014,7 @@ test "unify - Num(rigid_a) and Num(rigid_b)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - Num(Int(rigid)) and Num(Int(rigid))" {
@@ -3975,7 +4037,7 @@ test "unify - Num(Int(rigid)) and Num(Int(rigid))" {
 
     try std.testing.expectEqual(true, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(num, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(num, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - Num(Frac(rigid)) and Num(Frac(rigid))" {
@@ -4002,7 +4064,7 @@ test "unify - Num(Frac(rigid)) and Num(Frac(rigid))" {
 
     try std.testing.expectEqual(true, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(num, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(num, (try env.getDescForRootVar(b)).content);
 }
 
 // unification - structure/structure - compact/poly rigid
@@ -4021,7 +4083,7 @@ test "unify - compact int U8 and Num(Int(rigid)) (fails)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - compact frac Dec and Num(Frac(rigid)) (fails)" {
@@ -4038,7 +4100,7 @@ test "unify - compact frac Dec and Num(Frac(rigid)) (fails)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 // unification - structure/structure - poly/compact rigid
@@ -4057,7 +4119,7 @@ test "unify - Num(Int(rigid)) and compact int U8 (fails)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - Num(Frac(rigid)) and compact frac Dec (fails)" {
@@ -4074,7 +4136,7 @@ test "unify - Num(Frac(rigid)) and compact frac Dec (fails)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 // unification - structure/structure - func
@@ -4102,7 +4164,7 @@ test "unify - func are same" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(func, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(func, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - funcs have diff return args (fail)" {
@@ -4121,7 +4183,7 @@ test "unify - funcs have diff return args (fail)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - funcs have diff return types (fail)" {
@@ -4140,7 +4202,7 @@ test "unify - funcs have diff return types (fail)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - same funcs pure" {
@@ -4166,7 +4228,7 @@ test "unify - same funcs pure" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(func, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(func, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - same funcs effectful" {
@@ -4192,7 +4254,7 @@ test "unify - same funcs effectful" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(func, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(func, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - same funcs first eff, second pure (fail)" {
@@ -4219,7 +4281,7 @@ test "unify - same funcs first eff, second pure (fail)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - same funcs first pure, second eff" {
@@ -4289,7 +4351,7 @@ test "unify - a & b are both the same nominal type" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(b_nominal, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(b_nominal, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - a & b are diff nominal types (fail)" {
@@ -4310,7 +4372,7 @@ test "unify - a & b are diff nominal types (fail)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - a & b are both the same nominal type with diff args (fail)" {
@@ -4332,7 +4394,7 @@ test "unify - a & b are both the same nominal type with diff args (fail)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(.err, (try env.getDescForRootVar(b)).content);
 }
 
 // unification - records - partition fields
@@ -4354,10 +4416,10 @@ test "partitionFields - same record" {
     try std.testing.expectEqual(2, result.in_both.len());
 
     const both_slice = env.scratch.in_both_fields.sliceRange(result.in_both);
-    try std.testing.expectEqual(field_x, both_slice[0].a);
-    try std.testing.expectEqual(field_x, both_slice[0].b);
-    try std.testing.expectEqual(field_y, both_slice[1].a);
-    try std.testing.expectEqual(field_y, both_slice[1].b);
+    try expectEqualRecordField(field_x, both_slice[0].a);
+    try expectEqualRecordField(field_x, both_slice[0].b);
+    try expectEqualRecordField(field_y, both_slice[1].a);
+    try expectEqualRecordField(field_y, both_slice[1].b);
 }
 
 test "partitionFields - disjoint fields" {
@@ -4379,11 +4441,11 @@ test "partitionFields - disjoint fields" {
     try std.testing.expectEqual(0, result.in_both.len());
 
     const only_in_a_slice = env.scratch.only_in_a_fields.sliceRange(result.only_in_a);
-    try std.testing.expectEqual(a1, only_in_a_slice[0]);
-    try std.testing.expectEqual(a2, only_in_a_slice[1]);
+    try expectEqualRecordField(a1, only_in_a_slice[0]);
+    try expectEqualRecordField(a2, only_in_a_slice[1]);
 
     const only_in_b_slice = env.scratch.only_in_b_fields.sliceRange(result.only_in_b);
-    try std.testing.expectEqual(b1, only_in_b_slice[0]);
+    try expectEqualRecordField(b1, only_in_b_slice[0]);
 }
 
 test "partitionFields - overlapping fields" {
@@ -4405,14 +4467,14 @@ test "partitionFields - overlapping fields" {
     try std.testing.expectEqual(1, result.in_both.len());
 
     const both_slice = env.scratch.in_both_fields.sliceRange(result.in_both);
-    try std.testing.expectEqual(both, both_slice[0].a);
-    try std.testing.expectEqual(both, both_slice[0].b);
+    try expectEqualRecordField(both, both_slice[0].a);
+    try expectEqualRecordField(both, both_slice[0].b);
 
     const only_in_a_slice = env.scratch.only_in_a_fields.sliceRange(result.only_in_a);
-    try std.testing.expectEqual(a1, only_in_a_slice[0]);
+    try expectEqualRecordField(a1, only_in_a_slice[0]);
 
     const only_in_b_slice = env.scratch.only_in_b_fields.sliceRange(result.only_in_b);
-    try std.testing.expectEqual(b1, only_in_b_slice[0]);
+    try expectEqualRecordField(b1, only_in_b_slice[0]);
 }
 
 test "partitionFields - reordering is normalized" {
@@ -4434,12 +4496,12 @@ test "partitionFields - reordering is normalized" {
     try std.testing.expectEqual(3, result.in_both.len());
 
     const both = env.scratch.in_both_fields.sliceRange(result.in_both);
-    try std.testing.expectEqual(f1, both[0].a);
-    try std.testing.expectEqual(f1, both[0].b);
-    try std.testing.expectEqual(f2, both[1].a);
-    try std.testing.expectEqual(f2, both[1].b);
-    try std.testing.expectEqual(f3, both[2].a);
-    try std.testing.expectEqual(f3, both[2].b);
+    try expectEqualRecordField(f1, both[0].a);
+    try expectEqualRecordField(f1, both[0].b);
+    try expectEqualRecordField(f2, both[1].a);
+    try expectEqualRecordField(f2, both[1].b);
+    try expectEqualRecordField(f3, both[2].a);
+    try expectEqualRecordField(f3, both[2].b);
 }
 
 // unification - structure/structure - records closed
@@ -4465,7 +4527,7 @@ test "unify - identical closed records" {
 
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
     const b_record_fields = env.module_env.types.record_fields.sliceRange(b_record.fields);
-    try std.testing.expectEqualSlices(Ident.Idx, record_data_fields.items(.name), b_record_fields.items(.name));
+    try expectEqualIdentSlices(record_data_fields.items(.name), b_record_fields.items(.name));
     try std.testing.expectEqualSlices(Var, record_data_fields.items(.var_), b_record_fields.items(.var_));
 }
 
@@ -4520,7 +4582,7 @@ test "unify - identical open records" {
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
     try std.testing.expectEqual(1, b_record.fields.len());
     const b_record_fields = env.module_env.types.getRecordFieldsSlice(b_record.fields);
-    try std.testing.expectEqual(field_shared.name, b_record_fields.items(.name)[0]);
+    try std.testing.expect(field_shared.name.eql(b_record_fields.items(.name)[0]));
     try std.testing.expectEqual(field_shared.var_, b_record_fields.items(.var_)[0]);
 
     const b_ext = env.module_env.types.resolveVar(b_record.ext).desc.content;
@@ -4557,7 +4619,7 @@ test "unify - open record a extends b" {
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
     try std.testing.expectEqual(1, b_record.fields.len());
     const b_record_fields = env.module_env.types.getRecordFieldsSlice(b_record.fields);
-    try std.testing.expectEqual(field_shared.name, b_record_fields.items(.name)[0]);
+    try std.testing.expect(field_shared.name.eql(b_record_fields.items(.name)[0]));
     try std.testing.expectEqual(field_shared.var_, b_record_fields.items(.var_)[0]);
 
     try std.testing.expectEqual(1, env.scratch.fresh_vars.len());
@@ -4566,7 +4628,7 @@ test "unify - open record a extends b" {
     const b_ext_record = try TestEnv.getRecordOrErr(env.module_env.types.resolveVar(b_record.ext).desc);
     try std.testing.expectEqual(1, b_ext_record.fields.len());
     const b_ext_record_fields = env.module_env.types.getRecordFieldsSlice(b_ext_record.fields);
-    try std.testing.expectEqual(field_a_only.name, b_ext_record_fields.items(.name)[0]);
+    try std.testing.expect(field_a_only.name.eql(b_ext_record_fields.items(.name)[0]));
     try std.testing.expectEqual(field_a_only.var_, b_ext_record_fields.items(.var_)[0]);
 
     const b_ext_ext = env.module_env.types.resolveVar(b_ext_record.ext).desc.content;
@@ -4604,13 +4666,13 @@ test "unify - open record b extends a" {
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
     try std.testing.expectEqual(1, b_record.fields.len());
     const b_record_fields = env.module_env.types.getRecordFieldsSlice(b_record.fields);
-    try std.testing.expectEqual(field_shared.name, b_record_fields.items(.name)[0]);
+    try std.testing.expect(field_shared.name.eql(b_record_fields.items(.name)[0]));
     try std.testing.expectEqual(field_shared.var_, b_record_fields.items(.var_)[0]);
 
     const b_ext_record = try TestEnv.getRecordOrErr(env.module_env.types.resolveVar(b_record.ext).desc);
     try std.testing.expectEqual(1, b_ext_record.fields.len());
     const b_ext_record_fields = env.module_env.types.getRecordFieldsSlice(b_ext_record.fields);
-    try std.testing.expectEqual(field_b_only.name, b_ext_record_fields.items(.name)[0]);
+    try std.testing.expect(field_b_only.name.eql(b_ext_record_fields.items(.name)[0]));
     try std.testing.expectEqual(field_b_only.var_, b_ext_record_fields.items(.var_)[0]);
 
     const b_ext_ext = env.module_env.types.resolveVar(b_ext_record.ext).desc.content;
@@ -4810,10 +4872,10 @@ test "partitionTags - same tags" {
     try std.testing.expectEqual(2, result.in_both.len());
 
     const both_slice = env.scratch.in_both_tags.sliceRange(result.in_both);
-    try std.testing.expectEqual(tag_x, both_slice[0].a);
-    try std.testing.expectEqual(tag_x, both_slice[0].b);
-    try std.testing.expectEqual(tag_y, both_slice[1].a);
-    try std.testing.expectEqual(tag_y, both_slice[1].b);
+    try expectEqualTag(tag_x, both_slice[0].a);
+    try expectEqualTag(tag_x, both_slice[0].b);
+    try expectEqualTag(tag_y, both_slice[1].a);
+    try expectEqualTag(tag_y, both_slice[1].b);
 }
 
 test "partitionTags - disjoint fields" {
@@ -4835,11 +4897,11 @@ test "partitionTags - disjoint fields" {
     try std.testing.expectEqual(0, result.in_both.len());
 
     const only_in_a_slice = env.scratch.only_in_a_tags.sliceRange(result.only_in_a);
-    try std.testing.expectEqual(a1, only_in_a_slice[0]);
-    try std.testing.expectEqual(a2, only_in_a_slice[1]);
+    try expectEqualTag(a1, only_in_a_slice[0]);
+    try expectEqualTag(a2, only_in_a_slice[1]);
 
     const only_in_b_slice = env.scratch.only_in_b_tags.sliceRange(result.only_in_b);
-    try std.testing.expectEqual(b1, only_in_b_slice[0]);
+    try expectEqualTag(b1, only_in_b_slice[0]);
 }
 
 test "partitionTags - overlapping tags" {
@@ -4861,14 +4923,14 @@ test "partitionTags - overlapping tags" {
     try std.testing.expectEqual(1, result.in_both.len());
 
     const both_slice = env.scratch.in_both_tags.sliceRange(result.in_both);
-    try std.testing.expectEqual(both, both_slice[0].a);
-    try std.testing.expectEqual(both, both_slice[0].b);
+    try expectEqualTag(both, both_slice[0].a);
+    try expectEqualTag(both, both_slice[0].b);
 
     const only_in_a_slice = env.scratch.only_in_a_tags.sliceRange(result.only_in_a);
-    try std.testing.expectEqual(a1, only_in_a_slice[0]);
+    try expectEqualTag(a1, only_in_a_slice[0]);
 
     const only_in_b_slice = env.scratch.only_in_b_tags.sliceRange(result.only_in_b);
-    try std.testing.expectEqual(b1, only_in_b_slice[0]);
+    try expectEqualTag(b1, only_in_b_slice[0]);
 }
 
 test "partitionTags - reordering is normalized" {
@@ -4890,12 +4952,12 @@ test "partitionTags - reordering is normalized" {
     try std.testing.expectEqual(3, result.in_both.len());
 
     const both_slice = env.scratch.in_both_tags.sliceRange(result.in_both);
-    try std.testing.expectEqual(f1, both_slice[0].a);
-    try std.testing.expectEqual(f1, both_slice[0].b);
-    try std.testing.expectEqual(f2, both_slice[1].a);
-    try std.testing.expectEqual(f2, both_slice[1].b);
-    try std.testing.expectEqual(f3, both_slice[2].a);
-    try std.testing.expectEqual(f3, both_slice[2].b);
+    try expectEqualTag(f1, both_slice[0].a);
+    try expectEqualTag(f1, both_slice[0].b);
+    try expectEqualTag(f2, both_slice[1].a);
+    try expectEqualTag(f2, both_slice[1].b);
+    try expectEqualTag(f3, both_slice[2].a);
+    try expectEqualTag(f3, both_slice[2].b);
 }
 
 // unification - structure/structure - tag unions closed
@@ -4924,7 +4986,7 @@ test "unify - identical closed tag_unions" {
     const b_tags_names = b_tags.items(.name);
     const b_tags_args = b_tags.items(.args);
     try std.testing.expectEqual(1, b_tags.len);
-    try std.testing.expectEqual(tag.name, b_tags_names[0]);
+    try std.testing.expect(tag.name.eql(b_tags_names[0]));
     try std.testing.expectEqual(tag.args, b_tags_args[0]);
 
     try std.testing.expectEqual(1, b_tags.len);
@@ -4992,7 +5054,7 @@ test "unify - identical open tag unions" {
     const b_tags_names = b_tags.items(.name);
     const b_tags_args = b_tags.items(.args);
     try std.testing.expectEqual(1, b_tags.len);
-    try std.testing.expectEqual(tag_shared.name, b_tags_names[0]);
+    try std.testing.expect(tag_shared.name.eql(b_tags_names[0]));
     try std.testing.expectEqual(tag_shared.args, b_tags_args[0]);
 
     const b_ext = env.module_env.types.resolveVar(b_tag_union.ext).desc.content;
@@ -5034,7 +5096,7 @@ test "unify - open tag union a extends b" {
     const b_tags_names = b_tags.items(.name);
     const b_tags_args = b_tags.items(.args);
     try std.testing.expectEqual(1, b_tags.len);
-    try std.testing.expectEqual(tag_shared.name, b_tags_names[0]);
+    try std.testing.expect(tag_shared.name.eql(b_tags_names[0]));
     try std.testing.expectEqual(tag_shared.args, b_tags_args[0]);
 
     const b_ext_tag_union = try TestEnv.getTagUnionOrErr(env.module_env.types.resolveVar(b_tag_union.ext).desc);
@@ -5044,7 +5106,7 @@ test "unify - open tag union a extends b" {
     const b_ext_tags_names = b_ext_tags.items(.name);
     const b_ext_tags_args = b_ext_tags.items(.args);
     try std.testing.expectEqual(1, b_ext_tags.len);
-    try std.testing.expectEqual(tag_a_only.name, b_ext_tags_names[0]);
+    try std.testing.expect(tag_a_only.name.eql(b_ext_tags_names[0]));
     try std.testing.expectEqual(tag_a_only.args, b_ext_tags_args[0]);
 
     const b_ext_ext = env.module_env.types.resolveVar(b_ext_tag_union.ext).desc.content;
@@ -5087,7 +5149,7 @@ test "unify - open tag union b extends a" {
     const b_tags_names = b_tags.items(.name);
     const b_tags_args = b_tags.items(.args);
     try std.testing.expectEqual(1, b_tags.len);
-    try std.testing.expectEqual(tag_shared.name, b_tags_names[0]);
+    try std.testing.expect(tag_shared.name.eql(b_tags_names[0]));
     try std.testing.expectEqual(tag_shared.args, b_tags_args[0]);
 
     const b_ext_tag_union = try TestEnv.getTagUnionOrErr(env.module_env.types.resolveVar(b_tag_union.ext).desc);
@@ -5097,7 +5159,7 @@ test "unify - open tag union b extends a" {
     const b_ext_tags_names = b_ext_tags.items(.name);
     const b_ext_tags_args = b_ext_tags.items(.args);
     try std.testing.expectEqual(1, b_ext_tags.len);
-    try std.testing.expectEqual(tag_b_only.name, b_ext_tags_names[0]);
+    try std.testing.expect(tag_b_only.name.eql(b_ext_tags_names[0]));
     try std.testing.expectEqual(tag_b_only.args, b_ext_tags_args[0]);
 
     const b_ext_ext = env.module_env.types.resolveVar(b_ext_tag_union.ext).desc.content;
@@ -5140,9 +5202,9 @@ test "unify - both extend open tag union" {
 
     const b_tags = env.module_env.types.tags.sliceRange(b_tag_union.tags);
     try std.testing.expectEqual(3, b_tags.len);
-    try std.testing.expectEqual(tag_shared, b_tags.get(0));
-    try std.testing.expectEqual(tag_a_only, b_tags.get(1));
-    try std.testing.expectEqual(tag_b_only, b_tags.get(2));
+    try expectEqualTag(tag_shared, b_tags.get(0));
+    try expectEqualTag(tag_a_only, b_tags.get(1));
+    try expectEqualTag(tag_b_only, b_tags.get(2));
 
     const b_ext = env.module_env.types.resolveVar(b_tag_union.ext).desc.content;
     try std.testing.expectEqual(Content{ .flex_var = null }, b_ext);
@@ -5155,13 +5217,13 @@ test "unify - both extend open tag union" {
     const only_a_tag_union = try TestEnv.getTagUnionOrErr(env.module_env.types.resolveVar(only_a_var).desc);
     try std.testing.expectEqual(1, only_a_tag_union.tags.len());
     const only_a_tags = env.module_env.types.getTagsSlice(only_a_tag_union.tags);
-    try std.testing.expectEqual(tag_a_only, only_a_tags.get(0));
+    try expectEqualTag(tag_a_only, only_a_tags.get(0));
 
     const only_b_var = env.scratch.fresh_vars.get(@enumFromInt(1)).*;
     const only_b_tag_union = try TestEnv.getTagUnionOrErr(env.module_env.types.resolveVar(only_b_var).desc);
     try std.testing.expectEqual(1, only_b_tag_union.tags.len());
     const only_b_tags = env.module_env.types.getTagsSlice(only_b_tag_union.tags);
-    try std.testing.expectEqual(tag_b_only, only_b_tags.get(0));
+    try expectEqualTag(tag_b_only, only_b_tags.get(0));
 
     const ext_var = env.scratch.fresh_vars.get(@enumFromInt(2)).*;
     const ext_content = env.module_env.types.resolveVar(ext_var).desc.content;
@@ -5213,7 +5275,7 @@ test "unify - open tag extends closed (fail)" {
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(Content.err, (try env.getDescForRootVar(b)).content);
+    try expectEqualContent(Content.err, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - closed tag union extends open" {
@@ -5243,7 +5305,7 @@ test "unify - closed tag union extends open" {
     const b_tags_names = b_tags.items(.name);
     const b_tags_args = b_tags.items(.args);
     try std.testing.expectEqual(1, b_tags.len);
-    try std.testing.expectEqual(tag_shared.name, b_tags_names[0]);
+    try std.testing.expect(tag_shared.name.eql(b_tags_names[0]));
     try std.testing.expectEqual(tag_shared.args, b_tags_args[0]);
 
     const b_ext_tag_union = try TestEnv.getTagUnionOrErr(env.module_env.types.resolveVar(b_tag_union.ext).desc);
@@ -5253,7 +5315,7 @@ test "unify - closed tag union extends open" {
     const b_ext_tags_names = b_ext_tags.items(.name);
     const b_ext_tags_args = b_ext_tags.items(.args);
     try std.testing.expectEqual(1, b_ext_tags.len);
-    try std.testing.expectEqual(tag_b_only.name, b_ext_tags_names[0]);
+    try std.testing.expect(tag_b_only.name.eql(b_ext_tags_names[0]));
     try std.testing.expectEqual(tag_b_only.args, b_ext_tags_args[0]);
 
     const b_ext_ext = env.module_env.types.resolveVar(b_ext_tag_union.ext).desc.content;

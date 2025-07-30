@@ -8,6 +8,33 @@ const RocDec = @import("builtins").RocDec;
 const Node = @import("../Node.zig");
 const NodeStore = @import("../NodeStore.zig");
 const AST = @import("../AST.zig");
+const Token = @import("../tokenize.zig").Token;
+
+/// Custom comparison for Token values that handles IdentWithFlags properly
+fn expectEqualTokens(expected: Token, actual: Token) !void {
+    try testing.expectEqual(expected.tag, actual.tag);
+    try testing.expectEqual(expected.region, actual.region);
+    
+    // Compare data based on tag
+    switch (expected.tag) {
+        .UpperIdent, .LowerIdent, .DotLowerIdent, .DotUpperIdent, 
+        .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .NamedUnderscore, 
+        .OpaqueName, .MalformedUnicodeIdent, .MalformedDotUnicodeIdent,
+        .MalformedNoSpaceDotUnicodeIdent, .MalformedNamedUnderscoreUnicode,
+        .MalformedOpaqueNameUnicode => {
+            // These have IdentWithFlags data
+            const expected_ident = expected.data.ident_with_flags;
+            const actual_ident = actual.data.ident_with_flags;
+            try testing.expect(expected_ident.ident.eql(actual_ident.ident));
+            try testing.expectEqual(expected_ident.starts_with_underscore, actual_ident.starts_with_underscore);
+            try testing.expectEqual(expected_ident.ends_with_underscore, actual_ident.ends_with_underscore);
+        },
+        else => {
+            // For other token types, compare the data field directly
+            try testing.expectEqual(expected.data, actual.data);
+        },
+    }
+}
 
 var rand = std.Random.DefaultPrng.init(1234);
 
@@ -367,6 +394,83 @@ test "NodeStore round trip - Pattern" {
     }
 }
 
+fn expectEqualTypeAnno(expected: AST.TypeAnno, actual: AST.TypeAnno) !void {
+    try testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
+
+    switch (expected) {
+        .apply => |expected_apply| {
+            const actual_apply = actual.apply;
+            try testing.expectEqual(expected_apply.args.span, actual_apply.args.span);
+            try testing.expectEqual(expected_apply.region, actual_apply.region);
+        },
+        .ty_var => |expected_ty_var| {
+            const actual_ty_var = actual.ty_var;
+            try testing.expectEqual(expected_ty_var.tok, actual_ty_var.tok);
+            try testing.expectEqual(expected_ty_var.region, actual_ty_var.region);
+        },
+        .underscore_type_var => |expected_underscore| {
+            const actual_underscore = actual.underscore_type_var;
+            try testing.expectEqual(expected_underscore.tok, actual_underscore.tok);
+            try testing.expectEqual(expected_underscore.region, actual_underscore.region);
+        },
+        .underscore => |expected_underscore| {
+            const actual_underscore = actual.underscore;
+            try testing.expectEqual(expected_underscore.region, actual_underscore.region);
+        },
+        .ty => |expected_ty| {
+            const actual_ty = actual.ty;
+            try testing.expectEqual(expected_ty.token, actual_ty.token);
+            try testing.expectEqual(expected_ty.qualifiers.span, actual_ty.qualifiers.span);
+            try testing.expectEqual(expected_ty.region, actual_ty.region);
+        },
+        .mod_ty => |expected_mod_ty| {
+            const actual_mod_ty = actual.mod_ty;
+            // Use .eql() for Ident.Idx comparison
+            try testing.expect(expected_mod_ty.mod_ident.eql(actual_mod_ty.mod_ident));
+            try testing.expect(expected_mod_ty.ty_ident.eql(actual_mod_ty.ty_ident));
+            try testing.expectEqual(expected_mod_ty.region, actual_mod_ty.region);
+        },
+        .tag_union => |expected_tag_union| {
+            const actual_tag_union = actual.tag_union;
+            try testing.expectEqual(expected_tag_union.tags.span, actual_tag_union.tags.span);
+            if (expected_tag_union.open_anno) |expected_open| {
+                try testing.expect(actual_tag_union.open_anno != null);
+                try testing.expectEqual(expected_open, actual_tag_union.open_anno.?);
+            } else {
+                try testing.expect(actual_tag_union.open_anno == null);
+            }
+            try testing.expectEqual(expected_tag_union.region, actual_tag_union.region);
+        },
+        .tuple => |expected_tuple| {
+            const actual_tuple = actual.tuple;
+            try testing.expectEqual(expected_tuple.annos.span, actual_tuple.annos.span);
+            try testing.expectEqual(expected_tuple.region, actual_tuple.region);
+        },
+        .record => |expected_record| {
+            const actual_record = actual.record;
+            try testing.expectEqual(expected_record.fields.span, actual_record.fields.span);
+            try testing.expectEqual(expected_record.region, actual_record.region);
+        },
+        .@"fn" => |expected_fn| {
+            const actual_fn = actual.@"fn";
+            try testing.expectEqual(expected_fn.args.span, actual_fn.args.span);
+            try testing.expectEqual(expected_fn.ret, actual_fn.ret);
+            try testing.expectEqual(expected_fn.effectful, actual_fn.effectful);
+            try testing.expectEqual(expected_fn.region, actual_fn.region);
+        },
+        .parens => |expected_parens| {
+            const actual_parens = actual.parens;
+            try testing.expectEqual(expected_parens.anno, actual_parens.anno);
+            try testing.expectEqual(expected_parens.region, actual_parens.region);
+        },
+        .malformed => |expected_malformed| {
+            const actual_malformed = actual.malformed;
+            try testing.expectEqual(expected_malformed.parse_problem, actual_malformed.parse_problem);
+            try testing.expectEqual(expected_malformed.region, actual_malformed.region);
+        },
+    }
+}
+
 test "NodeStore round trip - TypeAnno" {
     const gpa = testing.allocator;
     var store = try NodeStore.initCapacity(gpa, NodeStore.AST_TYPE_ANNO_NODE_COUNT);
@@ -449,7 +553,7 @@ test "NodeStore round trip - TypeAnno" {
         const idx = try store.addTypeAnno(anno);
         const retrieved = store.getTypeAnno(idx);
 
-        testing.expectEqualDeep(anno, retrieved) catch |err| {
+        expectEqualTypeAnno(anno, retrieved) catch |err| {
             std.debug.print("\n\nOriginal:  {any}\n\n", .{anno});
             std.debug.print("Retrieved: {any}\n\n", .{retrieved});
             return err;

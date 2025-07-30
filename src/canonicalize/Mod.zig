@@ -606,7 +606,7 @@ pub fn canonicalizeFile(
                     if (self.parse_ir.store.getPattern(decl.pattern) == .ident) {
                         const pattern_ident = self.parse_ir.store.getPattern(decl.pattern).ident;
                         if (self.parse_ir.tokens.resolveIdentifier(pattern_ident.ident_tok)) |decl_ident| {
-                            if (anno_info.name.idx == decl_ident.idx) {
+                            if (anno_info.name.getIdx() == decl_ident.getIdx()) {
                                 // This declaration matches the type annotation
                                 const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
                                 const type_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, pattern_region, TypeVar);
@@ -2194,7 +2194,7 @@ pub fn canonicalizeExpr(
                     // Check for duplicate field names
                     var found_duplicate = false;
                     for (self.scratch_seen_record_fields.sliceFromStart(seen_fields_top)) |seen_field| {
-                        if (field_name_ident.idx == seen_field.ident.idx) {
+                        if (field_name_ident.getIdx() == seen_field.ident.getIdx()) {
                             // Found a duplicate - add diagnostic
                             const diagnostic = Diagnostic{
                                 .duplicate_record_field = .{
@@ -4718,7 +4718,15 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, can_intro
         // Create a malformed type header with an invalid identifier
         const region = self.parse_ir.tokenizedRegionToRegion(node.region);
         return try self.env.addTypeHeaderAndTypeVar(.{
-            .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Invalid identifier
+            .name = base.Ident.Idx{ 
+                .is_small = false,
+                .data = .{
+                    .big = .{
+                        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, 
+                        .idx = 0,
+                    },
+                },
+            }, // Invalid identifier
             .args = .{ .span = .{ .start = 0, .len = 0 } },
         }, Content{ .flex_var = null }, region);
     }
@@ -4730,7 +4738,15 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, can_intro
     const name_ident = self.parse_ir.tokens.resolveIdentifier(ast_header.name) orelse {
         // If we can't resolve the identifier, create a malformed header with invalid identifier
         return try self.env.addTypeHeaderAndTypeVar(.{
-            .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Invalid identifier
+            .name = base.Ident.Idx{ 
+                .is_small = false,
+                .data = .{
+                    .big = .{
+                        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, 
+                        .idx = 0,
+                    },
+                },
+            }, // Invalid identifier
             .args = .{ .span = .{ .start = 0, .len = 0 } },
         }, Content{ .flex_var = null }, region);
     };
@@ -5199,7 +5215,7 @@ fn scopeContains(
 
         var iter = map.iterator();
         while (iter.next()) |entry| {
-            if (name.idx == entry.key_ptr.idx) {
+            if (name.getIdx() == entry.key_ptr.getIdx()) {
                 return entry.value_ptr.*;
             }
         }
@@ -5326,7 +5342,7 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
             if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
                 // Check if we already have this type variable
                 for (self.scratch_idents.sliceFromStart(idents_start_idx)) |existing| {
-                    if (existing.idx == ident.idx) return; // Already added
+                    if (existing.getIdx() == ident.getIdx()) return; // Already added
                 }
                 _ = try self.scratch_idents.append(self.env.gpa, ident);
             }
@@ -5335,7 +5351,7 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
             if (self.parse_ir.tokens.resolveIdentifier(underscore_ty_var.tok)) |ident| {
                 // Check if we already have this type variable
                 for (self.scratch_idents.sliceFromStart(idents_start_idx)) |existing| {
-                    if (existing.idx == ident.idx) return; // Already added
+                    if (existing.getIdx() == ident.getIdx()) return; // Already added
                 }
                 try self.scratch_idents.append(self.env.gpa, ident);
             }
@@ -5381,7 +5397,7 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
     switch (ast_anno) {
         .ty_var => |ty_var| {
             if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
-                if (ident.idx == target_ident.idx) {
+                if (ident.getIdx() == target_ident.getIdx()) {
                     return self.parse_ir.tokenizedRegionToRegion(ty_var.region);
                 }
             }
@@ -5389,7 +5405,7 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
         },
         .underscore_type_var => |underscore_ty_var| {
             if (self.parse_ir.tokens.resolveIdentifier(underscore_ty_var.tok)) |ident| {
-                if (ident.idx == target_ident.idx) {
+                if (ident.getIdx() == target_ident.getIdx()) {
                     return self.parse_ir.tokenizedRegionToRegion(underscore_ty_var.region);
                 }
             }
@@ -5482,7 +5498,7 @@ fn scopeIntroduceInternal(
 
                 var iter = map.iterator();
                 while (iter.next()) |entry| {
-                    if (ident_idx.idx == entry.key_ptr.idx) {
+                    if (ident_idx.getIdx() == entry.key_ptr.getIdx()) {
                         declaration_scope_idx = scope_idx;
                         break;
                     }
@@ -5532,7 +5548,7 @@ fn scopeIntroduceInternal(
 
     var iter = map.iterator();
     while (iter.next()) |entry| {
-        if (ident_idx.idx == entry.key_ptr.idx) {
+        if (ident_idx.getIdx() == entry.key_ptr.getIdx()) {
             // Duplicate in same scope - still introduce but return shadowing warning
             try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
             return Scope.IntroduceResult{ .shadowing_warning = entry.value_ptr.* };
@@ -5546,7 +5562,7 @@ fn scopeIntroduceInternal(
 
 /// Check if an identifier is marked as ignored (underscore prefix)
 fn identIsIgnored(ident_idx: base.Ident.Idx) bool {
-    return ident_idx.attributes.ignored;
+    return ident_idx.attributes().ignored;
 }
 
 /// Handle unused variable checking and diagnostics

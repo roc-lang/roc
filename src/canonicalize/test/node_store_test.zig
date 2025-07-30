@@ -17,14 +17,514 @@ const TypeVar = types.Var;
 
 var rand = std.Random.DefaultPrng.init(1234);
 
+/// Helper function to compare diagnostics that contain Ident.Idx fields
+fn expectEqualDiagnostics(expected: ModuleEnv.Diagnostic, actual: ModuleEnv.Diagnostic) !void {
+    // First check that the tags match
+    try testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
+    
+    // Then compare the fields based on the tag
+    switch (expected) {
+        .not_implemented => |e| {
+            const a = actual.not_implemented;
+            try testing.expectEqual(e.feature, a.feature);
+            try testing.expectEqual(e.region, a.region);
+        },
+        .exposed_but_not_implemented => |e| {
+            const a = actual.exposed_but_not_implemented;
+            try testing.expect(e.ident.eql(a.ident));
+            try testing.expectEqual(e.region, a.region);
+        },
+        .redundant_exposed => |e| {
+            const a = actual.redundant_exposed;
+            try testing.expect(e.ident.eql(a.ident));
+            try testing.expectEqual(e.region, a.region);
+            try testing.expectEqual(e.original_region, a.original_region);
+        },
+        .invalid_num_literal => |e| {
+            const a = actual.invalid_num_literal;
+            try testing.expectEqual(e.region, a.region);
+        },
+        .invalid_single_quote => |e| {
+            const a = actual.invalid_single_quote;
+            try testing.expectEqual(e.region, a.region);
+        },
+        .empty_tuple => |e| {
+            const a = actual.empty_tuple;
+            try testing.expectEqual(e.region, a.region);
+        },
+        .ident_already_in_scope => |e| {
+            const a = actual.ident_already_in_scope;
+            try testing.expect(e.ident.eql(a.ident));
+            try testing.expectEqual(e.region, a.region);
+        },
+        .ident_not_in_scope => |e| {
+            const a = actual.ident_not_in_scope;
+            try testing.expect(e.ident.eql(a.ident));
+            try testing.expectEqual(e.region, a.region);
+        },
+        .invalid_top_level_statement => |e| {
+            const a = actual.invalid_top_level_statement;
+            try testing.expectEqual(e.stmt, a.stmt);
+            try testing.expectEqual(e.region, a.region);
+        },
+        .expr_not_canonicalized => |e| {
+            const a = actual.expr_not_canonicalized;
+            try testing.expectEqual(e.region, a.region);
+        },
+        .invalid_string_interpolation => |e| {
+            const a = actual.invalid_string_interpolation;
+            try testing.expectEqual(e.region, a.region);
+        },
+        .pattern_arg_invalid => |e| {
+            const a = actual.pattern_arg_invalid;
+            try testing.expectEqual(e.region, a.region);
+        },
+        .pattern_not_canonicalized => |e| {
+            const a = actual.pattern_not_canonicalized;
+            try testing.expectEqual(e.region, a.region);
+        },
+        .can_lambda_not_implemented => |e| {
+            const a = actual.can_lambda_not_implemented;
+            try testing.expectEqual(e.region, a.region);
+        },
+        .lambda_body_not_canonicalized => |e| {
+            const a = actual.lambda_body_not_canonicalized;
+            try testing.expectEqual(e.region, a.region);
+        },
+        .if_condition_not_canonicalized => |e| {
+            const a = actual.if_condition_not_canonicalized;
+            try testing.expectEqual(e.region, a.region);
+        },
+        .if_then_not_canonicalized => |e| {
+            const a = actual.if_then_not_canonicalized;
+            try testing.expectEqual(e.region, a.region);
+        },
+        .if_else_not_canonicalized => |e| {
+            const a = actual.if_else_not_canonicalized;
+            try testing.expectEqual(e.region, a.region);
+        },
+        .malformed_type_annotation => |e| {
+            const a = actual.malformed_type_annotation;
+            try testing.expectEqual(e.region, a.region);
+        },
+        .malformed_where_clause => |e| {
+            const a = actual.malformed_where_clause;
+            try testing.expectEqual(e.region, a.region);
+        },
+        .var_across_function_boundary => |e| {
+            const a = actual.var_across_function_boundary;
+            try testing.expectEqual(e.region, a.region);
+        },
+        .shadowing_warning => |e| {
+            const a = actual.shadowing_warning;
+            try testing.expect(e.ident.eql(a.ident));
+            try testing.expectEqual(e.region, a.region);
+            try testing.expectEqual(e.original_region, a.original_region);
+        },
+        .type_redeclared => |e| {
+            const a = actual.type_redeclared;
+            try testing.expect(e.name.eql(a.name));
+            try testing.expectEqual(e.original_region, a.original_region);
+            try testing.expectEqual(e.redeclared_region, a.redeclared_region);
+        },
+        .tuple_elem_not_canonicalized => |e| {
+            const a = actual.tuple_elem_not_canonicalized;
+            try testing.expectEqual(e.region, a.region);
+        },
+        .module_not_found => |e| {
+            const a = actual.module_not_found;
+            try testing.expect(e.module_name.eql(a.module_name));
+            try testing.expectEqual(e.region, a.region);
+        },
+        .module_not_imported => |e| {
+            const a = actual.module_not_imported;
+            try testing.expect(e.module_name.eql(a.module_name));
+            try testing.expectEqual(e.region, a.region);
+        },
+        .too_many_exports => |e| {
+            const a = actual.too_many_exports;
+            try testing.expectEqual(e.count, a.count);
+            try testing.expectEqual(e.region, a.region);
+        },
+    }
+}
+
 /// Generate a random index of type `T`.
 fn rand_idx(comptime T: type) T {
     return @enumFromInt(rand.random().int(u32));
 }
 
+/// Helper function to compare statements that contain Ident.Idx fields
+fn expectEqualStatements(expected: ModuleEnv.Statement, actual: ModuleEnv.Statement) !void {
+    // First check that the tags match
+    try testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
+    
+    // Then compare the fields based on the tag
+    switch (expected) {
+        .s_decl => |e| {
+            const a = actual.s_decl;
+            try testing.expectEqual(e.pattern, a.pattern);
+            try testing.expectEqual(e.expr, a.expr);
+        },
+        .s_var => |e| {
+            const a = actual.s_var;
+            try testing.expectEqual(e.pattern_idx, a.pattern_idx);
+            try testing.expectEqual(e.expr, a.expr);
+        },
+        .s_reassign => |e| {
+            const a = actual.s_reassign;
+            try testing.expectEqual(e.pattern_idx, a.pattern_idx);
+            try testing.expectEqual(e.expr, a.expr);
+        },
+        .s_crash => |e| {
+            const a = actual.s_crash;
+            try testing.expectEqual(e.msg, a.msg);
+        },
+        .s_dbg => |e| {
+            const a = actual.s_dbg;
+            try testing.expectEqual(e.expr, a.expr);
+        },
+        .s_import => |e| {
+            const a = actual.s_import;
+            try testing.expect(e.module_name_tok.eql(a.module_name_tok));
+            if (e.qualifier_tok) |eq| {
+                try testing.expect(eq.eql(a.qualifier_tok.?));
+            } else {
+                try testing.expect(a.qualifier_tok == null);
+            }
+            if (e.alias_tok) |ea| {
+                try testing.expect(ea.eql(a.alias_tok.?));
+            } else {
+                try testing.expect(a.alias_tok == null);
+            }
+            try testing.expectEqual(e.exposes, a.exposes);
+        },
+        .s_alias_decl => |e| {
+            const a = actual.s_alias_decl;
+            try testing.expectEqual(e.header, a.header);
+            try testing.expectEqual(e.anno, a.anno);
+            try testing.expectEqual(e.where, a.where);
+        },
+        .s_nominal_decl => |e| {
+            const a = actual.s_nominal_decl;
+            try testing.expectEqual(e.header, a.header);
+            try testing.expectEqual(e.anno, a.anno);
+            try testing.expectEqual(e.anno_var, a.anno_var);
+            try testing.expectEqual(e.where, a.where);
+        },
+        .s_type_anno => |e| {
+            const a = actual.s_type_anno;
+            try testing.expect(e.name.eql(a.name));
+            try testing.expectEqual(e.anno, a.anno);
+            try testing.expectEqual(e.where, a.where);
+        },
+    }
+}
+
 /// Generate a random index of type `T`.
 fn rand_idx_u16(comptime T: type) T {
     return @enumFromInt(rand.random().int(u16));
+}
+
+/// Helper function to compare expressions that contain Ident.Idx fields
+fn expectEqualExpressions(expected: ModuleEnv.Expr, actual: ModuleEnv.Expr) !void {
+    // First check that the tags match
+    try testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
+    
+    // Then compare the fields based on the tag
+    switch (expected) {
+        .e_int => |e| {
+            const a = actual.e_int;
+            try testing.expectEqual(e.value, a.value);
+        },
+        .e_frac_f64 => |e| {
+            const a = actual.e_frac_f64;
+            try testing.expectEqual(e.value, a.value);
+        },
+        .e_frac_dec => |e| {
+            const a = actual.e_frac_dec;
+            try testing.expectEqual(e.value, a.value);
+        },
+        .e_dec_small => |e| {
+            const a = actual.e_dec_small;
+            try testing.expectEqual(e.numerator, a.numerator);
+            try testing.expectEqual(e.denominator_power_of_ten, a.denominator_power_of_ten);
+        },
+        .e_str => |e| {
+            const a = actual.e_str;
+            try testing.expectEqual(e.segments, a.segments);
+        },
+        .e_single_quote => |e| {
+            const a = actual.e_single_quote;
+            try testing.expectEqual(e.segment, a.segment);
+        },
+        .e_bool => |e| {
+            const a = actual.e_bool;
+            try testing.expectEqual(e.val, a.val);
+        },
+        .e_tag => |e| {
+            const a = actual.e_tag;
+            try testing.expect(e.name.eql(a.name));
+            try testing.expectEqual(e.args, a.args);
+        },
+        .e_nominal => |e| {
+            const a = actual.e_nominal;
+            try testing.expectEqual(e.nominal_type_decl, a.nominal_type_decl);
+            try testing.expectEqual(e.backing_expr, a.backing_expr);
+            try testing.expectEqual(e.backing_type, a.backing_type);
+        },
+        .e_zero_argument_tag => |e| {
+            const a = actual.e_zero_argument_tag;
+            try testing.expect(e.closure_name.eql(a.closure_name));
+            try testing.expectEqual(e.variant_var, a.variant_var);
+            try testing.expectEqual(e.ext_var, a.ext_var);
+            try testing.expect(e.name.eql(a.name));
+        },
+        .e_closure => |e| {
+            const a = actual.e_closure;
+            try testing.expectEqual(e.lambda_var, a.lambda_var);
+            try testing.expectEqual(e.is_function, a.is_function);
+            try testing.expectEqual(e.captures, a.captures);
+            try testing.expectEqual(e.statements, a.statements);
+            try testing.expectEqual(e.ret_expr, a.ret_expr);
+            try testing.expectEqual(e.annotation, a.annotation);
+        },
+        .e_closure_def => |e| {
+            const a = actual.e_closure_def;
+            try testing.expectEqual(e.inner, a.inner);
+        },
+        .e_variable => |e| {
+            const a = actual.e_variable;
+            try testing.expectEqual(e.pattern_idx, a.pattern_idx);
+        },
+        .e_external => |e| {
+            const a = actual.e_external;
+            try testing.expectEqual(e.external_idx, a.external_idx);
+        },
+        .e_let => |e| {
+            const a = actual.e_let;
+            try testing.expectEqual(e.defs, a.defs);
+            try testing.expectEqual(e.expr, a.expr);
+        },
+        .e_if => |e| {
+            const a = actual.e_if;
+            try testing.expectEqual(e.cond, a.cond);
+            try testing.expectEqual(e.then_branch, a.then_branch);
+            try testing.expectEqual(e.else_branch, a.else_branch);
+        },
+        .e_match => |e| {
+            const a = actual.e_match;
+            try testing.expectEqual(e.cond, a.cond);
+            try testing.expectEqual(e.branches, a.branches);
+        },
+        .e_apply => |e| {
+            const a = actual.e_apply;
+            try testing.expectEqual(e.function, a.function);
+            try testing.expectEqual(e.args, a.args);
+            try testing.expectEqual(e.called_via, a.called_via);
+        },
+        .e_bvar => |e| {
+            const a = actual.e_bvar;
+            try testing.expectEqual(e.tag, a.tag);
+        },
+        .e_record => |e| {
+            const a = actual.e_record;
+            try testing.expectEqual(e.fields, a.fields);
+        },
+        .e_list => |e| {
+            const a = actual.e_list;
+            try testing.expectEqual(e.items, a.items);
+        },
+        .e_tuple => |e| {
+            const a = actual.e_tuple;
+            try testing.expectEqual(e.elems, a.elems);
+        },
+        .e_crash => |e| {
+            const a = actual.e_crash;
+            try testing.expectEqual(e.msg, a.msg);
+        },
+        .e_function_ref => |e| {
+            const a = actual.e_function_ref;
+            try testing.expectEqual(e.def_var, a.def_var);
+        },
+        .e_nominal_unwrap => |e| {
+            const a = actual.e_nominal_unwrap;
+            try testing.expectEqual(e.nominal_type_decl, a.nominal_type_decl);
+            try testing.expectEqual(e.backing_expr, a.backing_expr);
+        },
+        .e_dot_access => |e| {
+            const a = actual.e_dot_access;
+            try testing.expectEqual(e.receiver, a.receiver);
+            try testing.expect(e.field_name.eql(a.field_name));
+            try testing.expectEqual(e.args, a.args);
+        },
+        .e_runtime_error => |e| {
+            const a = actual.e_runtime_error;
+            try testing.expectEqual(e.diagnostic, a.diagnostic);
+        },
+    }
+}
+
+fn expectEqualPatterns(expected: ModuleEnv.Pattern, actual: ModuleEnv.Pattern) !void {
+    try testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
+
+    switch (expected) {
+        .assign => |expected_assign| {
+            const actual_assign = actual.assign;
+            try testing.expect(expected_assign.ident.eql(actual_assign.ident));
+        },
+        .as => |expected_as| {
+            const actual_as = actual.as;
+            try testing.expectEqual(expected_as.pattern, actual_as.pattern);
+            try testing.expect(expected_as.ident.eql(actual_as.ident));
+        },
+        .applied_tag => |expected_tag| {
+            const actual_tag = actual.applied_tag;
+            try testing.expect(expected_tag.name.eql(actual_tag.name));
+            try testing.expectEqual(expected_tag.args.span, actual_tag.args.span);
+        },
+        .record_destructure => |expected_record| {
+            const actual_record = actual.record_destructure;
+            try testing.expectEqual(expected_record.whole_var, actual_record.whole_var);
+            try testing.expectEqual(expected_record.ext_var, actual_record.ext_var);
+            try testing.expectEqual(expected_record.destructs.span, actual_record.destructs.span);
+        },
+        .tuple_destructure => |expected_tuple| {
+            const actual_tuple = actual.tuple_destructure;
+            try testing.expectEqual(expected_tuple.destructs.span, actual_tuple.destructs.span);
+            try testing.expectEqual(expected_tuple.ext_var, actual_tuple.ext_var);
+        },
+        .list => |expected_list| {
+            const actual_list = actual.list;
+            try testing.expectEqual(expected_list.list_patterns.span, actual_list.list_patterns.span);
+            try testing.expectEqual(expected_list.pattern_after, actual_list.pattern_after);
+        },
+        .num_literal => |expected_num| {
+            const actual_num = actual.num_literal;
+            try testing.expectEqual(expected_num.int_val, actual_num.int_val);
+        },
+        .int_literal => |expected_int| {
+            const actual_int = actual.int_literal;
+            try testing.expectEqual(expected_int.int_val, actual_int.int_val);
+        },
+        .str_literal => |expected_str| {
+            const actual_str = actual.str_literal;
+            try testing.expectEqual(expected_str, actual_str);
+        },
+        .char_literal => |expected_char| {
+            const actual_char = actual.char_literal;
+            try testing.expectEqual(expected_char, actual_char);
+        },
+        .underscore => {
+            // No fields to compare
+        },
+        .tag => |expected_tag_name| {
+            const actual_tag_name = actual.tag;
+            try testing.expect(expected_tag_name.eql(actual_tag_name));
+        },
+        .nominal => |expected_nominal| {
+            const actual_nominal = actual.nominal;
+            try testing.expectEqual(expected_nominal.nominal_type_decl, actual_nominal.nominal_type_decl);
+            try testing.expectEqual(expected_nominal.backing_pattern, actual_nominal.backing_pattern);
+            try testing.expectEqual(expected_nominal.backing_type, actual_nominal.backing_type);
+        },
+        .tuple => |expected_tuple_pat| {
+            const actual_tuple_pat = actual.tuple;
+            try testing.expectEqual(expected_tuple_pat.destructs.span, actual_tuple_pat.destructs.span);
+            try testing.expectEqual(expected_tuple_pat.ext_var, actual_tuple_pat.ext_var);
+        },
+        .small_dec_literal => |expected_small_dec| {
+            const actual_small_dec = actual.small_dec_literal;
+            try testing.expectEqual(expected_small_dec.int_sign, actual_small_dec.int_sign);
+            try testing.expectEqual(expected_small_dec.dec_val, actual_small_dec.dec_val);
+        },
+        .dec_literal => |expected_dec| {
+            const actual_dec = actual.dec_literal;
+            try testing.expectEqual(expected_dec.int_sign, actual_dec.int_sign);
+            try testing.expectEqual(expected_dec.dec_val, actual_dec.dec_val);
+        },
+        .runtime_error => |expected_error| {
+            const actual_error = actual.runtime_error;
+            try testing.expectEqual(expected_error.diagnostic, actual_error.diagnostic);
+        },
+    }
+}
+
+fn expectEqualTypeAnno(expected: ModuleEnv.TypeAnno, actual: ModuleEnv.TypeAnno) !void {
+    try testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
+
+    switch (expected) {
+        .apply => |expected_apply| {
+            const actual_apply = actual.apply;
+            try testing.expect(expected_apply.symbol.eql(actual_apply.symbol));
+            // args is a TypeAnno.Span, compare the spans
+            try testing.expectEqual(expected_apply.args.span, actual_apply.args.span);
+        },
+        .ty_var => |expected_tv| {
+            const actual_tv = actual.ty_var;
+            try testing.expect(expected_tv.name.eql(actual_tv.name));
+        },
+        .underscore => {
+            // No fields to compare
+        },
+        .ty => |expected_ty| {
+            const actual_ty = actual.ty;
+            try testing.expect(expected_ty.symbol.eql(actual_ty.symbol));
+        },
+        .tag_union => |expected_tu| {
+            const actual_tu = actual.tag_union;
+            // tags is a TypeAnno.Span
+            try testing.expectEqual(expected_tu.tags.span, actual_tu.tags.span);
+            // ext is optional TypeAnno.Idx
+            if (expected_tu.ext) |expected_ext| {
+                try testing.expect(actual_tu.ext != null);
+                try testing.expectEqual(expected_ext, actual_tu.ext.?);
+            } else {
+                try testing.expect(actual_tu.ext == null);
+            }
+        },
+        .tuple => |expected_tuple| {
+            const actual_tuple = actual.tuple;
+            // elems is a TypeAnno.Span
+            try testing.expectEqual(expected_tuple.elems.span, actual_tuple.elems.span);
+        },
+        .record => |expected_record| {
+            const actual_record = actual.record;
+            // fields is a RecordField.Span
+            try testing.expectEqual(expected_record.fields.span, actual_record.fields.span);
+        },
+        .@"fn" => |expected_fn| {
+            const actual_fn = actual.@"fn";
+            // args is a TypeAnno.Span
+            try testing.expectEqual(expected_fn.args.span, actual_fn.args.span);
+            // ret is a TypeAnno.Idx
+            try testing.expectEqual(expected_fn.ret, actual_fn.ret);
+            // effectful is a bool
+            try testing.expectEqual(expected_fn.effectful, actual_fn.effectful);
+        },
+        .parens => |expected_parens| {
+            const actual_parens = actual.parens;
+            // anno is a TypeAnno.Idx
+            try testing.expectEqual(expected_parens.anno, actual_parens.anno);
+        },
+        .ty_lookup_external => |expected_lookup| {
+            const actual_lookup = actual.ty_lookup_external;
+            // external_decl is a ModuleEnv.ExternalDecl.Idx
+            try testing.expectEqual(expected_lookup.external_decl, actual_lookup.external_decl);
+        },
+        .malformed => |expected_malformed| {
+            const actual_malformed = actual.malformed;
+            // diagnostic is a Diagnostic.Idx
+            try testing.expectEqual(expected_malformed.diagnostic, actual_malformed.diagnostic);
+        },
+    }
+}
+
+fn expectEqualTypeAnnos(expected: []const ModuleEnv.TypeAnno, actual: []const ModuleEnv.TypeAnno) !void {
+    try testing.expectEqual(expected.len, actual.len);
+    for (expected, actual) |expected_item, actual_item| {
+        try expectEqualTypeAnno(expected_item, actual_item);
+    }
 }
 
 /// Helper to create a `DataSpan` from raw start and length positions.
@@ -157,11 +657,7 @@ test "NodeStore round trip - Statements" {
         const idx = try store.addStatement(stmt, region);
         const retrieved = store.getStatement(idx);
 
-        testing.expectEqualDeep(stmt, retrieved) catch |err| {
-            std.debug.print("\n\nOriginal:  {any}\n\n", .{stmt});
-            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
-            return err;
-        };
+        try expectEqualStatements(stmt, retrieved);
     }
 
     const actual_test_count = statements.items.len;
@@ -352,11 +848,7 @@ test "NodeStore round trip - Expressions" {
         const idx = try store.addExpr(expr, region);
         const retrieved = store.getExpr(idx);
 
-        testing.expectEqualDeep(expr, retrieved) catch |err| {
-            std.debug.print("\n\nOriginal:  {any}\n\n", .{expr});
-            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
-            return err;
-        };
+        try expectEqualExpressions(expr, retrieved);
     }
 
     const actual_test_count = expressions.items.len;
@@ -686,11 +1178,7 @@ test "NodeStore round trip - Diagnostics" {
         const idx = try store.addDiagnostic(diagnostic);
         const retrieved = store.getDiagnostic(idx);
 
-        testing.expectEqualDeep(diagnostic, retrieved) catch |err| {
-            std.debug.print("\n\nOriginal:  {any}\n\n", .{diagnostic});
-            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
-            return err;
-        };
+        try expectEqualDiagnostics(diagnostic, retrieved);
     }
 
     const actual_test_count = diagnostics.items.len;
@@ -796,7 +1284,7 @@ test "NodeStore round trip - TypeAnno" {
         const idx = try store.addTypeAnno(type_anno, region);
         const retrieved = store.getTypeAnno(idx);
 
-        testing.expectEqualDeep(type_anno, retrieved) catch |err| {
+        expectEqualTypeAnno(type_anno, retrieved) catch |err| {
             std.debug.print("\n\nOriginal:  {any}\n\n", .{type_anno});
             std.debug.print("Retrieved: {any}\n\n", .{retrieved});
             return err;
@@ -906,11 +1394,7 @@ test "NodeStore round trip - Pattern" {
         const idx = try store.addPattern(pattern, region);
         const retrieved = store.getPattern(idx);
 
-        testing.expectEqualDeep(pattern, retrieved) catch |err| {
-            std.debug.print("\n\nOriginal:  {any}\n\n", .{pattern});
-            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
-            return err;
-        };
+        try expectEqualPatterns(pattern, retrieved);
 
         // Also verify the region was stored correctly
         const stored_region = store.getRegionAt(@enumFromInt(@intFromEnum(idx)));

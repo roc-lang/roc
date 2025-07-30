@@ -32,6 +32,14 @@ pub const Token = struct {
         ident: base.Ident.Idx,
         starts_with_underscore: bool,
         ends_with_underscore: bool,
+
+        /// Compare two IdentWithFlags values for equality
+        pub fn eql(self: @This(), other: @This()) bool {
+            // Use the custom eql method for Ident.Idx comparison
+            return self.ident.eql(other.ident) and 
+                   self.starts_with_underscore == other.starts_with_underscore and
+                   self.ends_with_underscore == other.ends_with_underscore;
+        }
     };
 
     pub const List = std.MultiArrayList(@This());

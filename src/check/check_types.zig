@@ -670,7 +670,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                     const field_names = record_fields.items(.name);
                     const field_vars = record_fields.items(.var_);
                     for (field_names, field_vars) |type_field_name, type_field_var| {
-                        if (type_field_name.idx == field.name.idx) {
+                        if (type_field_name.getIdx() == field.name.getIdx()) {
                             // Extract the type variable from the field value expression
                             // Different expression types store their type variables in different places
                             const field_expr_type_var = @as(Var, @enumFromInt(@intFromEnum(field.value)));
@@ -1914,8 +1914,8 @@ test "call site unification order matters for concrete vs flexible types" {
     // After failed unification, both variables become error types
     const concrete_after_fail = module_env.types.resolveVar(concrete_func_var);
     const expected_after_fail = module_env.types.resolveVar(expected_func_var);
-    try std.testing.expectEqual(types_mod.Content.err, concrete_after_fail.desc.content);
-    try std.testing.expectEqual(types_mod.Content.err, expected_after_fail.desc.content);
+    try std.testing.expectEqual(@as(std.meta.Tag(types_mod.Content), .err), std.meta.activeTag(concrete_after_fail.desc.content));
+    try std.testing.expectEqual(@as(std.meta.Tag(types_mod.Content), .err), std.meta.activeTag(expected_after_fail.desc.content));
 
     // Now simulate a complete type checking scenario for a function call
     // This is what happens when type checking code like: myFunc(1, 2)

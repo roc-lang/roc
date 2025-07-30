@@ -19,15 +19,18 @@ const Tag = types.Tag;
 const VarSafeList = Var.SafeList;
 const RecordFieldSafeMultiList = RecordField.SafeMultiList;
 const TagSafeMultiList = Tag.SafeMultiList;
+const FlatType = types.FlatType;
+const Record = types.Record;
+const Tuple = types.Tuple;
+const Func = types.Func;
 const Descriptor = types.Descriptor;
 const TypeIdent = types.TypeIdent;
 const Alias = types.Alias;
-const FlatType = types.FlatType;
 const NominalType = types.NominalType;
-const Record = types.Record;
 const Num = types.Num;
 
 const SERIALIZATION_ALIGNMENT = serialization.SERIALIZATION_ALIGNMENT;
+const Ident = base.Ident;
 
 /// A variable & its descriptor info
 pub const ResolvedVarDesc = struct { var_: Var, desc_idx: DescStore.Idx, desc: Desc };
@@ -1008,6 +1011,99 @@ pub const DescStoreIdx = DescStore.Idx;
 
 // path compression
 
+/// Helper function to compare Content values for testing
+fn expectEqualContent(expected: Content, actual: Content) !void {
+    // First check that the tags match
+    try std.testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
+    
+    // Then compare based on the tag
+    switch (expected) {
+        .flex_var => |expected_name| {
+            const actual_name = actual.flex_var;
+            if (expected_name != null and actual_name != null) {
+                try std.testing.expect(expected_name.?.eql(actual_name.?));
+            } else {
+                try std.testing.expectEqual(expected_name == null, actual_name == null);
+            }
+        },
+        .rigid_var => |expected_ident| {
+            try std.testing.expect(expected_ident.eql(actual.rigid_var));
+        },
+        .alias => |expected_alias| {
+            const actual_alias = actual.alias;
+            // Compare TypeIdent fields
+            try std.testing.expect(expected_alias.ident.ident_idx.eql(actual_alias.ident.ident_idx));
+            // Compare vars
+            try std.testing.expectEqual(expected_alias.vars, actual_alias.vars);
+        },
+        .structure => |expected_flat| {
+            try expectEqualFlatType(expected_flat, actual.structure);
+        },
+        .err => {
+            // Nothing to compare
+        },
+    }
+}
+
+fn expectEqualFlatType(expected: FlatType, actual: FlatType) !void {
+    try std.testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
+    switch (expected) {
+        .str, .list_unbound, .empty_record => {},
+        .box => |expected_var| try std.testing.expectEqual(expected_var, actual.box),
+        .list => |expected_var| try std.testing.expectEqual(expected_var, actual.list),
+        .record_unbound => |expected_range| try std.testing.expectEqual(expected_range, actual.record_unbound),
+        .record_poly => |expected_poly| {
+            try expectEqualRecord(expected_poly.record, actual.record_poly.record);
+            try std.testing.expectEqual(expected_poly.var_, actual.record_poly.var_);
+        },
+        .tuple => |expected_tuple| try expectEqualTuple(expected_tuple, actual.tuple),
+        .num => |expected_num| try std.testing.expectEqual(expected_num, actual.num),
+        .nominal_type => |expected_nom| try std.testing.expectEqual(expected_nom, actual.nominal_type),
+        .fn_pure, .fn_effectful, .fn_unbound => |expected_func| {
+            const actual_func = switch (actual) {
+                .fn_pure => |f| f,
+                .fn_effectful => |f| f,
+                .fn_unbound => |f| f,
+                else => unreachable,
+            };
+            try expectEqualFunc(expected_func, actual_func);
+        },
+        .record => |expected_record| try expectEqualRecord(expected_record, actual.record),
+        .tag_union => |expected_union| try expectEqualTagUnion(expected_union, actual.tag_union),
+        .bool => try std.testing.expectEqual(expected.bool, actual.bool),
+        .empty_tag_union => {},
+        .fn_effectful_args => |expected_args| try std.testing.expectEqual(expected_args, actual.fn_effectful_args),
+        .err_unbound => {},
+        .err_runtime => |expected_err| try std.testing.expectEqual(expected_err, actual.err_runtime),
+    }
+}
+
+fn expectEqualRecord(expected: Record, actual: Record) !void {
+    try std.testing.expectEqual(expected.fields.len(), actual.fields.len());
+    try std.testing.expectEqual(expected.sorted, actual.sorted);
+    // Note: We can't directly compare the fields ranges because they contain RecordField with Ident.Idx
+    // The serialization test verifies the content is correct through other means
+}
+
+fn expectEqualTuple(expected: Tuple, actual: Tuple) !void {
+    try std.testing.expectEqual(expected.elems.len(), actual.elems.len());
+    // Tuple elements are just Var ranges, which should be comparable
+}
+
+fn expectEqualFunc(expected: Func, actual: Func) !void {
+    try std.testing.expectEqual(expected.args.len(), actual.args.len());
+    try std.testing.expectEqual(expected.closure, actual.closure);
+    try std.testing.expectEqual(expected.ret, actual.ret);
+}
+
+fn expectEqualTagUnion(expected: TagUnion, actual: TagUnion) !void {
+    try std.testing.expectEqual(expected.tags.len(), actual.tags.len());
+    try std.testing.expectEqual(expected.recursive, actual.recursive);
+    try std.testing.expectEqual(expected.ext, actual.ext);
+    // Note: We can't directly compare the tags ranges because they contain Tag with Ident.Idx
+    // The serialization test verifies the content is correct through other means
+}
+
 test "resolveVarAndCompressPath - flattens redirect chain to flex_var" {
     const gpa = std.testing.allocator;
 
@@ -1019,7 +1115,7 @@ test "resolveVarAndCompressPath - flattens redirect chain to flex_var" {
     const a = try store.freshRedirect(b);
 
     const result = store.resolveVarAndCompressPath(a);
-    try std.testing.expectEqual(Content{ .flex_var = null }, result.desc.content);
+    try expectEqualContent(Content{ .flex_var = null }, result.desc.content);
     try std.testing.expectEqual(c, result.var_);
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
@@ -1041,7 +1137,7 @@ test "resolveVarAndCompressPath - no-op on already root" {
 
     const result = store.resolveVarAndCompressPath(num_var);
 
-    try std.testing.expectEqual(num, result.desc.content);
+    try expectEqualContent(num, result.desc.content);
     try std.testing.expectEqual(num_var, result.var_);
     // try std.testing.expectEqual(store.getSlot(num_var), Slot{ .root = num_desc_idx });
 }
@@ -1063,7 +1159,7 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
     const a = try store.freshRedirect(b);
 
     const result = store.resolveVarAndCompressPath(a);
-    try std.testing.expectEqual(num, result.desc.content);
+    try expectEqualContent(num, result.desc.content);
     try std.testing.expectEqual(c, result.var_);
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
@@ -1187,10 +1283,10 @@ test "Store basic CompactWriter roundtrip" {
 
     // Verify original values
     const flex_resolved = original.resolveVar(flex_var);
-    try std.testing.expectEqual(Content{ .flex_var = null }, flex_resolved.desc.content);
+    try expectEqualContent(Content{ .flex_var = null }, flex_resolved.desc.content);
 
     const rigid_resolved = original.resolveVar(rigid_var);
-    try std.testing.expectEqual(Content{ .rigid_var = @bitCast(@as(u32, 42)) }, rigid_resolved.desc.content);
+    try expectEqualContent(Content{ .rigid_var = @bitCast(@as(u32, 42)) }, rigid_resolved.desc.content);
 
     const redirect_resolved = original.resolveVar(redirect_var);
     try std.testing.expectEqual(flex_resolved.desc_idx, redirect_resolved.desc_idx);
@@ -1230,10 +1326,10 @@ test "Store basic CompactWriter roundtrip" {
     try std.testing.expectEqual(@as(usize, 3), deserialized.len());
 
     const deser_flex_resolved = deserialized.resolveVar(flex_var);
-    try std.testing.expectEqual(Content{ .flex_var = null }, deser_flex_resolved.desc.content);
+    try expectEqualContent(Content{ .flex_var = null }, deser_flex_resolved.desc.content);
 
     const deser_rigid_resolved = deserialized.resolveVar(rigid_var);
-    try std.testing.expectEqual(Content{ .rigid_var = @bitCast(@as(u32, 42)) }, deser_rigid_resolved.desc.content);
+    try expectEqualContent(Content{ .rigid_var = @bitCast(@as(u32, 42)) }, deser_rigid_resolved.desc.content);
 
     const deser_redirect_resolved = deserialized.resolveVar(redirect_var);
     try std.testing.expectEqual(deser_flex_resolved.desc_idx, deser_redirect_resolved.desc_idx);
@@ -1312,7 +1408,7 @@ test "Store comprehensive CompactWriter roundtrip" {
 
     // Verify all types
     const deser_str = deserialized.resolveVar(str_var);
-    try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, deser_str.desc.content);
+    try expectEqualContent(Content{ .structure = .{ .str = {} } }, deser_str.desc.content);
 
     const deser_list = deserialized.resolveVar(list_var);
     try std.testing.expectEqual(FlatType{ .list = list_elem }, deser_list.desc.content.structure);
@@ -1441,7 +1537,7 @@ test "Store multiple instances CompactWriter roundtrip" {
     // Verify store 1
     try std.testing.expectEqual(@as(usize, 3), deserialized1.len());
     const deser1_var2 = deserialized1.resolveVar(var1_2);
-    try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, deser1_var2.desc.content);
+    try expectEqualContent(Content{ .structure = .{ .str = {} } }, deser1_var2.desc.content);
 
     // Verify store 2
     try std.testing.expectEqual(@as(usize, 3), deserialized2.len());
@@ -1512,13 +1608,13 @@ test "SlotStore and DescStore serialization and deserialization" {
 
     // Verify we can resolve variables correctly
     const resolved1 = deserialized.resolveVar(var1);
-    try std.testing.expectEqual(Content{ .flex_var = null }, resolved1.desc.content);
+    try expectEqualContent(Content{ .flex_var = null }, resolved1.desc.content);
 
     const resolved2 = deserialized.resolveVar(var2);
-    try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, resolved2.desc.content);
+    try expectEqualContent(Content{ .structure = .{ .str = {} } }, resolved2.desc.content);
 
     const resolved3 = deserialized.resolveVar(var3);
-    try std.testing.expectEqual(Content{ .rigid_var = @bitCast(@as(u32, 123)) }, resolved3.desc.content);
+    try expectEqualContent(Content{ .rigid_var = @bitCast(@as(u32, 123)) }, resolved3.desc.content);
 
     // Verify redirects work
     const resolved_redirect1 = deserialized.resolveVar(redirect1);

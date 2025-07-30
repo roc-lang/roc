@@ -593,6 +593,12 @@ pub const RecordField = struct {
         return std.mem.order(u8, a_text, b_text);
     }
 
+    /// Compare two RecordField values for equality
+    pub fn eql(self: Self, other: Self) bool {
+        // Use the custom eql method for Ident.Idx comparison
+        return self.name.eql(other.name) and self.var_ == other.var_;
+    }
+
     /// A safe multi list of record fields
     pub const SafeMultiList = MkSafeMultiList(Self);
 
@@ -640,6 +646,15 @@ pub const Tag = struct {
         const a_text = store.getText(a.name);
         const b_text = store.getText(b.name);
         return std.mem.order(u8, a_text, b_text);
+    }
+
+    /// Compare two Tag values for equality
+    pub fn eql(self: Self, other: Self) bool {
+        // Use the custom eql method for Ident.Idx comparison
+        // Also need to compare the args ranges
+        return self.name.eql(other.name) and 
+               self.args.start == other.args.start and 
+               self.args.count == other.args.count;
     }
 
     /// A safe list of tags

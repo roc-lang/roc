@@ -642,7 +642,15 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
         undefined,
         backing_var,
         &.{},
-        Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        Ident.Idx{ 
+            .is_small = false,
+            .data = .{
+                .big = .{
+                    .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, 
+                    .idx = 0,
+                },
+            },
+        },
     ));
 
     // assert that starting from the nominal type, it works
@@ -707,7 +715,15 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
         undefined,
         type_b_backing,
         &.{},
-        Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        Ident.Idx{ 
+            .is_small = false,
+            .data = .{
+                .big = .{
+                    .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, 
+                    .idx = 0,
+                },
+            },
+        },
     ));
 
     // Set up TypeA = Type B
@@ -715,7 +731,15 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
         undefined,
         type_b_nominal,
         &.{},
-        Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        Ident.Idx{ 
+            .is_small = false,
+            .data = .{
+                .big = .{
+                    .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, 
+                    .idx = 0,
+                },
+            },
+        },
     ));
 
     // assert that starting from the `TypeA` nominal, it works

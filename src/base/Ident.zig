@@ -71,10 +71,25 @@ pub const Idx = packed struct(u32) {
 
     pub fn attributes(self: *const @This()) Attributes {
         if (self.is_small) {
-            return self.small.attributes();
+            const small = self.data.small;
+            return small.attributes();
         } else {
-            return self.big.attributes;
+            return self.data.big.attributes;
         }
+    }
+    
+    pub fn getIdx(self: *const @This()) u28 {
+        if (self.is_small) {
+            // Small identifiers don't have a real index in the store
+            return 0;
+        } else {
+            return self.data.big.idx;
+        }
+    }
+
+    pub fn eql(self: Idx, other: Idx) bool {
+        // Since Idx is a packed struct(u32), we can compare the bit representation directly
+        return @as(u32, @bitCast(self)) == @as(u32, @bitCast(other));
     }
 
     /// Given a nonempty ident string that does not start with a digit, try to construct an inline Idx.
@@ -219,8 +234,13 @@ pub const Store = struct {
         const idx = try self.interner.insert(gpa, ident.raw_text);
 
         return Idx{
-            .attributes = ident.attributes,
-            .idx = @as(u29, @intCast(@intFromEnum(idx))),
+            .is_small = false,
+            .data = .{
+                .big = .{
+                    .attributes = ident.attributes,
+                    .idx = @as(u28, @intCast(@intFromEnum(idx))),
+                },
+            },
         };
     }
 
@@ -268,7 +288,7 @@ pub const Store = struct {
 
     /// Get the text for an identifier.
     pub fn getText(self: *const Store, idx: Idx) []u8 {
-        return self.interner.getText(@enumFromInt(@as(u32, idx.idx)));
+        return self.interner.getText(@enumFromInt(@as(u32, idx.getIdx())));
     }
 
     /// Check if an identifier text already exists in the store.
@@ -285,8 +305,13 @@ pub const Store = struct {
 
         // Create an Idx with inferred attributes from the text
         return Idx{
-            .attributes = Attributes.fromString(text),
-            .idx = @as(u29, @intCast(@intFromEnum(interner_idx))),
+            .is_small = false,
+            .data = .{
+                .big = .{
+                    .attributes = Attributes.fromString(text),
+                    .idx = @as(u28, @intCast(@intFromEnum(interner_idx))),
+                },
+            },
         };
     }
 
@@ -724,7 +749,7 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
         const ident = Ident.for_text(test_ident.text);
         const idx = try original.insert(gpa, ident);
         try indices.append(idx);
-        try testing.expectEqual(test_ident.expected_idx, idx.idx);
+        try testing.expectEqual(test_ident.expected_idx, idx.getIdx());
     }
 
     // Add some unique names

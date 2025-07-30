@@ -2046,15 +2046,10 @@ fn moduleFmtsSame(source: []const u8) !void {
     var env = try ModuleEnv.init(gpa, try gpa.dupe(u8, source));
     defer env.deinit();
 
-    var parse_ast = parse(&env, source);
+    var parse_ast = try parse.parse(&env);
     defer parse_ast.deinit(gpa);
 
-    // @Anthony / @Josh shouldn't these be added to the ModuleEnv (env) so they are in the arena
-    // and then they are cleaned up when the arena is deinitialized at the end of program compilation
-    // or included in the cached build
-    defer gpa.free(parse_ast.errors);
-
-    if (parse_ast.errors.len > 0) {
+    if (parse_ast.parse_diagnostics.items.len > 0) {
         try printParseErrors(gpa, source, parse_ast);
         std.debug.panic("Test failed with parse errors", .{});
     }
@@ -2072,33 +2067,36 @@ fn exprFmtsSame(source: []const u8, flags: FormatFlags) !void {
 fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !void {
     const gpa = std.testing.allocator;
 
-    var env = try ModuleEnv.init(gpa, try gpa.dupe(u8, source));
+    const env = try gpa.create(ModuleEnv);
+    env.* = try ModuleEnv.init(gpa, try gpa.dupe(u8, source));
     defer env.deinit();
+    defer gpa.destroy(env);
 
     var messages: [1]tokenize.Diagnostic = undefined;
     const msg_slice = messages[0..];
 
-    var tokenizer_ = tokenize.Tokenizer.init(&env, source, msg_slice);
+    var tokenizer_ = tokenize.Tokenizer.init(env, source, msg_slice);
     tokenizer_.tokenize();
     const result = tokenizer_.finishAndDeinit();
 
     var parser = Parser.init(result.tokens);
     defer parser.deinit();
 
-    const expr = parser.parseExpr();
+    const expr = try parser.parseExpr();
 
     const errors = try parser.diagnostics.toOwnedSlice(gpa);
 
     var parse_ast = AST{
-        .source = source,
+        .env = env,
         .tokens = result.tokens,
         .store = parser.store,
-        .errors = errors,
+        .root_node_idx = @intFromEnum(expr),
+        .tokenize_diagnostics = .{},
+        .parse_diagnostics = std.ArrayListUnmanaged(AST.Diagnostic).fromOwnedSlice(errors),
     };
     defer parse_ast.deinit(std.testing.allocator);
-    defer std.testing.allocator.free(parse_ast.errors);
 
-    std.testing.expectEqualSlices(AST.Diagnostic, &[_]AST.Diagnostic{}, parse_ast.errors) catch {
+    std.testing.expectEqualSlices(AST.Diagnostic, &[_]AST.Diagnostic{}, parse_ast.parse_diagnostics.items) catch {
         std.debug.print("Tokens:\n{any}", .{result.tokens.tokens.items(.tag)});
         std.debug.panic("Test failed with parse errors", .{});
     };

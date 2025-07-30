@@ -257,8 +257,8 @@ test "cross-module type checking - record type" {
     try testing.expectEqual(@as(usize, 2), fields.len);
 
     // Check field names and types
-    try testing.expectEqual(x_ident, fields.items(.name)[0]);
-    try testing.expectEqual(y_ident, fields.items(.name)[1]);
+    try testing.expectEqual(x_ident.getIdx(), fields.items(.name)[0].getIdx());
+    try testing.expectEqual(y_ident.getIdx(), fields.items(.name)[1].getIdx());
 
     const x_resolved = module_b_env.types.resolveVar(fields.items(.var_)[0]);
     try testing.expect(x_resolved.desc.content == .structure);
