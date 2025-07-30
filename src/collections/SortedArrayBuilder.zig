@@ -293,6 +293,62 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
 
             return struct_offset;
         }
+
+        /// Serialized representation of a SortedArrayBuilder
+        pub const Serialized = struct {
+            entries_offset: u64,
+            entries_len: u64,
+            entries_capacity: u64,
+            sorted: bool,
+
+            /// Serialize a SortedArrayBuilder into this Serialized struct, appending data to the writer
+            pub fn serialize(
+                self: *Serialized,
+                builder: *const Self,
+                allocator: Allocator,
+                writer: anytype,
+            ) Allocator.Error!void {
+                // Must be sorted before serialization
+                if (!builder.sorted) {
+                    @panic("SortedArrayBuilder must be sorted before serialization");
+                }
+
+                const items = builder.entries.items;
+                // Append the slice data first
+                const slice_ptr = try writer.appendSlice(allocator, items);
+                // Store the offset, len, and capacity
+                self.entries_offset = @intFromPtr(slice_ptr.ptr);
+                self.entries_len = items.len;
+                self.entries_capacity = items.len;
+                self.sorted = builder.sorted;
+            }
+
+            /// Deserialize this Serialized struct into a SortedArrayBuilder
+            pub fn deserialize(self: *Serialized, offset: i64) *Self {
+                // Debug assert that Serialized is at least as big as Self
+                std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Self));
+
+                // Apply the offset to convert from serialized offset to actual pointer
+                const adjusted_offset: u64 = if (offset >= 0)
+                    self.entries_offset + @as(u64, @intCast(offset))
+                else
+                    self.entries_offset - @as(u64, @intCast(-offset));
+
+                const entries_ptr = @as([*]Entry, @ptrFromInt(adjusted_offset));
+                
+                // Cast self to Self pointer and construct the SortedArrayBuilder in place
+                const builder_ptr = @as(*Self, @ptrCast(self));
+                builder_ptr.* = .{
+                    .entries = .{
+                        .items = entries_ptr[0..self.entries_len],
+                        .capacity = self.entries_capacity,
+                    },
+                    .sorted = self.sorted,
+                };
+
+                return builder_ptr;
+            }
+        };
     };
 }
 
@@ -466,4 +522,68 @@ test "SortedArrayBuilder no duplicates case" {
     try testing.expectEqual(@as(?u16, 1), builder.get(allocator, "unique1"));
     try testing.expectEqual(@as(?u16, 2), builder.get(allocator, "unique2"));
     try testing.expectEqual(@as(?u16, 3), builder.get(allocator, "unique3"));
+}
+
+test "SortedArrayBuilder.Serialized roundtrip" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    const CompactWriter = serialization.CompactWriter;
+
+    // Create a builder with numeric keys (simpler for testing)
+    var original = SortedArrayBuilder(u32, u64).init();
+    defer original.deinit(allocator);
+
+    // Add items in random order
+    try original.put(allocator, 100, 1000);
+    try original.put(allocator, 50, 500);
+    try original.put(allocator, 200, 2000);
+    try original.put(allocator, 25, 250);
+
+    // Ensure sorted before serialization
+    original.ensureSorted(allocator);
+
+    // Create a CompactWriter and arena
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_file = try tmp_dir.dir.createFile("test.compact", .{ .read = true });
+    defer tmp_file.close();
+
+    var writer = CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(arena_alloc);
+
+    // Allocate and serialize using the Serialized struct
+    const Builder = SortedArrayBuilder(u32, u64);
+    const serialized_ptr = try writer.appendAlloc(arena_alloc, Builder.Serialized);
+    try serialized_ptr.serialize(&original, arena_alloc, &writer);
+
+    // Write to file
+    try writer.writeGather(arena_alloc, tmp_file);
+
+    // Read back
+    const file_size = try tmp_file.getEndPos();
+    const buffer = try allocator.alloc(u8, file_size);
+    defer allocator.free(buffer);
+    _ = try tmp_file.pread(buffer, 0);
+
+    // Deserialize
+    const deserialized_ptr = @as(*Builder.Serialized, @ptrCast(@alignCast(buffer.ptr)));
+    const builder = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify count and sorted state
+    try testing.expectEqual(@as(usize, 4), builder.count());
+    try testing.expect(builder.sorted);
+
+    // Verify all values are accessible
+    try testing.expectEqual(@as(?u64, 250), builder.get(allocator, 25));
+    try testing.expectEqual(@as(?u64, 500), builder.get(allocator, 50));
+    try testing.expectEqual(@as(?u64, 1000), builder.get(allocator, 100));
+    try testing.expectEqual(@as(?u64, 2000), builder.get(allocator, 200));
+    try testing.expectEqual(@as(?u64, null), builder.get(allocator, 999));
 }

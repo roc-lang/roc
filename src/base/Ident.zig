@@ -9,6 +9,7 @@ const std = @import("std");
 const mod = @import("mod.zig");
 const Region = @import("Region.zig");
 const serialization = @import("serialization");
+const CompactWriter = serialization.CompactWriter;
 const collections = @import("collections");
 
 const SmallStringInterner = mod.SmallStringInterner;
@@ -105,7 +106,7 @@ pub const Store = struct {
             self: *Serialized,
             store: *const Store,
             allocator: std.mem.Allocator,
-            writer: *collections.CompactWriter,
+            writer: *CompactWriter,
         ) std.mem.Allocator.Error!void {
             // Serialize the interner
             self.interner = (try store.interner.serialize(allocator, writer)).*;

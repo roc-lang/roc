@@ -248,6 +248,43 @@ pub const ExposedItems = struct {
     pub fn iterator(self: *const Self) Iterator {
         return .{ .items = self.items.entries.items, .index = 0 };
     }
+
+    /// Serialized representation of ExposedItems
+    pub const Serialized = struct {
+        items: SortedArrayBuilder(IdentIdx, u16).Serialized,
+
+        /// Serialize an ExposedItems into this Serialized struct, appending data to the writer
+        pub fn serialize(
+            self: *Serialized,
+            exposed: *const ExposedItems,
+            allocator: Allocator,
+            writer: *CompactWriter,
+        ) Allocator.Error!void {
+            // Items must be sorted and deduplicated before serialization
+            std.debug.assert(exposed.items.sorted);
+            std.debug.assert(exposed.items.isDeduplicated());
+
+            // Delegate to the SortedArrayBuilder's Serialized
+            try self.items.serialize(&exposed.items, allocator, writer);
+        }
+
+        /// Deserialize this Serialized struct into an ExposedItems
+        pub fn deserialize(self: *Serialized, offset: i64) *ExposedItems {
+            // Debug assert that Serialized is at least as big as ExposedItems
+            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(ExposedItems));
+
+            // Deserialize the SortedArrayBuilder
+            const items_ptr = self.items.deserialize(offset);
+
+            // Cast self to ExposedItems pointer and construct in place
+            const exposed_ptr = @as(*ExposedItems, @ptrCast(self));
+            exposed_ptr.* = .{
+                .items = items_ptr.*,
+            };
+
+            return exposed_ptr;
+        }
+    };
 };
 
 test "ExposedItems basic operations" {
@@ -606,4 +643,69 @@ test "ExposedItems multiple instances CompactWriter roundtrip" {
 
     // Verify exposed3 (empty)
     try testing.expectEqual(@as(usize, 0), deserialized3.count());
+}
+
+test "ExposedItems.Serialized roundtrip" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Create original ExposedItems and add some items
+    var original = ExposedItems.init();
+    defer original.deinit(allocator);
+
+    // Add exposed items with various IDs
+    const id1: IdentIdx = 100;
+    const id2: IdentIdx = 200;
+    const id3: IdentIdx = 300;
+
+    try original.addExposedById(allocator, id1);
+    try original.addExposedById(allocator, id2);
+    try original.addExposedById(allocator, id3);
+
+    // Set node indices
+    try original.setNodeIndexById(allocator, id1, 42);
+    try original.setNodeIndexById(allocator, id2, 84);
+    // id3 left as 0 (exposed but not defined)
+
+    // Ensure sorted before serialization
+    original.ensureSorted(allocator);
+
+    // Create a CompactWriter and arena
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_file = try tmp_dir.dir.createFile("test.compact", .{ .read = true });
+    defer tmp_file.close();
+
+    var writer = CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(arena_alloc);
+
+    // Allocate and serialize using the Serialized struct
+    const serialized_ptr = try writer.appendAlloc(arena_alloc, ExposedItems.Serialized);
+    try serialized_ptr.serialize(&original, arena_alloc, &writer);
+
+    // Write to file
+    try writer.writeGather(arena_alloc, tmp_file);
+
+    // Read back
+    const file_size = try tmp_file.getEndPos();
+    const buffer = try allocator.alloc(u8, file_size);
+    defer allocator.free(buffer);
+    _ = try tmp_file.pread(buffer, 0);
+
+    // Deserialize
+    const deserialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
+    const exposed = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify the items are accessible
+    try testing.expectEqual(@as(usize, 3), exposed.count());
+    try testing.expectEqual(@as(?u16, 42), exposed.getNodeIndexById(allocator, id1));
+    try testing.expectEqual(@as(?u16, 84), exposed.getNodeIndexById(allocator, id2));
+    try testing.expectEqual(@as(?u16, 0), exposed.getNodeIndexById(allocator, id3));
 }

@@ -737,6 +737,66 @@ pub fn SafeMultiList(comptime T: type) type {
             const old_addr: isize = @intCast(@intFromPtr(self.items.bytes));
             self.items.bytes = @ptrFromInt(@as(usize, @intCast(old_addr + offset)));
         }
+
+        /// Serialized representation of a SafeMultiList
+        pub const Serialized = struct {
+            offset: u64,
+            len: u64,
+            capacity: u64,
+
+            /// Serialize a SafeMultiList into this Serialized struct, appending data to the writer
+            pub fn serialize(
+                self: *Serialized,
+                safe_multi_list: *const SafeMultiList(T),
+                allocator: Allocator,
+                writer: *CompactWriter,
+            ) Allocator.Error!void {
+                // Write field data for each field of T
+                const data_offset = if (safe_multi_list.items.len > 0) blk: {
+                    const slice = safe_multi_list.items.slice();
+                    const fields = std.meta.fields(T);
+                    const first_field_offset = writer.total_bytes;
+                    
+                    inline for (fields, 0..) |_, i| {
+                        const field_ptr = slice.items(@as(Field, @enumFromInt(i))).ptr;
+                        _ = try writer.appendSlice(allocator, field_ptr[0..safe_multi_list.items.len]);
+                    }
+                    
+                    break :blk first_field_offset;
+                } else writer.total_bytes;
+
+                // Store the offset, len, and capacity
+                self.offset = data_offset;
+                self.len = safe_multi_list.items.len;
+                self.capacity = safe_multi_list.items.len;
+            }
+
+            /// Deserialize this Serialized struct into a SafeMultiList
+            pub fn deserialize(self: *Serialized, offset: i64) *SafeMultiList(T) {
+                // Debug assert that Serialized is at least as big as SafeMultiList
+                std.debug.assert(@sizeOf(Serialized) >= @sizeOf(SafeMultiList(T)));
+
+                // Apply the offset to convert from serialized offset to actual pointer
+                const adjusted_offset: u64 = if (offset >= 0)
+                    self.offset + @as(u64, @intCast(offset))
+                else
+                    self.offset - @as(u64, @intCast(-offset));
+
+                const bytes_ptr = @as([*]align(4) u8, @ptrFromInt(adjusted_offset));
+                
+                // Cast self to SafeMultiList pointer and construct the SafeMultiList in place
+                const multi_list_ptr = @as(*SafeMultiList(T), @ptrCast(self));
+                multi_list_ptr.* = .{
+                    .items = .{
+                        .bytes = bytes_ptr,
+                        .len = self.len,
+                        .capacity = self.capacity,
+                    },
+                };
+
+                return multi_list_ptr;
+            }
+        };
     };
 }
 
@@ -2879,4 +2939,81 @@ test "SafeMultiList empty list serialization framework test" {
     defer empty_list.deinit(gpa);
 
     try serialization.testing.testSerialization(SafeMultiList(TestStruct), &empty_list, gpa);
+}
+
+test "SafeMultiList.Serialized roundtrip" {
+    const gpa = testing.allocator;
+
+    const TestStruct = struct {
+        a: u32,
+        b: f32,
+        c: u8,
+    };
+
+    // Create original list and add some items
+    var original = SafeMultiList(TestStruct){};
+    defer original.deinit(gpa);
+
+    try original.append(gpa, .{ .a = 100, .b = 1.5, .c = 255 });
+    try original.append(gpa, .{ .a = 200, .b = 2.5, .c = 128 });
+    try original.append(gpa, .{ .a = 300, .b = 3.5, .c = 64 });
+
+    // Create a CompactWriter and arena
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_file = try tmp_dir.dir.createFile("test.compact", .{ .read = true });
+    defer tmp_file.close();
+
+    var writer = CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(arena_alloc);
+
+    // Allocate and serialize using the Serialized struct
+    const serialized_ptr = try writer.appendAlloc(arena_alloc, SafeMultiList(TestStruct).Serialized);
+    try serialized_ptr.serialize(&original, arena_alloc, &writer);
+
+    // Write to file
+    try writer.writeGather(arena_alloc, tmp_file);
+
+    // Read back
+    const file_size = try tmp_file.getEndPos();
+    const buffer = try gpa.alloc(u8, file_size);
+    defer gpa.free(buffer);
+    _ = try tmp_file.pread(buffer, 0);
+
+    // Find the Serialized struct at the end of the buffer
+    const serialized_offset = writer.total_bytes - @sizeOf(SafeMultiList(TestStruct).Serialized);
+    const deserialized_ptr = @as(*SafeMultiList(TestStruct).Serialized, @ptrCast(@alignCast(buffer.ptr + serialized_offset)));
+    const list = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify the items are accessible
+    try testing.expectEqual(@as(u32, 3), list.len());
+    
+    // Check field access
+    const a_values = list.field(.a);
+    try testing.expectEqual(@as(u32, 100), a_values[0]);
+    try testing.expectEqual(@as(u32, 200), a_values[1]);
+    try testing.expectEqual(@as(u32, 300), a_values[2]);
+
+    const b_values = list.field(.b);
+    try testing.expectEqual(@as(f32, 1.5), b_values[0]);
+    try testing.expectEqual(@as(f32, 2.5), b_values[1]);
+    try testing.expectEqual(@as(f32, 3.5), b_values[2]);
+
+    const c_values = list.field(.c);
+    try testing.expectEqual(@as(u8, 255), c_values[0]);
+    try testing.expectEqual(@as(u8, 128), c_values[1]);
+    try testing.expectEqual(@as(u8, 64), c_values[2]);
+
+    // Check get() method
+    const item1 = list.get(.{ .zero = 0 });
+    try testing.expectEqual(@as(u32, 100), item1.a);
+    try testing.expectEqual(@as(f32, 1.5), item1.b);
+    try testing.expectEqual(@as(u8, 255), item1.c);
 }

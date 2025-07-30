@@ -7,6 +7,8 @@ const collections = @import("collections");
 const base = @import("base");
 const reporting = @import("reporting");
 const builtins = @import("builtins");
+const serialization = @import("serialization");
+const CompactWriter = serialization.CompactWriter;
 
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
@@ -349,7 +351,7 @@ pub const Import = struct {
         pub fn serialize(
             self: *const Store,
             allocator: std.mem.Allocator,
-            writer: *collections.CompactWriter,
+            writer: *CompactWriter,
         ) std.mem.Allocator.Error!*const Store {
             // First, write the Store struct itself
             const offset_self = try writer.appendAlloc(allocator, Store);
@@ -378,7 +380,7 @@ pub const Import = struct {
                 self: *Serialized,
                 store: *const Store,
                 allocator: std.mem.Allocator,
-                writer: *collections.CompactWriter,
+                writer: *CompactWriter,
             ) std.mem.Allocator.Error!void {
                 // Serialize the imports SafeList
                 try self.imports.serialize(&store.imports, allocator, writer);

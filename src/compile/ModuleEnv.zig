@@ -11,7 +11,9 @@ const collections = @import("collections");
 const base = @import("base");
 const compile = @import("compile");
 
+const serialization = @import("serialization");
 const TypeWriter = types_mod.TypeWriter;
+const CompactWriter = serialization.CompactWriter;
 
 pub const CIR = compile.CIR;
 
@@ -1058,7 +1060,7 @@ pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
 pub fn serialize(
     self: *const Self,
     allocator: std.mem.Allocator,
-    writer: *collections.CompactWriter,
+    writer: *CompactWriter,
 ) std.mem.Allocator.Error!*const Self {
     // First, write the ModuleEnv struct itself
     const offset_self = try writer.appendAlloc(allocator, Self);
@@ -1114,6 +1116,111 @@ pub fn relocate(self: *Self, offset: isize) void {
 
     self.store.relocate(offset);
 }
+
+/// Serialized representation of ModuleEnv
+pub const Serialized = struct {
+    // Note: gpa is not serialized - will be set during deserialization
+    idents: Ident.Store.Serialized,
+    ident_ids_for_slicing: collections.SafeList(Ident.Idx).Serialized,
+    strings: StringLiteral.Store.Serialized,
+    types: types_mod.Store.Serialized,
+    exposed_items: collections.ExposedItems.Serialized,
+    line_starts: collections.SafeList(u32).Serialized,
+    // Note: source is not serialized as offset - will be set during deserialization
+    all_defs: Def.Span,
+    all_statements: Statement.Span,
+    external_decls: ExternalDecl.SafeList.Serialized,
+    imports: Import.Store.Serialized,
+    // Note: module_name is not serialized as offset - will be set during deserialization
+    diagnostics: Diagnostic.Span,
+    store: NodeStore, // NodeStore doesn't use Serialized pattern
+
+    /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
+    pub fn serialize(
+        self: *Serialized,
+        env: *const Self,
+        allocator: std.mem.Allocator,
+        writer: *CompactWriter,
+    ) !void {
+        // Serialize each component using its Serialized struct
+        try self.idents.serialize(&env.idents, allocator, writer);
+        try self.ident_ids_for_slicing.serialize(&env.ident_ids_for_slicing, allocator, writer);
+        try self.strings.serialize(&env.strings, allocator, writer);
+        try self.types.serialize(&env.types, allocator, writer);
+        try self.exposed_items.serialize(&env.exposed_items, allocator, writer);
+        try self.line_starts.serialize(&env.line_starts, allocator, writer);
+        
+        // Copy simple values directly
+        self.all_defs = env.all_defs;
+        self.all_statements = env.all_statements;
+        
+        try self.external_decls.serialize(&env.external_decls, allocator, writer);
+        try self.imports.serialize(&env.imports, allocator, writer);
+        
+        self.diagnostics = env.diagnostics;
+        
+        // Serialize NodeStore using its existing method
+        self.store = (try env.store.serialize(allocator, writer)).*;
+
+        // IMPORTANT: Set gpa field to all zeros as requested
+        // Note: gpa is not part of Serialized struct, it's set during deserialization
+        // std.mem.writeInt(usize, std.mem.asBytes(&self.gpa), 0, .little);
+
+        // Note: Individual fields are already serialized above
+        // _ = try writer.appendSlice(std.mem.asBytes(self));
+    }
+
+    /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
+    pub fn deserialize(
+        self: *Serialized,
+        offset: i64,
+        gpa: std.mem.Allocator,
+        source: []const u8,
+        module_name: []const u8,
+    ) *Self {
+        const env_ptr = @as(*Self, @ptrCast(self));
+
+        // Set the fields that weren't serialized
+        env_ptr.gpa = gpa;
+        env_ptr.source = source;
+        env_ptr.module_name = module_name;
+
+        // Deserialize each component
+        const idents = self.idents.deserialize(offset);
+        const ident_ids_for_slicing = self.ident_ids_for_slicing.deserialize(offset);
+        const strings = self.strings.deserialize(offset);
+        const types = self.types.deserialize(offset);
+        const exposed_items = self.exposed_items.deserialize(offset);
+        const line_starts = self.line_starts.deserialize(offset);
+        const external_decls = self.external_decls.deserialize(offset);
+        const imports = self.imports.deserialize(offset);
+        
+        // Relocate NodeStore
+        var store = self.store;
+        store.relocate(@as(isize, @intCast(offset)));
+
+        // Update the ModuleEnv with the deserialized data
+        env_ptr.* = .{
+            .gpa = gpa,
+            .idents = idents.*,
+            .ident_ids_for_slicing = ident_ids_for_slicing.*,
+            .strings = strings.*,
+            .types = types.*,
+            .exposed_items = exposed_items.*,
+            .line_starts = line_starts.*,
+            .source = source,
+            .all_defs = self.all_defs,
+            .all_statements = self.all_statements,
+            .external_decls = external_decls.*,
+            .imports = imports.*,
+            .module_name = module_name,
+            .diagnostics = self.diagnostics,
+            .store = store,
+        };
+
+        return env_ptr;
+    }
+};
 
 /// Convert a type into a node index
 pub fn nodeIdxFrom(idx: anytype) Node.Idx {
@@ -1394,7 +1501,8 @@ pub fn addMatchBranchPatternAndTypeVar(self: *Self, expr: Expr.Match.BranchPatte
 /// Add a new pattern record field and type variable.
 /// This function asserts that the types array and the nodes are in sync.
 pub fn addPatternRecordFieldAndTypeVar(self: *Self, expr: PatternRecordField, content: types_mod.Content, region: Region) std.mem.Allocator.Error!PatternRecordField.Idx {
-    const expr_idx = try self.store.addPatternRecordField(expr, region);
+    _ = region;
+    const expr_idx = try self.store.addPatternRecordField(expr);
     const expr_var = try self.types.freshFromContent(content);
     debugAssertIdxsEql("addPatternRecordFieldAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
@@ -1474,8 +1582,8 @@ pub fn pushExternalDecls(self: *Self, decls: []const ExternalDecl) std.mem.Alloc
 
 /// Gets a slice of external declarations from a span
 pub fn sliceExternalDecls(self: *const Self, span: ExternalDecl.Span) []const ExternalDecl {
-    const range = ExternalDecl.SafeList.Range{ .start = @enumFromInt(span.span.start), .end = @enumFromInt(span.span.start + span.span.len) };
-    return self.external_decls.rangeToSlice(range);
+    const range = ExternalDecl.SafeList.Range{ .start = @enumFromInt(span.span.start), .count = span.span.len };
+    return self.external_decls.sliceRange(range);
 }
 
 /// Retrieves the text of an identifier by its index
@@ -1936,4 +2044,87 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExpr
 
         try tree.endNode(root_begin, attrs);
     }
+}
+
+
+test "ModuleEnv.Serialized roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create original ModuleEnv with some data
+    var original = try init(gpa);
+    defer original.deinit();
+
+    // Add some test data
+    const hello_idx = try original.idents.insert(gpa, "hello");
+    const world_idx = try original.idents.insert(gpa, "world");
+    try original.ident_ids_for_slicing.append(gpa, hello_idx);
+    try original.ident_ids_for_slicing.append(gpa, world_idx);
+    
+    const str_idx = try original.strings.insert(gpa, "test string");
+    _ = str_idx;
+    
+    try original.exposed_items.addExposedById(gpa, @intFromEnum(hello_idx));
+    try original.exposed_items.setNodeIndexById(gpa, @intFromEnum(hello_idx), 42);
+    original.exposed_items.ensureSorted(gpa);
+    
+    try original.line_starts.append(gpa, 0);
+    try original.line_starts.append(gpa, 10);
+    try original.line_starts.append(gpa, 20);
+    
+    const source = "hello world\ntest line 2\n";
+    original.source = source;
+    original.module_name = "TestModule";
+    
+    // Create a CompactWriter and arena
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_file = try tmp_dir.dir.createFile("test.compact", .{ .read = true });
+    defer tmp_file.close();
+
+    var writer = CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(arena_alloc);
+
+    // Allocate and serialize using the Serialized struct
+    const serialized_ptr = try writer.appendAlloc(arena_alloc, Self.Serialized);
+    try serialized_ptr.serialize(&original, arena_alloc, &writer);
+
+    // Write to file
+    try writer.writeGather(arena_alloc, tmp_file);
+
+    // Read back
+    const file_size = try tmp_file.getEndPos();
+    const buffer = try gpa.alloc(u8, file_size);
+    defer gpa.free(buffer);
+    _ = try tmp_file.pread(buffer, 0);
+
+    // Find the Serialized struct at the end of the buffer
+    const serialized_offset = writer.total_bytes - @sizeOf(Self.Serialized);
+    const deserialized_ptr = @as(*Self.Serialized, @ptrCast(@alignCast(buffer.ptr + serialized_offset)));
+    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule");
+
+    // Verify the data was preserved
+    try testing.expectEqual(@as(usize, 2), env.ident_ids_for_slicing.len());
+    try testing.expectEqualStrings("hello", env.idents.get(hello_idx));
+    try testing.expectEqualStrings("world", env.idents.get(world_idx));
+    
+    try testing.expectEqual(@as(usize, 1), env.exposed_items.count());
+    try testing.expectEqual(@as(?u16, 42), env.exposed_items.getNodeIndexById(gpa, @intFromEnum(hello_idx)));
+    
+    try testing.expectEqual(@as(usize, 3), env.line_starts.len());
+    try testing.expectEqual(@as(u32, 0), env.line_starts.get(0));
+    try testing.expectEqual(@as(u32, 10), env.line_starts.get(1));
+    try testing.expectEqual(@as(u32, 20), env.line_starts.get(2));
+    
+    try testing.expectEqualStrings(source, env.source);
+    try testing.expectEqualStrings("TestModule", env.module_name);
 }

@@ -4,6 +4,8 @@ const std = @import("std");
 const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
+const serialization = @import("serialization");
+const CompactWriter = serialization.CompactWriter;
 const Node = @import("Node.zig");
 const ModuleEnv = @import("compile").ModuleEnv;
 const RocDec = ModuleEnv.RocDec;
@@ -1810,7 +1812,7 @@ pub fn addPatternRecordField(store: *NodeStore, patternRecordField: ModuleEnv.Pa
     _ = store;
     _ = patternRecordField;
 
-    return .{ .id = @enumFromInt(0) };
+    return @enumFromInt(0);
 }
 
 /// Adds a type annotation to the store.
@@ -2359,12 +2361,12 @@ pub fn sliceMatchBranchPatterns(store: *const NodeStore, span: ModuleEnv.Expr.Ma
 
 /// Creates a slice corresponding to a span.
 pub fn firstFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @enumFromInt(store.extra_data.items[span.start]));
+    return @as(T, @enumFromInt(store.extra_data.items.items[span.start]));
 }
 
 /// Creates a slice corresponding to a span.
 pub fn lastFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @enumFromInt(store.extra_data.items[span.start + span.len - 1]));
+    return @as(T, @enumFromInt(store.extra_data.items.items[span.start + span.len - 1]));
 }
 
 /// Retrieve a slice of IfBranch Idx's from a span
@@ -3121,6 +3123,7 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
     };
 }
 
+
 /// Serialize this NodeStore to the given CompactWriter. The resulting NodeStore
 /// in the writer's buffer will have offsets instead of pointers. Calling any
 /// methods on it or dereferencing its internal "pointers" (which are now
@@ -3128,7 +3131,7 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
 pub fn serialize(
     self: *const NodeStore,
     allocator: std.mem.Allocator,
-    writer: *collections.CompactWriter,
+    writer: *CompactWriter,
 ) std.mem.Allocator.Error!*const NodeStore {
     // First, write the NodeStore struct itself
     const offset_self = try writer.appendAlloc(allocator, NodeStore);
@@ -3174,6 +3177,7 @@ test "NodeStore empty CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
+
     // Create an empty NodeStore
     var original = try NodeStore.init(gpa);
     defer original.deinit();
@@ -3186,7 +3190,7 @@ test "NodeStore empty CompactWriter roundtrip" {
     defer file.close();
 
     // Serialize using CompactWriter
-    var writer = collections.CompactWriter{
+    var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
@@ -3255,7 +3259,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     defer file.close();
 
     // Serialize
-    var writer = collections.CompactWriter{
+    var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
@@ -3362,7 +3366,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     defer file.close();
 
     // Serialize
-    var writer = collections.CompactWriter{
+    var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
@@ -3424,3 +3428,5 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     try testing.expectEqual(@as(usize, 0), deserialized.scratch_exprs.items.items.len);
     try testing.expectEqual(@as(usize, 0), deserialized.scratch_patterns.items.items.len);
 }
+
+
