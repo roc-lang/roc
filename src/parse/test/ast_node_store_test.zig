@@ -4,11 +4,14 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const types = @import("types");
-const RocDec = @import("builtins").RocDec;
-const Node = @import("../Node.zig");
-const NodeStore = @import("../NodeStore.zig");
-const AST = @import("../AST.zig");
-const Token = @import("../tokenize.zig").Token;
+const parse = @import("parse");
+const builtins = @import("builtins");
+
+const RocDec = builtins.RocDec;
+const Node = parse.Node;
+const NodeStore = parse.NodeStore;
+const AST = parse.AST;
+const Token = parse.Token;
 
 /// Custom comparison for Token values that handles IdentWithFlags properly
 fn expectEqualTokens(expected: Token, actual: Token) !void {
@@ -466,7 +469,7 @@ fn expectEqualTypeAnno(expected: AST.TypeAnno, actual: AST.TypeAnno) !void {
         },
         .malformed => |expected_malformed| {
             const actual_malformed = actual.malformed;
-            try testing.expectEqual(expected_malformed.parse_problem, actual_malformed.parse_problem);
+            try testing.expectEqual(expected_malformed.reason, actual_malformed.reason);
             try testing.expectEqual(expected_malformed.region, actual_malformed.region);
         },
     }
@@ -496,12 +499,18 @@ fn expectEqualHeaders(expected: AST.Header, actual: AST.Header) !void {
         },
         .platform => |expected_plat| {
             const actual_plat = actual.platform;
-            try testing.expectEqual(expected_plat.requires, actual_plat.requires);
+            try testing.expectEqual(expected_plat.name, actual_plat.name);
+            try testing.expectEqual(expected_plat.requires_rigids, actual_plat.requires_rigids);
+            try testing.expectEqual(expected_plat.requires_signatures, actual_plat.requires_signatures);
             try testing.expectEqual(expected_plat.exposes, actual_plat.exposes);
             try testing.expectEqual(expected_plat.packages, actual_plat.packages);
-            try testing.expectEqual(expected_plat.imports, actual_plat.imports);
             try testing.expectEqual(expected_plat.provides, actual_plat.provides);
             try testing.expectEqual(expected_plat.region, actual_plat.region);
+        },
+        .hosted => |expected_hosted| {
+            const actual_hosted = actual.hosted;
+            try testing.expectEqual(expected_hosted.exposes, actual_hosted.exposes);
+            try testing.expectEqual(expected_hosted.region, actual_hosted.region);
         },
         .malformed => {
             // Nothing to compare
@@ -540,20 +549,48 @@ fn expectEqualStatements(expected: AST.Statement, actual: AST.Statement) !void {
         },
         .expect => |expected_expect| {
             const actual_expect = actual.expect;
-            try testing.expectEqual(expected_expect.expr, actual_expect.expr);
+            try testing.expectEqual(expected_expect.body, actual_expect.body);
             try testing.expectEqual(expected_expect.region, actual_expect.region);
         },
-        .single_module_ability => |expected_ability| {
-            const actual_ability = actual.single_module_ability;
-            try testing.expectEqual(expected_ability.name, actual_ability.name);
-            try testing.expectEqual(expected_ability.demands, actual_ability.demands);
-            try testing.expectEqual(expected_ability.region, actual_ability.region);
+        .@"for" => |expected_for| {
+            const actual_for = actual.@"for";
+            try testing.expectEqual(expected_for.patt, actual_for.patt);
+            try testing.expectEqual(expected_for.expr, actual_for.expr);
+            try testing.expectEqual(expected_for.body, actual_for.body);
+            try testing.expectEqual(expected_for.region, actual_for.region);
         },
-        .single_module_type => |expected_type| {
-            const actual_type = actual.single_module_type;
-            try testing.expectEqual(expected_type.decl, actual_type.decl);
-            try testing.expectEqual(expected_type.implements, actual_type.implements);
-            try testing.expectEqual(expected_type.region, actual_type.region);
+        .@"return" => |expected_return| {
+            const actual_return = actual.@"return";
+            try testing.expectEqual(expected_return.expr, actual_return.expr);
+            try testing.expectEqual(expected_return.region, actual_return.region);
+        },
+        .import => |expected_import| {
+            const actual_import = actual.import;
+            try testing.expectEqual(expected_import.module_name_tok, actual_import.module_name_tok);
+            try testing.expectEqual(expected_import.qualifier_tok, actual_import.qualifier_tok);
+            try testing.expectEqual(expected_import.alias_tok, actual_import.alias_tok);
+            try testing.expectEqual(expected_import.exposes, actual_import.exposes);
+            try testing.expectEqual(expected_import.region, actual_import.region);
+        },
+        .type_decl => |expected_type_decl| {
+            const actual_type_decl = actual.type_decl;
+            try testing.expectEqual(expected_type_decl.header, actual_type_decl.header);
+            try testing.expectEqual(expected_type_decl.anno, actual_type_decl.anno);
+            try testing.expectEqual(expected_type_decl.where, actual_type_decl.where);
+            try testing.expectEqual(expected_type_decl.kind, actual_type_decl.kind);
+            try testing.expectEqual(expected_type_decl.region, actual_type_decl.region);
+        },
+        .type_anno => |expected_type_anno| {
+            const actual_type_anno = actual.type_anno;
+            try testing.expectEqual(expected_type_anno.name, actual_type_anno.name);
+            try testing.expectEqual(expected_type_anno.anno, actual_type_anno.anno);
+            try testing.expectEqual(expected_type_anno.where, actual_type_anno.where);
+            try testing.expectEqual(expected_type_anno.region, actual_type_anno.region);
+        },
+        .malformed => |expected_malformed| {
+            const actual_malformed = actual.malformed;
+            try testing.expectEqual(expected_malformed.reason, actual_malformed.reason);
+            try testing.expectEqual(expected_malformed.region, actual_malformed.region);
         },
     }
 }

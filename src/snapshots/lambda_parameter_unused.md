@@ -34,9 +34,6 @@ main! = |_| {
 # EXPECTED
 UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
 UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
-TYPE MISMATCH - lambda_parameter_unused.md:24:25:24:42
-TYPE MISMATCH - lambda_parameter_unused.md:24:15:24:42
-TYPE MISMATCH - lambda_parameter_unused.md:24:5:24:42
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `unused` is not used anywhere in your code.
@@ -61,48 +58,6 @@ multiply = |_factor| _factor * 2
 ```
                      ^^^^^^^
 
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**lambda_parameter_unused.md:24:25:24:42:**
-```roc
-    result1 + result2 + result3 + result4
-```
-                        ^^^^^^^^^^^^^^^^^
-
-It is of type:
-    _Num(_size)_
-
-But you are trying to use it as:
-    _U64_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**lambda_parameter_unused.md:24:15:24:42:**
-```roc
-    result1 + result2 + result3 + result4
-```
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-It is of type:
-    _Num(_size)_
-
-But you are trying to use it as:
-    _U64_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**lambda_parameter_unused.md:24:5:24:42:**
-```roc
-    result1 + result2 + result3 + result4
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-It is of type:
-    _Num(_size)_
-
-But you are trying to use it as:
-    _U64_
 
 # TOKENS
 ~~~zig
@@ -302,10 +257,10 @@ main! = |_| {
 		(p-assign @19.1-19.6 (ident "main!"))
 		(e-closure @19.9-25.2
 			(captures
+				(capture @13.1-13.8 (ident "process"))
 				(capture @9.1-9.9 (ident "multiply"))
-				(capture @17.1-17.7 (ident "double"))
 				(capture @5.1-5.4 (ident "add"))
-				(capture @13.1-13.8 (ident "process")))
+				(capture @17.1-17.7 (ident "double")))
 			(e-lambda @19.9-25.2
 				(args
 					(p-underscore @19.10-19.11))
@@ -354,11 +309,11 @@ main! = |_| {
 		(patt @9.1-9.9 (type "U64 -> U64"))
 		(patt @13.1-13.8 (type "U64 -> U64"))
 		(patt @17.1-17.7 (type "U64 -> U64"))
-		(patt @19.1-19.6 (type "_arg -> Error")))
+		(patt @19.1-19.6 (type "_arg -> Num(_size)")))
 	(expressions
 		(expr @5.7-5.18 (type "U64 -> U64"))
 		(expr @9.12-9.33 (type "U64 -> U64"))
 		(expr @13.11-13.23 (type "U64 -> U64"))
 		(expr @17.10-17.27 (type "U64 -> U64"))
-		(expr @19.9-25.2 (type "_arg -> Error"))))
+		(expr @19.9-25.2 (type "_arg -> Num(_size)"))))
 ~~~

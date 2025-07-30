@@ -55,14 +55,20 @@ PARSE ERROR - qualified_type_canonicalization.md:8:1:8:7
 PARSE ERROR - qualified_type_canonicalization.md:8:14:8:21
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:10:15:10:23
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:10:24:10:32
+MODULE NOT FOUND - qualified_type_canonicalization.md:9:1:9:13
+MODULE NOT FOUND - qualified_type_canonicalization.md:10:1:10:15
 INVALID STATEMENT - qualified_type_canonicalization.md:10:15:10:23
 INVALID STATEMENT - qualified_type_canonicalization.md:10:24:10:32
 INVALID STATEMENT - qualified_type_canonicalization.md:10:33:10:40
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:15:19:15:24
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:19:26:19:35
+MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
+UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
+MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:31:16:31:21
+MODULE NOT IMPORTED - qualified_type_canonicalization.md:26:14:26:27
+UNDECLARED TYPE - qualified_type_canonicalization.md:31:16:31:21
 UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
+MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:13:39:26
+MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:55:39:76
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:42:27:42:42
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:43:28:43:41
 UNUSED VARIABLE - qualified_type_canonicalization.md:43:20:43:23
@@ -127,6 +133,28 @@ import ModuleA.ModuleB exposing [TypeC]
                        ^^^^^^^^
 
 
+**MODULE NOT FOUND**
+The module `Color` was not found in this Roc project.
+
+You're attempting to use this module here:
+**qualified_type_canonicalization.md:9:1:9:13:**
+```roc
+import Color
+```
+^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `ModuleA` was not found in this Roc project.
+
+You're attempting to use this module here:
+**qualified_type_canonicalization.md:10:1:10:15:**
+```roc
+import ModuleA.ModuleB exposing [TypeC]
+```
+^^^^^^^^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -160,10 +188,21 @@ import ModuleA.ModuleB exposing [TypeC]
                                 ^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `Color` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**MODULE NOT FOUND**
+The module `ExternalModule` was not found in this Roc project.
 
+You're attempting to use this module here:
+**qualified_type_canonicalization.md:11:1:11:32:**
+```roc
+import ExternalModule as ExtMod
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Color_ is not declared in this scope.
+
+This type is referenced here:
 **qualified_type_canonicalization.md:15:19:15:24:**
 ```roc
 simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
@@ -171,15 +210,36 @@ simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
                   ^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `DataType` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**MODULE NOT IMPORTED**
+There is no module with the name `module [
+    Color,
+    ModuleA.ModuleB.TypeC,
+    Result,
+    ExternalModule,
+]
 
-**qualified_type_canonicalization.md:19:26:19:35:**
-```roc
+import Basics.Result
+import Color
+import ModuleA.ModuleB exposing [TypeC]
+import ExternalModule as ExtMod
+
+# Simple qualified type
+simpleQualified : Color.RGB
+simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
+
+# Aliased qualified type
+aliasedQualified : ExtMod.DataType
 aliasedQualified = ExtMod.DataType.Default
+
+# Multi-level qualified type
+multiLevelQualified : ModuleA.ModuleB` imported into this Roc file.
+
+You're attempting to use this module here:
+**qualified_type_canonicalization.md:22:23:22:44:**
+```roc
+multiLevelQualified : ModuleA.ModuleB.TypeC
 ```
-                         ^^^^^^^^^
+                      ^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -193,10 +253,21 @@ multiLevelQualified = TypeC.new
                       ^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `Color` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**MODULE NOT IMPORTED**
+There is no module with the name `Result` imported into this Roc file.
 
+You're attempting to use this module here:
+**qualified_type_canonicalization.md:26:14:26:27:**
+```roc
+resultType : Result.Result(I32, Str)
+```
+             ^^^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Color_ is not declared in this scope.
+
+This type is referenced here:
 **qualified_type_canonicalization.md:31:16:31:21:**
 ```roc
 getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
@@ -214,6 +285,66 @@ The unused variable is declared here:
 processColor = |color|
 ```
                 ^^^^^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `Result` imported into this Roc file.
+
+You're attempting to use this module here:
+**qualified_type_canonicalization.md:39:13:39:26:**
+```roc
+transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+```
+            ^^^^^^^^^^^^^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `module [
+    Color,
+    ModuleA.ModuleB.TypeC,
+    Result,
+    ExternalModule,
+]
+
+import Basics.Result
+import Color
+import ModuleA.ModuleB exposing [TypeC]
+import ExternalModule as ExtMod
+
+# Simple qualified type
+simpleQualified : Color.RGB
+simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
+
+# Aliased qualified type
+aliasedQualified : ExtMod.DataType
+aliasedQualified = ExtMod.DataType.Default
+
+# Multi-level qualified type
+multiLevelQualified : ModuleA.ModuleB.TypeC
+multiLevelQualified = TypeC.new
+
+# Using qualified type with generics
+resultType : Result.Result(I32, Str)
+resultType = Result.Ok(42)
+
+# Function returning qualified type
+getColor : {} -> Color.RGB
+getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
+
+# Function accepting qualified type
+processColor : Color.RGB -> Str
+processColor = |color|
+    "Color processed"
+
+# Multiple qualified types in a function signature
+transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB` imported into this Roc file.
+
+You're attempting to use this module here:
+**qualified_type_canonicalization.md:39:55:39:76:**
+```roc
+transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+```
+                                                      ^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -431,48 +562,51 @@ transform = |result|
 (can-ir
 	(d-let
 		(p-assign @15.1-15.16 (ident "simpleQualified"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-runtime-error (tag "undeclared_type"))
 		(annotation @15.1-15.16
 			(declared-type
 				(ty-lookup-external @14.19-14.28
-					(ext-decl @14.19-14.28 (ident "Color.RGB") (kind "type"))))))
+					(module-idx "0")
+					(target-node-idx "0")))))
 	(d-let
 		(p-assign @19.1-19.17 (ident "aliasedQualified"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-nominal-external @19.20-19.43
+			(module-idx "2")
+			(target-node-idx "0")
+			(e-tag @19.20-19.43 (name "Default")))
 		(annotation @19.1-19.17
 			(declared-type
 				(ty-lookup-external @18.20-18.35
-					(ext-decl @18.20-18.35 (ident "ExtMod.DataType") (kind "type"))))))
+					(module-idx "2")
+					(target-node-idx "0")))))
 	(d-let
 		(p-assign @23.1-23.20 (ident "multiLevelQualified"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @23.1-23.20
 			(declared-type
-				(ty-lookup-external @22.23-22.44
-					(ext-decl @22.23-22.44 (ident "ModuleA.ModuleB.TypeC") (kind "type"))))))
+				(ty-malformed @22.23-22.44))))
 	(d-let
 		(p-assign @27.1-27.11 (ident "resultType"))
-		(e-nominal @27.14-27.20 (nominal "<malformed>")
+		(e-nominal @27.14-27.23 (nominal "<malformed>")
 			(e-tag @27.14-27.23 (name "Ok")
 				(args
 					(e-int @27.24-27.26 (value "42")))))
 		(annotation @27.1-27.11
 			(declared-type
-				(ty-apply @26.14-26.37 (symbol "Result.Result")
-					(ty @26.28-26.31 (name "I32"))
-					(ty @26.33-26.36 (name "Str"))))))
+				(ty-malformed @26.14-26.27))))
 	(d-let
 		(p-assign @31.1-31.9 (ident "getColor"))
 		(e-lambda @31.12-31.49
 			(args
 				(p-underscore @31.13-31.14))
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-runtime-error (tag "undeclared_type")))
 		(annotation @31.1-31.9
 			(declared-type
 				(ty-fn @30.12-30.27 (effectful false)
 					(ty-record @30.12-30.14)
 					(ty-lookup-external @30.18-30.27
-						(ext-decl @30.18-30.27 (ident "Color.RGB") (kind "type")))))))
+						(module-idx "0")
+						(target-node-idx "0"))))))
 	(d-let
 		(p-assign @35.1-35.13 (ident "processColor"))
 		(e-lambda @35.16-36.22
@@ -484,7 +618,8 @@ transform = |result|
 			(declared-type
 				(ty-fn @34.16-34.32 (effectful false)
 					(ty-lookup-external @34.16-34.25
-						(ext-decl @34.16-34.25 (ident "Color.RGB") (kind "type")))
+						(module-idx "0")
+						(target-node-idx "0"))
 					(ty @34.29-34.32 (name "Str"))))))
 	(d-let
 		(p-assign @40.1-40.10 (ident "transform"))
@@ -503,7 +638,7 @@ transform = |result|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @42.9-42.15
+										(p-nominal @42.9-42.23
 											(p-applied-tag @42.9-42.23))))
 								(value
 									(e-call @42.27-42.47
@@ -513,36 +648,21 @@ transform = |result|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @43.9-43.15
+										(p-nominal @43.9-43.24
 											(p-applied-tag @43.9-43.24))))
 								(value
 									(e-runtime-error (tag "ident_not_in_scope")))))))))
 		(annotation @40.1-40.10
 			(declared-type
 				(ty-fn @39.13-39.76 (effectful false)
-					(ty-apply @39.13-39.51 (symbol "Result.Result")
-						(ty-lookup-external @39.27-39.36
-							(ext-decl @39.27-39.36 (ident "Color.RGB") (kind "type")))
-						(ty-lookup-external @39.38-39.50
-							(ext-decl @39.38-39.50 (ident "ExtMod.Error") (kind "type"))))
-					(ty-lookup-external @39.55-39.76
-						(ext-decl @39.55-39.76 (ident "ModuleA.ModuleB.TypeC") (kind "type")))))))
+					(ty-malformed @39.13-39.26)
+					(ty-malformed @39.55-39.76)))))
 	(s-import @9.1-9.13 (module "Color")
 		(exposes))
 	(s-import @10.1-10.15 (module "ModuleA")
 		(exposes))
 	(s-import @11.1-11.32 (module "ExternalModule") (alias "ExtMod")
-		(exposes))
-	(ext-decl @14.19-14.28 (ident "Color.RGB") (kind "type"))
-	(ext-decl @18.20-18.35 (ident "ExtMod.DataType") (kind "type"))
-	(ext-decl @22.23-22.44 (ident "ModuleA.ModuleB.TypeC") (kind "type"))
-	(ext-decl @26.14-26.27 (ident "Result.Result") (kind "type"))
-	(ext-decl @30.18-30.27 (ident "Color.RGB") (kind "type"))
-	(ext-decl @34.16-34.25 (ident "Color.RGB") (kind "type"))
-	(ext-decl @39.13-39.26 (ident "Result.Result") (kind "type"))
-	(ext-decl @39.27-39.36 (ident "Color.RGB") (kind "type"))
-	(ext-decl @39.38-39.50 (ident "ExtMod.Error") (kind "type"))
-	(ext-decl @39.55-39.76 (ident "ModuleA.ModuleB.TypeC") (kind "type")))
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
@@ -553,14 +673,14 @@ transform = |result|
 		(patt @23.1-23.20 (type "Error"))
 		(patt @27.1-27.11 (type "Error"))
 		(patt @31.1-31.9 (type "{  } -> Error"))
-		(patt @35.1-35.13 (type "Color.RGB -> Str"))
+		(patt @35.1-35.13 (type "Error -> Str"))
 		(patt @40.1-40.10 (type "Error -> Error")))
 	(expressions
 		(expr @15.19-15.24 (type "Error"))
-		(expr @19.26-19.35 (type "Error"))
+		(expr @19.20-19.43 (type "Error"))
 		(expr @23.23-23.32 (type "Error"))
-		(expr @27.14-27.20 (type "Error"))
+		(expr @27.14-27.23 (type "Error"))
 		(expr @31.12-31.49 (type "{  } -> Error"))
-		(expr @35.16-36.22 (type "Color.RGB -> Str"))
+		(expr @35.16-36.22 (type "Error -> Str"))
 		(expr @40.13-44.6 (type "Error -> Error"))))
 ~~~

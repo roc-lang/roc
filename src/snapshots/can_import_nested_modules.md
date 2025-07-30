@@ -40,7 +40,9 @@ PARSE ERROR - can_import_nested_modules.md:5:1:5:7
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:13:5:20
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:20:5:27
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:28:5:36
+MODULE NOT FOUND - can_import_nested_modules.md:3:1:3:19
 INVALID STATEMENT - can_import_nested_modules.md:3:19:3:26
+MODULE NOT FOUND - can_import_nested_modules.md:4:1:4:19
 INVALID STATEMENT - can_import_nested_modules.md:4:19:4:24
 INVALID STATEMENT - can_import_nested_modules.md:4:25:4:27
 INVALID STATEMENT - can_import_nested_modules.md:5:8:5:13
@@ -48,11 +50,18 @@ INVALID STATEMENT - can_import_nested_modules.md:5:13:5:20
 INVALID STATEMENT - can_import_nested_modules.md:5:20:5:27
 INVALID STATEMENT - can_import_nested_modules.md:5:28:5:36
 INVALID STATEMENT - can_import_nested_modules.md:5:37:5:46
+MODULE NOT IMPORTED - can_import_nested_modules.md:8:15:8:30
 UNDEFINED VARIABLE - can_import_nested_modules.md:9:26:9:41
+MODULE NOT IMPORTED - can_import_nested_modules.md:12:28:12:42
 UNDEFINED VARIABLE - can_import_nested_modules.md:13:29:13:43
+MODULE NOT IMPORTED - can_import_nested_modules.md:16:15:16:37
+MODULE NOT IMPORTED - can_import_nested_modules.md:16:58:16:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:18:5:18:37
 UNDEFINED VARIABLE - can_import_nested_modules.md:22:23:22:30
 UNDEFINED VARIABLE - can_import_nested_modules.md:22:37:22:58
+MODULE NOT IMPORTED - can_import_nested_modules.md:25:16:25:36
+MODULE NOT IMPORTED - can_import_nested_modules.md:25:47:25:61
+MODULE NOT IMPORTED - can_import_nested_modules.md:25:63:25:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:26:24:26:41
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -151,6 +160,17 @@ import utils.String.Format exposing [padLeft]
                            ^^^^^^^^
 
 
+**MODULE NOT FOUND**
+The module `json.Parser` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_nested_modules.md:3:1:3:19:**
+```roc
+import json.Parser.Config
+```
+^^^^^^^^^^^^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -160,6 +180,17 @@ Only definitions, type annotations, and imports are allowed at the top level.
 import json.Parser.Config
 ```
                   ^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `http.Client` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_nested_modules.md:4:1:4:19:**
+```roc
+import http.Client.Auth as HttpAuth
+```
+^^^^^^^^^^^^^^^^^^
 
 
 **INVALID STATEMENT**
@@ -239,6 +270,17 @@ import utils.String.Format exposing [padLeft]
                                     ^^^^^^^^^
 
 
+**MODULE NOT IMPORTED**
+There is no module with the name `Config` imported into this Roc file.
+
+You're attempting to use this module here:
+**can_import_nested_modules.md:8:15:8:30:**
+```roc
+parseConfig : Config.Settings -> Str
+```
+              ^^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `toString` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -250,6 +292,17 @@ parseConfig = |settings| Config.toString(settings)
                          ^^^^^^^^^^^^^^^
 
 
+**MODULE NOT IMPORTED**
+There is no module with the name `HttpAuth` imported into this Roc file.
+
+You're attempting to use this module here:
+**can_import_nested_modules.md:12:28:12:42:**
+```roc
+authenticate : Str, Str -> HttpAuth.Token
+```
+                           ^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `login` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -259,6 +312,58 @@ Is there an `import` or `exposing` missing up-top?
 authenticate = |user, pass| HttpAuth.login(user, pass)
 ```
                             ^^^^^^^^^^^^^^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `module []
+
+import json.Parser.Config
+import http.Client.Auth as HttpAuth
+import utils.String.Format exposing [padLeft]
+
+# Test multi-level type qualification
+parseConfig : Config.Settings -> Str
+parseConfig = |settings| Config.toString(settings)
+
+# Test multi-level value qualification
+authenticate : Str, Str -> HttpAuth.Token
+authenticate = |user, pass| HttpAuth.login(user, pass)
+
+# Test deeply nested qualification
+processData : Config.Parser` imported into this Roc file.
+
+You're attempting to use this module here:
+**can_import_nested_modules.md:16:15:16:37:**
+```roc
+processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
+```
+              ^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `module []
+
+import json.Parser.Config
+import http.Client.Auth as HttpAuth
+import utils.String.Format exposing [padLeft]
+
+# Test multi-level type qualification
+parseConfig : Config.Settings -> Str
+parseConfig = |settings| Config.toString(settings)
+
+# Test multi-level value qualification
+authenticate : Str, Str -> HttpAuth.Token
+authenticate = |user, pass| HttpAuth.login(user, pass)
+
+# Test deeply nested qualification
+processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser` imported into this Roc file.
+
+You're attempting to use this module here:
+**can_import_nested_modules.md:16:58:16:77:**
+```roc
+processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
+```
+                                                         ^^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -292,6 +397,39 @@ Is there an `import` or `exposing` missing up-top?
 formatOutput = |text| padLeft(text, Config.defaultPadding)
 ```
                                     ^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `HttpAuth` imported into this Roc file.
+
+You're attempting to use this module here:
+**can_import_nested_modules.md:25:16:25:36:**
+```roc
+validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
+```
+               ^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `HttpAuth` imported into this Roc file.
+
+You're attempting to use this module here:
+**can_import_nested_modules.md:25:47:25:61:**
+```roc
+validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
+```
+                                              ^^^^^^^^^^^^^^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `HttpAuth` imported into this Roc file.
+
+You're attempting to use this module here:
+**can_import_nested_modules.md:25:63:25:77:**
+```roc
+validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
+```
+                                                              ^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -436,7 +574,7 @@ authenticate = |user, pass| HttpAuth.login(user, pass)
 # Test deeply nested qualification
 processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 processData = |advancedConfig, input|
-	Config.parseWith(advancedConfig, input)
+	Config.Parser.Advanced.parseWith(advancedConfig, input)
 
 # Test mixed qualification (exposed item + qualified)
 formatOutput : Str -> Str
@@ -461,8 +599,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(annotation @9.1-9.12
 			(declared-type
 				(ty-fn @8.15-8.37 (effectful false)
-					(ty-lookup-external @8.15-8.30
-						(ext-decl @8.15-8.30 (ident "Config.Settings") (kind "type")))
+					(ty-malformed @8.15-8.30)
 					(ty @8.34-8.37 (name "Str"))))))
 	(d-let
 		(p-assign @13.1-13.13 (ident "authenticate"))
@@ -481,8 +618,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(ty-fn @12.16-12.42 (effectful false)
 					(ty @12.16-12.19 (name "Str"))
 					(ty @12.21-12.24 (name "Str"))
-					(ty-lookup-external @12.28-12.42
-						(ext-decl @12.28-12.42 (ident "HttpAuth.Token") (kind "type")))))))
+					(ty-malformed @12.28-12.42)))))
 	(d-let
 		(p-assign @17.1-17.12 (ident "processData"))
 		(e-lambda @17.15-18.60
@@ -498,13 +634,11 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(annotation @17.1-17.12
 			(declared-type
 				(ty-fn @16.15-16.78 (effectful false)
-					(ty-lookup-external @16.15-16.37
-						(ext-decl @16.15-16.37 (ident "Config.Parser.Advanced") (kind "type")))
+					(ty-malformed @16.15-16.37)
 					(ty @16.39-16.42 (name "Str"))
 					(ty-apply @16.46-16.78 (symbol "Result")
 						(ty @16.53-16.56 (name "Str"))
-						(ty-lookup-external @16.58-16.77
-							(ext-decl @16.58-16.77 (ident "Config.Parser.Error") (kind "type"))))))))
+						(ty-malformed @16.58-16.77))))))
 	(d-let
 		(p-assign @22.1-22.13 (ident "formatOutput"))
 		(e-lambda @22.16-22.59
@@ -532,38 +666,28 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(annotation @26.1-26.13
 			(declared-type
 				(ty-fn @25.16-25.78 (effectful false)
-					(ty-lookup-external @25.16-25.36
-						(ext-decl @25.16-25.36 (ident "HttpAuth.Credentials") (kind "type")))
+					(ty-malformed @25.16-25.36)
 					(ty-apply @25.40-25.78 (symbol "Result")
-						(ty-lookup-external @25.47-25.61
-							(ext-decl @25.47-25.61 (ident "HttpAuth.Token") (kind "type")))
-						(ty-lookup-external @25.63-25.77
-							(ext-decl @25.63-25.77 (ident "HttpAuth.Error") (kind "type"))))))))
+						(ty-malformed @25.47-25.61)
+						(ty-malformed @25.63-25.77))))))
 	(s-import @3.1-3.19 (module "json.Parser") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.19 (module "http.Client") (qualifier "http")
-		(exposes))
-	(ext-decl @8.15-8.30 (ident "Config.Settings") (kind "type"))
-	(ext-decl @12.28-12.42 (ident "HttpAuth.Token") (kind "type"))
-	(ext-decl @16.15-16.37 (ident "Config.Parser.Advanced") (kind "type"))
-	(ext-decl @16.58-16.77 (ident "Config.Parser.Error") (kind "type"))
-	(ext-decl @25.16-25.36 (ident "HttpAuth.Credentials") (kind "type"))
-	(ext-decl @25.47-25.61 (ident "HttpAuth.Token") (kind "type"))
-	(ext-decl @25.63-25.77 (ident "HttpAuth.Error") (kind "type")))
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @9.1-9.12 (type "Config.Settings -> Str"))
-		(patt @13.1-13.13 (type "Str, Str -> HttpAuth.Token"))
-		(patt @17.1-17.12 (type "Config.Parser.Advanced, Str -> Error"))
+		(patt @9.1-9.12 (type "Error -> Str"))
+		(patt @13.1-13.13 (type "Str, Str -> Error"))
+		(patt @17.1-17.12 (type "Error, Str -> Error"))
 		(patt @22.1-22.13 (type "Str -> Str"))
-		(patt @26.1-26.13 (type "HttpAuth.Credentials -> Error")))
+		(patt @26.1-26.13 (type "Error -> Error")))
 	(expressions
-		(expr @9.15-9.51 (type "Config.Settings -> Str"))
-		(expr @13.16-13.55 (type "Str, Str -> HttpAuth.Token"))
-		(expr @17.15-18.60 (type "Config.Parser.Advanced, Str -> Error"))
+		(expr @9.15-9.51 (type "Error -> Str"))
+		(expr @13.16-13.55 (type "Str, Str -> Error"))
+		(expr @17.15-18.60 (type "Error, Str -> Error"))
 		(expr @22.16-22.59 (type "Str -> Str"))
-		(expr @26.16-26.48 (type "HttpAuth.Credentials -> Error"))))
+		(expr @26.16-26.48 (type "Error -> Error"))))
 ~~~

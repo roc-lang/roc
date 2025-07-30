@@ -15,7 +15,7 @@ MISSING HEADER - fuzz_crash_021.md:1:1:1:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_021.md:1:4:1:5
 PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 PARSE ERROR - fuzz_crash_021.md:3:15:3:15
-MALFORMED TYPE - :0:0:0:0
+MALFORMED TYPE - fuzz_crash_021.md:3:14:3:15
 INVALID STATEMENT - fuzz_crash_021.md:1:4:1:5
 INVALID STATEMENT - fuzz_crash_021.md:1:5:1:13
 INVALID STATEMENT - fuzz_crash_021.md:1:13:1:16
@@ -77,6 +77,13 @@ Pair(a, b+ : (
 
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
+
+**fuzz_crash_021.md:3:14:3:15:**
+```roc
+Pair(a, b+ : (
+```
+             ^
+
 
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.

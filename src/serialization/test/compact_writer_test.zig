@@ -5,17 +5,18 @@
 //! when serializing various data types and slices.
 
 const std = @import("std");
-const CompactWriter = @import("../CompactWriter.zig").CompactWriter;
+const CompactWriter = @import("serialization").CompactWriter;
 const testing = std.testing;
 
 test "CompactWriter basic functionality" {
-    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.deinit(allocator);
 
     // Test appendAlloc
     const test_struct = struct {
@@ -38,36 +39,40 @@ test "CompactWriter basic functionality" {
 }
 
 test "CompactWriter appendSlice" {
-    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.deinit(allocator);
+
+    // First append something to ensure we don't have offset 0
+    _ = try writer.appendAlloc(allocator, u8);
 
     // Create some test data
     const data = [_]u32{ 1, 2, 3, 4, 5 };
 
-    const slice = try writer.appendSlice(allocator, &data);
+    const slice = try writer.appendSlice(allocator, data[0..]);
 
     // Verify the writer has tracked the slice
-    try testing.expect(writer.iovecs.items.len > 0);
+    try testing.expect(writer.iovecs.items.len > 1);
     try testing.expect(@intFromPtr(slice.ptr) > 0);
-    try testing.expect(writer.total_bytes >= @sizeOf(u32) * data.len);
 
-    // Test that writer tracked the slice correctly
-    try testing.expect(writer.total_bytes >= @sizeOf(u32) * data.len);
+    // Should have u8 (1 byte) + padding (3 bytes) + data (20 bytes) = 24 bytes
+    try testing.expectEqual(@as(usize, 24), writer.total_bytes);
 }
 
 test "CompactWriter alignment padding" {
-    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.deinit(allocator);
 
     // First append a u8 (1-byte aligned)
     const byte_ptr = try writer.appendAlloc(allocator, u8);
@@ -88,13 +93,14 @@ test "CompactWriter alignment padding" {
 }
 
 test "CompactWriter multiple allocations" {
-    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.deinit(allocator);
 
     // Append multiple items
     const item1 = try writer.appendAlloc(allocator, u64);
@@ -117,13 +123,14 @@ test "CompactWriter multiple allocations" {
 }
 
 test "CompactWriter up-front padding with various alignments" {
-    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.deinit(allocator);
 
     // Start with u8 (1-byte aligned)
     _ = try writer.appendAlloc(allocator, u8);
@@ -156,13 +163,14 @@ test "CompactWriter up-front padding with various alignments" {
 }
 
 test "CompactWriter slice alignment" {
-    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
-    defer writer.deinit(allocator);
 
     // Start with a u8
     _ = try writer.appendAlloc(allocator, u8);
@@ -170,19 +178,18 @@ test "CompactWriter slice alignment" {
 
     // Add a slice of u32s - should pad to 4-byte alignment first
     const data = [_]u32{ 10, 20, 30 };
-    _ = try writer.appendSlice(allocator, &data);
+    _ = try writer.appendSlice(allocator, data[0..]);
     // 1 + 3 padding + (3 * 4) = 16
     try testing.expectEqual(@as(usize, 16), writer.total_bytes);
 
     // Add a slice of u64s - already at 16 (divisible by 8), no padding
     const data64 = [_]u64{ 100, 200 };
-    _ = try writer.appendSlice(allocator, &data64);
+    _ = try writer.appendSlice(allocator, data64[0..]);
     // 16 + (2 * 8) = 32
     try testing.expectEqual(@as(usize, 32), writer.total_bytes);
 }
 
 test "CompactWriter brute-force appendSlice alignment" {
-    const allocator = testing.allocator;
 
     // Test all slice lengths from 0 to 8 for different types
     // Verifies alignment padding works correctly for all cases
@@ -196,15 +203,18 @@ test "CompactWriter brute-force appendSlice alignment" {
     inline for (test_types) |T| {
         var length: usize = 0;
         while (length <= 8) : (length += 1) {
+            var inner_arena = std.heap.ArenaAllocator.init(testing.allocator);
+            defer inner_arena.deinit();
+            const allocator = inner_arena.allocator();
+
             var writer = CompactWriter{
                 .iovecs = .{},
                 .total_bytes = 0,
             };
-            defer writer.deinit(allocator);
 
             // Create test data
             var data: [8]T = undefined;
-            for (data, 0..) |*item, i| {
+            for (&data, 0..) |*item, i| {
                 item.* = @as(T, @intCast(i + 1));
             }
 

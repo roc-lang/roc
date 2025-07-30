@@ -9,8 +9,20 @@ app[]{f:platform""}import	B	as
 G	if 0{}else||0
 ~~~
 # EXPECTED
+MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
 INVALID STATEMENT - fuzz_crash_059.md:2:3:2:16
 # PROBLEMS
+**MODULE NOT FOUND**
+The module `B` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_059.md:1:20:2:2:**
+```roc
+app[]{f:platform""}import	B	as
+G	if 0{}else||0
+```
+
+
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.

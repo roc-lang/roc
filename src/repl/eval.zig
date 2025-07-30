@@ -6,8 +6,8 @@ const compile = @import("compile");
 const parse = @import("parse");
 const types = @import("types");
 const Can = @import("can");
+const Check = @import("check");
 
-const check_types = @import("../check/check_types.zig");
 const layout_store = @import("../layout/store.zig");
 const layout = @import("../layout/layout.zig");
 const eval = @import("../eval/interpreter.zig");
@@ -286,7 +286,7 @@ pub const Repl = struct {
         };
 
         // Type check
-        var checker = check_types.init(self.allocator, &module_env.types, cir, &.{}, &cir.store.regions) catch |err| {
+        var checker = Check.init(self.allocator, &module_env.types, cir, &.{}, &cir.store.regions) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
         };
         defer checker.deinit();
@@ -504,7 +504,7 @@ test "Repl - minimal interpreter integration" {
     };
 
     // Step 5: Type check
-    var checker = try check_types.init(allocator, &module_env.types, cir, &.{}, &cir.store.regions);
+    var checker = try Check.init(allocator, &module_env.types, cir, &.{}, &cir.store.regions);
     defer checker.deinit();
 
     _ = try checker.checkExpr(canonical_expr_idx.get_idx());

@@ -61,6 +61,7 @@ pub const Tag = enum {
     expr_dec_small,
     expr_tag,
     expr_nominal,
+    expr_nominal_external,
     expr_zero_argument_tag,
     expr_closure,
     expr_lambda,
@@ -83,6 +84,7 @@ pub const Tag = enum {
     annotation,
     // Type Annotation
     ty_apply,
+    ty_apply_external,
     ty_var,
     ty_ident,
     ty_underscore,
@@ -99,6 +101,7 @@ pub const Tag = enum {
     pattern_as,
     pattern_applied_tag,
     pattern_nominal,
+    pattern_nominal_external,
     pattern_record_destructure,
     pattern_list,
     pattern_tuple,

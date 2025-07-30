@@ -3,12 +3,18 @@
 const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
+const check = @import("check");
+const types_mod = @import("types");
 
-const check_types = @import("../../check_types.zig");
-const types_mod = @import("../types");
+const compile = @import("compile");
+const can = @import("can");
 
 const testing = std.testing;
 const test_allocator = testing.allocator;
+
+const CIR = compile.CIR;
+const canonicalize = can;
+
 
 // NOTE: These tests are currently commented out because they depend on nominal type
 // value creation (e.g., `Person { name: "Alice" }` creating a nominal type value).
@@ -37,41 +43,36 @@ const test_allocator = testing.allocator;
          \\    myColor.describe()
      ;
 
-     var module_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
+     var module_env = try compile.ModuleEnv.init(test_allocator, source);
      defer module_env.deinit();
 
      // Parse the source
-     var parse_ir = parse.parse(&module_env, source);
+     var parse_ir = try parse.parse(&module_env);
      defer parse_ir.deinit(test_allocator);
 
-     // Create CIR
-     var can_ir = CIR.init(&module_env);
-     defer can_ir.deinit();
-     can_ir.module_name = "Test";
-
      // Canonicalize
-     var can = try canonicalize.init(&can_ir, &parse_ir, null);
-     defer can.deinit();
-     _ = try can.canonicalizeFile();
+     var can_instance = try canonicalize.init(&module_env, &parse_ir, null);
+     defer can_instance.deinit();
+     _ = try can_instance.canonicalizeFile();
 
      // Type check
-     var solver = try check_types.init(test_allocator, &module_env.types, &can_ir, &.{});
+     var solver = try check.init(test_allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions);
      defer solver.deinit();
      try solver.checkDefs();
 
      // Verify no type errors
-     try testing.expectEqual(@as(usize, 0), solver.problems.problems.len());
+     try testing.expectEqual(@as(usize, 0), solver.problems.problems.items.len);
 
      // The type of main should be Str (the result of greet)
      // Find the main definition
-     const defs = can_ir.store.sliceDefs(can_ir.all_defs);
+     const defs = module_env.store.sliceDefs(module_env.all_defs);
      var main_expr_idx: ?CIR.Expr.Idx = null;
      for (defs) |def_idx| {
-         const def = can_ir.store.getDef(def_idx);
-         const pattern = can_ir.store.getPattern(def.pattern);
+         const def = module_env.store.getDef(def_idx);
+         const pattern = module_env.store.getPattern(def.pattern);
          if (pattern == .assign) {
              const ident_idx = pattern.assign.ident;
-             const ident_text = can_ir.env.idents.getText(ident_idx);
+             const ident_text = module_env.idents.getText(ident_idx);
 
              if (std.mem.eql(u8, ident_text, "main")) {
                  main_expr_idx = def.expr;
@@ -106,14 +107,14 @@ const test_allocator = testing.allocator;
 
  test "static dispatch - method call on imported nominal type" {
      // Create module environments
-     var data_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
+     var data_env = try compile.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
      defer data_env.deinit();
 
-     var main_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
+     var main_env = try compile.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
      defer main_env.deinit();
 
      // Create module envs map
-     var module_envs = std.StringHashMap(*base.ModuleEnv).init(test_allocator);
+     var module_envs = std.StringHashMap(*compile.ModuleEnv).init(test_allocator);
      defer module_envs.deinit();
      try module_envs.put("Data", &data_env);
 
@@ -127,21 +128,17 @@ const test_allocator = testing.allocator;
          \\greet = \person -> "Hello from Data module!"
      ;
 
-     var data_parse_ir = parse.parse(&data_env, data_source);
+     data_env.source = data_source;
+    var data_parse_ir = try parse.parse(&data_env);
      defer data_parse_ir.deinit(test_allocator);
 
-     // Create CIR for Data module
-     var data_can_ir = CIR.init(&data_env);
-     defer data_can_ir.deinit();
-     data_can_ir.module_name = "Data";
-
      // Canonicalize Data module
-     var data_can = try canonicalize.init(&data_can_ir, &data_parse_ir, &module_envs);
-     defer data_can.deinit();
-     _ = try data_can.canonicalizeFile();
+     var data_can_instance = try canonicalize.init(&data_env, &data_parse_ir, &module_envs);
+     defer data_can_instance.deinit();
+     _ = try data_can_instance.canonicalizeFile();
 
      // Type check Data module
-     var data_solver = try check_types.init(test_allocator, &data_env.types, &data_can_ir, &.{});
+     var data_solver = try check.init(test_allocator, &data_env.types, &data_env, &.{}, &data_env.store.regions);
      defer data_solver.deinit();
      try data_solver.checkDefs();
 
@@ -156,37 +153,33 @@ const test_allocator = testing.allocator;
          \\    bob.greet()
      ;
 
-     var main_parse_ir = parse.parse(&main_env, main_source);
+     main_env.source = main_source;
+     var main_parse_ir = try parse.parse(&main_env);
      defer main_parse_ir.deinit(test_allocator);
 
-     // Create CIR for Main module
-     var main_can_ir = CIR.init(&main_env);
-     defer main_can_ir.deinit();
-     main_can_ir.module_name = "Main";
-
      // Canonicalize Main module
-     var main_can = try canonicalize.init(&main_can_ir, &main_parse_ir, &module_envs);
-     defer main_can.deinit();
-     _ = try main_can.canonicalizeFile();
+     var main_can_instance = try canonicalize.init(&main_env, &main_parse_ir, &module_envs);
+     defer main_can_instance.deinit();
+     _ = try main_can_instance.canonicalizeFile();
 
      // Type check Main module with Data module available
-     const other_modules = [_]*CIR{&data_can_ir};
-     var main_solver = try check_types.init(test_allocator, &main_env.types, &main_can_ir, &other_modules);
+     const other_modules = [_]*compile.ModuleEnv{&data_env};
+     var main_solver = try check.init(test_allocator, &main_env.types, &main_env, &other_modules, &main_env.store.regions);
      defer main_solver.deinit();
      try main_solver.checkDefs();
 
      // Verify no type errors
-     try testing.expectEqual(@as(usize, 0), main_solver.problems.problems.len());
+     try testing.expectEqual(@as(usize, 0), main_solver.problems.problems.items.len);
 
      // Find the main expression and verify its type
-     const defs = main_can_ir.store.sliceDefs(main_can_ir.all_defs);
+     const defs = main_env.store.sliceDefs(main_env.all_defs);
      var main_expr_idx: ?CIR.Expr.Idx = null;
      for (defs) |def_idx| {
-         const def = main_can_ir.store.getDef(def_idx);
-         const pattern = main_can_ir.store.getPattern(def.pattern);
+         const def = main_env.store.getDef(def_idx);
+         const pattern = main_env.store.getPattern(def.pattern);
          if (pattern == .assign) {
              const ident_idx = pattern.assign.ident;
-             const ident_text = main_can_ir.env.idents.getText(ident_idx);
+             const ident_text = main_env.idents.getText(ident_idx);
              if (std.mem.eql(u8, ident_text, "main")) {
                  main_expr_idx = def.expr;
                  break;
@@ -235,40 +228,35 @@ const test_allocator = testing.allocator;
          \\    origin.distance(point)
      ;
 
-     var module_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
+     var module_env = try compile.ModuleEnv.init(test_allocator, source);
      defer module_env.deinit();
 
      // Parse the source
-     var parse_ir = parse.parse(&module_env, source);
+     var parse_ir = try parse.parse(&module_env);
      defer parse_ir.deinit(test_allocator);
 
-     // Create CIR
-     var can_ir = CIR.init(&module_env);
-     defer can_ir.deinit();
-     can_ir.module_name = "Test";
-
      // Canonicalize
-     var can = try canonicalize.init(&can_ir, &parse_ir, null);
-     defer can.deinit();
-     _ = try can.canonicalizeFile();
+     var can_instance = try canonicalize.init(&module_env, &parse_ir, null);
+     defer can_instance.deinit();
+     _ = try can_instance.canonicalizeFile();
 
      // Type check
-     var solver = try check_types.init(test_allocator, &module_env.types, &can_ir, &.{});
+     var solver = try check.init(test_allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions);
      defer solver.deinit();
      try solver.checkDefs();
 
      // Verify no type errors
-     try testing.expectEqual(@as(usize, 0), solver.problems.problems.len());
+     try testing.expectEqual(@as(usize, 0), solver.problems.problems.items.len);
 
      // Find the main expression
-     const defs = can_ir.store.sliceDefs(can_ir.all_defs);
+     const defs = module_env.store.sliceDefs(module_env.all_defs);
      var main_expr_idx: ?CIR.Expr.Idx = null;
      for (defs) |def_idx| {
-         const def = can_ir.store.getDef(def_idx);
-         const pattern = can_ir.store.getPattern(def.pattern);
+         const def = module_env.store.getDef(def_idx);
+         const pattern = module_env.store.getPattern(def.pattern);
          if (pattern == .assign) {
              const ident_idx = pattern.assign.ident;
-             const ident_text = can_ir.env.idents.getText(ident_idx);
+             const ident_text = module_env.idents.getText(ident_idx);
              if (std.mem.eql(u8, ident_text, "main")) {
                  main_expr_idx = def.expr;
                  break;
@@ -318,38 +306,33 @@ const test_allocator = testing.allocator;
          \\    alice.nonExistentMethod()
      ;
 
-     var module_env = base.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
+     var module_env = try compile.ModuleEnv.init(test_allocator, source);
      defer module_env.deinit();
 
      // Parse the source
-     var parse_ir = parse.parse(&module_env, source);
+     var parse_ir = try parse.parse(&module_env);
      defer parse_ir.deinit(test_allocator);
 
-     // Create CIR
-     var can_ir = CIR.init(&module_env);
-     defer can_ir.deinit();
-     can_ir.module_name = "Test";
-
      // Canonicalize
-     var can = try canonicalize.init(&can_ir, &parse_ir, null);
-     defer can.deinit();
-     _ = try can.canonicalizeFile();
+     var can_instance = try canonicalize.init(&module_env, &parse_ir, null);
+     defer can_instance.deinit();
+     _ = try can_instance.canonicalizeFile();
 
      // Type check
-     var solver = try check_types.init(test_allocator, &module_env.types, &can_ir, &.{});
+     var solver = try check.init(test_allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions);
      defer solver.deinit();
      try solver.checkDefs();
 
      // We should have problems since the method doesn't exist
      // For now, we just check that the expression was marked as an error
-     const defs = can_ir.store.sliceDefs(can_ir.all_defs);
+     const defs = module_env.store.sliceDefs(module_env.all_defs);
      var main_expr_idx: ?CIR.Expr.Idx = null;
      for (defs) |def_idx| {
-         const def = can_ir.store.getDef(def_idx);
-         const pattern = can_ir.store.getPattern(def.pattern);
+         const def = module_env.store.getDef(def_idx);
+         const pattern = module_env.store.getPattern(def.pattern);
          if (pattern == .assign) {
              const ident_idx = pattern.assign.ident;
-             const ident_text = can_ir.env.idents.getText(ident_idx);
+             const ident_text = module_env.idents.getText(ident_idx);
              if (std.mem.eql(u8, ident_text, "main")) {
                  main_expr_idx = def.expr;
                  break;

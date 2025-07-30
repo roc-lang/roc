@@ -172,8 +172,8 @@ answer = composed([42])
 		(p-assign @12.1-12.9 (ident "composed"))
 		(e-closure @12.12-12.41
 			(captures
-				(capture @6.1-6.12 (ident "make_record"))
-				(capture @9.1-9.10 (ident "get_value")))
+				(capture @9.1-9.10 (ident "get_value"))
+				(capture @6.1-6.12 (ident "make_record")))
 			(e-lambda @12.12-12.41
 				(args
 					(p-assign @12.13-12.14 (ident "n")))

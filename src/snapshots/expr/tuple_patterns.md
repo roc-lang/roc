@@ -26,78 +26,21 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:7:22:7:23
-UNDEFINED VARIABLE - tuple_patterns.md:7:7:7:8
-UNDEFINED VARIABLE - tuple_patterns.md:7:10:7:11
-UNDEFINED VARIABLE - tuple_patterns.md:7:15:7:16
-UNDEFINED VARIABLE - tuple_patterns.md:7:18:7:19
 UNUSED VARIABLE - tuple_patterns.md:13:12:13:18
+UNUSED VARIABLE - tuple_patterns.md:7:7:7:8
+UNUSED VARIABLE - tuple_patterns.md:16:6:16:10
+UNUSED VARIABLE - tuple_patterns.md:7:15:7:16
+UNUSED VARIABLE - tuple_patterns.md:10:13:10:19
+UNUSED VARIABLE - tuple_patterns.md:13:6:13:10
+UNUSED VARIABLE - tuple_patterns.md:7:18:7:19
 UNUSED VARIABLE - tuple_patterns.md:13:20:13:27
 UNUSED VARIABLE - tuple_patterns.md:10:6:10:11
 UNUSED VARIABLE - tuple_patterns.md:16:12:16:17
 UNUSED VARIABLE - tuple_patterns.md:10:21:10:26
-UNUSED VARIABLE - tuple_patterns.md:16:6:16:10
 UNUSED VARIABLE - tuple_patterns.md:4:6:4:7
 UNUSED VARIABLE - tuple_patterns.md:4:9:4:10
-UNUSED VARIABLE - tuple_patterns.md:10:13:10:19
-UNUSED VARIABLE - tuple_patterns.md:13:6:13:10
+UNUSED VARIABLE - tuple_patterns.md:7:10:7:11
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**tuple_patterns.md:7:22:7:23:**
-```roc
-    ((a, b), (c, d)) = ((10, 20), (30, 40))
-```
-                     ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `a` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tuple_patterns.md:7:7:7:8:**
-```roc
-    ((a, b), (c, d)) = ((10, 20), (30, 40))
-```
-      ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tuple_patterns.md:7:10:7:11:**
-```roc
-    ((a, b), (c, d)) = ((10, 20), (30, 40))
-```
-         ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `c` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tuple_patterns.md:7:15:7:16:**
-```roc
-    ((a, b), (c, d)) = ((10, 20), (30, 40))
-```
-              ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tuple_patterns.md:7:18:7:19:**
-```roc
-    ((a, b), (c, d)) = ((10, 20), (30, 40))
-```
-                 ^
-
-
 **UNUSED VARIABLE**
 Variable `string` is not used anywhere in your code.
 
@@ -108,6 +51,78 @@ The unused variable is declared here:
     (name, string, boolean) = ("Alice", "fixed", True)
 ```
            ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `a` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:7:7:7:8:**
+```roc
+    ((a, b), (c, d)) = ((10, 20), (30, 40))
+```
+      ^
+
+
+**UNUSED VARIABLE**
+Variable `list` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:16:6:16:10:**
+```roc
+    (list, hello) = ([1, 2, 3], "hello")
+```
+     ^^^^
+
+
+**UNUSED VARIABLE**
+Variable `c` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_c` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:7:15:7:16:**
+```roc
+    ((a, b), (c, d)) = ((10, 20), (30, 40))
+```
+              ^
+
+
+**UNUSED VARIABLE**
+Variable `second` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_second` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:10:13:10:19:**
+```roc
+    (first, second, third) = (100, 42, 200)
+```
+            ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `name` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:13:6:13:10:**
+```roc
+    (name, string, boolean) = ("Alice", "fixed", True)
+```
+     ^^^^
+
+
+**UNUSED VARIABLE**
+Variable `d` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_d` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:7:18:7:19:**
+```roc
+    ((a, b), (c, d)) = ((10, 20), (30, 40))
+```
+                 ^
 
 
 **UNUSED VARIABLE**
@@ -159,18 +174,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
-**tuple_patterns.md:16:6:16:10:**
-```roc
-    (list, hello) = ([1, 2, 3], "hello")
-```
-     ^^^^
-
-
-**UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
@@ -195,27 +198,15 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `second` is not used anywhere in your code.
+Variable `b` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_second` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
 The unused variable is declared here:
-**tuple_patterns.md:10:13:10:19:**
+**tuple_patterns.md:7:10:7:11:**
 ```roc
-    (first, second, third) = (100, 42, 200)
+    ((a, b), (c, d)) = ((10, 20), (30, 40))
 ```
-            ^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `name` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
-The unused variable is declared here:
-**tuple_patterns.md:13:6:13:10:**
-```roc
-    (name, string, boolean) = ("Alice", "fixed", True)
-```
-     ^^^^
+         ^
 
 
 # TOKENS
@@ -240,21 +231,21 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(e-tuple @4.14-4.20
 				(e-int @4.15-4.16 (raw "1"))
 				(e-int @4.18-4.19 (raw "2"))))
-		(e-tuple @7.5-7.21
-			(e-tuple @7.6-7.12
-				(e-ident @7.7-7.8 (raw "a"))
-				(e-ident @7.10-7.11 (raw "b")))
-			(e-tuple @7.14-7.20
-				(e-ident @7.15-7.16 (raw "c"))
-				(e-ident @7.18-7.19 (raw "d"))))
-		(e-malformed @7.22-7.23 (reason "expr_unexpected_token"))
-		(e-tuple @7.24-7.44
-			(e-tuple @7.25-7.33
-				(e-int @7.26-7.28 (raw "10"))
-				(e-int @7.30-7.32 (raw "20")))
-			(e-tuple @7.35-7.43
-				(e-int @7.36-7.38 (raw "30"))
-				(e-int @7.40-7.42 (raw "40"))))
+		(s-decl @7.5-7.44
+			(p-tuple @7.5-7.21
+				(p-tuple @7.6-7.12
+					(p-ident @7.7-7.8 (raw "a"))
+					(p-ident @7.10-7.11 (raw "b")))
+				(p-tuple @7.14-7.20
+					(p-ident @7.15-7.16 (raw "c"))
+					(p-ident @7.18-7.19 (raw "d"))))
+			(e-tuple @7.24-7.44
+				(e-tuple @7.25-7.33
+					(e-int @7.26-7.28 (raw "10"))
+					(e-int @7.30-7.32 (raw "20")))
+				(e-tuple @7.35-7.43
+					(e-int @7.36-7.38 (raw "30"))
+					(e-int @7.40-7.42 (raw "40")))))
 		(s-decl @10.5-10.44
 			(p-tuple @10.5-10.27
 				(p-ident @10.6-10.11 (raw "first"))
@@ -296,9 +287,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 	(x, y) = (1, 2)
 
 	# Nested tuple patterns
-	((a, b), (c, d))
-	
-	((10, 20), (30, 40))
+	((a, b), (c, d)) = ((10, 20), (30, 40))
 
 	# Mixed patterns with literals
 	(first, second, third) = (100, 42, 200)
@@ -324,18 +313,17 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(elems
 				(e-int @4.15-4.16 (value "1"))
 				(e-int @4.18-4.19 (value "2")))))
-	(s-expr @7.5-7.21
-		(e-tuple @7.5-7.21
-			(elems
-				(e-tuple @7.6-7.12
-					(elems
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-runtime-error (tag "ident_not_in_scope"))))
-				(e-tuple @7.14-7.20
-					(elems
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-runtime-error (tag "ident_not_in_scope")))))))
-	(s-expr @7.24-7.44
+	(s-let @7.5-7.44
+		(p-tuple @7.5-7.21
+			(patterns
+				(p-tuple @7.6-7.12
+					(patterns
+						(p-assign @7.7-7.8 (ident "a"))
+						(p-assign @7.10-7.11 (ident "b"))))
+				(p-tuple @7.14-7.20
+					(patterns
+						(p-assign @7.15-7.16 (ident "c"))
+						(p-assign @7.18-7.19 (ident "d"))))))
 		(e-tuple @7.24-7.44
 			(elems
 				(e-tuple @7.25-7.33

@@ -104,7 +104,7 @@ NO CHANGE
 		(e-lambda @6.9-6.26
 			(args
 				(p-assign @6.10-6.11 (ident "a")))
-			(e-nominal @6.13-6.18 (nominal "Maybe")
+			(e-nominal @6.13-6.23 (nominal "Maybe")
 				(e-tag @6.13-6.23 (name "Some")
 					(args
 						(e-lookup-local @6.24-6.25
@@ -117,7 +117,7 @@ NO CHANGE
 						(ty-var @5.20-5.21 (name "a")))))))
 	(d-let
 		(p-assign @9.1-9.6 (ident "none1"))
-		(e-nominal @9.9-9.14 (nominal "Maybe")
+		(e-nominal @9.9-9.19 (nominal "Maybe")
 			(e-tag @9.9-9.19 (name "None")))
 		(annotation @9.1-9.6
 			(declared-type
@@ -128,14 +128,14 @@ NO CHANGE
 		(e-lambda @11.9-11.26
 			(args
 				(p-assign @11.10-11.11 (ident "a")))
-			(e-nominal @11.13-11.18 (nominal "Maybe")
+			(e-nominal @11.13-11.23 (nominal "Maybe")
 				(e-tag @11.13-11.23 (name "Some")
 					(args
 						(e-lookup-local @11.24-11.25
 							(p-assign @11.10-11.11 (ident "a"))))))))
 	(d-let
 		(p-assign @13.1-13.6 (ident "none2"))
-		(e-nominal @13.9-13.14 (nominal "Maybe")
+		(e-nominal @13.9-13.19 (nominal "Maybe")
 			(e-tag @13.9-13.19 (name "None"))))
 	(s-nominal-decl @3.1-3.28
 		(ty-header @3.1-3.9 (name "Maybe")
@@ -161,7 +161,7 @@ NO CHANGE
 					(ty-var @3.7-3.8 (name "a"))))))
 	(expressions
 		(expr @6.9-6.26 (type "a -> Maybe(a)"))
-		(expr @9.9-9.14 (type "Maybe(a)"))
+		(expr @9.9-9.19 (type "Maybe(a)"))
 		(expr @11.9-11.26 (type "_arg -> Maybe(a)"))
-		(expr @13.9-13.14 (type "Maybe(a)"))))
+		(expr @13.9-13.19 (type "Maybe(a)"))))
 ~~~

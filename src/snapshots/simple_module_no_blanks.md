@@ -11,9 +11,19 @@ hello! = Stdout.line!("Hello")
 world = "World"
 ~~~
 # EXPECTED
-NIL
+MODULE NOT FOUND - simple_module_no_blanks.md:2:1:2:17
 # PROBLEMS
-NIL
+**MODULE NOT FOUND**
+The module `pf.Stdout` was not found in this Roc project.
+
+You're attempting to use this module here:
+**simple_module_no_blanks.md:2:1:2:17:**
+```roc
+import pf.Stdout
+```
+^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:22),CloseSquare(1:22-1:23),

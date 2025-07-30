@@ -13,9 +13,8 @@ const compile = @import("compile");
 const types = @import("types");
 const reporting = @import("reporting");
 const Can = @import("can");
+const Check = @import("check");
 
-const Solver = @import("check/check_types.zig");
-const types_problem_mod = @import("check/check_types/problem.zig");
 const cache = @import("cache/mod.zig");
 const fmt = @import("fmt.zig");
 const repl = @import("repl/eval.zig");
@@ -25,6 +24,7 @@ const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const AST = parse.AST;
 const Report = reporting.Report;
+const types_problem_mod = Check.problem;
 const tokenize = parse.tokenize;
 const parallel = base.parallel;
 
@@ -439,7 +439,7 @@ fn generateAllReports(
     allocator: std.mem.Allocator,
     parse_ast: *AST,
     can_ir: *ModuleEnv,
-    solver: *Solver,
+    solver: *Check,
     snapshot_path: []const u8,
     module_env: *ModuleEnv,
 ) !std.ArrayList(reporting.Report) {
@@ -473,9 +473,7 @@ fn generateAllReports(
     }
 
     // Generate type checking reports
-    var problems_itr = solver.problems.problems.iterIndices();
-    while (problems_itr.next()) |problem_idx| {
-        const problem = solver.problems.problems.get(problem_idx);
+    for (solver.problems.problems.items) |problem| {
         const empty_modules: []const *ModuleEnv = &.{};
         var report_builder = types_problem_mod.ReportBuilder.init(
             allocator,
@@ -1078,7 +1076,7 @@ fn processSnapshotContent(
 
     // Types
     const empty_modules: []const *ModuleEnv = &.{};
-    var solver = try Solver.init(
+    var solver = try Check.init(
         allocator,
         &can_ir.types,
         can_ir,
