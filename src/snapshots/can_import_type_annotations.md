@@ -295,7 +295,7 @@ config = Json.defaultConfig
 
 # Test nested type qualification
 advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
-advancedParser = |parserConfig, input| Json.parseWith(parserConfig, input)
+advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)
 
 # Test function with multiple type parameters
 combineResults : Result(a, err), Result(b, err) -> Result((a, b), err)

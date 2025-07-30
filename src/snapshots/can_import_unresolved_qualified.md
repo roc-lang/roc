@@ -114,33 +114,7 @@ LowerIdent(27:1-27:7),OpAssign(27:8-27:9),UpperIdent(27:10-27:14),NoSpaceDotUppe
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-import json.Json
-import http.Client as Http
-
-# Test unresolved qualified value
-main = Json.method
-
-# Test unresolved qualified type in annotation
-parseData : Json.InvalidType -> Str
-parseData = |data| Json.stringify(data)
-
-# Test unresolved nested qualification
-processRequest : Http.Server.Request -> Http.Server.Response
-processRequest = |req| Http.defaultResponse
-
-# Test typo in qualified name
-result = Json.prase("test")
-
-# Test unknown module qualification
-config = Unknown.config
-
-# Test valid module but invalid member
-client = Http.invalidMethod
-
-# Test deeply nested invalid qualification
-parser = Json.create
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
