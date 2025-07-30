@@ -10,8 +10,20 @@ S
 0
 ~~~
 # EXPECTED
+MODULE NOT FOUND - fuzz_crash_052.md:1:9:2:2
 INVALID STATEMENT - fuzz_crash_052.md:3:1:3:2
 # PROBLEMS
+**MODULE NOT FOUND**
+The module `S` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_052.md:1:9:2:2:**
+```roc
+module[]import
+S
+```
+
+
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.

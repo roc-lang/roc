@@ -684,9 +684,22 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             try report.document.addReflowingText("This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!");
             break :blk report;
         },
-        .malformed_type_annotation => |_| blk: {
+        .malformed_type_annotation => |data| blk: {
             var report = Report.init(allocator, "MALFORMED TYPE", .runtime_error);
             try report.document.addReflowingText("This type annotation is malformed or contains invalid syntax.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            const region_info = self.calcRegionInfo(data.region);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
             break :blk report;
         },
         .if_condition_not_canonicalized => |_| blk: {
@@ -878,6 +891,95 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             try report.document.addText("Use a guard:");
             try report.document.addLineBreak();
             try report.document.addInlineCode("n if n > 1e99 => ...");
+
+            break :blk report;
+        },
+        .type_not_exposed => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "TYPE NOT EXPOSED", .runtime_error);
+
+            const type_name_bytes = self.idents.getText(data.type_name);
+            const type_name = try report.addOwnedString(type_name_bytes);
+
+            const module_name_bytes = self.idents.getText(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            // Format the message to match origin/main
+            try report.document.addText("The type ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" is not an exposed by the module ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting to use this type here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
+            break :blk report;
+        },
+        .module_not_found => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MODULE NOT FOUND", .runtime_error);
+
+            const module_name_bytes = self.idents.getText(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            // Format the message to match origin/main
+            try report.document.addText("The module ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(" was not found in this Roc project.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting to use this module here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
+            break :blk report;
+        },
+        .module_not_imported => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MODULE NOT IMPORTED", .runtime_error);
+
+            const module_name_bytes = self.idents.getText(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            // Format the message to match origin/main
+            try report.document.addText("There is no module with the name ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(" imported into this Roc file.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting to use this module here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
 
             break :blk report;
         },
@@ -1096,10 +1198,30 @@ pub fn addPatternAndTypeVar(self: *Self, expr: Pattern, content: types_mod.Conte
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
+pub fn addPatternAndTypeVarRedirect(self: *Self, expr: Pattern, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!Pattern.Idx {
+    const expr_idx = try self.store.addPattern(expr, region);
+    const expr_var = try self.types.freshRedirect(redirect_to);
+    debugAssertIdxsEql("addPatternAndTypeVar", expr_idx, expr_var);
+    self.debugAssertArraysInSync();
+    return expr_idx;
+}
+
+/// Add a new expression and type variable.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addExprAndTypeVar(self: *Self, expr: Expr, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Expr.Idx {
     const expr_idx = try self.store.addExpr(expr, region);
     const expr_var = try self.types.freshFromContent(content);
     debugAssertIdxsEql("addExprAndTypeVar", expr_idx, expr_var);
+    self.debugAssertArraysInSync();
+    return expr_idx;
+}
+
+/// Add a new expression and type variable.
+/// This function asserts that the types array and the nodes are in sync.
+pub fn addExprAndTypeVarRedirect(self: *Self, expr: Expr, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!Expr.Idx {
+    const expr_idx = try self.store.addExpr(expr, region);
+    const expr_var = try self.types.freshRedirect(redirect_to);
+    debugAssertIdxsEql("addExprAndTypeVarRedirect", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -1176,6 +1298,16 @@ pub fn addTypeAnnoAndTypeVar(self: *Self, expr: TypeAnno, content: types_mod.Con
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
+pub fn addTypeAnnoAndTypeVarRedirect(self: *Self, expr: TypeAnno, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!TypeAnno.Idx {
+    const expr_idx = try self.store.addTypeAnno(expr, region);
+    const expr_var = try self.types.freshRedirect(redirect_to);
+    debugAssertIdxsEql("addTypeAnnoAndTypeVarRedirect", expr_idx, expr_var);
+    self.debugAssertArraysInSync();
+    return expr_idx;
+}
+
+/// Add a new expression and type variable.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addAnnotationAndTypeVar(self: *Self, expr: Annotation, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Annotation.Idx {
     const expr_idx = try self.store.addAnnotation(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -1186,9 +1318,29 @@ pub fn addAnnotationAndTypeVar(self: *Self, expr: Annotation, content: types_mod
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
+pub fn addAnnotationAndTypeVarRedirect(self: *Self, expr: Annotation, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!Annotation.Idx {
+    const expr_idx = try self.store.addAnnotation(expr, region);
+    const expr_var = try self.types.freshRedirect(redirect_to);
+    debugAssertIdxsEql("addAnnotationAndTypeVar", expr_idx, expr_var);
+    self.debugAssertArraysInSync();
+    return expr_idx;
+}
+
+/// Add a new expression and type variable.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addAnnoRecordFieldAndTypeVar(self: *Self, expr: TypeAnno.RecordField, content: types_mod.Content, region: Region) std.mem.Allocator.Error!TypeAnno.RecordField.Idx {
     const expr_idx = try self.store.addAnnoRecordField(expr, region);
     const expr_var = try self.types.freshFromContent(content);
+    debugAssertIdxsEql("addAnnoRecordFieldAndTypeVar", expr_idx, expr_var);
+    self.debugAssertArraysInSync();
+    return expr_idx;
+}
+
+/// Add a new expression and type variable.
+/// This function asserts that the types array and the nodes are in sync.
+pub fn addAnnoRecordFieldAndTypeVarRedirect(self: *Self, expr: TypeAnno.RecordField, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!TypeAnno.RecordField.Idx {
+    const expr_idx = try self.store.addAnnoRecordField(expr, region);
+    const expr_var = try self.types.freshRedirect(redirect_to);
     debugAssertIdxsEql("addAnnoRecordFieldAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;

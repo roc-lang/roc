@@ -16,8 +16,20 @@ decodeThings # After member name
 				module(a).Decode
 ~~~
 # EXPECTED
+MODULE NOT FOUND - where_clauses_10.md:3:1:3:32
 EXPOSED BUT NOT DEFINED - where_clauses_10.md:1:9:1:15
 # PROBLEMS
+**MODULE NOT FOUND**
+The module `Decode` was not found in this Roc project.
+
+You're attempting to use this module here:
+**where_clauses_10.md:3:1:3:32:**
+```roc
+import Decode exposing [Decode]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **EXPOSED BUT NOT DEFINED**
 The module header says that `decode` is exposed, but it is not defined anywhere in this module.
 

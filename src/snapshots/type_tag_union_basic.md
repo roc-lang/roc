@@ -237,14 +237,14 @@ main! = |_| {}
 								(pattern (degenerate false)
 									(p-applied-tag @14.5-14.10)))
 							(value
-								(e-nominal @14.14-14.18 (nominal "Bool")
+								(e-nominal @14.14-14.23 (nominal "Bool")
 									(e-tag @14.14-14.23 (name "True")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @15.5-15.11)))
 							(value
-								(e-nominal @15.15-15.19 (nominal "Bool")
+								(e-nominal @15.15-15.25 (nominal "Bool")
 									(e-tag @15.15-15.25 (name "False")))))))))
 		(annotation @13.1-13.15
 			(declared-type

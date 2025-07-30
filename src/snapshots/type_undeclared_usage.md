@@ -18,6 +18,7 @@ AnotherType : SomeModule.MissingType
 ~~~
 # EXPECTED
 UNDECLARED TYPE - type_undeclared_usage.md:3:10:3:21
+MODULE NOT IMPORTED - type_undeclared_usage.md:10:15:10:37
 UNDECLARED TYPE - type_undeclared_usage.md:5:16:5:32
 UNUSED VARIABLE - type_undeclared_usage.md:6:17:6:22
 # PROBLEMS
@@ -30,6 +31,17 @@ This type is referenced here:
 MyType : UnknownType
 ```
          ^^^^^^^^^^^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `SomeModule` imported into this Roc file.
+
+You're attempting to use this module here:
+**type_undeclared_usage.md:10:15:10:37:**
+```roc
+AnotherType : SomeModule.MissingType
+```
+              ^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -130,9 +142,7 @@ AnotherType : SomeModule.MissingType
 		(ty @3.10-3.21 (name "UnknownType")))
 	(s-alias-decl @10.1-10.37
 		(ty-header @10.1-10.12 (name "AnotherType"))
-		(ty-lookup-external @10.15-10.37
-			(ext-decl @10.15-10.37 (ident "SomeModule.MissingType") (kind "type"))))
-	(ext-decl @10.15-10.37 (ident "SomeModule.MissingType") (kind "type")))
+		(ty-malformed @10.15-10.37)))
 ~~~
 # TYPES
 ~~~clojure
@@ -142,7 +152,7 @@ AnotherType : SomeModule.MissingType
 	(type_decls
 		(alias @3.1-3.21 (type "Error")
 			(ty-header @3.1-3.7 (name "MyType")))
-		(alias @10.1-10.37 (type "AnotherType")
+		(alias @10.1-10.37 (type "Error")
 			(ty-header @10.1-10.12 (name "AnotherType"))))
 	(expressions
 		(expr @6.16-8.2 (type "Error -> Str"))))

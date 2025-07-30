@@ -117,6 +117,8 @@ h = |x, y| {
 }
 ~~~
 # EXPECTED
+MODULE NOT FOUND - everything.md:4:1:7:2
+MODULE NOT FOUND - everything.md:8:1:11:2
 UNUSED VARIABLE - everything.md:90:5:90:6
 UNUSED VARIABLE - everything.md:95:4:95:5
 UNUSED VARIABLE - everything.md:100:5:100:6
@@ -127,6 +129,32 @@ UNUSED VARIABLE - everything.md:69:2:69:4
 UNUSED VARIABLE - everything.md:77:2:77:4
 UNUSED VARIABLE - everything.md:73:2:73:4
 # PROBLEMS
+**MODULE NOT FOUND**
+The module `I1` was not found in this Roc project.
+
+You're attempting to use this module here:
+**everything.md:4:1:7:2:**
+```roc
+import I1 exposing [
+	I11,
+	I12,
+]
+```
+
+
+**MODULE NOT FOUND**
+The module `I2` was not found in this Roc project.
+
+You're attempting to use this module here:
+**everything.md:8:1:11:2:**
+```roc
+import I2 exposing [
+	I21 as Ias1,
+	I22 as Ias2,
+]
+```
+
+
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
 
@@ -510,11 +538,11 @@ NO CHANGE
 		(p-assign @60.1-60.2 (ident "h"))
 		(e-closure @60.5-110.2
 			(captures
-				(capture @89.5-89.6 (ident "a"))
-				(capture @94.4-94.5 (ident "a"))
 				(capture @99.5-99.6 (ident "a"))
 				(capture @105.5-105.6 (ident "a"))
-				(capture @60.1-60.2 (ident "h")))
+				(capture @60.1-60.2 (ident "h"))
+				(capture @89.5-89.6 (ident "a"))
+				(capture @94.4-94.5 (ident "a")))
 			(e-lambda @60.5-110.2
 				(args
 					(p-assign @60.6-60.7 (ident "x"))

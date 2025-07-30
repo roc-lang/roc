@@ -214,17 +214,18 @@ test "import validation - no module_envs provided" {
 
     _ = try can.canonicalizeFile();
 
-    // When module_envs is null, no import validation errors should be generated
     const diagnostics = try parse_env.getDiagnostics();
     defer allocator.free(diagnostics);
 
     for (diagnostics) |diagnostic| {
         switch (diagnostic) {
-            .module_not_found, .value_not_exposed, .type_not_exposed => {
-                // These errors should not occur when module_envs is null
+            .module_not_found => {
+                // expected this error message, ignore
+            },
+            else => {
+                // these errors are not expected
                 try testing.expect(false);
             },
-            else => {},
         }
     }
 }

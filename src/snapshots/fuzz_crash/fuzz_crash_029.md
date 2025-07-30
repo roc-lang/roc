@@ -49,7 +49,7 @@ INVALID STATEMENT - fuzz_crash_029.md:7:2:7:9
 INVALID STATEMENT - fuzz_crash_029.md:8:3:9:4
 INVALID STATEMENT - fuzz_crash_029.md:10:2:10:10
 INVALID STATEMENT - fuzz_crash_029.md:11:3:11:8
-MALFORMED TYPE - :0:0:0:0
+MALFORMED TYPE - fuzz_crash_029.md:13:6:13:7
 INVALID STATEMENT - fuzz_crash_029.md:13:7:13:10
 INVALID STATEMENT - fuzz_crash_029.md:13:10:13:11
 INVALID STATEMENT - fuzz_crash_029.md:13:11:13:12
@@ -366,6 +366,13 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
+
+**fuzz_crash_029.md:13:6:13:7:**
+```roc
+pkg: "..l", mmen		} # Cose
+```
+     ^
+
 
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.

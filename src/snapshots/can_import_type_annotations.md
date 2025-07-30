@@ -46,10 +46,48 @@ combineResults = |result1, result2|
     }
 ~~~
 # EXPECTED
+MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:56
+MODULE NOT FOUND - can_import_type_annotations.md:4:1:4:17
+MODULE NOT FOUND - can_import_type_annotations.md:5:1:5:38
 UNDECLARED TYPE - can_import_type_annotations.md:7:18:7:25
 UNDECLARED TYPE - can_import_type_annotations.md:7:29:7:37
 UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
+MODULE NOT IMPORTED - can_import_type_annotations.md:26:18:26:36
+MODULE NOT IMPORTED - can_import_type_annotations.md:26:64:26:81
 # PROBLEMS
+**MODULE NOT FOUND**
+The module `http.Client` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_type_annotations.md:3:1:3:56:**
+```roc
+import http.Client as Http exposing [Request, Response]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `json.Json` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_type_annotations.md:4:1:4:17:**
+```roc
+import json.Json
+```
+^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `utils.Result` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_type_annotations.md:5:1:5:38:**
+```roc
+import utils.Result exposing [Result]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type _Request_ is not declared in this scope.
 
@@ -82,6 +120,78 @@ The unused variable is declared here:
 processRequest = |req| Http.defaultResponse
 ```
                   ^^^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `module []
+
+import http.Client as Http exposing [Request, Response]
+import json.Json
+import utils.Result exposing [Result]
+
+processRequest : Request -> Response
+processRequest = |req| Http.defaultResponse
+
+parseJson : Str -> Json.Value
+parseJson = |input| Json.parse(input)
+
+handleApi : Http.Request -> Result(Http.Response, Json.Error)
+handleApi = |request| {
+    result = Json.decode(request.body)
+    match result {
+        Ok(data) => Ok(Http.success(data))
+        Err(err) => Err(err)
+    }
+}
+
+config : Json.Config
+config = Json.defaultConfig
+
+# Test nested type qualification
+advancedParser : Json.Parser` imported into this Roc file.
+
+You're attempting to use this module here:
+**can_import_type_annotations.md:26:18:26:36:**
+```roc
+advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
+```
+                 ^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `module []
+
+import http.Client as Http exposing [Request, Response]
+import json.Json
+import utils.Result exposing [Result]
+
+processRequest : Request -> Response
+processRequest = |req| Http.defaultResponse
+
+parseJson : Str -> Json.Value
+parseJson = |input| Json.parse(input)
+
+handleApi : Http.Request -> Result(Http.Response, Json.Error)
+handleApi = |request| {
+    result = Json.decode(request.body)
+    match result {
+        Ok(data) => Ok(Http.success(data))
+        Err(err) => Err(err)
+    }
+}
+
+config : Json.Config
+config = Json.defaultConfig
+
+# Test nested type qualification
+advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser` imported into this Roc file.
+
+You're attempting to use this module here:
+**can_import_type_annotations.md:26:64:26:81:**
+```roc
+advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
+```
+                                                               ^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -341,7 +451,8 @@ combineResults = |result1, result2|
 				(ty-fn @10.13-10.30 (effectful false)
 					(ty @10.13-10.16 (name "Str"))
 					(ty-lookup-external @10.20-10.30
-						(ext-decl @10.20-10.30 (ident "Json.Value") (kind "type")))))))
+						(module-idx "1")
+						(target-node-idx "0"))))))
 	(d-let
 		(p-assign @14.1-14.10 (ident "handleApi"))
 		(e-closure @14.13-20.2
@@ -394,12 +505,15 @@ combineResults = |result1, result2|
 			(declared-type
 				(ty-fn @13.13-13.62 (effectful false)
 					(ty-lookup-external @13.13-13.25
-						(ext-decl @13.13-13.25 (ident "Http.Request") (kind "type")))
+						(module-idx "0")
+						(target-node-idx "0"))
 					(ty-apply @13.29-13.62 (symbol "Result")
 						(ty-lookup-external @13.36-13.49
-							(ext-decl @13.36-13.49 (ident "Http.Response") (kind "type")))
+							(module-idx "0")
+							(target-node-idx "0"))
 						(ty-lookup-external @13.51-13.61
-							(ext-decl @13.51-13.61 (ident "Json.Error") (kind "type"))))))))
+							(module-idx "1")
+							(target-node-idx "0")))))))
 	(d-let
 		(p-assign @23.1-23.7 (ident "config"))
 		(e-lookup-external @23.10-23.28
@@ -408,7 +522,8 @@ combineResults = |result1, result2|
 		(annotation @23.1-23.7
 			(declared-type
 				(ty-lookup-external @22.10-22.21
-					(ext-decl @22.10-22.21 (ident "Json.Config") (kind "type"))))))
+					(module-idx "1")
+					(target-node-idx "0")))))
 	(d-let
 		(p-assign @27.1-27.15 (ident "advancedParser"))
 		(e-lambda @27.18-27.82
@@ -426,14 +541,13 @@ combineResults = |result1, result2|
 		(annotation @27.1-27.15
 			(declared-type
 				(ty-fn @26.18-26.82 (effectful false)
-					(ty-lookup-external @26.18-26.36
-						(ext-decl @26.18-26.36 (ident "Json.Parser.Config") (kind "type")))
+					(ty-malformed @26.18-26.36)
 					(ty @26.38-26.41 (name "Str"))
 					(ty-apply @26.45-26.82 (symbol "Result")
 						(ty-lookup-external @26.52-26.62
-							(ext-decl @26.52-26.62 (ident "Json.Value") (kind "type")))
-						(ty-lookup-external @26.64-26.81
-							(ext-decl @26.64-26.81 (ident "Json.Parser.Error") (kind "type"))))))))
+							(module-idx "1")
+							(target-node-idx "0"))
+						(ty-malformed @26.64-26.81))))))
 	(d-let
 		(p-assign @31.1-31.15 (ident "combineResults"))
 		(e-closure @31.18-39.6
@@ -516,31 +630,23 @@ combineResults = |result1, result2|
 		(exposes))
 	(s-import @5.1-5.38 (module "utils.Result") (qualifier "utils")
 		(exposes
-			(exposed (name "Result") (wildcard false))))
-	(ext-decl @10.20-10.30 (ident "Json.Value") (kind "type"))
-	(ext-decl @13.13-13.25 (ident "Http.Request") (kind "type"))
-	(ext-decl @13.36-13.49 (ident "Http.Response") (kind "type"))
-	(ext-decl @13.51-13.61 (ident "Json.Error") (kind "type"))
-	(ext-decl @22.10-22.21 (ident "Json.Config") (kind "type"))
-	(ext-decl @26.18-26.36 (ident "Json.Parser.Config") (kind "type"))
-	(ext-decl @26.52-26.62 (ident "Json.Value") (kind "type"))
-	(ext-decl @26.64-26.81 (ident "Json.Parser.Error") (kind "type")))
+			(exposed (name "Result") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @8.1-8.15 (type "Error -> Error"))
-		(patt @11.1-11.10 (type "Str -> Json.Value"))
-		(patt @14.1-14.10 (type "{ body: _field } -> Error"))
+		(patt @11.1-11.10 (type "Str -> Error"))
+		(patt @14.1-14.10 (type "Error -> Error"))
 		(patt @23.1-23.7 (type "Error"))
-		(patt @27.1-27.15 (type "Json.Parser.Config, Str -> Error"))
+		(patt @27.1-27.15 (type "Error, Str -> Error"))
 		(patt @31.1-31.15 (type "Error, Error -> Error")))
 	(expressions
 		(expr @8.18-8.44 (type "Error -> Error"))
-		(expr @11.13-11.38 (type "Str -> Json.Value"))
-		(expr @14.13-20.2 (type "{ body: _field } -> Error"))
+		(expr @11.13-11.38 (type "Str -> Error"))
+		(expr @14.13-20.2 (type "Error -> Error"))
 		(expr @23.10-23.28 (type "Error"))
-		(expr @27.18-27.82 (type "Json.Parser.Config, Str -> Error"))
+		(expr @27.18-27.82 (type "Error, Str -> Error"))
 		(expr @31.18-39.6 (type "Error, Error -> Error"))))
 ~~~

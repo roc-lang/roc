@@ -10,8 +10,20 @@ module []
 import json.Json [foo, BAR]
 ~~~
 # EXPECTED
+MODULE NOT FOUND - stmt_import.md:3:1:3:17
 INVALID STATEMENT - stmt_import.md:3:18:3:28
 # PROBLEMS
+**MODULE NOT FOUND**
+The module `json.Json` was not found in this Roc project.
+
+You're attempting to use this module here:
+**stmt_import.md:3:1:3:17:**
+```roc
+import json.Json [foo, BAR]
+```
+^^^^^^^^^^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.

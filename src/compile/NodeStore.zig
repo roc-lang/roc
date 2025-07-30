@@ -104,13 +104,13 @@ pub fn deinit(store: *NodeStore) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 44;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 30;
+pub const MODULEENV_EXPR_NODE_COUNT = 31;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 13;
 /// Count of the type annotation nodes in the ModuleEnv
-pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 11;
+pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
-pub const MODULEENV_PATTERN_NODE_COUNT = 13;
+pub const MODULEENV_PATTERN_NODE_COUNT = 14;
 
 comptime {
     // Check the number of ModuleEnv.Diagnostic nodes
@@ -242,13 +242,12 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
             const extra_data = store.extra_data.items.items[extra_start..];
 
             const anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(extra_data[0]));
-            const anno_var = @as(types.Var, @enumFromInt(extra_data[1]));
-            const header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(extra_data[2]));
-            const has_where = extra_data[3] != 0;
+            const header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(extra_data[1]));
+            const has_where = extra_data[2] != 0;
 
             const where_clause = if (has_where) blk: {
-                const where_start = extra_data[4];
-                const where_len = extra_data[5];
+                const where_start = extra_data[3];
+                const where_len = extra_data[4];
                 break :blk ModuleEnv.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
             } else null;
 
@@ -256,7 +255,6 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
                 .s_alias_decl = .{
                     .header = header,
                     .anno = anno,
-                    .anno_var = anno_var,
                     .where = where_clause,
                 },
             };
@@ -266,13 +264,12 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
             const extra_data = store.extra_data.items.items[extra_start..];
 
             const anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(extra_data[0]));
-            const anno_var = @as(types.Var, @enumFromInt(extra_data[1]));
-            const header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(extra_data[2]));
-            const has_where = extra_data[3] != 0;
+            const header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(extra_data[1]));
+            const has_where = extra_data[2] != 0;
 
             const where_clause = if (has_where) blk: {
-                const where_start = extra_data[4];
-                const where_len = extra_data[5];
+                const where_start = extra_data[3];
+                const where_len = extra_data[4];
                 break :blk ModuleEnv.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
             } else null;
 
@@ -280,7 +277,6 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
                 .s_nominal_decl = .{
                     .header = header,
                     .anno = anno,
-                    .anno_var = anno_var,
                     .where = where_clause,
                 },
             };
@@ -440,6 +436,24 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             return ModuleEnv.Expr{
                 .e_nominal = .{
                     .nominal_type_decl = nominal_type_decl,
+                    .backing_expr = backing_expr,
+                    .backing_type = backing_type,
+                },
+            };
+        },
+        .expr_nominal_external => {
+            const module_idx: ModuleEnv.Import.Idx = @enumFromInt(node.data_1);
+            const target_node_idx: u16 = @intCast(node.data_2);
+
+            const extra_data_idx = node.data_3;
+            const extra_data = store.extra_data.items.items[extra_data_idx..][0..2];
+            const backing_expr: ModuleEnv.Expr.Idx = @enumFromInt(extra_data[0]);
+            const backing_type: ModuleEnv.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
+
+            return ModuleEnv.Expr{
+                .e_nominal_external = .{
+                    .module_idx = module_idx,
+                    .target_node_idx = target_node_idx,
                     .backing_expr = backing_expr,
                     .backing_type = backing_type,
                 },
@@ -791,6 +805,24 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
                 },
             };
         },
+        .pattern_nominal_external => {
+            const module_idx: ModuleEnv.Import.Idx = @enumFromInt(node.data_1);
+            const target_node_idx: u16 = @intCast(node.data_2);
+
+            const extra_data_idx = node.data_3;
+            const extra_data = store.extra_data.items.items[extra_data_idx..][0..2];
+            const backing_pattern: ModuleEnv.Pattern.Idx = @enumFromInt(extra_data[0]);
+            const backing_type: ModuleEnv.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
+
+            return ModuleEnv.Pattern{
+                .nominal_external = .{
+                    .module_idx = module_idx,
+                    .target_node_idx = target_node_idx,
+                    .backing_pattern = backing_pattern,
+                    .backing_type = backing_type,
+                },
+            };
+        },
         .pattern_record_destructure => {
             const extra_start = node.data_1;
             const extra_data = store.extra_data.items.items[extra_start..];
@@ -927,6 +959,16 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: ModuleEnv.TypeAnno.Idx) Mo
             .symbol = @bitCast(node.data_1),
             .args = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
         } },
+        .ty_apply_external => {
+            const extra_data_idx = node.data_3;
+            const args_start = store.extra_data.items.items[extra_data_idx];
+            const args_len = store.extra_data.items.items[extra_data_idx + 1];
+            return ModuleEnv.TypeAnno{ .apply_external = .{
+                .module_idx = @enumFromInt(node.data_1),
+                .target_node_idx = @intCast(node.data_2),
+                .args = .{ .span = .{ .start = args_start, .len = args_len } },
+            } };
+        },
         .ty_var => return ModuleEnv.TypeAnno{ .ty_var = .{
             .name = @bitCast(node.data_1),
         } },
@@ -945,9 +987,9 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: ModuleEnv.TypeAnno.Idx) Mo
             .fields = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
         } },
         .ty_fn => {
-            const ret_and_effectful = node.data_3;
-            const ret: ModuleEnv.TypeAnno.Idx = @enumFromInt(ret_and_effectful & 0x7FFFFFFF);
-            const effectful = (ret_and_effectful & (1 << 31)) != 0;
+            const extra_data_idx = node.data_3;
+            const effectful = store.extra_data.items.items[extra_data_idx] != 0;
+            const ret: ModuleEnv.TypeAnno.Idx = @enumFromInt(store.extra_data.items.items[extra_data_idx + 1]);
             return ModuleEnv.TypeAnno{ .@"fn" = .{
                 .args = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
                 .ret = ret,
@@ -959,7 +1001,8 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: ModuleEnv.TypeAnno.Idx) Mo
         } },
         .ty_lookup_external => return ModuleEnv.TypeAnno{
             .ty_lookup_external = .{
-                .external_decl = @enumFromInt(node.data_1),
+                .module_idx = @enumFromInt(node.data_1),
+                .target_node_idx = @intCast(node.data_2),
             },
         },
         .ty_malformed => return ModuleEnv.TypeAnno{ .malformed = .{
@@ -1120,8 +1163,6 @@ pub fn addStatement(store: *NodeStore, statement: ModuleEnv.Statement, region: b
 
             // Store anno idx
             _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
-            // Store anno var
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno_var));
             // Store header idx
             _ = try store.extra_data.append(store.gpa, @intFromEnum(s.header));
             // Store where clause information
@@ -1145,8 +1186,6 @@ pub fn addStatement(store: *NodeStore, statement: ModuleEnv.Statement, region: b
 
             // Store anno idx
             _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
-            // Store anno var
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno_var));
             // Store header idx
             _ = try store.extra_data.append(store.gpa, @intFromEnum(s.header));
             // Store where clause information
@@ -1305,6 +1344,14 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
             node.data_1 = @intFromEnum(e.nominal_type_decl);
             node.data_2 = @intFromEnum(e.backing_expr);
             node.data_3 = @intFromEnum(e.backing_type);
+        },
+        .e_nominal_external => |e| {
+            node.tag = .expr_nominal_external;
+            node.data_1 = @intFromEnum(e.module_idx);
+            node.data_2 = @intCast(e.target_node_idx);
+            node.data_3 = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.backing_expr));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.backing_type));
         },
         .e_dot_access => |e| {
             node.tag = .expr_dot_access;
@@ -1661,6 +1708,14 @@ pub fn addPattern(store: *NodeStore, pattern: ModuleEnv.Pattern, region: base.Re
             node.data_2 = @intFromEnum(n.backing_pattern);
             node.data_3 = @intFromEnum(n.backing_type);
         },
+        .nominal_external => |n| {
+            node.tag = .pattern_nominal_external;
+            node.data_1 = @intFromEnum(n.module_idx);
+            node.data_2 = @intCast(n.target_node_idx);
+            node.data_3 = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(n.backing_pattern));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(n.backing_type));
+        },
         .record_destructure => |p| {
             node.tag = .pattern_record_destructure;
 
@@ -1777,6 +1832,15 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: ModuleEnv.TypeAnno, region: base
             node.data_3 = a.args.span.len;
             node.tag = .ty_apply;
         },
+        .apply_external => |a| {
+            node.data_1 = @intFromEnum(a.module_idx);
+            node.data_2 = a.target_node_idx;
+            const ed_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, a.args.span.start);
+            _ = try store.extra_data.append(store.gpa, a.args.span.len);
+            node.data_3 = ed_start;
+            node.tag = .ty_apply_external;
+        },
         .ty_var => |tv| {
             node.data_1 = @bitCast(tv.name);
             node.tag = .ty_var;
@@ -1807,7 +1871,10 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: ModuleEnv.TypeAnno, region: base
         .@"fn" => |f| {
             node.data_1 = f.args.span.start;
             node.data_2 = f.args.span.len;
-            node.data_3 = @intFromEnum(f.ret) | (if (f.effectful) @as(u32, 1) << 31 else 0);
+            const ed_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, if (f.effectful) @as(u32, 1) else 0);
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(f.ret));
+            node.data_3 = ed_start;
             node.tag = .ty_fn;
         },
         .parens => |p| {
@@ -1815,8 +1882,9 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: ModuleEnv.TypeAnno, region: base
             node.tag = .ty_parens;
         },
         .ty_lookup_external => |tle| {
-            node.data_1 = @intFromEnum(tle.external_decl);
             node.tag = .ty_lookup_external;
+            node.data_1 = @intFromEnum(tle.module_idx);
+            node.data_2 = tle.target_node_idx;
         },
         .malformed => |m| {
             node.data_1 = @intFromEnum(m.diagnostic);
@@ -2561,8 +2629,13 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
             node.tag = .diag_type_shadowed_warning;
             region = r.region;
             node.data_1 = @bitCast(r.name);
-            node.data_2 = r.original_region.start.offset;
-            node.data_3 = r.original_region.end.offset | (@as(u32, @intFromBool(r.cross_scope)) << 31);
+            node.data_2 = @intFromBool(r.cross_scope);
+
+            // Store original region in extra_data
+            const extra_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, r.original_region.start.offset);
+            _ = try store.extra_data.append(store.gpa, r.original_region.end.offset);
+            node.data_3 = extra_start;
         },
         .type_parameter_conflict => |r| {
             node.tag = .diag_type_parameter_conflict;
@@ -2813,15 +2886,20 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
                 .end = .{ .offset = @intCast(node.data_3) },
             },
         } },
-        .diag_type_shadowed_warning => return ModuleEnv.Diagnostic{ .type_shadowed_warning = .{
-            .name = @bitCast(node.data_1),
-            .region = store.getRegionAt(node_idx),
-            .original_region = .{
-                .start = .{ .offset = @intCast(node.data_2) },
-                .end = .{ .offset = @intCast(node.data_3 & 0x7FFFFFFF) },
-            },
-            .cross_scope = (node.data_3 & 0x80000000) != 0,
-        } },
+        .diag_type_shadowed_warning => {
+            const extra_data = store.extra_data.items.items[node.data_3..];
+            const original_start = extra_data[0];
+            const original_end = extra_data[1];
+            return ModuleEnv.Diagnostic{ .type_shadowed_warning = .{
+                .name = @bitCast(node.data_1),
+                .region = store.getRegionAt(node_idx),
+                .cross_scope = node.data_2 != 0,
+                .original_region = .{
+                    .start = .{ .offset = original_start },
+                    .end = .{ .offset = original_end },
+                },
+            } };
+        },
         .diag_type_parameter_conflict => {
             const extra_data = store.extra_data.items.items[node.data_3..];
             const original_start = extra_data[0];

@@ -14,7 +14,9 @@ test {
     testing.refAllDeclsRecursive(@import("builtins"));
 
     testing.refAllDeclsRecursive(@import("collections"));
-    testing.refAllDeclsRecursive(@import("types"));
+
+    testing.refAllDecls(@import("types"));
+    testing.refAllDecls(@import("types/test/rigid_instantiation.zig"));
 
     testing.refAllDeclsRecursive(@import("serialization"));
     testing.refAllDecls(@import("serialization/test/compact_writer_test.zig"));

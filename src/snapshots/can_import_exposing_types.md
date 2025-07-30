@@ -64,6 +64,9 @@ combineResults = |jsonResult, httpStatus|
 UNDECLARED TYPE - can_import_exposing_types.md:31:18:31:24
 UNDECLARED TYPE - can_import_exposing_types.md:32:18:32:24
 UNDECLARED TYPE - can_import_exposing_types.md:33:23:33:31
+MODULE NOT FOUND - can_import_exposing_types.md:3:1:3:49
+MODULE NOT FOUND - can_import_exposing_types.md:4:1:4:64
+MODULE NOT FOUND - can_import_exposing_types.md:5:1:5:38
 UNDECLARED TYPE - can_import_exposing_types.md:8:27:8:32
 UNDECLARED TYPE - can_import_exposing_types.md:8:34:8:39
 UNDECLARED TYPE - can_import_exposing_types.md:12:17:12:24
@@ -113,6 +116,39 @@ This type is referenced here:
     defaultResponse : Response,
 ```
                       ^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `json.Json` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_exposing_types.md:3:1:3:49:**
+```roc
+import json.Json exposing [Value, Error, Config]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `http.Client` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_exposing_types.md:4:1:4:64:**
+```roc
+import http.Client as Http exposing [Request, Response, Status]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `utils.Result` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_exposing_types.md:5:1:5:38:**
+```roc
+import utils.Result exposing [Result]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -608,8 +644,8 @@ combineResults = |jsonResult, httpStatus|
 		(p-assign @13.1-13.14 (ident "handleRequest"))
 		(e-closure @13.17-19.2
 			(captures
-				(capture @16.12-16.17 (ident "value"))
-				(capture @17.13-17.18 (ident "error")))
+				(capture @17.13-17.18 (ident "error"))
+				(capture @16.12-16.17 (ident "value")))
 			(e-lambda @13.17-19.2
 				(args
 					(p-assign @13.18-13.21 (ident "req")))
@@ -707,13 +743,14 @@ combineResults = |jsonResult, httpStatus|
 				(ty-fn @37.16-37.37 (effectful false)
 					(ty @37.16-37.22 (name "Config"))
 					(ty-lookup-external @37.26-37.37
-						(ext-decl @37.26-37.37 (ident "Http.Client") (kind "type")))))))
+						(module-idx "1")
+						(target-node-idx "0"))))))
 	(d-let
 		(p-assign @42.1-42.15 (ident "handleResponse"))
 		(e-closure @42.18-46.6
 			(captures
-				(capture @45.13-45.18 (ident "error"))
-				(capture @44.12-44.18 (ident "status")))
+				(capture @44.12-44.18 (ident "status"))
+				(capture @45.13-45.18 (ident "error")))
 			(e-lambda @42.18-46.6
 				(args
 					(p-assign @42.19-42.27 (ident "response")))
@@ -754,8 +791,8 @@ combineResults = |jsonResult, httpStatus|
 		(p-assign @50.1-50.15 (ident "combineResults"))
 		(e-closure @50.18-54.6
 			(captures
-				(capture @52.12-52.17 (ident "value"))
-				(capture @53.13-53.18 (ident "error")))
+				(capture @53.13-53.18 (ident "error"))
+				(capture @52.12-52.17 (ident "value")))
 			(e-lambda @50.18-54.6
 				(args
 					(p-assign @50.19-50.29 (ident "jsonResult"))
@@ -825,8 +862,7 @@ combineResults = |jsonResult, httpStatus|
 			(exposed (name "Status") (wildcard false))))
 	(s-import @5.1-5.38 (module "utils.Result") (qualifier "utils")
 		(exposes
-			(exposed (name "Result") (wildcard false))))
-	(ext-decl @37.26-37.37 (ident "Http.Client") (kind "type")))
+			(exposed (name "Result") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure
@@ -835,7 +871,7 @@ combineResults = |jsonResult, httpStatus|
 		(patt @9.1-9.10 (type "Str -> Error"))
 		(patt @13.1-13.14 (type "Error -> Error"))
 		(patt @23.1-23.12 (type "Error, Error -> Error"))
-		(patt @38.1-38.13 (type "Error -> Http.Client"))
+		(patt @38.1-38.13 (type "Error -> Error"))
 		(patt @42.1-42.15 (type "Error -> Str"))
 		(patt @50.1-50.15 (type "Error, Error -> Error")))
 	(type_decls
@@ -845,7 +881,7 @@ combineResults = |jsonResult, httpStatus|
 		(expr @9.13-9.38 (type "Str -> Error"))
 		(expr @13.17-19.2 (type "Error -> Error"))
 		(expr @23.15-27.6 (type "Error, Error -> Error"))
-		(expr @38.16-38.48 (type "Error -> Http.Client"))
+		(expr @38.16-38.48 (type "Error -> Error"))
 		(expr @42.18-46.6 (type "Error -> Str"))
 		(expr @50.18-54.6 (type "Error, Error -> Error"))))
 ~~~

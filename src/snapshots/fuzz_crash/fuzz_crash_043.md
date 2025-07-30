@@ -12,7 +12,7 @@ o:0}0
 PARSE ERROR - fuzz_crash_043.md:1:20:1:21
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_043.md:2:3:2:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_043.md:2:4:2:5
-MALFORMED TYPE - :0:0:0:0
+MALFORMED TYPE - fuzz_crash_043.md:2:3:2:4
 INVALID STATEMENT - fuzz_crash_043.md:2:4:2:5
 INVALID STATEMENT - fuzz_crash_043.md:2:5:2:6
 # PROBLEMS
@@ -54,6 +54,13 @@ o:0}0
 
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
+
+**fuzz_crash_043.md:2:3:2:4:**
+```roc
+o:0}0
+```
+  ^
+
 
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.

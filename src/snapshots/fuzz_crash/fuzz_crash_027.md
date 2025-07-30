@@ -180,6 +180,11 @@ UNDECLARED TYPE - fuzz_crash_027.md:34:8:34:11
 UNDECLARED TYPE - fuzz_crash_027.md:38:8:38:11
 UNDECLARED TYPE - fuzz_crash_027.md:43:11:43:16
 UNDECLARED TYPE - fuzz_crash_027.md:43:26:43:31
+MODULE NOT FOUND - fuzz_crash_027.md:4:1:4:38
+MODULE NOT FOUND - fuzz_crash_027.md:6:1:8:4
+MODULE NOT FOUND - fuzz_crash_027.md:10:1:10:46
+MODULE NOT FOUND - fuzz_crash_027.md:12:1:12:19
+MODULE NOT FOUND - fuzz_crash_027.md:13:1:14:4
 UNDECLARED TYPE - fuzz_crash_027.md:29:2:29:5
 UNDECLARED TYPE - fuzz_crash_027.md:30:2:30:5
 INVALID STATEMENT - fuzz_crash_027.md:40:7:40:8
@@ -377,6 +382,62 @@ This type is referenced here:
 Func(a) : Maybe(a), a -> Maybe(a)
 ```
                          ^^^^^
+
+
+**MODULE NOT FOUND**
+The module `pf.Stdout` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:4:1:4:38:**
+```roc
+import pf.Stdout exposing [line!, e!]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Stdot` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:6:1:8:4:**
+```roc
+import Stdot
+		exposing [ #tem
+		] # Cose
+```
+
+
+**MODULE NOT FOUND**
+The module `pkg.S` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:10:1:10:46:**
+```roc
+import pkg.S exposing [func as fry, Custom.*]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Bae` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:12:1:12:19:**
+```roc
+import Bae as Gooe
+```
+^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Ba` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:13:1:14:4:**
+```roc
+import
+	Ba
+```
 
 
 **UNDECLARED TYPE**
@@ -1825,8 +1886,8 @@ expect {
 		(p-assign @100.1-100.6 (ident "main!"))
 		(e-closure @100.9-148.2
 			(captures
-				(capture @132.2-132.7 (ident "tuple"))
-				(capture @60.1-60.11 (ident "match_time")))
+				(capture @60.1-60.11 (ident "match_time"))
+				(capture @132.2-132.7 (ident "tuple")))
 			(e-lambda @100.9-148.2
 				(args
 					(p-underscore @100.10-100.11))
@@ -2045,7 +2106,7 @@ expect {
 				(ty-apply @32.19-32.24 (symbol "Ok")
 					(ty-var @32.22-32.23 (name "a"))))
 			(field (field "bar")
-				(ty-var @32.32-32.33 (name "g")))))
+				(ty-malformed @32.32-32.33))))
 	(s-alias-decl @33.1-35.2
 		(ty-header @33.1-33.6 (name "Ml")
 			(ty-args
@@ -2107,7 +2168,7 @@ expect {
 (inferred-types
 	(defs
 		(patt @45.1-45.4 (type "Bool -> Num(_size)"))
-		(patt @48.1-48.8 (type "Error -> Error"))
+		(patt @48.1-48.8 (type "Error -> U64"))
 		(patt @60.1-60.11 (type "Error"))
 		(patt @100.1-100.6 (type "Error -> Error"))
 		(patt @151.1-151.6 (type "{}")))
@@ -2142,7 +2203,7 @@ expect {
 					(ty-var @43.6-43.7 (name "a"))))))
 	(expressions
 		(expr @45.7-45.28 (type "Bool -> Num(_size)"))
-		(expr @48.11-58.2 (type "Error -> Error"))
+		(expr @48.11-58.2 (type "Error -> U64"))
 		(expr @60.14-94.3 (type "Error"))
 		(expr @100.9-148.2 (type "Error -> Error"))
 		(expr @151.9-151.11 (type "{}"))))

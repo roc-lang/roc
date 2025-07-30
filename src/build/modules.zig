@@ -42,6 +42,7 @@ pub const RocModules = struct {
         self.base.addImport("collections", self.collections);
         self.base.addImport("types", self.types);
 
+        self.types.addImport("types", self.types);
         self.types.addImport("serialization", self.serialization);
         self.types.addImport("base", self.base);
         self.types.addImport("collections", self.collections);

@@ -26,7 +26,7 @@ main! = |_| swapPair(1, 2)
             ^^^^^^^^
 
 It is of type:
-    _Pair(a, b) -> Pair(b, a)_
+    _(a, b) -> (b, a)_
 
 But you are trying to use it as:
     _Num(_size), Num(_size2) -> _ret_

@@ -138,8 +138,13 @@ PARSE ERROR - fuzz_crash_020.md:66:12:66:12
 UNDECLARED TYPE - fuzz_crash_020.md:13:13:13:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:13:19:13:21
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:19:4:19:6
+UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:20:12:20:13
 UNDECLARED TYPE - fuzz_crash_020.md:24:15:24:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:24:24:24:25
+MODULE NOT FOUND - fuzz_crash_020.md:4:1:4:34
+MODULE NOT FOUND - fuzz_crash_020.md:6:1:8:6
+MODULE NOT FOUND - fuzz_crash_020.md:10:1:10:19
+MODULE NOT FOUND - fuzz_crash_020.md:11:1:12:4
 UNDECLARED TYPE - fuzz_crash_020.md:37:7:37:9
 UNDEFINED VARIABLE - fuzz_crash_020.md:40:5:40:8
 UNDEFINED VARIABLE - fuzz_crash_020.md:42:4:42:5
@@ -304,6 +309,19 @@ This type variable is referenced here:
    ^^
 
 
+**UNDECLARED TYPE VARIABLE**
+The type variable _b_ is not declared in this scope.
+
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
+**fuzz_crash_020.md:20:12:20:13:**
+```roc
+			List(			b	) #z)
+```
+           ^
+
+
 **UNDECLARED TYPE**
 The type _O_ is not declared in this scope.
 
@@ -326,6 +344,51 @@ This type variable is referenced here:
 Som : { foo : O, bar : g }
 ```
                        ^
+
+
+**MODULE NOT FOUND**
+The module `pf.Stdout` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_020.md:4:1:4:34:**
+```roc
+import pf.Stdout exposing [line!]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Stdot` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_020.md:6:1:8:6:**
+```roc
+import Stdot
+		exposing [ #tem
+Cust]
+```
+
+
+**MODULE NOT FOUND**
+The module `Bae` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_020.md:10:1:10:19:**
+```roc
+import Bae as Gooe
+```
+^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Ba` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_020.md:11:1:12:4:**
+```roc
+import
+	Ba
+```
 
 
 **UNDECLARED TYPE**
@@ -1702,25 +1765,23 @@ expect {
 				(ty-var @13.8-13.9 (name "b"))))
 		(ty-fn @13.13-13.33 (effectful false)
 			(ty @13.13-13.16 (name "Lis"))
-			(ty-tuple @13.18-13.22
-				(ty-var @13.19-13.21 (name "ab")))
+			(ty-malformed @13.19-13.21)
 			(ty-apply @13.26-13.33 (symbol "List")
 				(ty-var @13.31-13.32 (name "b")))))
 	(s-alias-decl @14.1-20.15
 		(ty-header @14.1-15.2 (name "MapML"))
 		(ty-fn @17.3-20.15 (effectful false)
 			(ty-apply @17.3-18.4 (symbol "List"))
-			(ty-tuple @19.3-19.7
-				(ty-var @19.4-19.6 (name "ab")))
+			(ty-malformed @19.4-19.6)
 			(ty-apply @20.4-20.15 (symbol "List")
-				(ty-var @20.12-20.13 (name "b")))))
+				(ty-malformed @20.12-20.13))))
 	(s-alias-decl @24.1-24.27
 		(ty-header @24.1-24.4 (name "Som"))
 		(ty-record @24.7-24.27
 			(field (field "foo")
 				(ty @24.15-24.16 (name "O")))
 			(field (field "bar")
-				(ty-var @24.24-24.25 (name "g")))))
+				(ty-malformed @24.24-24.25))))
 	(s-alias-decl @25.1-26.2
 		(ty-header @25.1-25.6 (name "Ml")
 			(ty-args

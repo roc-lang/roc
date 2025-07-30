@@ -21,7 +21,7 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_024.md:1:24:1:32
 PARSE ERROR - fuzz_crash_024.md:4:1:4:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:4:8:4:9
 PARSE ERROR - fuzz_crash_024.md:7:1:7:4
-MALFORMED TYPE - :0:0:0:0
+MALFORMED TYPE - fuzz_crash_024.md:1:24:1:32
 INVALID STATEMENT - fuzz_crash_024.md:1:33:1:53
 UNKNOWN OPERATOR - fuzz_crash_024.md:4:8:4:9
 DUPLICATE DEFINITION - fuzz_crash_024.md:7:5:7:6
@@ -103,6 +103,13 @@ var t= 0
 
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
+
+**fuzz_crash_024.md:1:24:1:32:**
+```roc
+module [module ] { pf: platform ".-/main._]where # A
+```
+                       ^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.

@@ -81,6 +81,7 @@ problems: problem.Store,
 unify_scratch: unifier.Scratch,
 occurs_scratch: occurs.Scratch,
 var_map: instantiate.VarSubstitution,
+rigid_var_map: instantiate.RigidVarSubstitution,
 /// Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
@@ -105,6 +106,7 @@ pub fn init(
         .unify_scratch = try unifier.Scratch.init(gpa),
         .occurs_scratch = try occurs.Scratch.init(gpa),
         .var_map = instantiate.VarSubstitution.init(gpa),
+        .rigid_var_map = instantiate.RigidVarSubstitution.init(gpa),
         .import_cache = ImportCache{},
     };
 }
@@ -116,6 +118,7 @@ pub fn deinit(self: *Self) void {
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
     self.var_map.deinit();
+    self.rigid_var_map.deinit();
     self.import_cache.deinit(self.gpa);
 }
 
@@ -160,13 +163,21 @@ const InstantiateRegionBehavior = union(enum) {
     use_last_var,
 };
 
-/// Instantiate a variable, writing su
-fn instantiateVar(self: *Self, var_to_instantiate: Var, region_behavior: InstantiateRegionBehavior) std.mem.Allocator.Error!Var {
+/// Instantiate a variable
+fn instantiateVar(
+    self: *Self,
+    var_to_instantiate: Var,
+    region_behavior: InstantiateRegionBehavior,
+) std.mem.Allocator.Error!Var {
     self.var_map.clearRetainingCapacity();
+    self.rigid_var_map.clearRetainingCapacity();
+
     const instantiated_var = try instantiate.instantiateVar(
         self.types,
         var_to_instantiate,
+        &self.cir.idents,
         &self.var_map,
+        .{ .generalize_rigid_to_flex = &self.rigid_var_map },
     );
 
     const root_instantiated_region = self.regions.get(@enumFromInt(@intFromEnum(var_to_instantiate))).*;
@@ -312,20 +323,23 @@ fn checkDef(self: *Self, def_idx: ModuleEnv.Def.Idx) std.mem.Allocator.Error!voi
         const annotation = self.cir.store.getAnnotation(anno_idx);
         const expr = self.cir.store.getExpr(def.expr);
 
+        const anno_var = ModuleEnv.varFrom(annotation.type_anno);
+        const anno_instantiated_var = try self.instantiateVar(anno_var, .use_last_var);
+
         // If the expression is a lambda and we have an annotation, pass the expected type
         if (expr == .e_lambda) {
             _ = try self.checkLambdaWithExpected(
                 def.expr,
                 expr_region,
                 expr.e_lambda,
-                annotation.signature,
+                anno_instantiated_var,
             );
+        } else {
+            // Unify the expression with its annotation
+            // This is where numeric literal constraints should be checked against
+            // the annotation type (e.g., 500 against U8)
+            _ = try self.unify(expr_var, anno_instantiated_var);
         }
-
-        // Unify the expression with its annotation
-        // This is where numeric literal constraints should be checked against
-        // the annotation type (e.g., 500 against U8)
-        _ = try self.unify(expr_var, annotation.signature);
     }
 
     // Unify the def with its expression
@@ -763,6 +777,10 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                 },
             }
         },
+        .e_nominal_external => |_| {
+            // TODO: Copy type from other module, then do same logic as regular
+            // nominal type checking
+        },
         .e_zero_argument_tag => |_| {},
         .e_binop => |binop| {
             does_fx = try self.checkBinopExpr(expr_idx, expr_region, binop);
@@ -1097,30 +1115,30 @@ fn checkLambdaWithExpected(
     // directly. This results in better error messages!
     //
     // If the expected type is *not* a function, unify like normal (which will be a mismatch)
-    if (expected_type) |expected| {
-        const instantiated_var = try self.instantiateVar(expected, .use_last_var);
-        const instantiated_content = self.types.resolveVar(instantiated_var).desc.content;
-        if (instantiated_content == .structure) {
-            switch (instantiated_content.structure) {
-                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    const expected_args = self.types.sliceVars(func.args);
+    if (expected_type) |expected_var| {
+        const expected_content = self.types.resolveVar(expected_var).desc.content;
+        if (expected_content == .structure) {
+            switch (expected_content.structure) {
+                .fn_pure, .fn_effectful, .fn_unbound => |expected_func| {
+                    const expected_args = self.types.sliceVars(expected_func.args);
                     // Unify each pattern with its expected type before checking body
                     if (expected_args.len == arg_patterns.len) {
                         for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
                             const pattern_var = ModuleEnv.varFrom(pattern_idx);
                             _ = try self.unify(pattern_var, expected_arg);
                         }
-                        _ = try self.unify(return_var, func.ret);
+
+                        _ = try self.unify(return_var, expected_func.ret);
                     } else {
-                        _ = try self.unify(fn_var, instantiated_var);
+                        _ = try self.unify(fn_var, expected_var);
                     }
                 },
                 else => {
-                    _ = try self.unify(fn_var, instantiated_var);
+                    _ = try self.unify(fn_var, expected_var);
                 },
             }
         } else {
-            _ = try self.unify(fn_var, instantiated_var);
+            _ = try self.unify(fn_var, expected_var);
         }
     }
 
@@ -1147,12 +1165,14 @@ fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region
 
             // Create a fresh number variable for the operation
             const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
-            const num_var = try self.freshFromContent(num_content, expr_region);
+            const num_var_lhs = try self.freshFromContent(num_content, expr_region);
+            const num_var_rhs = try self.freshFromContent(num_content, expr_region);
+            const num_var_result = try self.freshFromContent(num_content, expr_region);
 
             // Unify lhs, rhs, and result with the number type
-            _ = try self.unify(lhs_var, num_var);
-            _ = try self.unify(rhs_var, num_var);
-            _ = try self.unify(result_var, num_var);
+            _ = try self.unify(num_var_lhs, lhs_var);
+            _ = try self.unify(num_var_rhs, rhs_var);
+            _ = try self.unify(result_var, num_var_result);
         },
         .lt, .gt, .le, .ge, .eq, .ne => {
             // Comparison operators always return Bool

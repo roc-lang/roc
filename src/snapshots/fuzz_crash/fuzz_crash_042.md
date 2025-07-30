@@ -9,7 +9,9 @@ module[]import u.R}g:r->R.a.E
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_042.md:1:19:1:20
+MODULE NOT FOUND - fuzz_crash_042.md:1:9:1:19
 INVALID STATEMENT - fuzz_crash_042.md:1:19:1:20
+MODULE NOT IMPORTED - fuzz_crash_042.md:1:25:1:30
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **}** is not expected in an expression.
@@ -23,6 +25,17 @@ module[]import u.R}g:r->R.a.E
                   ^
 
 
+**MODULE NOT FOUND**
+The module `u.R` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_042.md:1:9:1:19:**
+```roc
+module[]import u.R}g:r->R.a.E
+```
+        ^^^^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -32,6 +45,17 @@ Only definitions, type annotations, and imports are allowed at the top level.
 module[]import u.R}g:r->R.a.E
 ```
                   ^
+
+
+**MODULE NOT IMPORTED**
+There is no module with the name `module[]import u.R}g:r->R.a` imported into this Roc file.
+
+You're attempting to use this module here:
+**fuzz_crash_042.md:1:25:1:30:**
+```roc
+module[]import u.R}g:r->R.a.E
+```
+                        ^^^^^
 
 
 # TOKENS
@@ -61,8 +85,7 @@ g : r -> R.a.E
 ~~~clojure
 (can-ir
 	(s-import @1.9-1.19 (module "u.R") (qualifier "u")
-		(exposes))
-	(ext-decl @1.25-1.30 (ident "R.a.E") (kind "type")))
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure

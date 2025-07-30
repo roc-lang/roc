@@ -59,14 +59,16 @@ NO CHANGE
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-applied-tag @2.2-2.6)))
+						(p-nominal @2.2-2.6
+							(p-applied-tag @2.2-2.6))))
 				(value
 					(e-string @2.10-2.24
 						(e-literal @2.11-2.23 (string "ready to go!")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-applied-tag @3.2-3.7)))
+						(p-nominal @3.2-3.7
+							(p-applied-tag @3.2-3.7))))
 				(value
 					(e-string @3.11-3.26
 						(e-literal @3.12-3.25 (string "not ready yet"))))))))
