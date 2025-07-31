@@ -336,8 +336,8 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
 
                 builder.* = Self{
                     .entries = .{
-                        .items = entries_ptr[0..self.entries_len],
-                        .capacity = self.entries_capacity,
+                        .items = entries_ptr[0..@as(usize, @intCast(self.entries_len))],
+                        .capacity = @as(usize, @intCast(self.entries_capacity)),
                     },
                     .sorted = self.sorted,
                 };

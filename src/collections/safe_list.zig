@@ -777,8 +777,8 @@ pub fn SafeMultiList(comptime T: type) type {
                 multi_list.* = SafeMultiList(T){
                     .items = .{
                         .bytes = bytes_ptr,
-                        .len = self.len,
-                        .capacity = self.capacity,
+                        .len = @as(usize, @intCast(self.len)),
+                        .capacity = @as(usize, @intCast(self.capacity)),
                     },
                 };
 
