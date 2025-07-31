@@ -32,7 +32,7 @@ const problem = Check.problem;
 const AST = parse.AST;
 
 // A fixed-size buffer to act as the heap inside the WASM linear memory.
-var wasm_heap_memory: [2 * 1024 * 1024]u8 = undefined; // 2MB heap
+var wasm_heap_memory: [64 * 1024 * 1024]u8 = undefined; // 64MB heap
 var fba: std.heap.FixedBufferAllocator = undefined;
 var allocator: Allocator = undefined;
 
