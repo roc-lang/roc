@@ -49,8 +49,8 @@
             .lazy = true,
         },
         .bytebox = .{
-            .url = "git+https://github.com/rdunnington/bytebox#cf123e4548b7e78a62672635b8cf8538f931417a",
-            .hash = "bytebox-0.0.1-SXc2sZ7BDgDO81Pg3gjHwHFTC_dVH00P8_qVaBisq9XD",
+            .url = "git+https://github.com/lukewilliamboswell/bytebox.git#16d59aa63d6dfb195753a98ce009855eff49932b",
+            .hash = "bytebox-0.0.1-SXc2sT3bDgAM6-bAd9CeQ3p1OY0DiLqWNTHVbQvmQP1f",
         },
     },
     .fingerprint = 0x9eea22a6c3bd0034,
