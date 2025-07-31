@@ -102,7 +102,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 44;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 45;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 31;
 /// Count of the statement nodes in the ModuleEnv
@@ -238,46 +238,18 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
             };
         },
         .statement_alias_decl => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(extra_data[0]));
-            const header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(extra_data[1]));
-            const has_where = extra_data[2] != 0;
-
-            const where_clause = if (has_where) blk: {
-                const where_start = extra_data[3];
-                const where_len = extra_data[4];
-                break :blk ModuleEnv.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
-            } else null;
-
             return ModuleEnv.Statement{
                 .s_alias_decl = .{
-                    .header = header,
-                    .anno = anno,
-                    .where = where_clause,
+                    .header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(node.data_1)),
+                    .anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(node.data_2)),
                 },
             };
         },
         .statement_nominal_decl => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(extra_data[0]));
-            const header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(extra_data[1]));
-            const has_where = extra_data[2] != 0;
-
-            const where_clause = if (has_where) blk: {
-                const where_start = extra_data[3];
-                const where_len = extra_data[4];
-                break :blk ModuleEnv.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
-            } else null;
-
             return ModuleEnv.Statement{
                 .s_nominal_decl = .{
-                    .header = header,
-                    .anno = anno,
-                    .where = where_clause,
+                    .header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(node.data_1)),
+                    .anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(node.data_2)),
                 },
             };
         },
@@ -1157,49 +1129,13 @@ pub fn addStatement(store: *NodeStore, statement: ModuleEnv.Statement, region: b
         },
         .s_alias_decl => |s| {
             node.tag = .statement_alias_decl;
-
-            // Store type_decl data in extra_data
-            const extra_start = store.extra_data.len();
-
-            // Store anno idx
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
-            // Store header idx
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.header));
-            // Store where clause information
-            if (s.where) |where_clause| {
-                // Store where clause span start and len
-                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
-                _ = try store.extra_data.append(store.gpa, where_clause.span.start);
-                _ = try store.extra_data.append(store.gpa, where_clause.span.len);
-            } else {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
-            }
-
-            // Store the extra data start position in the node
-            node.data_1 = extra_start;
+            node.data_1 = @intFromEnum(s.header);
+            node.data_2 = @intFromEnum(s.anno);
         },
         .s_nominal_decl => |s| {
             node.tag = .statement_nominal_decl;
-
-            // Store type_decl data in extra_data
-            const extra_start = store.extra_data.len();
-
-            // Store anno idx
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
-            // Store header idx
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.header));
-            // Store where clause information
-            if (s.where) |where_clause| {
-                // Store where clause span start and len
-                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
-                _ = try store.extra_data.append(store.gpa, where_clause.span.start);
-                _ = try store.extra_data.append(store.gpa, where_clause.span.len);
-            } else {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
-            }
-
-            // Store the extra data start position in the node
-            node.data_1 = extra_start;
+            node.data_1 = @intFromEnum(s.header);
+            node.data_2 = @intFromEnum(s.anno);
         },
         .s_type_anno => |s| {
             node.tag = .statement_type_anno;
@@ -1533,32 +1469,27 @@ pub fn addRecordField(store: *NodeStore, recordField: ModuleEnv.RecordField, reg
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addRecordDestruct(store: *NodeStore, record_destruct: ModuleEnv.Pattern.RecordDestruct, region: base.Region) std.mem.Allocator.Error!ModuleEnv.Pattern.RecordDestruct.Idx {
-    var node = Node{
+    const extra_data_start = @as(u32, @intCast(store.extra_data.len()));
+    const node = Node{
         .data_1 = @bitCast(record_destruct.label),
         .data_2 = @bitCast(record_destruct.ident),
-        .data_3 = 0,
+        .data_3 = extra_data_start,
         .tag = .record_destruct,
     };
 
     // Store kind in extra_data
     switch (record_destruct.kind) {
         .Required => |pattern_idx| {
-            const extra_data_start = @as(u32, @intCast(store.extra_data.len()));
             // Store kind tag (0 for Required)
             _ = try store.extra_data.append(store.gpa, 0);
             // Store pattern index
             _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
-            node.data_3 = extra_data_start;
         },
         .SubPattern => |sub_pattern| {
-            const extra_data_start = @as(u32, @intCast(store.extra_data.len()));
-
             // Store kind tag (1 for SubPattern)
             _ = try store.extra_data.append(store.gpa, 1);
             // Store sub-pattern index
             _ = try store.extra_data.append(store.gpa, @intFromEnum(sub_pattern));
-
-            node.data_3 = extra_data_start;
         },
     }
 
@@ -2054,10 +1985,12 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: ModuleEnv.Pattern.RecordD
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
     const node = store.nodes.get(node_idx);
 
+    std.debug.assert(node.tag == .record_destruct);
+
     // Retrieve kind from extra_data if it exists
-    const kind = if (node.data_3 != 0) blk: {
+    const kind = blk: {
         const extra_start = node.data_3;
-        const extra_data = store.extra_data.items.items[extra_start..];
+        const extra_data = store.extra_data.items.items[extra_start..][0..2];
         const kind_tag = extra_data[0];
 
         break :blk switch (kind_tag) {
@@ -2065,10 +1998,6 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: ModuleEnv.Pattern.RecordD
             1 => ModuleEnv.Pattern.RecordDestruct.Kind{ .SubPattern = @enumFromInt(extra_data[1]) },
             else => unreachable,
         };
-    } else blk: {
-        // This should not happen with properly canonicalized code
-        const dummy_pattern_idx: ModuleEnv.Pattern.Idx = @enumFromInt(0);
-        break :blk ModuleEnv.Pattern.RecordDestruct.Kind{ .Required = dummy_pattern_idx };
     };
 
     return ModuleEnv.Pattern.RecordDestruct{
@@ -2552,6 +2481,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
             node.tag = .diag_malformed_where_clause;
             region = r.region;
         },
+        .where_clause_not_allowed_in_type_decl => |r| {
+            node.tag = .diag_where_clause_not_allowed_in_type_decl;
+            region = r.region;
+        },
         .var_across_function_boundary => |r| {
             node.tag = .diag_var_across_function_boundary;
             region = r.region;
@@ -2868,6 +2801,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             .region = store.getRegionAt(node_idx),
         } },
         .diag_malformed_where_clause => return ModuleEnv.Diagnostic{ .malformed_where_clause = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_where_clause_not_allowed_in_type_decl => return ModuleEnv.Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_alias_redeclared => return ModuleEnv.Diagnostic{ .type_alias_redeclared = .{

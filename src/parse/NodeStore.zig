@@ -43,7 +43,7 @@ pub const AST_STATEMENT_NODE_COUNT = 12;
 /// Count of the pattern nodes in the AST
 pub const AST_PATTERN_NODE_COUNT = 14;
 /// Count of the type annotation nodes in the AST
-pub const AST_TYPE_ANNO_NODE_COUNT = 11;
+pub const AST_TYPE_ANNO_NODE_COUNT = 10;
 /// Count of the expression nodes in the AST
 pub const AST_EXPR_NODE_COUNT = 24;
 
@@ -871,13 +871,6 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
             node.data.lhs = t.qualifiers.span.start;
             node.data.rhs = t.qualifiers.span.len;
         },
-        .mod_ty => |t| {
-            node.tag = .ty_mod_ty;
-            node.region = t.region;
-            node.main_token = t.region.start;
-            node.data.lhs = @bitCast(t.mod_ident);
-            node.data.rhs = @bitCast(t.ty_ident);
-        },
         .tag_union => |tu| {
             node.tag = .ty_union;
             node.region = tu.region;
@@ -1660,13 +1653,6 @@ pub fn getTypeAnno(store: *NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnn
             return .{ .ty = .{
                 .token = node.main_token,
                 .qualifiers = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
-                .region = node.region,
-            } };
-        },
-        .ty_mod_ty => {
-            return .{ .mod_ty = .{
-                .mod_ident = @bitCast(node.data.lhs),
-                .ty_ident = @bitCast(node.data.rhs),
                 .region = node.region,
             } };
         },

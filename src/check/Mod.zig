@@ -14,8 +14,6 @@ const copy_import = @import("copy_import.zig");
 
 /// **Hindley-Milner+ Unification**
 pub const unifier = @import("unify.zig");
-/// **Type Instantiation**
-pub const instantiate = @import("instantiate.zig");
 /// **Type Snapshot**
 pub const snapshot = @import("snapshot.zig");
 /// **Recursion Checking**
@@ -25,6 +23,7 @@ pub const problem = @import("problem.zig");
 
 const ModuleEnv = compile.ModuleEnv;
 const testing = std.testing;
+const instantiate = types_mod.instantiate;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const Region = base.Region;

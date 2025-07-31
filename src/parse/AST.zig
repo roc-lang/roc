@@ -1756,12 +1756,6 @@ pub const TypeAnno = union(enum) {
         qualifiers: Token.Span,
         region: TokenizedRegion,
     },
-    mod_ty: struct {
-        mod_ident: base.Ident.Idx,
-        ty_ident: base.Ident.Idx,
-        // Region starts with the mod token and ends with the type token.
-        region: TokenizedRegion,
-    },
     tag_union: struct {
         tags: TypeAnno.Span,
         open_anno: ?TypeAnno.Idx,
@@ -1804,7 +1798,6 @@ pub const TypeAnno = union(enum) {
             .underscore_type_var => |utv| return utv.region,
             .underscore => |u| return u.region,
             .ty => |t| return t.region,
-            .mod_ty => |t| return t.region,
             .tag_union => |tu| return tu.region,
             .tuple => |t| return t.region,
             .record => |r| return r.region,
@@ -1860,30 +1853,6 @@ pub const TypeAnno = union(enum) {
                 const fully_qualified_name = ast.resolveQualifiedName(a.qualifiers, a.token, &strip_tokens);
                 try tree.pushStringPair("name", fully_qualified_name);
                 const attrs = tree.beginNode();
-
-                try tree.endNode(begin, attrs);
-            },
-            .mod_ty => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-mod");
-                const attrs = tree.beginNode();
-
-                const mod_text = env.idents.getText(a.mod_ident);
-                const type_text = env.idents.getText(a.ty_ident);
-
-                // module attribute
-                const module_begin = tree.beginNode();
-                try tree.pushStaticAtom("module");
-                try tree.pushString(mod_text);
-                const attrs2 = tree.beginNode();
-                try tree.endNode(module_begin, attrs2);
-
-                // name attribute
-                const name_begin = tree.beginNode();
-                try tree.pushStaticAtom("name");
-                try tree.pushString(type_text);
-                const attrs3 = tree.beginNode();
-                try tree.endNode(name_begin, attrs3);
 
                 try tree.endNode(begin, attrs);
             },

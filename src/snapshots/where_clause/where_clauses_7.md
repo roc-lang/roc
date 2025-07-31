@@ -23,9 +23,40 @@ Decode(a) : a
 		) -> a
 ~~~
 # EXPECTED
-NIL
+WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:3:1:10:26
+WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:12:1:16:9
 # PROBLEMS
-NIL
+**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
+You cannot define a `where` clause inside a type declaration.
+
+You're attempting do this here:
+**where_clauses_7.md:3:1:10:26:**
+```roc
+Hash(a, hasher) # After header
+	: # After colon
+		a # After var
+			where # After where
+				module(a).hash : hasher # After method
+					-> # After arrow
+						hasher, # After first clause
+				module(hasher).Hasher
+```
+
+
+**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
+You cannot define a `where` clause inside a type declaration.
+
+You're attempting do this here:
+**where_clauses_7.md:12:1:16:9:**
+```roc
+Decode(a) : a
+	where
+		module(a).decode( # After method args open
+			List(U8), # After method arg
+		) -> a
+```
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),CloseSquare(1:13-1:14),
@@ -100,27 +131,12 @@ Decode(a) : a
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))
 				(ty-var @3.9-3.15 (name "hasher"))))
-		(ty-var @5.3-5.4 (name "a"))
-		(where
-			(method @7.5-9.13 (module-of "a") (ident "hash")
-				(args
-					(ty-var @7.22-7.28 (name "hasher")))
-				(ty-var @9.7-9.13 (name "hasher")))
-			(alias @10.5-10.26 (module-of "hasher") (ident "Hasher"))))
+		(ty-var @5.3-5.4 (name "a")))
 	(s-alias-decl @12.1-16.9
 		(ty-header @12.1-12.10 (name "Decode")
 			(ty-args
 				(ty-var @12.8-12.9 (name "a"))))
-		(ty-var @12.13-12.14 (name "a"))
-		(where
-			(method @14.3-16.9 (module-of "a") (ident "decode")
-				(args
-					(ty-apply @15.4-15.12 (symbol "List")
-						(ty @15.9-15.11 (name "U8"))))
-				(ty-var @16.8-16.9 (name "a")))))
-	(ext-decl @7.5-9.13 (ident "module(a).hash") (kind "value"))
-	(ext-decl @10.5-10.26 (ident "module(hasher).Hasher") (kind "type"))
-	(ext-decl @14.3-16.9 (ident "module(a).decode") (kind "value")))
+		(ty-var @12.13-12.14 (name "a"))))
 ~~~
 # TYPES
 ~~~clojure

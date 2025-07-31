@@ -132,7 +132,6 @@ test "NodeStore round trip - Statements" {
         .s_alias_decl = .{
             .header = rand_idx(ModuleEnv.TypeHeader.Idx),
             .anno = rand_idx(ModuleEnv.TypeAnno.Idx),
-            .where = null,
         },
     });
 
@@ -140,7 +139,6 @@ test "NodeStore round trip - Statements" {
         .s_nominal_decl = .{
             .header = rand_idx(ModuleEnv.TypeHeader.Idx),
             .anno = rand_idx(ModuleEnv.TypeAnno.Idx),
-            .where = null,
         },
     });
 
@@ -523,6 +521,12 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(ModuleEnv.Diagnostic{
         .malformed_where_clause = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(ModuleEnv.Diagnostic{
+        .where_clause_not_allowed_in_type_decl = .{
             .region = rand_region(),
         },
     });
