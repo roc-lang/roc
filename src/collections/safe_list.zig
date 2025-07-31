@@ -1493,10 +1493,7 @@ test "SafeList(u32) CompactWriter roundtrip with file" {
 
     _ = try file.read(buffer);
 
-    // The key insight: we can just cast the buffer to a SafeList.Serialized pointer
     const serialized_ptr = @as(*SafeList(u32).Serialized, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(SafeList(u32).Serialized))));
-
-    // Deserialize - this converts the Serialized struct to a SafeList
     const base_addr = @intFromPtr(buffer.ptr);
     const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(base_addr)));
 
