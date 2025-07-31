@@ -296,7 +296,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
 
         /// Serialized representation of a SortedArrayBuilder
         pub const Serialized = struct {
-            entries_offset: u64,
+            entries_offset: i64,
             entries_len: u64,
             entries_capacity: u64,
             sorted: bool,
@@ -317,7 +317,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 // Append the slice data first
                 const slice_ptr = try writer.appendSlice(allocator, items);
                 // Store the offset, len, and capacity
-                self.entries_offset = @intFromPtr(slice_ptr.ptr);
+                self.entries_offset = @intCast(@intFromPtr(slice_ptr.ptr));
                 self.entries_len = items.len;
                 self.entries_capacity = items.len;
                 self.sorted = builder.sorted;
@@ -332,12 +332,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 const builder = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
                 // Apply the offset to convert from serialized offset to actual pointer
-                const adjusted_offset: u64 = if (offset >= 0)
-                    self.entries_offset + @as(u64, @intCast(offset))
-                else
-                    self.entries_offset - @as(u64, @intCast(-offset));
-
-                const entries_ptr = @as([*]Entry, @ptrFromInt(adjusted_offset));
+                const entries_ptr = @as([*]Entry, @ptrFromInt(@as(usize, @intCast(self.entries_offset + offset))));
 
                 builder.* = Self{
                     .entries = .{

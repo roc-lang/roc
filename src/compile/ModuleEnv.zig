@@ -1104,7 +1104,6 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.line_starts.relocate(offset);
 
     // Note: source is not relocated - it should be set manually
-
     // Note: all_defs and all_statements are just spans with numeric values, no pointers to relocate
 
     self.external_decls.relocate(offset);
@@ -1119,19 +1118,16 @@ pub fn relocate(self: *Self, offset: isize) void {
 
 /// Serialized representation of ModuleEnv
 pub const Serialized = struct {
-    // Note: gpa is not serialized - will be set during deserialization
     idents: Ident.Store.Serialized,
     ident_ids_for_slicing: collections.SafeList(Ident.Idx).Serialized,
     strings: StringLiteral.Store.Serialized,
     types: types_mod.Store.Serialized,
     exposed_items: collections.ExposedItems.Serialized,
     line_starts: collections.SafeList(u32).Serialized,
-    // Note: source is not serialized as offset - will be set during deserialization
     all_defs: Def.Span,
     all_statements: Statement.Span,
     external_decls: ExternalDecl.SafeList.Serialized,
     imports: Import.Store.Serialized,
-    // Note: module_name is not serialized as offset - will be set during deserialization
     diagnostics: Diagnostic.Span,
     store: NodeStore, // NodeStore doesn't use Serialized pattern
 
@@ -1149,16 +1145,16 @@ pub const Serialized = struct {
         try self.types.serialize(&env.types, allocator, writer);
         try self.exposed_items.serialize(&env.exposed_items, allocator, writer);
         try self.line_starts.serialize(&env.line_starts, allocator, writer);
-        
+
         // Copy simple values directly
         self.all_defs = env.all_defs;
         self.all_statements = env.all_statements;
-        
+
         try self.external_decls.serialize(&env.external_decls, allocator, writer);
         try self.imports.serialize(&env.imports, allocator, writer);
-        
+
         self.diagnostics = env.diagnostics;
-        
+
         // Serialize NodeStore using its existing method
         self.store = (try env.store.serialize(allocator, writer)).*;
 
@@ -2034,7 +2030,6 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExpr
     }
 }
 
-
 test "ModuleEnv.Serialized roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -2048,28 +2043,26 @@ test "ModuleEnv.Serialized roundtrip" {
     const world_idx = try original.idents.insert(gpa, "world");
     try original.ident_ids_for_slicing.append(gpa, hello_idx);
     try original.ident_ids_for_slicing.append(gpa, world_idx);
-    
+
     const str_idx = try original.strings.insert(gpa, "test string");
     _ = str_idx;
-    
+
     try original.exposed_items.addExposedById(gpa, @intFromEnum(hello_idx));
     try original.exposed_items.setNodeIndexById(gpa, @intFromEnum(hello_idx), 42);
     original.exposed_items.ensureSorted(gpa);
-    
+
     try original.line_starts.append(gpa, 0);
     try original.line_starts.append(gpa, 10);
     try original.line_starts.append(gpa, 20);
-    
+
     const source = "hello world\ntest line 2\n";
     original.source = source;
     original.module_name = "TestModule";
-    
+
     // Create a CompactWriter and arena
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
-
-
 
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -2104,15 +2097,15 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), env.ident_ids_for_slicing.len());
     try testing.expectEqualStrings("hello", env.idents.get(hello_idx));
     try testing.expectEqualStrings("world", env.idents.get(world_idx));
-    
+
     try testing.expectEqual(@as(usize, 1), env.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.exposed_items.getNodeIndexById(gpa, @intFromEnum(hello_idx)));
-    
+
     try testing.expectEqual(@as(usize, 3), env.line_starts.len());
     try testing.expectEqual(@as(u32, 0), env.line_starts.get(0));
     try testing.expectEqual(@as(u32, 10), env.line_starts.get(1));
     try testing.expectEqual(@as(u32, 20), env.line_starts.get(2));
-    
+
     try testing.expectEqualStrings(source, env.source);
     try testing.expectEqualStrings("TestModule", env.module_name);
 }

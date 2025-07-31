@@ -114,7 +114,7 @@ pub fn SafeList(comptime T: type) type {
 
         /// Serialized representation of a SafeList
         pub const Serialized = struct {
-            offset: u64,
+            offset: i64,
             len: u64,
             capacity: u64,
 
@@ -131,7 +131,7 @@ pub fn SafeList(comptime T: type) type {
                 const slice_ptr = try writer.appendSlice(allocator, items);
 
                 // Store the offset, len, and capacity
-                self.offset = @intFromPtr(slice_ptr.ptr);
+                self.offset = @intCast(@intFromPtr(slice_ptr.ptr));
                 self.len = items.len;
                 self.capacity = items.len;
             }
@@ -145,12 +145,7 @@ pub fn SafeList(comptime T: type) type {
                 const safe_list = @as(*SafeList(T), @ptrFromInt(@intFromPtr(self)));
 
                 // Apply the offset to convert from serialized offset to actual pointer
-                const adjusted_offset: u64 = if (offset >= 0)
-                    self.offset + @as(u64, @intCast(offset))
-                else
-                    self.offset - @as(u64, @intCast(-offset));
-
-                const items_ptr: [*]T = @ptrFromInt(adjusted_offset);
+                const items_ptr: [*]T = @ptrFromInt(@as(usize, @intCast(self.offset + offset)));
 
                 safe_list.* = SafeList(T){
                     .items = .{
@@ -737,7 +732,7 @@ pub fn SafeMultiList(comptime T: type) type {
 
         /// Serialized representation of a SafeMultiList
         pub const Serialized = struct {
-            offset: u64,
+            offset: i64,
             len: u64,
             capacity: u64,
 
@@ -763,7 +758,7 @@ pub fn SafeMultiList(comptime T: type) type {
                 } else writer.total_bytes;
 
                 // Store the offset, len, and capacity
-                self.offset = data_offset;
+                self.offset = @intCast(data_offset);
                 self.len = safe_multi_list.items.len;
                 self.capacity = safe_multi_list.items.len;
             }
@@ -777,12 +772,7 @@ pub fn SafeMultiList(comptime T: type) type {
                 const multi_list = @as(*SafeMultiList(T), @ptrFromInt(@intFromPtr(self)));
 
                 // Apply the offset to convert from serialized offset to actual pointer
-                const adjusted_offset: u64 = if (offset >= 0)
-                    self.offset + @as(u64, @intCast(offset))
-                else
-                    self.offset - @as(u64, @intCast(-offset));
-
-                const bytes_ptr = @as([*]align(4) u8, @ptrFromInt(adjusted_offset));
+                const bytes_ptr = @as([*]align(4) u8, @ptrFromInt(@as(usize, @intCast(self.offset + offset))));
 
                 multi_list.* = SafeMultiList(T){
                     .items = .{
