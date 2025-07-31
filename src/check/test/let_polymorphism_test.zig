@@ -13,7 +13,7 @@ const TypesStore = types.Store;
 const ModuleEnv = compile.ModuleEnv;
 const testing = std.testing;
 const test_allocator = testing.allocator;
-const instantiate = Check.instantiate;
+const instantiate = types.instantiate;
 
 const TestEnv = struct {
     module_env: *ModuleEnv,
