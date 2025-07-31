@@ -772,7 +772,7 @@ pub fn SafeMultiList(comptime T: type) type {
                 const multi_list = @as(*SafeMultiList(T), @ptrFromInt(@intFromPtr(self)));
 
                 // Apply the offset to convert from serialized offset to actual pointer
-                const bytes_ptr = @as([*]align(4) u8, @ptrFromInt(@as(usize, @intCast(self.offset + offset))));
+                const bytes_ptr = @as([*]align(@alignOf(T)) u8, @ptrFromInt(@as(usize, @intCast(self.offset + offset))));
 
                 multi_list.* = SafeMultiList(T){
                     .items = .{
