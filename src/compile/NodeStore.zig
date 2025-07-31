@@ -3172,6 +3172,64 @@ pub fn relocate(self: *NodeStore, offset: isize) void {
     // Note: scratch arrays are empty after deserialization, so no need to relocate
 }
 
+pub const Serialized = struct {
+    nodes: Node.List.Serialized,
+    regions: Region.List.Serialized,
+    extra_data: collections.SafeList(u32).Serialized,
+
+    /// Serialize a NodeStore into this Serialized struct, appending data to the writer
+    pub fn serialize(
+        self: *Serialized,
+        store: *const NodeStore,
+        allocator: std.mem.Allocator,
+        writer: *CompactWriter,
+    ) std.mem.Allocator.Error!void {
+        // Serialize nodes
+        try self.nodes.serialize(&store.nodes, allocator, writer);
+        // Serialize regions
+        try self.regions.serialize(&store.regions, allocator, writer);
+        // Serialize extra_data
+        try self.extra_data.serialize(&store.extra_data, allocator, writer);
+    }
+
+    /// Deserialize this Serialized struct into a NodeStore
+    pub fn deserialize(self: *Serialized, offset: i64) *NodeStore {
+        // NodeStore.Serialized should be at least as big as NodeStore
+        std.debug.assert(@sizeOf(Serialized) >= @sizeOf(NodeStore));
+
+        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+        const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
+
+        // Deserialize the lists
+        store.nodes = self.nodes.deserialize(offset).*;
+        store.regions = self.regions.deserialize(offset).*;
+        store.extra_data = self.extra_data.deserialize(offset).*;
+
+        // Initialize scratch arrays as empty
+        store.scratch_statements = .{ .items = .{} };
+        store.scratch_exprs = .{ .items = .{} };
+        store.scratch_captures = .{ .items = .{} };
+        store.scratch_patterns = .{ .items = .{} };
+        store.scratch_record_fields = .{ .items = .{} };
+        store.scratch_pattern_record_fields = .{ .items = .{} };
+        store.scratch_record_destructs = .{ .items = .{} };
+        store.scratch_match_branches = .{ .items = .{} };
+        store.scratch_match_branch_patterns = .{ .items = .{} };
+        store.scratch_if_branches = .{ .items = .{} };
+        store.scratch_type_annos = .{ .items = .{} };
+        store.scratch_anno_record_fields = .{ .items = .{} };
+        store.scratch_exposed_items = .{ .items = .{} };
+        store.scratch_defs = .{ .items = .{} };
+        store.scratch_where_clauses = .{ .items = .{} };
+        store.scratch_diagnostics = .{ .items = .{} };
+
+        // gpa will be set by the caller
+        store.gpa = undefined;
+
+        return store;
+    }
+};
+
 test "NodeStore empty CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;

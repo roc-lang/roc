@@ -1129,7 +1129,7 @@ pub const Serialized = struct {
     external_decls: ExternalDecl.SafeList.Serialized,
     imports: Import.Store.Serialized,
     diagnostics: Diagnostic.Span,
-    store: NodeStore, // NodeStore doesn't use Serialized pattern
+    store: NodeStore.Serialized,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1155,8 +1155,8 @@ pub const Serialized = struct {
 
         self.diagnostics = env.diagnostics;
 
-        // Serialize NodeStore using its existing method
-        self.store = (try env.store.serialize(allocator, writer)).*;
+        // Serialize NodeStore
+        try self.store.serialize(&env.store, allocator, writer);
 
         // IMPORTANT: Set gpa field to all zeros as requested
         // Note: gpa is not part of Serialized struct, it's set during deserialization
@@ -1180,10 +1180,6 @@ pub const Serialized = struct {
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
-        // Relocate NodeStore
-        var store = self.store;
-        store.relocate(@as(isize, @intCast(offset)));
-
         env.* = Self{
             .gpa = gpa,
             .idents = self.idents.deserialize(offset).*,
@@ -1199,7 +1195,7 @@ pub const Serialized = struct {
             .imports = self.imports.deserialize(offset).*,
             .module_name = module_name,
             .diagnostics = self.diagnostics,
-            .store = store,
+            .store = self.store.deserialize(offset).*,
         };
 
         return env;
