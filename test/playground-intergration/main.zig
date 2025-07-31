@@ -18,11 +18,11 @@ const WasmMessage = struct {
     type: []const u8,
     /// The Roc source code, used by "LOAD_SOURCE".
     source: ?[]const u8 = null,
-    /// An identifier, used by "GET_TYPE_INFO" to specify what to query.
+    /// An identifier, used by "GET_HOVER_INFO" to specify what to query.
     identifier: ?[]const u8 = null,
-    /// The line number (1-based), used by "GET_TYPE_INFO".
+    /// The line number (1-based), used by "GET_HOVER_INFO".
     line: ?u32 = null,
-    /// The column number (1-based), used by "GET_TYPE_INFO".
+    /// The column number (1-based), used by "GET_HOVER_INFO".
     ch: ?u32 = null,
 };
 
@@ -36,8 +36,8 @@ const WasmResponse = struct {
     data: ?[]const u8 = null,
     /// Present after "LOAD_SOURCE" with compilation details.
     diagnostics: ?Diagnostics = null,
-    /// Present after "GET_TYPE_INFO" with type details for an identifier.
-    type_info: ?TypeInfo = null,
+    /// Present after "GET_HOVER_INFO" with hover details for an identifier.
+    hover_info: ?HoverInfo = null,
     /// An optional error code, corresponding to the `WasmError` enum from the playground.
     code: ?u8 = null,
 
@@ -83,12 +83,12 @@ const WasmResponse = struct {
         end_column: u32,
     };
 
-    /// Contains type information for a specific identifier, returned by "GET_TYPE_INFO".
-    const TypeInfo = struct {
-        /// The string representation of the type.
-        type: []const u8,
-        /// An optional, more detailed description of the type.
-        description: ?[]const u8 = null,
+    /// Contains hover information for a specific identifier, returned by "GET_HOVER_INFO".
+    const HoverInfo = struct {
+        name: []const u8,
+        type_str: []const u8,
+        definition_region: Region,
+        docs: ?[]const u8,
     };
 };
 
@@ -134,8 +134,8 @@ const MessageStep = struct {
     expected_message_contains: ?[]const u8 = null,
     /// An optional substring expected to be in the response `data`.
     expected_data_contains: ?[]const u8 = null,
-    /// An optional substring expected to be in the response `type_info`.
-    expected_type_info_contains: ?[]const u8 = null,
+    /// An optional substring expected to be in the response `hover_info`.
+    expected_hover_info_contains: ?[]const u8 = null,
     /// Optional expectations for diagnostic content.
     expected_diagnostics: ?DiagnosticExpectation = null,
     /// If true, the step is expected to result in a Wasm invocation error.
@@ -466,17 +466,17 @@ fn expectDataContains(actual: ?[]const u8, contains: []const u8) TestAssertionEr
     }
 }
 
-/// Asserts that the `actual` optional type_info contains the `contains` substring.
+/// Asserts that the `actual` optional hover_info contains the `contains` substring.
 /// If `actual` is null or does not contain the substring, it logs an error and returns `TestAssertionFailed`.
-fn expectTypeInfoContains(actual: ?WasmResponse.TypeInfo, contains: []const u8) TestAssertionError!void {
+fn expectHoverInfoContains(actual: ?WasmResponse.HoverInfo, contains: []const u8) TestAssertionError!void {
     if (actual == null) {
-        logDebug("[ERROR] Assertion Failed: Expected type_info to contain '{s}', but type_info is null\n", .{contains});
+        logDebug("[ERROR] Assertion Failed: Expected hover_info to contain '{s}', but hover_info is null\n", .{contains});
         return error.TestAssertionFailed;
     }
 
-    const type_info = actual.?;
-    if (!std.mem.containsAtLeast(u8, type_info.type, 1, contains)) {
-        logDebug("[ERROR] Assertion Failed: Expected type_info.type to contain '{s}', got '{s}'\n", .{ contains, type_info.type });
+    const hover_info = actual.?;
+    if (!std.mem.containsAtLeast(u8, hover_info.type_str, 1, contains)) {
+        logDebug("[ERROR] Assertion Failed: Expected hover_info.type_str to contain '{s}', got '{s}'\n", .{ contains, hover_info.type_str });
         return error.TestAssertionFailed;
     }
 }
@@ -651,11 +651,11 @@ fn runTestSteps(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, te
             }
         }
 
-        if (step.expected_type_info_contains) |contains| {
-            if (expectTypeInfoContains(response.type_info, contains)) |_| {} else |_| {
+        if (step.expected_hover_info_contains) |contains| {
+            if (expectHoverInfoContains(response.hover_info, contains)) |_| {} else |_| {
                 logDebug("  Step {}: Assertions failed. Printing WASM internal debug log:\n", .{i + 1});
                 printWasmDebugLog(wasm_interface);
-                return StepExecutionResult{ .result = .failed, .failure_message = "Assertion failed: Type info content mismatch" };
+                return StepExecutionResult{ .result = .failed, .failure_message = "Assertion failed: Hover info content mismatch" };
             }
         }
 
@@ -849,9 +849,9 @@ pub fn main() !void {
         .expected_data_contains = "inferred-types",
     };
     happy_path_steps[6] = .{
-        .message = .{ .type = "GET_TYPE_INFO", .identifier = "foo", .line = 3, .ch = 0 },
+        .message = .{ .type = "GET_HOVER_INFO", .identifier = "foo", .line = 3, .ch = 1 },
         .expected_status = "SUCCESS",
-        .expected_type_info_contains = "Str",
+        .expected_hover_info_contains = "Str",
     };
     try test_cases.append(.{
         .name = "Happy Path - Simple Roc Program",
@@ -928,10 +928,10 @@ pub fn main() !void {
         .steps = memory_corruption_steps,
     });
 
-    // GET_TYPE_INFO Specific Test
-    var get_type_info_steps = try allocator.alloc(MessageStep, 3);
-    get_type_info_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    const get_type_info_code = try allocator.dupe(u8,
+    // GET_HOVER_INFO Specific Test
+    var get_hover_info_steps = try allocator.alloc(MessageStep, 3);
+    get_hover_info_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
+    const get_hover_info_code = try allocator.dupe(u8,
         \\module [main]
         \\
         \\main : Str
@@ -940,20 +940,20 @@ pub fn main() !void {
         \\num : I32
         \\num = 123
     );
-    get_type_info_steps[1] = .{
-        .message = .{ .type = "LOAD_SOURCE", .source = get_type_info_code },
+    get_hover_info_steps[1] = .{
+        .message = .{ .type = "LOAD_SOURCE", .source = get_hover_info_code },
         .expected_status = "SUCCESS",
         .expected_diagnostics = .{ .min_errors = 0, .min_warnings = 0 },
-        .owned_source = get_type_info_code,
+        .owned_source = get_hover_info_code,
     };
-    get_type_info_steps[2] = .{
-        .message = .{ .type = "GET_TYPE_INFO", .identifier = "num", .line = 7, .ch = 0 },
+    get_hover_info_steps[2] = .{
+        .message = .{ .type = "GET_HOVER_INFO", .identifier = "num", .line = 7, .ch = 1 },
         .expected_status = "SUCCESS",
-        .expected_type_info_contains = "I32",
+        .expected_hover_info_contains = "I32",
     };
     try test_cases.append(.{
-        .name = "GET_TYPE_INFO - Specific Type Query",
-        .steps = get_type_info_steps,
+        .name = "GET_HOVER_INFO - Specific Type Query",
+        .steps = get_hover_info_steps,
     });
 
     logDebug("[INFO] Starting Playground Integration Tests...\n", .{});

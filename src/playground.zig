@@ -50,7 +50,7 @@ const MessageType = enum {
     QUERY_AST,
     QUERY_CIR,
     QUERY_TYPES,
-    GET_TYPE_INFO,
+    GET_HOVER_INFO,
     RESET,
 
     pub fn fromString(str: []const u8) ?MessageType {
@@ -60,7 +60,7 @@ const MessageType = enum {
         if (std.mem.eql(u8, str, "QUERY_AST")) return .QUERY_AST;
         if (std.mem.eql(u8, str, "QUERY_CIR")) return .QUERY_CIR;
         if (std.mem.eql(u8, str, "QUERY_TYPES")) return .QUERY_TYPES;
-        if (std.mem.eql(u8, str, "GET_TYPE_INFO")) return .GET_TYPE_INFO;
+        if (std.mem.eql(u8, str, "GET_HOVER_INFO")) return .GET_HOVER_INFO;
         if (std.mem.eql(u8, str, "RESET")) return .RESET;
         return null;
     }
@@ -476,8 +476,8 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
         .QUERY_TYPES => {
             try writeTypesResponse(response_buffer, data);
         },
-        .GET_TYPE_INFO => {
-            try writeTypeInfoResponse(response_buffer, data, message_json);
+        .GET_HOVER_INFO => {
+            try writeHoverInfoResponse(response_buffer, data, message_json);
         },
         .RESET => {
             // A RESET message should clean up all compilation-related memory.
@@ -902,8 +902,22 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
     try resp_writer.finalize();
 }
 
-/// Write type info response for a specific position
-fn writeTypeInfoResponse(response_buffer: []u8, data: CompilerStageData, message_json: std.json.Value) ResponseWriteError!void {
+const HoverInfo = struct {
+    name: []const u8,
+    type_str: []const u8,
+    definition_region: DiagnosticRegion,
+    docs: ?[]const u8,
+
+    pub fn deinit(self: *HoverInfo, alloc: Allocator) void {
+        alloc.free(self.type_str);
+        if (self.docs) |d| {
+            alloc.free(d);
+        }
+    }
+};
+
+/// Write hover info response for a specific position
+fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, message_json: std.json.Value) ResponseWriteError!void {
     var resp_writer = ResponseWriter{ .buffer = response_buffer };
     resp_writer.pos = @sizeOf(u32);
     const w = resp_writer.writer();
@@ -929,7 +943,7 @@ fn writeTypeInfoResponse(response_buffer: []u8, data: CompilerStageData, message
         },
     };
     const ch_num = switch (ch_val) {
-        .integer => |i| @as(u32, @intCast(i)),
+        .integer => |i| @as(u32, @intCast(i)) - 1, // Convert from 1-based to 0-based
         else => {
             try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid ch parameter");
             return;
@@ -963,31 +977,47 @@ fn writeTypeInfoResponse(response_buffer: []u8, data: CompilerStageData, message
         return;
     }
 
-    var maybe_owned_type_info: ?[]const u8 = null;
-    defer if (maybe_owned_type_info) |owned_info| allocator.free(owned_info);
-
-    maybe_owned_type_info = findTypeInfoAtPosition(data, byte_offset, ident_str) catch {
-        try writeErrorResponse(response_buffer, .ERROR, "Failed to find type information");
+    var maybe_hover_info = findHoverInfoAtPosition(data, byte_offset, ident_str) catch {
+        try writeErrorResponse(response_buffer, .ERROR, "Failed to find hover information");
         return;
     };
 
-    try w.writeAll("{\"status\":\"SUCCESS\",\"type_info\":{\"type\":\"");
-    if (maybe_owned_type_info) |info| {
-        try writeJsonString(w, info);
+    try w.writeAll("{\"status\":\"SUCCESS\",\"hover_info\":");
+    if (maybe_hover_info) |*hover_info| {
+        defer hover_info.deinit(allocator);
+
+        try w.writeAll("{\"name\":\"");
+        try writeJsonString(w, hover_info.name);
+        try w.writeAll("\",\"type_str\":\"");
+        try writeJsonString(w, hover_info.type_str);
+        try w.writeAll("\",\"definition_region\":{");
+        try w.print("\"start_line\":{d},\"start_column\":{d},\"end_line\":{d},\"end_column\":{d}", .{
+            hover_info.definition_region.start_line,
+            hover_info.definition_region.start_column,
+            hover_info.definition_region.end_line,
+            hover_info.definition_region.end_column,
+        });
+        try w.writeAll("}");
+        try w.writeAll(",\"docs\":");
+        if (hover_info.docs) |docs| {
+            try w.writeAll("\"");
+            try writeJsonString(w, docs);
+            try w.writeAll("\"");
+        } else {
+            try w.writeAll("null");
+        }
+        try w.writeAll("}"); // closes hover_info
     } else {
         try w.writeAll("null");
     }
-    try w.writeAll("\"}}");
+    try w.writeAll("}"); // closes root
     try resp_writer.finalize();
 }
 
-/// Find type information for an identifier at a specific byte position
-fn findTypeInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier: []const u8) !?[]const u8 {
+/// Find hover information for an identifier at a specific byte position
+fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier: []const u8) !?HoverInfo {
     const cir = data.module_env;
-    const local_allocator = allocator; // Use the global WASM allocator for duplication
-
-    var type_writer = types.writers.TypeWriter.init(allocator, @ptrCast(cir)) catch return null;
-    defer type_writer.deinit();
+    const local_allocator = allocator;
 
     const all_defs = cir.store.sliceDefs(cir.all_defs);
 
@@ -1001,13 +1031,34 @@ fn findTypeInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier:
                 .assign => |assign| {
                     const ident_text = cir.idents.getText(assign.ident);
                     if (std.mem.eql(u8, ident_text, identifier)) {
-                        const def_var = @as(types.Var, @enumFromInt(@intFromEnum(def_idx)));
-                        type_writer.write(def_var) catch return null;
-                        const type_str_from_writer = type_writer.get();
+                        // 1. Get type string
+                        var type_writer = try types.TypeWriter.init(local_allocator, @ptrCast(cir));
+                        defer type_writer.deinit();
 
-                        // Duplicate the string so it can outlive the TypeWriter
-                        const owned_type_str = local_allocator.dupe(u8, type_str_from_writer) catch return null;
-                        return owned_type_str;
+                        const def_var = @as(types.Var, @enumFromInt(@intFromEnum(def_idx)));
+                        try type_writer.write(def_var);
+                        const type_str_from_writer = type_writer.get();
+                        const owned_type_str = try local_allocator.dupe(u8, type_str_from_writer);
+
+                        // 2. Get definition region
+                        const def_region_loc = cir.store.getPatternRegion(def.pattern);
+                        const region_info = cir.calcRegionInfo(def_region_loc);
+                        const def_region = DiagnosticRegion{
+                            .start_line = region_info.start_line_idx + 1,
+                            .start_column = region_info.start_col_idx + 1,
+                            .end_line = region_info.end_line_idx + 1,
+                            .end_column = region_info.end_col_idx + 1,
+                        };
+
+                        // 3. Get docs (not yet implemented)
+                        const docs: ?[]const u8 = null;
+
+                        return HoverInfo{
+                            .name = ident_text,
+                            .type_str = owned_type_str,
+                            .definition_region = def_region,
+                            .docs = docs,
+                        };
                     }
                 },
                 else => {},
