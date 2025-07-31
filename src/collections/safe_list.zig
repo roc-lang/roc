@@ -748,12 +748,12 @@ pub fn SafeMultiList(comptime T: type) type {
                     const slice = safe_multi_list.items.slice();
                     const fields = std.meta.fields(T);
                     const first_field_offset = writer.total_bytes;
-                    
+
                     inline for (fields, 0..) |_, i| {
                         const field_ptr = slice.items(@as(Field, @enumFromInt(i))).ptr;
                         _ = try writer.appendSlice(allocator, field_ptr[0..safe_multi_list.items.len]);
                     }
-                    
+
                     break :blk first_field_offset;
                 } else writer.total_bytes;
 
@@ -2982,7 +2982,7 @@ test "SafeMultiList.Serialized roundtrip" {
 
     // Verify the items are accessible
     try testing.expectEqual(@as(u32, 3), list.len());
-    
+
     // Check field access
     const a_values = list.field(.a);
     try testing.expectEqual(@as(u32, 100), a_values[0]);

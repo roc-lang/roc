@@ -3123,7 +3123,6 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
     };
 }
 
-
 /// Serialize this NodeStore to the given CompactWriter. The resulting NodeStore
 /// in the writer's buffer will have offsets instead of pointers. Calling any
 /// methods on it or dereferencing its internal "pointers" (which are now
@@ -3176,7 +3175,6 @@ pub fn relocate(self: *NodeStore, offset: isize) void {
 test "NodeStore empty CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
-
 
     // Create an empty NodeStore
     var original = try NodeStore.init(gpa);
@@ -3428,5 +3426,3 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     try testing.expectEqual(@as(usize, 0), deserialized.scratch_exprs.items.items.len);
     try testing.expectEqual(@as(usize, 0), deserialized.scratch_patterns.items.items.len);
 }
-
-

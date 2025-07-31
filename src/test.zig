@@ -42,7 +42,7 @@ test {
     testing.refAllDecls(@import("parse/test/ast_node_store_test.zig"));
 
     testing.refAllDeclsRecursive(@import("compile"));
-    
+
     testing.refAllDeclsRecursive(@import("main.zig"));
     testing.refAllDeclsRecursive(@import("cache/mod.zig"));
     testing.refAllDeclsRecursive(@import("cache/CacheModule.zig"));

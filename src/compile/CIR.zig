@@ -746,60 +746,57 @@ test "Import.Store.Serialized roundtrip" {
     // Create original store and add some imports
     var original = Import.Store.init();
     defer original.deinit(gpa);
-    
+
     // Create a string store for interning module names
     var string_store = try base.StringLiteral.Store.initCapacityBytes(gpa, 1024);
     defer string_store.deinit(gpa);
-    
+
     // Add some imports
     const idx1 = try original.getOrPut(gpa, &string_store, "Std.List");
     const idx2 = try original.getOrPut(gpa, &string_store, "Std.Dict");
     const idx3 = try original.getOrPut(gpa, &string_store, "App.Model");
-    
+
     // Create a CompactWriter and arena
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
-    
+
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     const tmp_file = try tmp_dir.dir.createFile("test_import_store_serialized.dat", .{ .read = true });
     defer tmp_file.close();
-    
+
     var writer = collections.CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
     defer writer.deinit(arena_alloc);
-    
+
     // Allocate and serialize using the Serialized struct
     const serialized_ptr = try writer.appendAlloc(arena_alloc, Import.Store.Serialized);
     try serialized_ptr.serialize(&original, arena_alloc, &writer);
-    
+
     // Write to file
     try writer.writeGather(arena_alloc, tmp_file);
-    
+
     // Read back
     const file_size = try tmp_file.getEndPos();
     const buffer = try gpa.alloc(u8, file_size);
     defer gpa.free(buffer);
     _ = try tmp_file.pread(buffer, 0);
-    
+
     // Deserialize
     const deserialized_ptr = @as(*Import.Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
     const store = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
-    
+
     // Verify the imports are accessible
     try testing.expectEqual(@as(usize, 3), store.imports.len());
-    
+
     // The map should be empty after deserialization
     try testing.expectEqual(@as(usize, 0), store.map.count());
-    
+
     // Verify the import indices match
-    try testing.expectEqual(string_store.get(original.imports.getAssume(@intFromEnum(idx1))), 
-                           string_store.get(store.imports.getAssume(@intFromEnum(idx1))));
-    try testing.expectEqual(string_store.get(original.imports.getAssume(@intFromEnum(idx2))), 
-                           string_store.get(store.imports.getAssume(@intFromEnum(idx2))));
-    try testing.expectEqual(string_store.get(original.imports.getAssume(@intFromEnum(idx3))), 
-                           string_store.get(store.imports.getAssume(@intFromEnum(idx3))));
+    try testing.expectEqual(string_store.get(original.imports.getAssume(@intFromEnum(idx1))), string_store.get(store.imports.getAssume(@intFromEnum(idx1))));
+    try testing.expectEqual(string_store.get(original.imports.getAssume(@intFromEnum(idx2))), string_store.get(store.imports.getAssume(@intFromEnum(idx2))));
+    try testing.expectEqual(string_store.get(original.imports.getAssume(@intFromEnum(idx3))), string_store.get(store.imports.getAssume(@intFromEnum(idx3))));
 }

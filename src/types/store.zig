@@ -694,7 +694,7 @@ pub const Store = struct {
             try self.vars.serialize(&store.vars, allocator, writer);
             try self.record_fields.serialize(&store.record_fields, allocator, writer);
             try self.tags.serialize(&store.tags, allocator, writer);
-            
+
             // Store the allocator
             self.gpa = allocator;
         }

@@ -1691,52 +1691,52 @@ test "StringLiteral.Store.Serialized roundtrip" {
     // Create original store and add some strings
     var original = StringLiteral.Store{};
     defer original.deinit(gpa);
-    
+
     const idx1 = try original.insert(gpa, "hello");
     const idx2 = try original.insert(gpa, "world");
     const idx3 = try original.insert(gpa, "foo bar baz");
-    
+
     // Freeze the store in debug mode
     original.freeze();
-    
+
     // Create a CompactWriter and arena
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
-    
+
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     const tmp_file = try tmp_dir.dir.createFile("test.compact", .{ .read = true });
     defer tmp_file.close();
-    
+
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
     defer writer.deinit(arena_alloc);
-    
+
     // Allocate and serialize using the Serialized struct
     const serialized_ptr = try writer.appendAlloc(arena_alloc, StringLiteral.Store.Serialized);
     try serialized_ptr.serialize(&original, arena_alloc, &writer);
-    
+
     // Write to file
     try writer.writeGather(arena_alloc, tmp_file);
-    
+
     // Read back
     const file_size = try tmp_file.getEndPos();
     const buffer = try gpa.alloc(u8, file_size);
     defer gpa.free(buffer);
     _ = try tmp_file.pread(buffer, 0);
-    
+
     // Deserialize
     const deserialized_ptr = @as(*StringLiteral.Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
     const store = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
-    
+
     // Verify the strings are accessible
     try std.testing.expectEqualStrings("hello", store.get(idx1));
     try std.testing.expectEqualStrings("world", store.get(idx2));
     try std.testing.expectEqualStrings("foo bar baz", store.get(idx3));
-    
+
     // Verify frozen state is preserved
     if (std.debug.runtime_safety) {
         try std.testing.expect(store.frozen);
