@@ -63,6 +63,9 @@ jobs:
           roc check src/PROFILING/exec_bench.roc
           roc test src/PROFILING/exec_bench.roc
 
+      - name: Run Playground Tests
+        run: |
+          zig build playground-test -Doptimize=ReleaseSmall -- --verbose
 
   zig-tests:
     needs: check-once

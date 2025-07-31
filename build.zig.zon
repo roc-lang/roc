@@ -48,6 +48,10 @@
             .hash = "122070972a9f996fc1a167b78d3a6a8c10f85349f9369383f5e26af1c5eed3cc41b0",
             .lazy = true,
         },
+        .bytebox = .{
+            .url = "git+https://github.com/lukewilliamboswell/bytebox.git#694b53b748dba8078751a8836f1b3cead792dcca",
+            .hash = "bytebox-0.0.1-SXc2sSfbDgCLYYKaTGdlU4Dl3ncfvesPax1bkLHAlCg6",
+        },
     },
     .fingerprint = 0x9eea22a6c3bd0034,
     .paths = .{
