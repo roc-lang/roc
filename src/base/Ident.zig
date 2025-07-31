@@ -95,9 +95,9 @@ pub const Store = struct {
     attributes: collections.SafeList(Attributes) = .{},
     next_unique_name: u32 = 0,
 
-    /// Serialized representation of a Store
+    /// Serialized representation of an Ident.Store
     pub const Serialized = struct {
-        interner: SmallStringInterner,
+        interner: SmallStringInterner.Serialized,
         attributes: collections.SafeList(Attributes).Serialized,
         next_unique_name: u32,
 
@@ -108,13 +108,11 @@ pub const Store = struct {
             allocator: std.mem.Allocator,
             writer: *CompactWriter,
         ) std.mem.Allocator.Error!void {
-            // Serialize the interner
-            self.interner = (try store.interner.serialize(allocator, writer)).*;
+            // Serialize the interner using its Serialized struct
+            try self.interner.serialize(&store.interner, allocator, writer);
 
             // Serialize the attributes SafeList
-            const attributes_serialized = try writer.appendAlloc(allocator, collections.SafeList(Attributes).Serialized);
-            try attributes_serialized.serialize(&store.attributes, allocator, writer);
-            self.attributes = attributes_serialized.*;
+            try self.attributes.serialize(&store.attributes, allocator, writer);
 
             // Copy next_unique_name directly
             self.next_unique_name = store.next_unique_name;
@@ -125,15 +123,15 @@ pub const Store = struct {
             // Debug assert that Serialized is at least as big as Store
             std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
 
-            // Apply relocations
-            self.interner.relocate(@intCast(offset));
+            // Deserialize the interner
+            const interner = self.interner.deserialize(offset);
 
             // Deserialize the attributes SafeList
             const attributes = self.attributes.deserialize(offset);
 
             // Build the Store
             const store = Store{
-                .interner = self.interner,
+                .interner = interner.*,
                 .attributes = attributes.*,
                 .next_unique_name = self.next_unique_name,
             };
