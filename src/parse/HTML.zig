@@ -229,8 +229,10 @@ pub fn toSExprHtml(ast: *const AST, env: ModuleEnv, writer: std.io.AnyWriter) !v
                     try writer.print("<div class=\"statements\">", .{});
                     try stack.append(.{ .action = .Exit, .node = node });
                     const statements = ast.store.statementSlice(span);
-                    for (statements.len..0) |i| {
-                        try stack.append(.{ .action = .Enter, .node = .{ .statement = ast.store.getStatement(statements[i - 1]) } });
+                    var i = statements.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try stack.append(.{ .action = .Enter, .node = .{ .statement = ast.store.getStatement(statements[i]) } });
                     }
                 } else {
                     try writer.print("</div>", .{});
@@ -401,8 +403,10 @@ pub fn toSExprHtml(ast: *const AST, env: ModuleEnv, writer: std.io.AnyWriter) !v
                 if (action == .Enter) {
                     try stack.append(.{ .action = .Exit, .node = node }); // No div for this one
                     const exprs = ast.store.exprSlice(span);
-                    for (exprs.len..0) |i| {
-                        try stack.append(.{ .action = .Enter, .node = .{ .expr = ast.store.getExpr(exprs[i - 1]) } });
+                    var i = exprs.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try stack.append(.{ .action = .Enter, .node = .{ .expr = ast.store.getExpr(exprs[i]) } });
                     }
                 }
             },
@@ -459,8 +463,10 @@ pub fn toSExprHtml(ast: *const AST, env: ModuleEnv, writer: std.io.AnyWriter) !v
                     // This simplified example assumes ExposedItem, but the real implementation
                     // would need to know the type of items in the collection.
                     const items = ast.store.exposedItemSlice(.{ .span = coll.span });
-                    for (items.len..0) |i| {
-                        try stack.append(.{ .action = .Enter, .node = .{ .exposed_item = ast.store.getExposedItem(items[i - 1]) } });
+                    var i = items.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try stack.append(.{ .action = .Enter, .node = .{ .exposed_item = ast.store.getExposedItem(items[i]) } });
                     }
                 } else {
                     try writer.print("</div>", .{});
@@ -489,8 +495,10 @@ pub fn toSExprHtml(ast: *const AST, env: ModuleEnv, writer: std.io.AnyWriter) !v
                 if (action == .Enter) {
                     try stack.append(.{ .action = .Exit, .node = node });
                     const items = ast.store.exposedItemSlice(span);
-                    for (items.len..0) |i| {
-                        try stack.append(.{ .action = .Enter, .node = .{ .exposed_item = ast.store.getExposedItem(items[i - 1]) } });
+                    var i = items.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try stack.append(.{ .action = .Enter, .node = .{ .exposed_item = ast.store.getExposedItem(items[i]) } });
                     }
                 }
             },
@@ -498,8 +506,10 @@ pub fn toSExprHtml(ast: *const AST, env: ModuleEnv, writer: std.io.AnyWriter) !v
                 if (action == .Enter) {
                     try stack.append(.{ .action = .Exit, .node = node });
                     const items = ast.store.patternSlice(span);
-                    for (items.len..0) |i| {
-                        try stack.append(.{ .action = .Enter, .node = .{ .pattern = ast.store.getPattern(items[i - 1]) } });
+                    var i = items.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try stack.append(.{ .action = .Enter, .node = .{ .pattern = ast.store.getPattern(items[i]) } });
                     }
                 }
             },
@@ -507,8 +517,10 @@ pub fn toSExprHtml(ast: *const AST, env: ModuleEnv, writer: std.io.AnyWriter) !v
                 if (action == .Enter) {
                     try stack.append(.{ .action = .Exit, .node = node });
                     const items = ast.store.exprSlice(span);
-                    for (items.len..0) |i| {
-                        try stack.append(.{ .action = .Enter, .node = .{ .expr = ast.store.getExpr(items[i - 1]) } });
+                    var i = items.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try stack.append(.{ .action = .Enter, .node = .{ .expr = ast.store.getExpr(items[i]) } });
                     }
                 }
             },
@@ -516,8 +528,10 @@ pub fn toSExprHtml(ast: *const AST, env: ModuleEnv, writer: std.io.AnyWriter) !v
                 if (action == .Enter) {
                     try stack.append(.{ .action = .Exit, .node = node });
                     const items = ast.store.recordFieldSlice(span);
-                    for (items.len..0) |i| {
-                        try stack.append(.{ .action = .Enter, .node = .{ .record_field = ast.store.getRecordField(items[i - 1]) } });
+                    var i = items.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try stack.append(.{ .action = .Enter, .node = .{ .record_field = ast.store.getRecordField(items[i]) } });
                     }
                 }
             },
@@ -525,8 +539,10 @@ pub fn toSExprHtml(ast: *const AST, env: ModuleEnv, writer: std.io.AnyWriter) !v
                 if (action == .Enter) {
                     try stack.append(.{ .action = .Exit, .node = node });
                     const items = ast.store.patternRecordFieldSlice(span);
-                    for (items.len..0) |i| {
-                        try stack.append(.{ .action = .Enter, .node = .{ .pattern_record_field = ast.store.getPatternRecordField(items[i - 1]) } });
+                    var i = items.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try stack.append(.{ .action = .Enter, .node = .{ .pattern_record_field = ast.store.getPatternRecordField(items[i]) } });
                     }
                 }
             },
@@ -561,8 +577,10 @@ pub fn toSExprHtml(ast: *const AST, env: ModuleEnv, writer: std.io.AnyWriter) !v
                     try writer.print("<div class=\"args\">", .{});
                     try stack.append(.{ .action = .Exit, .node = node });
                     const items = ast.store.patternSlice(span);
-                    for (items.len..0) |i| {
-                        try stack.append(.{ .action = .Enter, .node = .{ .pattern = ast.store.getPattern(items[i - 1]) } });
+                    var i = items.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try stack.append(.{ .action = .Enter, .node = .{ .pattern = ast.store.getPattern(items[i]) } });
                     }
                 } else {
                     try writer.print("</div>", .{});
@@ -572,8 +590,10 @@ pub fn toSExprHtml(ast: *const AST, env: ModuleEnv, writer: std.io.AnyWriter) !v
                 if (action == .Enter) {
                     try stack.append(.{ .action = .Exit, .node = node });
                     const items = ast.store.exprSlice(span);
-                    for (items.len..0) |i| {
-                        try stack.append(.{ .action = .Enter, .node = .{ .expr = ast.store.getExpr(items[i - 1]) } });
+                    var i = items.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try stack.append(.{ .action = .Enter, .node = .{ .expr = ast.store.getExpr(items[i]) } });
                     }
                 }
             },
@@ -615,8 +635,10 @@ pub fn toSExprHtml(ast: *const AST, env: ModuleEnv, writer: std.io.AnyWriter) !v
                     try writer.print("<div class=\"branches\">", .{});
                     try stack.append(.{ .action = .Exit, .node = node });
                     const items = ast.store.matchBranchSlice(span);
-                    for (items.len..0) |i| {
-                        try stack.append(.{ .action = .Enter, .node = .{ .match_branch = ast.store.getBranch(items[i - 1]) } });
+                    var i = items.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try stack.append(.{ .action = .Enter, .node = .{ .match_branch = ast.store.getBranch(items[i]) } });
                     }
                 } else {
                     try writer.print("</div>", .{});
@@ -668,8 +690,10 @@ pub fn toSExprHtml(ast: *const AST, env: ModuleEnv, writer: std.io.AnyWriter) !v
                 if (action == .Enter) {
                     try stack.append(.{ .action = .Exit, .node = node });
                     const items = ast.store.typeAnnoSlice(span);
-                    for (items.len..0) |i| {
-                        try stack.append(.{ .action = .Enter, .node = .{ .type_anno = ast.store.getTypeAnno(items[i - 1]) } });
+                    var i = items.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try stack.append(.{ .action = .Enter, .node = .{ .type_anno = ast.store.getTypeAnno(items[i]) } });
                     }
                 }
             },
@@ -686,8 +710,10 @@ pub fn toSExprHtml(ast: *const AST, env: ModuleEnv, writer: std.io.AnyWriter) !v
                 if (action == .Enter) {
                     try stack.append(.{ .action = .Exit, .node = node });
                     const items = ast.store.annoRecordFieldSlice(span);
-                    for (items.len..0) |i| {
-                        try stack.append(.{ .action = .Enter, .node = .{ .anno_record_field = try ast.store.getAnnoRecordField(items[i - 1]) } });
+                    var i = items.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try stack.append(.{ .action = .Enter, .node = .{ .anno_record_field = try ast.store.getAnnoRecordField(items[i]) } });
                     }
                 }
             },
@@ -705,8 +731,10 @@ pub fn toSExprHtml(ast: *const AST, env: ModuleEnv, writer: std.io.AnyWriter) !v
                 if (action == .Enter) {
                     try stack.append(.{ .action = .Exit, .node = node });
                     const items = ast.store.whereClauseSlice(span);
-                    for (items.len..0) |i| {
-                        try stack.append(.{ .action = .Enter, .node = .{ .where_clause = ast.store.getWhereClause(items[i - 1]) } });
+                    var i = items.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try stack.append(.{ .action = .Enter, .node = .{ .where_clause = ast.store.getWhereClause(items[i]) } });
                     }
                 }
             },

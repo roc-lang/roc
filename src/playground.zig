@@ -106,6 +106,10 @@ const CompilerStageData = struct {
     parse_ast: ?parse.AST = null,
     solver: ?Check = null,
 
+    // Pre-canonicalization HTML representations
+    tokens_html: ?[]const u8 = null,
+    ast_html: ?[]const u8 = null,
+
     // Diagnostic reports from each stage
     tokenize_reports: std.ArrayList(reporting.Report),
     parse_reports: std.ArrayList(reporting.Report),
@@ -127,6 +131,10 @@ const CompilerStageData = struct {
         if (self.solver) |*s| {
             s.deinit();
         }
+
+        // Free pre-generated HTML
+        if (self.tokens_html) |html| allocator.free(html);
+        if (self.ast_html) |html| allocator.free(html);
 
         // Deinit reports, which may reference data in the AST or ModuleEnv
         for (self.tokenize_reports.items) |*report| {
@@ -536,6 +544,33 @@ fn compileSource(source: []const u8) !CompilerStageData {
     var parse_ast = try parse.parse(module_env);
     result.parse_ast = parse_ast;
 
+    // Generate and store HTML before canonicalization corrupts the AST/tokens
+    var local_arena = std.heap.ArenaAllocator.init(allocator);
+    defer local_arena.deinit();
+    const temp_alloc = local_arena.allocator();
+
+    // Generate Tokens HTML
+    var tokens_html_buffer = std.ArrayList(u8).init(temp_alloc);
+    const tokens_writer = tokens_html_buffer.writer().any();
+    AST.tokensToHtml(&parse_ast, module_env, tokens_writer) catch |err| {
+        logDebug("compileSource: tokensToHtml failed: {}\n", .{err});
+    };
+    result.tokens_html = allocator.dupe(u8, tokens_html_buffer.items) catch |err| {
+        logDebug("compileSource: failed to dupe tokens_html: {}\n", .{err});
+        return err;
+    };
+
+    // Generate AST HTML
+    var ast_html_buffer = std.ArrayList(u8).init(temp_alloc);
+    const ast_writer = ast_html_buffer.writer().any();
+    AST.toSExprHtml(&parse_ast, module_env.*, ast_writer) catch |err| {
+        logDebug("compileSource: toSExprHtml failed: {}\n", .{err});
+    };
+    result.ast_html = allocator.dupe(u8, ast_html_buffer.items) catch |err| {
+        logDebug("compileSource: failed to dupe ast_html: {}\n", .{err});
+        return err;
+    };
+
     // Collect tokenize diagnostics with additional error handling
     for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
         const report = parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator) catch {
@@ -795,23 +830,8 @@ fn writeTokensResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
-    if (data.parse_ast) |ast| {
-        var local_arena = std.heap.ArenaAllocator.init(allocator);
-        defer local_arena.deinit();
-
-        var html_buffer = std.ArrayList(u8).init(local_arena.allocator());
-        defer html_buffer.deinit();
-        const html_writer = html_buffer.writer().any();
-
-        AST.tokensToHtml(&ast, data.module_env, html_writer) catch |err| {
-            logDebug("writeTokensResponse: tokensToHtml failed with error: {}\n", .{err});
-            try writeJsonString(w, "Error generating tokens HTML");
-            try w.writeAll("\"}");
-            try resp_writer.finalize();
-            return;
-        };
-
-        try writeJsonString(w, html_buffer.items);
+    if (data.tokens_html) |html| {
+        try writeJsonString(w, html);
     } else {
         try writeJsonString(w, "Tokens not available");
     }
@@ -828,11 +848,8 @@ fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) Respons
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
-    if (data.parse_ast) |_| {
-        // As hinted at in the integration test, `toSExprHtml` is currently disabled or buggy.
-        // Calling it results in a `TrapUnreachable`. For now, we return a placeholder
-        // to allow the rest of the system to be tested.
-        try writeJsonString(w, "<div class=\"file\"></div>");
+    if (data.ast_html) |html| {
+        try writeJsonString(w, html);
     } else {
         try writeJsonString(w, "Parse AST not available");
     }
