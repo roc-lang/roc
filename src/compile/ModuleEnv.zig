@@ -1178,47 +1178,35 @@ pub const Serialized = struct {
         source: []const u8,
         module_name: []const u8,
     ) *Self {
-        const env_ptr = @as(*Self, @ptrCast(self));
+        // ModuleEnv.Serialized should be at least as big as ModuleEnv
+        std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Self));
 
-        // Set the fields that weren't serialized
-        env_ptr.gpa = gpa;
-        env_ptr.source = source;
-        env_ptr.module_name = module_name;
+        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+        const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
-        // Deserialize each component
-        const idents = self.idents.deserialize(offset);
-        const ident_ids_for_slicing = self.ident_ids_for_slicing.deserialize(offset);
-        const strings = self.strings.deserialize(offset);
-        const types = self.types.deserialize(offset);
-        const exposed_items = self.exposed_items.deserialize(offset);
-        const line_starts = self.line_starts.deserialize(offset);
-        const external_decls = self.external_decls.deserialize(offset);
-        const imports = self.imports.deserialize(offset);
-        
         // Relocate NodeStore
         var store = self.store;
         store.relocate(@as(isize, @intCast(offset)));
 
-        // Update the ModuleEnv with the deserialized data
-        env_ptr.* = .{
+        env.* = Self{
             .gpa = gpa,
-            .idents = idents.*,
-            .ident_ids_for_slicing = ident_ids_for_slicing.*,
-            .strings = strings.*,
-            .types = types.*,
-            .exposed_items = exposed_items.*,
-            .line_starts = line_starts.*,
+            .idents = self.idents.deserialize(offset).*,
+            .ident_ids_for_slicing = self.ident_ids_for_slicing.deserialize(offset).*,
+            .strings = self.strings.deserialize(offset).*,
+            .types = self.types.deserialize(offset).*,
+            .exposed_items = self.exposed_items.deserialize(offset).*,
+            .line_starts = self.line_starts.deserialize(offset).*,
             .source = source,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
-            .external_decls = external_decls.*,
-            .imports = imports.*,
+            .external_decls = self.external_decls.deserialize(offset).*,
+            .imports = self.imports.deserialize(offset).*,
             .module_name = module_name,
             .diagnostics = self.diagnostics,
             .store = store,
         };
 
-        return env_ptr;
+        return env;
     }
 };
 

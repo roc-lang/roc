@@ -138,8 +138,11 @@ pub fn SafeList(comptime T: type) type {
 
             /// Deserialize this Serialized struct into a SafeList
             pub fn deserialize(self: *Serialized, offset: i64) *SafeList(T) {
-                // Debug assert that Serialized is at least as big as SafeList
+                // SafeList.Serialized should be at least as big as SafeList
                 std.debug.assert(@sizeOf(Serialized) >= @sizeOf(SafeList(T)));
+
+                // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+                const safe_list = @as(*SafeList(T), @ptrFromInt(@intFromPtr(self)));
 
                 // Apply the offset to convert from serialized offset to actual pointer
                 const adjusted_offset: u64 = if (offset >= 0)
@@ -147,22 +150,16 @@ pub fn SafeList(comptime T: type) type {
                 else
                     self.offset - @as(u64, @intCast(-offset));
 
-                // Build the SafeList
                 const items_ptr: [*]T = @ptrFromInt(adjusted_offset);
-                const items_slice = items_ptr[0..@intCast(self.len)];
-                const safe_list = SafeList(T){
+
+                safe_list.* = SafeList(T){
                     .items = .{
-                        .items = items_slice,
+                        .items = items_ptr[0..@intCast(self.len)],
                         .capacity = @intCast(self.capacity),
                     },
                 };
 
-                // Write the SafeList to our memory location
-                const self_ptr = @intFromPtr(self);
-                const safe_list_ptr = @as(*SafeList(T), @ptrFromInt(self_ptr));
-                safe_list_ptr.* = safe_list;
-
-                return safe_list_ptr;
+                return safe_list;
             }
         };
 
@@ -773,8 +770,11 @@ pub fn SafeMultiList(comptime T: type) type {
 
             /// Deserialize this Serialized struct into a SafeMultiList
             pub fn deserialize(self: *Serialized, offset: i64) *SafeMultiList(T) {
-                // Debug assert that Serialized is at least as big as SafeMultiList
+                // SafeMultiList.Serialized should be at least as big as SafeMultiList
                 std.debug.assert(@sizeOf(Serialized) >= @sizeOf(SafeMultiList(T)));
+
+                // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+                const multi_list = @as(*SafeMultiList(T), @ptrFromInt(@intFromPtr(self)));
 
                 // Apply the offset to convert from serialized offset to actual pointer
                 const adjusted_offset: u64 = if (offset >= 0)
@@ -783,10 +783,8 @@ pub fn SafeMultiList(comptime T: type) type {
                     self.offset - @as(u64, @intCast(-offset));
 
                 const bytes_ptr = @as([*]align(4) u8, @ptrFromInt(adjusted_offset));
-                
-                // Cast self to SafeMultiList pointer and construct the SafeMultiList in place
-                const multi_list_ptr = @as(*SafeMultiList(T), @ptrCast(self));
-                multi_list_ptr.* = .{
+
+                multi_list.* = SafeMultiList(T){
                     .items = .{
                         .bytes = bytes_ptr,
                         .len = self.len,
@@ -794,7 +792,7 @@ pub fn SafeMultiList(comptime T: type) type {
                     },
                 };
 
-                return multi_list_ptr;
+                return multi_list;
             }
         };
     };

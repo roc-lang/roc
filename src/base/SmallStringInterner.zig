@@ -244,22 +244,19 @@ pub const Serialized = struct {
 
     /// Deserialize this Serialized struct into a SmallStringInterner
     pub fn deserialize(self: *Serialized, offset: i64) *Self {
-        // Debug assert that Serialized is at least as big as Self
+        // Self.Serialized should be at least as big as Self
         std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Self));
 
-        // Deserialize the SafeLists
-        const bytes = self.bytes.deserialize(offset);
-        const hash_table = self.hash_table.deserialize(offset);
+        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+        const interner = @as(*Self, @ptrCast(self));
 
-        // Cast self to Self pointer and construct the SmallStringInterner in place
-        const interner_ptr = @as(*Self, @ptrCast(self));
-        interner_ptr.* = .{
-            .bytes = bytes.*,
-            .hash_table = hash_table.*,
+        interner.* = .{
+            .bytes = self.bytes.deserialize(offset).*,
+            .hash_table = self.hash_table.deserialize(offset).*,
             .entry_count = self.entry_count,
             .frozen = self.frozen,
         };
 
-        return interner_ptr;
+        return interner;
     }
 };

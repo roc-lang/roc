@@ -701,28 +701,22 @@ pub const Store = struct {
 
         /// Deserialize this Serialized struct into a Store
         pub fn deserialize(self: *Serialized, offset: i64) *Store {
-            // Debug assert that Serialized is at least as big as Store
+            // types.Store.Serialized should be at least as big as types.Store
             std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
 
-            // Deserialize each component
-            const slots_ptr = self.slots.deserialize(offset);
-            const descs_ptr = self.descs.deserialize(offset);
-            const vars_ptr = self.vars.deserialize(offset);
-            const record_fields_ptr = self.record_fields.deserialize(offset);
-            const tags_ptr = self.tags.deserialize(offset);
+            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
-            // Reinterpret as Store pointer
-            const store_ptr = @as(*Store, @ptrCast(self));
-            store_ptr.* = Store{
+            store.* = Store{
                 .gpa = self.gpa,
-                .slots = slots_ptr.*,
-                .descs = descs_ptr.*,
-                .vars = vars_ptr.*,
-                .record_fields = record_fields_ptr.*,
-                .tags = tags_ptr.*,
+                .slots = self.slots.deserialize(offset).*,
+                .descs = self.descs.deserialize(offset).*,
+                .vars = self.vars.deserialize(offset).*,
+                .record_fields = self.record_fields.deserialize(offset).*,
+                .tags = self.tags.deserialize(offset).*,
             };
 
-            return store_ptr;
+            return store;
         }
     };
 
@@ -940,19 +934,17 @@ const SlotStore = struct {
 
         /// Deserialize this Serialized struct into a SlotStore
         pub fn deserialize(self: *Serialized, offset: i64) *SlotStore {
-            // Debug assert that Serialized is at least as big as SlotStore
+            // SlotStore.Serialized should be at least as big as SlotStore
             std.debug.assert(@sizeOf(Serialized) >= @sizeOf(SlotStore));
 
-            // Deserialize the backing SafeList
-            const backing_ptr = self.backing.deserialize(offset);
+            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            const slot_store = @as(*SlotStore, @ptrFromInt(@intFromPtr(self)));
 
-            // Reinterpret as SlotStore pointer
-            const slot_store_ptr = @as(*SlotStore, @ptrCast(self));
-            slot_store_ptr.* = SlotStore{
-                .backing = backing_ptr.*,
+            slot_store.* = SlotStore{
+                .backing = self.backing.deserialize(offset).*,
             };
 
-            return slot_store_ptr;
+            return slot_store;
         }
     };
 
@@ -1051,19 +1043,17 @@ const DescStore = struct {
 
         /// Deserialize this Serialized struct into a DescStore
         pub fn deserialize(self: *Serialized, offset: i64) *DescStore {
-            // Debug assert that Serialized is at least as big as DescStore
+            // DescStore.Serialized should be at least as big as DescStore
             std.debug.assert(@sizeOf(Serialized) >= @sizeOf(DescStore));
 
-            // Deserialize the backing SafeMultiList
-            const backing_ptr = self.backing.deserialize(offset);
+            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            const desc_store = @as(*DescStore, @ptrFromInt(@intFromPtr(self)));
 
-            // Reinterpret as DescStore pointer
-            const desc_store_ptr = @as(*DescStore, @ptrCast(self));
-            desc_store_ptr.* = DescStore{
-                .backing = backing_ptr.*,
+            desc_store.* = DescStore{
+                .backing = self.backing.deserialize(offset).*,
             };
 
-            return desc_store_ptr;
+            return desc_store;
         }
     };
 

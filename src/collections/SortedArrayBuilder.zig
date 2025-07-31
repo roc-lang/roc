@@ -325,8 +325,11 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
 
             /// Deserialize this Serialized struct into a SortedArrayBuilder
             pub fn deserialize(self: *Serialized, offset: i64) *Self {
-                // Debug assert that Serialized is at least as big as Self
+                // SortedArrayBuilder.Serialized should be at least as big as SortedArrayBuilder
                 std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Self));
+
+                // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+                const builder = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
                 // Apply the offset to convert from serialized offset to actual pointer
                 const adjusted_offset: u64 = if (offset >= 0)
@@ -335,10 +338,8 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                     self.entries_offset - @as(u64, @intCast(-offset));
 
                 const entries_ptr = @as([*]Entry, @ptrFromInt(adjusted_offset));
-                
-                // Cast self to Self pointer and construct the SortedArrayBuilder in place
-                const builder_ptr = @as(*Self, @ptrCast(self));
-                builder_ptr.* = .{
+
+                builder.* = Self{
                     .entries = .{
                         .items = entries_ptr[0..self.entries_len],
                         .capacity = self.entries_capacity,
@@ -346,7 +347,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                     .sorted = self.sorted,
                 };
 
-                return builder_ptr;
+                return builder;
             }
         };
     };

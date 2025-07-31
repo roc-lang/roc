@@ -388,20 +388,18 @@ pub const Import = struct {
 
             /// Deserialize this Serialized struct into a Store
             pub fn deserialize(self: *Serialized, offset: i64) *Store {
-                // Debug assert that Serialized is at least as big as Store
+                // Import.Store.Serialized should be at least as big as Import.Store
                 std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
 
-                // Deserialize the imports SafeList
-                const imports_ptr = self.imports.deserialize(offset);
+                // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+                const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
-                // Cast self to Store pointer and construct the Store in place
-                const store_ptr = @as(*Store, @ptrCast(self));
-                store_ptr.* = .{
+                store.* = Store{
                     .map = .{}, // Map will be empty after deserialization (only used for deduplication during insertion)
-                    .imports = imports_ptr.*,
+                    .imports = self.imports.deserialize(offset).*,
                 };
 
-                return store_ptr;
+                return store;
             }
         };
     };

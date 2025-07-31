@@ -270,19 +270,17 @@ pub const ExposedItems = struct {
 
         /// Deserialize this Serialized struct into an ExposedItems
         pub fn deserialize(self: *Serialized, offset: i64) *ExposedItems {
-            // Debug assert that Serialized is at least as big as ExposedItems
+            // ExposedItems.Serialized should be at least as big as ExposedItems
             std.debug.assert(@sizeOf(Serialized) >= @sizeOf(ExposedItems));
 
-            // Deserialize the SortedArrayBuilder
-            const items_ptr = self.items.deserialize(offset);
+            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            const exposed = @as(*ExposedItems, @ptrFromInt(@intFromPtr(self)));
 
-            // Cast self to ExposedItems pointer and construct in place
-            const exposed_ptr = @as(*ExposedItems, @ptrCast(self));
-            exposed_ptr.* = .{
-                .items = items_ptr.*,
+            exposed.* = ExposedItems{
+                .items = self.items.deserialize(offset).*,
             };
 
-            return exposed_ptr;
+            return exposed;
         }
     };
 };

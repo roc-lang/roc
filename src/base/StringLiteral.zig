@@ -187,20 +187,18 @@ pub const Store = struct {
 
         /// Deserialize this Serialized struct into a Store
         pub fn deserialize(self: *Serialized, offset: i64) *Store {
-            // Debug assert that Serialized is at least as big as Store
+            // StringLiteral.Store.Serialized should be at least as big as StringLiteral.Store
             std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
 
-            // Deserialize the buffer
-            const buffer_ptr = self.buffer.deserialize(offset);
+            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
-            // Cast self to Store pointer and construct the Store in place
-            const store_ptr = @as(*Store, @ptrCast(self));
-            store_ptr.* = .{
-                .buffer = buffer_ptr.*,
+            store.* = Store{
+                .buffer = self.buffer.deserialize(offset).*,
                 .frozen = self.frozen,
             };
 
-            return store_ptr;
+            return store;
         }
     };
 };

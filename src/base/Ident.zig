@@ -108,40 +108,26 @@ pub const Store = struct {
             allocator: std.mem.Allocator,
             writer: *CompactWriter,
         ) std.mem.Allocator.Error!void {
-            // Serialize the interner using its Serialized struct
             try self.interner.serialize(&store.interner, allocator, writer);
-
-            // Serialize the attributes SafeList
             try self.attributes.serialize(&store.attributes, allocator, writer);
-
-            // Copy next_unique_name directly
             self.next_unique_name = store.next_unique_name;
         }
 
         /// Deserialize this Serialized struct into a Store
         pub fn deserialize(self: *Serialized, offset: i64) *Store {
-            // Debug assert that Serialized is at least as big as Store
+            // Ident.Store.Serialized should be at least as big as Ident.Store
             std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
 
-            // Deserialize the interner
-            const interner = self.interner.deserialize(offset);
+            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
-            // Deserialize the attributes SafeList
-            const attributes = self.attributes.deserialize(offset);
-
-            // Build the Store
-            const store = Store{
-                .interner = interner.*,
-                .attributes = attributes.*,
+            store.* = Store{
+                .interner = self.interner.deserialize(offset).*,
+                .attributes = self.attributes.deserialize(offset).*,
                 .next_unique_name = self.next_unique_name,
             };
 
-            // Write the Store to our memory location
-            const self_ptr = @intFromPtr(self);
-            const store_ptr = @as(*Store, @ptrFromInt(self_ptr));
-            store_ptr.* = store;
-
-            return store_ptr;
+            return store;
         }
     };
 
