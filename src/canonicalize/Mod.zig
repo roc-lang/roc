@@ -5169,13 +5169,13 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
 
     // Check if the node is malformed before calling getTypeHeader
     const node = self.parse_ir.store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
+    const node_region = self.parse_ir.tokenizedRegionToRegion(node.region);
     if (node.tag == .malformed) {
         // Create a malformed type header with an invalid identifier
-        const region = self.parse_ir.tokenizedRegionToRegion(node.region);
         return try self.env.addTypeHeaderAndTypeVar(.{
             .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Invalid identifier
             .args = .{ .span = .{ .start = 0, .len = 0 } },
-        }, Content{ .flex_var = null }, region);
+        }, Content{ .flex_var = null }, node_region);
     }
 
     const ast_header = self.parse_ir.store.getTypeHeader(header_idx);
@@ -5255,6 +5255,9 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
             },
             else => {
                 // Other types in parameter position - canonicalize normally but warn
+                try self.env.pushDiagnostic(Diagnostic{ .malformed_type_annotation = .{
+                    .region = node_region,
+                } });
                 const canonicalized = try self.canonicalizeTypeAnno(arg_idx, .type_decl_anno);
                 try self.env.store.addScratchTypeAnno(canonicalized);
             },
