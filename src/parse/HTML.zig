@@ -74,14 +74,14 @@ pub fn tokensToHtml(ast: *const AST, env: *const ModuleEnv, writer: anytype) !vo
             .KwVar,
             .KwWhere,
             .KwWith,
-            => "tok-kw",
-            .UpperIdent, .LowerIdent, .DotLowerIdent, .DotUpperIdent, .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .NamedUnderscore => "tok-ident",
-            .OpPlus, .OpStar, .OpPizza, .OpAssign, .OpBinaryMinus, .OpUnaryMinus, .OpNotEquals, .OpBang, .OpAnd, .OpAmpersand, .OpQuestion, .OpDoubleQuestion, .OpOr, .OpBar, .OpDoubleSlash, .OpSlash, .OpPercent, .OpCaret, .OpGreaterThanOrEq, .OpGreaterThan, .OpLessThanOrEq, .OpBackArrow, .OpLessThan, .OpEquals, .OpColonEqual, .NoSpaceOpQuestion => "tok-op",
-            .StringStart, .StringEnd, .MultilineStringStart, .MultilineStringEnd, .StringPart => "tok-str",
-            .Float, .Int => "tok-num",
-            .OpenRound, .CloseRound, .OpenSquare, .CloseSquare, .OpenCurly, .CloseCurly, .OpenStringInterpolation, .CloseStringInterpolation, .NoSpaceOpenRound => "tok-punct",
-            .EndOfFile => "tok-eof",
-            else => "tok-default",
+            => "token-keyword",
+            .UpperIdent, .LowerIdent, .DotLowerIdent, .DotUpperIdent, .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .NamedUnderscore => "token-keyword",
+            .OpPlus, .OpStar, .OpPizza, .OpAssign, .OpBinaryMinus, .OpUnaryMinus, .OpNotEquals, .OpBang, .OpAnd, .OpAmpersand, .OpQuestion, .OpDoubleQuestion, .OpOr, .OpBar, .OpDoubleSlash, .OpSlash, .OpPercent, .OpCaret, .OpGreaterThanOrEq, .OpGreaterThan, .OpLessThanOrEq, .OpBackArrow, .OpLessThan, .OpEquals, .OpColonEqual, .NoSpaceOpQuestion => "token-punctuation",
+            .StringStart, .StringEnd, .MultilineStringStart, .MultilineStringEnd, .StringPart => "token-string",
+            .Float, .Int => "token-number",
+            .OpenRound, .CloseRound, .OpenSquare, .CloseSquare, .OpenCurly, .CloseCurly, .OpenStringInterpolation, .CloseStringInterpolation, .NoSpaceOpenRound => "token-punctuation",
+            .EndOfFile => "token-default",
+            else => "token-default",
         };
 
         try writer.print("<span class=\"token {s}\">", .{css_class});
