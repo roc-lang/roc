@@ -3172,6 +3172,7 @@ pub fn relocate(self: *NodeStore, offset: isize) void {
     // Note: scratch arrays are empty after deserialization, so no need to relocate
 }
 
+/// Serialized representation of NodeStore
 pub const Serialized = struct {
     nodes: Node.List.Serialized,
     regions: Region.List.Serialized,
