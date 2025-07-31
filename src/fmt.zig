@@ -1292,7 +1292,7 @@ const Formatter = struct {
                     const pattern_region = fmt.nodeRegion(@intFromEnum(p));
                     _ = try fmt.formatPattern(p);
                     fmt.curr_indent = curr_indent;
-                    if (i < (a.patterns.span.len - 1)) {
+                    if (i < a.patterns.span.len - 1) {
                         if (multiline) {
                             _ = try fmt.flushCommentsBefore(pattern_region.end);
                             try fmt.ensureNewline();
@@ -1302,8 +1302,7 @@ const Formatter = struct {
                         }
                         try fmt.push('|');
                         const next_region = fmt.nodeRegion(@intFromEnum(patterns[i + 1]));
-                        const flushed = try fmt.flushCommentsBefore(next_region.start);
-                        if (flushed) {
+                        if (multiline and try fmt.flushCommentsBefore(next_region.start)) {
                             fmt.curr_indent += 1;
                             try fmt.pushIndent();
                         } else {

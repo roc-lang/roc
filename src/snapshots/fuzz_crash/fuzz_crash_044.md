@@ -11,94 +11,18 @@ app[]{f:platform""}{{0
 ""
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_044.md:1:20:1:21
-PARSE ERROR - fuzz_crash_044.md:1:21:1:22
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_044.md:2:1:2:2
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_044.md:2:2:2:3
-INVALID STATEMENT - fuzz_crash_044.md:1:22:1:23
-INVALID STATEMENT - fuzz_crash_044.md:2:1:2:2
-INVALID STATEMENT - fuzz_crash_044.md:2:2:2:3
+INVALID STATEMENT - fuzz_crash_044.md:1:20:2:3
 INVALID STATEMENT - fuzz_crash_044.md:4:1:4:3
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**fuzz_crash_044.md:1:20:1:21:**
-```roc
-app[]{f:platform""}{{0
-```
-                   ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**fuzz_crash_044.md:1:21:1:22:**
-```roc
-app[]{f:platform""}{{0
-```
-                    ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_044.md:2:1:2:2:**
-```roc
-}}
-```
-^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_044.md:2:2:2:3:**
-```roc
-}}
-```
- ^
-
-
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_044.md:1:22:1:23:**
+**fuzz_crash_044.md:1:20:2:3:**
 ```roc
 app[]{f:platform""}{{0
-```
-                     ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_044.md:2:1:2:2:**
-```roc
 }}
 ```
-^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_044.md:2:2:2:3:**
-```roc
-}}
-```
- ^
 
 
 **INVALID STATEMENT**
@@ -131,19 +55,22 @@ StringStart(4:1-4:2),StringPart(4:2-4:2),StringEnd(4:2-4:3),EndOfFile(4:3-4:3),
 				(e-string @1.17-1.19
 					(e-string-part @1.18-1.18 (raw ""))))))
 	(statements
-		(s-malformed @1.20-1.21 (tag "statement_unexpected_token"))
-		(s-malformed @1.21-1.22 (tag "statement_unexpected_token"))
-		(e-int @1.22-1.23 (raw "0"))
-		(e-malformed @2.1-2.2 (reason "expr_unexpected_token"))
-		(e-malformed @2.2-2.3 (reason "expr_unexpected_token"))
+		(e-block @1.20-2.3
+			(statements
+				(e-block @1.21-2.2
+					(statements
+						(e-int @1.22-1.23 (raw "0"))))))
 		(e-string @4.1-4.3
 			(e-string-part @4.2-4.2 (raw "")))))
 ~~~
 # FORMATTED
 ~~~roc
 app [] { f: platform "" }
-0
-
+{
+	{
+		0
+	}
+}
 
 ""
 ~~~

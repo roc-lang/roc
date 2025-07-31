@@ -27,34 +27,21 @@ ar,
 PARSE ERROR - fuzz_crash_029.md:4:4:4:5
 PARSE ERROR - fuzz_crash_029.md:5:14:5:17
 PARSE ERROR - fuzz_crash_029.md:5:9:5:13
-PARSE ERROR - fuzz_crash_029.md:5:22:5:23
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:5:23:5:24
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:5:24:5:25
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:6:4:6:5
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:7:2:7:9
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:10:2:10:10
-PARSE ERROR - fuzz_crash_029.md:12:3:12:4
-UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_029.md:13:6:13:7
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:13:7:13:10
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:13:10:13:11
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:13:11:13:12
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:13:19:13:20
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:14:2:14:10
 PARSE ERROR - fuzz_crash_029.md:17:4:17:4
 LIST NOT CLOSED - fuzz_crash_029.md:17:4:17:4
-INVALID STATEMENT - fuzz_crash_029.md:5:23:5:24
+INVALID STATEMENT - fuzz_crash_029.md:5:22:5:24
 INVALID STATEMENT - fuzz_crash_029.md:5:24:5:25
 INVALID STATEMENT - fuzz_crash_029.md:6:4:6:5
 INVALID STATEMENT - fuzz_crash_029.md:7:2:7:9
 INVALID STATEMENT - fuzz_crash_029.md:8:3:9:4
 INVALID STATEMENT - fuzz_crash_029.md:10:2:10:10
 INVALID STATEMENT - fuzz_crash_029.md:11:3:11:8
-MALFORMED TYPE - fuzz_crash_029.md:13:6:13:7
-INVALID STATEMENT - fuzz_crash_029.md:13:7:13:10
-INVALID STATEMENT - fuzz_crash_029.md:13:10:13:11
-INVALID STATEMENT - fuzz_crash_029.md:13:11:13:12
-INVALID STATEMENT - fuzz_crash_029.md:13:13:13:17
-INVALID STATEMENT - fuzz_crash_029.md:13:19:13:20
+INVALID STATEMENT - fuzz_crash_029.md:12:3:13:20
 INVALID STATEMENT - fuzz_crash_029.md:14:2:14:10
 INVALID STATEMENT - fuzz_crash_029.md:15:3:17:4
 # PROBLEMS
@@ -106,30 +93,6 @@ Here is the problematic code:
         ^^^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**fuzz_crash_029.md:5:22:5:23:**
-```roc
-			n! : List(Str) => {}, # ure
-```
-                     ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_029.md:5:23:5:24:**
-```roc
-			n! : List(Str) => {}, # ure
-```
-                      ^
-
-
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
@@ -178,78 +141,6 @@ Here is the problematic code:
  ^^^^^^^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**fuzz_crash_029.md:12:3:12:4:**
-```roc
-		{ # pen
-```
-  ^
-
-
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **"** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-Here is the problematic code:
-**fuzz_crash_029.md:13:6:13:7:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-     ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **..l** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_029.md:13:7:13:10:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-      ^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **"** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_029.md:13:10:13:11:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-         ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_029.md:13:11:13:12:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-          ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_029.md:13:19:13:20:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-                  ^
-
-
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **provides** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
@@ -291,11 +182,11 @@ Here is the problematic code:
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_029.md:5:23:5:24:**
+**fuzz_crash_029.md:5:22:5:24:**
 ```roc
 			n! : List(Str) => {}, # ure
 ```
-                      ^
+                     ^^
 
 
 **INVALID STATEMENT**
@@ -364,69 +255,15 @@ Only definitions, type annotations, and imports are allowed at the top level.
   ^^^^^
 
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**fuzz_crash_029.md:13:6:13:7:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-     ^
-
-
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_029.md:13:7:13:10:**
+**fuzz_crash_029.md:12:3:13:20:**
 ```roc
+		{ # pen
 pkg: "..l", mmen		} # Cose
 ```
-      ^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_029.md:13:10:13:11:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-         ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_029.md:13:11:13:12:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-          ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_029.md:13:13:13:17:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-            ^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_029.md:13:19:13:20:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-                  ^
 
 
 **INVALID STATEMENT**
@@ -478,38 +315,35 @@ CloseSquare(17:3-17:4),EndOfFile(17:4-17:4),
 	(malformed-header @4.4-5.8 (tag "expected_requires_rigids_close_curly"))
 	(statements
 		(s-malformed @5.9-5.21 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @5.22-5.23 (tag "statement_unexpected_token"))
-		(e-malformed @5.23-5.24 (reason "expr_unexpected_token"))
+		(e-record @5.22-5.24)
 		(e-malformed @5.24-5.25 (reason "expr_unexpected_token"))
 		(e-malformed @6.4-6.5 (reason "expr_unexpected_token"))
 		(e-malformed @7.2-7.9 (reason "expr_unexpected_token"))
 		(e-list @8.3-9.4)
 		(e-malformed @10.2-10.10 (reason "expr_unexpected_token"))
 		(e-ident @11.3-11.8 (raw "vides"))
-		(s-malformed @12.3-12.4 (tag "statement_unexpected_token"))
-		(s-type-anno @13.1-13.7 (name "pkg")
-			(ty-malformed @13.6-13.7 (tag "ty_anno_unexpected_token")))
-		(e-malformed @13.7-13.10 (reason "expr_unexpected_token"))
-		(e-malformed @13.10-13.11 (reason "expr_unexpected_token"))
-		(e-malformed @13.11-13.12 (reason "expr_unexpected_token"))
-		(e-ident @13.13-13.17 (raw "mmen"))
-		(e-malformed @13.19-13.20 (reason "expr_unexpected_token"))
+		(e-record @12.3-13.20
+			(field (field "pkg")
+				(e-string @13.6-13.11
+					(e-string-part @13.7-13.10 (raw "..l"))))
+			(field (field "mmen")))
 		(e-malformed @14.2-14.10 (reason "expr_unexpected_token"))
 		(e-malformed @17.4-17.4 (reason "expected_expr_close_square_or_comma"))))
 ~~~
 # FORMATTED
 ~~~roc
 # Co		{	} #ose
+{}
 # ure
 # Ce
 # rd
 [] # Cse
 # Cd
 vides # Cd
-# pen
-pkg : 
-mmen
-# Cose
+{ # pen
+	pkg: "..l",
+	mmen, # Cose
+} # Cose
 # Cd
 
 ~~~
