@@ -1924,31 +1924,31 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
     switch (content.meta.node_type) {
         .file => {
             const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(env.*, parse_ast, &tree);
+            try file.pushToSExprTree(env, parse_ast, &tree);
         },
         .header => {
             const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
-            try header.pushToSExprTree(env.*, parse_ast, &tree);
+            try header.pushToSExprTree(env, parse_ast, &tree);
         },
         .expr => {
             const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
-            try expr.pushToSExprTree(env.*, parse_ast, &tree);
+            try expr.pushToSExprTree(env, parse_ast, &tree);
         },
         .statement => {
             const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
-            try stmt.pushToSExprTree(env.*, parse_ast, &tree);
+            try stmt.pushToSExprTree(env, parse_ast, &tree);
         },
         .package => {
             const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(env.*, parse_ast, &tree);
+            try file.pushToSExprTree(env, parse_ast, &tree);
         },
         .platform => {
             const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(env.*, parse_ast, &tree);
+            try file.pushToSExprTree(env, parse_ast, &tree);
         },
         .app => {
             const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(env.*, parse_ast, &tree);
+            try file.pushToSExprTree(env, parse_ast, &tree);
         },
         .repl => {
             // REPL doesn't use parse trees

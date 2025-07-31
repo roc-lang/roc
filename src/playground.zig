@@ -561,15 +561,21 @@ fn compileSource(source: []const u8) !CompilerStageData {
     };
 
     // Generate AST HTML
-    var ast_html_buffer = std.ArrayList(u8).init(temp_alloc);
+    var ast_html_buffer = std.ArrayList(u8).init(allocator);
     const ast_writer = ast_html_buffer.writer().any();
-    AST.toSExprHtml(&parse_ast, module_env.*, ast_writer) catch |err| {
-        logDebug("compileSource: toSExprHtml failed: {}\n", .{err});
-    };
-    result.ast_html = allocator.dupe(u8, ast_html_buffer.items) catch |err| {
-        logDebug("compileSource: failed to dupe ast_html: {}\n", .{err});
-        return err;
-    };
+    {
+        const file = parse_ast.store.getFile();
+
+        var tree = SExprTree.init(temp_alloc);
+        defer tree.deinit();
+
+        try file.pushToSExprTree(module_env, &parse_ast, &tree);
+
+        try tree.toHtml(ast_writer);
+    }
+    // the AST HTML is stored in our heap and will be cleaned up when the module is RESET
+    // no need to free it here, we will re-use whenever the AST is queried
+    result.ast_html = ast_html_buffer.items;
 
     // Collect tokenize diagnostics with additional error handling
     for (parse_ast.tokenize_diagnostics.items) |diagnostic| {

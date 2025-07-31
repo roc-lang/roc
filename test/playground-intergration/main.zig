@@ -831,18 +831,17 @@ pub fn main() !void {
     happy_path_steps[2] = .{
         .message = .{ .type = "QUERY_TOKENS" },
         .expected_status = "SUCCESS",
-        .expected_data_contains = "token-list", // Checks for the root div in the HTML output
+        .expected_data_contains = "token-list",
     };
     happy_path_steps[3] = .{
         .message = .{ .type = "QUERY_AST" },
         .expected_status = "SUCCESS",
-        .expected_data_contains = "<div class=\"file\"", // Checks for the placeholder since toSExprHtml is disabled
+        .expected_data_contains = "<span class=\"token-punctuation\">",
     };
     happy_path_steps[4] = .{
         .message = .{ .type = "QUERY_CIR" },
         .expected_status = "SUCCESS",
-        // For a simple program like "foo = \"bar\"", the CIR might be simple or empty-cir-debug
-        .expected_data_contains = "can-ir", // A more general check for CIR content
+        .expected_data_contains = "can-ir",
     };
     happy_path_steps[5] = .{
         .message = .{ .type = "QUERY_TYPES" },
