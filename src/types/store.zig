@@ -672,7 +672,7 @@ pub const Store = struct {
 
     // serialization //
 
-    /// Serialized representation of Store
+    /// Serialized representation of types store
     pub const Serialized = struct {
         gpa: Allocator,
         slots: SlotStore.Serialized,
