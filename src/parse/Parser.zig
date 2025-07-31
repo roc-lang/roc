@@ -1682,11 +1682,8 @@ fn parseQualificationChain(self: *Parser) std.mem.Allocator.Error!QualificationR
     std.debug.assert(self.peek() == .UpperIdent or self.peek() == .LowerIdent);
 
     const scratch_top = self.store.scratchTokenTop();
-    var final_token = self.pos;
-    var is_upper = false;
-
-    final_token = self.pos; // Capture position of the identifier
-    is_upper = true;
+    var final_token = self.pos; // Capture position of the identifier
+    var is_upper = true;
 
     // Check if there's a qualification chain by looking ahead
     const saved_pos = self.pos;
