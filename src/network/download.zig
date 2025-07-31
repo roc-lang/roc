@@ -14,7 +14,7 @@ pub fn download(allocator: std.mem.Allocator, url: []const u8) ![]const u8 {
     var current_uri = uri;
 
     while (redirect_count < max_redirects) : (redirect_count += 1) {
-        var request = try client.open(.GET, current_uri, .{ 
+        var request = try client.open(.GET, current_uri, .{
             .server_header_buffer = &server_header_buffer,
         });
         defer request.deinit();
@@ -29,7 +29,7 @@ pub fn download(allocator: std.mem.Allocator, url: []const u8) ![]const u8 {
 
                 const temp_dir_name = try std.fmt.allocPrint(allocator, "download_tmp_{d}", .{std.time.milliTimestamp()});
                 defer allocator.free(temp_dir_name);
-                
+
                 try std.fs.cwd().makePath(temp_dir_name);
                 errdefer std.fs.cwd().deleteTree(temp_dir_name) catch {};
 
@@ -60,7 +60,7 @@ pub fn download(allocator: std.mem.Allocator, url: []const u8) ![]const u8 {
                     }
                 }
                 const location = location_header orelse return error.NoLocationHeader;
-                
+
                 if (std.mem.startsWith(u8, location, "http://") or std.mem.startsWith(u8, location, "https://")) {
                     current_uri = try std.Uri.parse(location);
                 } else {
@@ -136,14 +136,12 @@ test "download file from local server" {
 
                 const response_body = "Hello, World!";
                 var response_buf: [512]u8 = undefined;
-                const response = std.fmt.bufPrint(&response_buf, 
-                    "HTTP/1.1 200 OK\r\n" ++
+                const response = std.fmt.bufPrint(&response_buf, "HTTP/1.1 200 OK\r\n" ++
                     "Content-Type: text/plain\r\n" ++
                     "Content-Length: {d}\r\n" ++
                     "Connection: close\r\n" ++
                     "\r\n" ++
-                    "{s}", .{ response_body.len, response_body }
-                ) catch continue;
+                    "{s}", .{ response_body.len, response_body }) catch continue;
 
                 connection.stream.writeAll(response) catch continue;
             }
@@ -174,7 +172,7 @@ test "download file from local server" {
 
 test "download file from HTTPS with redirect" {
     const allocator = testing.allocator;
-    
+
     const url = "https://roc-lang.org";
     const downloaded_path = try download(allocator, url);
     defer allocator.free(downloaded_path);
