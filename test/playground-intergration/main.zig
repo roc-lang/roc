@@ -907,6 +907,28 @@ pub fn main() !void {
         .steps = reset_test_steps,
     });
 
+    // Memory Corruption on Reset Test
+    var memory_corruption_steps = try allocator.alloc(MessageStep, 4);
+    memory_corruption_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
+    const code_for_mem_test_1 = try TestData.happyPathRocCode(allocator);
+    memory_corruption_steps[1] = .{
+        .message = .{ .type = "LOAD_SOURCE", .source = code_for_mem_test_1 },
+        .expected_status = "SUCCESS",
+        .owned_source = code_for_mem_test_1,
+    };
+    memory_corruption_steps[2] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
+    const code_for_mem_test_2 = try TestData.syntaxErrorRocCode(allocator);
+    memory_corruption_steps[3] = .{
+        .message = .{ .type = "LOAD_SOURCE", .source = code_for_mem_test_2 },
+        .expected_status = "SUCCESS",
+        .expected_diagnostics = .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} },
+        .owned_source = code_for_mem_test_2,
+    };
+    try test_cases.append(.{
+        .name = "Memory Corruption on Reset - Load, Reset, Load",
+        .steps = memory_corruption_steps,
+    });
+
     // GET_TYPE_INFO Specific Test
     var get_type_info_steps = try allocator.alloc(MessageStep, 3);
     get_type_info_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
