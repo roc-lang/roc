@@ -11,6 +11,7 @@ const reporting = @import("reporting");
 const parse = @import("parse");
 const tracy = @import("tracy");
 
+const SharedMemoryAllocator = @import("./SharedMemoryAllocator.zig");
 const fmt = @import("fmt.zig");
 const coordinate_simple = @import("coordinate_simple.zig");
 const Filesystem = @import("fs/Filesystem.zig");
@@ -63,6 +64,9 @@ const Allocator = std.mem.Allocator;
 const ColorPalette = reporting.ColorPalette;
 
 const legalDetailsFileContent = @embedFile("legal_details");
+
+/// Default size for shared memory allocator (1GB)
+const SHARED_MEMORY_SIZE = 1 * 1024 * 1024 * 1024;
 
 /// The CLI entrypoint for the Roc compiler.
 pub fn main() !void {
@@ -518,6 +522,10 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     } else null;
 
     // Process the file and get Reports
+    // Shared memory allocator needs to outlive process_result
+    var shm_opt: ?SharedMemoryAllocator = null;
+    defer if (shm_opt) |*shm| shm.deinit(gpa);
+
     var process_result = coordinate_simple.processFile(
         gpa,
         Filesystem.default(),
@@ -529,6 +537,30 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     };
 
     defer process_result.deinit(gpa);
+
+    // Update header and try to shrink shared memory after we're done using it (only if using --shm)
+    defer if (shm_opt) |*shm| {
+        // Update header one more time before cleanup
+        shm.updateHeader();
+
+        const initial_size = shm.total_size;
+        const final_size = shm.shrinkToFit() catch |err| blk: {
+            if (args.verbose) {
+                stdout.print("Shared memory shrink failed: {}\n", .{err}) catch {};
+            }
+            break :blk shm.total_size;
+        };
+        if (args.verbose) {
+            const initial_mb = @as(f64, @floatFromInt(initial_size)) / (1024.0 * 1024.0);
+            const final_mb = @as(f64, @floatFromInt(final_size)) / (1024.0 * 1024.0);
+            const used_mb = @as(f64, @floatFromInt(shm.getUsedSize())) / (1024.0 * 1024.0);
+            if (final_size < initial_size) {
+                stdout.print("Shared memory shrunk from {d:.2} MB to {d:.2} MB\n", .{ initial_mb, final_mb }) catch {};
+            } else {
+                stdout.print("Shared memory remained at {d:.2} MB (used: {d:.2} MB, header updated)\n", .{ initial_mb, used_mb }) catch {};
+            }
+        }
+    };
 
     const elapsed = timer.read();
 
