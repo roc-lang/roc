@@ -15,6 +15,8 @@ const math = std.math;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 
+const RocAlloc = utils.RocAlloc;
+const RocDealloc = utils.RocDealloc;
 const Opaque = ?[*]u8;
 const EqFn = *const fn (Opaque, Opaque) callconv(.C) bool;
 const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.C) u8;
@@ -94,12 +96,17 @@ pub const RocList = extern struct {
         return true;
     }
 
-    pub fn fromSlice(comptime T: type, slice: []const T, elements_refcounted: bool) RocList {
+    pub fn fromSlice(
+        comptime T: type,
+        slice: []const T,
+        elements_refcounted: bool,
+        roc_allocate: RocAlloc,
+    ) RocList {
         if (slice.len == 0) {
             return RocList.empty();
         }
 
-        const list = allocate(@alignOf(T), slice.len, @sizeOf(T), elements_refcounted);
+        const list = roc_allocate(@alignOf(T), slice.len, @sizeOf(T), elements_refcounted);
 
         if (slice.len > 0) {
             const dest = list.bytes orelse unreachable;
@@ -163,7 +170,14 @@ pub const RocList = extern struct {
         utils.increfDataPtrC(self.getAllocationDataPtr(), amount);
     }
 
-    pub fn decref(self: RocList, alignment: u32, element_width: usize, elements_refcounted: bool, dec: Dec) void {
+    pub fn decref(
+        self: RocList,
+        alignment: u32,
+        element_width: usize,
+        elements_refcounted: bool,
+        dec: Dec,
+        roc_dealloc: RocDealloc,
+    ) void {
         // If unique, decref will free the list. Before that happens, all elements must be decremented.
         if (elements_refcounted and self.isUnique()) {
             if (self.getAllocationDataPtr()) |source| {
@@ -178,7 +192,13 @@ pub const RocList = extern struct {
         }
 
         // We use the raw capacity to ensure we always decrement the refcount of seamless slices.
-        utils.decref(self.getAllocationDataPtr(), self.capacity_or_alloc_ptr, alignment, elements_refcounted);
+        utils.decref(
+            self.getAllocationDataPtr(),
+            self.capacity_or_alloc_ptr,
+            alignment,
+            elements_refcounted,
+            roc_dealloc,
+        );
     }
 
     pub fn elements(self: RocList, comptime T: type) ?[*]T {
@@ -245,6 +265,7 @@ pub const RocList = extern struct {
         length: usize,
         element_width: usize,
         elements_refcounted: bool,
+        roc_alloc: RocAlloc,
     ) RocList {
         if (length == 0) {
             return empty();
@@ -253,7 +274,12 @@ pub const RocList = extern struct {
         const capacity = utils.calculateCapacity(0, length, element_width);
         const data_bytes = capacity * element_width;
         return RocList{
-            .bytes = utils.allocateWithRefcount(data_bytes, alignment, elements_refcounted),
+            .bytes = utils.allocateWithRefcount(
+                data_bytes,
+                alignment,
+                elements_refcounted,
+                roc_alloc,
+            ),
             .length = length,
             .capacity_or_alloc_ptr = capacity,
         };
@@ -264,6 +290,7 @@ pub const RocList = extern struct {
         length: usize,
         element_width: usize,
         elements_refcounted: bool,
+        roc_alloc: RocAlloc,
     ) RocList {
         if (length == 0) {
             return empty();
@@ -271,7 +298,12 @@ pub const RocList = extern struct {
 
         const data_bytes = length * element_width;
         return RocList{
-            .bytes = utils.allocateWithRefcount(data_bytes, alignment, elements_refcounted),
+            .bytes = utils.allocateWithRefcount(
+                data_bytes,
+                alignment,
+                elements_refcounted,
+                roc_alloc,
+            ),
             .length = length,
             .capacity_or_alloc_ptr = length,
         };
@@ -710,6 +742,8 @@ pub fn listSortWith(
     inc: Inc,
     dec: Dec,
     copy: CopyFn,
+    roc_alloc: RocAlloc,
+    roc_dealloc: RocDealloc,
 ) callconv(.C) RocList {
     if (input.len() < 2) {
         return input;
@@ -717,7 +751,19 @@ pub fn listSortWith(
     var list = input.makeUnique(alignment, element_width, elements_refcounted, inc, dec);
 
     if (list.bytes) |source_ptr| {
-        sort.fluxsort(source_ptr, list.len(), cmp, cmp_data, data_is_owned, inc_n_data, element_width, alignment, copy);
+        sort.fluxsort(
+            source_ptr,
+            list.len(),
+            cmp,
+            cmp_data,
+            data_is_owned,
+            inc_n_data,
+            element_width,
+            alignment,
+            copy,
+            roc_alloc,
+            roc_dealloc,
+        );
     }
 
     return list;

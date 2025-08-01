@@ -15,6 +15,8 @@ const WithOverflow = utils.WithOverflow;
 const roc_panic = @import("panic.zig").panic_help;
 const U256 = num_.U256;
 const mul_u128 = num_.mul_u128;
+const RocAlloc = utils.RocAlloc;
+const RocDealloc = utils.RocDealloc;
 
 /// TODO: Document the RocDec struct.
 pub const RocDec = extern struct {
@@ -153,7 +155,9 @@ pub const RocDec = extern struct {
         return (c -% 48) <= 9;
     }
 
-    pub fn to_str(self: RocDec) RocStr {
+    pub fn to_str(self: RocDec, roc_alloc: RocAlloc) RocStr {
+        _ = roc_alloc; // TODO pass this into RocStr init helpers
+
         // Special case
         if (self.num == 0) {
             return RocStr.init("0.0", 3);
@@ -925,8 +929,25 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 const expectError = testing.expectError;
-const expectEqualSlices = testing.expectEqualSlices;
-const expect = testing.expect;
+const expectEqualSlices = std.testing.expectEqualSlices;
+const expect = std.testing.expect;
+
+// Test allocator functions for RocDec.to_str tests
+fn test_roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
+    const log2_align = std.math.log2_int(u32, alignment);
+    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
+    const slice = std.testing.allocator.rawAlloc(size, align_enum, @returnAddress()) orelse return null;
+    return @as(*anyopaque, @ptrCast(slice));
+}
+
+fn test_roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
+    const log2_align = std.math.log2_int(u32, alignment);
+    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
+    // For testing, we'll skip deallocation to avoid complexity
+    // In real usage, proper deallocation would be implemented
+    _ = c_ptr;
+    _ = align_enum;
+}
 
 test "fromU64" {
     const dec = RocDec.fromU64(25);
@@ -1051,7 +1072,7 @@ test "fromStr: .123.1" {
 
 test "to_str: 100.00" {
     var dec: RocDec = .{ .num = 100000000000000000000 };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
 
     const res_slice: []const u8 = "100.0"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1059,7 +1080,7 @@ test "to_str: 100.00" {
 
 test "to_str: 123.45" {
     var dec: RocDec = .{ .num = 123450000000000000000 };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
 
     const res_slice: []const u8 = "123.45"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1067,7 +1088,7 @@ test "to_str: 123.45" {
 
 test "to_str: -123.45" {
     var dec: RocDec = .{ .num = -123450000000000000000 };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
 
     const res_slice: []const u8 = "-123.45"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1075,7 +1096,7 @@ test "to_str: -123.45" {
 
 test "to_str: 123.0" {
     var dec: RocDec = .{ .num = 123000000000000000000 };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
 
     const res_slice: []const u8 = "123.0"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1083,7 +1104,7 @@ test "to_str: 123.0" {
 
 test "to_str: -123.0" {
     var dec: RocDec = .{ .num = -123000000000000000000 };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
 
     const res_slice: []const u8 = "-123.0"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1091,7 +1112,7 @@ test "to_str: -123.0" {
 
 test "to_str: 0.45" {
     var dec: RocDec = .{ .num = 450000000000000000 };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
 
     const res_slice: []const u8 = "0.45"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1099,7 +1120,7 @@ test "to_str: 0.45" {
 
 test "to_str: -0.45" {
     var dec: RocDec = .{ .num = -450000000000000000 };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
 
     const res_slice: []const u8 = "-0.45"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1107,7 +1128,7 @@ test "to_str: -0.45" {
 
 test "to_str: 0.00045" {
     var dec: RocDec = .{ .num = 450000000000000 };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
 
     const res_slice: []const u8 = "0.00045"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1115,7 +1136,7 @@ test "to_str: 0.00045" {
 
 test "to_str: -0.00045" {
     var dec: RocDec = .{ .num = -450000000000000 };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
 
     const res_slice: []const u8 = "-0.00045"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1123,7 +1144,7 @@ test "to_str: -0.00045" {
 
 test "to_str: -111.123456" {
     var dec: RocDec = .{ .num = -111123456000000000000 };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
 
     const res_slice: []const u8 = "-111.123456"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1131,7 +1152,7 @@ test "to_str: -111.123456" {
 
 test "to_str: 123.1111111" {
     var dec: RocDec = .{ .num = 123111111100000000000 };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
 
     const res_slice: []const u8 = "123.1111111"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1139,7 +1160,7 @@ test "to_str: 123.1111111" {
 
 test "to_str: 123.1111111111111 (big str)" {
     var dec: RocDec = .{ .num = 123111111111111000000 };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
     errdefer res_roc_str.decref();
     defer res_roc_str.decref();
 
@@ -1149,7 +1170,7 @@ test "to_str: 123.1111111111111 (big str)" {
 
 test "to_str: 123.111111111111444444 (max number of decimal places)" {
     var dec: RocDec = .{ .num = 123111111111111444444 };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
     errdefer res_roc_str.decref();
     defer res_roc_str.decref();
 
@@ -1159,7 +1180,7 @@ test "to_str: 123.111111111111444444 (max number of decimal places)" {
 
 test "to_str: 12345678912345678912.111111111111111111 (max number of digits)" {
     var dec: RocDec = .{ .num = 12345678912345678912111111111111111111 };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
     errdefer res_roc_str.decref();
     defer res_roc_str.decref();
 
@@ -1169,7 +1190,7 @@ test "to_str: 12345678912345678912.111111111111111111 (max number of digits)" {
 
 test "to_str: std.math.maxInt" {
     var dec: RocDec = .{ .num = std.math.maxInt(i128) };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
     errdefer res_roc_str.decref();
     defer res_roc_str.decref();
 
@@ -1179,7 +1200,7 @@ test "to_str: std.math.maxInt" {
 
 test "to_str: std.math.minInt" {
     var dec: RocDec = .{ .num = std.math.minInt(i128) };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
     errdefer res_roc_str.decref();
     defer res_roc_str.decref();
 
@@ -1189,7 +1210,7 @@ test "to_str: std.math.minInt" {
 
 test "to_str: 0" {
     var dec: RocDec = .{ .num = 0 };
-    var res_roc_str = dec.to_str();
+    var res_roc_str = dec.to_str(&test_roc_alloc);
 
     const res_slice: []const u8 = "0.0"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1497,8 +1518,8 @@ pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
 }
 
 /// TODO: Document to_str.
-pub fn to_str(arg: RocDec) callconv(.C) RocStr {
-    return @call(.always_inline, RocDec.to_str, .{arg});
+pub fn to_str(arg: RocDec, roc_alloc: RocAlloc) callconv(.C) RocStr {
+    return @call(.always_inline, RocDec.to_str, .{ arg, roc_alloc });
 }
 
 /// TODO: Document fromF64C.

@@ -12,21 +12,96 @@ const DEBUG_INCDEC = false;
 const DEBUG_TESTING_ALLOC = false;
 const DEBUG_ALLOC = false;
 
+/// TODO
+pub const RocAlloc = *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque;
+/// TODO
+pub const RocDealloc = *const fn (c_ptr: *anyopaque, alignment: u32) callconv(.C) void;
+
+/// Tracks allocations for testing purposes with C ABI compatibility. Uses a single global testing allocator to track allocations. If we need multiple independent allocators we will need to modify this and use comptime.
+pub const TestAllocator = struct {
+    const AllocationMap = std.HashMap(*anyopaque, usize, std.hash_map.AutoContext(*anyopaque), std.hash_map.default_max_load_percentage);
+
+    var allocation_map: AllocationMap = undefined;
+    var allocator_initialized: bool = false;
+
+    fn allocFn(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
+        // Setup our allocator if it hasn't been initialized yet
+        if (!allocator_initialized) {
+            allocation_map = AllocationMap.init(std.testing.allocator);
+            allocator_initialized = true;
+        }
+
+        // TODO something proper here
+        _ = alignment;
+        const allign = 8;
+
+        // Allocate memory using the testing allocator
+        const ptr = std.testing.allocator.alignedAlloc(
+            u8,
+            allign,
+            size,
+        ) catch {
+            return null;
+        };
+
+        // Cast the pointer to *anyopaque
+        const result: *anyopaque = @ptrCast(ptr.ptr);
+
+        // Save the allocation in the map
+        allocation_map.put(result, size) catch {
+            std.testing.allocator.free(ptr);
+            return null;
+        };
+
+        return result;
+    }
+
+    fn deallocFn(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
+        _ = alignment; // Not needed for std.testing.allocator
+
+        if (allocation_map.fetchRemove(c_ptr)) |entry| {
+            const bytes: [*]u8 = @ptrCast(@alignCast(c_ptr));
+            const slice = bytes[0..entry.value];
+            std.testing.allocator.free(slice);
+        }
+    }
+
+    // These are the C ABI compatible function pointers you need
+    pub const roc_alloc: RocAlloc = allocFn;
+    pub const roc_dealloc: RocDealloc = deallocFn;
+
+    /// Call this at the end of your tests to clean up
+    pub fn deinit() void {
+        if (allocator_initialized) {
+            // Free any remaining allocations
+            var iterator = allocation_map.iterator();
+            while (iterator.next()) |entry| {
+                const bytes: [*]u8 = @ptrCast(@alignCast(entry.key_ptr.*));
+                const slice = bytes[0..entry.value_ptr.*];
+                std.testing.allocator.free(slice);
+            }
+
+            allocation_map.deinit();
+            allocator_initialized = false;
+        }
+    }
+
+    /// Get the number of currently tracked allocations
+    pub fn getAllocationCount() usize {
+        if (!allocator_initialized) return 0;
+        return allocation_map.count();
+    }
+};
+
 /// Returns a struct type that holds a value of type T and a boolean indicating whether overflow occurred
 /// Used for arithmetic operations that can detect overflow
 pub fn WithOverflow(comptime T: type) type {
     return extern struct { value: T, has_overflowed: bool };
 }
 
-// If allocation fails, this must cxa_throw - it must not return a null pointer!
-extern fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque;
-
 // This should never be passed a null pointer.
 // If allocation fails, this must cxa_throw - it must not return a null pointer!
 extern fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*anyopaque;
-
-// This should never be passed a null pointer.
-extern fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void;
 
 extern fn roc_dbg(loc: *anyopaque, message: *anyopaque, src: *anyopaque) callconv(.C) void;
 
@@ -155,23 +230,12 @@ fn testing_roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     @panic("Roc panicked");
 }
 
-/// Allocates memory with specified size and alignment, wrapping roc_alloc
-/// Returns a pointer to the allocated memory
-pub fn alloc(size: usize, alignment: u32) ?[*]u8 {
-    return @as(?[*]u8, @ptrCast(roc_alloc(size, alignment)));
-}
-
 /// Reallocates memory to new size, preserving contents up to the minimum of old and new sizes
 pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [*]u8 {
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
         std.debug.print("- realloc {*}\n", .{c_ptr});
     }
     return @as([*]u8, @ptrCast(roc_realloc(c_ptr, new_size, old_size, alignment)));
-}
-
-/// Deallocates memory previously allocated with alloc or realloc
-pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
-    return roc_dealloc(c_ptr, alignment);
 }
 
 // indirection because otherwise zig creates an alias to the panic function which our LLVM code
@@ -257,6 +321,7 @@ pub fn decrefRcPtrC(
     bytes_or_null: ?[*]isize,
     alignment: u32,
     elements_refcounted: bool,
+    roc_dealloc: RocDealloc,
 ) callconv(.C) void {
     // IMPORTANT: bytes_or_null is this case is expected to be a pointer to the refcount
     // (NOT the start of the data, or the start of the allocation)
@@ -264,7 +329,7 @@ pub fn decrefRcPtrC(
     // this is of course unsafe, but we trust what we get from the llvm side
     const bytes = @as([*]isize, @ptrCast(bytes_or_null));
 
-    return @call(.always_inline, decref_ptr_to_refcount, .{ bytes, alignment, elements_refcounted });
+    return @call(.always_inline, decref_ptr_to_refcount, .{ bytes, alignment, elements_refcounted, roc_dealloc });
 }
 
 /// Safely decrements reference count for a potentially null pointer
@@ -272,10 +337,11 @@ pub fn decrefCheckNullC(
     bytes_or_null: ?[*]u8,
     alignment: u32,
     elements_refcounted: bool,
+    roc_dealloc: RocDealloc,
 ) callconv(.C) void {
     if (bytes_or_null) |bytes| {
         const isizes: [*]isize = @as([*]isize, @ptrCast(@alignCast(bytes)));
-        return @call(.always_inline, decref_ptr_to_refcount, .{ isizes - 1, alignment, elements_refcounted });
+        return @call(.always_inline, decref_ptr_to_refcount, .{ isizes - 1, alignment, elements_refcounted, roc_dealloc });
     }
 }
 
@@ -286,6 +352,7 @@ pub fn decrefDataPtrC(
     bytes_or_null: ?[*]u8,
     alignment: u32,
     elements_refcounted: bool,
+    roc_dealloc: RocDealloc,
 ) callconv(.C) void {
     const bytes = bytes_or_null orelse return;
 
@@ -296,7 +363,7 @@ pub fn decrefDataPtrC(
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(unmasked_ptr));
     const rc_ptr = isizes - 1;
 
-    return decrefRcPtrC(rc_ptr, alignment, elements_refcounted);
+    return decrefRcPtrC(rc_ptr, alignment, elements_refcounted, roc_dealloc);
 }
 
 /// Increments reference count for a data pointer by specified amount
@@ -324,6 +391,7 @@ pub fn freeDataPtrC(
     bytes_or_null: ?[*]u8,
     alignment: u32,
     elements_refcounted: bool,
+    roc_dealloc: RocDealloc,
 ) callconv(.C) void {
     const bytes = bytes_or_null orelse return;
 
@@ -334,7 +402,7 @@ pub fn freeDataPtrC(
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(masked_ptr));
 
     // we always store the refcount right before the data
-    return freeRcPtrC(isizes - 1, alignment, elements_refcounted);
+    return freeRcPtrC(isizes - 1, alignment, elements_refcounted, roc_dealloc);
 }
 
 /// Frees memory for a reference count pointer regardless of current count
@@ -344,9 +412,10 @@ pub fn freeRcPtrC(
     bytes_or_null: ?[*]isize,
     alignment: u32,
     elements_refcounted: bool,
+    roc_dealloc: RocDealloc,
 ) callconv(.C) void {
     const bytes = bytes_or_null orelse return;
-    return free_ptr_to_refcount(bytes, alignment, elements_refcounted);
+    return free_ptr_to_refcount(bytes, alignment, elements_refcounted, roc_dealloc);
 }
 
 /// Decrements reference count and potentially frees memory
@@ -355,6 +424,7 @@ pub fn decref(
     data_bytes: usize,
     alignment: u32,
     elements_refcounted: bool,
+    roc_dealloc: RocDealloc,
 ) void {
     if (data_bytes == 0) {
         return;
@@ -364,13 +434,14 @@ pub fn decref(
 
     const isizes: [*]isize = @as([*]isize, @ptrCast(@alignCast(bytes)));
 
-    decref_ptr_to_refcount(isizes - 1, alignment, elements_refcounted);
+    decref_ptr_to_refcount(isizes - 1, alignment, elements_refcounted, roc_dealloc);
 }
 
 inline fn free_ptr_to_refcount(
     refcount_ptr: [*]isize,
     alignment: u32,
     elements_refcounted: bool,
+    roc_dealloc: RocDealloc,
 ) void {
     if (RC_TYPE == .none) return;
     const ptr_width = @sizeOf(usize);
@@ -379,7 +450,7 @@ inline fn free_ptr_to_refcount(
     const allocation_ptr = @as([*]u8, @ptrCast(refcount_ptr)) - (extra_bytes - @sizeOf(usize));
 
     // NOTE: we don't even check whether the refcount is "infinity" here!
-    dealloc(allocation_ptr, alignment);
+    roc_dealloc(allocation_ptr, alignment);
 
     if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
         std.debug.print("💀 freed {*}\n", .{allocation_ptr});
@@ -390,6 +461,7 @@ inline fn decref_ptr_to_refcount(
     refcount_ptr: [*]isize,
     element_alignment: u32,
     elements_refcounted: bool,
+    roc_dealloc: RocDealloc,
 ) void {
     if (RC_TYPE == .none) return;
 
@@ -415,13 +487,13 @@ inline fn decref_ptr_to_refcount(
 
                 refcount_ptr[0] = refcount -% 1;
                 if (refcount == 1) {
-                    free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
+                    free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted, roc_dealloc);
                 }
             },
             .atomic => {
                 const last = @atomicRmw(isize, &refcount_ptr[0], .Sub, 1, .monotonic);
                 if (last == 1) {
-                    free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
+                    free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted, roc_dealloc);
                 }
             },
             .none => unreachable,
@@ -542,8 +614,9 @@ pub fn allocateWithRefcountC(
     data_bytes: usize,
     element_alignment: u32,
     elements_refcounted: bool,
+    roc_alloc: RocAlloc,
 ) callconv(.C) [*]u8 {
-    return allocateWithRefcount(data_bytes, element_alignment, elements_refcounted);
+    return allocateWithRefcount(data_bytes, element_alignment, elements_refcounted, roc_alloc);
 }
 
 /// Allocates memory with space for a reference count
@@ -553,6 +626,7 @@ pub fn allocateWithRefcount(
     data_bytes: usize,
     element_alignment: u32,
     elements_refcounted: bool,
+    roc_alloc: RocAlloc,
 ) [*]u8 {
     // If the element type is refcounted, we need to also allocate space to store the element count on the heap.
     // This is used so that a seamless slice can de-allocate the underlying list type.
@@ -562,7 +636,7 @@ pub fn allocateWithRefcount(
     const extra_bytes = @max(required_space, element_alignment);
     const length = extra_bytes + data_bytes;
 
-    const new_bytes: [*]u8 = alloc(length, alignment) orelse unreachable;
+    const new_bytes = @as([*]u8, @ptrCast(roc_alloc(length, alignment) orelse unreachable));
 
     if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
         std.debug.print("+ allocated {*} ({} bytes with alignment {})\n", .{ new_bytes, data_bytes, alignment });
