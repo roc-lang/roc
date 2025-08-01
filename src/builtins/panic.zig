@@ -4,14 +4,17 @@
 //! including signaling panic conditions to the host environment. It bridges
 //! between Roc's internal panic representation and the external host interface.
 const std = @import("std");
+const utils = @import("utils.zig");
+
 const RocStr = @import("str.zig").RocStr;
+const RocAlloc = utils.RocAlloc;
 
 // Signals to the host that the program has panicked
 extern fn roc_panic(msg: *const RocStr, tag_id: u32) callconv(.C) noreturn;
 
 /// TODO: Document panic_help.
-pub fn panic_help(msg: []const u8, tag_id: u32) noreturn {
-    var str = RocStr.init(msg.ptr, msg.len);
+pub fn panic_help(msg: []const u8, tag_id: u32, roc_alloc: RocAlloc) noreturn {
+    var str = RocStr.init(msg.ptr, msg.len, roc_alloc);
     roc_panic(&str, tag_id);
 }
 

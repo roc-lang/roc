@@ -7,10 +7,13 @@
 //! operations efficiently and safely.
 const std = @import("std");
 const math = std.math;
+const utils = @import("utils.zig");
+
 const RocList = @import("list.zig").RocList;
 const RocStr = @import("str.zig").RocStr;
-const WithOverflow = @import("utils.zig").WithOverflow;
-const Ordering = @import("utils.zig").Ordering;
+const WithOverflow = utils.WithOverflow;
+const Ordering = utils.Ordering;
+const RocAlloc = utils.RocAlloc;
 const roc_panic = @import("panic.zig").panic_help;
 
 /// Result type for numeric parsing, with value and error code.
@@ -123,9 +126,16 @@ pub fn exportNumToFloatCast(comptime T: type, comptime F: type, comptime name: [
 }
 
 /// Raise a number to a power, with overflow handling.
-pub fn exportPow(comptime T: type, comptime name: []const u8) void {
+pub fn exportPow(
+    comptime T: type,
+    comptime name: []const u8,
+) void {
     const f = struct {
-        fn func(base: T, exp: T) callconv(.C) T {
+        fn func(
+            base: T,
+            exp: T,
+            roc_alloc: RocAlloc,
+        ) callconv(.C) T {
             switch (@typeInfo(T)) {
                 // std.math.pow can handle ints via powi, but it turns any errors to unreachable
                 // we want to catch overflow and report a proper error to the user
@@ -133,7 +143,7 @@ pub fn exportPow(comptime T: type, comptime name: []const u8) void {
                     if (std.math.powi(T, base, exp)) |value| {
                         return value;
                     } else |err| switch (err) {
-                        error.Overflow => roc_panic("Integer raised to power overflowed!", 0),
+                        error.Overflow => roc_panic("Integer raised to power overflowed!", 0, roc_alloc),
                         error.Underflow => return 0,
                     }
                 },
@@ -297,11 +307,18 @@ pub fn exportCeiling(comptime F: type, comptime T: type, comptime name: []const 
 }
 
 /// Integer division with ceiling using zig std.math.
-pub fn exportDivCeil(comptime T: type, comptime name: []const u8) void {
+pub fn exportDivCeil(
+    comptime T: type,
+    comptime name: []const u8,
+) void {
     const f = struct {
-        fn func(a: T, b: T) callconv(.C) T {
+        fn func(
+            a: T,
+            b: T,
+            roc_alloc: RocAlloc,
+        ) callconv(.C) T {
             return math.divCeil(T, a, b) catch {
-                roc_panic("Integer division by 0!", 0);
+                roc_panic("Integer division by 0!", 0, roc_alloc);
             };
         }
     }.func;
@@ -426,12 +443,19 @@ pub fn exportAddWrappedInt(comptime T: type, comptime name: []const u8) void {
 }
 
 /// Exports a function to add two numbers, panicking on overflow.
-pub fn exportAddOrPanic(comptime T: type, comptime name: []const u8) void {
+pub fn exportAddOrPanic(
+    comptime T: type,
+    comptime name: []const u8,
+) void {
     const f = struct {
-        fn func(self: T, other: T) callconv(.C) T {
+        fn func(
+            self: T,
+            other: T,
+            roc_alloc: RocAlloc,
+        ) callconv(.C) T {
             const result = addWithOverflow(T, self, other);
             if (result.has_overflowed) {
-                roc_panic("Integer addition overflowed!", 0);
+                roc_panic("Integer addition overflowed!", 0, roc_alloc);
             } else {
                 return result.value;
             }
@@ -497,12 +521,19 @@ pub fn exportSubWrappedInt(comptime T: type, comptime name: []const u8) void {
 }
 
 /// Exports a function to subtract two numbers, panicking on overflow.
-pub fn exportSubOrPanic(comptime T: type, comptime name: []const u8) void {
+pub fn exportSubOrPanic(
+    comptime T: type,
+    comptime name: []const u8,
+) void {
     const f = struct {
-        fn func(self: T, other: T) callconv(.C) T {
+        fn func(
+            self: T,
+            other: T,
+            roc_alloc: RocAlloc,
+        ) callconv(.C) T {
             const result = subWithOverflow(T, self, other);
             if (result.has_overflowed) {
-                roc_panic("Integer subtraction overflowed!", 0);
+                roc_panic("Integer subtraction overflowed!", 0, roc_alloc);
             } else {
                 return result.value;
             }
@@ -700,12 +731,20 @@ pub fn greaterThanOrEqualU128(self: u128, other: u128) callconv(.C) bool {
 }
 
 /// Exports a function to multiply two numbers, panicking on overflow.
-pub fn exportMulOrPanic(comptime T: type, comptime W: type, comptime name: []const u8) void {
+pub fn exportMulOrPanic(
+    comptime T: type,
+    comptime W: type,
+    comptime name: []const u8,
+) void {
     const f = struct {
-        fn func(self: T, other: T) callconv(.C) T {
+        fn func(
+            self: T,
+            other: T,
+            roc_alloc: RocAlloc,
+        ) callconv(.C) T {
             const result = @call(.always_inline, mulWithOverflow, .{ T, W, self, other });
             if (result.has_overflowed) {
-                roc_panic("Integer multiplication overflowed!", 0);
+                roc_panic("Integer multiplication overflowed!", 0, roc_alloc);
             } else {
                 return result.value;
             }

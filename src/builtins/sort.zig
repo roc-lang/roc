@@ -64,9 +64,9 @@ pub fn fluxsort(
         quadsort(array, len, cmp, cmp_data, data_is_owned_runtime, inc_n_data, element_width, alignment, copy, roc_alloc, roc_dealloc);
     } else if (element_width <= MAX_ELEMENT_BUFFER_SIZE) {
         if (data_is_owned_runtime) {
-            fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_data, false);
+            fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_data, false, roc_alloc, roc_dealloc);
         } else {
-            fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data, false);
+            fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data, false, roc_alloc, roc_dealloc);
         }
     } else {
         if (roc_alloc(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
@@ -79,25 +79,25 @@ pub fn fluxsort(
 
             // Sort.
             if (data_is_owned_runtime) {
-                fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_data, true);
+                fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_data, true, roc_alloc, roc_dealloc);
             } else {
-                fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_data, true);
+                fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_data, true, roc_alloc, roc_dealloc);
             }
 
             if (roc_alloc(len * element_width, alignment)) |collect_ptr| {
                 // Collect sorted pointers into correct order.
                 defer roc_dealloc(collect_ptr, alignment);
                 for (0..len) |i| {
-                    copy(collect_ptr + i * element_width, arr_ptr[i]);
+                    copy(@as([*]u8, @ptrCast(collect_ptr)) + i * element_width, arr_ptr[i]);
                 }
 
                 // Copy to original array as sorted.
-                @memcpy(array[0..(len * element_width)], collect_ptr[0..(len * element_width)]);
+                @memcpy(array[0..(len * element_width)], @as([*]u8, @ptrCast(collect_ptr))[0..(len * element_width)]);
             } else {
-                roc_panic("Out of memory while trying to allocate for sorting", 0);
+                roc_panic("Out of memory while trying to allocate for sorting", 0, roc_alloc);
             }
         } else {
-            roc_panic("Out of memory while trying to allocate for sorting", 0);
+            roc_panic("Out of memory while trying to allocate for sorting", 0, roc_alloc);
         }
     }
 }
@@ -113,14 +113,29 @@ fn fluxsort_direct(
     comptime data_is_owned: bool,
     inc_n_data: IncN,
     comptime indirect: bool,
+    roc_alloc: RocAlloc,
+    roc_dealloc: RocDealloc,
 ) void {
     if (roc_alloc(len * element_width, alignment)) |swap| {
-        flux_analyze(array, len, swap, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect);
+        flux_analyze(array, len, @as([*]u8, @ptrCast(swap)), len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect);
 
         roc_dealloc(swap, alignment);
     } else {
         // Fallback to quadsort. It has ways to use less memory.
-        quadsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, data_is_owned, inc_n_data, indirect);
+        quadsort_direct(
+            array,
+            len,
+            cmp,
+            cmp_data,
+            element_width,
+            alignment,
+            copy,
+            data_is_owned,
+            inc_n_data,
+            indirect,
+            roc_alloc,
+            roc_dealloc,
+        );
     }
 }
 
@@ -1177,10 +1192,10 @@ pub fn quadsort(
                 // Copy to original array as sorted.
                 @memcpy(array[0..(len * element_width)], @as([*]u8, @ptrCast(collect_ptr))[0..(len * element_width)]);
             } else {
-                roc_panic("Out of memory while trying to allocate for sorting", 0);
+                roc_panic("Out of memory while trying to allocate for sorting", 0, roc_alloc);
             }
         } else {
-            roc_panic("Out of memory while trying to allocate for sorting", 0);
+            roc_panic("Out of memory while trying to allocate for sorting", 0, roc_alloc);
         }
     }
 }

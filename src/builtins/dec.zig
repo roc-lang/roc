@@ -17,6 +17,9 @@ const U256 = num_.U256;
 const mul_u128 = num_.mul_u128;
 const RocAlloc = utils.RocAlloc;
 const RocDealloc = utils.RocDealloc;
+const TestAllocator = utils.TestAllocator;
+const testing_roc_alloc = TestAllocator.roc_alloc;
+const testing_roc_dealloc = TestAllocator.roc_dealloc;
 
 /// TODO: Document the RocDec struct.
 pub const RocDec = extern struct {
@@ -33,8 +36,16 @@ pub const RocDec = extern struct {
     pub const one_point_zero_i128: i128 = math.pow(i128, 10, RocDec.decimal_places);
     pub const one_point_zero: RocDec = .{ .num = one_point_zero_i128 };
 
-    pub const two_point_zero: RocDec = RocDec.add(RocDec.one_point_zero, RocDec.one_point_zero);
-    pub const zero_point_five: RocDec = RocDec.div(RocDec.one_point_zero, RocDec.two_point_zero);
+    pub const two_point_zero: RocDec = RocDec.add(
+        RocDec.one_point_zero,
+        RocDec.one_point_zero,
+        undefined,
+    );
+    pub const zero_point_five: RocDec = RocDec.div(
+        RocDec.one_point_zero,
+        RocDec.two_point_zero,
+        undefined,
+    );
 
     pub fn fromU64(num: u64) RocDec {
         return .{ .num = num * one_point_zero_i128 };
@@ -156,11 +167,10 @@ pub const RocDec = extern struct {
     }
 
     pub fn to_str(self: RocDec, roc_alloc: RocAlloc) RocStr {
-        _ = roc_alloc; // TODO pass this into RocStr init helpers
 
         // Special case
         if (self.num == 0) {
-            return RocStr.init("0.0", 3);
+            return RocStr.init("0.0", 3, roc_alloc);
         }
 
         const num = self.num;
@@ -232,7 +242,7 @@ pub const RocDec = extern struct {
             }
         }
 
-        return RocStr.init(&str_bytes, position);
+        return RocStr.init(&str_bytes, position, roc_alloc);
     }
 
     pub fn toI128(self: RocDec) i128 {
@@ -270,11 +280,15 @@ pub const RocDec = extern struct {
         return .{ .value = RocDec{ .num = answer[0] }, .has_overflowed = answer[1] == 1 };
     }
 
-    pub fn add(self: RocDec, other: RocDec) RocDec {
+    pub fn add(
+        self: RocDec,
+        other: RocDec,
+        roc_alloc: RocAlloc,
+    ) RocDec {
         const answer = RocDec.addWithOverflow(self, other);
 
         if (answer.has_overflowed) {
-            roc_panic("Decimal addition overflowed!", 0);
+            roc_panic("Decimal addition overflowed!", 0, roc_alloc);
         } else {
             return answer.value;
         }
@@ -300,11 +314,15 @@ pub const RocDec = extern struct {
         return .{ .value = RocDec{ .num = answer[0] }, .has_overflowed = answer[1] == 1 };
     }
 
-    pub fn sub(self: RocDec, other: RocDec) RocDec {
+    pub fn sub(
+        self: RocDec,
+        other: RocDec,
+        roc_alloc: RocAlloc,
+    ) RocDec {
         const answer = RocDec.subWithOverflow(self, other);
 
         if (answer.has_overflowed) {
-            roc_panic("Decimal subtraction overflowed!", 0);
+            roc_panic("Decimal subtraction overflowed!", 0, roc_alloc);
         } else {
             return answer.value;
         }
@@ -364,8 +382,15 @@ pub const RocDec = extern struct {
         }
     }
 
-    fn trunc(self: RocDec) RocDec {
-        return RocDec.sub(self, self.fract());
+    fn trunc(
+        self: RocDec,
+        roc_alloc: RocAlloc,
+    ) RocDec {
+        return RocDec.sub(
+            self,
+            self.fract(),
+            roc_alloc,
+        );
     }
 
     fn fract(self: RocDec) RocDec {
@@ -376,79 +401,114 @@ pub const RocDec = extern struct {
     }
 
     // Returns the nearest integer to self. If a value is half-way between two integers, round away from 0.0.
-    fn round(arg1: RocDec) RocDec {
+    fn round(
+        arg1: RocDec,
+        roc_alloc: RocAlloc,
+    ) RocDec {
         // this rounds towards zero
-        const tmp = arg1.trunc();
+        const tmp = arg1.trunc(roc_alloc);
 
         const sign = std.math.sign(arg1.num);
         const abs_fract = sign * arg1.fract().num;
 
         if (abs_fract >= RocDec.zero_point_five.num) {
-            return RocDec.add(tmp, RocDec{ .num = sign * RocDec.one_point_zero.num });
+            return RocDec.add(
+                tmp,
+                RocDec{ .num = sign * RocDec.one_point_zero.num },
+                roc_alloc,
+            );
         } else {
             return tmp;
         }
     }
 
     // Returns the largest integer less than or equal to itself
-    fn floor(arg1: RocDec) RocDec {
-        const tmp = arg1.trunc();
+    fn floor(
+        arg1: RocDec,
+        roc_alloc: RocAlloc,
+    ) RocDec {
+        const tmp = arg1.trunc(roc_alloc);
 
         if (arg1.num < 0 and arg1.fract().num != 0) {
-            return RocDec.sub(tmp, RocDec.one_point_zero);
+            return RocDec.sub(tmp, RocDec.one_point_zero, roc_alloc);
         } else {
             return tmp;
         }
     }
 
     // Returns the smallest integer greater than or equal to itself
-    fn ceiling(arg1: RocDec) RocDec {
-        const tmp = arg1.trunc();
+    fn ceiling(
+        arg1: RocDec,
+        roc_alloc: RocAlloc,
+    ) RocDec {
+        const tmp = arg1.trunc(roc_alloc);
 
         if (arg1.num > 0 and arg1.fract().num != 0) {
-            return RocDec.add(tmp, RocDec.one_point_zero);
+            return RocDec.add(
+                tmp,
+                RocDec.one_point_zero,
+                roc_alloc,
+            );
         } else {
             return tmp;
         }
     }
 
-    fn powInt(base: RocDec, exponent: i128) RocDec {
+    fn powInt(
+        base: RocDec,
+        exponent: i128,
+        roc_alloc: RocAlloc,
+    ) RocDec {
         if (exponent == 0) {
             return RocDec.one_point_zero;
         } else if (exponent > 0) {
             if (@mod(exponent, 2) == 0) {
-                const half_power = RocDec.powInt(base, exponent >> 1); // `>> 1` == `/ 2`
-                return RocDec.mul(half_power, half_power);
+                const half_power = RocDec.powInt(base, exponent >> 1, roc_alloc); // `>> 1` == `/ 2`
+                return RocDec.mul(half_power, half_power, roc_alloc);
             } else {
-                return RocDec.mul(base, RocDec.powInt(base, exponent - 1));
+                return RocDec.mul(base, RocDec.powInt(base, exponent - 1, roc_alloc), roc_alloc);
             }
         } else {
-            return RocDec.div(RocDec.one_point_zero, RocDec.powInt(base, -exponent));
+            return RocDec.div(RocDec.one_point_zero, RocDec.powInt(base, -exponent, roc_alloc), roc_alloc);
         }
     }
 
-    fn pow(base: RocDec, exponent: RocDec) RocDec {
-        if (exponent.trunc().num == exponent.num) {
-            return base.powInt(@divTrunc(exponent.num, RocDec.one_point_zero_i128));
+    fn pow(
+        base: RocDec,
+        exponent: RocDec,
+        roc_alloc: RocAlloc,
+    ) RocDec {
+        if (exponent.trunc(roc_alloc).num == exponent.num) {
+            return base.powInt(
+                @divTrunc(exponent.num, RocDec.one_point_zero_i128),
+                roc_alloc,
+            );
         } else {
             return fromF64(std.math.pow(f64, base.toF64(), exponent.toF64())).?;
         }
     }
 
-    pub fn sqrt(self: RocDec) RocDec {
+    pub fn sqrt(
+        self: RocDec,
+        roc_alloc: RocAlloc,
+    ) RocDec {
         // sqrt(-n) is an error
         if (self.num < 0) {
-            roc_panic("Square root by 0!", 0);
+            roc_panic("Square root by 0!", 0, roc_alloc);
         }
 
         return fromF64(std.math.sqrt(self.toF64())).?;
     }
 
-    pub fn mul(self: RocDec, other: RocDec) RocDec {
+    pub fn mul(
+        self: RocDec,
+        other: RocDec,
+        roc_alloc: RocAlloc,
+    ) RocDec {
         const answer = RocDec.mulWithOverflow(self, other);
 
         if (answer.has_overflowed) {
-            roc_panic("Decimal multiplication overflowed!", 0);
+            roc_panic("Decimal multiplication overflowed!", 0, roc_alloc);
         } else {
             return answer.value;
         }
@@ -467,13 +527,17 @@ pub const RocDec = extern struct {
         }
     }
 
-    pub fn div(self: RocDec, other: RocDec) RocDec {
+    pub fn div(
+        self: RocDec,
+        other: RocDec,
+        roc_alloc: RocAlloc,
+    ) RocDec {
         const numerator_i128 = self.num;
         const denominator_i128 = other.num;
 
         // (n / 0) is an error
         if (denominator_i128 == 0) {
-            roc_panic("Decimal division by 0!", 0);
+            roc_panic("Decimal division by 0!", 0, roc_alloc);
         }
 
         // (0 / n) is always 0
@@ -507,7 +571,7 @@ pub const RocDec = extern struct {
             if (denominator_i128 == one_point_zero_i128) {
                 return self;
             } else {
-                roc_panic("Decimal division overflow in numerator!", 0);
+                roc_panic("Decimal division overflow in numerator!", 0, roc_alloc);
             }
         }
 
@@ -520,7 +584,7 @@ pub const RocDec = extern struct {
             if (numerator_i128 == one_point_zero_i128) {
                 return other;
             } else {
-                roc_panic("Decimal division overflow in denominator!", 0);
+                roc_panic("Decimal division overflow in denominator!", 0, roc_alloc);
             }
         }
 
@@ -531,7 +595,7 @@ pub const RocDec = extern struct {
         if (answer.hi == 0 and answer.lo <= math.maxInt(i128)) {
             unsigned_answer = @as(i128, @intCast(answer.lo));
         } else {
-            roc_panic("Decimal division overflow!", 0);
+            roc_panic("Decimal division overflow!", 0, roc_alloc);
         }
 
         return RocDec{ .num = if (is_answer_negative) -unsigned_answer else unsigned_answer };
@@ -966,105 +1030,135 @@ test "fromF64 overflow" {
 }
 
 test "fromStr: empty" {
-    const roc_str = RocStr.init("", 0);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("", 0, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str);
 
     try expectEqual(dec, null);
 }
 
 test "fromStr: 0" {
-    const roc_str = RocStr.init("0", 1);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("0", 1, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = 0 }, dec.?);
 }
 
 test "fromStr: 1" {
-    const roc_str = RocStr.init("1", 1);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("1", 1, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec.one_point_zero, dec.?);
 }
 
 test "fromStr: 123.45" {
-    const roc_str = RocStr.init("123.45", 6);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("123.45", 6, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = 123450000000000000000 }, dec.?);
 }
 
 test "fromStr: .45" {
-    const roc_str = RocStr.init(".45", 3);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init(".45", 3, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
 }
 
 test "fromStr: 0.45" {
-    const roc_str = RocStr.init("0.45", 4);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("0.45", 4, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
 }
 
 test "fromStr: 123" {
-    const roc_str = RocStr.init("123", 3);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("123", 3, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = 123000000000000000000 }, dec.?);
 }
 
 test "fromStr: -.45" {
-    const roc_str = RocStr.init("-.45", 4);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("-.45", 4, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
 }
 
 test "fromStr: -0.45" {
-    const roc_str = RocStr.init("-0.45", 5);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("-0.45", 5, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
 }
 
 test "fromStr: -123" {
-    const roc_str = RocStr.init("-123", 4);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("-123", 4, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = -123000000000000000000 }, dec.?);
 }
 
 test "fromStr: -123.45" {
-    const roc_str = RocStr.init("-123.45", 7);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("-123.45", 7, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = -123450000000000000000 }, dec.?);
 }
 
 test "fromStr: abc" {
-    const roc_str = RocStr.init("abc", 3);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("abc", 3, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str);
 
     try expectEqual(dec, null);
 }
 
 test "fromStr: 123.abc" {
-    const roc_str = RocStr.init("123.abc", 7);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("123.abc", 7, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str);
 
     try expectEqual(dec, null);
 }
 
 test "fromStr: abc.123" {
-    const roc_str = RocStr.init("abc.123", 7);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("abc.123", 7, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str);
 
     try expectEqual(dec, null);
 }
 
 test "fromStr: .123.1" {
-    const roc_str = RocStr.init(".123.1", 6);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init(".123.1", 6, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str);
 
     try expectEqual(dec, null);
@@ -1161,8 +1255,8 @@ test "to_str: 123.1111111" {
 test "to_str: 123.1111111111111 (big str)" {
     var dec: RocDec = .{ .num = 123111111111111000000 };
     var res_roc_str = dec.to_str(&test_roc_alloc);
-    errdefer res_roc_str.decref();
-    defer res_roc_str.decref();
+    errdefer res_roc_str.decref(testing_roc_dealloc);
+    defer res_roc_str.decref(testing_roc_dealloc);
 
     const res_slice: []const u8 = "123.111111111111"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1171,8 +1265,8 @@ test "to_str: 123.1111111111111 (big str)" {
 test "to_str: 123.111111111111444444 (max number of decimal places)" {
     var dec: RocDec = .{ .num = 123111111111111444444 };
     var res_roc_str = dec.to_str(&test_roc_alloc);
-    errdefer res_roc_str.decref();
-    defer res_roc_str.decref();
+    errdefer res_roc_str.decref(testing_roc_dealloc);
+    defer res_roc_str.decref(testing_roc_dealloc);
 
     const res_slice: []const u8 = "123.111111111111444444"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1181,8 +1275,8 @@ test "to_str: 123.111111111111444444 (max number of decimal places)" {
 test "to_str: 12345678912345678912.111111111111111111 (max number of digits)" {
     var dec: RocDec = .{ .num = 12345678912345678912111111111111111111 };
     var res_roc_str = dec.to_str(&test_roc_alloc);
-    errdefer res_roc_str.decref();
-    defer res_roc_str.decref();
+    errdefer res_roc_str.decref(testing_roc_dealloc);
+    defer res_roc_str.decref(testing_roc_dealloc);
 
     const res_slice: []const u8 = "12345678912345678912.111111111111111111"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1191,8 +1285,8 @@ test "to_str: 12345678912345678912.111111111111111111 (max number of digits)" {
 test "to_str: std.math.maxInt" {
     var dec: RocDec = .{ .num = std.math.maxInt(i128) };
     var res_roc_str = dec.to_str(&test_roc_alloc);
-    errdefer res_roc_str.decref();
-    defer res_roc_str.decref();
+    errdefer res_roc_str.decref(testing_roc_dealloc);
+    defer res_roc_str.decref(testing_roc_dealloc);
 
     const res_slice: []const u8 = "170141183460469231731.687303715884105727"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1201,8 +1295,8 @@ test "to_str: std.math.maxInt" {
 test "to_str: std.math.minInt" {
     var dec: RocDec = .{ .num = std.math.minInt(i128) };
     var res_roc_str = dec.to_str(&test_roc_alloc);
-    errdefer res_roc_str.decref();
-    defer res_roc_str.decref();
+    errdefer res_roc_str.decref(testing_roc_dealloc);
+    defer res_roc_str.decref(testing_roc_dealloc);
 
     const res_slice: []const u8 = "-170141183460469231731.687303715884105728"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1219,106 +1313,110 @@ test "to_str: 0" {
 test "add: 0" {
     var dec: RocDec = .{ .num = 0 };
 
-    try expectEqual(RocDec{ .num = 0 }, dec.add(.{ .num = 0 }));
+    try expectEqual(RocDec{ .num = 0 }, dec.add(.{ .num = 0 }, testing_roc_alloc));
 }
 
 test "add: 1" {
     var dec: RocDec = .{ .num = 0 };
 
-    try expectEqual(RocDec{ .num = 1 }, dec.add(.{ .num = 1 }));
+    try expectEqual(RocDec{ .num = 1 }, dec.add(.{ .num = 1 }, testing_roc_alloc));
 }
 
 test "sub: 0" {
     var dec: RocDec = .{ .num = 1 };
 
-    try expectEqual(RocDec{ .num = 1 }, dec.sub(.{ .num = 0 }));
+    try expectEqual(RocDec{ .num = 1 }, dec.sub(.{ .num = 0 }, testing_roc_alloc));
 }
 
 test "sub: 1" {
     var dec: RocDec = .{ .num = 1 };
 
-    try expectEqual(RocDec{ .num = 0 }, dec.sub(.{ .num = 1 }));
+    try expectEqual(RocDec{ .num = 0 }, dec.sub(.{ .num = 1 }, testing_roc_alloc));
 }
 
 test "mul: by 0" {
     var dec: RocDec = .{ .num = 0 };
 
-    try expectEqual(RocDec{ .num = 0 }, dec.mul(.{ .num = 0 }));
+    try expectEqual(RocDec{ .num = 0 }, dec.mul(.{ .num = 0 }, testing_roc_alloc));
 }
 
 test "mul: by 1" {
     var dec: RocDec = RocDec.fromU64(15);
 
-    try expectEqual(RocDec.fromU64(15), dec.mul(RocDec.fromU64(1)));
+    try expectEqual(RocDec.fromU64(15), dec.mul(RocDec.fromU64(1), testing_roc_alloc));
 }
 
 test "mul: by 2" {
     var dec: RocDec = RocDec.fromU64(15);
 
-    try expectEqual(RocDec.fromU64(30), dec.mul(RocDec.fromU64(2)));
+    try expectEqual(RocDec.fromU64(30), dec.mul(RocDec.fromU64(2), testing_roc_alloc));
 }
 
 test "div: 0 / 2" {
     var dec: RocDec = RocDec.fromU64(0);
 
-    try expectEqual(RocDec.fromU64(0), dec.div(RocDec.fromU64(2)));
+    try expectEqual(RocDec.fromU64(0), dec.div(RocDec.fromU64(2), testing_roc_alloc));
 }
 
 test "div: 2 / 2" {
     var dec: RocDec = RocDec.fromU64(2);
 
-    try expectEqual(RocDec.fromU64(1), dec.div(RocDec.fromU64(2)));
+    try expectEqual(RocDec.fromU64(1), dec.div(RocDec.fromU64(2), testing_roc_alloc));
 }
 
 test "div: 20 / 2" {
     var dec: RocDec = RocDec.fromU64(20);
 
-    try expectEqual(RocDec.fromU64(10), dec.div(RocDec.fromU64(2)));
+    try expectEqual(RocDec.fromU64(10), dec.div(RocDec.fromU64(2), testing_roc_alloc));
 }
 
 test "div: 8 / 5" {
     var dec: RocDec = RocDec.fromU64(8);
-    const res: RocDec = RocDec.fromStr(RocStr.init("1.6", 3)).?;
-    try expectEqual(res, dec.div(RocDec.fromU64(5)));
+    const res: RocDec = RocDec.fromStr(RocStr.init("1.6", 3, testing_roc_alloc)).?;
+    try expectEqual(res, dec.div(RocDec.fromU64(5), testing_roc_alloc));
 }
 
 test "div: 10 / 3" {
     var numerator: RocDec = RocDec.fromU64(10);
     const denom: RocDec = RocDec.fromU64(3);
 
-    var roc_str = RocStr.init("3.333333333333333333", 20);
-    errdefer roc_str.decref();
-    defer roc_str.decref();
+    var roc_str = RocStr.init("3.333333333333333333", 20, testing_roc_alloc);
+    errdefer roc_str.decref(testing_roc_dealloc);
+    defer roc_str.decref(testing_roc_dealloc);
 
     const res: RocDec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(res, numerator.div(denom));
+    try expectEqual(res, numerator.div(denom, testing_roc_alloc));
 }
 
 test "div: 341 / 341" {
     var number1: RocDec = RocDec.fromU64(341);
     const number2: RocDec = RocDec.fromU64(341);
-    try expectEqual(RocDec.fromU64(1), number1.div(number2));
+    try expectEqual(RocDec.fromU64(1), number1.div(number2, testing_roc_alloc));
 }
 
 test "div: 342 / 343" {
+    defer TestAllocator.deinit();
+
     var number1: RocDec = RocDec.fromU64(342);
     const number2: RocDec = RocDec.fromU64(343);
-    const roc_str = RocStr.init("0.997084548104956268", 20);
-    try expectEqual(RocDec.fromStr(roc_str), number1.div(number2));
+    const roc_str = RocStr.init("0.997084548104956268", 20, testing_roc_alloc);
+    try expectEqual(RocDec.fromStr(roc_str), number1.div(number2, testing_roc_alloc));
 }
 
 test "div: 680 / 340" {
     var number1: RocDec = RocDec.fromU64(680);
     const number2: RocDec = RocDec.fromU64(340);
-    try expectEqual(RocDec.fromU64(2), number1.div(number2));
+    try expectEqual(RocDec.fromU64(2), number1.div(number2, testing_roc_alloc));
 }
 
 test "div: 500 / 1000" {
+    defer TestAllocator.deinit();
+
     const number1: RocDec = RocDec.fromU64(500);
     const number2: RocDec = RocDec.fromU64(1000);
-    const roc_str = RocStr.init("0.5", 3);
-    try expectEqual(RocDec.fromStr(roc_str), number1.div(number2));
+    const roc_str = RocStr.init("0.5", 3, testing_roc_alloc);
+    try expectEqual(RocDec.fromStr(roc_str), number1.div(number2, testing_roc_alloc));
 }
 
 test "log: 1" {
@@ -1326,35 +1424,45 @@ test "log: 1" {
 }
 
 test "fract: 0" {
-    const roc_str = RocStr.init("0", 1);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("0", 1, testing_roc_alloc);
     var dec = RocDec.fromStr(roc_str).?;
 
     try expectEqual(RocDec{ .num = 0 }, dec.fract());
 }
 
 test "fract: 1" {
-    const roc_str = RocStr.init("1", 1);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("1", 1, testing_roc_alloc);
     var dec = RocDec.fromStr(roc_str).?;
 
     try expectEqual(RocDec{ .num = 0 }, dec.fract());
 }
 
 test "fract: 123.45" {
-    const roc_str = RocStr.init("123.45", 6);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("123.45", 6, testing_roc_alloc);
     var dec = RocDec.fromStr(roc_str).?;
 
     try expectEqual(RocDec{ .num = 450000000000000000 }, dec.fract());
 }
 
 test "fract: -123.45" {
-    const roc_str = RocStr.init("-123.45", 7);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("-123.45", 7, testing_roc_alloc);
     var dec = RocDec.fromStr(roc_str).?;
 
     try expectEqual(RocDec{ .num = -450000000000000000 }, dec.fract());
 }
 
 test "fract: .45" {
-    const roc_str = RocStr.init(".45", 3);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init(".45", 3, testing_roc_alloc);
     var dec = RocDec.fromStr(roc_str).?;
 
     try expectEqual(RocDec{ .num = 450000000000000000 }, dec.fract());
@@ -1368,142 +1476,178 @@ test "fract: -0.00045" {
 }
 
 test "trunc: 0" {
-    const roc_str = RocStr.init("0", 1);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("0", 1, testing_roc_alloc);
     var dec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(RocDec{ .num = 0 }, dec.trunc());
+    try expectEqual(RocDec{ .num = 0 }, dec.trunc(testing_roc_alloc));
 }
 
 test "trunc: 1" {
-    const roc_str = RocStr.init("1", 1);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("1", 1, testing_roc_alloc);
     var dec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(RocDec.one_point_zero, dec.trunc());
+    try expectEqual(RocDec.one_point_zero, dec.trunc(testing_roc_alloc));
 }
 
 test "trunc: 123.45" {
-    const roc_str = RocStr.init("123.45", 6);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("123.45", 6, testing_roc_alloc);
     var dec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(RocDec{ .num = 123000000000000000000 }, dec.trunc());
+    try expectEqual(RocDec{ .num = 123000000000000000000 }, dec.trunc(testing_roc_alloc));
 }
 
 test "trunc: -123.45" {
-    const roc_str = RocStr.init("-123.45", 7);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("-123.45", 7, testing_roc_alloc);
     var dec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(RocDec{ .num = -123000000000000000000 }, dec.trunc());
+    try expectEqual(RocDec{ .num = -123000000000000000000 }, dec.trunc(testing_roc_alloc));
 }
 
 test "trunc: .45" {
-    const roc_str = RocStr.init(".45", 3);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init(".45", 3, testing_roc_alloc);
     var dec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(RocDec{ .num = 0 }, dec.trunc());
+    try expectEqual(RocDec{ .num = 0 }, dec.trunc(testing_roc_alloc));
 }
 
 test "trunc: -0.00045" {
     const dec: RocDec = .{ .num = -450000000000000 };
-    const res = dec.trunc();
+    const res = dec.trunc(testing_roc_alloc);
 
     try expectEqual(RocDec{ .num = 0 }, res);
 }
 
 test "round: 123.45" {
-    const roc_str = RocStr.init("123.45", 6);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("123.45", 6, testing_roc_alloc);
     var dec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(RocDec{ .num = 123000000000000000000 }, dec.round());
+    try expectEqual(RocDec{ .num = 123000000000000000000 }, dec.round(testing_roc_alloc));
 }
 
 test "round: -123.45" {
-    const roc_str = RocStr.init("-123.45", 7);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("-123.45", 7, testing_roc_alloc);
     var dec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(RocDec{ .num = -123000000000000000000 }, dec.round());
+    try expectEqual(RocDec{ .num = -123000000000000000000 }, dec.round(testing_roc_alloc));
 }
 
 test "round: 0.5" {
-    const roc_str = RocStr.init("0.5", 3);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("0.5", 3, testing_roc_alloc);
     var dec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(RocDec.one_point_zero, dec.round());
+    try expectEqual(RocDec.one_point_zero, dec.round(testing_roc_alloc));
 }
 
 test "round: -0.5" {
-    const roc_str = RocStr.init("-0.5", 4);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("-0.5", 4, testing_roc_alloc);
     var dec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(RocDec{ .num = -1000000000000000000 }, dec.round());
+    try expectEqual(RocDec{ .num = -1000000000000000000 }, dec.round(testing_roc_alloc));
 }
 
 test "powInt: 3.1 ^ 0" {
-    const roc_str = RocStr.init("3.1", 3);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("3.1", 3, testing_roc_alloc);
     var dec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(RocDec.one_point_zero, dec.powInt(0));
+    try expectEqual(RocDec.one_point_zero, dec.powInt(0, testing_roc_alloc));
 }
 
 test "powInt: 3.1 ^ 1" {
-    const roc_str = RocStr.init("3.1", 3);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("3.1", 3, testing_roc_alloc);
     var dec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(dec, dec.powInt(1));
+    try expectEqual(dec, dec.powInt(1, testing_roc_alloc));
 }
 
 test "powInt: 2 ^ 2" {
-    const roc_str = RocStr.init("4", 1);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("4", 1, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(dec, RocDec.two_point_zero.powInt(2));
+    try expectEqual(dec, RocDec.two_point_zero.powInt(2, testing_roc_alloc));
 }
 
 test "powInt: 0.5 ^ 2" {
-    const roc_str = RocStr.init("0.25", 4);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("0.25", 4, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(dec, RocDec.zero_point_five.powInt(2));
+    try expectEqual(dec, RocDec.zero_point_five.powInt(2, testing_roc_alloc));
 }
 
 test "pow: 0.5 ^ 2.0" {
-    const roc_str = RocStr.init("0.25", 4);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("0.25", 4, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(dec, RocDec.zero_point_five.pow(RocDec.two_point_zero));
+    try expectEqual(dec, RocDec.zero_point_five.pow(RocDec.two_point_zero, testing_roc_alloc));
 }
 
 test "sqrt: 1.0" {
-    const roc_str = RocStr.init("1.0", 3);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("1.0", 3, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(dec, RocDec.sqrt(RocDec.one_point_zero));
+    try expectEqual(dec, RocDec.sqrt(RocDec.one_point_zero, testing_roc_alloc));
 }
 
 test "sqrt: 0.0" {
-    const roc_str = RocStr.init("0.0", 3);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("0.0", 3, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(dec, dec.sqrt());
+    try expectEqual(dec, dec.sqrt(testing_roc_alloc));
 }
 
 test "sqrt: 9.0" {
-    const roc_str = RocStr.init("9.0", 3);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("9.0", 3, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str).?;
 
-    const roc_str_expected = RocStr.init("3.0", 3);
+    const roc_str_expected = RocStr.init("3.0", 3, testing_roc_alloc);
     const expected = RocDec.fromStr(roc_str_expected).?;
 
-    try expectEqual(expected, dec.sqrt());
+    try expectEqual(expected, dec.sqrt(testing_roc_alloc));
 }
 
 test "sqrt: 1.44" {
-    const roc_str = RocStr.init("1.44", 4);
+    defer TestAllocator.deinit();
+
+    const roc_str = RocStr.init("1.44", 4, testing_roc_alloc);
     const dec = RocDec.fromStr(roc_str).?;
 
-    const roc_str_expected = RocStr.init("1.2", 3);
+    const roc_str_expected = RocStr.init("1.2", 3, testing_roc_alloc);
     const expected = RocDec.fromStr(roc_str_expected).?;
 
-    try expectEqual(expected, dec.sqrt());
+    try expectEqual(expected, dec.sqrt(testing_roc_alloc));
 }
 
 // exports
@@ -1518,26 +1662,35 @@ pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
 }
 
 /// TODO: Document to_str.
-pub fn to_str(arg: RocDec, roc_alloc: RocAlloc) callconv(.C) RocStr {
+pub fn to_str(
+    arg: RocDec,
+    roc_alloc: RocAlloc,
+) callconv(.C) RocStr {
     return @call(.always_inline, RocDec.to_str, .{ arg, roc_alloc });
 }
 
 /// TODO: Document fromF64C.
-pub fn fromF64C(arg: f64) callconv(.C) i128 {
+pub fn fromF64C(
+    arg: f64,
+    roc_alloc: RocAlloc,
+) callconv(.C) i128 {
     if (@call(.always_inline, RocDec.fromF64, .{arg})) |dec| {
         return dec.num;
     } else {
-        roc_panic("Decimal conversion from f64 failed!", 0);
+        roc_panic("Decimal conversion from f64 failed!", 0, roc_alloc);
     }
 }
 
 /// TODO: Document fromF32C.
-pub fn fromF32C(arg_f32: f32) callconv(.C) i128 {
+pub fn fromF32C(
+    arg_f32: f32,
+    roc_alloc: RocAlloc,
+) callconv(.C) i128 {
     const arg_f64 = arg_f32;
     if (@call(.always_inline, RocDec.fromF64, .{arg_f64})) |dec| {
         return dec.num;
     } else {
-        roc_panic("Decimal conversion from f32!", 0);
+        roc_panic("Decimal conversion from f32!", 0, roc_alloc);
     }
 }
 
@@ -1549,12 +1702,15 @@ pub fn toF64(arg: RocDec) callconv(.C) f64 {
 /// TODO: Document exportFromInt.
 pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
-        fn func(self: T) callconv(.C) i128 {
+        fn func(
+            self: T,
+            roc_alloc: RocAlloc,
+        ) callconv(.C) i128 {
             const this = @as(i128, @intCast(self));
 
             const answer = @mulWithOverflow(this, RocDec.one_point_zero_i128);
             if (answer[1] == 1) {
-                roc_panic("Decimal conversion from Integer failed!", 0);
+                roc_panic("Decimal conversion from Integer failed!", 0, roc_alloc);
             } else {
                 return answer[0];
             }
@@ -1589,16 +1745,22 @@ pub fn neqC(arg1: RocDec, arg2: RocDec) callconv(.C) bool {
 }
 
 /// TODO: Document negateC.
-pub fn negateC(arg: RocDec) callconv(.C) i128 {
+pub fn negateC(
+    arg: RocDec,
+    roc_alloc: RocAlloc,
+) callconv(.C) i128 {
     return if (@call(.always_inline, RocDec.negate, .{arg})) |dec| dec.num else {
-        roc_panic("Decimal negation overflow!", 0);
+        roc_panic("Decimal negation overflow!", 0, roc_alloc);
     };
 }
 
 /// TODO: Document absC.
-pub fn absC(arg: RocDec) callconv(.C) i128 {
+pub fn absC(
+    arg: RocDec,
+    roc_alloc: RocAlloc,
+) callconv(.C) i128 {
     const result = @call(.always_inline, RocDec.abs, .{arg}) catch {
-        roc_panic("Decimal absolute value overflow!", 0);
+        roc_panic("Decimal absolute value overflow!", 0, roc_alloc);
     };
     return result.num;
 }
@@ -1619,8 +1781,12 @@ pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
 }
 
 /// TODO: Document divC.
-pub fn divC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
-    return @call(.always_inline, RocDec.div, .{ arg1, arg2 }).num;
+pub fn divC(
+    arg1: RocDec,
+    arg2: RocDec,
+    roc_alloc: RocAlloc,
+) callconv(.C) i128 {
+    return @call(.always_inline, RocDec.div, .{ arg1, arg2, roc_alloc }).num;
 }
 
 /// TODO: Document logC.
@@ -1629,8 +1795,12 @@ pub fn logC(arg: RocDec) callconv(.C) i128 {
 }
 
 /// TODO: Document powC.
-pub fn powC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
-    return @call(.always_inline, RocDec.pow, .{ arg1, arg2 }).num;
+pub fn powC(
+    arg1: RocDec,
+    arg2: RocDec,
+    roc_alloc: RocAlloc,
+) callconv(.C) i128 {
+    return @call(.always_inline, RocDec.pow, .{ arg1, arg2, roc_alloc }).num;
 }
 
 /// TODO: Document sinC.
@@ -1664,8 +1834,12 @@ pub fn atanC(arg: RocDec) callconv(.C) i128 {
 }
 
 /// TODO: Document addOrPanicC.
-pub fn addOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
-    return @call(.always_inline, RocDec.add, .{ arg1, arg2 });
+pub fn addOrPanicC(
+    arg1: RocDec,
+    arg2: RocDec,
+    roc_alloc: RocAlloc,
+) callconv(.C) RocDec {
+    return @call(.always_inline, RocDec.add, .{ arg1, arg2, roc_alloc });
 }
 
 /// TODO: Document addSaturatedC.
@@ -1674,8 +1848,12 @@ pub fn addSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
 }
 
 /// TODO: Document subOrPanicC.
-pub fn subOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
-    return @call(.always_inline, RocDec.sub, .{ arg1, arg2 });
+pub fn subOrPanicC(
+    arg1: RocDec,
+    arg2: RocDec,
+    roc_alloc: RocAlloc,
+) callconv(.C) RocDec {
+    return @call(.always_inline, RocDec.sub, .{ arg1, arg2, roc_alloc });
 }
 
 /// TODO: Document subSaturatedC.
@@ -1684,8 +1862,12 @@ pub fn subSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
 }
 
 /// TODO: Document mulOrPanicC.
-pub fn mulOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
-    return @call(.always_inline, RocDec.mul, .{ arg1, arg2 });
+pub fn mulOrPanicC(
+    arg1: RocDec,
+    arg2: RocDec,
+    roc_alloc: RocAlloc,
+) callconv(.C) RocDec {
+    return @call(.always_inline, RocDec.mul, .{ arg1, arg2, roc_alloc });
 }
 
 /// TODO: Document mulSaturatedC.
@@ -1696,8 +1878,11 @@ pub fn mulSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
 /// TODO: Document exportRound.
 pub fn exportRound(comptime T: type, comptime name: []const u8) void {
     const f = struct {
-        fn func(input: RocDec) callconv(.C) T {
-            return @as(T, @intCast(@divFloor(input.round().num, RocDec.one_point_zero_i128)));
+        fn func(
+            input: RocDec,
+            roc_alloc: RocAlloc,
+        ) callconv(.C) T {
+            return @as(T, @intCast(@divFloor(input.round(roc_alloc).num, RocDec.one_point_zero_i128)));
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
@@ -1706,8 +1891,11 @@ pub fn exportRound(comptime T: type, comptime name: []const u8) void {
 /// TODO: Document exportFloor.
 pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
     const f = struct {
-        fn func(input: RocDec) callconv(.C) T {
-            return @as(T, @intCast(@divFloor(input.floor().num, RocDec.one_point_zero_i128)));
+        fn func(
+            input: RocDec,
+            roc_alloc: RocAlloc,
+        ) callconv(.C) T {
+            return @as(T, @intCast(@divFloor(input.floor(roc_alloc).num, RocDec.one_point_zero_i128)));
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
@@ -1716,8 +1904,11 @@ pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
 /// TODO: Document exportCeiling.
 pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
     const f = struct {
-        fn func(input: RocDec) callconv(.C) T {
-            return @as(T, @intCast(@divFloor(input.ceiling().num, RocDec.one_point_zero_i128)));
+        fn func(
+            input: RocDec,
+            roc_alloc: RocAlloc,
+        ) callconv(.C) T {
+            return @as(T, @intCast(@divFloor(input.ceiling(roc_alloc).num, RocDec.one_point_zero_i128)));
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
