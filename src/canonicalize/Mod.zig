@@ -5259,6 +5259,9 @@ fn canonicalizeTypeAnnoTagUnion(
                     const args_slice: []TypeVar = @ptrCast(self.env.store.sliceTypeAnnos(apply.args));
                     break :blk try self.env.types.mkTag(apply.symbol, args_slice);
                 },
+                .malformed => {
+                    continue;
+                },
                 else => unreachable,
             }
         };
