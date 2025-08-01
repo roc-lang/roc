@@ -130,10 +130,10 @@ CloseCurly(23:1-23:2),EndOfFile(23:2-23:2),
 								(e-ident @20.20-20.27 (raw "result1"))
 								(e-ident @20.29-20.36 (raw "result2"))))
 						(e-binop @22.5-22.14 (op "+")
-							(e-ident @22.5-22.6 (raw "a"))
-							(e-binop @22.9-22.14 (op "+")
-								(e-ident @22.9-22.10 (raw "b"))
-								(e-ident @22.13-22.14 (raw "c"))))))))))
+							(e-binop @22.5-22.10 (op "+")
+								(e-ident @22.5-22.6 (raw "a"))
+								(e-ident @22.9-22.10 (raw "b")))
+							(e-ident @22.13-22.14 (raw "c")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -236,13 +236,13 @@ main! = |_| {
 							(e-lookup-local @20.29-20.36
 								(p-assign @19.5-19.12 (ident "result2")))))
 					(e-binop @22.5-22.14 (op "add")
-						(e-lookup-local @22.5-22.6
-							(p-assign @4.1-4.2 (ident "a")))
-						(e-binop @22.9-22.14 (op "add")
+						(e-binop @22.5-22.10 (op "add")
+							(e-lookup-local @22.5-22.6
+								(p-assign @4.1-4.2 (ident "a")))
 							(e-lookup-local @22.9-22.10
-								(p-assign @5.1-5.2 (ident "b")))
-							(e-lookup-local @22.13-22.14
-								(p-assign @6.1-6.2 (ident "c"))))))))))
+								(p-assign @5.1-5.2 (ident "b"))))
+						(e-lookup-local @22.13-22.14
+							(p-assign @6.1-6.2 (ident "c")))))))))
 ~~~
 # TYPES
 ~~~clojure

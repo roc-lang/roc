@@ -32,14 +32,14 @@ OpenRound(1:1-1:2),OpBar(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:5-1:6),Comma(1
 							(field @1.24-1.25 (name "d") (rest false))
 							(field @1.27-1.28 (name "e") (rest false))))))
 			(e-binop @1.33-1.50 (op "+")
-				(e-ident @1.33-1.34 (raw "a"))
-				(e-binop @1.37-1.50 (op "+")
-					(e-ident @1.37-1.38 (raw "b"))
-					(e-binop @1.41-1.50 (op "+")
-						(e-ident @1.41-1.42 (raw "c"))
-						(e-binop @1.45-1.50 (op "+")
-							(e-ident @1.45-1.46 (raw "d"))
-							(e-ident @1.49-1.50 (raw "e"))))))))
+				(e-binop @1.33-1.46 (op "+")
+					(e-binop @1.33-1.42 (op "+")
+						(e-binop @1.33-1.38 (op "+")
+							(e-ident @1.33-1.34 (raw "a"))
+							(e-ident @1.37-1.38 (raw "b")))
+						(e-ident @1.41-1.42 (raw "c")))
+					(e-ident @1.45-1.46 (raw "d")))
+				(e-ident @1.49-1.50 (raw "e")))))
 	(e-record @1.53-1.88
 		(field (field "a")
 			(e-int @1.58-1.59 (raw "1")))
@@ -85,19 +85,19 @@ OpenRound(1:1-1:2),OpBar(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:5-1:6),Comma(1
 										(required
 											(p-assign @1.27-1.28 (ident "e")))))))))))
 		(e-binop @1.33-1.50 (op "add")
-			(e-lookup-local @1.33-1.34
-				(p-assign @1.5-1.6 (ident "a")))
-			(e-binop @1.37-1.50 (op "add")
-				(e-lookup-local @1.37-1.38
-					(p-assign @1.12-1.13 (ident "b")))
-				(e-binop @1.41-1.50 (op "add")
+			(e-binop @1.33-1.46 (op "add")
+				(e-binop @1.33-1.42 (op "add")
+					(e-binop @1.33-1.38 (op "add")
+						(e-lookup-local @1.33-1.34
+							(p-assign @1.5-1.6 (ident "a")))
+						(e-lookup-local @1.37-1.38
+							(p-assign @1.12-1.13 (ident "b"))))
 					(e-lookup-local @1.41-1.42
-						(p-assign @1.15-1.16 (ident "c")))
-					(e-binop @1.45-1.50 (op "add")
-						(e-lookup-local @1.45-1.46
-							(p-assign @1.24-1.25 (ident "d")))
-						(e-lookup-local @1.49-1.50
-							(p-assign @1.27-1.28 (ident "e"))))))))
+						(p-assign @1.15-1.16 (ident "c"))))
+				(e-lookup-local @1.45-1.46
+					(p-assign @1.24-1.25 (ident "d"))))
+			(e-lookup-local @1.49-1.50
+				(p-assign @1.27-1.28 (ident "e")))))
 	(e-record @1.53-1.88
 		(fields
 			(field (name "a")

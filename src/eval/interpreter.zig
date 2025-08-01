@@ -1468,20 +1468,20 @@ pub const Interpreter = struct {
 
         // Pop the record value from the stack
         const record_value = try self.popStackValue();
-        
+
         // Get the field name
         const field_name_ident: base.Ident.Idx = @bitCast(field_name_idx);
         const field_name = self.env.idents.getText(field_name_ident);
-        
+
         // The record must have a record layout
         if (record_value.layout.tag != .record) {
             return error.LayoutError;
         }
-        
+
         // Get the record data
         const record_data = self.layout_cache.getRecordData(record_value.layout.data.record.idx);
         const record_fields = self.layout_cache.record_fields.sliceRange(record_data.getFields());
-        
+
         // Find the field in the record layout by name
         var field_index: ?usize = null;
         for (0..record_fields.len) |idx| {
@@ -1491,18 +1491,18 @@ pub const Interpreter = struct {
                 break;
             }
         }
-        
+
         const index = field_index orelse return error.LayoutError;
-        
+
         // Get the field offset and layout
         const field_offset = self.layout_cache.getRecordFieldOffset(record_value.layout.data.record.idx, @intCast(index));
         const field_layout = self.layout_cache.getLayout(record_fields.get(index).layout);
         const field_size = self.layout_cache.layoutSize(field_layout);
-        
+
         // Calculate the field pointer
         const record_ptr = @as([*]const u8, @ptrCast(record_value.ptr.?));
         const field_ptr = record_ptr + field_offset;
-        
+
         // Push the field value onto the stack
         if (field_size > 0) {
             const result_ptr = (try self.pushStackValue(field_layout)).?;
@@ -1512,7 +1512,7 @@ pub const Interpreter = struct {
             // Zero-sized field
             _ = try self.pushStackValue(field_layout);
         }
-        
+
         self.traceInfo("Accessed field '{s}' at offset {}, size {}", .{ field_name, field_offset, field_size });
     }
 

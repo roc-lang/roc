@@ -69,12 +69,12 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 				(p-ident @3.26-3.27 (raw "x"))
 				(p-ident @3.29-3.30 (raw "y")))
 			(e-binop @3.35-3.48 (op "+")
-				(e-ident @3.35-3.36 (raw "a"))
-				(e-binop @3.39-3.48 (op "+")
-					(e-ident @3.39-3.40 (raw "b"))
-					(e-binop @3.43-3.48 (op "+")
-						(e-ident @3.43-3.44 (raw "x"))
-						(e-ident @3.47-3.48 (raw "y"))))))
+				(e-binop @3.35-3.44 (op "+")
+					(e-binop @3.35-3.40 (op "+")
+						(e-ident @3.35-3.36 (raw "a"))
+						(e-ident @3.39-3.40 (raw "b")))
+					(e-ident @3.43-3.44 (raw "x")))
+				(e-ident @3.47-3.48 (raw "y"))))
 		(branch @4.5-4.23
 			(p-list @4.5-4.13
 				(p-ident @4.6-4.12 (raw "single")))
@@ -126,16 +126,16 @@ match items {
 								(p-assign @1.1-1.1 (ident "middle"))))))
 				(value
 					(e-binop @3.35-3.48 (op "add")
-						(e-lookup-local @3.35-3.36
-							(p-assign @3.6-3.7 (ident "a")))
-						(e-binop @3.39-3.48 (op "add")
-							(e-lookup-local @3.39-3.40
-								(p-assign @3.9-3.10 (ident "b")))
-							(e-binop @3.43-3.48 (op "add")
-								(e-lookup-local @3.43-3.44
-									(p-assign @3.26-3.27 (ident "x")))
-								(e-lookup-local @3.47-3.48
-									(p-assign @3.29-3.30 (ident "y"))))))))
+						(e-binop @3.35-3.44 (op "add")
+							(e-binop @3.35-3.40 (op "add")
+								(e-lookup-local @3.35-3.36
+									(p-assign @3.6-3.7 (ident "a")))
+								(e-lookup-local @3.39-3.40
+									(p-assign @3.9-3.10 (ident "b"))))
+							(e-lookup-local @3.43-3.44
+								(p-assign @3.26-3.27 (ident "x"))))
+						(e-lookup-local @3.47-3.48
+							(p-assign @3.29-3.30 (ident "y"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

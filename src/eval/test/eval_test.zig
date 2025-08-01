@@ -151,6 +151,114 @@ test "parentheses and precedence" {
     try runExpectInt("100 - (20 - 10)", 90, .no_trace);
 }
 
+test "operator associativity - addition" {
+    // Left associative: a + b + c should parse as (a + b) + c
+    try runExpectInt("100 + 20 + 10", 130, .no_trace); // (100 + 20) + 10 = 130
+    try runExpectInt("100 + (20 + 10)", 130, .no_trace); // Same result, but explicitly grouped
+
+    // More complex case
+    try runExpectInt("10 + 20 + 30 + 40", 100, .no_trace); // ((10 + 20) + 30) + 40 = 100
+}
+
+test "operator associativity - subtraction" {
+    // Left associative: a - b - c should parse as (a - b) - c
+    try runExpectInt("100 - 20 - 10", 70, .no_trace); // (100 - 20) - 10 = 70
+    try runExpectInt("100 - (20 - 10)", 90, .no_trace); // Different result with explicit grouping
+
+    // More complex case showing the difference
+    try runExpectInt("100 - 50 - 25 - 5", 20, .no_trace); // ((100 - 50) - 25) - 5 = 20
+    try runExpectInt("100 - (50 - (25 - 5))", 70, .no_trace); // Right associative would give 70
+}
+
+test "operator associativity - multiplication" {
+    // Left associative: a * b * c should parse as (a * b) * c
+    try runExpectInt("2 * 3 * 4", 24, .no_trace); // (2 * 3) * 4 = 24
+    try runExpectInt("2 * (3 * 4)", 24, .no_trace); // Same result for multiplication
+
+    // Chain of multiplications
+    try runExpectInt("2 * 3 * 4 * 5", 120, .no_trace); // ((2 * 3) * 4) * 5 = 120
+}
+
+test "operator associativity - division" {
+    // Left associative: a / b / c should parse as (a / b) / c
+    // Note: Using integer division (//) for predictable integer results
+    try runExpectInt("100 // 20 // 2", 2, .no_trace); // (100 // 20) // 2 = 5 // 2 = 2
+    try runExpectInt("100 // (20 // 2)", 10, .no_trace); // Different result: 100 // 10 = 10
+
+    // More complex case showing the difference
+    try runExpectInt("1000 // 10 // 5 // 2", 10, .no_trace); // ((1000 // 10) // 5) // 2 = 10
+    try runExpectInt("1000 // (10 // (5 // 2))", 200, .no_trace); // Right associative would give 200
+}
+
+test "operator associativity - modulo" {
+    // Left associative: a % b % c should parse as (a % b) % c
+    try runExpectInt("100 % 30 % 7", 3, .no_trace); // (100 % 30) % 7 = 10 % 7 = 3
+    try runExpectInt("100 % (30 % 7)", 0, .no_trace); // Different result: 100 % 2 = 0
+
+    // Another example
+    try runExpectInt("50 % 20 % 6", 4, .no_trace); // (50 % 20) % 6 = 10 % 6 = 4
+    try runExpectInt("50 % (20 % 6)", 0, .no_trace); // Right associative: 50 % 2 = 0
+}
+
+test "operator associativity - mixed precedence" {
+    // Verify that precedence still works correctly with fixed associativity
+    try runExpectInt("2 + 3 * 4", 14, .no_trace); // 2 + (3 * 4) = 14
+    try runExpectInt("2 * 3 + 4", 10, .no_trace); // (2 * 3) + 4 = 10
+
+    // More complex mixed operations
+    try runExpectInt("10 - 2 * 3", 4, .no_trace); // 10 - (2 * 3) = 4
+    try runExpectInt("100 // 5 + 10", 30, .no_trace); // (100 // 5) + 10 = 30
+    try runExpectInt("100 // 5 % 3", 2, .no_trace); // (100 // 5) % 3 = 20 % 3 = 2
+}
+
+test "operator associativity - edge cases" {
+    // Very long chains to ensure associativity is consistent
+    try runExpectInt("1000 - 100 - 50 - 25 - 10 - 5", 810, .no_trace);
+    // ((((1000 - 100) - 50) - 25) - 10) - 5 = 810
+
+    // Complex nested expressions
+    try runExpectInt("(100 - 50) - (30 - 10)", 30, .no_trace); // 50 - 20 = 30
+    try runExpectInt("100 - (50 - 30) - 10", 70, .no_trace); // 100 - 20 - 10 = 70
+
+    // Division chains that would overflow if right-associative
+    try runExpectInt("1000000 // 1000 // 100 // 10", 1, .no_trace);
+    // (((1000000 // 1000) // 100) // 10) = 1
+
+    // Modulo chains
+    try runExpectInt("1000 % 300 % 40 % 7", 6, .no_trace);
+    // ((1000 % 300) % 40) % 7 = (100 % 40) % 7 = 20 % 7 = 6
+}
+
+test "comparison operators - non-associative" {
+    // Comparison operators should be non-associative
+    // These should work with parentheses
+    try runExpectInt("(5 > 3) == 1", 1, .no_trace); // true == true
+    try runExpectInt("(10 < 20) == 1", 1, .no_trace); // true == true
+    try runExpectInt("(5 >= 5) == 1", 1, .no_trace); // true == true
+    try runExpectInt("(10 <= 9) == 0", 1, .no_trace); // false == false
+
+    // But chaining without parentheses should fail to parse
+    // We can't test parse errors in eval tests, so we just verify the operators work
+}
+
+test "operator associativity - documentation" {
+    // This test documents the expected associativity behavior after fixes
+
+    // LEFT ASSOCIATIVE (most arithmetic operators)
+    // a op b op c = (a op b) op c
+    try runExpectInt("8 - 4 - 2", 2, .no_trace); // (8-4)-2 = 2, NOT 8-(4-2) = 6
+    try runExpectInt("16 // 4 // 2", 2, .no_trace); // (16//4)//2 = 2, NOT 16//(4//2) = 8
+
+    // NON-ASSOCIATIVE (comparison operators)
+    // Can't chain without parentheses
+    try runExpectInt("(5 > 3) && (3 > 1)", 1, .no_trace); // Must use parentheses
+
+    // RIGHT ASSOCIATIVE (logical operators)
+    // a op b op c = a op (b op c)
+    // Note: && and || are right associative in Roc
+    // This is mostly relevant for short-circuiting behavior
+}
+
 test "error test - divide by zero" {
     try runExpectError("5 // 0", EvalError.DivisionByZero, .no_trace);
     try runExpectError("10 % 0", EvalError.DivisionByZero, .no_trace);
@@ -441,7 +549,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // Allocate space for ModuleEnv and serialize
         const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv);
         const env_start_offset = writer.total_bytes - @sizeOf(ModuleEnv);
-        const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(env_ptr));
+        const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
         try serialized_ptr.serialize(&original_env, arena_alloc, &writer);
 
         // Write to file
@@ -449,7 +557,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         // Read back from file
         const file_size = try tmp_file.getEndPos();
-        const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), file_size);
+        const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), @intCast(file_size));
         defer gpa.free(buffer);
         _ = try tmp_file.pread(buffer, 0);
 
