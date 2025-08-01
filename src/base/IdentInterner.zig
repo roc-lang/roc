@@ -159,7 +159,9 @@ fn toUpperAscii(c: u8) u8 {
 pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
     std.debug.assert(string.len > 0); // Should never be asked to intern empty strings!
     std.debug.assert(!(string[0] >= '0' and string[0] <= '9')); // Identifiers cannot start with digits!
-    std.debug.assert(!self.frozen); // Should not insert into a frozen interner
+    if (std.debug.runtime_safety) {
+        std.debug.assert(!self.frozen); // Should not insert into a frozen interner
+    }
 
     // Normalize to lowercase
     if (string[0] >= 'A' and string[0] <= 'Z') {
