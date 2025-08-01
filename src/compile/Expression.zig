@@ -222,6 +222,20 @@ pub const Expr = union(enum) {
         backing_expr: Expr.Idx,
         backing_type: NominalBackingType,
     },
+    /// An external qualified, nominal type
+    ///
+    /// ```roc
+    /// OtherModule.Result.Ok("success")       # Tags
+    /// OtherModule.Config.{ optimize : Bool}  # Records
+    /// OtherModule.Point.(1.0, 2.0)           # Tuples
+    /// OtherModule.Point.(1.0)                # Values
+    /// ```
+    e_nominal_external: struct {
+        module_idx: ModuleEnv.Import.Idx,
+        target_node_idx: u16,
+        backing_expr: Expr.Idx,
+        backing_type: NominalBackingType,
+    },
     /// Tag constructor with no arguments.
     /// Represents constant values in tag union types.
     /// Optimized representation for tags that carry no data.
@@ -784,6 +798,27 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
 
                 try ir.store.getExpr(nominal_expr.backing_expr).pushToSExprTree(ir, tree, nominal_expr.backing_expr);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_nominal_external => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-nominal-external");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                // Add module index
+                var buf: [32]u8 = undefined;
+                const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(e.module_idx)}) catch unreachable;
+                try tree.pushStringPair("module-idx", module_idx_str);
+
+                // Add target node index
+                var buf2: [32]u8 = undefined;
+                const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{e.target_node_idx}) catch unreachable;
+                try tree.pushStringPair("target-node-idx", target_idx_str);
+
+                try ir.store.getExpr(e.backing_expr).pushToSExprTree(ir, tree, e.backing_expr);
 
                 try tree.endNode(begin, attrs);
             },

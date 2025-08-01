@@ -29,6 +29,7 @@ UNEXPECTED TOKEN IN EXPRESSION - underscore_type_decl.md:7:13:7:14
 PARSE ERROR - underscore_type_decl.md:7:20:7:21
 PARSE ERROR - underscore_type_decl.md:7:23:7:24
 PARSE ERROR - underscore_type_decl.md:7:15:7:19
+MODULE NOT FOUND - underscore_type_decl.md:3:1:3:30
 INVALID STATEMENT - underscore_type_decl.md:6:6:6:12
 INVALID STATEMENT - underscore_type_decl.md:6:13:6:14
 INVALID STATEMENT - underscore_type_decl.md:7:6:7:12
@@ -260,6 +261,17 @@ Here is the problematic code:
 Pair3(_, _) = Pair(0, 1)
 ```
               ^^^^
+
+
+**MODULE NOT FOUND**
+The module `Module` was not found in this Roc project.
+
+You're attempting to use this module here:
+**underscore_type_decl.md:3:1:3:30:**
+```roc
+import Module exposing [Pair]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **INVALID STATEMENT**

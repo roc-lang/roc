@@ -666,6 +666,10 @@ pub const Interpreter = struct {
                     .expr_idx = nominal.backing_expr,
                 });
             },
+            .e_nominal_external => |_| {
+                // TODO: Is this right?
+                return error.LayoutError;
+            },
 
             // Tags with arguments
             .e_tag => |tag| {

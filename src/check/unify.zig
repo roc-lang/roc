@@ -40,16 +40,16 @@
 //! subsequent unification runs.
 
 const std = @import("std");
-
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
 const compile = @import("compile");
+const Check = @import("check");
 
-const problem_mod = @import("./problem.zig");
-const occurs = @import("./occurs.zig");
-const snapshot_mod = @import("./snapshot.zig");
+const problem_mod = Check.problem;
+const occurs = Check.occurs;
+const snapshot_mod = Check.snapshot;
 
 const ModuleEnv = compile.ModuleEnv;
 
@@ -100,7 +100,7 @@ pub const Result = union(enum) {
     const Self = @This();
 
     ok,
-    problem: Problem.SafeMultiList.Idx,
+    problem: Problem.Idx,
 
     pub fn isOk(self: Self) bool {
         return self == .ok;
@@ -513,12 +513,13 @@ fn Unifier(comptime StoreTypeB: type) type {
                 },
                 .alias => |b_alias| {
                     const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
-                    const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
-                    if (b_backing_resolved.desc.content == .err) {
-                        // Invalid alias - treat as transparent
-                        self.merge(vars, vars.a.desc.content);
-                        return;
-                    }
+                    // TODO: Do we need this?
+                    // const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
+                    // if (b_backing_resolved.desc.content == .err) {
+                    //     // Invalid alias - treat as transparent
+                    //     self.merge(vars, vars.a.desc.content);
+                    //     return;
+                    // }
                     if (TypeIdent.eql(&self.module_env.idents, a_alias.ident, b_alias.ident)) {
                         try self.unifyTwoAliases(vars, a_alias, b_alias);
                     } else {

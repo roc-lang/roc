@@ -24,7 +24,7 @@ PARSE ERROR - type_shadowing_across_scopes.md:11:24:11:31
 UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:11:31:11:32
 UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:12:1:12:2
 TYPE REDECLARED - type_shadowing_across_scopes.md:3:1:3:31
-MALFORMED TYPE - :0:0:0:0
+MALFORMED TYPE - type_shadowing_across_scopes.md:11:24:11:31
 UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
 INVALID STATEMENT - type_shadowing_across_scopes.md:11:31:11:32
 INVALID STATEMENT - type_shadowing_across_scopes.md:12:1:12:2
@@ -97,6 +97,13 @@ module [Result, processData]
 
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
+
+**type_shadowing_across_scopes.md:11:24:11:31:**
+```roc
+    Result : [Success, Failure]
+```
+                       ^^^^^^^
+
 
 **UNUSED VARIABLE**
 Variable `data` is not used anywhere in your code.

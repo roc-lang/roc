@@ -154,8 +154,8 @@ main! = |_| {}
 						(p-assign @4.15-4.16 (ident "x")))
 					(e-closure @4.18-4.30
 						(captures
-							(capture @4.15-4.16 (ident "x"))
-							(capture @4.10-4.12 (ident "fn")))
+							(capture @4.10-4.12 (ident "fn"))
+							(capture @4.15-4.16 (ident "x")))
 						(e-lambda @4.18-4.30
 							(args
 								(p-assign @4.19-4.20 (ident "y")))

@@ -13,6 +13,7 @@ pub const target = @import("target.zig");
 
 pub const PackedDataSpan = @import("PackedDataSpan.zig").PackedDataSpan;
 pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
+pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;
 
 /// Whether a function calls itself.
 pub const Recursive = enum {

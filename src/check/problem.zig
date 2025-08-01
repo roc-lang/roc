@@ -4,20 +4,23 @@ const std = @import("std");
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
-
 const types_mod = @import("types");
-const snapshot = @import("./snapshot.zig");
 const compile = @import("compile");
 const reporting = @import("reporting");
+const Check = @import("check");
+
+const snapshot = Check.snapshot;
+
+const Allocator = std.mem.Allocator;
+
+const ModuleEnv = compile.ModuleEnv;
 
 const Report = reporting.Report;
 const Document = reporting.Document;
 const UnderlineRegion = reporting.UnderlineRegion;
 const SourceCodeDisplayRegion = reporting.SourceCodeDisplayRegion;
 
-const ModuleEnv = compile.ModuleEnv;
 const TypesStore = types_mod.Store;
-const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 
 const MkSafeMultiList = collections.SafeMultiList;
@@ -39,8 +42,7 @@ pub const Problem = union(enum) {
     invalid_tag_union_ext: VarProblem1,
     bug: Bug,
 
-    pub const SafeMultiList = MkSafeMultiList(@This());
-    pub const Idx = SafeMultiList.Idx;
+    pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
 };
 
@@ -1340,12 +1342,13 @@ pub const ReportBuilder = struct {
 /// Entry points are `appendProblem` and `deepCopyVar`
 pub const Store = struct {
     const Self = @This();
+    const ALIGNMENT = 16;
 
-    problems: Problem.SafeMultiList,
+    problems: std.ArrayListAlignedUnmanaged(Problem, ALIGNMENT) = .{},
 
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
-            .problems = try Problem.SafeMultiList.initCapacity(gpa, capacity),
+            .problems = try std.ArrayListAlignedUnmanaged(Problem, ALIGNMENT).initCapacity(gpa, capacity),
         };
     }
 
@@ -1354,7 +1357,9 @@ pub const Store = struct {
     }
 
     /// Create a deep snapshot from a Var, storing it in this SnapshotStore
-    pub fn appendProblem(self: *Self, gpa: Allocator, problem: Problem) std.mem.Allocator.Error!Problem.SafeMultiList.Idx {
-        return try self.problems.append(gpa, problem);
+    pub fn appendProblem(self: *Self, gpa: Allocator, problem: Problem) std.mem.Allocator.Error!Problem.Idx {
+        const idx: Problem.Idx = @enumFromInt(self.problems.items.len);
+        try self.problems.append(gpa, problem);
+        return idx;
     }
 };

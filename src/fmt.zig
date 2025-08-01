@@ -169,7 +169,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.source, parse_ast);
         return error.ParsingFailed;
     }
@@ -202,7 +202,7 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.source, parse_ast);
         return error.ParsingFailed;
     }
@@ -854,10 +854,15 @@ const Formatter = struct {
                 try fmt.pushTokenText(s.token);
             },
             .ident => |i| {
-                // Extract first qualifier from span if any
                 const qualifier_tokens = fmt.ast.store.tokenSlice(i.qualifiers);
-                const qualifier = if (qualifier_tokens.len > 0) qualifier_tokens[0] else null;
-                try fmt.formatIdent(i.token, qualifier);
+
+                for (qualifier_tokens) |tok_idx| {
+                    const tok = @as(Token.Idx, @intCast(tok_idx));
+                    try fmt.pushTokenText(tok);
+                    try fmt.push('.');
+                }
+
+                try fmt.pushTokenText(i.token);
             },
             .field_access => |fa| {
                 _ = try fmt.formatExpr(fa.left);
@@ -1044,10 +1049,11 @@ const Formatter = struct {
 
                 for (qualifier_tokens) |tok_idx| {
                     const tok = @as(Token.Idx, @intCast(tok_idx));
-                    try fmt.pushAll(fmt.ast.resolve(tok));
+                    try fmt.pushTokenText(tok);
+                    try fmt.push('.');
                 }
 
-                try fmt.pushAll(fmt.ast.resolve(t.token));
+                try fmt.pushTokenText(t.token);
             },
             .if_then_else => |i| {
                 try fmt.pushAll("if");
@@ -1142,7 +1148,7 @@ const Formatter = struct {
                 _ = try fmt.formatExpr(d.expr);
             },
             .block => |b| {
-                try fmt.formatBody(b);
+                try fmt.formatBlock(b);
             },
             .ellipsis => |_| {
                 try fmt.pushAll("...");
@@ -1286,7 +1292,7 @@ const Formatter = struct {
                     const pattern_region = fmt.nodeRegion(@intFromEnum(p));
                     _ = try fmt.formatPattern(p);
                     fmt.curr_indent = curr_indent;
-                    if (i < (a.patterns.span.len - 1)) {
+                    if (i < a.patterns.span.len - 1) {
                         if (multiline) {
                             _ = try fmt.flushCommentsBefore(pattern_region.end);
                             try fmt.ensureNewline();
@@ -1296,8 +1302,7 @@ const Formatter = struct {
                         }
                         try fmt.push('|');
                         const next_region = fmt.nodeRegion(@intFromEnum(patterns[i + 1]));
-                        const flushed = try fmt.flushCommentsBefore(next_region.start);
-                        if (flushed) {
+                        if (multiline and try fmt.flushCommentsBefore(next_region.start)) {
                             fmt.curr_indent += 1;
                             try fmt.pushIndent();
                         } else {
@@ -1644,19 +1649,18 @@ const Formatter = struct {
         return fmt.ast.store.nodes.items.items(.region)[idx];
     }
 
-    fn formatBody(fmt: *Formatter, body: AST.Body) !void {
-        const multiline = fmt.ast.regionIsMultiline(body.region);
-        if (multiline or body.statements.span.len > 1) {
+    fn formatBlock(fmt: *Formatter, block: AST.Block) !void {
+        if (block.statements.span.len > 0) {
             fmt.curr_indent += 1;
             try fmt.push('{');
-            for (fmt.ast.store.statementSlice(body.statements), 0..) |s, i| {
+            for (fmt.ast.store.statementSlice(block.statements), 0..) |s, i| {
                 const region = fmt.nodeRegion(@intFromEnum(s));
                 _ = try fmt.flushCommentsBefore(region.start);
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
                 try fmt.formatStatement(s);
 
-                if (i == body.statements.span.len - 1) {
+                if (i == block.statements.span.len - 1) {
                     _ = try fmt.flushCommentsBefore(region.end);
                 }
             }
@@ -1664,10 +1668,6 @@ const Formatter = struct {
             fmt.curr_indent -= 1;
             try fmt.pushIndent();
             try fmt.push('}');
-        } else if (body.statements.span.len == 1) {
-            for (fmt.ast.store.statementSlice(body.statements)) |s| {
-                try fmt.formatStatement(s);
-            }
         } else {
             try fmt.pushAll("{}");
         }
@@ -1838,15 +1838,11 @@ const Formatter = struct {
 
                 for (qualifier_tokens) |tok_idx| {
                     const tok = @as(Token.Idx, @intCast(tok_idx));
-                    try fmt.pushAll(fmt.ast.resolve(tok));
+                    try fmt.pushTokenText(tok);
+                    try fmt.push('.');
                 }
 
-                try fmt.pushAll(fmt.ast.resolve(t.token));
-            },
-            .mod_ty => |t| {
-                try fmt.pushTokenText(t.region.start);
-                try fmt.pushAll(".");
-                try fmt.pushTokenText(t.region.end - 1);
+                try fmt.pushTokenText(t.token);
             },
             .tuple => |t| {
                 region = t.region;

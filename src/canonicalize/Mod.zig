@@ -313,12 +313,7 @@ fn addBuiltinType(self: *Self, ir: *ModuleEnv, type_name: []const u8, content: t
 
     // Create the type declaration statement
     const type_decl_stmt = Statement{
-        .s_alias_decl = .{
-            .header = header_idx,
-            .anno = anno_idx,
-            .anno_var = anno_var,
-            .where = null,
-        },
+        .s_alias_decl = .{ .header = header_idx, .anno = anno_idx },
     };
 
     const type_decl_idx = try ir.addStatementAndTypeVar(
@@ -361,12 +356,7 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void 
 
     // Create the type declaration statement
     const type_decl_stmt = Statement{
-        .s_nominal_decl = .{
-            .header = header_idx,
-            .anno = anno_idx,
-            .anno_var = anno_var,
-            .where = null,
-        },
+        .s_nominal_decl = .{ .header = header_idx, .anno = anno_idx },
     };
 
     const type_decl_idx = try ir.addStatementAndTypeVar(
@@ -450,7 +440,7 @@ pub fn canonicalizeFile(
         switch (stmt) {
             .type_decl => |type_decl| {
                 // Canonicalize the type declaration header first
-                const header_idx = try self.canonicalizeTypeHeader(type_decl.header, .cannot_introduce_vars);
+                const header_idx = try self.canonicalizeTypeHeader(type_decl.header);
                 const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
 
                 // Extract the type name from the header to introduce it into scope early
@@ -463,16 +453,12 @@ pub fn canonicalizeFile(
                         .s_alias_decl = .{
                             .header = header_idx,
                             .anno = @enumFromInt(0), // placeholder - will be replaced
-                            .anno_var = @enumFromInt(0), // placeholder - will be replaced
-                            .where = null,
                         },
                     },
                     .nominal => Statement{
                         .s_nominal_decl = .{
                             .header = header_idx,
                             .anno = @enumFromInt(0), // placeholder - will be replaced
-                            .anno_var = @enumFromInt(0), // placeholder - will be replaced
-                            .where = null,
                         },
                     },
                 };
@@ -492,45 +478,28 @@ pub fn canonicalizeFile(
                     try self.introduceTypeParametersFromHeader(header_idx);
 
                     // Now canonicalize the type annotation with type parameters and type name in scope
-                    break :blk try self.canonicalizeTypeAnno(type_decl.anno, .cannot_introduce_vars, true);
+                    break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
                 };
 
-                // Creat type variables to the backing type (rhs)
-                const anno_var = blk: {
-                    // Enter a new scope for backing annotation type
-                    try self.scopeEnter(self.env.gpa, false);
-                    defer self.scopeExit(self.env.gpa) catch {};
+                // Get type variables to args (lhs)
+                const header_arg_vars: []TypeVar = @ptrCast(self.env.store.sliceTypeAnnos(type_header.args));
 
-                    break :blk try self.canonicalizeTypeAnnoToTypeVar(anno_idx);
-                };
+                // Get type variable to the backing type (rhs)
+                const anno_var = ModuleEnv.varFrom(anno_idx);
 
                 // Check if the backing type is already an error type
                 const backing_resolved = self.env.types.resolveVar(anno_var);
                 const backing_is_error = backing_resolved.desc.content == .err;
 
-                // Create types for each arg annotation
-                const scratch_anno_start = self.scratch_vars.top();
-                for (self.env.store.sliceTypeAnnos(type_header.args)) |arg_anno_idx| {
-                    const arg_anno_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx);
-                    try self.scratch_vars.append(self.env.gpa, arg_anno_var);
-                }
-                const arg_anno_slice = self.scratch_vars.slice(scratch_anno_start, self.scratch_vars.top());
-
                 // The identified of the type
                 const type_ident = types.TypeIdent{ .ident_idx = type_header.name };
 
                 // Canonicalize where clauses if present
-                const where_clauses = if (type_decl.where) |where_coll| blk: {
-                    const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
-                    const where_start = self.env.store.scratchWhereClauseTop();
-
-                    for (where_slice) |where_idx| {
-                        const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .cannot_introduce_vars);
-                        try self.env.store.addScratchWhereClause(canonicalized_where);
-                    }
-
-                    break :blk try self.env.store.whereClauseSpanFrom(where_start);
-                } else null;
+                if (type_decl.where) |_| {
+                    try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
+                        .region = region,
+                    } });
+                }
 
                 // Create the real CIR type declaration statement with the canonicalized annotation
                 const real_cir_type_decl, const type_decl_content = blk: {
@@ -539,15 +508,13 @@ pub fn canonicalizeFile(
                             const alias_content = if (backing_is_error)
                                 types.Content{ .err = {} }
                             else
-                                try self.env.types.mkAlias(type_ident, anno_var, arg_anno_slice);
+                                try self.env.types.mkAlias(type_ident, anno_var, header_arg_vars);
 
                             break :blk .{
                                 Statement{
                                     .s_alias_decl = .{
                                         .header = header_idx,
                                         .anno = anno_idx,
-                                        .anno_var = anno_var,
-                                        .where = where_clauses,
                                     },
                                 },
                                 alias_content,
@@ -560,7 +527,7 @@ pub fn canonicalizeFile(
                                 try self.env.types.mkNominal(
                                     type_ident,
                                     anno_var,
-                                    arg_anno_slice,
+                                    header_arg_vars,
                                     try self.env.idents.insert(self.env.gpa, base.Ident.for_text(self.env.module_name)),
                                 );
 
@@ -569,8 +536,6 @@ pub fn canonicalizeFile(
                                     .s_nominal_decl = .{
                                         .header = header_idx,
                                         .anno = anno_idx,
-                                        .anno_var = anno_var,
-                                        .where = where_clauses,
                                     },
                                 },
                                 nominal_content,
@@ -582,9 +547,6 @@ pub fn canonicalizeFile(
                 // Create the real statement and add it to scratch statements
                 const type_decl_stmt_idx = try self.env.addStatementAndTypeVar(real_cir_type_decl, type_decl_content, region);
                 try self.env.store.addScratchStatement(type_decl_stmt_idx);
-
-                // Shrink the scratch var buffer now that our work is done
-                self.scratch_vars.clearFrom(scratch_anno_start);
 
                 // Update the scope to point to the real statement instead of the placeholder
                 try self.scopeUpdateTypeDecl(type_header.name, type_decl_stmt_idx);
@@ -797,23 +759,8 @@ pub fn canonicalizeFile(
                 try self.scopeEnter(self.env.gpa, false);
                 defer self.scopeExit(self.env.gpa) catch {};
 
-                // Introduce type variables into scope (if we have any)
-                if (self.scratch_idents.top() > type_vars_top) {
-                    for (self.scratch_idents.sliceFromStart(type_vars_top)) |type_var| {
-                        // Create a dummy type annotation for the type variable
-                        const dummy_anno = try self.env.addTypeAnnoAndTypeVar(.{
-                            .ty_var = .{
-                                .name = type_var,
-                            },
-                        }, Content{ .flex_var = null }, region); // TODO we may want to use the region for the type_var instead of the whole annotation
-                        try self.scopeIntroduceTypeVar(type_var, dummy_anno);
-                    }
-                    // Shrink the scratch vars list to the original size
-                    self.scratch_idents.clearFrom(type_vars_top);
-                }
-
                 // Now canonicalize the annotation with type variables in scope
-                const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .cannot_introduce_vars, false);
+                const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .inline_anno);
 
                 // Canonicalize where clauses if present
                 const where_clauses = if (ta.where) |where_coll| blk: {
@@ -821,7 +768,7 @@ pub fn canonicalizeFile(
                     const where_start = self.env.store.scratchWhereClauseTop();
 
                     for (where_slice) |where_idx| {
-                        const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .cannot_introduce_vars);
+                        const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);
                         try self.env.store.addScratchWhereClause(canonicalized_where);
                     }
 
@@ -910,7 +857,7 @@ fn collectBoundVars(self: *Self, pattern_idx: Pattern.Idx, bound_vars: *std.Auto
                 }
             }
         },
-        .int_literal, .small_dec_literal, .dec_literal, .str_literal, .underscore, .nominal, .runtime_error => {},
+        .int_literal, .small_dec_literal, .dec_literal, .str_literal, .underscore, .nominal, .nominal_external, .runtime_error => {},
     }
 }
 
@@ -1302,6 +1249,23 @@ fn canonicalizeImportStatement(
     const current_scope = self.currentScope();
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
+    // 9. Check that this module actually exists, and if not report an error
+    if (self.module_envs) |envs_map| {
+        // Check if the module exists
+        if (!envs_map.contains(module_name_text)) {
+            // Module not found - create diagnostic
+            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+                .module_name = module_name,
+                .region = import_region,
+            } });
+        }
+    } else {
+        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+            .module_name = module_name,
+            .region = import_region,
+        } });
+    }
+
     return import_idx;
 }
 
@@ -1343,14 +1307,14 @@ fn createExternalDeclaration(
     module_name: Ident.Idx,
     local_name: Ident.Idx,
     kind: @TypeOf(@as(ModuleEnv.ExternalDecl, undefined).kind),
+    type_var: TypeVar,
     region: Region,
 ) std.mem.Allocator.Error!ModuleEnv.ExternalDecl.Idx {
-    const external_type_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar);
     const external_decl = ModuleEnv.ExternalDecl{
         .qualified_name = qualified_name,
         .module_name = module_name,
         .local_name = local_name,
-        .type_var = external_type_var,
+        .type_var = type_var,
         .kind = kind,
         .region = region,
     };
@@ -1434,11 +1398,8 @@ fn introduceExposedItemsIntoScope(
 
         // Check if the module exists
         if (!envs_map.contains(module_name_text)) {
-            // Module not found - create diagnostic
-            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-                .module_name = module_name,
-                .region = import_region,
-            } });
+            // Module not found - Module existence check is already done in canonicalizeImportStatement,
+            // so there is no need to create another diagnostic here for module_not_found
             return;
         }
 
@@ -2947,6 +2908,8 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
 
     var args_span = Expr.Span{ .span = DataSpan.empty() };
 
+    const free_vars_start = self.scratch_free_vars.top();
+
     if (mb_args) |args| {
         if (args.span.len > 0) {
             // Canonicalize all arguments
@@ -2966,7 +2929,6 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
 
     // Create a single tag, open tag union for this variable
     // Use a placeholder ext_var that will be handled during type checking
-    // TODO(jared): Parent
     const ext_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar);
     const tag = try self.env.types.mkTag(tag_name, @ptrCast(self.env.store.sliceExpr(args_span)));
     const tag_union = try self.env.types.mkTagUnion(&[_]Tag{tag}, ext_var);
@@ -2980,7 +2942,6 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
     }, tag_union, region);
 
     if (e.qualifiers.span.len == 0) {
-
         // Check if this is an unqualified nominal tag (e.g. True or False are in scope unqualified by default)
         if (self.unqualified_nominal_tags.get(tag_name_text)) |nominal_type_decl| {
             // Get the type variable for the nominal type declaration (e.g., Bool type)
@@ -2999,40 +2960,127 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
         // If this is a tag without a prefix and not in unqualified_nominal_tags,
         // then it is an anonymous tag and we can just return it
         return CanonicalizedExpr{ .idx = tag_expr_idx, .free_vars = null };
-    } else {
-        // If this is a tag with a prefix, then is it a nominal tag.
-        //
-        // TODO: Currently this just get the last qualified, then
-        // looks up the associated type. Is this right?
+    } else if (e.qualifiers.span.len == 1) {
+        // If this is a tag with a single, then is it a nominal tag and the qualifier
+        // is the type
 
         // Get the last token of the qualifiers
         const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
-        const last_tok_idx = qualifier_toks[e.qualifiers.span.len - 1];
-        const last_tok_ident = self.parse_ir.tokens.resolveIdentifier(last_tok_idx) orelse unreachable;
-        const last_tok_region = self.parse_ir.tokens.resolve(last_tok_idx);
+        const type_tok_idx = qualifier_toks[0];
+        const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
+        const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
 
-        // Lookup last token (assumed to be a type decl) in scope
-        const nominal_type_decl = self.scopeLookupTypeDecl(last_tok_ident) orelse
+        // Lookup the type ident in scope
+        const nominal_type_decl = self.scopeLookupTypeDecl(type_tok_ident) orelse
             return CanonicalizedExpr{
-                .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
-                    .ident = last_tok_ident,
-                    .region = last_tok_region,
+                .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
+                    .name = type_tok_ident,
+                    .region = type_tok_region,
                 } }),
                 .free_vars = null,
             };
-
         const nominal_type_var = ModuleEnv.castIdx(Statement.Idx, TypeVar, nominal_type_decl);
-        const resolved = self.env.types.resolveVar(nominal_type_var);
 
-        const expr_idx = try self.env.addExprAndTypeVar(ModuleEnv.Expr{
+        const expr_idx = try self.env.addExprAndTypeVarRedirect(ModuleEnv.Expr{
             .e_nominal = .{
                 .nominal_type_decl = nominal_type_decl,
                 .backing_expr = tag_expr_idx,
                 .backing_type = .tag,
             },
-        }, resolved.desc.content, last_tok_region);
+        }, nominal_type_var, region);
 
-        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+        const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+        return CanonicalizedExpr{
+            .idx = expr_idx,
+            .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null,
+        };
+    } else {
+        // If this is a tag with more than 1 qualifier, then it is an imported
+        // nominal type where the last qualifier is the type name, then the other
+        // are the module
+
+        // Get the last token of the qualifiers
+        const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
+
+        // Get the type from the last qualifier
+        const type_tok_idx = qualifier_toks[qualifier_toks.len - 1];
+        const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
+        const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
+        const type_tok_text = self.env.idents.getText(type_tok_ident);
+
+        // Get the fully resolved module name from all but the last qualifier
+        const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
+        const module_alias_text = self.parse_ir.resolveQualifiedName(
+            .{ .span = .{ .start = 0, .len = @intCast(qualifier_toks.len - 2) } },
+            qualifier_toks[qualifier_toks.len - 2],
+            &strip_tokens,
+        );
+        const module_alias = try self.env.idents.insert(self.env.gpa, base.Ident.for_text(module_alias_text));
+
+        // Check if this is a module alias
+        const module_name = self.scopeLookupModule(module_alias) orelse {
+            // Module is not in current scope
+            return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, ModuleEnv.Diagnostic{ .module_not_imported = .{
+                .module_name = module_alias,
+                .region = region,
+            } }), .free_vars = null };
+        };
+        const module_name_text = self.env.idents.getText(module_name);
+
+        // Check if this module is imported in the current scope
+        const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
+            return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
+                .module_name = module_name,
+                .region = region,
+            } }), .free_vars = null };
+        };
+
+        // Look up the target node index in the module's exposed_nodes
+        const target_node_idx, const type_content = blk: {
+            const envs_map = self.module_envs orelse {
+                break :blk .{ 0, Content.err };
+            };
+
+            const module_env = envs_map.get(module_name_text) orelse {
+                break :blk .{ 0, Content.err };
+            };
+
+            const target_ident = module_env.idents.findByString(type_tok_text) orelse {
+                // Type is not exposed by the module
+                return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, ModuleEnv.Diagnostic{ .type_not_exposed = .{
+                    .module_name = module_name,
+                    .type_name = type_tok_ident,
+                    .region = type_tok_region,
+                } }), .free_vars = null };
+            };
+
+            const other_module_node_id = module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse {
+                // Type is not exposed by the module
+                return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, ModuleEnv.Diagnostic{ .type_not_exposed = .{
+                    .module_name = module_name,
+                    .type_name = type_tok_ident,
+                    .region = type_tok_region,
+                } }), .free_vars = null };
+            };
+
+            // Successfully found the target node
+            break :blk .{ other_module_node_id, Content{ .flex_var = null } };
+        };
+
+        const expr_idx = try self.env.addExprAndTypeVar(ModuleEnv.Expr{
+            .e_nominal_external = .{
+                .module_idx = import_idx,
+                .target_node_idx = target_node_idx,
+                .backing_expr = tag_expr_idx,
+                .backing_type = .tag,
+            },
+        }, type_content, region);
+
+        const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+        return CanonicalizedExpr{
+            .idx = expr_idx,
+            .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null,
+        };
     }
 }
 
@@ -3275,6 +3323,7 @@ fn canonicalizePattern(
         },
         .tag => |e| {
             const tag_name = self.parse_ir.tokens.resolveIdentifier(e.tag_tok) orelse return null;
+            const tag_name_text = self.parse_ir.env.idents.getText(tag_name);
 
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
@@ -3310,39 +3359,132 @@ fn canonicalizePattern(
             }, tag_union_type, region);
 
             if (e.qualifiers.span.len == 0) {
-                // If this is a tag without a prefix, then is it an
-                // anonymous tag and we can just return it
+                // Check if this is an unqualified nominal tag (e.g. True or False are in scope unqualified by default)
+                if (self.unqualified_nominal_tags.get(tag_name_text)) |nominal_type_decl| {
+                    // Get the type variable for the nominal type declaration (e.g., Bool type)
+                    const nominal_type_var = ModuleEnv.castIdx(Statement.Idx, TypeVar, nominal_type_decl);
+                    const nominal_pattern_idx = try self.env.addPatternAndTypeVarRedirect(ModuleEnv.Pattern{
+                        .nominal = .{
+                            .nominal_type_decl = nominal_type_decl,
+                            .backing_pattern = tag_pattern_idx,
+                            .backing_type = .tag,
+                        },
+                    }, nominal_type_var, region);
+                    return nominal_pattern_idx;
+                }
+
+                // If this is a tag without a prefix and not in unqualified_nominal_tags,
+                // then it is an anonymous tag and we can just return it
                 return tag_pattern_idx;
-            } else {
-                // If this is a tag with a prefix, then is it a nominal tag.
-                //
-                // TODO: Currently this just get the last qualified, then
-                // looks up the associated type. Is this right?
+            } else if (e.qualifiers.span.len == 1) {
+                // If this is a tag with a single, then is it a nominal tag and the qualifier is the type
 
                 // Get the last token of the qualifiers
                 const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
-                const last_tok_idx = qualifier_toks[e.qualifiers.span.len - 1];
-                const last_tok_region = self.parse_ir.tokens.resolve(last_tok_idx);
-                const last_tok_ident = self.parse_ir.tokens.resolveIdentifier(last_tok_idx) orelse unreachable;
+                const type_tok_idx = qualifier_toks[0];
+                const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
+                const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
 
-                // Lookup last token (assumed to be a type decl) in scope
-                const nominal_type_decl = self.scopeLookupTypeDecl(last_tok_ident) orelse
-                    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .ident_not_in_scope = .{
-                        .ident = last_tok_ident,
-                        .region = last_tok_region,
+                // Lookup the type ident in scope
+                const nominal_type_decl = self.scopeLookupTypeDecl(type_tok_ident) orelse
+                    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .undeclared_type = .{
+                        .name = type_tok_ident,
+                        .region = type_tok_region,
                     } });
+                const nominal_type_var = ModuleEnv.castIdx(Statement.Idx, TypeVar, nominal_type_decl);
 
-                // Create the nominal pattern
-                // In type checking, this will be unified with the nominal type if the `tag` is valid
-                const pattern_idx = try self.env.addPatternAndTypeVar(Pattern{
+                const pattern_idx = try self.env.addPatternAndTypeVarRedirect(ModuleEnv.Pattern{
                     .nominal = .{
                         .nominal_type_decl = nominal_type_decl,
                         .backing_pattern = tag_pattern_idx,
                         .backing_type = .tag,
                     },
-                }, Content{ .flex_var = null }, last_tok_region);
+                }, nominal_type_var, region);
 
                 return pattern_idx;
+            } else {
+                // If this is a tag with more than 1 qualifier, then it is an imported
+                // nominal type where the last qualifier is the type name, then the other
+                // are the module
+
+                // Get the last token of the qualifiers
+                const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
+
+                // Get the type from the last qualifier
+                const type_tok_idx = qualifier_toks[qualifier_toks.len - 1];
+                const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
+                const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
+                const type_tok_text = self.env.idents.getText(type_tok_ident);
+
+                // Get the fully resolved module name from all but the last qualifier
+                const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
+                const module_alias_text = self.parse_ir.resolveQualifiedName(
+                    .{ .span = .{ .start = 0, .len = @intCast(qualifier_toks.len - 2) } },
+                    qualifier_toks[qualifier_toks.len - 2],
+                    &strip_tokens,
+                );
+                const module_alias = try self.env.idents.insert(self.env.gpa, base.Ident.for_text(module_alias_text));
+
+                // Check if this is a module alias
+                const module_name = self.scopeLookupModule(module_alias) orelse {
+                    // Module is not in current scope
+                    return try self.env.pushMalformed(Pattern.Idx, ModuleEnv.Diagnostic{ .module_not_imported = .{
+                        .module_name = module_alias,
+                        .region = region,
+                    } });
+                };
+                const module_name_text = self.env.idents.getText(module_name);
+
+                // Check if this module is imported in the current scope
+                const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
+                    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .module_not_imported = .{
+                        .module_name = module_name,
+                        .region = region,
+                    } });
+                };
+
+                // Look up the target node index in the module's exposed_nodes
+                const target_node_idx, const type_content = blk: {
+                    const envs_map = self.module_envs orelse {
+                        break :blk .{ 0, Content.err };
+                    };
+
+                    const module_env = envs_map.get(module_name_text) orelse {
+                        break :blk .{ 0, Content.err };
+                    };
+
+                    const target_ident = module_env.idents.findByString(type_tok_text) orelse {
+                        // Type is not exposed by the module
+                        return try self.env.pushMalformed(Pattern.Idx, ModuleEnv.Diagnostic{ .type_not_exposed = .{
+                            .module_name = module_name,
+                            .type_name = type_tok_ident,
+                            .region = type_tok_region,
+                        } });
+                    };
+
+                    const other_module_node_id = module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse {
+                        // Type is not exposed by the module
+                        return try self.env.pushMalformed(Pattern.Idx, ModuleEnv.Diagnostic{ .type_not_exposed = .{
+                            .module_name = module_name,
+                            .type_name = type_tok_ident,
+                            .region = type_tok_region,
+                        } });
+                    };
+
+                    // Successfully found the target node
+                    break :blk .{ other_module_node_id, Content{ .flex_var = null } };
+                };
+
+                const nominal_pattern_idx = try self.env.addPatternAndTypeVar(ModuleEnv.Pattern{
+                    .nominal_external = .{
+                        .module_idx = import_idx,
+                        .target_node_idx = target_node_idx,
+                        .backing_pattern = tag_pattern_idx,
+                        .backing_type = .tag,
+                    },
+                }, type_content, region);
+
+                return nominal_pattern_idx;
             }
         },
         .record => |e| {
@@ -3981,13 +4123,6 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
     };
 }
 
-test {
-    _ = @import("test/int_test.zig");
-    _ = @import("test/frac_test.zig");
-    _ = @import("test/bool_test.zig");
-    _ = @import("test/node_store_test.zig");
-    _ = @import("test/exposed_shadowing_test.zig");
-}
 /// Introduce a new identifier to the current scope, return an
 /// index if
 fn scopeIntroduceIdent(
@@ -4077,75 +4212,6 @@ fn scopeIntroduceVar(
         },
     }
 }
-
-/// Canonicalize a tag variant within a tag union type annotation
-/// Unlike general type canonicalization, this doesn't validate tag names against scope
-/// since tags in tag unions are anonymous and defined by the union itself
-fn canonicalizeTagVariant(self: *Self, anno_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!TypeAnno.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
-    switch (ast_anno) {
-        .ty => |ty| {
-            // For simple tags like `None`, just create the type annotation without scope validation
-            const region = self.parse_ir.tokenizedRegionToRegion(ty.region);
-            const ident_idx = if (self.parse_ir.tokens.resolveIdentifier(ty.token)) |ident|
-                ident
-            else
-                // Create identifier from text if resolution fails
-                try self.env.idents.insert(self.env.gpa, base.Ident.for_text(self.parse_ir.resolve(ty.token)));
-
-            return try self.env.addTypeAnnoAndTypeVar(.{ .ty = .{
-                .symbol = ident_idx,
-            } }, Content{ .flex_var = null }, region);
-        },
-        .apply => |apply| {
-            // For tags with arguments like `Some(Str)`, validate the arguments but not the tag name
-            const region = self.parse_ir.tokenizedRegionToRegion(apply.region);
-            const args_slice = self.parse_ir.store.typeAnnoSlice(apply.args);
-
-            if (args_slice.len == 0) {
-                return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .malformed_type_annotation = .{ .region = region } });
-            }
-
-            // First argument is the tag name - don't validate it against scope
-            const base_type = self.parse_ir.store.getTypeAnno(args_slice[0]);
-            const type_name = switch (base_type) {
-                .ty => |ty| if (self.parse_ir.tokens.resolveIdentifier(ty.token)) |ident|
-                    ident
-                else
-                    try self.env.idents.insert(self.env.gpa, base.Ident.for_text(self.parse_ir.resolve(ty.token))),
-                else => return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .malformed_type_annotation = .{ .region = region } }),
-            };
-
-            // Canonicalize type arguments (skip first which is the tag name)
-            // These should be validated against scope since they're real types like `Str`, `Int`, etc.
-            const scratch_top = self.env.store.scratchTypeAnnoTop();
-            defer self.env.store.clearScratchTypeAnnosFrom(scratch_top);
-
-            for (args_slice[1..]) |arg_idx| {
-                const canonicalized = try self.canonicalizeTypeAnno(arg_idx, .can_introduce_vars, false);
-                try self.env.store.addScratchTypeAnno(canonicalized);
-            }
-
-            const args = try self.env.store.typeAnnoSpanFrom(scratch_top);
-            return try self.env.addTypeAnnoAndTypeVar(.{ .apply = .{
-                .symbol = type_name,
-                .args = args,
-            } }, Content{ .flex_var = null }, region);
-        },
-        else => {
-            return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{
-                .malformed_type_annotation = .{ .region = self.parse_ir.tokenizedRegionToRegion(ast_anno.toRegion()) },
-            });
-        },
-    }
-}
-
-// Some type annotations, like function type annotations, can introduce variables.
-// Others, however, like alias or nominal tag annotations, cannot.
-const CanIntroduceVars = enum(u1) { can_introduce_vars, cannot_introduce_vars };
 
 fn collectTypeVarProblems(ident: Ident.Idx, is_single_use: bool, ast_anno: AST.TypeAnno.Idx, gpa: std.mem.Allocator, scratch: *base.Scratch(TypeVarProblem)) void {
     // Warn for type variables with trailing underscores
@@ -4269,105 +4335,38 @@ fn processCollectedTypeVars(self: *Self) std.mem.Allocator.Error!void {
     }
 }
 
-/// Canonicalize a statement within a block
-fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars: CanIntroduceVars, in_type_declaration: bool) std.mem.Allocator.Error!TypeAnno.Idx {
+// ===== Canonicalize Type Annotations =====
+
+// Some type annotations, like function type annotations, can introduce variables.
+// Others, however, like alias or nominal tag annotations, cannot.
+const TypeAnnoCtx = struct {
+    type: TypeAnnoCtxType,
+    found_underscore: bool,
+
+    const TypeAnnoCtxType = enum(u1) { type_decl_anno, inline_anno };
+
+    pub fn init(typ: TypeAnnoCtxType) TypeAnnoCtx {
+        return .{ .type = typ, .found_underscore = false };
+    }
+
+    pub fn isTypeDeclAndHasUnderscore(self: TypeAnnoCtx) bool {
+        return self.type == .type_decl_anno and self.found_underscore;
+    }
+};
+
+fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx_type: TypeAnnoCtx.TypeAnnoCtxType) std.mem.Allocator.Error!TypeAnno.Idx {
+    var ctx = TypeAnnoCtx.init(type_anno_ctx_type);
+    return canonicalizeTypeAnnoHelp(self, anno_idx, &ctx);
+}
+
+fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *TypeAnnoCtx) std.mem.Allocator.Error!TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var found_underscore = false;
     const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
     switch (ast_anno) {
         .apply => |apply| {
-            const region = self.parse_ir.tokenizedRegionToRegion(apply.region);
-            const args_slice = self.parse_ir.store.typeAnnoSlice(apply.args);
-
-            // Validate we have arguments
-            if (args_slice.len == 0) {
-                return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .malformed_type_annotation = .{ .region = region } });
-            }
-
-            // Canonicalize the base type first
-            const canonicalized_base = try self.canonicalizeTypeAnno(args_slice[0], can_intro_vars, in_type_declaration);
-            const base_cir_type = self.env.store.getTypeAnno(canonicalized_base);
-
-            // Check if base type is invalid
-            if (in_type_declaration) {
-                const base_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized_base)));
-                const base_resolved = self.env.types.resolveVar(base_var);
-                if (base_resolved.desc.content == .err) {
-                    found_underscore = true;
-                }
-            }
-
-            // Extract the symbol for the type application
-            const type_symbol = switch (base_cir_type) {
-                .ty => |ty| ty.symbol,
-                .ty_lookup_external => |tle| {
-                    // For external types, get the qualified name from the external declaration
-                    const external_decl = self.env.getExternalDecl(tle.external_decl);
-
-                    const scratch_top = self.env.store.scratchTypeAnnoTop();
-                    defer self.env.store.clearScratchTypeAnnosFrom(scratch_top);
-
-                    for (args_slice[1..]) |arg_idx| {
-                        const canonicalized = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars, in_type_declaration);
-                        try self.env.store.addScratchTypeAnno(canonicalized);
-
-                        // Check if this argument is invalid
-                        if (in_type_declaration) {
-                            const arg_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized)));
-                            const arg_resolved = self.env.types.resolveVar(arg_var);
-                            if (arg_resolved.desc.content == .err) {
-                                found_underscore = true;
-                            }
-                        }
-                    }
-
-                    const args = try self.env.store.typeAnnoSpanFrom(scratch_top);
-                    // Create type variable with error content if underscore in type declaration
-                    const content = if (found_underscore and in_type_declaration)
-                        types.Content{ .err = {} }
-                    else
-                        types.Content{ .flex_var = null };
-
-                    return try self.env.addTypeAnnoAndTypeVar(.{ .apply = .{
-                        .symbol = external_decl.qualified_name,
-                        .args = args,
-                    } }, content, region);
-                },
-                else => return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .malformed_type_annotation = .{ .region = region } }),
-            };
-
-            // Canonicalize type arguments (skip first which is the type name)
-            const scratch_top = self.env.store.scratchTypeAnnoTop();
-            defer self.env.store.clearScratchTypeAnnosFrom(scratch_top);
-
-            for (args_slice[1..]) |arg_idx| {
-                const canonicalized = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars, in_type_declaration);
-                try self.env.store.addScratchTypeAnno(canonicalized);
-
-                // Check if this argument is invalid
-                if (in_type_declaration) {
-                    const arg_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized)));
-                    const arg_resolved = self.env.types.resolveVar(arg_var);
-                    if (arg_resolved.desc.content == .err) {
-                        found_underscore = true;
-                    }
-                }
-            }
-
-            const args = try self.env.store.typeAnnoSpanFrom(scratch_top);
-
-            // Create type variable with error content if underscore in type declaration
-            const content = if (found_underscore and in_type_declaration)
-                types.Content{ .err = {} }
-            else
-                types.Content{ .flex_var = null };
-
-            return try self.env.addTypeAnnoAndTypeVar(.{ .apply = .{
-                .symbol = type_symbol,
-                .args = args,
-            } }, content, region);
+            return try self.canonicalizeTypeAnnoTypeApplication(apply, type_anno_ctx);
         },
         .ty_var => |ty_var| {
             const region = self.parse_ir.tokenizedRegionToRegion(ty_var.region);
@@ -4376,36 +4375,53 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
                     .region = region,
                 } });
             };
-
             // Check if this type variable is in scope
-            const type_var_in_scope = self.scopeLookupTypeVar(name_ident);
-            if (type_var_in_scope == null and can_intro_vars == .cannot_introduce_vars) {
-                // Type variable not found in scope - issue diagnostic
-                try self.env.pushDiagnostic(Diagnostic{ .undeclared_type_var = .{
-                    .name = name_ident,
-                    .region = region,
-                } });
+            const scope = self.currentScope();
+            switch (scope.lookupTypeVar(name_ident)) {
+                .found => |found_anno_idx| {
+                    // Track this type variable for underscore validation
+                    try self.scratch_type_var_validation.append(self.env.gpa, name_ident);
+
+                    return try self.env.addTypeAnnoAndTypeVarRedirect(.{ .ty_var = .{
+                        .name = name_ident,
+                    } }, ModuleEnv.varFrom(found_anno_idx), region);
+                },
+                .not_found => {
+                    switch (type_anno_ctx.type) {
+                        // If this is an inline anno, then we can introduce the variable
+                        // into the scope
+                        .inline_anno => {
+                            // Track this type variable for underscore validation
+                            try self.scratch_type_var_validation.append(self.env.gpa, name_ident);
+
+                            const content = types.Content{ .rigid_var = name_ident };
+                            const new_anno_idx = try self.env.addTypeAnnoAndTypeVar(.{ .ty_var = .{
+                                .name = name_ident,
+                            } }, content, region);
+
+                            // Add to scope
+                            _ = try self.scopeIntroduceTypeVar(name_ident, new_anno_idx);
+
+                            return new_anno_idx;
+                        },
+                        // Otherwise, this is malformed
+                        .type_decl_anno => {
+                            return self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
+                                .name = name_ident,
+                                .region = region,
+                            } });
+                        },
+                    }
+                },
             }
-
-            // Track this type variable for underscore validation
-            try self.scratch_type_var_validation.append(self.env.gpa, name_ident);
-
-            // Create type variable with error content if underscore in type declaration
-            const content = if (found_underscore and in_type_declaration)
-                types.Content{ .err = {} }
-            else
-                types.Content{ .flex_var = null };
-
-            return try self.env.addTypeAnnoAndTypeVar(.{ .ty_var = .{
-                .name = name_ident,
-            } }, content, region);
         },
         .underscore_type_var => |underscore_ty_var| {
+            type_anno_ctx.found_underscore = true;
+
             const region = self.parse_ir.tokenizedRegionToRegion(underscore_ty_var.region);
 
             // Underscore types aren't allowed in type declarations (aliases or nominal)
-            if (in_type_declaration) {
-                found_underscore = true;
+            if (type_anno_ctx.type == .type_decl_anno) {
                 try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                     .is_alias = true,
                     .region = region,
@@ -4419,125 +4435,55 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             };
 
             // Check if this type variable is in scope
-            const type_var_in_scope = self.scopeLookupTypeVar(name_ident);
-            if (type_var_in_scope == null and can_intro_vars == .cannot_introduce_vars) {
-                // Type variable not found in scope - issue diagnostic
-                try self.env.pushDiagnostic(Diagnostic{ .undeclared_type_var = .{
-                    .name = name_ident,
-                    .region = region,
-                } });
+            const scope = self.currentScope();
+            switch (scope.lookupTypeVar(name_ident)) {
+                .found => |found_anno_idx| {
+                    // Track this type variable for underscore validation
+                    try self.scratch_type_var_validation.append(self.env.gpa, name_ident);
+
+                    return try self.env.addTypeAnnoAndTypeVarRedirect(.{ .ty_var = .{
+                        .name = name_ident,
+                    } }, ModuleEnv.varFrom(found_anno_idx), region);
+                },
+                .not_found => {
+                    switch (type_anno_ctx.type) {
+                        // If this is an inline anno, then we can introduce the variable
+                        // into the scope
+                        .inline_anno => {
+                            // Track this type variable for underscore validation
+                            try self.scratch_type_var_validation.append(self.env.gpa, name_ident);
+
+                            const content = types.Content{ .rigid_var = name_ident };
+                            const new_anno_idx = try self.env.addTypeAnnoAndTypeVar(.{ .ty_var = .{
+                                .name = name_ident,
+                            } }, content, region);
+
+                            // Add to scope
+                            _ = try self.scopeIntroduceTypeVar(name_ident, new_anno_idx);
+
+                            return new_anno_idx;
+                        },
+                        // Otherwise, this is malformed
+                        .type_decl_anno => {
+                            return self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
+                                .name = name_ident,
+                                .region = region,
+                            } });
+                        },
+                    }
+                },
             }
-
-            // Track this type variable for underscore validation
-            try self.scratch_type_var_validation.append(self.env.gpa, name_ident);
-
-            // Create type variable with error content if underscore in type declaration
-            const content = if (found_underscore and in_type_declaration)
-                types.Content{ .err = {} }
-            else
-                types.Content{ .flex_var = null };
-
-            return try self.env.addTypeAnnoAndTypeVar(.{ .ty_var = .{
-                .name = name_ident,
-            } }, content, region);
         },
         .ty => |ty| {
-            const region = self.parse_ir.tokenizedRegionToRegion(ty.region);
-            // Resolve the fully qualified type name
-            const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
-
-            const type_name_text = self.parse_ir.resolveQualifiedName(ty.qualifiers, ty.token, &strip_tokens);
-
-            // Check if this is a qualified type name (contains dots)
-            if (std.mem.indexOf(u8, type_name_text, ".")) |_| {
-                // This is a qualified type - create external declaration
-                // Split the qualified name to get module and type parts
-                const last_dot = std.mem.lastIndexOf(u8, type_name_text, ".") orelse unreachable;
-                const module_text = type_name_text[0..last_dot];
-                const local_type_text = type_name_text[last_dot + 1 ..];
-
-                const module_name = try self.env.idents.insert(self.env.gpa, base.Ident.for_text(module_text));
-                const local_name = try self.env.idents.insert(self.env.gpa, base.Ident.for_text(local_type_text));
-
-                // Create qualified name identifier from the full type name
-                const qualified_name_ident = try self.env.idents.insert(self.env.gpa, base.Ident.for_text(type_name_text));
-
-                // Create external declaration for the qualified type
-                const external_type_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar);
-                const external_decl = ModuleEnv.ExternalDecl{
-                    .qualified_name = qualified_name_ident,
-                    .module_name = module_name,
-                    .local_name = local_name,
-                    .type_var = external_type_var,
-                    .kind = .type,
-                    .region = region,
-                };
-
-                // TODO: Check that external decl is in scope
-                // if (self.scopeLookupTypeDecl(external_decl.qualified_name) == null) {
-                //     // Type not found in scope - issue diagnostic
-                //     self.env.pushDiagnostic(Diagnostic{ .undeclared_type = .{
-                //         .name = type_symbol,
-                //         .region = region,
-                //     } });
-                // }
-
-                const external_idx = try self.env.pushExternalDecl(external_decl);
-
-                // Create type variable with error content if underscore in type declaration
-                const content = if (found_underscore and in_type_declaration)
-                    types.Content{ .err = {} }
-                else
-                    types.Content{ .flex_var = null };
-
-                return try self.env.addTypeAnnoAndTypeVar(.{ .ty_lookup_external = .{
-                    .external_decl = external_idx,
-                } }, content, region);
-            } else {
-                // Unqualified type - check if this type is declared in scope
-                const ident_idx = if (self.parse_ir.tokens.resolveIdentifier(ty.token)) |ident|
-                    ident
-                else
-                    // Create identifier from text if resolution fails
-                    try self.env.idents.insert(self.env.gpa, base.Ident.for_text(type_name_text));
-
-                if (self.scopeLookupTypeDecl(ident_idx) == null) {
-                    // Type not found in scope - issue diagnostic
-                    try self.env.pushDiagnostic(Diagnostic{ .undeclared_type = .{
-                        .name = ident_idx,
-                        .region = region,
-                    } });
-                }
-
-                // Create type variable with error content if underscore in type declaration
-                const content = if (found_underscore and in_type_declaration)
-                    types.Content{ .err = {} }
-                else
-                    types.Content{ .flex_var = null };
-
-                return try self.env.addTypeAnnoAndTypeVar(.{ .ty = .{
-                    .symbol = ident_idx,
-                } }, content, region);
-            }
-        },
-        .mod_ty => |mod_ty| {
-            const region = self.parse_ir.tokenizedRegionToRegion(mod_ty.region);
-            // Create type variable with error content if underscore in type declaration
-            const content = if (found_underscore and in_type_declaration)
-                types.Content{ .err = {} }
-            else
-                types.Content{ .flex_var = null };
-
-            return try self.env.addTypeAnnoAndTypeVar(.{ .ty = .{
-                .symbol = mod_ty.ty_ident,
-            } }, content, region);
+            return (try self.canonicalizeTypeAnnoBasicType(ty)).anno_idx;
         },
         .underscore => |underscore| {
+            type_anno_ctx.found_underscore = true;
+
             const region = self.parse_ir.tokenizedRegionToRegion(underscore.region);
 
             // Underscore types aren't allowed in type declarations (aliases or nominal)
-            if (in_type_declaration) {
-                found_underscore = true;
+            if (type_anno_ctx.type == .type_decl_anno) {
                 try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                     .is_alias = true,
                     .region = region,
@@ -4545,226 +4491,42 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
             }
 
             // Create type variable with error content if underscore in type declaration
-            const content = if (found_underscore and in_type_declaration)
-                types.Content{ .err = {} }
-            else
-                types.Content{ .flex_var = null };
+            const content = blk: {
+                if (type_anno_ctx.isTypeDeclAndHasUnderscore()) {
+                    break :blk types.Content{ .err = {} };
+                } else {
+                    break :blk types.Content{ .flex_var = null };
+                }
+            };
 
             return try self.env.addTypeAnnoAndTypeVar(.{ .underscore = {} }, content, region);
         },
         .tuple => |tuple| {
-            const region = self.parse_ir.tokenizedRegionToRegion(tuple.region);
-            // Canonicalize all tuple elements
-            const scratch_top = self.env.store.scratchTypeAnnoTop();
-            defer self.env.store.clearScratchTypeAnnosFrom(scratch_top);
-
-            for (self.parse_ir.store.typeAnnoSlice(tuple.annos)) |elem_idx| {
-                const canonicalized = try self.canonicalizeTypeAnno(elem_idx, can_intro_vars, in_type_declaration);
-                try self.env.store.addScratchTypeAnno(canonicalized);
-
-                // Check if this element is invalid
-                if (in_type_declaration) {
-                    const elem_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized)));
-                    const elem_resolved = self.env.types.resolveVar(elem_var);
-                    if (elem_resolved.desc.content == .err) {
-                        found_underscore = true;
-                    }
-                }
-            }
-
-            const annos = try self.env.store.typeAnnoSpanFrom(scratch_top);
-            // Create type variable with error content if underscore in type declaration
-            const content = if (found_underscore and in_type_declaration)
-                types.Content{ .err = {} }
-            else
-                types.Content{ .flex_var = null };
-
-            return try self.env.addTypeAnnoAndTypeVar(.{ .tuple = .{
-                .elems = annos,
-            } }, content, region);
+            return try self.canonicalizeTypeAnnoTuple(tuple, type_anno_ctx);
         },
         .record => |record| {
-            const region = self.parse_ir.tokenizedRegionToRegion(record.region);
-
-            // Canonicalize all record fields
-            const scratch_top = self.env.store.scratchAnnoRecordFieldTop();
-            defer self.env.store.clearScratchAnnoRecordFieldsFrom(scratch_top);
-
-            for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
-                const ast_field = self.parse_ir.store.getAnnoRecordField(field_idx) catch |err| switch (err) {
-                    error.MalformedNode => {
-                        // Skip malformed field entirely - it was already handled during parsing
-                        continue;
-                    },
-                };
-
-                // Resolve field name
-                const field_name = self.parse_ir.tokens.resolveIdentifier(ast_field.name) orelse {
-                    // Malformed field name - continue with placeholder
-                    const malformed_field_ident = Ident.for_text("malformed_field");
-                    const malformed_ident = try self.env.idents.insert(self.env.gpa, malformed_field_ident);
-                    const canonicalized_ty = try self.canonicalizeTypeAnno(ast_field.ty, can_intro_vars, in_type_declaration);
-
-                    const cir_field = ModuleEnv.TypeAnno.RecordField{
-                        .name = malformed_ident,
-                        .ty = canonicalized_ty,
-                    };
-                    const field_cir_idx = try self.env.addAnnoRecordFieldAndTypeVar(cir_field, .{ .flex_var = null }, self.parse_ir.tokenizedRegionToRegion(ast_field.region));
-                    try self.env.store.addScratchAnnoRecordField(field_cir_idx);
-                    continue;
-                };
-
-                // Canonicalize field type
-                const canonicalized_ty = try self.canonicalizeTypeAnno(ast_field.ty, can_intro_vars, in_type_declaration);
-
-                // Check if this field type is invalid
-                if (in_type_declaration) {
-                    const field_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized_ty)));
-                    const field_resolved = self.env.types.resolveVar(field_var);
-                    if (field_resolved.desc.content == .err) {
-                        found_underscore = true;
-                    }
-                }
-
-                // Create CIR field
-                const cir_field = ModuleEnv.TypeAnno.RecordField{
-                    .name = field_name,
-                    .ty = canonicalized_ty,
-                };
-                const field_cir_idx = try self.env.addAnnoRecordFieldAndTypeVar(cir_field, .{ .flex_var = null }, self.parse_ir.tokenizedRegionToRegion(ast_field.region));
-                try self.env.store.addScratchAnnoRecordField(field_cir_idx);
-            }
-
-            const fields = try self.env.store.annoRecordFieldSpanFrom(scratch_top);
-            // Create type variable with error content if underscore in type declaration
-            const content = if (found_underscore and in_type_declaration)
-                types.Content{ .err = {} }
-            else
-                types.Content{ .flex_var = null };
-
-            return try self.env.addTypeAnnoAndTypeVar(.{ .record = .{
-                .fields = fields,
-            } }, content, region);
+            return try self.canonicalizeTypeAnnoRecord(record, type_anno_ctx);
         },
         .tag_union => |tag_union| {
-            const region = self.parse_ir.tokenizedRegionToRegion(tag_union.region);
-
-            // Canonicalize all tags in the union using tag-specific canonicalization
-            const scratch_top = self.env.store.scratchTypeAnnoTop();
-            defer self.env.store.clearScratchTypeAnnosFrom(scratch_top);
-
-            for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
-                const canonicalized = try self.canonicalizeTagVariant(tag_idx);
-                try self.env.store.addScratchTypeAnno(canonicalized);
-
-                // Check if this tag is invalid
-                if (in_type_declaration) {
-                    const tag_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized)));
-                    const tag_resolved = self.env.types.resolveVar(tag_var);
-                    if (tag_resolved.desc.content == .err) {
-                        found_underscore = true;
-                    }
-                }
-            }
-
-            const tags = try self.env.store.typeAnnoSpanFrom(scratch_top);
-
-            // Handle optional open annotation (for extensible tag unions)
-            const ext = if (tag_union.open_anno) |open_idx| blk: {
-                const open_canonicalized = try self.canonicalizeTypeAnno(open_idx, can_intro_vars, in_type_declaration);
-
-                // Check if the open annotation is invalid
-                if (in_type_declaration) {
-                    const open_var = @as(types.Var, @enumFromInt(@intFromEnum(open_canonicalized)));
-                    const open_resolved = self.env.types.resolveVar(open_var);
-                    if (open_resolved.desc.content == .err) {
-                        found_underscore = true;
-                    }
-                }
-
-                break :blk open_canonicalized;
-            } else null;
-
-            // Create type variable with error content if underscore in type declaration
-            const content = if (found_underscore and in_type_declaration)
-                types.Content{ .err = {} }
-            else
-                types.Content{ .flex_var = null };
-
-            return try self.env.addTypeAnnoAndTypeVar(.{ .tag_union = .{
-                .tags = tags,
-                .ext = ext,
-            } }, content, region);
+            return try self.canonicalizeTypeAnnoTagUnion(tag_union, type_anno_ctx);
         },
-        .@"fn" => |fn_anno| {
-            const region = self.parse_ir.tokenizedRegionToRegion(fn_anno.region);
-
-            // Canonicalize argument types
-            const scratch_top = self.env.store.scratchTypeAnnoTop();
-            defer self.env.store.clearScratchTypeAnnosFrom(scratch_top);
-
-            for (self.parse_ir.store.typeAnnoSlice(fn_anno.args)) |arg_idx| {
-                const canonicalized = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars, in_type_declaration);
-                try self.env.store.addScratchTypeAnno(canonicalized);
-
-                // Check if this argument is invalid
-                if (in_type_declaration) {
-                    const arg_var = @as(types.Var, @enumFromInt(@intFromEnum(canonicalized)));
-                    const arg_resolved = self.env.types.resolveVar(arg_var);
-                    if (arg_resolved.desc.content == .err) {
-                        found_underscore = true;
-                    }
-                }
-            }
-
-            const args = try self.env.store.typeAnnoSpanFrom(scratch_top);
-
-            // Canonicalize return type
-            const ret = try self.canonicalizeTypeAnno(fn_anno.ret, can_intro_vars, in_type_declaration);
-
-            // Check if the return type is invalid
-            if (in_type_declaration) {
-                const ret_var = @as(types.Var, @enumFromInt(@intFromEnum(ret)));
-                const ret_resolved = self.env.types.resolveVar(ret_var);
-                if (ret_resolved.desc.content == .err) {
-                    found_underscore = true;
-                }
-            }
-
-            // Create type variable with error content if underscore in type declaration
-            const content = if (found_underscore and in_type_declaration)
-                types.Content{ .err = {} }
-            else
-                types.Content{ .flex_var = null };
-
-            return try self.env.addTypeAnnoAndTypeVar(.{ .@"fn" = .{
-                .args = args,
-                .ret = ret,
-                .effectful = fn_anno.effectful,
-            } }, content, region);
+        .@"fn" => |func| {
+            return try self.canonicalizeTypeAnnoFunc(func, type_anno_ctx);
         },
         .parens => |parens| {
             const region = self.parse_ir.tokenizedRegionToRegion(parens.region);
-            const inner_anno = try self.canonicalizeTypeAnno(parens.anno, can_intro_vars, in_type_declaration);
-
-            // Check if the inner annotation is invalid
-            if (in_type_declaration) {
-                const inner_var = @as(types.Var, @enumFromInt(@intFromEnum(inner_anno)));
-                const inner_resolved = self.env.types.resolveVar(inner_var);
-                if (inner_resolved.desc.content == .err) {
-                    found_underscore = true;
-                }
-            }
+            const inner_anno = try self.canonicalizeTypeAnnoHelp(parens.anno, type_anno_ctx);
 
             // Create type variable with error content if underscore in type declaration
-            const content = if (found_underscore and in_type_declaration)
-                types.Content{ .err = {} }
-            else
-                types.Content{ .flex_var = null };
-
-            return try self.env.addTypeAnnoAndTypeVar(.{ .parens = .{
-                .anno = inner_anno,
-            } }, content, region);
+            if (type_anno_ctx.isTypeDeclAndHasUnderscore()) {
+                return try self.env.addTypeAnnoAndTypeVar(.{ .parens = .{
+                    .anno = inner_anno,
+                } }, .err, region);
+            } else {
+                return try self.env.addTypeAnnoAndTypeVarRedirect(.{ .parens = .{
+                    .anno = inner_anno,
+                } }, ModuleEnv.varFrom(inner_anno), region);
+            }
         },
         .malformed => |malformed| {
             const region = self.parse_ir.tokenizedRegionToRegion(malformed.region);
@@ -4778,19 +4540,712 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, can_intro_vars:
     try self.processCollectedTypeVars();
 }
 
-fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, can_intro_vars: CanIntroduceVars) std.mem.Allocator.Error!ModuleEnv.TypeHeader.Idx {
+const CanonicalizedTypeAnnoBasicType = struct {
+    anno_idx: TypeAnno.Idx,
+    mb_local_decl: ?union(enum) {
+        alias: @TypeOf(@as(ModuleEnv.Statement, undefined).s_alias_decl),
+        nominal: @TypeOf(@as(ModuleEnv.Statement, undefined).s_nominal_decl),
+    },
+};
+
+/// Handle basic type lookup (Bool, Str, Num, etc.)
+fn canonicalizeTypeAnnoBasicType(
+    self: *Self,
+    ty: @TypeOf(@as(AST.TypeAnno, undefined).ty),
+) std.mem.Allocator.Error!CanonicalizedTypeAnnoBasicType {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const region = self.parse_ir.tokenizedRegionToRegion(ty.region);
+
+    // Get the last token of the qualifiers
+    const qualifier_toks = self.parse_ir.store.tokenSlice(ty.qualifiers);
+
+    // Get the type ident
+    const type_name_ident = self.parse_ir.tokens.resolveIdentifier(ty.token) orelse unreachable;
+    const type_name_region = self.parse_ir.tokens.resolve(ty.token);
+
+    if (qualifier_toks.len == 0) {
+        // Unqualified type
+
+        const type_decl_idx = self.scopeLookupTypeDecl(type_name_ident) orelse {
+            // Type not found in scope - issue diagnostic
+            try self.env.pushDiagnostic(Diagnostic{ .undeclared_type = .{
+                .name = type_name_ident,
+                .region = type_name_region,
+            } });
+            return .{ .anno_idx = try self.env.addTypeAnnoAndTypeVar(.{ .ty = .{
+                .symbol = type_name_ident,
+            } }, .err, region), .mb_local_decl = null };
+        };
+
+        const type_decl = self.env.store.getStatement(type_decl_idx);
+        switch (type_decl) {
+            .s_alias_decl => |decl| {
+                return .{
+                    .anno_idx = try self.env.addTypeAnnoAndTypeVarRedirect(ModuleEnv.TypeAnno{ .ty = .{
+                        .symbol = type_name_ident,
+                    } }, ModuleEnv.varFrom(type_decl_idx), region),
+                    .mb_local_decl = .{ .alias = decl },
+                };
+            },
+            .s_nominal_decl => |decl| {
+                return .{
+                    .anno_idx = try self.env.addTypeAnnoAndTypeVarRedirect(ModuleEnv.TypeAnno{ .ty = .{
+                        .symbol = type_name_ident,
+                    } }, ModuleEnv.varFrom(type_decl_idx), region),
+                    .mb_local_decl = .{ .nominal = decl },
+                };
+            },
+            else => {
+                // Since we looked up this type decl from `scopeLookupTypeDecl`
+                // this state should be impossible
+                unreachable;
+            },
+        }
+    } else {
+        // This is an external type
+
+        // Get the fully resolved module name
+        const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
+        const module_alias_text = self.parse_ir.resolveQualifiedName(
+            .{ .span = .{ .start = 0, .len = @intCast(qualifier_toks.len - 1) } },
+            qualifier_toks[qualifier_toks.len - 1],
+            &strip_tokens,
+        );
+        const module_alias = try self.env.idents.insert(self.env.gpa, base.Ident.for_text(module_alias_text));
+
+        // Check if this is a module alias
+        const module_name = self.scopeLookupModule(module_alias) orelse {
+            // Module is not in current scope
+            return .{ .anno_idx = try self.env.pushMalformed(TypeAnno.Idx, ModuleEnv.Diagnostic{ .module_not_imported = .{
+                .module_name = module_alias,
+                .region = region,
+            } }), .mb_local_decl = null };
+        };
+        const module_name_text = self.env.idents.getText(module_name);
+
+        // Check if this module is imported in the current scope
+        const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
+            return .{ .anno_idx = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .module_not_imported = .{
+                .module_name = module_name,
+                .region = region,
+            } }), .mb_local_decl = null };
+        };
+
+        // Look up the target node index in the module's exposed_nodes
+        const type_name_text = self.env.idents.getText(type_name_ident);
+        const target_node_idx, const type_content = blk: {
+            const envs_map = self.module_envs orelse {
+                break :blk .{ 0, Content.err };
+            };
+
+            const module_env = envs_map.get(module_name_text) orelse {
+                break :blk .{ 0, Content.err };
+            };
+
+            const target_ident = module_env.idents.findByString(type_name_text) orelse {
+                // Type is not exposed by the module
+                return .{ .anno_idx = try self.env.pushMalformed(TypeAnno.Idx, ModuleEnv.Diagnostic{ .type_not_exposed = .{
+                    .module_name = module_name,
+                    .type_name = type_name_ident,
+                    .region = type_name_region,
+                } }), .mb_local_decl = null };
+            };
+
+            const other_module_node_id = module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse {
+                // Type is not exposed by the module
+                return .{ .anno_idx = try self.env.pushMalformed(TypeAnno.Idx, ModuleEnv.Diagnostic{ .type_not_exposed = .{
+                    .module_name = module_name,
+                    .type_name = type_name_ident,
+                    .region = type_name_region,
+                } }), .mb_local_decl = null };
+            };
+
+            // Successfully found the target node
+            break :blk .{ other_module_node_id, Content{ .flex_var = null } };
+        };
+
+        // Create the ty_lookup_external expression with Import.Idx
+        // Type solving will copy this types from the origin type store into the
+        // this module's type store
+        return .{
+            .anno_idx = try self.env.addTypeAnnoAndTypeVar(ModuleEnv.TypeAnno{ .ty_lookup_external = .{
+                .module_idx = import_idx,
+                .target_node_idx = target_node_idx,
+            } }, type_content, region),
+            .mb_local_decl = null,
+        };
+    }
+}
+
+/// Handle type applications like List(Str), Dict(k, v)
+fn canonicalizeTypeAnnoTypeApplication(
+    self: *Self,
+    apply: @TypeOf(@as(AST.TypeAnno, undefined).apply),
+    type_anno_ctx: *TypeAnnoCtx,
+) std.mem.Allocator.Error!TypeAnno.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const region = self.parse_ir.tokenizedRegionToRegion(apply.region);
+    const args_slice = self.parse_ir.store.typeAnnoSlice(apply.args);
+
+    // Validate we have arguments
+    if (args_slice.len == 0) {
+        return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .malformed_type_annotation = .{ .region = region } });
+    }
+
+    // Canonicalize the base type first
+    const based_anno_ast = self.parse_ir.store.getTypeAnno(args_slice[0]);
+    const base_canonicalized = blk: {
+        switch (based_anno_ast) {
+            .ty => |ty| {
+                break :blk try self.canonicalizeTypeAnnoBasicType(ty);
+            },
+            else => {
+                return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .malformed_type_annotation = .{ .region = region } });
+            },
+        }
+    };
+    const base_anno = self.env.store.getTypeAnno(base_canonicalized.anno_idx);
+
+    // Canonicalize type arguments (skip first which is the type name)
+    const scratch_top = self.env.store.scratchTypeAnnoTop();
+    defer self.env.store.clearScratchTypeAnnosFrom(scratch_top);
+
+    for (args_slice[1..]) |arg_idx| {
+        const apply_arg_anno_idx = try self.canonicalizeTypeAnnoHelp(arg_idx, type_anno_ctx);
+        try self.env.store.addScratchTypeAnno(apply_arg_anno_idx);
+    }
+    const args_span = try self.env.store.typeAnnoSpanFrom(scratch_top);
+
+    // Extract the root type symbol for the type application
+    // Then, we must instantiate the type from the base declaration *with* the
+    // user-provided type arugmuments applied
+    switch (base_anno) {
+        .ty => |ty| {
+            if (type_anno_ctx.isTypeDeclAndHasUnderscore()) {
+                return try self.env.addTypeAnnoAndTypeVar(.{ .apply = .{
+                    .symbol = ty.symbol,
+                    .args = args_span,
+                } }, .err, region);
+            }
+
+            const local_decl = base_canonicalized.mb_local_decl orelse {
+                return try self.env.addTypeAnnoAndTypeVar(.{ .apply = .{
+                    .symbol = ty.symbol,
+                    .args = args_span,
+                } }, .err, region);
+            };
+
+            const type_content = blk: {
+                switch (local_decl) {
+                    .alias => |d| {
+                        // Create a substitution map from the alias parameters to the applied arguments
+                        const decl_header = self.env.store.getTypeHeader(d.header);
+                        const decl_params = self.env.store.sliceTypeAnnos(decl_header.args);
+                        const applied_args = self.env.store.sliceTypeAnnos(args_span);
+
+                        // Verify arity matches
+                        if (decl_params.len != applied_args.len) {
+                            // TODO: Return malformed/diagnostic
+                            return try self.env.addTypeAnnoAndTypeVar(.{ .apply = .{
+                                .symbol = ty.symbol,
+                                .args = args_span,
+                            } }, .err, region);
+                        }
+
+                        // Setup instantiation
+                        var substitution = types.instantiate.VarSubstitution.init(self.env.gpa);
+                        defer substitution.deinit();
+
+                        // Create substitution map: original param vars -> applied arg vars
+                        var rigid_substitution = types.instantiate.RigidVarSubstitution.init(self.env.gpa);
+                        defer rigid_substitution.deinit();
+
+                        // Create a mapping from rigid vars in the type declaration
+                        // to arguments provided in this type annotation
+                        for (decl_params, applied_args) |decl_arg_anno_idx, arg_anno_idx| {
+                            const decl_anno = self.env.store.getTypeAnno(decl_arg_anno_idx);
+                            switch (decl_anno) {
+                                .ty_var => |decl_ty| {
+                                    const arg_var = ModuleEnv.varFrom(arg_anno_idx);
+                                    try rigid_substitution.put(self.env.idents.getText(decl_ty.name), arg_var);
+                                },
+                                // TODO(jared): Don't throw on underscore/malformed
+                                else => unreachable,
+                            }
+                        }
+
+                        // Instantiate the backing type with the substitution
+                        const decl_backing_var = ModuleEnv.varFrom(d.anno);
+                        const instantiated_decl_backing = try types.instantiate.instantiateVar(
+                            &self.env.types,
+                            decl_backing_var,
+                            &self.env.idents,
+                            &substitution,
+                            .{ .apply_rigid_substitution = &rigid_substitution },
+                        );
+
+                        // Ensure CIR slot exists for any instantiated vars
+                        for (0..(self.env.types.len() - self.env.store.nodes.len())) |_| {
+                            _ = try self.env.store.addTypeVarSlot(@enumFromInt(0), region);
+                        }
+
+                        // Create the type
+                        break :blk try self.env.types.mkAlias(
+                            .{ .ident_idx = ty.symbol },
+                            instantiated_decl_backing,
+                            @ptrCast(self.env.store.sliceTypeAnnos(args_span)),
+                        );
+                    },
+                    .nominal => |d| {
+                        // Create a substitution map from the alias parameters to the applied arguments
+                        const decl_header = self.env.store.getTypeHeader(d.header);
+                        const decl_params = self.env.store.sliceTypeAnnos(decl_header.args);
+                        const applied_args = self.env.store.sliceTypeAnnos(args_span);
+
+                        // Verify arity matches
+                        if (decl_params.len != applied_args.len) {
+                            // TODO: Return malformed/diagnostic
+                            return try self.env.addTypeAnnoAndTypeVar(.{ .apply = .{
+                                .symbol = ty.symbol,
+                                .args = args_span,
+                            } }, .err, region);
+                        }
+
+                        // Setup instantiation
+                        var substitution = types.instantiate.VarSubstitution.init(self.env.gpa);
+                        defer substitution.deinit();
+
+                        // Create substitution map: original param vars -> applied arg vars
+                        var rigid_substitution = types.instantiate.RigidVarSubstitution.init(self.env.gpa);
+                        defer rigid_substitution.deinit();
+
+                        // Create a mapping from rigid vars in the type declaration
+                        // to arguments provided in this type annotation
+                        for (decl_params, applied_args) |decl_arg_anno_idx, arg_anno_idx| {
+                            const decl_anno = self.env.store.getTypeAnno(decl_arg_anno_idx);
+                            switch (decl_anno) {
+                                .ty_var => |decl_ty| {
+                                    const arg_var = ModuleEnv.varFrom(arg_anno_idx);
+                                    try rigid_substitution.put(self.env.idents.getText(decl_ty.name), arg_var);
+                                },
+                                // TODO(jared): Don't throw on underscore/malformed
+                                else => unreachable,
+                            }
+                        }
+
+                        // Instantiate the backing type with the substitution
+                        const decl_backing_var = ModuleEnv.varFrom(d.anno);
+                        const instantiated_decl_backing = try types.instantiate.instantiateVar(
+                            &self.env.types,
+                            decl_backing_var,
+                            &self.env.idents,
+                            &substitution,
+                            .{ .apply_rigid_substitution = &rigid_substitution },
+                        );
+
+                        // Ensure CIR slot exists for any instantiated vars
+                        for (0..(self.env.types.len() - self.env.store.nodes.len())) |_| {
+                            _ = try self.env.store.addTypeVarSlot(@enumFromInt(0), region);
+                        }
+
+                        // Create the type
+                        break :blk try self.env.types.mkNominal(
+                            .{ .ident_idx = ty.symbol },
+                            instantiated_decl_backing,
+                            @ptrCast(self.env.store.sliceTypeAnnos(args_span)),
+                            try self.env.idents.insert(self.env.gpa, base.Ident.for_text(self.env.module_name)),
+                        );
+                    },
+                }
+            };
+
+            return try self.env.addTypeAnnoAndTypeVar(.{ .apply = .{
+                .symbol = ty.symbol,
+                .args = args_span,
+            } }, type_content, region);
+        },
+        .ty_lookup_external => |tle| {
+            if (type_anno_ctx.isTypeDeclAndHasUnderscore()) {
+                return try self.env.addTypeAnnoAndTypeVar(.{ .apply_external = .{
+                    .module_idx = tle.module_idx,
+                    .target_node_idx = tle.target_node_idx,
+                    .args = args_span,
+                } }, .err, region);
+            } else {
+                // Set the type to be flex var for now. The type solving phase
+                // will copy the type from the original module's type store into
+                // this module's type store
+                return try self.env.addTypeAnnoAndTypeVar(.{ .apply_external = .{
+                    .module_idx = tle.module_idx,
+                    .target_node_idx = tle.target_node_idx,
+                    .args = args_span,
+                } }, .{ .flex_var = null }, region);
+            }
+        },
+        else => return base_canonicalized.anno_idx,
+    }
+}
+
+/// Handle tuple types like (a, b, c)
+fn canonicalizeTypeAnnoTuple(
+    self: *Self,
+    tuple: @TypeOf(@as(AST.TypeAnno, undefined).tuple),
+    type_anno_ctx: *TypeAnnoCtx,
+) std.mem.Allocator.Error!TypeAnno.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const region = self.parse_ir.tokenizedRegionToRegion(tuple.region);
+
+    const tuple_elems_slice = self.parse_ir.store.typeAnnoSlice(tuple.annos);
+
+    if (tuple_elems_slice.len == 1) {
+        return try self.canonicalizeTypeAnnoHelp(tuple_elems_slice[0], type_anno_ctx);
+    } else {
+
+        // Canonicalize all tuple elements
+        const scratch_top = self.env.store.scratchTypeAnnoTop();
+        defer self.env.store.clearScratchTypeAnnosFrom(scratch_top);
+
+        const scratch_vars_top = self.scratch_vars.top();
+        defer self.scratch_vars.clearFrom(scratch_vars_top);
+
+        for (tuple_elems_slice) |elem_idx| {
+            const canonicalized_elem_idx = try self.canonicalizeTypeAnnoHelp(elem_idx, type_anno_ctx);
+            try self.env.store.addScratchTypeAnno(canonicalized_elem_idx);
+
+            const elem_var = ModuleEnv.varFrom(canonicalized_elem_idx);
+            try self.scratch_vars.append(self.env.gpa, elem_var);
+        }
+        const annos = try self.env.store.typeAnnoSpanFrom(scratch_top);
+
+        const content = blk: {
+            if (type_anno_ctx.isTypeDeclAndHasUnderscore()) {
+                break :blk types.Content{ .err = {} };
+            } else {
+                const elems_var_range = try self.env.types.appendVars(self.scratch_vars.sliceFromStart(scratch_vars_top));
+                break :blk types.Content{ .structure = FlatType{ .tuple = .{ .elems = elems_var_range } } };
+            }
+        };
+
+        return try self.env.addTypeAnnoAndTypeVar(.{ .tuple = .{
+            .elems = annos,
+        } }, content, region);
+    }
+}
+
+fn canonicalizeTypeAnnoRecord(
+    self: *Self,
+    record: @TypeOf(@as(AST.TypeAnno, undefined).record),
+    type_anno_ctx: *TypeAnnoCtx,
+) std.mem.Allocator.Error!TypeAnno.Idx {
+    const region = self.parse_ir.tokenizedRegionToRegion(record.region);
+
+    // Canonicalize all record fields
+    const scratch_top = self.env.store.scratchAnnoRecordFieldTop();
+    defer self.env.store.clearScratchAnnoRecordFieldsFrom(scratch_top);
+
+    const scratch_record_fields_top = self.scratch_record_fields.top();
+    defer self.scratch_record_fields.clearFrom(scratch_record_fields_top);
+
+    for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
+        const ast_field = self.parse_ir.store.getAnnoRecordField(field_idx) catch |err| switch (err) {
+            error.MalformedNode => {
+                // Skip malformed field entirely - it was already handled during parsing
+                continue;
+            },
+        };
+
+        // Resolve field name
+        const field_name = self.parse_ir.tokens.resolveIdentifier(ast_field.name) orelse {
+            // Malformed field name - continue with placeholder
+            const malformed_field_ident = Ident.for_text("malformed_field");
+            const malformed_ident = try self.env.idents.insert(self.env.gpa, malformed_field_ident);
+            const canonicalized_ty = try self.canonicalizeTypeAnnoHelp(ast_field.ty, type_anno_ctx);
+
+            const cir_field = ModuleEnv.TypeAnno.RecordField{
+                .name = malformed_ident,
+                .ty = canonicalized_ty,
+            };
+            const field_cir_idx = try self.env.addAnnoRecordFieldAndTypeVarRedirect(
+                cir_field,
+                ModuleEnv.varFrom(canonicalized_ty),
+                self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+            );
+            try self.env.store.addScratchAnnoRecordField(field_cir_idx);
+
+            try self.scratch_record_fields.append(self.env.gpa, types.RecordField{
+                .name = malformed_ident,
+                .var_ = ModuleEnv.varFrom(field_cir_idx),
+            });
+
+            continue;
+        };
+
+        // Canonicalize field type
+        const canonicalized_ty = try self.canonicalizeTypeAnnoHelp(ast_field.ty, type_anno_ctx);
+
+        // Create CIR field
+        const cir_field = ModuleEnv.TypeAnno.RecordField{
+            .name = field_name,
+            .ty = canonicalized_ty,
+        };
+        const field_cir_idx = try self.env.addAnnoRecordFieldAndTypeVarRedirect(
+            cir_field,
+            ModuleEnv.varFrom(canonicalized_ty),
+            self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+        );
+        try self.env.store.addScratchAnnoRecordField(field_cir_idx);
+
+        try self.scratch_record_fields.append(self.env.gpa, types.RecordField{
+            .name = field_name,
+            .var_ = ModuleEnv.varFrom(field_cir_idx),
+        });
+    }
+
+    const field_anno_idxs = try self.env.store.annoRecordFieldSpanFrom(scratch_top);
+
+    // Should we be sorting here?
+    const record_fields_scratch = self.scratch_record_fields.sliceFromStart(scratch_record_fields_top);
+    std.mem.sort(types.RecordField, record_fields_scratch, &self.env.idents, comptime types.RecordField.sortByNameAsc);
+    const fields_type_range = try self.env.types.appendRecordFields(record_fields_scratch);
+
+    const content = blk: {
+        if (type_anno_ctx.isTypeDeclAndHasUnderscore()) {
+            break :blk types.Content{ .err = {} };
+        } else {
+            // TODO: Add parser support for extensible variables in
+            // record then thread that through here
+            const ext_var = try self.env.addTypeSlotAndTypeVar(
+                @enumFromInt(0), // TODO
+                .{ .structure = .empty_record },
+                region,
+                TypeVar,
+            );
+            break :blk Content{ .structure = .{ .record = .{ .fields = fields_type_range, .ext = ext_var } } };
+        }
+    };
+
+    return try self.env.addTypeAnnoAndTypeVar(.{ .record = .{
+        .fields = field_anno_idxs,
+    } }, content, region);
+}
+
+/// Handle tag union types like [Some(a), None]
+fn canonicalizeTypeAnnoTagUnion(
+    self: *Self,
+    tag_union: @TypeOf(@as(AST.TypeAnno, undefined).tag_union),
+    type_anno_ctx: *TypeAnnoCtx,
+) std.mem.Allocator.Error!TypeAnno.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const region = self.parse_ir.tokenizedRegionToRegion(tag_union.region);
+
+    // Canonicalize all tags in the union using tag-specific canonicalization
+    const scratch_annos_top = self.env.store.scratchTypeAnnoTop();
+    defer self.env.store.clearScratchTypeAnnosFrom(scratch_annos_top);
+
+    const scratch_tags_top = self.scratch_tags.top();
+    defer self.scratch_tags.clearFrom(scratch_tags_top);
+
+    for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
+        // First canonicalized the tag variant
+        // This will always return a `ty` or an `apply`
+        const canonicalized_tag_idx = try self.canonicalizeTypeAnnoTag(tag_idx, type_anno_ctx);
+        try self.env.store.addScratchTypeAnno(canonicalized_tag_idx);
+
+        // Then, create the type system tag and append to scratch tags
+        const tag_cir_anno = self.env.store.getTypeAnno(canonicalized_tag_idx);
+        const tag = blk: {
+            switch (tag_cir_anno) {
+                .ty => |ty| {
+                    break :blk try self.env.types.mkTag(ty.symbol, &.{});
+                },
+                .apply => |apply| {
+                    const args_slice: []TypeVar = @ptrCast(self.env.store.sliceTypeAnnos(apply.args));
+                    break :blk try self.env.types.mkTag(apply.symbol, args_slice);
+                },
+                else => unreachable,
+            }
+        };
+        try self.scratch_tags.append(self.env.gpa, tag);
+    }
+
+    const tag_anno_idxs = try self.env.store.typeAnnoSpanFrom(scratch_annos_top);
+
+    // Should we be sorting here?
+    const tags_slice = self.scratch_tags.sliceFromStart(scratch_tags_top);
+    std.mem.sort(types.Tag, tags_slice, &self.env.idents, comptime types.Tag.sortByNameAsc);
+
+    // Canonicalize the ext, if it exists
+    const mb_ext_anno = if (tag_union.open_anno) |open_idx| blk: {
+        break :blk try self.canonicalizeTypeAnnoHelp(open_idx, type_anno_ctx);
+    } else null;
+
+    const content = blk: {
+        if (type_anno_ctx.isTypeDeclAndHasUnderscore()) {
+            break :blk types.Content{ .err = {} };
+        } else {
+            // Make the ext type variable
+            const ext_var = inner_blk: {
+                if (mb_ext_anno) |ext_anno| {
+                    break :inner_blk ModuleEnv.varFrom(ext_anno);
+                } else {
+                    break :inner_blk try self.env.addTypeSlotAndTypeVar(
+                        @enumFromInt(0),
+                        .{ .structure = .empty_tag_union },
+                        region,
+                        TypeVar,
+                    );
+                }
+            };
+
+            // Make type system tag union
+            break :blk try self.env.types.mkTagUnion(tags_slice, ext_var);
+        }
+    };
+
+    return try self.env.addTypeAnnoAndTypeVar(.{ .tag_union = .{
+        .tags = tag_anno_idxs,
+        .ext = mb_ext_anno,
+    } }, content, region);
+}
+
+/// Canonicalize a tag variant within a tag union type annotation
+///
+/// Unlike general type canonicalization, this doesn't validate tag names against scope
+/// since tags in tag unions are anonymous and defined by the union itself
+///
+/// Note that these annotation node types are not used, so they're set to be flex vars
+fn canonicalizeTypeAnnoTag(
+    self: *Self,
+    anno_idx: AST.TypeAnno.Idx,
+    type_anno_ctx: *TypeAnnoCtx,
+) std.mem.Allocator.Error!TypeAnno.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
+    switch (ast_anno) {
+        .ty => |ty| {
+            // For simple tags like `None`, just create the type annotation without scope validation
+            const region = self.parse_ir.tokenizedRegionToRegion(ty.region);
+            const ident_idx = if (self.parse_ir.tokens.resolveIdentifier(ty.token)) |ident|
+                ident
+            else
+                // Create identifier from text if resolution fails
+                try self.env.idents.insert(self.env.gpa, base.Ident.for_text(self.parse_ir.resolve(ty.token)));
+
+            return try self.env.addTypeAnnoAndTypeVar(.{ .ty = .{
+                .symbol = ident_idx,
+            } }, Content{ .flex_var = null }, region);
+        },
+        .apply => |apply| {
+            // For tags with arguments like `Some(Str)`, validate the arguments but not the tag name
+            const region = self.parse_ir.tokenizedRegionToRegion(apply.region);
+            const args_slice = self.parse_ir.store.typeAnnoSlice(apply.args);
+
+            if (args_slice.len == 0) {
+                return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .malformed_type_annotation = .{ .region = region } });
+            }
+
+            // First argument is the tag name - don't validate it against scope
+            const base_type = self.parse_ir.store.getTypeAnno(args_slice[0]);
+            const type_name = switch (base_type) {
+                .ty => |ty| if (self.parse_ir.tokens.resolveIdentifier(ty.token)) |ident|
+                    ident
+                else
+                    try self.env.idents.insert(self.env.gpa, base.Ident.for_text(self.parse_ir.resolve(ty.token))),
+                else => return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .malformed_type_annotation = .{ .region = region } }),
+            };
+
+            // Canonicalize type arguments (skip first which is the tag name)
+            // These should be validated against scope since they're real types like `Str`, `Int`, etc.
+            const scratch_top = self.env.store.scratchTypeAnnoTop();
+            defer self.env.store.clearScratchTypeAnnosFrom(scratch_top);
+
+            for (args_slice[1..]) |arg_idx| {
+                const canonicalized = try self.canonicalizeTypeAnnoHelp(arg_idx, type_anno_ctx);
+                try self.env.store.addScratchTypeAnno(canonicalized);
+            }
+
+            const args = try self.env.store.typeAnnoSpanFrom(scratch_top);
+            return try self.env.addTypeAnnoAndTypeVar(.{ .apply = .{
+                .symbol = type_name,
+                .args = args,
+            } }, Content{ .flex_var = null }, region);
+        },
+        else => {
+            return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{
+                .malformed_type_annotation = .{ .region = self.parse_ir.tokenizedRegionToRegion(ast_anno.toRegion()) },
+            });
+        },
+    }
+}
+
+fn canonicalizeTypeAnnoFunc(
+    self: *Self,
+    func: @TypeOf(@as(AST.TypeAnno, undefined).@"fn"),
+    type_anno_ctx: *TypeAnnoCtx,
+) std.mem.Allocator.Error!TypeAnno.Idx {
+    const region = self.parse_ir.tokenizedRegionToRegion(func.region);
+
+    // Canonicalize argument types
+    const scratch_top = self.env.store.scratchTypeAnnoTop();
+    defer self.env.store.clearScratchTypeAnnosFrom(scratch_top);
+    for (self.parse_ir.store.typeAnnoSlice(func.args)) |arg_idx| {
+        const arg_anno_idx = try self.canonicalizeTypeAnnoHelp(arg_idx, type_anno_ctx);
+        try self.env.store.addScratchTypeAnno(arg_anno_idx);
+    }
+
+    const args_span = try self.env.store.typeAnnoSpanFrom(scratch_top);
+
+    const args_anno_idxs = self.env.store.sliceTypeAnnos(args_span);
+    const args_vars: []TypeVar = @ptrCast(@alignCast(args_anno_idxs));
+
+    // Canonicalize return type
+    const ret_anno_idx = try self.canonicalizeTypeAnnoHelp(func.ret, type_anno_ctx);
+    const ret_var = ModuleEnv.varFrom(ret_anno_idx);
+
+    const content = blk: {
+        if (type_anno_ctx.isTypeDeclAndHasUnderscore()) {
+            break :blk types.Content{ .err = {} };
+        } else {
+            if (func.effectful) {
+                break :blk try self.env.types.mkFuncEffectful(args_vars, ret_var);
+            } else {
+                break :blk try self.env.types.mkFuncPure(args_vars, ret_var);
+            }
+        }
+    };
+
+    return try self.env.addTypeAnnoAndTypeVar(.{ .@"fn" = .{
+        .args = args_span,
+        .ret = ret_anno_idx,
+        .effectful = func.effectful,
+    } }, content, region);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.Allocator.Error!ModuleEnv.TypeHeader.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Check if the node is malformed before calling getTypeHeader
     const node = self.parse_ir.store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
+    const node_region = self.parse_ir.tokenizedRegionToRegion(node.region);
     if (node.tag == .malformed) {
         // Create a malformed type header with an invalid identifier
-        const region = self.parse_ir.tokenizedRegionToRegion(node.region);
         return try self.env.addTypeHeaderAndTypeVar(.{
             .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Invalid identifier
             .args = .{ .span = .{ .start = 0, .len = 0 } },
-        }, Content{ .flex_var = null }, region);
+        }, Content{ .flex_var = null }, node_region);
     }
 
     const ast_header = self.parse_ir.store.getTypeHeader(header_idx);
@@ -4835,7 +5290,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, can_intro
 
                 const param_anno = try self.env.addTypeAnnoAndTypeVar(.{ .ty_var = .{
                     .name = param_ident,
-                } }, Content{ .flex_var = null }, param_region);
+                } }, Content{ .rigid_var = param_ident }, param_region);
                 try self.env.store.addScratchTypeAnno(param_anno);
             },
             .underscore => |underscore_param| {
@@ -4870,7 +5325,10 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, can_intro
             },
             else => {
                 // Other types in parameter position - canonicalize normally but warn
-                const canonicalized = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars, false);
+                try self.env.pushDiagnostic(Diagnostic{ .malformed_type_annotation = .{
+                    .region = node_region,
+                } });
+                const canonicalized = try self.canonicalizeTypeAnno(arg_idx, .type_decl_anno);
                 try self.env.store.addScratchTypeAnno(canonicalized);
             },
         }
@@ -5125,35 +5583,20 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             // Extract type variables from the AST annotation
             try self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
 
-            // Enter a new scope for type variables
-            try self.scopeEnter(self.env.gpa, false);
-            defer self.scopeExit(self.env.gpa) catch {};
-
-            // Introduce type variables into scope (if we have any)
-            if (self.scratch_idents.top() > type_vars_top) {
-                for (self.scratch_idents.sliceFromStart(type_vars_top)) |type_var| {
-                    // Get the proper region for this type variable from the AST
-                    const type_var_anno = try self.env.addTypeAnnoAndTypeVar(
-                        .{ .ty_var = .{ .name = type_var } },
-                        .{ .flex_var = null },
-                        self.getTypeVarRegionFromAST(ta.anno, type_var) orelse region,
-                    );
-                    try self.scopeIntroduceTypeVar(type_var, type_var_anno);
-                }
-                // Shrink the scratch vars list to the original size
-                self.scratch_idents.clearFrom(type_vars_top);
-            }
-
             // Now canonicalize the annotation with type variables in scope
-            const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .cannot_introduce_vars, false);
+            const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .inline_anno);
 
             // Canonicalize where clauses if present
             const where_clauses = if (ta.where) |where_coll| blk: {
                 const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
                 const where_start = self.env.store.scratchWhereClauseTop();
 
+                // Enter a new scope for where clause
+                try self.scopeEnter(self.env.gpa, false);
+                defer self.scopeExit(self.env.gpa) catch {};
+
                 for (where_slice) |where_idx| {
-                    const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .cannot_introduce_vars);
+                    const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);
                     try self.env.store.addScratchWhereClause(canonicalized_where);
                 }
 
@@ -5421,52 +5864,6 @@ fn scopeIntroduceTypeVar(self: *Self, name: Ident.Idx, type_var_anno: TypeAnno.I
     }
 }
 
-/// Extract type variables from a type annotation and introduce them into scope
-fn extractTypeVarsFromAnno(self: *Self, type_anno_idx: TypeAnno.Idx) void {
-    const type_anno = self.env.store.getTypeAnno(type_anno_idx);
-
-    switch (type_anno) {
-        .ty_var => |ty_var| {
-            // This is a type variable - introduce it into scope
-            self.scopeIntroduceTypeVar(ty_var.name, type_anno_idx);
-        },
-        .apply => |apply| {
-            // Recursively extract from arguments
-            for (self.env.store.sliceTypeAnnos(apply.args)) |arg_idx| {
-                self.extractTypeVarsFromAnno(arg_idx);
-            }
-        },
-        .@"fn" => |fn_anno| {
-            // Extract type variables from function parameter types
-            for (self.env.store.sliceTypeAnnos(fn_anno.args)) |param_idx| {
-                self.extractTypeVarsFromAnno(param_idx);
-            }
-            // Extract type variables from return type
-            self.extractTypeVarsFromAnno(fn_anno.ret);
-        },
-        .tuple => |tuple| {
-            // Extract from tuple elements
-            for (self.env.store.sliceTypeAnnos(tuple.annos)) |elem_idx| {
-                self.extractTypeVarsFromAnno(elem_idx);
-            }
-        },
-        .parens => |parens| {
-            // Extract from inner annotation
-            self.extractTypeVarsFromAnno(parens.anno);
-        },
-        .record => |record| {
-            // Extract type variables from record field types
-            for (self.env.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
-                const field = self.env.store.getAnnoRecordField(field_idx);
-                self.extractTypeVarsFromAnno(field.ty);
-            }
-        },
-        .ty, .underscore, .mod_ty, .tag_union, .ty_lookup_external, .malformed => {
-            // These don't contain type variables to extract
-        },
-    }
-}
-
 fn introduceTypeParametersFromHeader(self: *Self, header_idx: ModuleEnv.TypeHeader.Idx) std.mem.Allocator.Error!void {
     const header = self.env.store.getTypeHeader(header_idx);
 
@@ -5528,7 +5925,7 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
                 try self.extractTypeVarIdentsFromASTAnno(field.ty, idents_start_idx);
             }
         },
-        .ty, .underscore, .mod_ty, .tag_union, .malformed => {
+        .ty, .underscore, .tag_union, .malformed => {
             // These don't contain type variables to extract
         },
     }
@@ -5604,7 +6001,7 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
             }
             return null;
         },
-        .ty, .underscore, .mod_ty, .malformed => {
+        .ty, .underscore, .malformed => {
             // These don't contain type variables
             return null;
         },
@@ -6190,115 +6587,8 @@ fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) std.mem.Allocato
     }
 }
 
-/// Convert a parsed TypeAnno into a canonical TypeVar with appropriate Content
-fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: TypeAnno.Idx) std.mem.Allocator.Error!TypeVar {
-    const type_anno_node_idx = ModuleEnv.nodeIdxFrom(type_anno_idx);
-    const type_anno = self.env.store.getTypeAnno(type_anno_idx);
-    const region = self.env.store.getTypeAnnoRegion(type_anno_idx);
-
-    switch (type_anno) {
-        .ty_var => |tv| {
-            // Check if this type variable is already in scope
-            const scope = self.currentScope();
-
-            switch (scope.lookupTypeVar(tv.name)) {
-                .found => |_| {
-                    // Type variable already exists, create fresh var with same name
-                    return try self.env.addTypeSlotAndTypeVar(
-                        type_anno_node_idx,
-                        .{ .flex_var = tv.name },
-                        region,
-                        TypeVar,
-                    );
-                },
-                .not_found => {
-                    // Create a basic type annotation for the scope
-                    const ty_var_anno = try self.env.addTypeAnnoAndTypeVar(
-                        .{ .ty_var = .{ .name = tv.name } },
-                        .{ .flex_var = tv.name },
-                        region,
-                    );
-
-                    // Add to scope (simplified - ignoring result for now)
-                    // TODO: Handle scope result and possible error
-                    _ = try scope.introduceTypeVar(self.env.gpa, tv.name, ty_var_anno, null);
-
-                    return ModuleEnv.castIdx(TypeAnno.Idx, TypeVar, ty_var_anno);
-                },
-            }
-        },
-        .underscore => {
-            // Check if this underscore type annotation has error content
-            const type_var = @as(types.Var, @enumFromInt(@intFromEnum(type_anno_idx)));
-            const resolved = self.env.types.resolveVar(type_var);
-            if (resolved.desc.content == .err) {
-                // This underscore was in a type declaration - create error type variable
-                return try self.env.addTypeSlotAndTypeVar(type_anno_node_idx, .err, region, TypeVar);
-            } else {
-                // Create anonymous flex var
-                return try self.env.addTypeSlotAndTypeVar(type_anno_node_idx, .{ .flex_var = null }, region, TypeVar);
-            }
-        },
-        .ty => |t| {
-            // Look up built-in or user-defined type
-            return try self.canonicalizeBasicType(t.symbol, type_anno_node_idx, region);
-        },
-        .apply => |apply| {
-            // Handle type application like List(String), Dict(a, b)
-            return try self.canonicalizeTypeApplication(apply, type_anno_node_idx, region);
-        },
-        .@"fn" => |func| {
-            // Create function type
-            return try self.canonicalizeFunctionType(func, type_anno_node_idx, region);
-        },
-        .tuple => |tuple| {
-            if (tuple.elems.span.len == 1) {
-                // Single element tuples are just parenthized exprs
-                const type_annos = self.env.store.sliceTypeAnnos(tuple.elems);
-                return try self.canonicalizeTypeAnnoToTypeVar(type_annos[0]);
-            } else {
-                // Create tuple type
-                return self.canonicalizeTupleType(tuple, type_anno_node_idx, region);
-            }
-        },
-        .record => |record| {
-            // Create record type
-            return try self.canonicalizeRecordType(record, type_anno_node_idx, region);
-        },
-        .tag_union => |tag_union| {
-            // Create tag union type
-            return try self.canonicalizeTagUnionType(tag_union, type_anno_node_idx, region);
-        },
-        .parens => |parens| {
-            // Recursively canonicalize the inner type
-            return try self.canonicalizeTypeAnnoToTypeVar(parens.anno);
-        },
-
-        .ty_lookup_external => |tle| {
-            // For external type lookups, create a flexible type variable
-            // This will be resolved later when dependencies are available
-            const external_decl = self.env.getExternalDecl(tle.external_decl);
-            return try self.env.addTypeSlotAndTypeVar(
-                type_anno_node_idx,
-                .{ .flex_var = external_decl.qualified_name },
-                region,
-                TypeVar,
-            );
-        },
-        .malformed => {
-            // Return error type for malformed annotations
-            return try self.env.addTypeSlotAndTypeVar(
-                type_anno_node_idx,
-                .err,
-                region,
-                TypeVar,
-            );
-        },
-    }
-}
-
 /// Canonicalize a where clause from AST to CIR
-fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, can_intro_vars: CanIntroduceVars) std.mem.Allocator.Error!WhereClause.Idx {
+fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type_anno_ctx: TypeAnnoCtx.TypeAnnoCtxType) std.mem.Allocator.Error!WhereClause.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -6328,13 +6618,13 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, can_
             const args_slice = self.parse_ir.store.typeAnnoSlice(.{ .span = self.parse_ir.store.getCollection(mm.args).span });
             const args_start = self.env.store.scratchTypeAnnoTop();
             for (args_slice) |arg_idx| {
-                const canonicalized_arg = try self.canonicalizeTypeAnno(arg_idx, can_intro_vars, false);
+                const canonicalized_arg = try self.canonicalizeTypeAnno(arg_idx, type_anno_ctx);
                 try self.env.store.addScratchTypeAnno(canonicalized_arg);
             }
             const args_span = try self.env.store.typeAnnoSpanFrom(args_start);
 
             // Canonicalize return type
-            const ret_anno = try self.canonicalizeTypeAnno(mm.ret_anno, can_intro_vars, false);
+            const ret_anno = try self.canonicalizeTypeAnno(mm.ret_anno, type_anno_ctx);
 
             // Create external declaration for where clause method constraint
             // This represents the requirement that type variable must come from a module
@@ -6351,7 +6641,8 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, can_
             defer self.env.gpa.free(module_text);
             const module_name = try self.env.idents.insert(self.env.gpa, Ident.for_text(module_text));
 
-            const external_decl = try self.createExternalDeclaration(qualified_name, module_name, method_ident, .value, region);
+            const external_type_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar);
+            const external_decl = try self.createExternalDeclaration(qualified_name, module_name, method_ident, .value, external_type_var, region);
 
             return try self.env.addWhereClauseAndTypeVar(WhereClause{ .mod_method = .{
                 .var_name = var_ident,
@@ -6395,7 +6686,8 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, can_
             defer self.env.gpa.free(module_text);
             const module_name = try self.env.idents.insert(self.env.gpa, Ident.for_text(module_text));
 
-            const external_decl = try self.createExternalDeclaration(qualified_name, module_name, alias_ident, .type, region);
+            const external_type_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar);
+            const external_decl = try self.createExternalDeclaration(qualified_name, module_name, alias_ident, .type, external_type_var, region);
 
             return try self.env.addWhereClauseAndTypeVar(WhereClause{ .mod_alias = .{
                 .var_name = var_ident,
@@ -6415,366 +6707,17 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, can_
     }
 }
 
-/// Handle basic type lookup (Bool, Str, Num, etc.)
-fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    if (self.scopeLookupTypeDecl(symbol)) |decl_idx| {
-        const decl = self.env.store.getStatement(decl_idx);
-        switch (decl) {
-            .s_alias_decl => |_| {
-                return try self.env.addTypeSlotAndTypeVarRedirect(parent_node_idx, ModuleEnv.varFrom(decl_idx), region, TypeVar);
-            },
-            .s_nominal_decl => |_| {
-                return try self.env.addTypeSlotAndTypeVarRedirect(parent_node_idx, ModuleEnv.varFrom(decl_idx), region, TypeVar);
-            },
-            else => {
-                // TODO: Add malformed node?
-                // Unknown type - create error type
-                return try self.env.addTypeSlotAndTypeVar(
-                    parent_node_idx,
-                    .err,
-                    region,
-                    TypeVar,
-                );
-            },
-        }
-    } else {
-        // TODO: Add malformed node?
-        // Unknown type - create error type
-        return try self.env.addTypeSlotAndTypeVar(
-            parent_node_idx,
-            .err,
-            region,
-            TypeVar,
-        );
-    }
-}
-
-/// Handle type applications like List(Str), Dict(k, v)
-fn canonicalizeTypeApplication(self: *Self, apply: ModuleEnv.TypeAnno.Apply, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // Look up the type name in scope
-    if (self.scopeLookupTypeDecl(apply.symbol)) |type_decl_idx| {
-        const actual_args = self.env.store.sliceTypeAnnos(apply.args);
-
-        const type_decl = self.env.store.getStatement(type_decl_idx);
-        switch (type_decl) {
-            .s_alias_decl => |d| {
-                const header = self.env.store.getTypeHeader(d.header);
-                const expected_args = self.env.store.sliceTypeAnnos(header.args).len;
-
-                // Check arity
-                if (expected_args != actual_args.len) {
-                    return try self.env.addTypeSlotAndTypeVar(
-                        parent_node_idx,
-                        .err,
-                        region,
-                        TypeVar,
-                    );
-                }
-
-                const scratch_anno_start = self.scratch_vars.top();
-                for (actual_args) |arg_idx| {
-                    const arg_anno_var = try self.canonicalizeTypeAnnoToTypeVar(arg_idx);
-                    try self.scratch_vars.append(self.env.gpa, arg_anno_var);
-                }
-                const arg_anno_slice = self.scratch_vars.slice(scratch_anno_start, self.scratch_vars.top());
-
-                // Now set the alias content on the main variable
-                const alias = try self.env.types.mkAlias(.{ .ident_idx = apply.symbol }, d.anno_var, arg_anno_slice);
-                const alias_var = try self.env.addTypeSlotAndTypeVar(
-                    parent_node_idx,
-                    alias,
-                    region,
-                    TypeVar,
-                );
-
-                // Ensure slots exist for the alias and all its arguments
-                // Shrink the scratch var buffer now that our work is done
-                self.scratch_vars.clearFrom(scratch_anno_start);
-
-                return alias_var;
-            },
-            .s_nominal_decl => |d| {
-                const header = self.env.store.getTypeHeader(d.header);
-                const args = self.env.store.sliceTypeAnnos(header.args);
-
-                // Check arity
-                if (args.len != actual_args.len) {
-                    return try self.env.addTypeSlotAndTypeVar(
-                        parent_node_idx,
-                        .err,
-                        region,
-                        TypeVar,
-                    );
-                }
-
-                const scratch_anno_start = self.scratch_vars.top();
-                for (actual_args) |arg_idx| {
-                    const arg_anno_var = try self.canonicalizeTypeAnnoToTypeVar(arg_idx);
-                    try self.scratch_vars.append(self.env.gpa, arg_anno_var);
-                }
-                const arg_anno_slice = self.scratch_vars.slice(scratch_anno_start, self.scratch_vars.top());
-
-                const module_ident = try self.env.idents.insert(self.env.gpa, base.Ident.for_text(self.env.module_name));
-                const nominal = try self.env.types.mkNominal(types.TypeIdent{ .ident_idx = header.name }, d.anno_var, arg_anno_slice, module_ident);
-                const nominal_var = try self.env.addTypeSlotAndTypeVar(
-                    parent_node_idx,
-                    nominal,
-                    region,
-                    TypeVar,
-                );
-
-                // Shrink the scratch var buffer now that our work is done
-                self.scratch_vars.clearFrom(scratch_anno_start);
-
-                return nominal_var;
-            },
-            else => @panic("scopeLookupTypeDecl only returns type declarations"),
-        }
-    } else {
-        // TODO: This should be impossible
-        return try self.env.addTypeSlotAndTypeVar(
-            parent_node_idx,
-            .err,
-            region,
-            TypeVar,
-        );
-    }
-}
-
-/// Handle function types like a -> b
-fn canonicalizeFunctionType(self: *Self, func: ModuleEnv.TypeAnno.Func, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // Canonicalize argument types and return type
-    const args_slice = self.env.store.sliceTypeAnnos(func.args);
-
-    // Collect canonicalized argument type variables
-
-    // For each argument, canonicalize its type and collect the type var
-    const arg_vars_top = self.scratch_vars.top();
-    for (args_slice) |arg_anno_idx| {
-        const arg_type_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx);
-        try self.scratch_vars.append(self.env.gpa, arg_type_var);
-    }
-    const arg_vars_end = self.scratch_vars.top();
-
-    // Canonicalize return type
-    const ret_type_var = try self.canonicalizeTypeAnnoToTypeVar(func.ret);
-
-    // Create the appropriate function type based on effectfulness
-    const arg_vars = self.scratch_vars.slice(arg_vars_top, arg_vars_end);
-    const func_content = if (func.effectful)
-        try self.env.types.mkFuncEffectful(arg_vars, ret_type_var)
-    else
-        try self.env.types.mkFuncPure(arg_vars, ret_type_var);
-
-    // Shink the scratch array to it's original size
-    self.scratch_vars.clearFrom(arg_vars_top);
-
-    // Create and return the function type variable
-    return try self.env.addTypeSlotAndTypeVar(
-        parent_node_idx,
-        func_content,
-        region,
-        TypeVar,
-    );
-}
-
-/// Handle tuple types like (a, b, c)
-fn canonicalizeTupleType(self: *Self, tuple: ModuleEnv.TypeAnno.Tuple, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // Canonicalized each tuple element
-    const scratch_elems_start = self.scratch_vars.top();
-    for (self.env.store.sliceTypeAnnos(tuple.elems)) |tuple_elem_anno_idx| {
-        const elem_var = try self.canonicalizeTypeAnnoToTypeVar(tuple_elem_anno_idx);
-        _ = try self.scratch_vars.append(self.env.gpa, elem_var);
-    }
-    const elem_vars_range = try self.env.types.appendVars(
-        self.scratch_vars.items.items[scratch_elems_start..],
-    );
-
-    // Shink the scratch array to it's original size
-    self.scratch_vars.clearFrom(scratch_elems_start);
-
-    const tuple_content = Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
-    return try self.env.addTypeSlotAndTypeVar(
-        parent_node_idx,
-        tuple_content,
-        region,
-        TypeVar,
-    );
-}
-
-/// Handle record types like { name: Str, age: Num }
-fn canonicalizeRecordType(self: *Self, record: ModuleEnv.TypeAnno.Record, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // Create fresh type variables for each field
-    const record_fields_top = self.scratch_record_fields.top();
-
-    // Process each field in the record type annotation
-    for (self.env.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
-        const field = self.env.store.getAnnoRecordField(field_idx);
-
-        // Canonicalize the field's type annotation
-        const field_type_var = try self.canonicalizeTypeAnnoToTypeVar(field.ty);
-
-        try self.scratch_record_fields.append(self.env.gpa, types.RecordField{
-            .name = field.name,
-            .var_ = field_type_var,
-        });
-    }
-
-    // Create the record type structure
-    const type_fields_range = try self.env.types.appendRecordFields(self.scratch_record_fields.items.items[record_fields_top..]);
-    const ext_var = try self.env.addTypeSlotAndTypeVar(
-        parent_node_idx,
-        .{ .structure = .empty_record },
-        region,
-        TypeVar,
-    );
-
-    // Shink the scratch array to it's original size
-    self.scratch_record_fields.clearFrom(record_fields_top);
-
-    const record_content = Content{ .structure = .{ .record = .{ .fields = type_fields_range, .ext = ext_var } } };
-    return try self.env.addTypeSlotAndTypeVar(
-        parent_node_idx,
-        record_content,
-        region,
-        TypeVar,
-    );
-}
-
-/// Handle tag union types like [Some(a), None]
-fn canonicalizeTagUnionType(self: *Self, tag_union: ModuleEnv.TypeAnno.TagUnion, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // TODO: When
-
-    // Iterate over the tags, adding them to the types store
-    const tags_slice = self.env.store.sliceTypeAnnos(tag_union.tags);
-    const tags_range = blk: {
-        if (tags_slice.len == 0) {
-            break :blk types.Tag.SafeMultiList.Range.empty();
-        }
-
-        // If we got here, then the following should be true:
-        // 1. Each tag type should be either `ty` or `apply`
-        // 2. Each `apply` should have at least 1 argument
-        // If these are not true, it is a bug in `canonicalizeTagVariant`
-
-        // First, add tags to the scratch buffer
-        const tags_start = self.scratch_tags.top();
-        for (tags_slice) |tag_anno_idx| {
-            const tag_anno = self.env.store.getTypeAnno(tag_anno_idx);
-            switch (tag_anno) {
-                .ty => |ty| {
-                    // For tags without args, just add them
-                    _ = try self.scratch_tags.append(self.env.gpa, types.Tag{
-                        .name = ty.symbol,
-                        .args = TypeVar.SafeList.Range.empty(),
-                    });
-                },
-                .apply => |apply| {
-                    if (apply.args.span.len == 0) {
-                        // This should be impossible. See above comment for details
-                        // TODO: Is there a better way to do this?
-                        std.debug.assert(false);
-                    }
-
-                    // Get a type var for every argument
-                    const args_start = self.scratch_vars.top();
-                    for (self.env.store.sliceTypeAnnos(apply.args)) |arg_anno_idx| {
-                        const arg_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx);
-                        try self.scratch_vars.append(self.env.gpa, arg_var);
-                    }
-                    const args_end = self.scratch_vars.top();
-
-                    // Append the tag args to the types store
-                    const args_range = try self.env.types.appendVars(
-                        self.scratch_vars.slice(args_start, args_end),
-                    );
-
-                    // Shrink the scratch var buffer now that our work is done
-                    self.scratch_vars.clearFrom(args_start);
-
-                    // Append the tag to scratch tags
-                    _ = try self.scratch_tags.append(self.env.gpa, types.Tag{
-                        .name = apply.symbol,
-                        .args = args_range,
-                    });
-                },
-                else => {
-                    // This should be impossible. See above comment for details
-                    // TODO: Is there a better way to do this?
-                    std.debug.assert(false);
-                },
-            }
-        }
-        const tags_end = self.scratch_tags.top();
-
-        // Append the tags to the types store
-        const range = try self.env.types.appendTags(self.scratch_tags.slice(tags_start, tags_end));
-
-        // Shrink the scratch var buffer now that our work is done
-        self.scratch_tags.clearFrom(tags_start);
-
-        break :blk range;
-    };
-
-    // Get the tag union ext
-    const tag_union_ext = blk: {
-        if (tag_union.ext) |ext_anno_idx| {
-            break :blk try self.canonicalizeTypeAnnoToTypeVar(ext_anno_idx);
-        } else {
-            break :blk try self.env.addTypeSlotAndTypeVar(
-                parent_node_idx,
-                Content{ .structure = .empty_tag_union },
-                region,
-                TypeVar,
-            );
-        }
-    };
-
-    // Create the type content
-    const tag_union_content = types.Content{ .structure = types.FlatType{
-        .tag_union = types.TagUnion{ .tags = tags_range, .ext = tag_union_ext },
-    } };
-
-    // Create the type var
-    return try self.env.addTypeSlotAndTypeVar(
-        parent_node_idx,
-        tag_union_content,
-        region,
-        TypeVar,
-    );
-}
-
 /// Handle module-qualified types like Json.Decoder
 /// Create an annotation from a type annotation
 fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: TypeAnno.Idx, _: TypeVar, region: Region) std.mem.Allocator.Error!?Annotation.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Convert the type annotation to a type variable
-    const signature = try self.canonicalizeTypeAnnoToTypeVar(type_anno_idx);
-
     // Create the annotation structure
+    // TODO: Remove signature field from Annotation
     const annotation = ModuleEnv.Annotation{
         .type_anno = type_anno_idx,
-        .signature = signature,
+        .signature = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar),
     };
 
     // Add to NodeStore and return the index

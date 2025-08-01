@@ -1158,12 +1158,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) std.mem.Allocato
             }
         },
         .OpenCurly, .OpenRound => {
-            const open_token = self.peek();
-            const close_token: AST.Token.Tag = switch (open_token) {
-                .OpenCurly => .CloseCurly,
-                .OpenRound => .CloseRound,
-                else => return try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos),
-            };
+            const isCurly = self.peek() == .OpenCurly;
 
             const start = self.pos;
 
@@ -1173,9 +1168,9 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) std.mem.Allocato
             var depth: u32 = 0;
             while (lookahead_pos < self.tok_buf.tokens.len) {
                 const tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
-                if (tok == open_token) {
+                if ((isCurly and tok == .OpenCurly) or (!isCurly and (tok == .OpenRound or tok == .NoSpaceOpenRound))) {
                     depth += 1;
-                } else if (tok == close_token) {
+                } else if ((isCurly and tok == .CloseCurly) or (!isCurly and tok == .CloseRound)) {
                     if (depth == 0) {
                         const token_after_close_curly = self.tok_buf.tokens.items(.tag)[lookahead_pos + 1];
                         if (token_after_close_curly == .OpAssign) {
@@ -1684,11 +1679,8 @@ fn parseQualificationChain(self: *Parser) std.mem.Allocator.Error!QualificationR
     std.debug.assert(self.peek() == .UpperIdent or self.peek() == .LowerIdent);
 
     const scratch_top = self.store.scratchTokenTop();
-    var final_token = self.pos;
-    var is_upper = false;
-
-    final_token = self.pos; // Capture position of the identifier
-    is_upper = true;
+    var final_token = self.pos; // Capture position of the identifier
+    var is_upper = true;
 
     // Check if there's a qualification chain by looking ahead
     const saved_pos = self.pos;

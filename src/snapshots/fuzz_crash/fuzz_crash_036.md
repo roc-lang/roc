@@ -51,7 +51,9 @@ KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),OpenCurly(1:9-1:10),U
 # FORMATTED
 ~~~roc
 module []
-B
+{
+	B
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -9,6 +9,7 @@ const std = @import("std");
 const mod = @import("mod.zig");
 const Region = @import("Region.zig");
 const serialization = @import("serialization");
+const CompactWriter = serialization.CompactWriter;
 const collections = @import("collections");
 
 const IdentInterner = mod.IdentInterner;
@@ -92,6 +93,42 @@ pub const Attributes = packed struct(u3) {
 pub const Store = struct {
     interner: IdentInterner,
     attributes: collections.SafeList(Attributes) = .{},
+
+    /// Serialized representation of an Ident.Store
+    pub const Serialized = struct {
+        interner: SmallStringInterner.Serialized,
+        attributes: collections.SafeList(Attributes).Serialized,
+        next_unique_name: u32,
+
+        /// Serialize a Store into this Serialized struct, appending data to the writer
+        pub fn serialize(
+            self: *Serialized,
+            store: *const Store,
+            allocator: std.mem.Allocator,
+            writer: *CompactWriter,
+        ) std.mem.Allocator.Error!void {
+            try self.interner.serialize(&store.interner, allocator, writer);
+            try self.attributes.serialize(&store.attributes, allocator, writer);
+            self.next_unique_name = store.next_unique_name;
+        }
+
+        /// Deserialize this Serialized struct into a Store
+        pub fn deserialize(self: *Serialized, offset: i64) *Store {
+            // Ident.Store.Serialized should be at least as big as Ident.Store
+            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
+
+            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
+
+            store.* = Store{
+                .interner = self.interner.deserialize(offset).*,
+                .attributes = self.attributes.deserialize(offset).*,
+                .next_unique_name = self.next_unique_name,
+            };
+
+            return store;
+        }
+    };
 
     /// Initialize the memory for an `Ident.Store` with a specific capaicty.
     pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!Store {
@@ -233,7 +270,7 @@ pub const Store = struct {
     pub fn serialize(
         self: *const Store,
         allocator: std.mem.Allocator,
-        writer: *collections.CompactWriter,
+        writer: *serialization.CompactWriter,
     ) std.mem.Allocator.Error!*const Store {
         // First, write the Store struct itself
         const offset_self = try writer.appendAlloc(allocator, Store);

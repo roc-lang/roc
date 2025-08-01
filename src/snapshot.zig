@@ -13,9 +13,8 @@ const compile = @import("compile");
 const types = @import("types");
 const reporting = @import("reporting");
 const Can = @import("can");
+const Check = @import("check");
 
-const Solver = @import("check/check_types.zig");
-const types_problem_mod = @import("check/check_types/problem.zig");
 const cache = @import("cache/mod.zig");
 const fmt = @import("fmt.zig");
 const repl = @import("repl/eval.zig");
@@ -25,6 +24,7 @@ const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const AST = parse.AST;
 const Report = reporting.Report;
+const types_problem_mod = Check.problem;
 const tokenize = parse.tokenize;
 const parallel = base.parallel;
 
@@ -439,7 +439,7 @@ fn generateAllReports(
     allocator: std.mem.Allocator,
     parse_ast: *AST,
     can_ir: *ModuleEnv,
-    solver: *Solver,
+    solver: *Check,
     snapshot_path: []const u8,
     module_env: *ModuleEnv,
 ) !std.ArrayList(reporting.Report) {
@@ -473,9 +473,7 @@ fn generateAllReports(
     }
 
     // Generate type checking reports
-    var problems_itr = solver.problems.problems.iterIndices();
-    while (problems_itr.next()) |problem_idx| {
-        const problem = solver.problems.problems.get(problem_idx);
+    for (solver.problems.problems.items) |problem| {
         const empty_modules: []const *ModuleEnv = &.{};
         var report_builder = types_problem_mod.ReportBuilder.init(
             allocator,
@@ -1078,7 +1076,7 @@ fn processSnapshotContent(
 
     // Types
     const empty_modules: []const *ModuleEnv = &.{};
-    var solver = try Solver.init(
+    var solver = try Check.init(
         allocator,
         &can_ir.types,
         can_ir,
@@ -1926,31 +1924,31 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
     switch (content.meta.node_type) {
         .file => {
             const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(env.*, parse_ast, &tree);
+            try file.pushToSExprTree(env, parse_ast, &tree);
         },
         .header => {
             const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
-            try header.pushToSExprTree(env.*, parse_ast, &tree);
+            try header.pushToSExprTree(env, parse_ast, &tree);
         },
         .expr => {
             const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
-            try expr.pushToSExprTree(env.*, parse_ast, &tree);
+            try expr.pushToSExprTree(env, parse_ast, &tree);
         },
         .statement => {
             const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
-            try stmt.pushToSExprTree(env.*, parse_ast, &tree);
+            try stmt.pushToSExprTree(env, parse_ast, &tree);
         },
         .package => {
             const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(env.*, parse_ast, &tree);
+            try file.pushToSExprTree(env, parse_ast, &tree);
         },
         .platform => {
             const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(env.*, parse_ast, &tree);
+            try file.pushToSExprTree(env, parse_ast, &tree);
         },
         .app => {
             const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(env.*, parse_ast, &tree);
+            try file.pushToSExprTree(env, parse_ast, &tree);
         },
         .repl => {
             // REPL doesn't use parse trees

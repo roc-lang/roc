@@ -81,6 +81,9 @@ pub const Diagnostic = union(enum) {
     malformed_where_clause: struct {
         region: Region,
     },
+    where_clause_not_allowed_in_type_decl: struct {
+        region: Region,
+    },
     var_across_function_boundary: struct {
         region: Region,
     },
@@ -212,6 +215,7 @@ pub const Diagnostic = union(enum) {
             .if_else_not_canonicalized => |d| d.region,
             .malformed_type_annotation => |d| d.region,
             .malformed_where_clause => |d| d.region,
+            .where_clause_not_allowed_in_type_decl => |d| d.region,
             .var_across_function_boundary => |d| d.region,
             .shadowing_warning => |d| d.region,
             .type_redeclared => |d| d.redeclared_region,

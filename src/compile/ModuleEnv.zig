@@ -11,7 +11,9 @@ const collections = @import("collections");
 const base = @import("base");
 const compile = @import("compile");
 
+const serialization = @import("serialization");
 const TypeWriter = types_mod.TypeWriter;
+const CompactWriter = serialization.CompactWriter;
 
 pub const CIR = compile.CIR;
 
@@ -692,9 +694,22 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             try report.document.addReflowingText("This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!");
             break :blk report;
         },
-        .malformed_type_annotation => |_| blk: {
+        .malformed_type_annotation => |data| blk: {
             var report = Report.init(allocator, "MALFORMED TYPE", .runtime_error);
             try report.document.addReflowingText("This type annotation is malformed or contains invalid syntax.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            const region_info = self.calcRegionInfo(data.region);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
             break :blk report;
         },
         .if_condition_not_canonicalized => |_| blk: {
@@ -889,6 +904,120 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             break :blk report;
         },
+        .type_not_exposed => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "TYPE NOT EXPOSED", .runtime_error);
+
+            const type_name_bytes = self.idents.getText(data.type_name);
+            const type_name = try report.addOwnedString(type_name_bytes);
+
+            const module_name_bytes = self.idents.getText(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            // Format the message to match origin/main
+            try report.document.addText("The type ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" is not an exposed by the module ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting to use this type here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
+            break :blk report;
+        },
+        .module_not_found => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MODULE NOT FOUND", .runtime_error);
+
+            const module_name_bytes = self.idents.getText(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            // Format the message to match origin/main
+            try report.document.addText("The module ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(" was not found in this Roc project.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting to use this module here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
+            break :blk report;
+        },
+        .module_not_imported => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MODULE NOT IMPORTED", .runtime_error);
+
+            const module_name_bytes = self.idents.getText(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            // Format the message to match origin/main
+            try report.document.addText("There is no module with the name ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(" imported into this Roc file.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting to use this module here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
+            break :blk report;
+        },
+        .where_clause_not_allowed_in_type_decl => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION", .warning);
+
+            // Format the message to match origin/main
+            try report.document.addText("You cannot define a ");
+            try report.document.addInlineCode("where");
+            try report.document.addReflowingText(" clause inside a type declaration.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting do this here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.source,
+                self.line_starts.items.items,
+            );
+
+            break :blk report;
+        },
         else => {
             // For unhandled diagnostics, create a generic report
             const diagnostic_name = @tagName(diagnostic);
@@ -956,6 +1085,155 @@ pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
 
     return self.source[line_start..line_end];
 }
+
+/// Serialize this ModuleEnv to the given CompactWriter.
+/// IMPORTANT: The returned pointer points to memory inside the writer!
+/// Attempting to dereference this pointer or calling any methods on it
+/// is illegal behavior!
+pub fn serialize(
+    self: *const Self,
+    allocator: std.mem.Allocator,
+    writer: *CompactWriter,
+) std.mem.Allocator.Error!*const Self {
+    // First, write the ModuleEnv struct itself
+    const offset_self = try writer.appendAlloc(allocator, Self);
+
+    // Then serialize the sub-structures and update the struct
+    offset_self.* = .{
+        .gpa = undefined, // Will be set when deserializing
+        .idents = (try self.idents.serialize(allocator, writer)).*,
+        .ident_ids_for_slicing = (try self.ident_ids_for_slicing.serialize(allocator, writer)).*,
+        .strings = (try self.strings.serialize(allocator, writer)).*,
+        .types = (try self.types.serialize(allocator, writer)).*,
+        .exposed_items = (try self.exposed_items.serialize(allocator, writer)).*,
+        .line_starts = (try self.line_starts.serialize(allocator, writer)).*,
+        .source = "", // Will be set when deserializing
+        .all_defs = self.all_defs,
+        .all_statements = self.all_statements,
+        .external_decls = (try self.external_decls.serialize(allocator, writer)).*,
+        .imports = (try self.imports.serialize(allocator, writer)).*,
+        .module_name = "", // Will be set when deserializing
+        .diagnostics = self.diagnostics,
+        .store = (try self.store.serialize(allocator, writer)).*,
+    };
+
+    // IMPORTANT: Set gpa field to all zeros as requested
+    @memset(@as([*]u8, @ptrCast(&offset_self.gpa))[0..@sizeOf(@TypeOf(offset_self.gpa))], 0);
+
+    return @constCast(offset_self);
+}
+
+/// Add the given offset to the memory addresses of all pointers in `self`.
+/// IMPORTANT: The gpa, source, and module_name fields must be manually set before calling this function.
+pub fn relocate(self: *Self, offset: isize) void {
+    // IMPORTANT: gpa, source, and module_name are not relocated - they should be set manually before calling relocate
+
+    // Relocate all sub-structures
+    self.idents.relocate(offset);
+    self.ident_ids_for_slicing.relocate(offset);
+    self.strings.relocate(offset);
+    self.types.relocate(offset);
+    self.exposed_items.relocate(offset);
+    self.line_starts.relocate(offset);
+
+    // Note: source is not relocated - it should be set manually
+    // Note: all_defs and all_statements are just spans with numeric values, no pointers to relocate
+
+    self.external_decls.relocate(offset);
+    self.imports.relocate(offset);
+
+    // Note: module_name is not relocated - it should be set manually
+
+    // Note: diagnostics is just a span with numeric values, no pointers to relocate
+
+    self.store.relocate(offset);
+}
+
+/// Serialized representation of ModuleEnv
+pub const Serialized = struct {
+    idents: Ident.Store.Serialized,
+    ident_ids_for_slicing: collections.SafeList(Ident.Idx).Serialized,
+    strings: StringLiteral.Store.Serialized,
+    types: types_mod.Store.Serialized,
+    exposed_items: collections.ExposedItems.Serialized,
+    line_starts: collections.SafeList(u32).Serialized,
+    all_defs: Def.Span,
+    all_statements: Statement.Span,
+    external_decls: ExternalDecl.SafeList.Serialized,
+    imports: Import.Store.Serialized,
+    diagnostics: Diagnostic.Span,
+    store: NodeStore.Serialized,
+
+    /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
+    pub fn serialize(
+        self: *Serialized,
+        env: *const Self,
+        allocator: std.mem.Allocator,
+        writer: *CompactWriter,
+    ) !void {
+        // Serialize each component using its Serialized struct
+        try self.idents.serialize(&env.idents, allocator, writer);
+        try self.ident_ids_for_slicing.serialize(&env.ident_ids_for_slicing, allocator, writer);
+        try self.strings.serialize(&env.strings, allocator, writer);
+        try self.types.serialize(&env.types, allocator, writer);
+        try self.exposed_items.serialize(&env.exposed_items, allocator, writer);
+        try self.line_starts.serialize(&env.line_starts, allocator, writer);
+
+        // Copy simple values directly
+        self.all_defs = env.all_defs;
+        self.all_statements = env.all_statements;
+
+        try self.external_decls.serialize(&env.external_decls, allocator, writer);
+        try self.imports.serialize(&env.imports, allocator, writer);
+
+        self.diagnostics = env.diagnostics;
+
+        // Serialize NodeStore
+        try self.store.serialize(&env.store, allocator, writer);
+
+        // IMPORTANT: Set gpa field to all zeros as requested
+        // Note: gpa is not part of Serialized struct, it's set during deserialization
+        // std.mem.writeInt(usize, std.mem.asBytes(&self.gpa), 0, .little);
+
+        // Note: Individual fields are already serialized above
+        // _ = try writer.appendSlice(std.mem.asBytes(self));
+    }
+
+    /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
+    pub fn deserialize(
+        self: *Serialized,
+        offset: i64,
+        gpa: std.mem.Allocator,
+        source: []const u8,
+        module_name: []const u8,
+    ) *Self {
+        // ModuleEnv.Serialized should be at least as big as ModuleEnv
+        std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Self));
+
+        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+        const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
+
+        env.* = Self{
+            .gpa = gpa,
+            .idents = self.idents.deserialize(offset).*,
+            .ident_ids_for_slicing = self.ident_ids_for_slicing.deserialize(offset).*,
+            .strings = self.strings.deserialize(offset).*,
+            .types = self.types.deserialize(offset).*,
+            .exposed_items = self.exposed_items.deserialize(offset).*,
+            .line_starts = self.line_starts.deserialize(offset).*,
+            .source = source,
+            .all_defs = self.all_defs,
+            .all_statements = self.all_statements,
+            .external_decls = self.external_decls.deserialize(offset).*,
+            .imports = self.imports.deserialize(offset).*,
+            .module_name = module_name,
+            .diagnostics = self.diagnostics,
+            .store = self.store.deserialize(offset).*,
+        };
+
+        return env;
+    }
+};
 
 /// Convert a type into a node index
 pub fn nodeIdxFrom(idx: anytype) Node.Idx {
@@ -1040,10 +1318,30 @@ pub fn addPatternAndTypeVar(self: *Self, expr: Pattern, content: types_mod.Conte
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
+pub fn addPatternAndTypeVarRedirect(self: *Self, expr: Pattern, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!Pattern.Idx {
+    const expr_idx = try self.store.addPattern(expr, region);
+    const expr_var = try self.types.freshRedirect(redirect_to);
+    debugAssertIdxsEql("addPatternAndTypeVar", expr_idx, expr_var);
+    self.debugAssertArraysInSync();
+    return expr_idx;
+}
+
+/// Add a new expression and type variable.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addExprAndTypeVar(self: *Self, expr: Expr, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Expr.Idx {
     const expr_idx = try self.store.addExpr(expr, region);
     const expr_var = try self.types.freshFromContent(content);
     debugAssertIdxsEql("addExprAndTypeVar", expr_idx, expr_var);
+    self.debugAssertArraysInSync();
+    return expr_idx;
+}
+
+/// Add a new expression and type variable.
+/// This function asserts that the types array and the nodes are in sync.
+pub fn addExprAndTypeVarRedirect(self: *Self, expr: Expr, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!Expr.Idx {
+    const expr_idx = try self.store.addExpr(expr, region);
+    const expr_var = try self.types.freshRedirect(redirect_to);
+    debugAssertIdxsEql("addExprAndTypeVarRedirect", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
@@ -1120,6 +1418,16 @@ pub fn addTypeAnnoAndTypeVar(self: *Self, expr: TypeAnno, content: types_mod.Con
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
+pub fn addTypeAnnoAndTypeVarRedirect(self: *Self, expr: TypeAnno, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!TypeAnno.Idx {
+    const expr_idx = try self.store.addTypeAnno(expr, region);
+    const expr_var = try self.types.freshRedirect(redirect_to);
+    debugAssertIdxsEql("addTypeAnnoAndTypeVarRedirect", expr_idx, expr_var);
+    self.debugAssertArraysInSync();
+    return expr_idx;
+}
+
+/// Add a new expression and type variable.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addAnnotationAndTypeVar(self: *Self, expr: Annotation, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Annotation.Idx {
     const expr_idx = try self.store.addAnnotation(expr, region);
     const expr_var = try self.types.freshFromContent(content);
@@ -1130,9 +1438,29 @@ pub fn addAnnotationAndTypeVar(self: *Self, expr: Annotation, content: types_mod
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
+pub fn addAnnotationAndTypeVarRedirect(self: *Self, expr: Annotation, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!Annotation.Idx {
+    const expr_idx = try self.store.addAnnotation(expr, region);
+    const expr_var = try self.types.freshRedirect(redirect_to);
+    debugAssertIdxsEql("addAnnotationAndTypeVar", expr_idx, expr_var);
+    self.debugAssertArraysInSync();
+    return expr_idx;
+}
+
+/// Add a new expression and type variable.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addAnnoRecordFieldAndTypeVar(self: *Self, expr: TypeAnno.RecordField, content: types_mod.Content, region: Region) std.mem.Allocator.Error!TypeAnno.RecordField.Idx {
     const expr_idx = try self.store.addAnnoRecordField(expr, region);
     const expr_var = try self.types.freshFromContent(content);
+    debugAssertIdxsEql("addAnnoRecordFieldAndTypeVar", expr_idx, expr_var);
+    self.debugAssertArraysInSync();
+    return expr_idx;
+}
+
+/// Add a new expression and type variable.
+/// This function asserts that the types array and the nodes are in sync.
+pub fn addAnnoRecordFieldAndTypeVarRedirect(self: *Self, expr: TypeAnno.RecordField, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!TypeAnno.RecordField.Idx {
+    const expr_idx = try self.store.addAnnoRecordField(expr, region);
+    const expr_var = try self.types.freshRedirect(redirect_to);
     debugAssertIdxsEql("addAnnoRecordFieldAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
@@ -1186,7 +1514,8 @@ pub fn addMatchBranchPatternAndTypeVar(self: *Self, expr: Expr.Match.BranchPatte
 /// Add a new pattern record field and type variable.
 /// This function asserts that the types array and the nodes are in sync.
 pub fn addPatternRecordFieldAndTypeVar(self: *Self, expr: PatternRecordField, content: types_mod.Content, region: Region) std.mem.Allocator.Error!PatternRecordField.Idx {
-    const expr_idx = try self.store.addPatternRecordField(expr, region);
+    _ = region;
+    const expr_idx = try self.store.addPatternRecordField(expr);
     const expr_var = try self.types.freshFromContent(content);
     debugAssertIdxsEql("addPatternRecordFieldAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
@@ -1266,8 +1595,8 @@ pub fn pushExternalDecls(self: *Self, decls: []const ExternalDecl) std.mem.Alloc
 
 /// Gets a slice of external declarations from a span
 pub fn sliceExternalDecls(self: *const Self, span: ExternalDecl.Span) []const ExternalDecl {
-    const range = ExternalDecl.SafeList.Range{ .start = @enumFromInt(span.span.start), .end = @enumFromInt(span.span.start + span.span.len) };
-    return self.external_decls.rangeToSlice(range);
+    const range = ExternalDecl.SafeList.Range{ .start = @enumFromInt(span.span.start), .count = span.span.len };
+    return self.external_decls.sliceRange(range);
 }
 
 /// Retrieves the text of an identifier by its index
@@ -1318,21 +1647,191 @@ pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree)
     }
 }
 
-/// Append region information to an S-expression node for a given index.
-pub fn appendRegionInfoToSexprNode(self: *const Self, node: *SExpr, idx: anytype) std.mem.Allocator.Error!void {
-    const region = self.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
-    try self.appendRegionInfoToSexprNodeFromRegion(node, region);
+test "ModuleEnv with types CompactWriter roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create ModuleEnv
+    var original = try Self.init(gpa, "");
+    defer original.deinit();
+
+    // Initialize CIR fields
+    try original.initCIRFields(gpa, "test.Types");
+
+    // Add some type variables
+    const var1 = try original.types.freshFromContent(.empty);
+    const var2 = try original.types.freshFromContent(.{ .structure = .{ .record = .{ .tags = .{} } } });
+    const var3 = try original.types.freshFromContent(.{ .alias = .{ .name = .placeholder, .type_arguments = .{}, .real = var1, .lambda_sets = .{} } });
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_types_module_env.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize
+    var writer = collections.CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*Self, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Self))));
+
+    // Set gpa, source, and module_name before relocating
+    deserialized.gpa = gpa;
+    deserialized.source = "";
+    deserialized.module_name = "test.Types";
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify we have the right number of types
+    try testing.expectEqual(@as(usize, 3), deserialized.types.len());
+
+    // Verify type contents (basic check)
+    const content1 = deserialized.types.getContent(var1);
+    try testing.expectEqual(types_mod.Content.empty, content1.*);
+
+    const content2 = deserialized.types.getContent(var2);
+    try testing.expectEqual(@as(types_mod.Content.Tag, .structure), std.meta.activeTag(content2.*));
+
+    const content3 = deserialized.types.getContent(var3);
+    try testing.expectEqual(@as(types_mod.Content.Tag, .alias), std.meta.activeTag(content3.*));
 }
 
-/// Append region information to an S-expression node from a specific region.
-pub fn appendRegionInfoToSexprNodeFromRegion(self: *const Self, node: *SExpr, region: Region) std.mem.Allocator.Error!void {
-    const info = self.getRegionInfo(region);
-    try node.appendByteRange(
-        self.gpa,
-        info,
-        region.start.offset,
-        region.end.offset,
-    );
+test "ModuleEnv empty CompactWriter roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create an empty ModuleEnv
+    var original = try Self.init(gpa, "");
+    defer original.deinit();
+
+    // Initialize CIR fields
+    try original.initCIRFields(gpa, "test.Empty");
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_empty_module_env.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize using CompactWriter
+    var writer = collections.CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*Self, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Self))));
+
+    // Set gpa, source, and module_name before relocating
+    deserialized.gpa = gpa;
+    deserialized.source = "";
+    deserialized.module_name = "test.Types";
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify empty state
+    try testing.expectEqualStrings("", deserialized.source);
+    try testing.expectEqualStrings("test.Empty", deserialized.module_name);
+    try testing.expectEqual(@as(usize, 0), deserialized.all_defs.span.len);
+    try testing.expectEqual(@as(usize, 0), deserialized.all_statements.span.len);
+    try testing.expectEqual(@as(usize, 0), deserialized.external_decls.len());
+    try testing.expectEqual(@as(usize, 0), deserialized.imports.imports.len());
+}
+
+test "ModuleEnv with source code CompactWriter roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const source =
+        \\app [main] {
+        \\    main = \{} ->
+        \\        "Hello, World!"
+        \\}
+    ;
+
+    // Create ModuleEnv with source
+    var original = try Self.init(gpa, source);
+    defer original.deinit();
+
+    // Initialize CIR fields
+    try original.initCIRFields(gpa, "test.Hello");
+
+    // Calculate line starts
+    try original.calcLineStarts();
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_source_module_env.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize
+    var writer = collections.CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*Self, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Self))));
+
+    // Set gpa, source, and module_name before relocating
+    deserialized.gpa = gpa;
+    deserialized.source = "";
+    deserialized.module_name = "test.Types";
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify source and module name
+    try testing.expectEqualStrings(source, deserialized.source);
+    try testing.expectEqualStrings("test.Hello", deserialized.module_name);
+
+    // Verify line starts were preserved
+    try testing.expectEqual(original.line_starts.items.items.len, deserialized.line_starts.items.items.len);
 }
 
 /// Append region information to an S-expression node for a given index.
@@ -1558,4 +2057,84 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExpr
 
         try tree.endNode(root_begin, attrs);
     }
+}
+
+test "ModuleEnv.Serialized roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create original ModuleEnv with some data
+    var original = try init(gpa);
+    defer original.deinit();
+
+    // Add some test data
+    const hello_idx = try original.idents.insert(gpa, "hello");
+    const world_idx = try original.idents.insert(gpa, "world");
+    try original.ident_ids_for_slicing.append(gpa, hello_idx);
+    try original.ident_ids_for_slicing.append(gpa, world_idx);
+
+    const str_idx = try original.strings.insert(gpa, "test string");
+    _ = str_idx;
+
+    try original.exposed_items.addExposedById(gpa, @intFromEnum(hello_idx));
+    try original.exposed_items.setNodeIndexById(gpa, @intFromEnum(hello_idx), 42);
+    original.exposed_items.ensureSorted(gpa);
+
+    try original.line_starts.append(gpa, 0);
+    try original.line_starts.append(gpa, 10);
+    try original.line_starts.append(gpa, 20);
+
+    const source = "hello world\ntest line 2\n";
+    original.source = source;
+    original.module_name = "TestModule";
+
+    // Create a CompactWriter and arena
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_file = try tmp_dir.dir.createFile("test.compact", .{ .read = true });
+    defer tmp_file.close();
+
+    var writer = CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(arena_alloc);
+
+    // Allocate and serialize using the Serialized struct
+    const serialized_ptr = try writer.appendAlloc(arena_alloc, Self.Serialized);
+    try serialized_ptr.serialize(&original, arena_alloc, &writer);
+
+    // Write to file
+    try writer.writeGather(arena_alloc, tmp_file);
+
+    // Read back
+    const file_size = try tmp_file.getEndPos();
+    const buffer = try gpa.alloc(u8, file_size);
+    defer gpa.free(buffer);
+    _ = try tmp_file.pread(buffer, 0);
+
+    // Find the Serialized struct at the end of the buffer
+    const serialized_offset = writer.total_bytes - @sizeOf(Self.Serialized);
+    const deserialized_ptr = @as(*Self.Serialized, @ptrCast(@alignCast(buffer.ptr + serialized_offset)));
+    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule");
+
+    // Verify the data was preserved
+    try testing.expectEqual(@as(usize, 2), env.ident_ids_for_slicing.len());
+    try testing.expectEqualStrings("hello", env.idents.get(hello_idx));
+    try testing.expectEqualStrings("world", env.idents.get(world_idx));
+
+    try testing.expectEqual(@as(usize, 1), env.exposed_items.count());
+    try testing.expectEqual(@as(?u16, 42), env.exposed_items.getNodeIndexById(gpa, @intFromEnum(hello_idx)));
+
+    try testing.expectEqual(@as(usize, 3), env.line_starts.len());
+    try testing.expectEqual(@as(u32, 0), env.line_starts.get(0));
+    try testing.expectEqual(@as(u32, 10), env.line_starts.get(1));
+    try testing.expectEqual(@as(u32, 20), env.line_starts.get(2));
+
+    try testing.expectEqualStrings(source, env.source);
+    try testing.expectEqualStrings("TestModule", env.module_name);
 }

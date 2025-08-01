@@ -15,9 +15,33 @@ Hash(a, hasher) : a
 Decode(a) : a where module(a).decode : List(U8) -> a
 ~~~
 # EXPECTED
-NIL
+WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:3:1:6:24
+WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:8:1:8:53
 # PROBLEMS
-NIL
+**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
+You cannot define a `where` clause inside a type declaration.
+
+You're attempting do this here:
+**where_clauses_1.md:3:1:6:24:**
+```roc
+Hash(a, hasher) : a
+	where
+		module(a).hash : hasher -> hasher,
+		module(hasher).Hasher
+```
+
+
+**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
+You cannot define a `where` clause inside a type declaration.
+
+You're attempting do this here:
+**where_clauses_1.md:8:1:8:53:**
+```roc
+Decode(a) : a where module(a).decode : List(U8) -> a
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),Comma(1:13-1:14),UpperIdent(1:15-1:21),CloseSquare(1:21-1:22),
@@ -68,31 +92,16 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-alias-decl @3.1-6.24
-		(ty-header @3.1-3.16 (name "hash")
+		(ty-header @3.1-3.16 (name "Hash")
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))
 				(ty-var @3.9-3.15 (name "hasher"))))
-		(ty-var @3.19-3.20 (name "a"))
-		(where
-			(method @5.3-5.36 (module-of "a") (ident "hash")
-				(args
-					(ty-var @5.20-5.26 (name "hasher")))
-				(ty-var @5.30-5.36 (name "hasher")))
-			(alias @6.3-6.24 (module-of "hasher") (ident "hasher"))))
+		(ty-var @3.19-3.20 (name "a")))
 	(s-alias-decl @8.1-8.53
-		(ty-header @8.1-8.10 (name "decode")
+		(ty-header @8.1-8.10 (name "Decode")
 			(ty-args
 				(ty-var @8.8-8.9 (name "a"))))
-		(ty-var @8.13-8.14 (name "a"))
-		(where
-			(method @8.21-8.53 (module-of "a") (ident "decode")
-				(args
-					(ty-apply @8.40-8.48 (symbol "List")
-						(ty @8.45-8.47 (name "U8"))))
-				(ty-var @8.52-8.53 (name "a")))))
-	(ext-decl @5.3-5.36 (ident "module(a).hash") (kind "value"))
-	(ext-decl @6.3-6.24 (ident "module(hasher).Hasher") (kind "type"))
-	(ext-decl @8.21-8.53 (ident "module(a).decode") (kind "value")))
+		(ty-var @8.13-8.14 (name "a"))))
 ~~~
 # TYPES
 ~~~clojure
@@ -100,12 +109,12 @@ NO CHANGE
 	(defs)
 	(type_decls
 		(alias @3.1-6.24 (type "Hash(a, hasher)")
-			(ty-header @3.1-3.16 (name "hash")
+			(ty-header @3.1-3.16 (name "Hash")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))
 					(ty-var @3.9-3.15 (name "hasher")))))
 		(alias @8.1-8.53 (type "Decode(a)")
-			(ty-header @8.1-8.10 (name "decode")
+			(ty-header @8.1-8.10 (name "Decode")
 				(ty-args
 					(ty-var @8.8-8.9 (name "a"))))))
 	(expressions))

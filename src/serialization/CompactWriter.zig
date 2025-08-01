@@ -30,29 +30,56 @@ pub const CompactWriter = struct {
         var iovec_offset: usize = 0;
         const total_size = self.total_bytes;
 
-        while (bytes_written < total_size) {
-            // Create adjusted iovec array for partial writes
-            const remaining_iovecs = self.iovecs.items.len - current_iovec;
-            var adjusted_iovecs = try allocator.alloc(std.posix.iovec_const, remaining_iovecs);
-            defer allocator.free(adjusted_iovecs);
+        // Early return if nothing to write
+        if (total_size == 0 or self.iovecs.items.len == 0) return;
 
-            // Copy remaining iovecs, adjusting first one for partial write
+        while (bytes_written < total_size) {
+            // Skip any iovecs that have been completely written
+            while (current_iovec < self.iovecs.items.len and
+                iovec_offset >= self.iovecs.items[current_iovec].iov_len)
+            {
+                current_iovec += 1;
+                iovec_offset = 0;
+            }
+
+            // Check if we've processed all iovecs
+            if (current_iovec >= self.iovecs.items.len) break;
+
+            // Count valid remaining iovecs (those with data to write)
+            var valid_iovec_count: usize = 0;
             for (self.iovecs.items[current_iovec..], 0..) |iovec, j| {
-                if (j == 0 and iovec_offset > 0) {
-                    // Adjust first iovec for partial write
-                    adjusted_iovecs[j] = .{
-                        .base = @ptrFromInt(@intFromPtr(iovec.iov_base) + iovec_offset),
-                        .len = iovec.iov_len - iovec_offset,
-                    };
-                } else {
-                    adjusted_iovecs[j] = .{
-                        .base = iovec.iov_base,
-                        .len = iovec.iov_len,
-                    };
+                const offset = if (j == 0) iovec_offset else 0;
+                if (iovec.iov_len > offset) {
+                    valid_iovec_count += 1;
                 }
             }
 
+            if (valid_iovec_count == 0) break;
+
+            // Create adjusted iovec array for partial writes
+            var adjusted_iovecs = try allocator.alloc(std.posix.iovec_const, valid_iovec_count);
+            defer allocator.free(adjusted_iovecs);
+
+            // Copy remaining iovecs, adjusting first one for partial write and filtering out empty ones
+            var adjusted_index: usize = 0;
+            for (self.iovecs.items[current_iovec..], 0..) |iovec, j| {
+                const offset = if (j == 0) iovec_offset else 0;
+
+                // Skip iovecs that have no remaining data
+                if (iovec.iov_len <= offset) continue;
+
+                adjusted_iovecs[adjusted_index] = .{
+                    .base = @ptrFromInt(@intFromPtr(iovec.iov_base) + offset),
+                    .len = iovec.iov_len - offset,
+                };
+                adjusted_index += 1;
+            }
+
+            // Sanity check - we should have filled all slots
+            std.debug.assert(adjusted_index == valid_iovec_count);
+
             const n = try std.posix.pwritev(file.handle, adjusted_iovecs, bytes_written);
+
             if (n == 0) return error.UnexpectedEof;
 
             // Update position tracking
@@ -110,13 +137,23 @@ pub const CompactWriter = struct {
         return answer;
     }
 
+    /// Never call this as the first append in the writer (e.g. always call appendAlloc first),
+    /// because that will result in this attempting to return a slice with an offset of 0,
+    /// which will be interpreted by Zig as an attempt to have a slice with a null pointer.
+    /// This is not allowed, and so will cause a panic in debug builds.
+    /// (In practice, this should never happen because we always write a struct as the very
+    /// first write in the writer, never an array.)
     pub fn appendSlice(
         self: *@This(),
         allocator: std.mem.Allocator,
         slice: anytype,
     ) std.mem.Allocator.Error!@TypeOf(slice) {
         const SliceType = @TypeOf(slice);
-        const T = std.meta.Child(SliceType);
+        const info = @typeInfo(SliceType);
+        const T = if (info == .pointer and info.pointer.size == .one)
+            std.meta.Child(std.meta.Child(SliceType))
+        else
+            std.meta.Child(SliceType);
         const size = @sizeOf(T);
         const alignment = @alignOf(T);
         const len = slice.len;
@@ -133,11 +170,12 @@ pub const CompactWriter = struct {
         self.total_bytes += size * len;
 
         // Return the same slice type as the input
-        const info = @typeInfo(SliceType);
-        return if (info.pointer.is_const)
+        const result = if (info.pointer.is_const)
             @as([*]const T, @ptrFromInt(offset))[0..len]
         else
             @as([*]T, @ptrFromInt(offset))[0..len];
+
+        return result;
     }
 
     fn padToAlignment(self: *@This(), allocator: std.mem.Allocator, alignment: usize) std.mem.Allocator.Error!void {

@@ -120,7 +120,7 @@ is_ok = |result| match result {
 		(e-lambda @6.6-6.24
 			(args
 				(p-assign @6.7-6.8 (ident "a")))
-			(e-nominal @6.10-6.18 (nominal "MyResult")
+			(e-nominal @6.10-6.21 (nominal "MyResult")
 				(e-tag @6.10-6.21 (name "Ok")
 					(args
 						(e-lookup-local @6.22-6.23
@@ -146,18 +146,18 @@ is_ok = |result| match result {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal @10.5-10.13
+									(p-nominal @10.5-10.19
 										(p-applied-tag @10.5-10.19))))
 							(value
-								(e-nominal @10.23-10.27 (nominal "Bool")
+								(e-nominal @10.23-10.32 (nominal "Bool")
 									(e-tag @10.23-10.32 (name "True")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal @11.5-11.13
+									(p-nominal @11.5-11.20
 										(p-applied-tag @11.5-11.20))))
 							(value
-								(e-nominal @11.24-11.28 (nominal "Bool")
+								(e-nominal @11.24-11.34 (nominal "Bool")
 									(e-tag @11.24-11.34 (name "False")))))))))
 		(annotation @9.1-9.6
 			(declared-type

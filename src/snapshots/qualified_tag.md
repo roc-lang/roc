@@ -48,7 +48,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @5.1-5.5 (ident "test"))
-		(e-nominal @5.8-5.13 (nominal "Color")
+		(e-nominal @5.8-5.17 (nominal "Color")
 			(e-tag @5.8-5.17 (name "Red"))))
 	(s-nominal-decl @3.1-3.21
 		(ty-header @3.1-3.6 (name "color"))
@@ -65,5 +65,5 @@ NO CHANGE
 		(nominal @3.1-3.21 (type "Color")
 			(ty-header @3.1-3.6 (name "color"))))
 	(expressions
-		(expr @5.8-5.13 (type "Color"))))
+		(expr @5.8-5.17 (type "Color"))))
 ~~~

@@ -4,10 +4,11 @@ const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
 const types = @import("types");
-const ModuleEnv = @import("compile").ModuleEnv;
+const compile = @import("compile");
 
-const TypesStore = types.Store;
 const Allocator = std.mem.Allocator;
+const ModuleEnv = compile.ModuleEnv;
+const TypesStore = types.Store;
 const Ident = base.Ident;
 
 /// Index enum for SnapshotContentList
@@ -17,7 +18,6 @@ const SnapshotContentList = collections.SafeList(SnapshotContent);
 const SnapshotContentIdxSafeList = collections.SafeList(SnapshotContentIdx);
 const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
 const SnapshotTagSafeList = collections.SafeMultiList(SnapshotTag);
-
 const MkSafeMultiList = collections.SafeMultiList;
 
 const Var = types.Var;
@@ -148,6 +148,7 @@ pub const Store = struct {
 
         return SnapshotAlias{
             .ident = alias.ident,
+            .backing = try self.deepCopyContent(store, backing_resolved.desc.content),
             .vars = args_range,
         };
     }
@@ -387,10 +388,6 @@ pub const Store = struct {
         return self.record_fields.sliceRange(range);
     }
 
-    pub fn getTagsSlice(self: *const Self, range: SnapshotTagSafeList.Range) []const SnapshotTag {
-        return self.tags.sliceRange(range);
-    }
-
     pub fn getContent(self: *const Self, idx: SnapshotContentIdx) SnapshotContent {
         return self.contents.get(idx).*;
     }
@@ -408,6 +405,7 @@ pub const SnapshotContent = union(enum) {
 /// TODO
 pub const SnapshotAlias = struct {
     ident: types.TypeIdent,
+    backing: SnapshotContentIdx,
     vars: SnapshotContentIdxSafeList.Range, // The 1st variable is the backing var, rest are args
 };
 

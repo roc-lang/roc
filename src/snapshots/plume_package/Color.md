@@ -119,7 +119,7 @@ It is of type:
     _u8_
 
 But you are trying to use it as:
-    _{ to_frac: Frac(_size) }_
+    _{ to_frac: Num(_size) }_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -670,7 +670,7 @@ is_named_color = |str| {
 				(p-assign @18.8-18.9 (ident "r"))
 				(p-assign @18.11-18.12 (ident "g"))
 				(p-assign @18.14-18.15 (ident "b")))
-			(e-nominal @18.17-18.22 (nominal "Color")
+			(e-nominal @18.17-18.26 (nominal "Color")
 				(e-tag @18.17-18.26 (name "RGB")
 					(args
 						(e-lookup-local @18.27-18.28
@@ -704,7 +704,7 @@ is_named_color = |str| {
 									(p-assign @21.18-21.19 (ident "a"))))
 							(args))
 						(e-dec-small @22.29-22.34 (numerator "2550") (denominator-power-of-ten "1") (value "255"))))
-				(e-nominal @23.5-23.10 (nominal "Color")
+				(e-nominal @23.5-23.15 (nominal "Color")
 					(e-tag @23.5-23.15 (name "RGBA")
 						(args
 							(e-lookup-local @23.16-23.17
@@ -727,13 +727,13 @@ is_named_color = |str| {
 		(p-assign @27.1-27.4 (ident "hex"))
 		(e-closure @27.7-46.2
 			(captures
-				(capture @33.30-33.31 (ident "f"))
-				(capture @33.21-33.22 (ident "c"))
-				(capture @34.13-34.21 (ident "is_valid"))
-				(capture @33.15-33.16 (ident "a"))
 				(capture @33.27-33.28 (ident "e"))
+				(capture @33.21-33.22 (ident "c"))
+				(capture @33.15-33.16 (ident "a"))
+				(capture @33.18-33.19 (ident "b"))
 				(capture @33.24-33.25 (ident "d"))
-				(capture @33.18-33.19 (ident "b")))
+				(capture @33.30-33.31 (ident "f"))
+				(capture @34.13-34.21 (ident "is_valid")))
 			(e-lambda @27.7-46.2
 				(args
 					(p-assign @27.8-27.11 (ident "str")))
@@ -843,7 +843,7 @@ is_named_color = |str| {
 															(p-assign @34.13-34.21 (ident "is_valid")))
 														(e-tag @42.25-42.27 (name "Ok")
 															(args
-																(e-nominal @42.28-42.33 (nominal "Color")
+																(e-nominal @42.28-42.37 (nominal "Color")
 																	(e-tag @42.28-42.37 (name "Hex")
 																		(args
 																			(e-lookup-local @42.38-42.41
@@ -885,16 +885,16 @@ is_named_color = |str| {
 		(p-assign @49.1-49.7 (ident "to_str"))
 		(e-closure @49.10-54.2
 			(captures
-				(capture @51.22-51.23 (ident "b"))
-				(capture @50.21-50.22 (ident "b"))
+				(capture @53.15-53.20 (ident "inner"))
 				(capture @50.18-50.19 (ident "g"))
+				(capture @51.22-51.23 (ident "b"))
 				(capture @49.1-49.7 (ident "to_str"))
 				(capture @50.15-50.16 (ident "r"))
-				(capture @51.25-51.26 (ident "a"))
-				(capture @53.15-53.20 (ident "inner"))
+				(capture @51.16-51.17 (ident "r"))
 				(capture @51.19-51.20 (ident "g"))
-				(capture @52.17-52.22 (ident "inner"))
-				(capture @51.16-51.17 (ident "r")))
+				(capture @51.25-51.26 (ident "a"))
+				(capture @50.21-50.22 (ident "b"))
+				(capture @52.17-52.22 (ident "inner")))
 			(e-lambda @49.10-54.2
 				(args
 					(p-assign @49.11-49.16 (ident "color")))
@@ -907,7 +907,7 @@ is_named_color = |str| {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @50.5-50.10
+										(p-nominal @50.5-50.23
 											(p-applied-tag @50.5-50.23))))
 								(value
 									(e-string @50.27-50.86
@@ -933,7 +933,7 @@ is_named_color = |str| {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @51.5-51.10
+										(p-nominal @51.5-51.27
 											(p-applied-tag @51.5-51.27))))
 								(value
 									(e-string @51.31-51.109
@@ -965,7 +965,7 @@ is_named_color = |str| {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @52.5-52.10
+										(p-nominal @52.5-52.23
 											(p-applied-tag @52.5-52.23))))
 								(value
 									(e-lookup-local @52.27-52.32
@@ -973,7 +973,7 @@ is_named_color = |str| {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @53.5-53.10
+										(p-nominal @53.5-53.21
 											(p-applied-tag @53.5-53.21))))
 								(value
 									(e-lookup-local @53.25-53.30
@@ -998,7 +998,7 @@ is_named_color = |str| {
 							(args))
 						(e-tag @63.9-63.11 (name "Ok")
 							(args
-								(e-nominal @63.12-63.17 (nominal "Color")
+								(e-nominal @63.12-63.23 (nominal "Color")
 									(e-tag @63.12-63.23 (name "Named")
 										(args
 											(e-lookup-local @63.24-63.27
@@ -1111,20 +1111,20 @@ is_named_color = |str| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.4 (type "Error, Error, Error -> Color"))
-		(patt @21.1-21.5 (type "Error, Error, Error, Error -> Color"))
+		(patt @18.1-18.4 (type "U8, U8, U8 -> Color"))
+		(patt @21.1-21.5 (type "U8, U8, U8, Error -> Color"))
 		(patt @27.1-27.4 (type "Error"))
-		(patt @49.1-49.7 (type "Color -> Error"))
+		(patt @49.1-49.7 (type "Color -> Str"))
 		(patt @61.1-61.6 (type "Error -> Error"))
 		(patt @67.1-67.15 (type "_arg -> _ret")))
 	(type_decls
 		(nominal @10.1-15.2 (type "Color")
 			(ty-header @10.1-10.6 (name "color"))))
 	(expressions
-		(expr @18.7-18.35 (type "Error, Error, Error -> Color"))
-		(expr @21.8-24.2 (type "Error, Error, Error, Error -> Color"))
+		(expr @18.7-18.35 (type "U8, U8, U8 -> Color"))
+		(expr @21.8-24.2 (type "U8, U8, U8, Error -> Color"))
 		(expr @27.7-46.2 (type "Error"))
-		(expr @49.10-54.2 (type "Color -> Error"))
+		(expr @49.10-54.2 (type "Color -> Str"))
 		(expr @61.9-65.50 (type "Error -> Error"))
 		(expr @67.18-71.2 (type "_arg -> _ret"))))
 ~~~

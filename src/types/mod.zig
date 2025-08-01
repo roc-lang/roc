@@ -8,6 +8,7 @@
 pub const types = @import("types.zig");
 pub const store = @import("store.zig");
 pub const writers = @import("writers.zig");
+pub const instantiate = @import("instantiate.zig");
 
 pub const Alias = types.Alias;
 pub const Content = types.Content;

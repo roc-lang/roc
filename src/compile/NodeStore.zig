@@ -4,6 +4,8 @@ const std = @import("std");
 const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
+const serialization = @import("serialization");
+const CompactWriter = serialization.CompactWriter;
 const Node = @import("Node.zig");
 const ModuleEnv = @import("compile").ModuleEnv;
 const RocDec = ModuleEnv.RocDec;
@@ -102,15 +104,15 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 44;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 45;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 30;
+pub const MODULEENV_EXPR_NODE_COUNT = 31;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 13;
 /// Count of the type annotation nodes in the ModuleEnv
-pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 11;
+pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
-pub const MODULEENV_PATTERN_NODE_COUNT = 13;
+pub const MODULEENV_PATTERN_NODE_COUNT = 14;
 
 comptime {
     // Check the number of ModuleEnv.Diagnostic nodes
@@ -238,50 +240,18 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
             };
         },
         .statement_alias_decl => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(extra_data[0]));
-            const anno_var = @as(types.Var, @enumFromInt(extra_data[1]));
-            const header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(extra_data[2]));
-            const has_where = extra_data[3] != 0;
-
-            const where_clause = if (has_where) blk: {
-                const where_start = extra_data[4];
-                const where_len = extra_data[5];
-                break :blk ModuleEnv.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
-            } else null;
-
             return ModuleEnv.Statement{
                 .s_alias_decl = .{
-                    .header = header,
-                    .anno = anno,
-                    .anno_var = anno_var,
-                    .where = where_clause,
+                    .header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(node.data_1)),
+                    .anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(node.data_2)),
                 },
             };
         },
         .statement_nominal_decl => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(extra_data[0]));
-            const anno_var = @as(types.Var, @enumFromInt(extra_data[1]));
-            const header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(extra_data[2]));
-            const has_where = extra_data[3] != 0;
-
-            const where_clause = if (has_where) blk: {
-                const where_start = extra_data[4];
-                const where_len = extra_data[5];
-                break :blk ModuleEnv.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
-            } else null;
-
             return ModuleEnv.Statement{
                 .s_nominal_decl = .{
-                    .header = header,
-                    .anno = anno,
-                    .anno_var = anno_var,
-                    .where = where_clause,
+                    .header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(node.data_1)),
+                    .anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(node.data_2)),
                 },
             };
         },
@@ -440,6 +410,24 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             return ModuleEnv.Expr{
                 .e_nominal = .{
                     .nominal_type_decl = nominal_type_decl,
+                    .backing_expr = backing_expr,
+                    .backing_type = backing_type,
+                },
+            };
+        },
+        .expr_nominal_external => {
+            const module_idx: ModuleEnv.Import.Idx = @enumFromInt(node.data_1);
+            const target_node_idx: u16 = @intCast(node.data_2);
+
+            const extra_data_idx = node.data_3;
+            const extra_data = store.extra_data.items.items[extra_data_idx..][0..2];
+            const backing_expr: ModuleEnv.Expr.Idx = @enumFromInt(extra_data[0]);
+            const backing_type: ModuleEnv.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
+
+            return ModuleEnv.Expr{
+                .e_nominal_external = .{
+                    .module_idx = module_idx,
+                    .target_node_idx = target_node_idx,
                     .backing_expr = backing_expr,
                     .backing_type = backing_type,
                 },
@@ -791,6 +779,24 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
                 },
             };
         },
+        .pattern_nominal_external => {
+            const module_idx: ModuleEnv.Import.Idx = @enumFromInt(node.data_1);
+            const target_node_idx: u16 = @intCast(node.data_2);
+
+            const extra_data_idx = node.data_3;
+            const extra_data = store.extra_data.items.items[extra_data_idx..][0..2];
+            const backing_pattern: ModuleEnv.Pattern.Idx = @enumFromInt(extra_data[0]);
+            const backing_type: ModuleEnv.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
+
+            return ModuleEnv.Pattern{
+                .nominal_external = .{
+                    .module_idx = module_idx,
+                    .target_node_idx = target_node_idx,
+                    .backing_pattern = backing_pattern,
+                    .backing_type = backing_type,
+                },
+            };
+        },
         .pattern_record_destructure => {
             const extra_start = node.data_1;
             const extra_data = store.extra_data.items.items[extra_start..];
@@ -927,6 +933,16 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: ModuleEnv.TypeAnno.Idx) Mo
             .symbol = @bitCast(node.data_1),
             .args = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
         } },
+        .ty_apply_external => {
+            const extra_data_idx = node.data_3;
+            const args_start = store.extra_data.items.items[extra_data_idx];
+            const args_len = store.extra_data.items.items[extra_data_idx + 1];
+            return ModuleEnv.TypeAnno{ .apply_external = .{
+                .module_idx = @enumFromInt(node.data_1),
+                .target_node_idx = @intCast(node.data_2),
+                .args = .{ .span = .{ .start = args_start, .len = args_len } },
+            } };
+        },
         .ty_var => return ModuleEnv.TypeAnno{ .ty_var = .{
             .name = @bitCast(node.data_1),
         } },
@@ -945,9 +961,9 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: ModuleEnv.TypeAnno.Idx) Mo
             .fields = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
         } },
         .ty_fn => {
-            const ret_and_effectful = node.data_3;
-            const ret: ModuleEnv.TypeAnno.Idx = @enumFromInt(ret_and_effectful & 0x7FFFFFFF);
-            const effectful = (ret_and_effectful & (1 << 31)) != 0;
+            const extra_data_idx = node.data_3;
+            const effectful = store.extra_data.items.items[extra_data_idx] != 0;
+            const ret: ModuleEnv.TypeAnno.Idx = @enumFromInt(store.extra_data.items.items[extra_data_idx + 1]);
             return ModuleEnv.TypeAnno{ .@"fn" = .{
                 .args = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
                 .ret = ret,
@@ -959,7 +975,8 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: ModuleEnv.TypeAnno.Idx) Mo
         } },
         .ty_lookup_external => return ModuleEnv.TypeAnno{
             .ty_lookup_external = .{
-                .external_decl = @enumFromInt(node.data_1),
+                .module_idx = @enumFromInt(node.data_1),
+                .target_node_idx = @intCast(node.data_2),
             },
         },
         .ty_malformed => return ModuleEnv.TypeAnno{ .malformed = .{
@@ -1114,53 +1131,13 @@ pub fn addStatement(store: *NodeStore, statement: ModuleEnv.Statement, region: b
         },
         .s_alias_decl => |s| {
             node.tag = .statement_alias_decl;
-
-            // Store type_decl data in extra_data
-            const extra_start = store.extra_data.len();
-
-            // Store anno idx
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
-            // Store anno var
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno_var));
-            // Store header idx
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.header));
-            // Store where clause information
-            if (s.where) |where_clause| {
-                // Store where clause span start and len
-                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
-                _ = try store.extra_data.append(store.gpa, where_clause.span.start);
-                _ = try store.extra_data.append(store.gpa, where_clause.span.len);
-            } else {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
-            }
-
-            // Store the extra data start position in the node
-            node.data_1 = extra_start;
+            node.data_1 = @intFromEnum(s.header);
+            node.data_2 = @intFromEnum(s.anno);
         },
         .s_nominal_decl => |s| {
             node.tag = .statement_nominal_decl;
-
-            // Store type_decl data in extra_data
-            const extra_start = store.extra_data.len();
-
-            // Store anno idx
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
-            // Store anno var
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno_var));
-            // Store header idx
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.header));
-            // Store where clause information
-            if (s.where) |where_clause| {
-                // Store where clause span start and len
-                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
-                _ = try store.extra_data.append(store.gpa, where_clause.span.start);
-                _ = try store.extra_data.append(store.gpa, where_clause.span.len);
-            } else {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
-            }
-
-            // Store the extra data start position in the node
-            node.data_1 = extra_start;
+            node.data_1 = @intFromEnum(s.header);
+            node.data_2 = @intFromEnum(s.anno);
         },
         .s_type_anno => |s| {
             node.tag = .statement_type_anno;
@@ -1305,6 +1282,14 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
             node.data_1 = @intFromEnum(e.nominal_type_decl);
             node.data_2 = @intFromEnum(e.backing_expr);
             node.data_3 = @intFromEnum(e.backing_type);
+        },
+        .e_nominal_external => |e| {
+            node.tag = .expr_nominal_external;
+            node.data_1 = @intFromEnum(e.module_idx);
+            node.data_2 = @intCast(e.target_node_idx);
+            node.data_3 = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.backing_expr));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.backing_type));
         },
         .e_dot_access => |e| {
             node.tag = .expr_dot_access;
@@ -1486,32 +1471,27 @@ pub fn addRecordField(store: *NodeStore, recordField: ModuleEnv.RecordField, reg
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addRecordDestruct(store: *NodeStore, record_destruct: ModuleEnv.Pattern.RecordDestruct, region: base.Region) std.mem.Allocator.Error!ModuleEnv.Pattern.RecordDestruct.Idx {
-    var node = Node{
+    const extra_data_start = @as(u32, @intCast(store.extra_data.len()));
+    const node = Node{
         .data_1 = @bitCast(record_destruct.label),
         .data_2 = @bitCast(record_destruct.ident),
-        .data_3 = 0,
+        .data_3 = extra_data_start,
         .tag = .record_destruct,
     };
 
     // Store kind in extra_data
     switch (record_destruct.kind) {
         .Required => |pattern_idx| {
-            const extra_data_start = @as(u32, @intCast(store.extra_data.len()));
             // Store kind tag (0 for Required)
             _ = try store.extra_data.append(store.gpa, 0);
             // Store pattern index
             _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
-            node.data_3 = extra_data_start;
         },
         .SubPattern => |sub_pattern| {
-            const extra_data_start = @as(u32, @intCast(store.extra_data.len()));
-
             // Store kind tag (1 for SubPattern)
             _ = try store.extra_data.append(store.gpa, 1);
             // Store sub-pattern index
             _ = try store.extra_data.append(store.gpa, @intFromEnum(sub_pattern));
-
-            node.data_3 = extra_data_start;
         },
     }
 
@@ -1661,6 +1641,14 @@ pub fn addPattern(store: *NodeStore, pattern: ModuleEnv.Pattern, region: base.Re
             node.data_2 = @intFromEnum(n.backing_pattern);
             node.data_3 = @intFromEnum(n.backing_type);
         },
+        .nominal_external => |n| {
+            node.tag = .pattern_nominal_external;
+            node.data_1 = @intFromEnum(n.module_idx);
+            node.data_2 = @intCast(n.target_node_idx);
+            node.data_3 = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(n.backing_pattern));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(n.backing_type));
+        },
         .record_destructure => |p| {
             node.tag = .pattern_record_destructure;
 
@@ -1755,7 +1743,7 @@ pub fn addPatternRecordField(store: *NodeStore, patternRecordField: ModuleEnv.Pa
     _ = store;
     _ = patternRecordField;
 
-    return .{ .id = @enumFromInt(0) };
+    return @enumFromInt(0);
 }
 
 /// Adds a type annotation to the store.
@@ -1776,6 +1764,15 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: ModuleEnv.TypeAnno, region: base
             node.data_2 = a.args.span.start;
             node.data_3 = a.args.span.len;
             node.tag = .ty_apply;
+        },
+        .apply_external => |a| {
+            node.data_1 = @intFromEnum(a.module_idx);
+            node.data_2 = a.target_node_idx;
+            const ed_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, a.args.span.start);
+            _ = try store.extra_data.append(store.gpa, a.args.span.len);
+            node.data_3 = ed_start;
+            node.tag = .ty_apply_external;
         },
         .ty_var => |tv| {
             node.data_1 = @bitCast(tv.name);
@@ -1807,7 +1804,10 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: ModuleEnv.TypeAnno, region: base
         .@"fn" => |f| {
             node.data_1 = f.args.span.start;
             node.data_2 = f.args.span.len;
-            node.data_3 = @intFromEnum(f.ret) | (if (f.effectful) @as(u32, 1) << 31 else 0);
+            const ed_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, if (f.effectful) @as(u32, 1) else 0);
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(f.ret));
+            node.data_3 = ed_start;
             node.tag = .ty_fn;
         },
         .parens => |p| {
@@ -1815,8 +1815,9 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: ModuleEnv.TypeAnno, region: base
             node.tag = .ty_parens;
         },
         .ty_lookup_external => |tle| {
-            node.data_1 = @intFromEnum(tle.external_decl);
             node.tag = .ty_lookup_external;
+            node.data_1 = @intFromEnum(tle.module_idx);
+            node.data_2 = tle.target_node_idx;
         },
         .malformed => |m| {
             node.data_1 = @intFromEnum(m.diagnostic);
@@ -1986,10 +1987,12 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: ModuleEnv.Pattern.RecordD
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
     const node = store.nodes.get(node_idx);
 
+    std.debug.assert(node.tag == .record_destruct);
+
     // Retrieve kind from extra_data if it exists
-    const kind = if (node.data_3 != 0) blk: {
+    const kind = blk: {
         const extra_start = node.data_3;
-        const extra_data = store.extra_data.items.items[extra_start..];
+        const extra_data = store.extra_data.items.items[extra_start..][0..2];
         const kind_tag = extra_data[0];
 
         break :blk switch (kind_tag) {
@@ -1997,10 +2000,6 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: ModuleEnv.Pattern.RecordD
             1 => ModuleEnv.Pattern.RecordDestruct.Kind{ .SubPattern = @enumFromInt(extra_data[1]) },
             else => unreachable,
         };
-    } else blk: {
-        // This should not happen with properly canonicalized code
-        const dummy_pattern_idx: ModuleEnv.Pattern.Idx = @enumFromInt(0);
-        break :blk ModuleEnv.Pattern.RecordDestruct.Kind{ .Required = dummy_pattern_idx };
     };
 
     return ModuleEnv.Pattern.RecordDestruct{
@@ -2291,12 +2290,12 @@ pub fn sliceMatchBranchPatterns(store: *const NodeStore, span: ModuleEnv.Expr.Ma
 
 /// Creates a slice corresponding to a span.
 pub fn firstFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @enumFromInt(store.extra_data.items[span.start]));
+    return @as(T, @enumFromInt(store.extra_data.items.items[span.start]));
 }
 
 /// Creates a slice corresponding to a span.
 pub fn lastFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @enumFromInt(store.extra_data.items[span.start + span.len - 1]));
+    return @as(T, @enumFromInt(store.extra_data.items.items[span.start + span.len - 1]));
 }
 
 /// Retrieve a slice of IfBranch Idx's from a span
@@ -2484,6 +2483,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
             node.tag = .diag_malformed_where_clause;
             region = r.region;
         },
+        .where_clause_not_allowed_in_type_decl => |r| {
+            node.tag = .diag_where_clause_not_allowed_in_type_decl;
+            region = r.region;
+        },
         .var_across_function_boundary => |r| {
             node.tag = .diag_var_across_function_boundary;
             region = r.region;
@@ -2561,8 +2564,13 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
             node.tag = .diag_type_shadowed_warning;
             region = r.region;
             node.data_1 = @bitCast(r.name);
-            node.data_2 = r.original_region.start.offset;
-            node.data_3 = r.original_region.end.offset | (@as(u32, @intFromBool(r.cross_scope)) << 31);
+            node.data_2 = @intFromBool(r.cross_scope);
+
+            // Store original region in extra_data
+            const extra_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, r.original_region.start.offset);
+            _ = try store.extra_data.append(store.gpa, r.original_region.end.offset);
+            node.data_3 = extra_start;
         },
         .type_parameter_conflict => |r| {
             node.tag = .diag_type_parameter_conflict;
@@ -2797,6 +2805,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
         .diag_malformed_where_clause => return ModuleEnv.Diagnostic{ .malformed_where_clause = .{
             .region = store.getRegionAt(node_idx),
         } },
+        .diag_where_clause_not_allowed_in_type_decl => return ModuleEnv.Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
+            .region = store.getRegionAt(node_idx),
+        } },
         .diag_type_alias_redeclared => return ModuleEnv.Diagnostic{ .type_alias_redeclared = .{
             .name = @bitCast(node.data_1),
             .redeclared_region = store.getRegionAt(node_idx),
@@ -2813,15 +2824,20 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
                 .end = .{ .offset = @intCast(node.data_3) },
             },
         } },
-        .diag_type_shadowed_warning => return ModuleEnv.Diagnostic{ .type_shadowed_warning = .{
-            .name = @bitCast(node.data_1),
-            .region = store.getRegionAt(node_idx),
-            .original_region = .{
-                .start = .{ .offset = @intCast(node.data_2) },
-                .end = .{ .offset = @intCast(node.data_3 & 0x7FFFFFFF) },
-            },
-            .cross_scope = (node.data_3 & 0x80000000) != 0,
-        } },
+        .diag_type_shadowed_warning => {
+            const extra_data = store.extra_data.items.items[node.data_3..];
+            const original_start = extra_data[0];
+            const original_end = extra_data[1];
+            return ModuleEnv.Diagnostic{ .type_shadowed_warning = .{
+                .name = @bitCast(node.data_1),
+                .region = store.getRegionAt(node_idx),
+                .cross_scope = node.data_2 != 0,
+                .original_region = .{
+                    .start = .{ .offset = original_start },
+                    .end = .{ .offset = original_end },
+                },
+            } };
+        },
         .diag_type_parameter_conflict => {
             const extra_data = store.extra_data.items.items[node.data_3..];
             const original_start = extra_data[0];
@@ -3050,7 +3066,7 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
 pub fn serialize(
     self: *const NodeStore,
     allocator: std.mem.Allocator,
-    writer: *collections.CompactWriter,
+    writer: *CompactWriter,
 ) std.mem.Allocator.Error!*const NodeStore {
     // First, write the NodeStore struct itself
     const offset_self = try writer.appendAlloc(allocator, NodeStore);
@@ -3092,6 +3108,65 @@ pub fn relocate(self: *NodeStore, offset: isize) void {
     // Note: scratch arrays are empty after deserialization, so no need to relocate
 }
 
+/// Serialized representation of NodeStore
+pub const Serialized = struct {
+    nodes: Node.List.Serialized,
+    regions: Region.List.Serialized,
+    extra_data: collections.SafeList(u32).Serialized,
+
+    /// Serialize a NodeStore into this Serialized struct, appending data to the writer
+    pub fn serialize(
+        self: *Serialized,
+        store: *const NodeStore,
+        allocator: std.mem.Allocator,
+        writer: *CompactWriter,
+    ) std.mem.Allocator.Error!void {
+        // Serialize nodes
+        try self.nodes.serialize(&store.nodes, allocator, writer);
+        // Serialize regions
+        try self.regions.serialize(&store.regions, allocator, writer);
+        // Serialize extra_data
+        try self.extra_data.serialize(&store.extra_data, allocator, writer);
+    }
+
+    /// Deserialize this Serialized struct into a NodeStore
+    pub fn deserialize(self: *Serialized, offset: i64) *NodeStore {
+        // NodeStore.Serialized should be at least as big as NodeStore
+        std.debug.assert(@sizeOf(Serialized) >= @sizeOf(NodeStore));
+
+        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+        const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
+
+        // Deserialize the lists
+        store.nodes = self.nodes.deserialize(offset).*;
+        store.regions = self.regions.deserialize(offset).*;
+        store.extra_data = self.extra_data.deserialize(offset).*;
+
+        // Initialize scratch arrays as empty
+        store.scratch_statements = .{ .items = .{} };
+        store.scratch_exprs = .{ .items = .{} };
+        store.scratch_captures = .{ .items = .{} };
+        store.scratch_patterns = .{ .items = .{} };
+        store.scratch_record_fields = .{ .items = .{} };
+        store.scratch_pattern_record_fields = .{ .items = .{} };
+        store.scratch_record_destructs = .{ .items = .{} };
+        store.scratch_match_branches = .{ .items = .{} };
+        store.scratch_match_branch_patterns = .{ .items = .{} };
+        store.scratch_if_branches = .{ .items = .{} };
+        store.scratch_type_annos = .{ .items = .{} };
+        store.scratch_anno_record_fields = .{ .items = .{} };
+        store.scratch_exposed_items = .{ .items = .{} };
+        store.scratch_defs = .{ .items = .{} };
+        store.scratch_where_clauses = .{ .items = .{} };
+        store.scratch_diagnostics = .{ .items = .{} };
+
+        // gpa will be set by the caller
+        store.gpa = undefined;
+
+        return store;
+    }
+};
+
 test "NodeStore empty CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -3108,7 +3183,7 @@ test "NodeStore empty CompactWriter roundtrip" {
     defer file.close();
 
     // Serialize using CompactWriter
-    var writer = collections.CompactWriter{
+    var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
@@ -3177,7 +3252,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     defer file.close();
 
     // Serialize
-    var writer = collections.CompactWriter{
+    var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
@@ -3284,7 +3359,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     defer file.close();
 
     // Serialize
-    var writer = collections.CompactWriter{
+    var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };

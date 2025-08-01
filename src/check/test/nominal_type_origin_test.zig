@@ -1,13 +1,14 @@
 //! Tests for displaying nominal type origins in error messages
 
 const std = @import("std");
-const testing = std.testing;
 const base = @import("base");
 const types_mod = @import("types");
-const snapshot = @import("../snapshot.zig");
-const Ident = base.Ident;
+const Check = @import("check");
 
+const Ident = base.Ident;
+const testing = std.testing;
 const test_allocator = testing.allocator;
+const snapshot = Check.snapshot;
 
 test "nominal type origin - displays origin in snapshot writer" {
     // Create a simple test environment
