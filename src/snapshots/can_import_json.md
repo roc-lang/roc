@@ -15,7 +15,7 @@ main = Json.utf8
 MODULE NOT FOUND - can_import_json.md:3:1:3:17
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `json.Json` was not found in this Roc project.
+The module `Json.Json` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_json.md:3:1:3:17:**

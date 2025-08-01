@@ -56,7 +56,7 @@ MODULE NOT IMPORTED - can_import_type_annotations.md:26:18:26:36
 MODULE NOT IMPORTED - can_import_type_annotations.md:26:64:26:81
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `http.Client` was not found in this Roc project.
+The module `Http.Client` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_type_annotations.md:3:1:3:56:**
@@ -67,7 +67,7 @@ import http.Client as Http exposing [Request, Response]
 
 
 **MODULE NOT FOUND**
-The module `json.Json` was not found in this Roc project.
+The module `Json.Json` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_type_annotations.md:4:1:4:17:**
@@ -78,7 +78,7 @@ import json.Json
 
 
 **MODULE NOT FOUND**
-The module `utils.Result` was not found in this Roc project.
+The module `Utils.Result` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_type_annotations.md:5:1:5:38:**
@@ -624,29 +624,29 @@ combineResults = |result1, result2|
 						(ty-var @30.67-30.70 (name "err")))))))
 	(s-import @3.1-3.56 (module "http.Client") (qualifier "http") (alias "Http")
 		(exposes
-			(exposed (name "request") (wildcard false))
-			(exposed (name "response") (wildcard false))))
+			(exposed (name "Request") (wildcard false))
+			(exposed (name "Response") (wildcard false))))
 	(s-import @4.1-4.17 (module "json.Json") (qualifier "json")
 		(exposes))
 	(s-import @5.1-5.38 (module "utils.Result") (qualifier "utils")
 		(exposes
-			(exposed (name "result") (wildcard false)))))
+			(exposed (name "Result") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @8.1-8.15 (type "Error -> Error"))
-		(patt @11.1-11.10 (type "str -> Error"))
+		(patt @11.1-11.10 (type "Str -> Error"))
 		(patt @14.1-14.10 (type "Error -> Error"))
 		(patt @23.1-23.7 (type "Error"))
-		(patt @27.1-27.15 (type "Error, str -> Error"))
+		(patt @27.1-27.15 (type "Error, Str -> Error"))
 		(patt @31.1-31.15 (type "Error, Error -> Error")))
 	(expressions
 		(expr @8.18-8.44 (type "Error -> Error"))
-		(expr @11.13-11.38 (type "str -> Error"))
+		(expr @11.13-11.38 (type "Str -> Error"))
 		(expr @14.13-20.2 (type "Error -> Error"))
 		(expr @23.10-23.28 (type "Error"))
-		(expr @27.18-27.82 (type "Error, str -> Error"))
+		(expr @27.18-27.82 (type "Error, Str -> Error"))
 		(expr @31.18-39.6 (type "Error, Error -> Error"))))
 ~~~

@@ -22,7 +22,7 @@ x = -1
     ^^
 
 However, its inferred type is **unsigned**:
-    _u8_
+    _U8_
 
 # TOKENS
 ~~~zig

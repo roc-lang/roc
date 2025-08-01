@@ -63,7 +63,7 @@ NO CHANGE
 			(declared-type
 				(ty @5.7-5.14 (name "BadType")))))
 	(s-nominal-decl @3.1-3.13
-		(ty-header @3.1-3.8 (name "badType"))
+		(ty-header @3.1-3.8 (name "BadType"))
 		(ty-underscore @1.1-1.1)))
 ~~~
 # TYPES
@@ -73,7 +73,7 @@ NO CHANGE
 		(patt @6.1-6.4 (type "Error")))
 	(type_decls
 		(nominal @3.1-3.13 (type "Error")
-			(ty-header @3.1-3.8 (name "badType"))))
+			(ty-header @3.1-3.8 (name "BadType"))))
 	(expressions
 		(expr @6.7-6.9 (type "Error"))))
 ~~~

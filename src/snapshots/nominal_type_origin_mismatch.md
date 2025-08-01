@@ -22,7 +22,7 @@ UNDECLARED TYPE - nominal_type_origin_mismatch.md:5:17:5:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:6:18:6:19
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `data` was not found in this Roc project.
+The module `Data` was not found in this Roc project.
 
 You're attempting to use this module here:
 **nominal_type_origin_mismatch.md:3:1:3:30:**
@@ -128,7 +128,7 @@ main =
 				(e-literal @10.20-10.32 (string "not a person")))))
 	(s-import @3.1-3.30 (module "Data")
 		(exposes
-			(exposed (name "person") (wildcard false)))))
+			(exposed (name "Person") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

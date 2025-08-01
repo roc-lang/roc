@@ -138,7 +138,7 @@ NO CHANGE
 		(e-nominal @13.9-13.19 (nominal "Maybe")
 			(e-tag @13.9-13.19 (name "None"))))
 	(s-nominal-decl @3.1-3.28
-		(ty-header @3.1-3.9 (name "maybe")
+		(ty-header @3.1-3.9 (name "Maybe")
 			(ty-args
 				(ty-var @3.7-3.8 (name "a"))))
 		(ty-tag-union @3.13-3.28
@@ -150,18 +150,18 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.6 (type "a -> maybe(a)"))
-		(patt @9.1-9.6 (type "maybe(a)"))
-		(patt @11.1-11.6 (type "_arg -> maybe(a)"))
-		(patt @13.1-13.6 (type "maybe(a)")))
+		(patt @6.1-6.6 (type "a -> Maybe(a)"))
+		(patt @9.1-9.6 (type "Maybe(a)"))
+		(patt @11.1-11.6 (type "_arg -> Maybe(a)"))
+		(patt @13.1-13.6 (type "Maybe(a)")))
 	(type_decls
-		(nominal @3.1-3.28 (type "maybe(a)")
-			(ty-header @3.1-3.9 (name "maybe")
+		(nominal @3.1-3.28 (type "Maybe(a)")
+			(ty-header @3.1-3.9 (name "Maybe")
 				(ty-args
 					(ty-var @3.7-3.8 (name "a"))))))
 	(expressions
-		(expr @6.9-6.26 (type "a -> maybe(a)"))
-		(expr @9.9-9.19 (type "maybe(a)"))
-		(expr @11.9-11.26 (type "_arg -> maybe(a)"))
-		(expr @13.9-13.19 (type "maybe(a)"))))
+		(expr @6.9-6.26 (type "a -> Maybe(a)"))
+		(expr @9.9-9.19 (type "Maybe(a)"))
+		(expr @11.9-11.26 (type "_arg -> Maybe(a)"))
+		(expr @13.9-13.19 (type "Maybe(a)"))))
 ~~~

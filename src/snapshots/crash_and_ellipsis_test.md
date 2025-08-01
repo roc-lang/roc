@@ -82,7 +82,7 @@ testCrash : U64 -> U64
                    ^^^
 
 It is of type:
-    _u64_
+    _U64_
 
 But you are trying to use it as:
     _{}_
@@ -96,7 +96,7 @@ testCrashSimple : U64 -> U64
                          ^^^
 
 It is of type:
-    _u64_
+    _U64_
 
 But you are trying to use it as:
     _{}_
@@ -300,13 +300,13 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.13 (type "u64 -> u64"))
-		(patt @9.1-9.10 (type "u64 -> Error"))
-		(patt @15.1-15.16 (type "u64 -> Error"))
+		(patt @5.1-5.13 (type "U64 -> U64"))
+		(patt @9.1-9.10 (type "U64 -> Error"))
+		(patt @15.1-15.16 (type "U64 -> Error"))
 		(patt @19.1-19.6 (type "_arg -> List(_elem)")))
 	(expressions
-		(expr @5.16-5.23 (type "u64 -> u64"))
-		(expr @9.13-11.2 (type "u64 -> Error"))
-		(expr @15.19-17.2 (type "u64 -> Error"))
+		(expr @5.16-5.23 (type "U64 -> U64"))
+		(expr @9.13-11.2 (type "U64 -> Error"))
+		(expr @15.19-17.2 (type "U64 -> Error"))
 		(expr @19.9-24.2 (type "_arg -> List(_elem)"))))
 ~~~

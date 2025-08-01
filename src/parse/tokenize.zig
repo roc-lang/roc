@@ -398,6 +398,8 @@ pub const Token = struct {
 
     pub const valid_number_suffixes = std.StaticStringMap(void).initComptime(.{
         .{ "dec", .{} },
+        .{ "f32", .{} },
+        .{ "f64", .{} },
         .{ "i128", .{} },
         .{ "i16", .{} },
         .{ "i32", .{} },

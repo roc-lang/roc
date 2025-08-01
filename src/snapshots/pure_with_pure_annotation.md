@@ -144,11 +144,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.4 (type "i32, i32 -> i32"))
-		(patt @9.1-9.7 (type "i32 -> i32"))
-		(patt @11.1-11.6 (type "i32")))
+		(patt @5.1-5.4 (type "I32, I32 -> I32"))
+		(patt @9.1-9.7 (type "I32 -> I32"))
+		(patt @11.1-11.6 (type "I32")))
 	(expressions
-		(expr @5.7-5.30 (type "i32, i32 -> i32"))
-		(expr @9.10-9.23 (type "i32 -> i32"))
-		(expr @11.9-11.18 (type "i32"))))
+		(expr @5.7-5.30 (type "I32, I32 -> I32"))
+		(expr @9.10-9.23 (type "I32 -> I32"))
+		(expr @11.9-11.18 (type "I32"))))
 ~~~

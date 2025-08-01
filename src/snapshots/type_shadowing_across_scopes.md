@@ -221,7 +221,7 @@ InnerModule :
 					(ty @5.15-5.18 (name "Str"))
 					(ty @5.22-5.25 (name "Str"))))))
 	(s-alias-decl @3.1-3.31
-		(ty-header @3.1-3.13 (name "result")
+		(ty-header @3.1-3.13 (name "Result")
 			(ty-args
 				(ty-var @3.8-3.9 (name "a"))
 				(ty-var @3.11-3.12 (name "b"))))
@@ -231,22 +231,22 @@ InnerModule :
 			(ty-apply @3.24-3.30 (symbol "Err")
 				(ty-var @3.28-3.29 (name "b")))))
 	(s-alias-decl @10.1-11.31
-		(ty-header @10.1-10.12 (name "innerModule"))
+		(ty-header @10.1-10.12 (name "InnerModule"))
 		(ty-malformed @11.24-11.31)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.12 (type "str -> Str")))
+		(patt @6.1-6.12 (type "Str -> Str")))
 	(type_decls
-		(alias @3.1-3.31 (type "result(a, b)")
-			(ty-header @3.1-3.13 (name "result")
+		(alias @3.1-3.31 (type "Result(a, b)")
+			(ty-header @3.1-3.13 (name "Result")
 				(ty-args
 					(ty-var @3.8-3.9 (name "a"))
 					(ty-var @3.11-3.12 (name "b")))))
 		(alias @10.1-11.31 (type "Error")
-			(ty-header @10.1-10.12 (name "innerModule"))))
+			(ty-header @10.1-10.12 (name "InnerModule"))))
 	(expressions
-		(expr @6.15-7.16 (type "str -> Str"))))
+		(expr @6.15-7.16 (type "Str -> Str"))))
 ~~~

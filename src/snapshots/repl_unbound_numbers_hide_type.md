@@ -12,8 +12,8 @@ type=repl
 # OUTPUT
 42
 ---
-Evaluation error: error.LayoutError
+3.14e0
 ---
-42
+3
 # PROBLEMS
 NIL

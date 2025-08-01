@@ -942,8 +942,13 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             var report = Report.init(allocator, "MODULE NOT FOUND", .runtime_error);
 
-            const module_name_bytes = self.idents.getLowercase(data.module_name);
-            const module_name = try report.addOwnedString(module_name_bytes);
+            // Module names should always start with uppercase
+            const uppercase = try self.idents.getUppercase(data.module_name);
+            var name_buf = std.ArrayList(u8).init(allocator);
+            defer name_buf.deinit();
+            try name_buf.append(uppercase.first);
+            try name_buf.appendSlice(uppercase.rest);
+            const module_name = try report.addOwnedString(name_buf.items);
 
             // Format the message to match origin/main
             try report.document.addText("The module ");

@@ -13,7 +13,7 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
 INVALID STATEMENT - fuzz_crash_059.md:2:3:2:16
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `b` was not found in this Roc project.
+The module `B` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_059.md:1:20:2:2:**

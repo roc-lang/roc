@@ -41,7 +41,7 @@ MODULE NOT IMPORTED - can_import_unresolved_qualified.md:14:41:14:61
 UNUSED VARIABLE - can_import_unresolved_qualified.md:15:19:15:22
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `json.Json` was not found in this Roc project.
+The module `Json.Json` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_unresolved_qualified.md:3:1:3:17:**
@@ -52,7 +52,7 @@ import json.Json
 
 
 **MODULE NOT FOUND**
-The module `http.Client` was not found in this Roc project.
+The module `Http.Client` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_unresolved_qualified.md:4:1:4:27:**
@@ -261,7 +261,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @7.1-7.5 (type "Error"))
-		(patt @11.1-11.10 (type "Error -> str"))
+		(patt @11.1-11.10 (type "Error -> Str"))
 		(patt @15.1-15.15 (type "Error -> Error"))
 		(patt @18.1-18.7 (type "_a"))
 		(patt @21.1-21.7 (type "_a"))
@@ -269,7 +269,7 @@ NO CHANGE
 		(patt @27.1-27.7 (type "Error")))
 	(expressions
 		(expr @7.8-7.31 (type "Error"))
-		(expr @11.13-11.40 (type "Error -> str"))
+		(expr @11.13-11.40 (type "Error -> Str"))
 		(expr @15.18-15.51 (type "Error -> Error"))
 		(expr @18.10-18.28 (type "_a"))
 		(expr @21.10-21.31 (type "_a"))

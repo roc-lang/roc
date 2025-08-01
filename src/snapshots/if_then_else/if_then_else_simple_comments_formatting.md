@@ -55,5 +55,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.9 (type "[a, b]_others"))
+(expr @1.1-3.9 (type "[A, B]_others"))
 ~~~

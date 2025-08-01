@@ -341,7 +341,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 											(e-int @18.37-18.39 (value "42"))))
 									(e-tag @18.42-18.46 (name "None"))))))))))
 	(s-alias-decl @16.1-16.64
-		(ty-header @16.1-16.18 (name "complexType")
+		(ty-header @16.1-16.18 (name "ComplexType")
 			(ty-args
 				(ty-var @16.13-16.14 (name "a"))
 				(ty-var @16.16-16.17 (name "b"))))
@@ -363,7 +363,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(patt @18.1-18.6 (type "_arg -> Error")))
 	(type_decls
 		(alias @16.1-16.64 (type "Error")
-			(ty-header @16.1-16.18 (name "complexType")
+			(ty-header @16.1-16.18 (name "ComplexType")
 				(ty-args
 					(ty-var @16.13-16.14 (name "a"))
 					(ty-var @16.16-16.17 (name "b"))))))

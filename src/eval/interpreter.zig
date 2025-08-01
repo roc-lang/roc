@@ -38,6 +38,7 @@ const build_options = @import("build_options");
 const layout_store = @import("../layout/store.zig");
 const stack = @import("stack.zig");
 const collections = @import("collections");
+const builtins = @import("builtins");
 
 const SExprTree = base.SExprTree;
 const types_store = types.store;
@@ -45,6 +46,7 @@ const target = base.target;
 const Layout = layout.Layout;
 const LayoutTag = layout.LayoutTag;
 const target_usize = base.target.Target.native.target_usize;
+const RocDec = builtins.RocDec;
 
 /// Debug configuration set at build time using flag `zig build test -Dtrace-eval`
 ///
@@ -95,7 +97,10 @@ const WorkKind = enum {
     w_binop_lt,
     w_binop_ge,
     w_binop_le,
+    w_binop_and,
+    w_binop_or,
     w_unary_minus,
+    w_unary_not,
     w_if_check_condition,
     w_lambda_call,
     w_lambda_return,
@@ -270,11 +275,14 @@ pub const Interpreter = struct {
         while (self.take_work()) |work| {
             switch (work.kind) {
                 .w_eval_expr => try self.evalExpr(work.expr_idx),
-                .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le => {
+                .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
                     try self.completeBinop(work.kind);
                 },
                 .w_unary_minus => {
                     try self.completeUnaryMinus();
+                },
+                .w_unary_not => {
+                    try self.completeUnaryNot();
                 },
                 .w_if_check_condition => {
                     // The expr_idx encodes both the if expression and the branch index
@@ -475,6 +483,17 @@ pub const Interpreter = struct {
                 }
             },
 
+            .e_frac_f32 => |float_lit| {
+                const layout_idx = try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const result_ptr = (try self.pushStackValue(expr_layout)).?;
+
+                const typed_ptr = @as(*f32, @ptrCast(@alignCast(result_ptr)));
+                typed_ptr.* = float_lit.value;
+
+                self.traceEnter("PUSH e_frac_f32 {}", .{float_lit.value});
+            },
+
             .e_frac_f64 => |float_lit| {
                 const layout_idx = try self.getLayoutIdx(expr_idx);
                 const expr_layout = self.layout_cache.getLayout(layout_idx);
@@ -533,6 +552,8 @@ pub const Interpreter = struct {
                     .lt => .w_binop_lt,
                     .ge => .w_binop_ge,
                     .le => .w_binop_le,
+                    .@"and" => .w_binop_and,
+                    .@"or" => .w_binop_or,
                     else => return error.Crash,
                 };
 
@@ -747,6 +768,21 @@ pub const Interpreter = struct {
                 });
             },
 
+            // Unary not operation
+            .e_unary_not => |unary| {
+                // Push work to complete unary not after operand is evaluated
+                try self.work_stack.append(.{
+                    .kind = .w_unary_not,
+                    .expr_idx = expr_idx,
+                });
+
+                // Evaluate the operand expression
+                try self.work_stack.append(.{
+                    .kind = .w_eval_expr,
+                    .expr_idx = unary.expr,
+                });
+            },
+
             .e_block => |block| {
                 // Schedule cleanup work to run after the block is done.
                 self.schedule_work(.{
@@ -787,7 +823,43 @@ pub const Interpreter = struct {
                 }
             },
 
-            .e_str, .e_str_segment, .e_list, .e_dot_access, .e_lookup_external, .e_match, .e_frac_dec, .e_dec_small, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
+            .e_frac_dec => |dec_lit| {
+                const layout_idx = try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const result_ptr = (try self.pushStackValue(expr_layout)).?;
+
+                // Store RocDec value directly in memory
+                const typed_ptr = @as(*RocDec, @ptrCast(@alignCast(result_ptr)));
+                typed_ptr.* = dec_lit.value;
+
+                self.traceInfo(
+                    "Pushed decimal literal {}",
+                    .{dec_lit.value.num},
+                );
+            },
+
+            .e_dec_small => |small_dec| {
+                const layout_idx = try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const result_ptr = (try self.pushStackValue(expr_layout)).?;
+
+                // Convert small decimal to RocDec
+                // e_dec_small stores numerator/10^denominator_power_of_ten
+                // RocDec stores value * 10^18
+                // So we need: numerator * 10^(18-denominator_power_of_ten)
+                const scale_factor = std.math.pow(i128, 10, RocDec.decimal_places - small_dec.denominator_power_of_ten);
+                const dec_value = RocDec{ .num = @as(i128, small_dec.numerator) * scale_factor };
+
+                const typed_ptr = @as(*RocDec, @ptrCast(@alignCast(result_ptr)));
+                typed_ptr.* = dec_value;
+
+                self.traceInfo(
+                    "Pushed small decimal literal: numerator={}, denom_pow={}, result={}",
+                    .{ small_dec.numerator, small_dec.denominator_power_of_ten, dec_value.num },
+                );
+            },
+
+            .e_str, .e_str_segment, .e_list, .e_dot_access, .e_lookup_external, .e_match, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
                 return error.LayoutError;
             },
 
@@ -894,7 +966,7 @@ pub const Interpreter = struct {
         // Determine result layout
         const result_layout = switch (kind) {
             .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div => lhs.layout, // Numeric result
-            .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le => blk: {
+            .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => blk: {
                 // Boolean result
                 const bool_layout = Layout{
                     .tag = .scalar,
@@ -958,6 +1030,16 @@ pub const Interpreter = struct {
                 const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
                 bool_ptr.* = if (lhs_val <= rhs_val) 1 else 0;
             },
+            .w_binop_and => {
+                const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
+                // Boolean AND: both operands must be truthy (non-zero)
+                bool_ptr.* = if (lhs_val != 0 and rhs_val != 0) 1 else 0;
+            },
+            .w_binop_or => {
+                const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
+                // Boolean OR: at least one operand must be truthy (non-zero)
+                bool_ptr.* = if (lhs_val != 0 or rhs_val != 0) 1 else 0;
+            },
             else => unreachable,
         }
     }
@@ -985,6 +1067,41 @@ pub const Interpreter = struct {
         // Negate the value and write it back to the same location
         const result_val: i128 = -operand_val;
         self.writeIntToMemoryAndTrace(operand_value.ptr.?, result_val, operand_scalar.data.int);
+    }
+
+    fn completeUnaryNot(self: *Interpreter) EvalError!void {
+        // Pop the operand layout
+        const operand_value = try self.peekStackValue(1);
+        const operand_layout = operand_value.layout;
+
+        // For boolean operations, we expect a scalar type
+        if (operand_layout.tag != .scalar) {
+            self.traceInfo("Unary not operation failed: expected scalar layout, got {}", .{operand_layout.tag});
+            return error.LayoutError;
+        }
+
+        const operand_scalar = operand_layout.data.scalar;
+        self.traceInfo("Unary not operation: scalar tag = {}", .{operand_scalar.tag});
+
+        // Boolean tags (True/False) are represented as 1-byte scalar values
+        // We don't need to check the specific scalar tag since boolean tags can be
+        // represented as small integers - just verify it's a 1-byte scalar
+        // (which matches what we see in e_tag evaluation)
+
+        // Read the boolean value from memory
+        const bool_ptr: *u8 = @ptrCast(operand_value.ptr.?);
+        const bool_val = bool_ptr.*;
+
+        self.traceInfo("Unary not operation: bool tag value = {}", .{bool_val});
+
+        // Boolean tag values: 0 = False, 1 = True
+        // Negate the boolean value
+        const result_val: u8 = if (bool_val == 0) 1 else 0;
+
+        self.traceInfo("Unary not operation: !{} = {}", .{ bool_val, result_val });
+
+        // Write the negated value back to the same location
+        bool_ptr.* = result_val;
     }
 
     fn checkIfCondition(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, branch_index: u16) EvalError!void {

@@ -303,10 +303,10 @@ main! = |_| {
 				(e-lookup-local @38.5-38.11
 					(p-assign @30.5-30.11 (ident "userId"))))))
 	(s-alias-decl @4.1-4.13
-		(ty-header @4.1-4.7 (name "userId"))
+		(ty-header @4.1-4.7 (name "UserId"))
 		(ty @4.10-4.13 (name "U64")))
 	(s-alias-decl @7.1-7.37
-		(ty-header @7.1-7.16 (name "result")
+		(ty-header @7.1-7.16 (name "Result")
 			(ty-args
 				(ty-var @7.8-7.10 (name "ok"))
 				(ty-var @7.12-7.15 (name "err"))))
@@ -316,14 +316,14 @@ main! = |_| {
 			(ty-apply @7.28-7.36 (symbol "Err")
 				(ty-var @7.32-7.35 (name "err")))))
 	(s-alias-decl @10.1-10.35
-		(ty-header @10.1-10.7 (name "person"))
+		(ty-header @10.1-10.7 (name "Person"))
 		(ty-record @10.10-10.35
 			(field (field "name")
 				(ty @10.19-10.22 (name "Str")))
 			(field (field "age")
 				(ty @10.30-10.33 (name "U64")))))
 	(s-alias-decl @13.1-13.21
-		(ty-header @13.1-13.12 (name "mapFn")
+		(ty-header @13.1-13.12 (name "MapFn")
 			(ty-args
 				(ty-var @13.7-13.8 (name "a"))
 				(ty-var @13.10-13.11 (name "b"))))
@@ -331,14 +331,14 @@ main! = |_| {
 			(ty-var @13.15-13.16 (name "a"))
 			(ty-var @13.20-13.21 (name "b"))))
 	(s-alias-decl @16.1-16.38
-		(ty-header @16.1-16.18 (name "apiResponse")
+		(ty-header @16.1-16.18 (name "ApiResponse")
 			(ty-args
 				(ty-var @16.13-16.17 (name "data"))))
 		(ty-apply @16.21-16.38 (symbol "Result")
 			(ty-var @16.28-16.32 (name "data"))
 			(ty @16.34-16.37 (name "Str"))))
 	(s-alias-decl @19.1-19.47
-		(ty-header @19.1-19.6 (name "color"))
+		(ty-header @19.1-19.6 (name "Color"))
 		(ty-tag-union @19.9-19.47
 			(ty @19.10-19.13 (name "Red"))
 			(ty @19.15-19.20 (name "Green"))
@@ -348,7 +348,7 @@ main! = |_| {
 				(ty @19.39-19.41 (name "U8"))
 				(ty @19.43-19.45 (name "U8")))))
 	(s-alias-decl @22.1-25.2
-		(ty-header @22.1-22.16 (name "container")
+		(ty-header @22.1-22.16 (name "Container")
 			(ty-args
 				(ty-var @22.11-22.15 (name "item"))))
 		(ty-record @22.19-25.2
@@ -368,28 +368,28 @@ main! = |_| {
 	(defs
 		(patt @27.1-27.6 (type "_arg -> Num(_size2)")))
 	(type_decls
-		(alias @4.1-4.13 (type "userId")
-			(ty-header @4.1-4.7 (name "userId")))
-		(alias @7.1-7.37 (type "result(ok, err)")
-			(ty-header @7.1-7.16 (name "result")
+		(alias @4.1-4.13 (type "UserId")
+			(ty-header @4.1-4.7 (name "UserId")))
+		(alias @7.1-7.37 (type "Result(ok, err)")
+			(ty-header @7.1-7.16 (name "Result")
 				(ty-args
 					(ty-var @7.8-7.10 (name "ok"))
 					(ty-var @7.12-7.15 (name "err")))))
-		(alias @10.1-10.35 (type "person")
-			(ty-header @10.1-10.7 (name "person")))
-		(alias @13.1-13.21 (type "mapFn(a, b)")
-			(ty-header @13.1-13.12 (name "mapFn")
+		(alias @10.1-10.35 (type "Person")
+			(ty-header @10.1-10.7 (name "Person")))
+		(alias @13.1-13.21 (type "MapFn(a, b)")
+			(ty-header @13.1-13.12 (name "MapFn")
 				(ty-args
 					(ty-var @13.7-13.8 (name "a"))
 					(ty-var @13.10-13.11 (name "b")))))
-		(alias @16.1-16.38 (type "apiResponse(data)")
-			(ty-header @16.1-16.18 (name "apiResponse")
+		(alias @16.1-16.38 (type "ApiResponse(data)")
+			(ty-header @16.1-16.18 (name "ApiResponse")
 				(ty-args
 					(ty-var @16.13-16.17 (name "data")))))
-		(alias @19.1-19.47 (type "color")
-			(ty-header @19.1-19.6 (name "color")))
-		(alias @22.1-25.2 (type "container(item)")
-			(ty-header @22.1-22.16 (name "container")
+		(alias @19.1-19.47 (type "Color")
+			(ty-header @19.1-19.6 (name "Color")))
+		(alias @22.1-25.2 (type "Container(item)")
+			(ty-header @22.1-22.16 (name "Container")
 				(ty-args
 					(ty-var @22.11-22.15 (name "item"))))))
 	(expressions

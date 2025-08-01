@@ -202,13 +202,13 @@ NO CHANGE
 				(p-underscore @24.10-24.11))
 			(e-empty_record @24.13-24.15)))
 	(s-alias-decl @4.1-4.37
-		(ty-header @4.1-4.7 (name "status"))
+		(ty-header @4.1-4.7 (name "Status"))
 		(ty-tag-union @4.10-4.37
 			(ty @4.11-4.18 (name "Loading"))
 			(ty @4.20-4.28 (name "Complete"))
 			(ty @4.30-4.36 (name "Failed"))))
 	(s-alias-decl @7.1-7.55
-		(ty-header @7.1-7.7 (name "result"))
+		(ty-header @7.1-7.7 (name "Result"))
 		(ty-tag-union @7.10-7.55
 			(ty-apply @7.11-7.23 (symbol "Success")
 				(ty @7.19-7.22 (name "Str")))
@@ -218,14 +218,14 @@ NO CHANGE
 				(ty @7.45-7.48 (name "Str"))
 				(ty @7.50-7.53 (name "I32")))))
 	(s-alias-decl @10.1-10.50
-		(ty-header @10.1-10.9 (name "response"))
+		(ty-header @10.1-10.9 (name "Response"))
 		(ty-tag-union @10.12-10.50
 			(ty-apply @10.13-10.23 (symbol "Ok")
 				(ty @10.16-10.22 (name "Result")))
 			(ty @10.25-10.37 (name "NetworkError"))
 			(ty @10.39-10.49 (name "ParseError"))))
 	(s-alias-decl @13.1-13.52
-		(ty-header @13.1-13.10 (name "userState"))
+		(ty-header @13.1-13.10 (name "UserState"))
 		(ty-tag-union @13.13-13.52
 			(ty-apply @13.14-13.25 (symbol "Active")
 				(ty @13.21-13.24 (name "Str")))
@@ -233,7 +233,7 @@ NO CHANGE
 			(ty-apply @13.37-13.51 (symbol "Suspended")
 				(ty @13.47-13.50 (name "Str")))))
 	(s-alias-decl @14.1-14.58
-		(ty-header @14.1-14.16 (name "connectionState"))
+		(ty-header @14.1-14.16 (name "ConnectionState"))
 		(ty-tag-union @14.19-14.58
 			(ty @14.20-14.26 (name "Active"))
 			(ty @14.28-14.40 (name "Disconnected"))
@@ -244,22 +244,22 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.14 (type "result -> Str"))
-		(patt @22.1-22.15 (type "response -> Str"))
+		(patt @18.1-18.14 (type "Result -> Str"))
+		(patt @22.1-22.15 (type "Response -> Str"))
 		(patt @24.1-24.6 (type "_arg -> {}")))
 	(type_decls
-		(alias @4.1-4.37 (type "status")
-			(ty-header @4.1-4.7 (name "status")))
-		(alias @7.1-7.55 (type "result")
-			(ty-header @7.1-7.7 (name "result")))
-		(alias @10.1-10.50 (type "response")
-			(ty-header @10.1-10.9 (name "response")))
-		(alias @13.1-13.52 (type "userState")
-			(ty-header @13.1-13.10 (name "userState")))
-		(alias @14.1-14.58 (type "connectionState")
-			(ty-header @14.1-14.16 (name "connectionState"))))
+		(alias @4.1-4.37 (type "Status")
+			(ty-header @4.1-4.7 (name "Status")))
+		(alias @7.1-7.55 (type "Result")
+			(ty-header @7.1-7.7 (name "Result")))
+		(alias @10.1-10.50 (type "Response")
+			(ty-header @10.1-10.9 (name "Response")))
+		(alias @13.1-13.52 (type "UserState")
+			(ty-header @13.1-13.10 (name "UserState")))
+		(alias @14.1-14.58 (type "ConnectionState")
+			(ty-header @14.1-14.16 (name "ConnectionState"))))
 	(expressions
-		(expr @18.17-18.38 (type "result -> Str"))
-		(expr @22.18-22.39 (type "response -> Str"))
+		(expr @18.17-18.38 (type "Result -> Str"))
+		(expr @22.18-22.39 (type "Response -> Str"))
 		(expr @24.9-24.15 (type "_arg -> {}"))))
 ~~~

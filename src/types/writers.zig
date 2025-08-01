@@ -370,7 +370,10 @@ pub const TypeWriter = struct {
 
     /// Write an alias type
     fn writeAlias(self: *Self, alias: Alias, root_var: Var) std.mem.Allocator.Error!void {
-        _ = try self.buf.writer().write(self.idents.getLowercase(alias.ident.ident_idx));
+        // Type alias names should be uppercase (e.g., ServerConfig, not serverConfig)
+        const uppercase = try self.idents.getUppercase(alias.ident.ident_idx);
+        try self.buf.append(uppercase.first);
+        _ = try self.buf.writer().write(uppercase.rest);
         var args_iter = self.types.iterAliasArgs(alias);
         if (args_iter.count() > 0) {
             _ = try self.buf.writer().write("(");
@@ -463,7 +466,21 @@ pub const TypeWriter = struct {
 
     /// Write a nominal type
     fn writeNominalType(self: *Self, nominal_type: NominalType, root_var: Var) std.mem.Allocator.Error!void {
-        _ = try self.buf.writer().write(self.idents.getLowercase(nominal_type.ident.ident_idx));
+        const ident_idx = nominal_type.ident.ident_idx;
+        const lowercase_text = self.idents.getLowercase(ident_idx);
+
+        // Special handling for builtin types that have specific capitalization
+        if (std.mem.eql(u8, lowercase_text, "str")) {
+            _ = try self.buf.writer().write("Str");
+        } else if (lowercase_text.len > 0) {
+            // For other nominal types, use the uppercase version of the identifier
+            const uppercase = try self.idents.getUppercase(ident_idx);
+            try self.buf.append(uppercase.first);
+            _ = try self.buf.writer().write(uppercase.rest);
+        } else {
+            // Empty identifier - shouldn't happen
+            _ = try self.buf.writer().write(lowercase_text);
+        }
 
         var args_iter = self.types.iterNominalArgs(nominal_type);
         if (args_iter.count() > 0) {
@@ -680,7 +697,10 @@ pub const TypeWriter = struct {
 
     /// Write a single tag
     fn writeTag(self: *Self, tag: Tag, root_var: Var) std.mem.Allocator.Error!void {
-        _ = try self.buf.writer().write(self.idents.getLowercase(tag.name));
+        // Tag names should be uppercase (e.g., Apple, Some, None)
+        const uppercase = try self.idents.getUppercase(tag.name);
+        try self.buf.append(uppercase.first);
+        _ = try self.buf.writer().write(uppercase.rest);
         const args = self.types.sliceVars(tag.args);
         if (args.len > 0) {
             _ = try self.buf.writer().write("(");

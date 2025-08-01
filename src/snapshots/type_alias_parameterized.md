@@ -136,7 +136,7 @@ NO CHANGE
 					(e-int @8.22-8.23 (value "1"))
 					(e-int @8.25-8.26 (value "2"))))))
 	(s-alias-decl @3.1-3.20
-		(ty-header @3.1-3.11 (name "pair")
+		(ty-header @3.1-3.11 (name "Pair")
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))
 				(ty-var @3.9-3.10 (name "b"))))
@@ -151,8 +151,8 @@ NO CHANGE
 		(patt @6.1-6.9 (type "Error"))
 		(patt @8.1-8.6 (type "_arg -> _ret")))
 	(type_decls
-		(alias @3.1-3.20 (type "pair(a, b)")
-			(ty-header @3.1-3.11 (name "pair")
+		(alias @3.1-3.20 (type "Pair(a, b)")
+			(ty-header @3.1-3.11 (name "Pair")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))
 					(ty-var @3.9-3.10 (name "b"))))))

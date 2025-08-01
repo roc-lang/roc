@@ -47,7 +47,7 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-nominal-decl @3.1-3.13
-		(ty-header @3.1-3.8 (name "badType"))
+		(ty-header @3.1-3.8 (name "BadType"))
 		(ty-underscore @1.1-1.1)))
 ~~~
 # TYPES
@@ -56,6 +56,6 @@ NO CHANGE
 	(defs)
 	(type_decls
 		(nominal @3.1-3.13 (type "Error")
-			(ty-header @3.1-3.8 (name "badType"))))
+			(ty-header @3.1-3.8 (name "BadType"))))
 	(expressions))
 ~~~

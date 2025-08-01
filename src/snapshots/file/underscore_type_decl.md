@@ -264,7 +264,7 @@ Pair3(_, _) = Pair(0, 1)
 
 
 **MODULE NOT FOUND**
-The module `module` was not found in this Roc project.
+The module `Module` was not found in this Roc project.
 
 You're attempting to use this module here:
 **underscore_type_decl.md:3:1:3:30:**
@@ -363,7 +363,7 @@ import Module exposing [Pair]
 (can-ir
 	(s-import @3.1-3.30 (module "Module")
 		(exposes
-			(exposed (name "pair") (wildcard false)))))
+			(exposed (name "Pair") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

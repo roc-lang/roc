@@ -282,26 +282,26 @@ quux = ("hello", 42)
 			(declared-type
 				(ty @25.8-25.16 (name "BadTuple")))))
 	(s-nominal-decl @3.1-3.13
-		(ty-header @3.1-3.8 (name "badType"))
+		(ty-header @3.1-3.8 (name "BadType"))
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @8.1-8.19
-		(ty-header @8.1-8.8 (name "badList"))
+		(ty-header @8.1-8.8 (name "BadList"))
 		(ty-apply @8.12-8.19 (symbol "List")
 			(ty-underscore @8.17-8.17)))
 	(s-nominal-decl @13.1-13.38
-		(ty-header @13.1-13.10 (name "badRecord"))
+		(ty-header @13.1-13.10 (name "BadRecord"))
 		(ty-record @13.14-13.38
 			(field (field "field")
 				(ty-underscore @1.1-1.1))
 			(field (field "other")
 				(ty @13.33-13.36 (name "U32")))))
 	(s-nominal-decl @18.1-18.22
-		(ty-header @18.1-18.12 (name "badFunction"))
+		(ty-header @18.1-18.12 (name "BadFunction"))
 		(ty-fn @18.16-18.22 (effectful false)
 			(ty-underscore @1.1-1.1)
 			(ty-underscore @1.1-1.1)))
 	(s-nominal-decl @23.1-23.21
-		(ty-header @23.1-23.9 (name "badTuple"))
+		(ty-header @23.1-23.9 (name "BadTuple"))
 		(ty-tuple @23.13-23.21
 			(ty-underscore @23.14-23.14)
 			(ty @23.17-23.20 (name "U32")))))
@@ -317,15 +317,15 @@ quux = ("hello", 42)
 		(patt @26.1-26.5 (type "Error")))
 	(type_decls
 		(nominal @3.1-3.13 (type "Error")
-			(ty-header @3.1-3.8 (name "badType")))
+			(ty-header @3.1-3.8 (name "BadType")))
 		(nominal @8.1-8.19 (type "Error")
-			(ty-header @8.1-8.8 (name "badList")))
+			(ty-header @8.1-8.8 (name "BadList")))
 		(nominal @13.1-13.38 (type "Error")
-			(ty-header @13.1-13.10 (name "badRecord")))
+			(ty-header @13.1-13.10 (name "BadRecord")))
 		(nominal @18.1-18.22 (type "Error")
-			(ty-header @18.1-18.12 (name "badFunction")))
+			(ty-header @18.1-18.12 (name "BadFunction")))
 		(nominal @23.1-23.21 (type "Error")
-			(ty-header @23.1-23.9 (name "badTuple"))))
+			(ty-header @23.1-23.9 (name "BadTuple"))))
 	(expressions
 		(expr @6.7-6.9 (type "Error"))
 		(expr @11.7-11.16 (type "Error"))

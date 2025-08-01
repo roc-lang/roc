@@ -75,7 +75,7 @@ B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
 
 
 **MODULE NOT FOUND**
-The module `i1` was not found in this Roc project.
+The module `I1` was not found in this Roc project.
 
 You're attempting to use this module here:
 **everything.md:4:1:4:30:**
@@ -86,7 +86,7 @@ import I1 exposing [I11, I12]
 
 
 **MODULE NOT FOUND**
-The module `i2` was not found in this Roc project.
+The module `I2` was not found in this Roc project.
 
 You're attempting to use this module here:
 **everything.md:5:1:5:46:**
@@ -497,17 +497,17 @@ NO CHANGE
 										(e-lookup-local @29.17-29.18
 											(p-assign @29.7-29.8 (ident "a"))))))))))))
 	(s-alias-decl @8.1-8.74
-		(ty-header @8.1-8.5 (name "a")
+		(ty-header @8.1-8.5 (name "A")
 			(ty-args
 				(ty-var @8.3-8.4 (name "a"))))
 		(ty-var @8.8-8.9 (name "a")))
 	(s-alias-decl @9.1-9.74
-		(ty-header @9.1-9.5 (name "b")
+		(ty-header @9.1-9.5 (name "B")
 			(ty-args
 				(ty-var @9.3-9.4 (name "b"))))
 		(ty-var @9.8-9.9 (name "b")))
 	(s-alias-decl @11.1-11.17
-		(ty-header @11.1-11.8 (name "c")
+		(ty-header @11.1-11.8 (name "C")
 			(ty-args
 				(ty-var @11.3-11.4 (name "a"))
 				(ty-var @11.6-11.7 (name "b"))))
@@ -515,7 +515,7 @@ NO CHANGE
 			(ty-var @11.12-11.13 (name "a"))
 			(ty-var @11.15-11.16 (name "b"))))
 	(s-alias-decl @12.1-12.18
-		(ty-header @12.1-12.8 (name "d")
+		(ty-header @12.1-12.8 (name "D")
 			(ty-args
 				(ty-var @12.3-12.4 (name "a"))
 				(ty-var @12.6-12.7 (name "b"))))
@@ -523,25 +523,25 @@ NO CHANGE
 			(ty-var @12.13-12.14 (name "a"))
 			(ty-var @12.16-12.17 (name "b"))))
 	(s-alias-decl @13.1-13.25
-		(ty-header @13.1-13.2 (name "e"))
+		(ty-header @13.1-13.2 (name "E"))
 		(ty-record @13.5-13.25
 			(field (field "a")
 				(ty @13.11-13.14 (name "Str")))
 			(field (field "b")
 				(ty @13.20-13.23 (name "Str")))))
 	(s-alias-decl @14.1-14.11
-		(ty-header @14.1-14.2 (name "f"))
+		(ty-header @14.1-14.2 (name "F"))
 		(ty-tag-union @14.5-14.11
 			(ty @14.6-14.7 (name "A"))
 			(ty @14.9-14.10 (name "B"))))
 	(s-import @4.1-4.30 (module "I1")
 		(exposes
-			(exposed (name "i11") (wildcard false))
-			(exposed (name "i12") (wildcard false))))
+			(exposed (name "I11") (wildcard false))
+			(exposed (name "I12") (wildcard false))))
 	(s-import @5.1-5.46 (module "I2")
 		(exposes
-			(exposed (name "i21") (alias "ias1") (wildcard false))
-			(exposed (name "i22") (alias "ias2") (wildcard false))))
+			(exposed (name "I21") (alias "ias1") (wildcard false))
+			(exposed (name "I22") (alias "ias2") (wildcard false))))
 	(s-type-anno @16.1-16.42 (name "g")
 		(ty-fn @16.5-16.11 (effectful false)
 			(ty-var @16.5-16.6 (name "e"))
@@ -556,30 +556,30 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.2 (type "[z1((field, field2)), z2(i, j), z3(k), z4(List(elem))]others, [z1((field3, field4)), z2(l, m), z3(n), z4(List(elem2))]others2 -> _ret")))
+		(patt @18.1-18.2 (type "[Z1((field, field2)), Z2(i, j), Z3(k), Z4(List(elem))]others, [Z1((field3, field4)), Z2(l, m), Z3(n), Z4(List(elem2))]others2 -> _ret")))
 	(type_decls
-		(alias @8.1-8.74 (type "a(a)")
-			(ty-header @8.1-8.5 (name "a")
+		(alias @8.1-8.74 (type "A(a)")
+			(ty-header @8.1-8.5 (name "A")
 				(ty-args
 					(ty-var @8.3-8.4 (name "a")))))
-		(alias @9.1-9.74 (type "b(b)")
-			(ty-header @9.1-9.5 (name "b")
+		(alias @9.1-9.74 (type "B(b)")
+			(ty-header @9.1-9.5 (name "B")
 				(ty-args
 					(ty-var @9.3-9.4 (name "b")))))
-		(alias @11.1-11.17 (type "c(a, b)")
-			(ty-header @11.1-11.8 (name "c")
+		(alias @11.1-11.17 (type "C(a, b)")
+			(ty-header @11.1-11.8 (name "C")
 				(ty-args
 					(ty-var @11.3-11.4 (name "a"))
 					(ty-var @11.6-11.7 (name "b")))))
-		(alias @12.1-12.18 (type "d(a, b)")
-			(ty-header @12.1-12.8 (name "d")
+		(alias @12.1-12.18 (type "D(a, b)")
+			(ty-header @12.1-12.8 (name "D")
 				(ty-args
 					(ty-var @12.3-12.4 (name "a"))
 					(ty-var @12.6-12.7 (name "b")))))
-		(alias @13.1-13.25 (type "e")
-			(ty-header @13.1-13.2 (name "e")))
-		(alias @14.1-14.11 (type "f")
-			(ty-header @14.1-14.2 (name "f"))))
+		(alias @13.1-13.25 (type "E")
+			(ty-header @13.1-13.2 (name "E")))
+		(alias @14.1-14.11 (type "F")
+			(ty-header @14.1-14.2 (name "F"))))
 	(expressions
-		(expr @18.5-31.2 (type "[z1((field, field2)), z2(i, j), z3(k), z4(List(elem))]others, [z1((field3, field4)), z2(l, m), z3(n), z4(List(elem2))]others2 -> _ret"))))
+		(expr @18.5-31.2 (type "[Z1((field, field2)), Z2(i, j), Z3(k), Z4(List(elem))]others, [Z1((field3, field4)), Z2(l, m), Z3(n), Z4(List(elem2))]others2 -> _ret"))))
 ~~~

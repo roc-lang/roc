@@ -20,7 +20,7 @@ main = {
 MODULE NOT FOUND - import_exposing_basic.md:3:1:3:43
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `json.Json` was not found in this Roc project.
+The module `Json.Json` was not found in this Roc project.
 
 You're attempting to use this module here:
 **import_exposing_basic.md:3:1:3:43:**

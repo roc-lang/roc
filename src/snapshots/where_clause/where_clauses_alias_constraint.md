@@ -92,7 +92,7 @@ NO CHANGE
 					(ty-apply @6.22-6.32 (symbol "List")
 						(ty-var @6.27-6.31 (name "elem")))))))
 	(s-alias-decl @3.1-4.48
-		(ty-header @3.1-3.8 (name "sort")
+		(ty-header @3.1-3.8 (name "Sort")
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))))
 		(ty-var @3.11-3.12 (name "a")))
@@ -112,8 +112,8 @@ NO CHANGE
 	(defs
 		(patt @7.1-7.5 (type "Error -> Error")))
 	(type_decls
-		(alias @3.1-4.48 (type "sort(a)")
-			(ty-header @3.1-3.8 (name "sort")
+		(alias @3.1-4.48 (type "Sort(a)")
+			(ty-header @3.1-3.8 (name "Sort")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))))))
 	(expressions

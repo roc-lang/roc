@@ -119,16 +119,16 @@ NO CHANGE
 			(declared-type
 				(ty @14.13-14.24 (name "GoodDerived")))))
 	(s-nominal-decl @3.1-3.13
-		(ty-header @3.1-3.8 (name "badBase"))
+		(ty-header @3.1-3.8 (name "BadBase"))
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @5.1-5.22
-		(ty-header @5.1-5.11 (name "badDerived"))
+		(ty-header @5.1-5.11 (name "BadDerived"))
 		(ty @5.15-5.22 (name "BadBase")))
 	(s-nominal-decl @10.1-10.16
-		(ty-header @10.1-10.9 (name "goodBase"))
+		(ty-header @10.1-10.9 (name "GoodBase"))
 		(ty @10.13-10.16 (name "Str")))
 	(s-nominal-decl @12.1-12.24
-		(ty-header @12.1-12.12 (name "goodDerived"))
+		(ty-header @12.1-12.12 (name "GoodDerived"))
 		(ty @12.16-12.24 (name "GoodBase"))))
 ~~~
 # TYPES
@@ -139,13 +139,13 @@ NO CHANGE
 		(patt @15.1-15.10 (type "Error")))
 	(type_decls
 		(nominal @3.1-3.13 (type "Error")
-			(ty-header @3.1-3.8 (name "badBase")))
+			(ty-header @3.1-3.8 (name "BadBase")))
 		(nominal @5.1-5.22 (type "Error")
-			(ty-header @5.1-5.11 (name "badDerived")))
-		(nominal @10.1-10.16 (type "goodBase")
-			(ty-header @10.1-10.9 (name "goodBase")))
-		(nominal @12.1-12.24 (type "goodDerived")
-			(ty-header @12.1-12.12 (name "goodDerived"))))
+			(ty-header @5.1-5.11 (name "BadDerived")))
+		(nominal @10.1-10.16 (type "GoodBase")
+			(ty-header @10.1-10.9 (name "GoodBase")))
+		(nominal @12.1-12.24 (type "GoodDerived")
+			(ty-header @12.1-12.12 (name "GoodDerived"))))
 	(expressions
 		(expr @8.9-8.15 (type "Error"))
 		(expr @15.13-15.19 (type "Error"))))

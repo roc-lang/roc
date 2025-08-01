@@ -8,18 +8,17 @@ type=expr
 !isValid
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - unary_op_not.md:1:1:1:2
+UNDEFINED VARIABLE - unary_op_not.md:1:2:1:9
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **!** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNDEFINED VARIABLE**
+Nothing is named `isValid` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-Here is the problematic code:
-**unary_op_not.md:1:1:1:2:**
+**unary_op_not.md:1:2:1:9:**
 ```roc
 !isValid
 ```
-^
+ ^^^^^^^
 
 
 # TOKENS
@@ -28,19 +27,19 @@ OpBang(1:1-1:2),LowerIdent(1:2-1:9),EndOfFile(1:9-1:9),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.1-1.2 (reason "expr_unexpected_token"))
+(unary "!"
+	(e-ident @1.2-1.9 (raw "isValid")))
 ~~~
 # FORMATTED
 ~~~roc
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(e-unary-not @1.1-1.9
+	(e-runtime-error (tag "ident_not_in_scope")))
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr @1.1-1.9 (type "Error"))
 ~~~

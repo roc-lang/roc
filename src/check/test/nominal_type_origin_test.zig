@@ -79,6 +79,9 @@ test "nominal type origin - displays origin in snapshot writer" {
         const result = buf.items;
         // Should show just "Person" without origin
         try testing.expect(std.mem.indexOf(u8, result, "Person") != null);
+        if (std.mem.indexOf(u8, result, "(from CurrentModule)") != null) {
+            std.debug.print("\nTest failure: Found '(from CurrentModule)' in output: {s}\n", .{result});
+        }
         try testing.expect(std.mem.indexOf(u8, result, "(from CurrentModule)") == null);
     }
 

@@ -21,7 +21,7 @@ MODULE NOT FOUND - external_decl_lookup.md:3:1:3:17
 MODULE NOT FOUND - external_decl_lookup.md:4:1:4:17
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
+The module `Pf.Stdout` was not found in this Roc project.
 
 You're attempting to use this module here:
 **external_decl_lookup.md:3:1:3:17:**
@@ -32,7 +32,7 @@ import pf.Stdout
 
 
 **MODULE NOT FOUND**
-The module `json.Json` was not found in this Roc project.
+The module `Json.Json` was not found in this Roc project.
 
 You're attempting to use this module here:
 **external_decl_lookup.md:4:1:4:17:**

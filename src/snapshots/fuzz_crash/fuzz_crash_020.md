@@ -347,7 +347,7 @@ Som : { foo : O, bar : g }
 
 
 **MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
+The module `Pf.Stdout` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_020.md:4:1:4:34:**
@@ -358,7 +358,7 @@ import pf.Stdout exposing [line!]
 
 
 **MODULE NOT FOUND**
-The module `stdot` was not found in this Roc project.
+The module `Stdot` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_020.md:6:1:8:6:**
@@ -370,7 +370,7 @@ Cust]
 
 
 **MODULE NOT FOUND**
-The module `bae` was not found in this Roc project.
+The module `Bae` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_020.md:10:1:10:19:**
@@ -381,7 +381,7 @@ import Bae as Gooe
 
 
 **MODULE NOT FOUND**
-The module `ba` was not found in this Roc project.
+The module `Ba` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_020.md:11:1:12:4:**
@@ -1759,7 +1759,7 @@ expect {
 		(p-assign @114.1-114.2 (ident "e"))
 		(e-empty_record @114.5-114.7))
 	(s-alias-decl @13.1-13.33
-		(ty-header @13.1-13.10 (name "map")
+		(ty-header @13.1-13.10 (name "Map")
 			(ty-args
 				(ty-var @13.5-13.6 (name "a"))
 				(ty-var @13.8-13.9 (name "b"))))
@@ -1769,37 +1769,37 @@ expect {
 			(ty-apply @13.26-13.33 (symbol "List")
 				(ty-var @13.31-13.32 (name "b")))))
 	(s-alias-decl @14.1-20.15
-		(ty-header @14.1-15.2 (name "mapML"))
+		(ty-header @14.1-15.2 (name "MapML"))
 		(ty-fn @17.3-20.15 (effectful false)
 			(ty-apply @17.3-18.4 (symbol "List"))
 			(ty-malformed @19.4-19.6)
 			(ty-apply @20.4-20.15 (symbol "List")
 				(ty-malformed @20.12-20.13))))
 	(s-alias-decl @24.1-24.27
-		(ty-header @24.1-24.4 (name "som"))
+		(ty-header @24.1-24.4 (name "Som"))
 		(ty-record @24.7-24.27
 			(field (field "foo")
 				(ty @24.15-24.16 (name "O")))
 			(field (field "bar")
 				(ty-malformed @24.24-24.25))))
 	(s-alias-decl @25.1-26.2
-		(ty-header @25.1-25.6 (name "ml")
+		(ty-header @25.1-25.6 (name "Ml")
 			(ty-args
 				(ty-var @25.4-25.5 (name "a"))))
 		(ty-record @25.9-26.2))
 	(s-alias-decl @28.1-29.2
-		(ty-header @28.1-28.9 (name "soine")
+		(ty-header @28.1-28.9 (name "Soine")
 			(ty-args
 				(ty-var @28.7-28.8 (name "a"))))
 		(ty-record @28.12-29.2))
 	(s-alias-decl @30.1-30.19
-		(ty-header @30.1-30.9 (name "maybe")
+		(ty-header @30.1-30.9 (name "Maybe")
 			(ty-args
 				(ty-var @30.7-30.8 (name "a"))))
 		(ty-tag-union @30.12-30.19
 			(ty @30.13-30.18 (name "Somne"))))
 	(s-alias-decl @32.1-33.2
-		(ty-header @32.1-32.10 (name "mayine")
+		(ty-header @32.1-32.10 (name "Mayine")
 			(ty-args
 				(ty-var @32.8-32.9 (name "a"))))
 		(ty-tag-union @32.13-33.2))
@@ -1808,7 +1808,7 @@ expect {
 			(exposed (name "line!") (wildcard false))))
 	(s-import @6.1-8.6 (module "Stdot")
 		(exposes
-			(exposed (name "cust") (wildcard false))))
+			(exposed (name "Cust") (wildcard false))))
 	(s-import @10.1-10.19 (module "Bae") (alias "Gooe")
 		(exposes))
 	(s-import @11.1-12.4 (module "Ba")
@@ -1829,41 +1829,41 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @35.1-35.4 (type "bool -> Num(_size)"))
-		(patt @38.1-38.4 (type "[rum]_others -> Error"))
-		(patt @49.1-49.3 (type "[blue]_others -> Error"))
-		(patt @75.1-75.3 (type "_arg -> [stdo!(Str)]_others"))
+		(patt @35.1-35.4 (type "Bool -> Num(_size)"))
+		(patt @38.1-38.4 (type "[Rum]_others -> Error"))
+		(patt @49.1-49.3 (type "[Blue]_others -> Error"))
+		(patt @75.1-75.3 (type "_arg -> [Stdo!(Str)]_others"))
 		(patt @114.1-114.2 (type "{}")))
 	(type_decls
-		(alias @13.1-13.33 (type "map(a, b)")
-			(ty-header @13.1-13.10 (name "map")
+		(alias @13.1-13.33 (type "Map(a, b)")
+			(ty-header @13.1-13.10 (name "Map")
 				(ty-args
 					(ty-var @13.5-13.6 (name "a"))
 					(ty-var @13.8-13.9 (name "b")))))
-		(alias @14.1-20.15 (type "mapML")
-			(ty-header @14.1-15.2 (name "mapML")))
-		(alias @24.1-24.27 (type "som")
-			(ty-header @24.1-24.4 (name "som")))
-		(alias @25.1-26.2 (type "ml(a)")
-			(ty-header @25.1-25.6 (name "ml")
+		(alias @14.1-20.15 (type "MapML")
+			(ty-header @14.1-15.2 (name "MapML")))
+		(alias @24.1-24.27 (type "Som")
+			(ty-header @24.1-24.4 (name "Som")))
+		(alias @25.1-26.2 (type "Ml(a)")
+			(ty-header @25.1-25.6 (name "Ml")
 				(ty-args
 					(ty-var @25.4-25.5 (name "a")))))
-		(alias @28.1-29.2 (type "soine(a)")
-			(ty-header @28.1-28.9 (name "soine")
+		(alias @28.1-29.2 (type "Soine(a)")
+			(ty-header @28.1-28.9 (name "Soine")
 				(ty-args
 					(ty-var @28.7-28.8 (name "a")))))
-		(alias @30.1-30.19 (type "maybe(a)")
-			(ty-header @30.1-30.9 (name "maybe")
+		(alias @30.1-30.19 (type "Maybe(a)")
+			(ty-header @30.1-30.9 (name "Maybe")
 				(ty-args
 					(ty-var @30.7-30.8 (name "a")))))
-		(alias @32.1-33.2 (type "mayine(a)")
-			(ty-header @32.1-32.10 (name "mayine")
+		(alias @32.1-33.2 (type "Mayine(a)")
+			(ty-header @32.1-32.10 (name "Mayine")
 				(ty-args
 					(ty-var @32.8-32.9 (name "a"))))))
 	(expressions
-		(expr @35.7-35.28 (type "bool -> Num(_size)"))
-		(expr @38.7-47.2 (type "[rum]_others -> Error"))
-		(expr @49.6-69.3 (type "[blue]_others -> Error"))
-		(expr @75.5-111.2 (type "_arg -> [stdo!(Str)]_others"))
+		(expr @35.7-35.28 (type "Bool -> Num(_size)"))
+		(expr @38.7-47.2 (type "[Rum]_others -> Error"))
+		(expr @49.6-69.3 (type "[Blue]_others -> Error"))
+		(expr @75.5-111.2 (type "_arg -> [Stdo!(Str)]_others"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~

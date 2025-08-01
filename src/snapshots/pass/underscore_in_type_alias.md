@@ -215,35 +215,35 @@ TagType := [Some(_), None]
 ~~~clojure
 (can-ir
 	(s-alias-decl @3.1-3.11
-		(ty-header @3.1-3.7 (name "myType"))
+		(ty-header @3.1-3.7 (name "MyType"))
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @5.1-5.15
-		(ty-header @5.1-5.10 (name "otherType"))
+		(ty-header @5.1-5.10 (name "OtherType"))
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @7.1-7.23
-		(ty-header @7.1-7.12 (name "complexType"))
+		(ty-header @7.1-7.12 (name "ComplexType"))
 		(ty-apply @7.16-7.23 (symbol "List")
 			(ty-underscore @7.21-7.21)))
 	(s-nominal-decl @9.1-9.39
-		(ty-header @9.1-9.11 (name "recordType"))
+		(ty-header @9.1-9.11 (name "RecordType"))
 		(ty-record @9.15-9.39
 			(field (field "field")
 				(ty-underscore @1.1-1.1))
 			(field (field "other")
 				(ty @9.34-9.37 (name "U32")))))
 	(s-nominal-decl @11.1-11.23
-		(ty-header @11.1-11.13 (name "functionType"))
+		(ty-header @11.1-11.13 (name "FunctionType"))
 		(ty-fn @11.17-11.23 (effectful false)
 			(ty-underscore @1.1-1.1)
 			(ty-underscore @1.1-1.1)))
 	(s-nominal-decl @13.1-13.25
-		(ty-header @13.1-13.10 (name "tupleType"))
+		(ty-header @13.1-13.10 (name "TupleType"))
 		(ty-tuple @13.14-13.25
 			(ty-underscore @13.15-13.15)
 			(ty @13.18-13.21 (name "U32"))
 			(ty-underscore @1.1-1.1)))
 	(s-nominal-decl @15.1-15.27
-		(ty-header @15.1-15.8 (name "tagType"))
+		(ty-header @15.1-15.8 (name "TagType"))
 		(ty-tag-union @15.12-15.27
 			(ty-apply @15.13-15.20 (symbol "Some")
 				(ty-underscore @15.18-15.18))
@@ -255,18 +255,18 @@ TagType := [Some(_), None]
 	(defs)
 	(type_decls
 		(alias @3.1-3.11 (type "Error")
-			(ty-header @3.1-3.7 (name "myType")))
+			(ty-header @3.1-3.7 (name "MyType")))
 		(nominal @5.1-5.15 (type "Error")
-			(ty-header @5.1-5.10 (name "otherType")))
+			(ty-header @5.1-5.10 (name "OtherType")))
 		(nominal @7.1-7.23 (type "Error")
-			(ty-header @7.1-7.12 (name "complexType")))
+			(ty-header @7.1-7.12 (name "ComplexType")))
 		(nominal @9.1-9.39 (type "Error")
-			(ty-header @9.1-9.11 (name "recordType")))
+			(ty-header @9.1-9.11 (name "RecordType")))
 		(nominal @11.1-11.23 (type "Error")
-			(ty-header @11.1-11.13 (name "functionType")))
+			(ty-header @11.1-11.13 (name "FunctionType")))
 		(nominal @13.1-13.25 (type "Error")
-			(ty-header @13.1-13.10 (name "tupleType")))
+			(ty-header @13.1-13.10 (name "TupleType")))
 		(nominal @15.1-15.27 (type "Error")
-			(ty-header @15.1-15.8 (name "tagType"))))
+			(ty-header @15.1-15.8 (name "TagType"))))
 	(expressions))
 ~~~

@@ -39,7 +39,7 @@ import Color.*
 
 
 **MODULE NOT FOUND**
-The module `color` was not found in this Roc project.
+The module `Color` was not found in this Roc project.
 
 You're attempting to use this module here:
 **nominal_import_wildcard.md:3:1:3:13:**

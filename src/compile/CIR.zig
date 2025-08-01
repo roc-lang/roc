@@ -104,8 +104,19 @@ pub const TypeHeader = struct {
         const region = cir.store.getRegionAt(node_idx);
         try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-        const name_str = cir.idents.getLowercase(self.name);
-        try tree.pushStringPair("name", name_str);
+        // Type names should be uppercase
+        const name_text = cir.idents.getLowercase(self.name);
+        if (name_text.len > 0) {
+            const uppercase = try cir.idents.getUppercase(self.name);
+            var name_buf = std.ArrayList(u8).init(tree.allocator);
+            defer name_buf.deinit();
+            try name_buf.append(uppercase.first);
+            try name_buf.appendSlice(uppercase.rest);
+            try tree.pushStringPair("name", name_buf.items);
+        } else {
+            // Empty name - shouldn't happen but handle gracefully
+            try tree.pushStringPair("name", name_text);
+        }
 
         const attrs = tree.beginNode();
 
@@ -253,10 +264,9 @@ pub const ExposedItem = struct {
     pub fn pushToSExprTree(self: *const ExposedItem, _: anytype, cir: anytype, tree: anytype) !void {
         const begin = tree.beginNode();
 
-        const name_str = cir.idents.getLowercase(self.name);
+        try tree.pushStaticAtom("exposed");
 
         if (self.is_type) {
-            try tree.pushStaticAtom("exposed-type");
             // For types, capitalize the first letter
             const uppercase = try cir.idents.getUppercase(self.name);
             var name_buf = std.ArrayList(u8).init(tree.allocator);
@@ -265,13 +275,25 @@ pub const ExposedItem = struct {
             try name_buf.appendSlice(uppercase.rest);
             try tree.pushStringPair("name", name_buf.items);
         } else {
-            try tree.pushStaticAtom("exposed");
+            // For non-types, use lowercase
+            const name_str = cir.idents.getLowercase(self.name);
             try tree.pushStringPair("name", name_str);
         }
 
         if (self.alias) |alias_idx| {
-            const alias_str = cir.idents.getLowercase(alias_idx);
-            try tree.pushStringPair("alias", alias_str);
+            if (self.is_type) {
+                // For type aliases, capitalize the first letter
+                const uppercase = try cir.idents.getUppercase(alias_idx);
+                var alias_buf = std.ArrayList(u8).init(tree.allocator);
+                defer alias_buf.deinit();
+                try alias_buf.append(uppercase.first);
+                try alias_buf.appendSlice(uppercase.rest);
+                try tree.pushStringPair("alias", alias_buf.items);
+            } else {
+                // For non-type aliases, use lowercase
+                const alias_str = cir.idents.getLowercase(alias_idx);
+                try tree.pushStringPair("alias", alias_str);
+            }
         }
 
         try tree.pushBoolPair("wildcard", self.is_wildcard);

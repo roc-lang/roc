@@ -116,7 +116,7 @@ rgba : U8, U8, U8, U8 -> Color
                    ^^
 
 It is of type:
-    _u8_
+    _U8_
 
 But you are trying to use it as:
     _{ to_frac: Num(_size) }_
@@ -130,7 +130,7 @@ hex : Str -> Result(Color, [InvalidHex(Str)])
       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It is of type:
-    _str -> Error_
+    _Str -> Error_
 
 But you are trying to use it as:
     _{ to_utf8: List(Num(_size)) } -> [InvalidHex(Str), Err([InvalidHex(Str)]_others)][Ok(Color)]_others2_
@@ -144,10 +144,10 @@ named : Str -> Result(Color, [UnknownColor(Str)])
         ^^^
 
 It is of type:
-    _str_
+    _Str_
 
 But you are trying to use it as:
-    _{ is_named_color: Bool (from Bool) }_
+    _{ is_named_color: Bool }_
 
 # TOKENS
 ~~~zig
@@ -1048,7 +1048,7 @@ is_named_color = |str| {
 						(e-lookup-local @70.21-70.24
 							(p-assign @67.19-67.22 (ident "str"))))))))
 	(s-nominal-decl @10.1-15.2
-		(ty-header @10.1-10.6 (name "color"))
+		(ty-header @10.1-10.6 (name "Color"))
 		(ty-tag-union @10.10-15.2
 			(ty-apply @11.5-11.20 (symbol "RGB")
 				(ty @11.9-11.11 (name "U8"))
@@ -1111,20 +1111,20 @@ is_named_color = |str| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.4 (type "u8, u8, u8 -> color"))
-		(patt @21.1-21.5 (type "u8, u8, u8, Error -> color"))
+		(patt @18.1-18.4 (type "U8, U8, U8 -> Color"))
+		(patt @21.1-21.5 (type "U8, U8, U8, Error -> Color"))
 		(patt @27.1-27.4 (type "Error"))
-		(patt @49.1-49.7 (type "color -> str"))
+		(patt @49.1-49.7 (type "Color -> Str"))
 		(patt @61.1-61.6 (type "Error -> Error"))
 		(patt @67.1-67.15 (type "_arg -> _ret")))
 	(type_decls
-		(nominal @10.1-15.2 (type "color")
-			(ty-header @10.1-10.6 (name "color"))))
+		(nominal @10.1-15.2 (type "Color")
+			(ty-header @10.1-10.6 (name "Color"))))
 	(expressions
-		(expr @18.7-18.35 (type "u8, u8, u8 -> color"))
-		(expr @21.8-24.2 (type "u8, u8, u8, Error -> color"))
+		(expr @18.7-18.35 (type "U8, U8, U8 -> Color"))
+		(expr @21.8-24.2 (type "U8, U8, U8, Error -> Color"))
 		(expr @27.7-46.2 (type "Error"))
-		(expr @49.10-54.2 (type "color -> str"))
+		(expr @49.10-54.2 (type "Color -> Str"))
 		(expr @61.9-65.50 (type "Error -> Error"))
 		(expr @67.18-71.2 (type "_arg -> _ret"))))
 ~~~

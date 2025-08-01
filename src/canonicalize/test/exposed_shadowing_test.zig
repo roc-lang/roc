@@ -602,8 +602,8 @@ test "exposed items SExpr output distinguishes types from values" {
                 try testing.expect(std.mem.indexOf(u8, output, "(exposed") != null);
                 try testing.expect(std.mem.indexOf(u8, output, name_str) != null);
             } else {
-                // Types should use "exposed-type" and uppercase names
-                try testing.expect(std.mem.indexOf(u8, output, "(exposed-type") != null);
+                // Types should use "exposed" and uppercase names
+                try testing.expect(std.mem.indexOf(u8, output, "(exposed") != null);
                 // The uppercase version should be in the output
                 const uppercase = try env.idents.getUppercase(name_ident);
                 var uppercase_buf = std.ArrayList(u8).init(allocator);

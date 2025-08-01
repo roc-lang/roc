@@ -22,7 +22,7 @@ x = 500
     ^^^
 
 Its inferred type is:
-    _u8_
+    _U8_
 
 # TOKENS
 ~~~zig

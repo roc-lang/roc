@@ -17,7 +17,7 @@ decodeThings = ...
 MODULE NOT FOUND - where_clauses_4.md:3:1:3:32
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `decode` was not found in this Roc project.
+The module `Decode` was not found in this Roc project.
 
 You're attempting to use this module here:
 **where_clauses_4.md:3:1:3:32:**
@@ -82,7 +82,7 @@ NO CHANGE
 						(ty-var @5.39-5.40 (name "a")))))))
 	(s-import @3.1-3.32 (module "Decode")
 		(exposes
-			(exposed (name "decode") (wildcard false))))
+			(exposed (name "Decode") (wildcard false))))
 	(s-type-anno @5.1-6.24 (name "decodeThings")
 		(ty-fn @5.16-5.41 (effectful false)
 			(ty-apply @5.16-5.30 (symbol "List")

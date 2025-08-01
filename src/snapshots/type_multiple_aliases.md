@@ -199,16 +199,16 @@ NO CHANGE
 						(e-lookup-local @16.16-16.20
 							(p-assign @15.2-15.6 (ident "user"))))))))
 	(s-alias-decl @3.1-3.13
-		(ty-header @3.1-3.7 (name "userId"))
+		(ty-header @3.1-3.7 (name "UserId"))
 		(ty @3.10-3.13 (name "U64")))
 	(s-alias-decl @4.1-4.15
-		(ty-header @4.1-4.9 (name "userName"))
+		(ty-header @4.1-4.9 (name "UserName"))
 		(ty @4.12-4.15 (name "Str")))
 	(s-alias-decl @5.1-5.13
-		(ty-header @5.1-5.8 (name "userAge"))
+		(ty-header @5.1-5.8 (name "UserAge"))
 		(ty @5.11-5.13 (name "U8")))
 	(s-alias-decl @6.1-6.55
-		(ty-header @6.1-6.5 (name "user"))
+		(ty-header @6.1-6.5 (name "User"))
 		(ty-record @6.8-6.55
 			(field (field "id")
 				(ty @6.15-6.21 (name "UserId")))
@@ -221,20 +221,20 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @9.1-9.12 (type "userId, userName, userAge -> { age: userAge, id: userId, name: userName }"))
-		(patt @12.1-12.14 (type "{ age: userAge, id: userId, name: userName } -> userName"))
-		(patt @14.1-14.6 (type "_arg -> userName")))
+		(patt @9.1-9.12 (type "UserId, UserName, UserAge -> { age: UserAge, id: UserId, name: UserName }"))
+		(patt @12.1-12.14 (type "{ age: UserAge, id: UserId, name: UserName } -> UserName"))
+		(patt @14.1-14.6 (type "_arg -> UserName")))
 	(type_decls
-		(alias @3.1-3.13 (type "userId")
-			(ty-header @3.1-3.7 (name "userId")))
-		(alias @4.1-4.15 (type "userName")
-			(ty-header @4.1-4.9 (name "userName")))
-		(alias @5.1-5.13 (type "userAge")
-			(ty-header @5.1-5.8 (name "userAge")))
-		(alias @6.1-6.55 (type "user")
-			(ty-header @6.1-6.5 (name "user"))))
+		(alias @3.1-3.13 (type "UserId")
+			(ty-header @3.1-3.7 (name "UserId")))
+		(alias @4.1-4.15 (type "UserName")
+			(ty-header @4.1-4.9 (name "UserName")))
+		(alias @5.1-5.13 (type "UserAge")
+			(ty-header @5.1-5.8 (name "UserAge")))
+		(alias @6.1-6.55 (type "User")
+			(ty-header @6.1-6.5 (name "User"))))
 	(expressions
-		(expr @9.15-9.48 (type "userId, userName, userAge -> { age: userAge, id: userId, name: userName }"))
-		(expr @12.17-12.33 (type "{ age: userAge, id: userId, name: userName } -> userName"))
-		(expr @14.9-17.2 (type "_arg -> userName"))))
+		(expr @9.15-9.48 (type "UserId, UserName, UserAge -> { age: UserAge, id: UserId, name: UserName }"))
+		(expr @12.17-12.33 (type "{ age: UserAge, id: UserId, name: UserName } -> UserName"))
+		(expr @14.9-17.2 (type "_arg -> UserName"))))
 ~~~

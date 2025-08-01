@@ -129,7 +129,7 @@ kind = |color| match color {
 					(ty @5.8-5.13 (name "Color"))
 					(ty @5.17-5.20 (name "Str"))))))
 	(s-alias-decl @3.1-3.51
-		(ty-header @3.1-3.6 (name "color"))
+		(ty-header @3.1-3.6 (name "Color"))
 		(ty-tag-union @3.9-3.51
 			(ty @3.10-3.13 (name "Red"))
 			(ty @3.15-3.20 (name "Green"))
@@ -142,10 +142,10 @@ kind = |color| match color {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.5 (type "[blue, green, orange, purple, red, yellow] -> Str")))
+		(patt @6.1-6.5 (type "[Blue, Green, Orange, Purple, Red, Yellow] -> Str")))
 	(type_decls
-		(alias @3.1-3.51 (type "color")
-			(ty-header @3.1-3.6 (name "color"))))
+		(alias @3.1-3.51 (type "Color")
+			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions
-		(expr @6.8-9.2 (type "[blue, green, orange, purple, red, yellow] -> Str"))))
+		(expr @6.8-9.2 (type "[Blue, Green, Orange, Purple, Red, Yellow] -> Str"))))
 ~~~

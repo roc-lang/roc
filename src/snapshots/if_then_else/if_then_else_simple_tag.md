@@ -47,5 +47,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.31 (type "[ok(Num(_size)), err(Num(_size2))]_others"))
+(expr @1.1-1.31 (type "[Ok(Num(_size)), Err(Num(_size2))]_others"))
 ~~~

@@ -775,7 +775,10 @@ pub const SnapshotWriter = struct {
 
     /// Write an alias type
     pub fn writeAlias(self: *Self, alias: SnapshotAlias, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        _ = try self.writer.write(self.idents.getLowercase(alias.ident.ident_idx));
+        // Type alias names should be uppercase (e.g., ServerConfig, not serverConfig)
+        const uppercase = try self.idents.getUppercase(alias.ident.ident_idx);
+        try self.writer.writeByte(uppercase.first);
+        _ = try self.writer.write(uppercase.rest);
 
         // The 1st var is the alias type's backing var, so we skip it
         var vars = self.snapshots.sliceVars(alias.vars);
@@ -866,20 +869,10 @@ pub const SnapshotWriter = struct {
 
     /// Write a nominal type
     pub fn writeNominalType(self: *Self, nominal_type: SnapshotNominalType, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        // Get the lowercase text and convert first char to uppercase inline
-        const lowercase_text = self.idents.getLowercase(nominal_type.ident.ident_idx);
-        if (lowercase_text[0] >= 'a' and lowercase_text[0] <= 'z') {
-            // Write the first character as uppercase
-            const first_char = lowercase_text[0] - ('a' - 'A');
-            _ = try self.writer.write(&[_]u8{first_char});
-            // Write the rest of the string
-            if (lowercase_text.len > 1) {
-                _ = try self.writer.write(lowercase_text[1..]);
-            }
-        } else {
-            // Already uppercase or doesn't start with a letter
-            _ = try self.writer.write(lowercase_text);
-        }
+        // Nominal types should always be uppercase (e.g., Bool, List, Dict, Str)
+        const uppercase = try self.idents.getUppercase(nominal_type.ident.ident_idx);
+        try self.writer.writeByte(uppercase.first);
+        _ = try self.writer.write(uppercase.rest);
 
         // The 1st var is the nominal type's backing var, so we skip it
         var vars = self.snapshots.sliceVars(nominal_type.vars);
@@ -897,18 +890,33 @@ pub const SnapshotWriter = struct {
 
         // Add origin information if it's from a different module
         if (self.current_module_name) |current_module| {
+            // Get the original case-preserving name for comparison
             const origin_module_name = self.idents.getLowercase(nominal_type.origin_module);
 
-            // Only show origin if it's different from the current module
-            // Compare case-insensitively by converting only first char of current module to lowercase
-            var current_module_lower: [256]u8 = undefined;
-            const len = @min(current_module.len, current_module_lower.len);
-            @memcpy(current_module_lower[0..len], current_module[0..len]);
-            if (len > 0 and current_module_lower[0] >= 'A' and current_module_lower[0] <= 'Z') {
-                current_module_lower[0] = current_module_lower[0] + ('a' - 'A');
-            }
+            // Check if this is a builtin type - builtin types don't show origin
+            const is_builtin = std.mem.eql(u8, origin_module_name, "bool") or
+                std.mem.eql(u8, origin_module_name, "num") or
+                std.mem.eql(u8, origin_module_name, "str") or
+                std.mem.eql(u8, origin_module_name, "list") or
+                std.mem.eql(u8, origin_module_name, "dict") or
+                std.mem.eql(u8, origin_module_name, "set") or
+                std.mem.eql(u8, origin_module_name, "result");
 
-            if (!std.mem.eql(u8, origin_module_name, current_module_lower[0..len])) {
+            // For comparison, check if they're the same module
+            // The interner only lowercases the first character if it's uppercase ASCII
+            // So "CurrentModule" becomes "currentModule", not "currentmodule"
+            const current_module_normalized = blk: {
+                var buf: [256]u8 = undefined;
+                const len = @min(current_module.len, buf.len);
+                @memcpy(buf[0..len], current_module[0..len]);
+                if (len > 0 and current_module[0] >= 'A' and current_module[0] <= 'Z') {
+                    buf[0] = current_module[0] + ('a' - 'A');
+                }
+                break :blk buf[0..len];
+            };
+            const same_module = std.mem.eql(u8, origin_module_name, current_module_normalized);
+
+            if (!same_module and !is_builtin) {
                 _ = try self.writer.write(" (from ");
 
                 // Convert module name to uppercase if needed (for display)
@@ -1068,20 +1076,10 @@ pub const SnapshotWriter = struct {
 
     /// Write a single tag
     pub fn writeTag(self: *Self, tag: SnapshotTag, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        // Get the lowercase text and convert first char to uppercase inline
-        const lowercase_text = self.idents.getLowercase(tag.name);
-        if (lowercase_text.len > 0 and lowercase_text[0] >= 'a' and lowercase_text[0] <= 'z') {
-            // Write the first character as uppercase
-            const first_char = lowercase_text[0] - ('a' - 'A');
-            _ = try self.writer.write(&[_]u8{first_char});
-            // Write the rest of the string
-            if (lowercase_text.len > 1) {
-                _ = try self.writer.write(lowercase_text[1..]);
-            }
-        } else {
-            // Already uppercase or doesn't start with a letter
-            _ = try self.writer.write(lowercase_text);
-        }
+        // Tag names should always be uppercase (e.g., None, Some, True, False)
+        const uppercase = try self.idents.getUppercase(tag.name);
+        try self.writer.writeByte(uppercase.first);
+        _ = try self.writer.write(uppercase.rest);
         const args = self.snapshots.sliceVars(tag.args);
         if (args.len > 0) {
             _ = try self.writer.write("(");

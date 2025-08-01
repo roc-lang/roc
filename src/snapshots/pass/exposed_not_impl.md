@@ -106,7 +106,7 @@ NO CHANGE
 		(p-assign @8.1-8.4 (ident "foo"))
 		(e-int @8.7-8.9 (value "42")))
 	(s-alias-decl @10.1-10.19
-		(ty-header @10.1-10.7 (name "myType"))
+		(ty-header @10.1-10.7 (name "MyType"))
 		(ty-tag-union @10.10-10.19
 			(ty @10.11-10.12 (name "A"))
 			(ty @10.14-10.15 (name "B"))
@@ -118,8 +118,8 @@ NO CHANGE
 	(defs
 		(patt @8.1-8.4 (type "Num(_size)")))
 	(type_decls
-		(alias @10.1-10.19 (type "myType")
-			(ty-header @10.1-10.7 (name "myType"))))
+		(alias @10.1-10.19 (type "MyType")
+			(ty-header @10.1-10.7 (name "MyType"))))
 	(expressions
 		(expr @8.7-8.9 (type "Num(_size)"))))
 ~~~

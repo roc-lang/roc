@@ -20,7 +20,7 @@ MODULE NOT FOUND - where_clauses_10.md:3:1:3:32
 EXPOSED BUT NOT DEFINED - where_clauses_10.md:1:9:1:15
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `decode` was not found in this Roc project.
+The module `Decode` was not found in this Roc project.
 
 You're attempting to use this module here:
 **where_clauses_10.md:3:1:3:32:**
@@ -83,7 +83,7 @@ NO CHANGE
 (can-ir
 	(s-import @3.1-3.32 (module "Decode")
 		(exposes
-			(exposed (name "decode") (wildcard false))))
+			(exposed (name "Decode") (wildcard false))))
 	(s-type-anno @5.1-9.21 (name "decodeThings")
 		(ty-fn @7.3-7.28 (effectful false)
 			(ty-apply @7.3-7.17 (symbol "List")

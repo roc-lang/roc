@@ -122,7 +122,7 @@ extract_age = |person| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.12 (type "{ age: u64 } -> U64")))
+		(patt @4.1-4.12 (type "{ age: U64 } -> U64")))
 	(expressions
-		(expr @4.15-8.2 (type "{ age: u64 } -> U64"))))
+		(expr @4.15-8.2 (type "{ age: U64 } -> U64"))))
 ~~~

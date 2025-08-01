@@ -91,7 +91,7 @@ NO CHANGE
 			(declared-type
 				(ty @8.10-8.15 (name "Color")))))
 	(s-nominal-decl @3.1-3.28
-		(ty-header @3.1-3.6 (name "color"))
+		(ty-header @3.1-3.6 (name "Color"))
 		(ty-tag-union @3.10-3.28
 			(ty @3.11-3.14 (name "Red"))
 			(ty @3.16-3.21 (name "Green"))
@@ -105,7 +105,7 @@ NO CHANGE
 		(patt @9.1-9.7 (type "Error")))
 	(type_decls
 		(nominal @3.1-3.28 (type "Error")
-			(ty-header @3.1-3.6 (name "color"))))
+			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions
 		(expr @6.8-6.18 (type "Error"))
 		(expr @9.10-9.22 (type "Error"))))

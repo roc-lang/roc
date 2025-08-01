@@ -26,7 +26,7 @@ module[]import u.R}g:r->R.a.E
 
 
 **MODULE NOT FOUND**
-The module `u.R` was not found in this Roc project.
+The module `U.R` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_042.md:1:9:1:19:**

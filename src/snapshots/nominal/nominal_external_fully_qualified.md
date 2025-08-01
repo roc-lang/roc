@@ -22,7 +22,7 @@ MODULE NOT FOUND - nominal_external_fully_qualified.md:3:1:3:22
 UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `myResultModule` was not found in this Roc project.
+The module `MyResultModule` was not found in this Roc project.
 
 You're attempting to use this module here:
 **nominal_external_fully_qualified.md:3:1:3:22:**
@@ -154,7 +154,7 @@ handleResult = |result| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.13 (type "Error -> str")))
+		(patt @6.1-6.13 (type "Error -> Str")))
 	(expressions
-		(expr @6.16-11.2 (type "Error -> str"))))
+		(expr @6.16-11.2 (type "Error -> Str"))))
 ~~~

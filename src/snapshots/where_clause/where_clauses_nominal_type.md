@@ -63,7 +63,7 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-nominal-decl @3.1-5.28
-		(ty-header @3.1-3.12 (name "cache")
+		(ty-header @3.1-3.12 (name "Cache")
 			(ty-args
 				(ty-var @3.7-3.8 (name "k"))
 				(ty-var @3.10-3.11 (name "v"))))
@@ -77,7 +77,7 @@ NO CHANGE
 	(defs)
 	(type_decls
 		(nominal @3.1-5.28 (type "Error")
-			(ty-header @3.1-3.12 (name "cache")
+			(ty-header @3.1-3.12 (name "Cache")
 				(ty-args
 					(ty-var @3.7-3.8 (name "k"))
 					(ty-var @3.10-3.11 (name "v"))))))

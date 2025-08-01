@@ -15,7 +15,7 @@ main! = |_| Stdout.line!("Hello, world!")
 MODULE NOT FOUND - hello_world.md:3:1:3:17
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
+The module `Pf.Stdout` was not found in this Roc project.
 
 You're attempting to use this module here:
 **hello_world.md:3:1:3:17:**

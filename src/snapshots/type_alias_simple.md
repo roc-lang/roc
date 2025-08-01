@@ -114,19 +114,19 @@ NO CHANGE
 						(p-assign @6.1-6.8 (ident "getUser")))
 					(e-int @8.21-8.24 (value "100"))))))
 	(s-alias-decl @3.1-3.13
-		(ty-header @3.1-3.7 (name "userId"))
+		(ty-header @3.1-3.7 (name "UserId"))
 		(ty @3.10-3.13 (name "U64"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.8 (type "userId -> Str"))
+		(patt @6.1-6.8 (type "UserId -> Str"))
 		(patt @8.1-8.6 (type "_arg -> Str")))
 	(type_decls
-		(alias @3.1-3.13 (type "userId")
-			(ty-header @3.1-3.7 (name "userId"))))
+		(alias @3.1-3.13 (type "UserId")
+			(ty-header @3.1-3.7 (name "UserId"))))
 	(expressions
-		(expr @6.11-6.47 (type "userId -> Str"))
+		(expr @6.11-6.47 (type "UserId -> Str"))
 		(expr @8.9-8.25 (type "_arg -> Str"))))
 ~~~

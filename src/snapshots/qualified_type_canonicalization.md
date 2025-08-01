@@ -134,7 +134,7 @@ import ModuleA.ModuleB exposing [TypeC]
 
 
 **MODULE NOT FOUND**
-The module `color` was not found in this Roc project.
+The module `Color` was not found in this Roc project.
 
 You're attempting to use this module here:
 **qualified_type_canonicalization.md:9:1:9:13:**
@@ -145,7 +145,7 @@ import Color
 
 
 **MODULE NOT FOUND**
-The module `moduleA` was not found in this Roc project.
+The module `ModuleA` was not found in this Roc project.
 
 You're attempting to use this module here:
 **qualified_type_canonicalization.md:10:1:10:15:**
@@ -189,7 +189,7 @@ import ModuleA.ModuleB exposing [TypeC]
 
 
 **MODULE NOT FOUND**
-The module `externalModule` was not found in this Roc project.
+The module `ExternalModule` was not found in this Roc project.
 
 You're attempting to use this module here:
 **qualified_type_canonicalization.md:11:1:11:32:**

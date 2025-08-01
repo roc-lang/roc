@@ -46,7 +46,7 @@ Foo(a, b) : (a, b, Str, U64)
 ~~~clojure
 (can-ir
 	(s-alias-decl @3.1-3.25
-		(ty-header @3.1-3.9 (name "foo")
+		(ty-header @3.1-3.9 (name "Foo")
 			(ty-args
 				(ty-var @3.5-3.6 (name "a"))
 				(ty-var @3.7-3.8 (name "b"))))
@@ -61,8 +61,8 @@ Foo(a, b) : (a, b, Str, U64)
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-3.25 (type "foo(a, b)")
-			(ty-header @3.1-3.9 (name "foo")
+		(alias @3.1-3.25 (type "Foo(a, b)")
+			(ty-header @3.1-3.9 (name "Foo")
 				(ty-args
 					(ty-var @3.5-3.6 (name "a"))
 					(ty-var @3.7-3.8 (name "b"))))))

@@ -202,7 +202,7 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-alias-decl @3.1-3.41
-		(ty-header @3.1-3.10 (name "map")
+		(ty-header @3.1-3.10 (name "Map")
 			(ty-args
 				(ty-var @3.5-3.6 (name "a"))
 				(ty-var @3.8-3.9 (name "b"))))
@@ -216,12 +216,12 @@ NO CHANGE
 			(ty-apply @3.34-3.41 (symbol "List")
 				(ty-var @3.39-3.40 (name "b")))))
 	(s-alias-decl @5.1-5.17
-		(ty-header @5.1-5.4 (name "foo"))
+		(ty-header @5.1-5.4 (name "Foo"))
 		(ty-tuple @5.7-5.17
 			(ty @5.8-5.11 (name "Bar"))
 			(ty @5.13-5.16 (name "Baz"))))
 	(s-alias-decl @7.1-7.43
-		(ty-header @7.1-7.8 (name "some")
+		(ty-header @7.1-7.8 (name "Some")
 			(ty-args
 				(ty-var @7.6-7.7 (name "a"))))
 		(ty-record @7.11-7.43
@@ -231,7 +231,7 @@ NO CHANGE
 			(field (field "bar")
 				(ty @7.32-7.41 (name "Something")))))
 	(s-alias-decl @9.1-9.27
-		(ty-header @9.1-9.9 (name "maybe")
+		(ty-header @9.1-9.9 (name "Maybe")
 			(ty-args
 				(ty-var @9.7-9.8 (name "a"))))
 		(ty-tag-union @9.12-9.27
@@ -239,7 +239,7 @@ NO CHANGE
 				(ty-var @9.18-9.19 (name "a")))
 			(ty @9.22-9.26 (name "None"))))
 	(s-alias-decl @11.1-11.38
-		(ty-header @11.1-11.12 (name "someFunc")
+		(ty-header @11.1-11.12 (name "SomeFunc")
 			(ty-args
 				(ty-var @11.10-11.11 (name "a"))))
 		(ty-fn @11.15-11.38 (effectful false)
@@ -249,10 +249,10 @@ NO CHANGE
 			(ty-apply @11.30-11.38 (symbol "Maybe")
 				(ty-var @11.36-11.37 (name "a")))))
 	(s-alias-decl @13.1-13.13
-		(ty-header @13.1-13.7 (name "myType"))
+		(ty-header @13.1-13.7 (name "MyType"))
 		(ty @13.10-13.13 (name "U64")))
 	(s-alias-decl @15.1-15.24
-		(ty-header @15.1-15.8 (name "myType2"))
+		(ty-header @15.1-15.8 (name "MyType2"))
 		(ty-malformed @15.11-15.24)))
 ~~~
 # TYPES
@@ -260,28 +260,28 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-3.41 (type "map(a, b)")
-			(ty-header @3.1-3.10 (name "map")
+		(alias @3.1-3.41 (type "Map(a, b)")
+			(ty-header @3.1-3.10 (name "Map")
 				(ty-args
 					(ty-var @3.5-3.6 (name "a"))
 					(ty-var @3.8-3.9 (name "b")))))
-		(alias @5.1-5.17 (type "foo")
-			(ty-header @5.1-5.4 (name "foo")))
-		(alias @7.1-7.43 (type "some(a)")
-			(ty-header @7.1-7.8 (name "some")
+		(alias @5.1-5.17 (type "Foo")
+			(ty-header @5.1-5.4 (name "Foo")))
+		(alias @7.1-7.43 (type "Some(a)")
+			(ty-header @7.1-7.8 (name "Some")
 				(ty-args
 					(ty-var @7.6-7.7 (name "a")))))
-		(alias @9.1-9.27 (type "maybe(a)")
-			(ty-header @9.1-9.9 (name "maybe")
+		(alias @9.1-9.27 (type "Maybe(a)")
+			(ty-header @9.1-9.9 (name "Maybe")
 				(ty-args
 					(ty-var @9.7-9.8 (name "a")))))
-		(alias @11.1-11.38 (type "someFunc(a)")
-			(ty-header @11.1-11.12 (name "someFunc")
+		(alias @11.1-11.38 (type "SomeFunc(a)")
+			(ty-header @11.1-11.12 (name "SomeFunc")
 				(ty-args
 					(ty-var @11.10-11.11 (name "a")))))
-		(alias @13.1-13.13 (type "myType")
-			(ty-header @13.1-13.7 (name "myType")))
+		(alias @13.1-13.13 (type "MyType")
+			(ty-header @13.1-13.7 (name "MyType")))
 		(alias @15.1-15.24 (type "Error")
-			(ty-header @15.1-15.8 (name "myType2"))))
+			(ty-header @15.1-15.8 (name "MyType2"))))
 	(expressions))
 ~~~

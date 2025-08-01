@@ -314,7 +314,7 @@ main = {
 			(e-lookup-local @25.5-25.7
 				(p-assign @23.5-23.7 (ident "p2")))))
 	(s-alias-decl @4.1-4.20
-		(ty-header @4.1-4.11 (name "pair")
+		(ty-header @4.1-4.11 (name "Pair")
 			(ty-args
 				(ty-var @4.6-4.7 (name "a"))
 				(ty-var @4.9-4.10 (name "b"))))
@@ -330,8 +330,8 @@ main = {
 		(patt @12.1-12.9 (type "Error"))
 		(patt @17.1-17.5 (type "_e")))
 	(type_decls
-		(alias @4.1-4.20 (type "pair(a, b)")
-			(ty-header @4.1-4.11 (name "pair")
+		(alias @4.1-4.20 (type "Pair(a, b)")
+			(ty-header @4.1-4.11 (name "Pair")
 				(ty-args
 					(ty-var @4.6-4.7 (name "a"))
 					(ty-var @4.9-4.10 (name "b"))))))

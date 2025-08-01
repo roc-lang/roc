@@ -15,7 +15,7 @@ main = 42
 MODULE NOT FOUND - exposed_items_test.md:3:1:3:42
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
+The module `Pf.Stdout` was not found in this Roc project.
 
 You're attempting to use this module here:
 **exposed_items_test.md:3:1:3:42:**

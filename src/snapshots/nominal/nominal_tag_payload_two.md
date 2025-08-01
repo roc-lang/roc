@@ -167,7 +167,7 @@ is_ok = |result| match result {
 						(ty-var @8.23-8.27 (name "_err")))
 					(ty @8.32-8.36 (name "Bool"))))))
 	(s-nominal-decl @3.1-3.40
-		(ty-header @3.1-3.18 (name "myResult")
+		(ty-header @3.1-3.18 (name "MyResult")
 			(ty-args
 				(ty-var @3.10-3.12 (name "ok"))
 				(ty-var @3.14-3.17 (name "err"))))
@@ -181,15 +181,15 @@ is_ok = |result| match result {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.3 (type "ok -> myResult(ok, err)"))
-		(patt @9.1-9.6 (type "myResult(ok, err) -> bool")))
+		(patt @6.1-6.3 (type "ok -> MyResult(ok, err)"))
+		(patt @9.1-9.6 (type "MyResult(ok, err) -> Bool")))
 	(type_decls
-		(nominal @3.1-3.40 (type "myResult(ok, err)")
-			(ty-header @3.1-3.18 (name "myResult")
+		(nominal @3.1-3.40 (type "MyResult(ok, err)")
+			(ty-header @3.1-3.18 (name "MyResult")
 				(ty-args
 					(ty-var @3.10-3.12 (name "ok"))
 					(ty-var @3.14-3.17 (name "err"))))))
 	(expressions
-		(expr @6.6-6.24 (type "ok -> myResult(ok, err)"))
-		(expr @9.9-12.2 (type "myResult(ok, err) -> bool"))))
+		(expr @6.6-6.24 (type "ok -> MyResult(ok, err)"))
+		(expr @9.9-12.2 (type "MyResult(ok, err) -> Bool"))))
 ~~~

@@ -194,7 +194,7 @@ e : U128
     ^^^^
 
 It is of type:
-    _u128_
+    _U128_
 
 But you are trying to use it as:
     _Frac(_size)_

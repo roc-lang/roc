@@ -118,9 +118,9 @@ main! = |_| getName({ name: "luke", age: 21 })
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "{ age: u64, name: str } -> Str"))
+		(patt @4.1-4.8 (type "{ age: U64, name: Str } -> Str"))
 		(patt @6.1-6.6 (type "_arg -> Str")))
 	(expressions
-		(expr @4.11-4.28 (type "{ age: u64, name: str } -> Str"))
+		(expr @4.11-4.28 (type "{ age: U64, name: Str } -> Str"))
 		(expr @6.9-6.44 (type "_arg -> Str"))))
 ~~~

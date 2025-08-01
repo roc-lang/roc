@@ -211,7 +211,7 @@ processColor = |color| {
 					(ty-underscore @1.1-1.1)
 					(ty @5.21-5.32 (name "LocalStatus"))))))
 	(s-nominal-decl @3.1-3.35
-		(ty-header @3.1-3.12 (name "localStatus"))
+		(ty-header @3.1-3.12 (name "LocalStatus"))
 		(ty-tag-union @3.16-3.35
 			(ty @3.17-3.24 (name "Pending"))
 			(ty @3.26-3.34 (name "Complete")))))
@@ -220,10 +220,10 @@ processColor = |color| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.13 (type "Error -> localStatus")))
+		(patt @6.1-6.13 (type "Error -> LocalStatus")))
 	(type_decls
-		(nominal @3.1-3.35 (type "localStatus")
-			(ty-header @3.1-3.12 (name "localStatus"))))
+		(nominal @3.1-3.35 (type "LocalStatus")
+			(ty-header @3.1-3.12 (name "LocalStatus"))))
 	(expressions
-		(expr @6.16-16.2 (type "Error -> localStatus"))))
+		(expr @6.16-16.2 (type "Error -> LocalStatus"))))
 ~~~

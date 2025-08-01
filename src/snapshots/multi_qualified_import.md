@@ -102,7 +102,7 @@ data = json.Core.Utf8.encode("hello")
 
 
 **MODULE NOT FOUND**
-The module `json.Core` was not found in this Roc project.
+The module `Json.Core` was not found in this Roc project.
 
 You're attempting to use this module here:
 **multi_qualified_import.md:3:1:3:17:**

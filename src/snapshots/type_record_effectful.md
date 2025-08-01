@@ -20,7 +20,7 @@ main! = |_| {}
 MODULE NOT FOUND - type_record_effectful.md:3:1:3:17
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
+The module `Pf.Stdout` was not found in this Roc project.
 
 You're attempting to use this module here:
 **type_record_effectful.md:3:1:3:17:**
@@ -144,9 +144,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.10 (type "{ age: u64, name: str } -> str"))
+		(patt @6.1-6.10 (type "{ age: U64, name: Str } -> Str"))
 		(patt @10.1-10.6 (type "_arg -> {}")))
 	(expressions
-		(expr @6.13-9.2 (type "{ age: u64, name: str } -> str"))
+		(expr @6.13-9.2 (type "{ age: U64, name: Str } -> Str"))
 		(expr @10.9-10.15 (type "_arg -> {}"))))
 ~~~

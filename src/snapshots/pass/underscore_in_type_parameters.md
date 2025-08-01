@@ -167,24 +167,24 @@ MultiType(_, _, c) : c
 ~~~clojure
 (can-ir
 	(s-alias-decl @4.1-4.16
-		(ty-header @4.1-4.10 (name "myType")
+		(ty-header @4.1-4.10 (name "MyType")
 			(ty-args
 				(ty-underscore @4.8-4.9)))
 		(ty @4.13-4.16 (name "Str")))
 	(s-alias-decl @7.1-7.18
-		(ty-header @7.1-7.14 (name "myType2")
+		(ty-header @7.1-7.14 (name "MyType2")
 			(ty-args
 				(ty-underscore @7.9-7.10)
 				(ty-var @7.12-7.13 (name "b"))))
 		(ty-var @7.17-7.18 (name "b")))
 	(s-alias-decl @10.1-10.18
-		(ty-header @10.1-10.14 (name "myType3")
+		(ty-header @10.1-10.14 (name "MyType3")
 			(ty-args
 				(ty-var @10.9-10.10 (name "a"))
 				(ty-underscore @10.12-10.13)))
 		(ty-var @10.17-10.18 (name "a")))
 	(s-alias-decl @13.1-13.33
-		(ty-header @13.1-13.18 (name "complexType")
+		(ty-header @13.1-13.18 (name "ComplexType")
 			(ty-args
 				(ty-underscore @13.13-13.14)
 				(ty-var @13.16-13.17 (name "b"))))
@@ -192,7 +192,7 @@ MultiType(_, _, c) : c
 			(field (field "field")
 				(ty-var @13.30-13.31 (name "b")))))
 	(s-alias-decl @16.1-16.23
-		(ty-header @16.1-16.19 (name "multiType")
+		(ty-header @16.1-16.19 (name "MultiType")
 			(ty-args
 				(ty-underscore @16.11-16.12)
 				(ty-underscore @16.14-16.15)
@@ -204,27 +204,27 @@ MultiType(_, _, c) : c
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @4.1-4.16 (type "myType(Error)")
-			(ty-header @4.1-4.10 (name "myType")
+		(alias @4.1-4.16 (type "MyType(Error)")
+			(ty-header @4.1-4.10 (name "MyType")
 				(ty-args
 					(ty-underscore @4.8-4.9))))
-		(alias @7.1-7.18 (type "myType2(Error, b)")
-			(ty-header @7.1-7.14 (name "myType2")
+		(alias @7.1-7.18 (type "MyType2(Error, b)")
+			(ty-header @7.1-7.14 (name "MyType2")
 				(ty-args
 					(ty-underscore @7.9-7.10)
 					(ty-var @7.12-7.13 (name "b")))))
-		(alias @10.1-10.18 (type "myType3(a, Error)")
-			(ty-header @10.1-10.14 (name "myType3")
+		(alias @10.1-10.18 (type "MyType3(a, Error)")
+			(ty-header @10.1-10.14 (name "MyType3")
 				(ty-args
 					(ty-var @10.9-10.10 (name "a"))
 					(ty-underscore @10.12-10.13))))
-		(alias @13.1-13.33 (type "complexType(Error, b)")
-			(ty-header @13.1-13.18 (name "complexType")
+		(alias @13.1-13.33 (type "ComplexType(Error, b)")
+			(ty-header @13.1-13.18 (name "ComplexType")
 				(ty-args
 					(ty-underscore @13.13-13.14)
 					(ty-var @13.16-13.17 (name "b")))))
-		(alias @16.1-16.23 (type "multiType(Error, Error, c)")
-			(ty-header @16.1-16.19 (name "multiType")
+		(alias @16.1-16.23 (type "MultiType(Error, Error, c)")
+			(ty-header @16.1-16.19 (name "MultiType")
 				(ty-args
 					(ty-underscore @16.11-16.12)
 					(ty-underscore @16.14-16.15)

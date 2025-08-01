@@ -161,7 +161,7 @@ import utils.String.Format exposing [padLeft]
 
 
 **MODULE NOT FOUND**
-The module `json.Parser` was not found in this Roc project.
+The module `Json.Parser` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_nested_modules.md:3:1:3:19:**
@@ -183,7 +183,7 @@ import json.Parser.Config
 
 
 **MODULE NOT FOUND**
-The module `http.Client` was not found in this Roc project.
+The module `Http.Client` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_nested_modules.md:4:1:4:19:**
@@ -679,15 +679,15 @@ validateAuth = |creds| HttpAuth.validate(creds)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @9.1-9.12 (type "Error -> str"))
-		(patt @13.1-13.13 (type "str, str -> Error"))
-		(patt @17.1-17.12 (type "Error, str -> Error"))
-		(patt @22.1-22.13 (type "str -> str"))
+		(patt @9.1-9.12 (type "Error -> Str"))
+		(patt @13.1-13.13 (type "Str, Str -> Error"))
+		(patt @17.1-17.12 (type "Error, Str -> Error"))
+		(patt @22.1-22.13 (type "Str -> Str"))
 		(patt @26.1-26.13 (type "Error -> Error")))
 	(expressions
-		(expr @9.15-9.51 (type "Error -> str"))
-		(expr @13.16-13.55 (type "str, str -> Error"))
-		(expr @17.15-18.60 (type "Error, str -> Error"))
-		(expr @22.16-22.59 (type "str -> str"))
+		(expr @9.15-9.51 (type "Error -> Str"))
+		(expr @13.16-13.55 (type "Str, Str -> Error"))
+		(expr @17.15-18.60 (type "Error, Str -> Error"))
+		(expr @22.16-22.59 (type "Str -> Str"))
 		(expr @26.16-26.48 (type "Error -> Error"))))
 ~~~

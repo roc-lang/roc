@@ -59,7 +59,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.4 (type "bool")))
+		(patt @3.1-3.4 (type "Bool")))
 	(expressions
-		(expr @3.7-3.16 (type "bool"))))
+		(expr @3.7-3.16 (type "Bool"))))
 ~~~

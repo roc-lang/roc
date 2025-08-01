@@ -84,7 +84,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.10 (type "{ to_str: str } -> str")))
+		(patt @4.1-4.10 (type "{ to_str: Str } -> Str")))
 	(expressions
-		(expr @4.13-4.35 (type "{ to_str: str } -> str"))))
+		(expr @4.13-4.35 (type "{ to_str: Str } -> Str"))))
 ~~~

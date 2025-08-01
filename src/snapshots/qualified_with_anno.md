@@ -59,7 +59,7 @@ NO CHANGE
 			(declared-type
 				(ty @5.9-5.15 (name "MyType")))))
 	(s-nominal-decl @3.1-3.23
-		(ty-header @3.1-3.7 (name "myType"))
+		(ty-header @3.1-3.7 (name "MyType"))
 		(ty-tag-union @3.11-3.23
 			(ty @3.12-3.16 (name "TagA"))
 			(ty @3.18-3.22 (name "TagB")))))
@@ -68,10 +68,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.6 (type "myType")))
+		(patt @6.1-6.6 (type "MyType")))
 	(type_decls
-		(nominal @3.1-3.23 (type "myType")
-			(ty-header @3.1-3.7 (name "myType"))))
+		(nominal @3.1-3.23 (type "MyType")
+			(ty-header @3.1-3.7 (name "MyType"))))
 	(expressions
-		(expr @6.9-6.20 (type "myType"))))
+		(expr @6.9-6.20 (type "MyType"))))
 ~~~

@@ -60,7 +60,7 @@ import design.Styles.Color exposing [Encoder as CE]
 
 
 **MODULE NOT FOUND**
-The module `design.Styles` was not found in this Roc project.
+The module `Design.Styles` was not found in this Roc project.
 
 You're attempting to use this module here:
 **nominal_import_long_package.md:3:1:3:21:**

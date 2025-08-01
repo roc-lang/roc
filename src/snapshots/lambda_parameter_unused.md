@@ -305,15 +305,15 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.4 (type "u64 -> U64"))
+		(patt @5.1-5.4 (type "U64 -> U64"))
 		(patt @9.1-9.9 (type "U64 -> U64"))
-		(patt @13.1-13.8 (type "u64 -> U64"))
+		(patt @13.1-13.8 (type "U64 -> U64"))
 		(patt @17.1-17.7 (type "U64 -> U64"))
 		(patt @19.1-19.6 (type "_arg -> Num(_size)")))
 	(expressions
-		(expr @5.7-5.18 (type "u64 -> U64"))
+		(expr @5.7-5.18 (type "U64 -> U64"))
 		(expr @9.12-9.33 (type "U64 -> U64"))
-		(expr @13.11-13.23 (type "u64 -> U64"))
+		(expr @13.11-13.23 (type "U64 -> U64"))
 		(expr @17.10-17.27 (type "U64 -> U64"))
 		(expr @19.9-25.2 (type "_arg -> Num(_size)"))))
 ~~~

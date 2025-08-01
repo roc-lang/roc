@@ -19,7 +19,7 @@ main! = print_msg!("Hello, world!")
 MODULE NOT FOUND - effectful_with_effectful_annotation.md:3:1:3:17
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
+The module `Pf.Stdout` was not found in this Roc project.
 
 You're attempting to use this module here:
 **effectful_with_effectful_annotation.md:3:1:3:17:**
@@ -109,9 +109,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @7.1-7.11 (type "str -> {  }"))
+		(patt @7.1-7.11 (type "Str -> {  }"))
 		(patt @9.1-9.6 (type "{  }")))
 	(expressions
-		(expr @7.14-7.37 (type "str -> {  }"))
+		(expr @7.14-7.37 (type "Str -> {  }"))
 		(expr @9.9-9.36 (type "{  }"))))
 ~~~
