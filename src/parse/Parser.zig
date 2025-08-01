@@ -1374,11 +1374,8 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) std.mem.Allocator
                         } });
                     }
                 } else {
-                    // This is a qualified lowercase ident (shouldn't happen in patterns, but handle it)
-                    pattern = try self.store.addPattern(.{ .ident = .{
-                        .ident_tok = qual_result.final_token,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
+                    // This is a qualified lowercase ident, which shouldn't happen in patterns
+                    return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
                 }
             },
             .StringStart => {
