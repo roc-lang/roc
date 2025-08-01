@@ -3130,7 +3130,7 @@ pub const Serialized = struct {
     }
 
     /// Deserialize this Serialized struct into a NodeStore
-    pub fn deserialize(self: *Serialized, offset: i64) *NodeStore {
+    pub fn deserialize(self: *Serialized, offset: i64, gpa: std.mem.Allocator) *NodeStore {
         // NodeStore.Serialized should be at least as big as NodeStore
         std.debug.assert(@sizeOf(Serialized) >= @sizeOf(NodeStore));
 
@@ -3160,8 +3160,8 @@ pub const Serialized = struct {
         store.scratch_where_clauses = .{ .items = .{} };
         store.scratch_diagnostics = .{ .items = .{} };
 
-        // gpa will be set by the caller
-        store.gpa = undefined;
+        // Set gpa from parameter
+        store.gpa = gpa;
 
         return store;
     }
