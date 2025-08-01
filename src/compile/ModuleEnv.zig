@@ -1225,8 +1225,11 @@ pub const Serialized = struct {
             .imports = self.imports.deserialize(offset).*,
             .module_name = module_name,
             .diagnostics = self.diagnostics,
-            .store = self.store.deserialize(offset, gpa).*,
+            .store = self.store.deserialize(offset).*,
         };
+
+        // Set the store's gpa after deserialization
+        env.store.gpa = gpa;
 
         return env;
     }
@@ -1693,6 +1696,14 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExpr
         const defs_slice = self.store.sliceDefs(self.all_defs);
         for (defs_slice) |def_idx| {
             const def = self.store.getDef(def_idx);
+
+            // Only process assign patterns - skip destructuring patterns
+            const pattern = self.store.getPattern(def.pattern);
+            switch (pattern) {
+                .assign => {},
+                else => continue, // Skip non-assign patterns (like destructuring)
+            }
+
             const pattern_var = varFrom(def.pattern);
 
             // Get the region for this definition
@@ -1718,6 +1729,94 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExpr
         }
 
         try tree.endNode(defs_begin, defs_attrs);
+
+        // Check if we have any type declarations to output
+        const all_stmts = self.store.sliceStatements(self.all_statements);
+        var has_type_decl = false;
+        for (all_stmts) |stmt_idx| {
+            const stmt = self.store.getStatement(stmt_idx);
+            switch (stmt) {
+                .s_alias_decl, .s_nominal_decl => {
+                    has_type_decl = true;
+                    break;
+                },
+                else => continue,
+            }
+        }
+
+        // Create type_decls section if we have any type declarations
+        if (has_type_decl) {
+            const type_decls_begin = tree.beginNode();
+            try tree.pushStaticAtom("type_decls");
+            const type_decls_attrs = tree.beginNode();
+
+            for (all_stmts) |stmt_idx| {
+                const stmt = self.store.getStatement(stmt_idx);
+                switch (stmt) {
+                    .s_alias_decl => |alias| {
+                        const stmt_begin = tree.beginNode();
+                        try tree.pushStaticAtom("alias");
+
+                        // Add region info for the statement
+                        const stmt_region = self.store.getStatementRegion(stmt_idx);
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, stmt_region);
+
+                        // Get the type variable for this statement
+                        const stmt_var = varFrom(stmt_idx);
+
+                        // Create a TypeWriter to format the type
+                        var type_writer = TypeWriter.init(self.gpa, self) catch continue;
+                        defer type_writer.deinit();
+
+                        // Write the type to the buffer
+                        type_writer.write(stmt_var) catch continue;
+
+                        const type_str = type_writer.get();
+                        try tree.pushStringPair("type", type_str);
+
+                        const stmt_attrs = tree.beginNode();
+
+                        // Add the type header
+                        const header = self.store.getTypeHeader(alias.header);
+                        try header.pushToSExprTree(self, tree, alias.header);
+
+                        try tree.endNode(stmt_begin, stmt_attrs);
+                    },
+                    .s_nominal_decl => |nominal| {
+                        const stmt_begin = tree.beginNode();
+                        try tree.pushStaticAtom("nominal");
+
+                        // Add region info for the statement
+                        const stmt_region = self.store.getStatementRegion(stmt_idx);
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, stmt_region);
+
+                        // Get the type variable for this statement
+                        const stmt_var = varFrom(stmt_idx);
+
+                        // Create a TypeWriter to format the type
+                        var type_writer = TypeWriter.init(self.gpa, self) catch continue;
+                        defer type_writer.deinit();
+
+                        // Write the type to the buffer
+                        type_writer.write(stmt_var) catch continue;
+
+                        const type_str = type_writer.get();
+                        try tree.pushStringPair("type", type_str);
+
+                        const stmt_attrs = tree.beginNode();
+
+                        // Add the type header
+                        const header = self.store.getTypeHeader(nominal.header);
+                        try header.pushToSExprTree(self, tree, nominal.header);
+
+                        try tree.endNode(stmt_begin, stmt_attrs);
+                    },
+                    else => continue,
+                }
+            }
+
+            try tree.endNode(type_decls_begin, type_decls_attrs);
+        }
 
         // Create expressions section
         const exprs_begin = tree.beginNode();
@@ -1757,10 +1856,11 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExpr
 }
 
 fn pushExprTypesToSExprTree(self: *Self, expr_idx: Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
-    const types_begin = tree.beginNode();
-    try tree.pushStaticAtom("types");
+    const expr_begin = tree.beginNode();
+    try tree.pushStaticAtom("expr");
 
-    const attrs = tree.beginNode();
+    // Add region info for the expression
+    try self.appendRegionInfoToSExprTree(tree, expr_idx);
 
     // Get the type variable for this expression
     const expr_var = varFrom(expr_idx);
@@ -1774,7 +1874,7 @@ fn pushExprTypesToSExprTree(self: *Self, expr_idx: Expr.Idx, tree: *SExprTree) s
 
     // Add the formatted type to the S-expression tree
     const type_str = type_writer.get();
-    try tree.pushStringPair("expr_type", type_str);
+    try tree.pushStringPair("type", type_str);
 
-    try tree.endNode(types_begin, attrs);
+    try tree.endNode(expr_begin, tree.beginNode());
 }

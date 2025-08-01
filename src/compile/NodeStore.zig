@@ -3150,7 +3150,7 @@ pub const Serialized = struct {
     }
 
     /// Deserialize this Serialized struct into a NodeStore
-    pub fn deserialize(self: *Serialized, offset: i64, gpa: std.mem.Allocator) *NodeStore {
+    pub fn deserialize(self: *Serialized, offset: i64) *NodeStore {
         // NodeStore.Serialized should be at least as big as NodeStore
         std.debug.assert(@sizeOf(Serialized) >= @sizeOf(NodeStore));
 
@@ -3158,7 +3158,7 @@ pub const Serialized = struct {
         const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
 
         store.* = NodeStore{
-            .gpa = gpa,
+            .gpa = undefined,
             .nodes = self.nodes.deserialize(offset).*,
             .regions = self.regions.deserialize(offset).*,
             .extra_data = self.extra_data.deserialize(offset).*,
