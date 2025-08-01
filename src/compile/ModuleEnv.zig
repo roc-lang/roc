@@ -1643,3 +1643,67 @@ pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree)
         try tree.endNode(root_begin, attrs);
     }
 }
+
+/// Append region information to an S-expression node for a given index.
+pub fn appendRegionInfoToSExprTree(self: *const Self, tree: *SExprTree, idx: anytype) std.mem.Allocator.Error!void {
+    const region = self.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
+    try self.appendRegionInfoToSExprTreeFromRegion(tree, region);
+}
+
+/// Append region information to an S-expression node from a specific region.
+pub fn appendRegionInfoToSExprTreeFromRegion(self: *const Self, tree: *SExprTree, region: Region) std.mem.Allocator.Error!void {
+    const info = self.getRegionInfo(region) catch RegionInfo{
+        .start_line_idx = 0,
+        .start_col_idx = 0,
+        .end_line_idx = 0,
+        .end_col_idx = 0,
+    };
+    try tree.pushBytesRange(
+        region.start.offset,
+        region.end.offset,
+        info,
+    );
+}
+
+/// Get region information for a node.
+pub fn getNodeRegionInfo(self: *const Self, idx: anytype) RegionInfo {
+    const region = self.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
+    return self.getRegionInfo(region);
+}
+
+/// Helper function to convert type information to an SExpr node
+/// in S-expression format for snapshot testing. Implements the definition-focused
+/// format showing final types for defs, expressions, and builtins.
+pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
+    if (maybe_expr_idx) |expr_idx| {
+        try self.pushExprTypesToSExprTree(expr_idx, tree);
+    } else {
+        // No expression provided, just push empty types
+        const types_begin = tree.beginNode();
+        try tree.pushStaticAtom("types");
+        try tree.endNode(types_begin, tree.beginNode());
+    }
+}
+
+fn pushExprTypesToSExprTree(self: *Self, expr_idx: Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
+    const types_begin = tree.beginNode();
+    try tree.pushStaticAtom("types");
+
+    const attrs = tree.beginNode();
+
+    // Get the type variable for this expression
+    const expr_var = varFrom(expr_idx);
+    
+    // Create a TypeWriter to format the type
+    var type_writer = try TypeWriter.init(self.gpa, self);
+    defer type_writer.deinit();
+
+    // Write the type to the buffer
+    try type_writer.write(expr_var);
+    
+    // Add the formatted type to the S-expression tree
+    const type_str = type_writer.get();
+    try tree.pushStringPair("expr_type", type_str);
+
+    try tree.endNode(types_begin, attrs);
+}
