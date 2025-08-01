@@ -1,9 +1,11 @@
 //! Strings written inline in Roc code, e.g. `x = "abc"`.
 
 const std = @import("std");
-const collections = @import("../collections.zig");
-const serialization = @import("../serialization/mod.zig");
+const collections = @import("collections");
+const serialization = @import("serialization");
 const testing = std.testing;
+
+const CompactWriter = serialization.CompactWriter;
 
 /// The index of this string in a `StringLiteral.Store`.
 pub const Idx = enum(u32) { _ };
@@ -30,14 +32,19 @@ pub const Store = struct {
     /// sizes, encoded in reverse where for example,
     /// the first 7 bit would signal the length, the last bit would signal that the length
     /// continues to the previous byte
-    buffer: std.ArrayListUnmanaged(u8) = .{},
+    buffer: collections.SafeList(u8) = .{},
+    /// When true, no new entries can be added to the store.
+    /// This is set after canonicalization is complete, so that
+    /// we know it's safe to serialize/deserialize the part of the interner
+    /// that goes from ident to string, because we don't go from string to ident anymore.
+    frozen: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) false else {},
 
     /// Intiizalizes a `StringLiteral.Store` with capacity `bytes` of space.
     /// Note this specifically is the number of bytes for storing strings.
     /// The string `hello, world!` will use 14 bytes including the null terminator.
     pub fn initCapacityBytes(gpa: std.mem.Allocator, bytes: usize) std.mem.Allocator.Error!Store {
         return .{
-            .buffer = try std.ArrayListUnmanaged(u8).initCapacity(gpa, bytes),
+            .buffer = try collections.SafeList(u8).initCapacity(gpa, bytes),
         };
     }
 
@@ -50,14 +57,17 @@ pub const Store = struct {
     ///
     /// Does not deduplicate, as string literals are expected to be large and mostly unique.
     pub fn insert(self: *Store, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
+        if (std.debug.runtime_safety) {
+            std.debug.assert(!self.frozen); // Should not insert into a frozen store
+        }
         const str_len: u32 = @truncate(string.len);
 
         const str_len_bytes = std.mem.asBytes(&str_len);
-        try self.buffer.appendSlice(gpa, str_len_bytes);
+        _ = try self.buffer.appendSlice(gpa, str_len_bytes);
 
-        const string_content_start = self.buffer.items.len;
+        const string_content_start = self.buffer.len();
 
-        try self.buffer.appendSlice(gpa, string);
+        _ = try self.buffer.appendSlice(gpa, string);
 
         return @enumFromInt(@as(u32, @intCast(string_content_start)));
     }
@@ -65,15 +75,22 @@ pub const Store = struct {
     /// Get a string literal's text from this `Store`.
     pub fn get(self: *const Store, idx: Idx) []u8 {
         const idx_u32: u32 = @intCast(@intFromEnum(idx));
-        const str_len = std.mem.bytesAsValue(u32, self.buffer.items[idx_u32 - 4 .. idx_u32]).*;
-        return self.buffer.items[idx_u32 .. idx_u32 + str_len];
+        const str_len = std.mem.bytesAsValue(u32, self.buffer.items.items[idx_u32 - 4 .. idx_u32]).*;
+        return self.buffer.items.items[idx_u32 .. idx_u32 + str_len];
+    }
+
+    /// Freeze the store, preventing any new entries from being added.
+    pub fn freeze(self: *Store) void {
+        if (std.debug.runtime_safety) {
+            self.frozen = true;
+        }
     }
 
     /// Calculate the size needed to serialize this StringLiteral.Store
     pub fn serializedSize(self: *const Store) usize {
         // Header: 4 bytes for buffer length
         // Data: buffer.items.len bytes
-        const raw_size = @sizeOf(u32) + self.buffer.items.len;
+        const raw_size = @sizeOf(u32) + self.buffer.len();
         // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
         return std.mem.alignForward(usize, raw_size, serialization.SERIALIZATION_ALIGNMENT);
     }
@@ -86,15 +103,15 @@ pub const Store = struct {
 
         // Write buffer length
         const len_ptr = @as(*u32, @ptrCast(@alignCast(buffer.ptr)));
-        len_ptr.* = @intCast(self.buffer.items.len);
+        len_ptr.* = @intCast(self.buffer.len());
 
         // Write buffer data
-        if (self.buffer.items.len > 0) {
-            @memcpy(buffer[@sizeOf(u32) .. @sizeOf(u32) + self.buffer.items.len], self.buffer.items);
+        if (self.buffer.len() > 0) {
+            @memcpy(buffer[@sizeOf(u32) .. @sizeOf(u32) + self.buffer.len()], self.buffer.items.items);
         }
 
         // Zero out any padding bytes
-        const actual_size = @sizeOf(u32) + self.buffer.items.len;
+        const actual_size = @sizeOf(u32) + self.buffer.len();
         if (actual_size < size) {
             @memset(buffer[actual_size..size], 0);
         }
@@ -118,54 +135,70 @@ pub const Store = struct {
         // Copy buffer data
         if (buffer_len > 0) {
             const data_start = @sizeOf(u32);
-            store.buffer.appendSliceAssumeCapacity(buffer[data_start .. data_start + buffer_len]);
+            _ = try store.buffer.appendSlice(gpa, buffer[data_start .. data_start + buffer_len]);
         }
 
         return store;
     }
+
+    /// Serialize this Store to the given CompactWriter. The resulting Store
+    /// in the writer's buffer will have offsets instead of pointers. Calling any
+    /// methods on it or dereferencing its internal "pointers" (which are now
+    /// offsets) is illegal behavior!
+    pub fn serialize(
+        self: *const Store,
+        allocator: std.mem.Allocator,
+        writer: *CompactWriter,
+    ) std.mem.Allocator.Error!*const Store {
+        // First, write the Store struct itself
+        const offset_self = try writer.appendAlloc(allocator, Store);
+
+        // Then serialize the buffer SafeList and update the struct
+        offset_self.* = .{
+            .buffer = (try self.buffer.serialize(allocator, writer)).*,
+            .frozen = self.frozen,
+        };
+
+        return @constCast(offset_self);
+    }
+
+    /// Add the given offset to the memory addresses of all pointers in `self`.
+    pub fn relocate(self: *Store, offset: isize) void {
+        self.buffer.relocate(offset);
+    }
+
+    /// Serialized representation of a Store
+    pub const Serialized = struct {
+        buffer: collections.SafeList(u8).Serialized,
+        frozen: if (std.debug.runtime_safety) bool else void,
+
+        /// Serialize a Store into this Serialized struct, appending data to the writer
+        pub fn serialize(
+            self: *Serialized,
+            store: *const Store,
+            allocator: std.mem.Allocator,
+            writer: *CompactWriter,
+        ) std.mem.Allocator.Error!void {
+            // Serialize the buffer SafeList
+            try self.buffer.serialize(&store.buffer, allocator, writer);
+            // Copy the frozen field
+            self.frozen = store.frozen;
+        }
+
+        /// Deserialize this Serialized struct into a Store
+        pub fn deserialize(self: *Serialized, offset: i64) *Store {
+            // StringLiteral.Store.Serialized should be at least as big as StringLiteral.Store
+            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
+
+            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
+
+            store.* = Store{
+                .buffer = self.buffer.deserialize(offset).*,
+                .frozen = self.frozen,
+            };
+
+            return store;
+        }
+    };
 };
-
-test "insert" {
-    const gpa = testing.allocator;
-
-    var interner = Store{};
-    defer interner.deinit(gpa);
-
-    const str_1 = "abc".*;
-    const str_2 = "defg".*;
-    const idx_1 = try interner.insert(gpa, &str_1);
-    const idx_2 = try interner.insert(gpa, &str_2);
-
-    try testing.expectEqualStrings("abc", interner.get(idx_1));
-    try testing.expectEqualStrings("defg", interner.get(idx_2));
-}
-
-test "StringLiteral.Store serialization comprehensive" {
-    const gpa = testing.allocator;
-
-    var store = Store{};
-    defer store.deinit(gpa);
-
-    // Add various test strings including edge cases
-    _ = try store.insert(gpa, "hello");
-    _ = try store.insert(gpa, "world");
-    _ = try store.insert(gpa, "test string with 🦎 unicode");
-    _ = try store.insert(gpa, ""); // empty string
-    _ = try store.insert(gpa, "\x00\x01\x02"); // binary data
-    _ = try store.insert(gpa, "🦎🚀✨"); // emoji
-    _ = try store.insert(gpa, "日本語"); // non-latin script
-    _ = try store.insert(gpa, "test\n\r\t"); // control characters
-    _ = try store.insert(gpa, "very very very very very very long string that exceeds normal buffer sizes and might cause issues with memory management");
-
-    // Test serialization
-    try serialization.testing.testSerialization(Store, &store, gpa);
-}
-
-test "StringLiteral.Store empty store serialization" {
-    const gpa = testing.allocator;
-
-    var empty_store = Store{};
-    defer empty_store.deinit(gpa);
-
-    try serialization.testing.testSerialization(Store, &empty_store, gpa);
-}

@@ -12,7 +12,7 @@ PARSE ERROR - fuzz_crash_036.md:1:11:1:11
 INVALID STATEMENT - fuzz_crash_036.md:1:9:1:11
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly_or_comma`
+A parsing error occurred: `expected_expr_close_curly`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
@@ -51,7 +51,9 @@ KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),OpenCurly(1:9-1:10),U
 # FORMATTED
 ~~~roc
 module []
-B
+{
+	B
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

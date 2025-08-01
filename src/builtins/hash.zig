@@ -34,7 +34,7 @@ const primes = [_]u64{
 
 fn read_bytes(comptime bytes: u8, data: []const u8) u64 {
     const T = std.meta.Int(.unsigned, 8 * bytes);
-    return std.mem.readInt(T, data[0..bytes], .little);
+    return mem.readInt(T, data[0..bytes], .little);
 }
 
 fn read_8bytes_swapped(data: []const u8) u64 {
@@ -88,7 +88,7 @@ const WyhashStateless = struct {
 
         var off: usize = 0;
         while (off < b.len) : (off += 32) {
-            self.round(b[off .. off + 32]);
+            @call(.always_inline, WyhashStateless.round, .{ self, b[off .. off + 32] });
         }
 
         self.msg_len += b.len;
@@ -143,10 +143,9 @@ const WyhashStateless = struct {
     pub fn hash(seed: u64, input: []const u8) u64 {
         const aligned_len = input.len - (input.len % 32);
 
-        const c = WyhashStateless.init(seed);
-        var hasher = c;
-        hasher.update(input[0..aligned_len]);
-        return hasher.final(input[aligned_len..]);
+        var c = WyhashStateless.init(seed);
+        @call(.always_inline, WyhashStateless.update, .{ &c, input[0..aligned_len] });
+        return @call(.always_inline, WyhashStateless.final, .{ &c, input[aligned_len..] });
     }
 };
 
@@ -171,7 +170,7 @@ pub const Wyhash = struct {
 
         if (self.buf_len != 0 and self.buf_len + b.len >= 32) {
             off += 32 - self.buf_len;
-            @memcpy(self.buf[self.buf_len .. self.buf_len + off], b[0..off]);
+            @memcpy(self.buf[self.buf_len..][0..off], b[0..off]);
             self.state.update(self.buf[0..]);
             self.buf_len = 0;
         }
@@ -180,9 +179,9 @@ pub const Wyhash = struct {
         const aligned_len = remain_len - (remain_len % 32);
         self.state.update(b[off .. off + aligned_len]);
 
-        const remaining_data = b[off + aligned_len ..];
-        @memcpy(self.buf[self.buf_len .. self.buf_len + remaining_data.len], remaining_data);
-        self.buf_len += @as(u8, @intCast(remaining_data.len));
+        const remaining = b[off + aligned_len ..];
+        @memcpy(self.buf[self.buf_len..][0..remaining.len], remaining);
+        self.buf_len += @as(u8, @intCast(b[off + aligned_len ..].len));
     }
 
     pub fn final(self: *Wyhash) u64 {

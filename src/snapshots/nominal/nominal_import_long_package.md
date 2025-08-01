@@ -16,6 +16,7 @@ red = ... # not implemented
 UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:21:3:27
 UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:28:3:36
 LIST NOT CLOSED - nominal_import_long_package.md:3:51:3:52
+MODULE NOT FOUND - nominal_import_long_package.md:3:1:3:21
 INVALID STATEMENT - nominal_import_long_package.md:3:21:3:27
 INVALID STATEMENT - nominal_import_long_package.md:3:28:3:36
 INVALID STATEMENT - nominal_import_long_package.md:3:37:3:52
@@ -56,6 +57,17 @@ Here is the problematic code:
 import design.Styles.Color exposing [Encoder as CE]
 ```
                                                   ^
+
+
+**MODULE NOT FOUND**
+The module `design.Styles` was not found in this Roc project.
+
+You're attempting to use this module here:
+**nominal_import_long_package.md:3:1:3:21:**
+```roc
+import design.Styles.Color exposing [Encoder as CE]
+```
+^^^^^^^^^^^^^^^^^^^^
 
 
 **INVALID STATEMENT**

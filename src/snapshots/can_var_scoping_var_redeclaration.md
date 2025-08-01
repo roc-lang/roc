@@ -19,7 +19,6 @@ result = redeclareTest({})
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:6:2:6:13
-UNUSED VARIABLE - can_var_scoping_var_redeclaration.md:6:2:6:13
 # PROBLEMS
 **DUPLICATE DEFINITION**
 The name `x_` is being redeclared in this scope.
@@ -37,18 +36,6 @@ But `x_` was already defined here:
 	var x_ = 5
 ```
  ^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `x_` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x_` to suppress this warning.
-The unused variable is declared here:
-**can_var_scoping_var_redeclaration.md:6:2:6:13:**
-```roc
-	var x_ = 10 # Redeclare var - should warn but proceed
-```
- ^^^^^^^^^^^
 
 
 # TOKENS
@@ -109,10 +96,10 @@ NO CHANGE
 					(p-assign @6.2-6.13 (ident "x_"))
 					(e-int @6.11-6.13 (value "10")))
 				(s-reassign @7.2-7.4
-					(p-assign @5.2-5.12 (ident "x_"))
+					(p-assign @6.2-6.13 (ident "x_"))
 					(e-int @7.7-7.9 (value "15")))
 				(e-lookup-local @8.2-8.4
-					(p-assign @5.2-5.12 (ident "x_"))))))
+					(p-assign @6.2-6.13 (ident "x_"))))))
 	(d-let
 		(p-assign @11.1-11.7 (ident "result"))
 		(e-call @11.10-11.27

@@ -1,3 +1,0 @@
-# netlify redirects
-/packages/basic-cli/0.17.0/*      https://roc-lang.github.io/basic-cli/0.17.0/:splat
-/packages/basic-cli/0.18.0/*      https://roc-lang.github.io/basic-cli/0.18.0/:splat

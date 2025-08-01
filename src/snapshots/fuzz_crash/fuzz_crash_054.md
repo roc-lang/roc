@@ -9,9 +9,19 @@ app[]{f:platform""}import S exposing[c as
 f]
 ~~~
 # EXPECTED
-NIL
+MODULE NOT FOUND - fuzz_crash_054.md:1:20:2:3
 # PROBLEMS
-NIL
+**MODULE NOT FOUND**
+The module `S` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_054.md:1:20:2:3:**
+```roc
+app[]{f:platform""}import S exposing[c as
+f]
+```
+
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:4-1:5),CloseSquare(1:5-1:6),OpenCurly(1:6-1:7),LowerIdent(1:7-1:8),OpColon(1:8-1:9),KwPlatform(1:9-1:17),StringStart(1:17-1:18),StringPart(1:18-1:18),StringEnd(1:18-1:19),CloseCurly(1:19-1:20),KwImport(1:20-1:26),UpperIdent(1:27-1:28),KwExposing(1:29-1:37),OpenSquare(1:37-1:38),LowerIdent(1:38-1:39),KwAs(1:40-1:42),
@@ -40,7 +50,7 @@ LowerIdent(2:1-2:2),CloseSquare(2:2-2:3),EndOfFile(2:3-2:3),
 ~~~roc
 app [] { f: platform "" }
 import S exposing [
-	c as f
+	c as f,
 ]
 ~~~
 # CANONICALIZE

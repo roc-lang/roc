@@ -2,16 +2,18 @@
 //! output formats without the complexity of vtables or interfaces.
 
 const std = @import("std");
+const reporting = @import("reporting");
+const collections = @import("collections");
+
+const source_region = reporting.source_region;
 const Allocator = std.mem.Allocator;
-const Report = @import("report.zig").Report;
-const Document = @import("document.zig").Document;
-const DocumentElement = @import("document.zig").DocumentElement;
-const Annotation = @import("document.zig").Annotation;
-const ColorPalette = @import("style.zig").ColorPalette;
-const ColorUtils = @import("style.zig").ColorUtils;
-pub const ReportingConfig = @import("config.zig").ReportingConfig;
-const collections = @import("../collections.zig");
-const source_region = @import("source_region.zig");
+const Report = reporting.Report;
+const Document = reporting.Document;
+const DocumentElement = reporting.DocumentElement;
+const Annotation = reporting.Annotation;
+const ColorPalette = reporting.ColorPalette;
+const ColorUtils = reporting.ColorUtils;
+pub const ReportingConfig = reporting.ReportingConfig;
 
 /// TODO find a better solution this is temporary to make CI happy
 ///

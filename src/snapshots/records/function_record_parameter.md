@@ -43,9 +43,11 @@ NO CHANGE
 		(p-record-destructure @1.2-1.15
 			(destructs
 				(record-destruct @1.4-1.8 (label "name") (ident "name")
-					(required))
+					(required
+						(p-assign @1.4-1.8 (ident "name"))))
 				(record-destruct @1.10-1.13 (label "age") (ident "age")
-					(required)))))
+					(required
+						(p-assign @1.10-1.13 (ident "age")))))))
 	(e-string @1.17-1.67
 		(e-literal @1.18-1.24 (string "Hello "))
 		(e-lookup-local @1.26-1.30

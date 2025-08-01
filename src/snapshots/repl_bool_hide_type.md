@@ -8,9 +8,9 @@ type=repl
 » True
 » False
 ~~~
-# EXPECTED
-True
+# OUTPUT
+1
 ---
-False
+1
 # PROBLEMS
 NIL

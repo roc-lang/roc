@@ -85,17 +85,7 @@ LowerIdent(11:1-11:6),OpAssign(11:7-11:8),LowerIdent(11:9-11:12),NoSpaceOpenRoun
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-# Function with pure annotation using thin arrow
-add : I32, I32 -> I32
-add = |x, y| {x: x, y: y}.x
-
-# Another pure function that calls a pure function
-double : I32 -> I32
-double = |x| add(x, x)
-
-main! = add(1, 2)
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -124,16 +114,19 @@ main! = add(1, 2)
 					(ty @4.19-4.22 (name "I32"))))))
 	(d-let
 		(p-assign @9.1-9.7 (ident "double"))
-		(e-lambda @9.10-9.23
-			(args
-				(p-assign @9.11-9.12 (ident "x")))
-			(e-call @9.14-9.23
-				(e-lookup-local @9.14-9.17
-					(p-assign @5.1-5.4 (ident "add")))
-				(e-lookup-local @9.18-9.19
+		(e-closure @9.10-9.23
+			(captures
+				(capture @5.1-5.4 (ident "add")))
+			(e-lambda @9.10-9.23
+				(args
 					(p-assign @9.11-9.12 (ident "x")))
-				(e-lookup-local @9.21-9.22
-					(p-assign @9.11-9.12 (ident "x")))))
+				(e-call @9.14-9.23
+					(e-lookup-local @9.14-9.17
+						(p-assign @5.1-5.4 (ident "add")))
+					(e-lookup-local @9.18-9.19
+						(p-assign @9.11-9.12 (ident "x")))
+					(e-lookup-local @9.21-9.22
+						(p-assign @9.11-9.12 (ident "x"))))))
 		(annotation @9.1-9.7
 			(declared-type
 				(ty-fn @8.10-8.20 (effectful false)

@@ -35,12 +35,12 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:28:6:29
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:10:7:17
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:17:7:18
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:30:7:31
-MALFORMED TYPE - :0:0:0:0
-MALFORMED TYPE - :0:0:0:0
+MALFORMED TYPE - record_different_fields_error.md:2:20:2:21
+MALFORMED TYPE - record_different_fields_error.md:3:13:3:14
 UNDEFINED VARIABLE - record_different_fields_error.md:5:5:5:10
 UNDEFINED VARIABLE - record_different_fields_error.md:5:11:5:15
 UNDEFINED VARIABLE - record_different_fields_error.md:6:5:6:10
-MALFORMED TYPE - :0:0:0:0
+MALFORMED TYPE - record_different_fields_error.md:6:20:6:21
 UNDEFINED VARIABLE - record_different_fields_error.md:7:5:7:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -286,8 +286,22 @@ Here is the problematic code:
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
+**record_different_fields_error.md:2:20:2:21:**
+```roc
+    _privateField: "leading underscore",
+```
+                   ^
+
+
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
+
+**record_different_fields_error.md:3:13:3:14:**
+```roc
+    field_: "trailing underscore",
+```
+            ^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `kebab` in this scope.
@@ -325,6 +339,13 @@ Is there an `import` or `exposing` missing up-top?
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
+**record_different_fields_error.md:6:20:6:21:**
+```roc
+    field$special: "dollar",
+```
+                   ^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `field` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -342,7 +363,7 @@ OpenCurly(1:1-1:2),
 NamedUnderscore(2:5-2:18),OpColon(2:18-2:19),StringStart(2:20-2:21),StringPart(2:21-2:39),StringEnd(2:39-2:40),Comma(2:40-2:41),
 LowerIdent(3:5-3:11),OpColon(3:11-3:12),StringStart(3:13-3:14),StringPart(3:14-3:33),StringEnd(3:33-3:34),Comma(3:34-3:35),
 UpperIdent(4:5-4:15),OpColon(4:15-4:16),StringStart(4:17-4:18),StringPart(4:18-4:24),StringEnd(4:24-4:25),Comma(4:25-4:26),
-LowerIdent(5:5-5:10),OpBinaryMinus(5:10-5:11),LowerIdent(5:11-5:15),OpColon(5:15-5:16),StringStart(5:17-5:18),StringPart(5:18-5:23),StringEnd(5:23-5:24),Comma(5:24-5:25),
+LowerIdent(5:5-5:10),OpUnaryMinus(5:10-5:11),LowerIdent(5:11-5:15),OpColon(5:15-5:16),StringStart(5:17-5:18),StringPart(5:18-5:23),StringEnd(5:23-5:24),Comma(5:24-5:25),
 LowerIdent(6:5-6:10),MalformedUnknownToken(6:10-6:11),LowerIdent(6:11-6:18),OpColon(6:18-6:19),StringStart(6:20-6:21),StringPart(6:21-6:27),StringEnd(6:27-6:28),Comma(6:28-6:29),
 LowerIdent(7:5-7:10),OpaqueName(7:10-7:17),OpColon(7:17-7:18),StringStart(7:19-7:20),StringPart(7:20-7:29),StringEnd(7:29-7:30),Comma(7:30-7:31),
 CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
@@ -366,8 +387,8 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 		(e-string @4.17-4.25
 			(e-string-part @4.18-4.24 (raw "pascal")))
 		(e-malformed @4.25-4.26 (reason "expr_unexpected_token"))
-		(e-binop @5.5-5.15 (op "-")
-			(e-ident @5.5-5.10 (raw "kebab"))
+		(e-ident @5.5-5.10 (raw "kebab"))
+		(unary "-"
 			(e-ident @5.11-5.15 (raw "case")))
 		(e-malformed @5.15-5.16 (reason "expr_unexpected_token"))
 		(e-string @5.17-5.24
@@ -402,7 +423,8 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 	
 	"pascal"
 	
-	kebab - case
+	kebab
+	-case
 	
 	"kebab"
 	
@@ -431,9 +453,10 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 	(s-expr @4.17-4.25
 		(e-string @4.17-4.25
 			(e-literal @4.18-4.24 (string "pascal"))))
-	(s-expr @5.5-5.15
-		(e-binop @5.5-5.15 (op "sub")
-			(e-runtime-error (tag "ident_not_in_scope"))
+	(s-expr @5.5-5.10
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(s-expr @5.10-5.15
+		(e-unary-minus @5.10-5.15
 			(e-runtime-error (tag "ident_not_in_scope"))))
 	(s-expr @5.17-5.24
 		(e-string @5.17-5.24

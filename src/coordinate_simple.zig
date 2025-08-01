@@ -1,26 +1,26 @@
 //! Simplified coordination system for single-file processing.
 
 const std = @import("std");
-const base = @import("base.zig");
-const tracy = @import("tracy.zig");
 const builtin = @import("builtin");
-const parse = @import("check/parse.zig");
-const canonicalize = @import("check/canonicalize.zig");
-const Solver = @import("check/check_types.zig");
-const types_problem_mod = @import("check/check_types/problem.zig");
-const reporting = @import("reporting.zig");
-const Filesystem = @import("fs/Filesystem.zig");
 const build_options = @import("build_options");
+const base = @import("base");
+const parse = @import("parse");
+const reporting = @import("reporting");
+const compile = @import("compile");
+const Can = @import("can");
+const Check = @import("check");
+const tracy = @import("tracy");
 
-const ModuleEnv = base.ModuleEnv;
-const CIR = canonicalize.CIR;
-const AST = parse.AST;
+const Filesystem = @import("fs/Filesystem.zig");
 const cache_mod = @import("cache/mod.zig");
+
+const ModuleEnv = compile.ModuleEnv;
+const AST = parse.AST;
 const CacheManager = cache_mod.CacheManager;
 const CacheConfig = cache_mod.CacheConfig;
-
 const CacheResult = cache_mod.CacheResult;
 const CacheHit = cache_mod.CacheHit;
+const types_problem_mod = Check.problem;
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
@@ -37,14 +37,16 @@ pub const TimingInfo = struct {
 /// for proper diagnostic reporting.
 ///
 /// This struct owns:
-/// - The source text (which the reports reference but don't own)
+/// - The source text (which the reports reference)
 /// - The CIR data
 /// - The reports
 ///
 /// The reports contain references to the source text, so ProcessResult
 /// must outlive any usage of the reports.
 pub const ProcessResult = struct {
-    cir: *CIR,
+    cir: *ModuleEnv,
+    source: []const u8,
+    own_source: bool, // Whether we own the source text (true if processed from file)
     reports: []reporting.Report,
     timing: ?TimingInfo = null,
     error_count: u32 = 0,
@@ -59,11 +61,13 @@ pub const ProcessResult = struct {
 
         // Clean up the heap-allocated ModuleEnv (only when loaded from cache)
         if (self.was_cached) {
-            self.cir.env.deinit();
-            gpa.destroy(self.cir.env);
+            self.cir.deinit();
+            gpa.destroy(self.cir);
         }
-
-        self.cir.deinit();
+        if (self.own_source) {
+            // If we own the source, we need to free it
+            gpa.free(self.source);
+        }
         gpa.destroy(self.cir);
     }
 };
@@ -102,7 +106,7 @@ pub fn processFile(
         const compiler_version = getCompilerVersion();
 
         // Check cache - loadFromCache takes ownership of source only
-        const cache_result = cache.loadFromCache(source, compiler_version);
+        const cache_result = cache.loadFromCache(compiler_version, source);
 
         switch (cache_result) {
             .hit => |process_result| {
@@ -111,35 +115,27 @@ pub fn processFile(
             },
             .miss => |returned| {
                 // Cache miss - we get back ownership of source
-                // Process normally with returned source
-                var process_result = try processSourceInternal(gpa, returned.source, filepath, config);
+                var process_result = try processSourceInternal(gpa, source, true, filepath, config);
                 process_result.was_cached = false;
 
                 // Store in cache (don't fail compilation if cache store fails)
-                cache.store(returned.source, compiler_version, &process_result) catch |err| {
+                cache.store(returned.key, &process_result) catch |err| {
                     std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
                 };
 
                 return process_result;
             },
-            .invalid => |returned| {
-                // Cache invalid - we get back ownership of source
-                // Process normally with returned source
-                var process_result = try processSourceInternal(gpa, returned.source, filepath, config);
-                process_result.was_cached = false;
-
-                // Store in cache (don't fail compilation if cache store fails)
-                cache.store(returned.source, compiler_version, &process_result) catch |err| {
-                    std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
-                };
-
-                return process_result;
+            .not_enabled => {
+                // We pass ownership of the source to processSourceInternal
+                return try processSourceInternal(gpa, source, true, filepath, config);
             },
         }
-    }
+    } else {
+        // No caching
 
-    // No caching - process normally
-    return try processSourceInternal(gpa, source, filepath, config);
+        // We pass ownership of the source to processSourceInternal
+        return try processSourceInternal(gpa, source, true, filepath, config);
+    }
 }
 
 /// Process source code directly and return both CIR and reports for proper reporting.
@@ -148,15 +144,13 @@ pub fn processFile(
 /// retains ownership of the input. Use this when you already have source text
 /// in memory (e.g., from tests, REPL, or other tools).
 ///
-/// The source is duplicated and owned by the ModuleEnv in the returned ProcessResult.
-///
 /// `processSource` is used by the fuzzer.
 pub fn processSource(
     gpa: std.mem.Allocator,
     source: []const u8,
     filename: []const u8,
 ) !ProcessResult {
-    return try processSourceInternal(gpa, source, filename, .{ .collect_timing = false });
+    return try processSourceInternal(gpa, source, false, filename, .{ .collect_timing = false });
 }
 
 /// Configuration for processSourceInternal
@@ -189,11 +183,10 @@ fn collectTiming(config: ProcessConfig, timer: *?std.time.Timer, timing_info: *?
 /// The config.collect_timing parameter controls whether to collect timing information:
 /// - true: Collect timing information for each compilation phase
 /// - false: Skip timing collection for faster processing
-///
-/// The source is always duplicated for the ModuleEnv, which owns the copy.
 fn processSourceInternal(
     gpa: std.mem.Allocator,
     source: []const u8,
+    own_source: bool, // Whether we own the source text (true if processed from file)
     filename: []const u8,
     config: ProcessConfig,
 ) !ProcessResult {
@@ -217,16 +210,13 @@ fn processSourceInternal(
     // Initialize the ModuleEnv (heap-allocated for ownership transfer)
     var module_env = try gpa.create(ModuleEnv);
 
-    // Always duplicate source since ModuleEnv owns it
-    const owned_source_for_env = try gpa.dupe(u8, source);
-
-    module_env.* = try ModuleEnv.init(gpa, owned_source_for_env);
+    module_env.* = try ModuleEnv.init(gpa, source);
 
     // Calculate line starts for region info
-    try module_env.*.calcLineStarts(source);
+    try module_env.*.calcLineStarts();
 
     // Parse the source code
-    var parse_ast: AST = try parse.parse(module_env, source);
+    var parse_ast: AST = try parse.parse(module_env);
     defer parse_ast.deinit(gpa);
 
     // Create an arraylist for capturing diagnostic reports.
@@ -241,27 +231,32 @@ fn processSourceInternal(
 
     // Get parser diagnostic Reports
     for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(module_env, diagnostic, gpa, "<source>") catch continue;
+        const report = parse_ast.parseDiagnosticToReport(module_env.*, diagnostic, gpa, "<source>") catch continue;
         reports.append(report) catch continue;
     }
 
     collectTiming(config, &timer, &timing_info, "tokenize_parse_ns");
 
-    // Initialize the Can IR (heap-allocated)
-    var cir = try gpa.create(CIR);
     // Extract module name from filename (remove path and extension)
     const basename = std.fs.path.basename(filename);
     const module_name = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
         basename[0..dot_idx]
     else
         basename;
-    cir.* = try CIR.init(module_env, module_name);
+
+    // Initialize CIR fields in ModuleEnv
+    try module_env.initCIRFields(gpa, module_name);
+
+    // CIR is now just an alias for ModuleEnv
+    const cir = module_env;
 
     // Create scope for semantic analysis
     // Canonicalize the AST
-    var canonicalizer = try canonicalize.init(cir, &parse_ast, null);
-    defer canonicalizer.deinit();
-    try canonicalizer.canonicalizeFile();
+    var czer = try Can.init(cir, &parse_ast, null);
+    defer czer
+        .deinit();
+    try czer
+        .canonicalizeFile();
 
     collectTiming(config, &timer, &timing_info, "canonicalize_ns");
 
@@ -272,15 +267,15 @@ fn processSourceInternal(
     const diagnostics = try cir.getDiagnostics();
     defer gpa.free(diagnostics);
     for (diagnostics) |diagnostic| {
-        const report = try cir.diagnosticToReport(diagnostic, gpa, source, filename);
+        const report = try cir.diagnosticToReport(diagnostic, gpa, filename);
         try reports.append(report);
     }
 
     collectTiming(config, &timer, &timing_info, "canonicalize_diagnostics_ns");
 
     // Type checking
-    const empty_modules: []const *CIR = &.{};
-    var solver = try Solver.init(gpa, &module_env.types, cir, empty_modules, &cir.store.regions);
+    const empty_modules: []const *ModuleEnv = &.{};
+    var solver = try Check.init(gpa, &cir.types, cir, empty_modules, &cir.store.regions);
     defer solver.deinit();
 
     // Check for type errors
@@ -297,15 +292,12 @@ fn processSourceInternal(
         module_env,
         cir,
         &solver.snapshots,
-        module_env.source,
         filename,
         empty_modules,
     );
     defer report_builder.deinit();
 
-    var problems_itr = solver.problems.problems.iterIndices();
-    while (problems_itr.next()) |problem_idx| {
-        const problem = solver.problems.problems.get(problem_idx);
+    for (solver.problems.problems.items) |problem| {
         const report = report_builder.build(problem) catch continue;
         reports.append(report) catch continue;
     }
@@ -327,6 +319,8 @@ fn processSourceInternal(
 
     return ProcessResult{
         .cir = cir,
+        .source = source,
+        .own_source = own_source,
         .reports = final_reports,
         .timing = timing_info,
         .error_count = error_count,

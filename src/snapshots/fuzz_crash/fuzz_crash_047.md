@@ -52,10 +52,10 @@ LowerIdent(5:2-5:5),OpColon(5:5-5:6),Int(5:7-5:9),CloseCurly(5:10-5:11),EndOfFil
 ~~~roc
 module [person, updated]
 
-person = {name: "Alice", age: 30}
+person = { name: "Alice", age: 30 }
 updated = {
 	..person,
-	age: 31
+	age: 31,
 }
 ~~~
 # CANONICALIZE

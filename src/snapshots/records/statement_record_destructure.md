@@ -5,169 +5,18 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
+module []
+
 { name, age, email } = person
 ~~~
 # EXPECTED
-MISSING HEADER - statement_record_destructure.md:1:1:1:2
-UNEXPECTED TOKEN IN EXPRESSION - statement_record_destructure.md:1:7:1:8
-UNEXPECTED TOKEN IN EXPRESSION - statement_record_destructure.md:1:12:1:13
-UNEXPECTED TOKEN IN EXPRESSION - statement_record_destructure.md:1:20:1:21
-UNEXPECTED TOKEN IN EXPRESSION - statement_record_destructure.md:1:22:1:23
-INVALID STATEMENT - statement_record_destructure.md:1:3:1:7
-INVALID STATEMENT - statement_record_destructure.md:1:7:1:8
-INVALID STATEMENT - statement_record_destructure.md:1:9:1:12
-INVALID STATEMENT - statement_record_destructure.md:1:12:1:13
-INVALID STATEMENT - statement_record_destructure.md:1:14:1:19
-INVALID STATEMENT - statement_record_destructure.md:1:20:1:21
-INVALID STATEMENT - statement_record_destructure.md:1:22:1:23
-INVALID STATEMENT - statement_record_destructure.md:1:24:1:30
+UNDEFINED VARIABLE - statement_record_destructure.md:3:24:3:30
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
+**UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-Here is the problematic code:
-**statement_record_destructure.md:1:1:1:2:**
-```roc
-{ name, age, email } = person
-```
-^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**statement_record_destructure.md:1:7:1:8:**
-```roc
-{ name, age, email } = person
-```
-      ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**statement_record_destructure.md:1:12:1:13:**
-```roc
-{ name, age, email } = person
-```
-           ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**statement_record_destructure.md:1:20:1:21:**
-```roc
-{ name, age, email } = person
-```
-                   ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**statement_record_destructure.md:1:22:1:23:**
-```roc
-{ name, age, email } = person
-```
-                     ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**statement_record_destructure.md:1:3:1:7:**
-```roc
-{ name, age, email } = person
-```
-  ^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**statement_record_destructure.md:1:7:1:8:**
-```roc
-{ name, age, email } = person
-```
-      ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**statement_record_destructure.md:1:9:1:12:**
-```roc
-{ name, age, email } = person
-```
-        ^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**statement_record_destructure.md:1:12:1:13:**
-```roc
-{ name, age, email } = person
-```
-           ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**statement_record_destructure.md:1:14:1:19:**
-```roc
-{ name, age, email } = person
-```
-             ^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**statement_record_destructure.md:1:20:1:21:**
-```roc
-{ name, age, email } = person
-```
-                   ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**statement_record_destructure.md:1:22:1:23:**
-```roc
-{ name, age, email } = person
-```
-                     ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**statement_record_destructure.md:1:24:1:30:**
+**statement_record_destructure.md:3:24:3:30:**
 ```roc
 { name, age, email } = person
 ```
@@ -176,36 +25,47 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:19),CloseCurly(1:20-1:21),OpAssign(1:22-1:23),LowerIdent(1:24-1:30),EndOfFile(1:30-1:30),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+OpenCurly(3:1-3:2),LowerIdent(3:3-3:7),Comma(3:7-3:8),LowerIdent(3:9-3:12),Comma(3:12-3:13),LowerIdent(3:14-3:19),CloseCurly(3:20-3:21),OpAssign(3:22-3:23),LowerIdent(3:24-3:30),EndOfFile(3:30-3:30),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.30
-	(malformed-header @1.1-1.2 (tag "missing_header"))
+(file @1.1-3.30
+	(module @1.1-1.10
+		(exposes @1.8-1.10))
 	(statements
-		(e-ident @1.3-1.7 (raw "name"))
-		(e-malformed @1.7-1.8 (reason "expr_unexpected_token"))
-		(e-ident @1.9-1.12 (raw "age"))
-		(e-malformed @1.12-1.13 (reason "expr_unexpected_token"))
-		(e-ident @1.14-1.19 (raw "email"))
-		(e-malformed @1.20-1.21 (reason "expr_unexpected_token"))
-		(e-malformed @1.22-1.23 (reason "expr_unexpected_token"))
-		(e-ident @1.24-1.30 (raw "person"))))
+		(s-decl @3.1-3.30
+			(p-record @3.1-3.21
+				(field @3.3-3.7 (name "name") (rest false))
+				(field @3.9-3.12 (name "age") (rest false))
+				(field @3.14-3.19 (name "email") (rest false)))
+			(e-ident @3.24-3.30 (raw "person")))))
 ~~~
 # FORMATTED
 ~~~roc
-name
-age
-email
-person
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(d-let
+		(p-record-destructure @3.1-3.21
+			(destructs
+				(record-destruct @3.3-3.7 (label "name") (ident "name")
+					(required
+						(p-assign @3.3-3.7 (ident "name"))))
+				(record-destruct @3.9-3.12 (label "age") (ident "age")
+					(required
+						(p-assign @3.9-3.12 (ident "age"))))
+				(record-destruct @3.14-3.19 (label "email") (ident "email")
+					(required
+						(p-assign @3.14-3.19 (ident "email"))))))
+		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
-	(expressions))
+	(expressions
+		(expr @3.24-3.30 (type "Error"))))
 ~~~

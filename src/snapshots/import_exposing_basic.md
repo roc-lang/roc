@@ -17,9 +17,19 @@ main = {
 }
 ~~~
 # EXPECTED
-NIL
+MODULE NOT FOUND - import_exposing_basic.md:3:1:3:43
 # PROBLEMS
-NIL
+**MODULE NOT FOUND**
+The module `json.Json` was not found in this Roc project.
+
+You're attempting to use this module here:
+**import_exposing_basic.md:3:1:3:43:**
+```roc
+import json.Json exposing [decode, encode]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),
@@ -76,7 +86,7 @@ module [main]
 import json.Json exposing [decode, encode]
 
 main = {
-	data = {name: "Alice", age: 30}
+	data = { name: "Alice", age: 30 }
 	encoded = encode(data)
 	decoded = decode(encoded)
 	decoded

@@ -10,7 +10,7 @@ type=repl
 » 1.5dec
 » 255u8
 ~~~
-# EXPECTED
+# OUTPUT
 Evaluation error: error.Crash
 ---
 Failed to canonicalize expression

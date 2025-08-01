@@ -10,6 +10,7 @@ const std = @import("std");
 
 pub const testing = @import("testing.zig");
 pub const safety = @import("safety.zig");
+pub const CompactWriter = @import("CompactWriter.zig").CompactWriter;
 
 const Allocator = std.mem.Allocator;
 

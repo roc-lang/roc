@@ -224,12 +224,53 @@ UNDECLARED TYPE - syntax_grab_bag.md:45:8:45:10
 UNDECLARED TYPE - syntax_grab_bag.md:46:8:46:17
 UNDECLARED TYPE - syntax_grab_bag.md:52:4:52:6
 UNDECLARED TYPE - syntax_grab_bag.md:53:8:53:17
+MODULE NOT FOUND - syntax_grab_bag.md:4:1:4:42
 NOT IMPLEMENTED - :0:0:0:0
 NOT IMPLEMENTED - :0:0:0:0
 NOT IMPLEMENTED - :0:0:0:0
+MODULE NOT FOUND - syntax_grab_bag.md:6:1:12:4
+MODULE NOT FOUND - syntax_grab_bag.md:14:1:14:82
+MODULE NOT FOUND - syntax_grab_bag.md:16:1:16:27
+MODULE NOT FOUND - syntax_grab_bag.md:17:1:20:20
 UNDEFINED VARIABLE - syntax_grab_bag.md:72:4:72:13
 UNUSED VARIABLE - syntax_grab_bag.md:97:3:97:8
 UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
+NOT IMPLEMENTED - :0:0:0:0
+UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
+NOT IMPLEMENTED - :0:0:0:0
+UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
+NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
+UNUSED VARIABLE - syntax_grab_bag.md:121:21:121:27
+UNUSED VARIABLE - syntax_grab_bag.md:127:4:128:9
+NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
+UNUSED VARIABLE - syntax_grab_bag.md:82:2:82:3
+UNDEFINED VARIABLE - syntax_grab_bag.md:141:2:141:6
+UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
+UNDEFINED VARIABLE - syntax_grab_bag.md:147:9:147:13
+UNDEFINED VARIABLE - syntax_grab_bag.md:158:2:158:11
+NOT IMPLEMENTED - :0:0:0:0
+UNDEFINED VARIABLE - syntax_grab_bag.md:178:63:178:69
+UNDEFINED VARIABLE - syntax_grab_bag.md:179:42:179:48
+UNDEFINED VARIABLE - syntax_grab_bag.md:183:3:183:7
+UNDEFINED VARIABLE - syntax_grab_bag.md:185:4:185:10
+UNDEFINED VARIABLE - syntax_grab_bag.md:188:22:188:25
+NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - :0:0:0:0
+UNDEFINED VARIABLE - syntax_grab_bag.md:193:4:193:13
+UNUSED VARIABLE - syntax_grab_bag.md:166:2:166:6
+UNUSED VARIABLE - syntax_grab_bag.md:180:2:180:17
+UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
+UNUSED VARIABLE - syntax_grab_bag.md:165:2:165:14
+UNUSED VARIABLE - syntax_grab_bag.md:178:2:178:8
+UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
+UNUSED VARIABLE - syntax_grab_bag.md:164:2:164:18
+UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
+TYPE MISMATCH - syntax_grab_bag.md:67:11:67:14
+INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
+TYPE MISMATCH - syntax_grab_bag.md:155:2:155:12
+INCOMPATIBLE LIST ELEMENTS - syntax_grab_bag.md:167:3:167:3
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
@@ -341,6 +382,17 @@ This type is referenced here:
        ^^^^^^^^^
 
 
+**MODULE NOT FOUND**
+The module `pf.Stdout` was not found in this Roc project.
+
+You're attempting to use this module here:
+**syntax_grab_bag.md:4:1:4:42:**
+```roc
+import pf.Stdout exposing [line!, write!]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented: malformed import module name contains invalid control characters
 
@@ -355,6 +407,57 @@ This error doesn't have a proper diagnostic report yet. Let us know if you want 
 This feature is not yet implemented: Exposed item 'write!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+**MODULE NOT FOUND**
+The module `MALFORMED_IMPORT` was not found in this Roc project.
+
+You're attempting to use this module here:
+**syntax_grab_bag.md:6:1:12:4:**
+```roc
+import # Comment after import keyword
+	pf # Comment after qualifier
+		.StdoutMultiline # Comment after ident
+		exposing [ # Comment after exposing open
+			line!, # Comment after exposed item
+			write!, # Another after exposed item
+		] # Comment after exposing close
+```
+
+
+**MODULE NOT FOUND**
+The module `pkg.Something` was not found in this Roc project.
+
+You're attempting to use this module here:
+**syntax_grab_bag.md:14:1:14:82:**
+```roc
+import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `BadName` was not found in this Roc project.
+
+You're attempting to use this module here:
+**syntax_grab_bag.md:16:1:16:27:**
+```roc
+import BadName as GoodName
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `BadNameMultiline` was not found in this Roc project.
+
+You're attempting to use this module here:
+**syntax_grab_bag.md:17:1:20:20:**
+```roc
+import
+	BadNameMultiline
+		as
+		GoodNameMultiline
+```
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
@@ -607,42 +710,6 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable `multiline_tuple` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_multiline_tuple` to suppress this warning.
-The unused variable is declared here:
-**syntax_grab_bag.md:180:2:180:17:**
-```roc
-	multiline_tuple = (
-```
- ^^^^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `record` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
-The unused variable is declared here:
-**syntax_grab_bag.md:178:2:178:8:**
-```roc
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-```
- ^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `tag_with_payload` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_tag_with_payload` to suppress this warning.
-The unused variable is declared here:
-**syntax_grab_bag.md:164:2:164:18:**
-```roc
-	tag_with_payload = Ok(number)
-```
- ^^^^^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
 Variable `list` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
@@ -655,15 +722,15 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `bin_op_result` is not used anywhere in your code.
+Variable `multiline_tuple` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_bin_op_result` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_multiline_tuple` to suppress this warning.
 The unused variable is declared here:
-**syntax_grab_bag.md:188:2:188:15:**
+**syntax_grab_bag.md:180:2:180:17:**
 ```roc
-	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+	multiline_tuple = (
 ```
- ^^^^^^^^^^^^^
+ ^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -688,6 +755,42 @@ The unused variable is declared here:
 	interpolated = "Hello, ${world}"
 ```
  ^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `record` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:178:2:178:8:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+ ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `bin_op_result` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_bin_op_result` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:188:2:188:15:**
+```roc
+	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+```
+ ^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `tag_with_payload` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_tag_with_payload` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:164:2:164:18:**
+```roc
+	tag_with_payload = Ok(number)
+```
+ ^^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -800,6 +903,29 @@ It is of type:
 
 But you are trying to use it as:
     __arg -> _ret_
+
+**INCOMPATIBLE LIST ELEMENTS**
+The first two elements in this list have incompatible types:
+**syntax_grab_bag.md:167:3:**
+```roc
+		add_one(
+			dbg # After dbg in list
+				number, # after dbg expr as arg
+		), # Comment one
+		456, # Comment two
+```
+  ^^^
+
+The first element has this type:
+    _U64_
+
+However, the second element has this type:
+    _Num(_size)_
+
+All elements in a list must have compatible types.
+
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -1472,19 +1598,19 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 							(e-field-access @189.26-189.111
 								(e-field-access @189.26-189.97
 									(e-field-access @189.26-189.66
-										(e-question-suffix @189.26-189.39
+										(e-question-suffix @189.26-189.40
 											(e-apply @189.26-189.39
 												(e-ident @189.26-189.33 (raw "some_fn"))
 												(e-ident @189.34-189.38 (raw "arg1"))))
-										(e-question-suffix @189.40-189.65
+										(e-question-suffix @189.40-189.66
 											(e-apply @189.40-189.65
 												(e-ident @189.40-189.63 (raw "static_dispatch_method")))))
-									(e-question-suffix @189.66-189.96
+									(e-question-suffix @189.66-189.97
 										(e-apply @189.66-189.96
 											(e-ident @189.66-189.94 (raw "next_static_dispatch_method")))))
-								(e-question-suffix @189.97-189.110
+								(e-question-suffix @189.97-189.111
 									(e-ident @189.97-189.110 (raw "record_field")))))
-						(e-question-suffix @190.2-190.28
+						(e-question-suffix @190.2-190.29
 							(e-apply @190.2-190.28
 								(e-ident @190.2-190.14 (raw "Stdout.line!"))
 								(e-ident @190.15-190.27 (raw "interpolated"))))
@@ -1532,7 +1658,7 @@ import # Comment after import keyword
 	pf.StdoutMultiline # Comment after ident
 		exposing [ # Comment after exposing open
 			line!, # Comment after exposed item
-			write! # Another after exposed item
+			write!, # Another after exposed item
 		] # Comment after exposing close
 
 import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
@@ -1699,7 +1825,7 @@ main! = |_| { # Yeah I can leave a comment here
 		Stdout.line!("Adding ${n} to ${number}")
 		number = number + n
 	}
-	record = {foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned}
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 	multiline_tuple = (
 		123,
@@ -1778,387 +1904,399 @@ expect {
 					(ty @67.18-67.21 (name "U64"))))))
 	(d-let
 		(p-assign @80.1-80.11 (ident "match_time"))
-		(e-lambda @80.14-138.3
-			(args
-				(p-assign @81.2-81.3 (ident "a"))
-				(p-assign @82.2-82.3 (ident "b")))
-			(e-match @84.2-138.3
-				(match @84.2-138.3
-					(cond
-						(e-lookup-local @84.8-84.9
-							(p-assign @81.2-81.3 (ident "a"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @85.3-85.7))
-								(pattern (degenerate false)
-									(p-applied-tag @85.10-85.15))
-								(pattern (degenerate false)
-									(p-applied-tag @85.18-85.21)))
-							(value
-								(e-block @85.25-88.4
-									(s-let @86.4-86.10
-										(p-assign @86.4-86.5 (ident "x"))
-										(e-int @86.8-86.10 (value "12")))
-									(e-lookup-local @87.4-87.5
-										(p-assign @86.4-86.5 (ident "x"))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @89.3-89.7))
-								(pattern (degenerate false)
-									(p-applied-tag @91.4-91.9))
-								(pattern (degenerate false)
-									(p-applied-tag @92.5-92.8)))
-							(value
-								(e-block @93.7-96.5
-									(s-let @94.5-94.11
-										(p-assign @94.5-94.6 (ident "x"))
-										(e-int @94.9-94.11 (value "12")))
-									(e-lookup-local @95.5-95.6
-										(p-assign @94.5-94.6 (ident "x"))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-assign @97.3-97.8 (ident "lower"))))
-							(value
-								(e-int @98.7-98.8 (value "1"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-str @99.3-99.8 (text """))))
-							(value
-								(e-int @100.4-100.7 (value "100"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-str @101.3-101.8 (text """)))
-								(pattern (degenerate false)
-									(p-str @101.11-101.16 (text """))))
-							(value
-								(e-int @101.20-101.23 (value "200"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list @102.3-102.24
-										(patterns
-											(p-int @102.4-102.5 (value "1"))
-											(p-int @102.7-102.8 (value "2"))
-											(p-int @102.10-102.11 (value "3")))
-										(rest-at (index 3)
-											(p-assign @1.1-1.1 (ident "rest"))))))
-							(value
-								(e-int @104.5-104.8 (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list @108.3-108.28
-										(patterns
-											(p-int @108.4-108.5 (value "1"))
-											(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-											(p-int @108.14-108.15 (value "3")))
-										(rest-at (index 3)
-											(p-assign @1.1-1.1 (ident "rest"))))))
-							(value
-								(e-int @108.32-108.35 (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list @109.3-116.4
-										(patterns
-											(p-int @110.4-110.5 (value "1"))
-											(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-											(p-int @112.4-112.5 (value "3")))
-										(rest-at (index 3)
-											(p-assign @1.1-1.1 (ident "rest"))))))
-							(value
-								(e-int @116.8-116.11 (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec @117.3-117.7)))
-							(value
-								(e-int @117.11-117.14 (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec @118.3-118.7))
-								(pattern (degenerate false)
-									(p-small-dec @118.10-118.14)))
-							(value
-								(e-int @118.18-118.21 (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple @119.3-119.12
-										(patterns
-											(p-int @119.4-119.5 (value "1"))
-											(p-int @119.7-119.8 (value "2"))
-											(p-int @119.10-119.11 (value "3"))))))
-							(value
-								(e-int @119.16-119.19 (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple @120.3-120.16
-										(patterns
-											(p-int @120.4-120.5 (value "1"))
-											(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-											(p-int @120.14-120.15 (value "3"))))))
-							(value
-								(e-int @120.20-120.23 (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure @121.3-121.29
-										(destructs
-											(record-destruct @121.5-121.11 (label "foo") (ident "foo")
-												(sub-pattern
-													(p-int @121.10-121.11 (value "1"))))
-											(record-destruct @121.13-121.19 (label "bar") (ident "bar")
-												(sub-pattern
-													(p-int @121.18-121.19 (value "2"))))
-											(record-destruct @121.21-121.27 (label "rest") (ident "rest")
-												(required))))))
-							(value
-								(e-runtime-error (tag "not_implemented"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure @122.3-129.4
-										(destructs
-											(record-destruct @123.4-125.7 (label "foo") (ident "foo")
-												(sub-pattern
-													(p-int @125.6-125.7 (value "1"))))
-											(record-destruct @126.4-126.10 (label "bar") (ident "bar")
-												(sub-pattern
-													(p-int @126.9-126.10 (value "2"))))
-											(record-destruct @127.4-128.9 (label "rest") (ident "rest")
-												(required))))))
-							(value
-								(e-int @129.8-129.10 (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure @130.3-130.25
-										(destructs
-											(record-destruct @130.5-130.11 (label "foo") (ident "foo")
-												(sub-pattern
-													(p-int @130.10-130.11 (value "1"))))
-											(record-destruct @130.13-130.23 (label "bar") (ident "bar")
-												(sub-pattern
-													(p-runtime-error @1.1-1.1 (tag "not_implemented"))))))))
-							(value
-								(e-int @130.29-130.31 (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure @131.3-134.4
-										(destructs
-											(record-destruct @132.4-132.10 (label "foo") (ident "foo")
-												(sub-pattern
-													(p-int @132.9-132.10 (value "1"))))
-											(record-destruct @133.4-133.14 (label "bar") (ident "bar")
-												(sub-pattern
-													(p-runtime-error @1.1-1.1 (tag "not_implemented"))))))))
-							(value
-								(e-int @134.8-134.10 (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @135.3-135.10)))
-							(value
-								(e-int @135.14-135.17 (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @136.3-136.17)))
-							(value
-								(e-lookup-local @136.21-136.25
-									(p-assign @136.11-136.15 (ident "dude")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @137.3-137.34)))
-							(value
-								(e-int @137.38-137.42 (value "1000")))))))))
+		(e-closure @80.14-138.3
+			(captures
+				(capture @86.4-86.5 (ident "x"))
+				(capture @94.5-94.6 (ident "x"))
+				(capture @136.11-136.15 (ident "dude")))
+			(e-lambda @80.14-138.3
+				(args
+					(p-assign @81.2-81.3 (ident "a"))
+					(p-assign @82.2-82.3 (ident "b")))
+				(e-match @84.2-138.3
+					(match @84.2-138.3
+						(cond
+							(e-lookup-local @84.8-84.9
+								(p-assign @81.2-81.3 (ident "a"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @85.3-85.7))
+									(pattern (degenerate false)
+										(p-applied-tag @85.10-85.15))
+									(pattern (degenerate false)
+										(p-applied-tag @85.18-85.21)))
+								(value
+									(e-block @85.25-88.4
+										(s-let @86.4-86.10
+											(p-assign @86.4-86.5 (ident "x"))
+											(e-int @86.8-86.10 (value "12")))
+										(e-lookup-local @87.4-87.5
+											(p-assign @86.4-86.5 (ident "x"))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @89.3-89.7))
+									(pattern (degenerate false)
+										(p-applied-tag @91.4-91.9))
+									(pattern (degenerate false)
+										(p-applied-tag @92.5-92.8)))
+								(value
+									(e-block @93.7-96.5
+										(s-let @94.5-94.11
+											(p-assign @94.5-94.6 (ident "x"))
+											(e-int @94.9-94.11 (value "12")))
+										(e-lookup-local @95.5-95.6
+											(p-assign @94.5-94.6 (ident "x"))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-assign @97.3-97.8 (ident "lower"))))
+								(value
+									(e-int @98.7-98.8 (value "1"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-str @99.3-99.8 (text """))))
+								(value
+									(e-int @100.4-100.7 (value "100"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-str @101.3-101.8 (text """)))
+									(pattern (degenerate false)
+										(p-str @101.11-101.16 (text """))))
+								(value
+									(e-int @101.20-101.23 (value "200"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-list @102.3-102.24
+											(patterns
+												(p-int @102.4-102.5 (value "1"))
+												(p-int @102.7-102.8 (value "2"))
+												(p-int @102.10-102.11 (value "3")))
+											(rest-at (index 3)
+												(p-assign @1.1-1.1 (ident "rest"))))))
+								(value
+									(e-int @104.5-104.8 (value "123"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-list @108.3-108.28
+											(patterns
+												(p-int @108.4-108.5 (value "1"))
+												(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+												(p-int @108.14-108.15 (value "3")))
+											(rest-at (index 3)
+												(p-assign @1.1-1.1 (ident "rest"))))))
+								(value
+									(e-int @108.32-108.35 (value "123"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-list @109.3-116.4
+											(patterns
+												(p-int @110.4-110.5 (value "1"))
+												(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+												(p-int @112.4-112.5 (value "3")))
+											(rest-at (index 3)
+												(p-assign @1.1-1.1 (ident "rest"))))))
+								(value
+									(e-int @116.8-116.11 (value "123"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-small-dec @117.3-117.7)))
+								(value
+									(e-int @117.11-117.14 (value "314"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-small-dec @118.3-118.7))
+									(pattern (degenerate false)
+										(p-small-dec @118.10-118.14)))
+								(value
+									(e-int @118.18-118.21 (value "314"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-tuple @119.3-119.12
+											(patterns
+												(p-int @119.4-119.5 (value "1"))
+												(p-int @119.7-119.8 (value "2"))
+												(p-int @119.10-119.11 (value "3"))))))
+								(value
+									(e-int @119.16-119.19 (value "123"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-tuple @120.3-120.16
+											(patterns
+												(p-int @120.4-120.5 (value "1"))
+												(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+												(p-int @120.14-120.15 (value "3"))))))
+								(value
+									(e-int @120.20-120.23 (value "123"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-record-destructure @121.3-121.29
+											(destructs
+												(record-destruct @121.5-121.11 (label "foo") (ident "foo")
+													(sub-pattern
+														(p-int @121.10-121.11 (value "1"))))
+												(record-destruct @121.13-121.19 (label "bar") (ident "bar")
+													(sub-pattern
+														(p-int @121.18-121.19 (value "2"))))
+												(record-destruct @121.21-121.27 (label "rest") (ident "rest")
+													(required
+														(p-assign @121.21-121.27 (ident "rest"))))))))
+								(value
+									(e-runtime-error (tag "not_implemented"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-record-destructure @122.3-129.4
+											(destructs
+												(record-destruct @123.4-125.7 (label "foo") (ident "foo")
+													(sub-pattern
+														(p-int @125.6-125.7 (value "1"))))
+												(record-destruct @126.4-126.10 (label "bar") (ident "bar")
+													(sub-pattern
+														(p-int @126.9-126.10 (value "2"))))
+												(record-destruct @127.4-128.9 (label "rest") (ident "rest")
+													(required
+														(p-assign @127.4-128.9 (ident "rest"))))))))
+								(value
+									(e-int @129.8-129.10 (value "12"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-record-destructure @130.3-130.25
+											(destructs
+												(record-destruct @130.5-130.11 (label "foo") (ident "foo")
+													(sub-pattern
+														(p-int @130.10-130.11 (value "1"))))
+												(record-destruct @130.13-130.23 (label "bar") (ident "bar")
+													(sub-pattern
+														(p-runtime-error @1.1-1.1 (tag "not_implemented"))))))))
+								(value
+									(e-int @130.29-130.31 (value "12"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-record-destructure @131.3-134.4
+											(destructs
+												(record-destruct @132.4-132.10 (label "foo") (ident "foo")
+													(sub-pattern
+														(p-int @132.9-132.10 (value "1"))))
+												(record-destruct @133.4-133.14 (label "bar") (ident "bar")
+													(sub-pattern
+														(p-runtime-error @1.1-1.1 (tag "not_implemented"))))))))
+								(value
+									(e-int @134.8-134.10 (value "12"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @135.3-135.10)))
+								(value
+									(e-int @135.14-135.17 (value "123"))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @136.3-136.17)))
+								(value
+									(e-lookup-local @136.21-136.25
+										(p-assign @136.11-136.15 (ident "dude")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag @137.3-137.34)))
+								(value
+									(e-int @137.38-137.42 (value "1000"))))))))))
 	(d-let
 		(p-assign @144.1-144.6 (ident "main!"))
-		(e-lambda @144.9-196.2
-			(args
-				(p-underscore @144.10-144.11))
-			(e-block @144.13-196.2
-				(s-let @145.2-145.17
-					(p-assign @145.2-145.7 (ident "world"))
-					(e-string @145.10-145.17
-						(e-literal @145.11-145.16 (string "World"))))
-				(s-var @146.2-146.18
-					(p-assign @146.2-146.18 (ident "number"))
-					(e-int @146.15-146.18 (value "123")))
-				(s-expect @147.2-147.18
-					(e-binop @147.9-147.18 (op "eq")
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-int @147.17-147.18 (value "1"))))
-				(s-let @148.2-148.12
-					(p-assign @148.2-148.5 (ident "tag"))
-					(e-tag @148.8-148.12 (name "Blue")))
-				(s-return @149.2-150.6
-					(e-lookup-local @150.3-150.6
-						(p-assign @148.2-148.5 (ident "tag"))))
-				(s-expr @154.2-154.5
-					(e-not-implemented @1.1-1.1))
-				(s-expr @155.2-157.3
-					(e-call @155.2-157.3
-						(e-lookup-local @155.2-155.12
-							(p-assign @80.1-80.11 (ident "match_time")))
-						(e-not-implemented @1.1-1.1)))
-				(s-expr @158.2-161.3
-					(e-call @158.2-161.3
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-dbg @159.3-160.6
-							(e-int @160.4-160.6 (value "42")))))
-				(s-crash @162.2-163.17 (msg "Unreachable!"))
-				(s-let @164.2-164.31
-					(p-assign @164.2-164.18 (ident "tag_with_payload"))
-					(e-tag @164.21-164.23 (name "Ok")
-						(args
-							(e-lookup-local @164.24-164.30
-								(p-assign @146.2-146.18 (ident "number"))))))
-				(s-let @165.2-165.34
-					(p-assign @165.2-165.14 (ident "interpolated"))
-					(e-string @165.17-165.34
-						(e-literal @165.18-165.25 (string "Hello, "))
-						(e-lookup-local @165.27-165.32
-							(p-assign @145.2-145.7 (ident "world")))
-						(e-literal @165.33-165.33 (string ""))))
-				(s-let @166.2-173.3
-					(p-assign @166.2-166.6 (ident "list"))
-					(e-list @166.9-173.3
-						(elems
-							(e-call @167.3-170.4
-								(e-lookup-local @167.3-167.10
-									(p-assign @68.1-68.8 (ident "add_one")))
-								(e-dbg @168.4-169.11
-									(e-lookup-local @169.5-169.11
-										(p-assign @146.2-146.18 (ident "number")))))
-							(e-int @171.3-171.6 (value "456"))
-							(e-int @172.3-172.6 (value "789")))))
-				(s-let @178.2-178.71
-					(p-assign @178.2-178.8 (ident "record"))
-					(e-record @178.11-178.71
-						(fields
-							(field (name "foo")
-								(e-int @178.18-178.21 (value "123")))
-							(field (name "bar")
-								(e-string @178.28-178.35
-									(e-literal @178.29-178.34 (string "Hello"))))
-							(field (name "baz")
-								(e-lookup-local @178.42-178.45
-									(p-assign @148.2-148.5 (ident "tag"))))
-							(field (name "qux")
-								(e-tag @178.52-178.54 (name "Ok")
-									(args
-										(e-lookup-local @178.55-178.60
-											(p-assign @145.2-145.7 (ident "world"))))))
-							(field (name "punned")
-								(e-runtime-error (tag "ident_not_in_scope"))))))
-				(s-let @179.2-179.68
-					(p-assign @179.2-179.7 (ident "tuple"))
-					(e-tuple @179.10-179.68
-						(elems
-							(e-int @179.11-179.14 (value "123"))
-							(e-string @179.16-179.23
-								(e-literal @179.17-179.22 (string "World")))
-							(e-lookup-local @179.25-179.28
-								(p-assign @148.2-148.5 (ident "tag")))
-							(e-tag @179.30-179.32 (name "Ok")
-								(args
-									(e-lookup-local @179.33-179.38
-										(p-assign @145.2-145.7 (ident "world")))))
-							(e-tuple @179.41-179.56
-								(elems
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-lookup-local @179.50-179.55
-										(p-assign @179.2-179.7 (ident "tuple")))))
-							(e-list @179.58-179.67
-								(elems
-									(e-int @179.59-179.60 (value "1"))
-									(e-int @179.62-179.63 (value "2"))
-									(e-int @179.65-179.66 (value "3")))))))
-				(s-let @180.2-187.3
-					(p-assign @180.2-180.17 (ident "multiline_tuple"))
-					(e-tuple @180.20-187.3
-						(elems
-							(e-int @181.3-181.6 (value "123"))
-							(e-string @182.3-182.10
-								(e-literal @182.4-182.9 (string "World")))
+		(e-closure @144.9-196.2
+			(captures
+				(capture @68.1-68.8 (ident "add_one"))
+				(capture @179.2-179.7 (ident "tuple"))
+				(capture @80.1-80.11 (ident "match_time")))
+			(e-lambda @144.9-196.2
+				(args
+					(p-underscore @144.10-144.11))
+				(e-block @144.13-196.2
+					(s-let @145.2-145.17
+						(p-assign @145.2-145.7 (ident "world"))
+						(e-string @145.10-145.17
+							(e-literal @145.11-145.16 (string "World"))))
+					(s-var @146.2-146.18
+						(p-assign @146.2-146.18 (ident "number"))
+						(e-int @146.15-146.18 (value "123")))
+					(s-expect @147.2-147.18
+						(e-binop @147.9-147.18 (op "eq")
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @184.3-184.5 (name "Ok")
-								(args
-									(e-lookup-local @184.6-184.11
-										(p-assign @145.2-145.7 (ident "world")))))
-							(e-tuple @185.3-185.18
-								(elems
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-lookup-local @185.12-185.17
-										(p-assign @179.2-179.7 (ident "tuple")))))
-							(e-list @186.3-186.12
-								(elems
-									(e-int @186.4-186.5 (value "1"))
-									(e-int @186.7-186.8 (value "2"))
-									(e-int @186.10-186.11 (value "3")))))))
-				(s-let @188.2-188.86
-					(p-assign @188.2-188.15 (ident "bin_op_result"))
-					(e-binop @188.18-188.86 (op "or")
-						(e-binop @188.18-188.71 (op "or")
-							(e-binop @188.18-188.40 (op "gt")
-								(e-binop @188.18-188.32 (op "null_coalesce")
-									(e-tag @188.18-188.21 (name "Err")
+							(e-int @147.17-147.18 (value "1"))))
+					(s-let @148.2-148.12
+						(p-assign @148.2-148.5 (ident "tag"))
+						(e-tag @148.8-148.12 (name "Blue")))
+					(s-return @149.2-150.6
+						(e-lookup-local @150.3-150.6
+							(p-assign @148.2-148.5 (ident "tag"))))
+					(s-expr @154.2-154.5
+						(e-not-implemented @1.1-1.1))
+					(s-expr @155.2-157.3
+						(e-call @155.2-157.3
+							(e-lookup-local @155.2-155.12
+								(p-assign @80.1-80.11 (ident "match_time")))
+							(e-not-implemented @1.1-1.1)))
+					(s-expr @158.2-161.3
+						(e-call @158.2-161.3
+							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-dbg @159.3-160.6
+								(e-int @160.4-160.6 (value "42")))))
+					(s-crash @162.2-163.17 (msg "Unreachable!"))
+					(s-let @164.2-164.31
+						(p-assign @164.2-164.18 (ident "tag_with_payload"))
+						(e-tag @164.21-164.23 (name "Ok")
+							(args
+								(e-lookup-local @164.24-164.30
+									(p-assign @146.2-146.18 (ident "number"))))))
+					(s-let @165.2-165.34
+						(p-assign @165.2-165.14 (ident "interpolated"))
+						(e-string @165.17-165.34
+							(e-literal @165.18-165.25 (string "Hello, "))
+							(e-lookup-local @165.27-165.32
+								(p-assign @145.2-145.7 (ident "world")))
+							(e-literal @165.33-165.33 (string ""))))
+					(s-let @166.2-173.3
+						(p-assign @166.2-166.6 (ident "list"))
+						(e-list @166.9-173.3
+							(elems
+								(e-call @167.3-170.4
+									(e-lookup-local @167.3-167.10
+										(p-assign @68.1-68.8 (ident "add_one")))
+									(e-dbg @168.4-169.11
+										(e-lookup-local @169.5-169.11
+											(p-assign @146.2-146.18 (ident "number")))))
+								(e-int @171.3-171.6 (value "456"))
+								(e-int @172.3-172.6 (value "789")))))
+					(s-let @178.2-178.71
+						(p-assign @178.2-178.8 (ident "record"))
+						(e-record @178.11-178.71
+							(fields
+								(field (name "foo")
+									(e-int @178.18-178.21 (value "123")))
+								(field (name "bar")
+									(e-string @178.28-178.35
+										(e-literal @178.29-178.34 (string "Hello"))))
+								(field (name "baz")
+									(e-lookup-local @178.42-178.45
+										(p-assign @148.2-148.5 (ident "tag"))))
+								(field (name "qux")
+									(e-tag @178.52-178.54 (name "Ok")
 										(args
-											(e-runtime-error (tag "ident_not_in_scope"))))
-									(e-int @188.30-188.32 (value "12")))
-								(e-binop @188.35-188.40 (op "mul")
-									(e-int @188.35-188.36 (value "5"))
-									(e-int @188.39-188.40 (value "5"))))
-							(e-binop @188.44-188.71 (op "and")
-								(e-binop @188.44-188.54 (op "lt")
-									(e-binop @188.44-188.50 (op "add")
-										(e-int @188.44-188.46 (value "13"))
-										(e-int @188.49-188.50 (value "2")))
-									(e-int @188.53-188.54 (value "5")))
-								(e-binop @188.59-188.71 (op "ge")
-									(e-binop @188.59-188.65 (op "sub")
-										(e-int @188.59-188.61 (value "10"))
-										(e-int @188.64-188.65 (value "1")))
-									(e-int @188.69-188.71 (value "16")))))
-						(e-binop @188.75-188.86 (op "le")
-							(e-int @188.75-188.77 (value "12"))
-							(e-binop @188.81-188.86 (op "div")
-								(e-int @188.81-188.82 (value "3"))
-								(e-int @188.85-188.86 (value "5"))))))
-				(s-let @189.2-189.111
-					(p-assign @189.2-189.23 (ident "static_dispatch_style"))
-					(e-dot-access @189.26-189.111 (field "unknown")
-						(receiver
-							(e-dot-access @189.26-189.97 (field "unknown")
-								(receiver
-									(e-dot-access @189.26-189.66 (field "unknown")
-										(receiver
-											(e-runtime-error (tag "not_implemented")))))))))
-				(s-expr @190.2-190.29
-					(e-runtime-error (tag "not_implemented")))
-				(e-call @191.2-195.3
-					(e-lookup-external @191.2-191.14
-						(module-idx "0")
-						(target-node-idx "0"))
-					(e-string @192.3-194.18
-						(e-literal @192.4-192.14 (string "How about "))
-						(e-call @193.4-193.21
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-lookup-local @193.14-193.20
-								(p-assign @146.2-146.18 (ident "number"))))
-						(e-literal @194.4-194.17 (string " as a string?"))))))
+											(e-lookup-local @178.55-178.60
+												(p-assign @145.2-145.7 (ident "world"))))))
+								(field (name "punned")
+									(e-runtime-error (tag "ident_not_in_scope"))))))
+					(s-let @179.2-179.68
+						(p-assign @179.2-179.7 (ident "tuple"))
+						(e-tuple @179.10-179.68
+							(elems
+								(e-int @179.11-179.14 (value "123"))
+								(e-string @179.16-179.23
+									(e-literal @179.17-179.22 (string "World")))
+								(e-lookup-local @179.25-179.28
+									(p-assign @148.2-148.5 (ident "tag")))
+								(e-tag @179.30-179.32 (name "Ok")
+									(args
+										(e-lookup-local @179.33-179.38
+											(p-assign @145.2-145.7 (ident "world")))))
+								(e-tuple @179.41-179.56
+									(elems
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-lookup-local @179.50-179.55
+											(p-assign @179.2-179.7 (ident "tuple")))))
+								(e-list @179.58-179.67
+									(elems
+										(e-int @179.59-179.60 (value "1"))
+										(e-int @179.62-179.63 (value "2"))
+										(e-int @179.65-179.66 (value "3")))))))
+					(s-let @180.2-187.3
+						(p-assign @180.2-180.17 (ident "multiline_tuple"))
+						(e-tuple @180.20-187.3
+							(elems
+								(e-int @181.3-181.6 (value "123"))
+								(e-string @182.3-182.10
+									(e-literal @182.4-182.9 (string "World")))
+								(e-runtime-error (tag "ident_not_in_scope"))
+								(e-tag @184.3-184.5 (name "Ok")
+									(args
+										(e-lookup-local @184.6-184.11
+											(p-assign @145.2-145.7 (ident "world")))))
+								(e-tuple @185.3-185.18
+									(elems
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-lookup-local @185.12-185.17
+											(p-assign @179.2-179.7 (ident "tuple")))))
+								(e-list @186.3-186.12
+									(elems
+										(e-int @186.4-186.5 (value "1"))
+										(e-int @186.7-186.8 (value "2"))
+										(e-int @186.10-186.11 (value "3")))))))
+					(s-let @188.2-188.86
+						(p-assign @188.2-188.15 (ident "bin_op_result"))
+						(e-binop @188.18-188.86 (op "or")
+							(e-binop @188.18-188.71 (op "or")
+								(e-binop @188.18-188.40 (op "gt")
+									(e-binop @188.18-188.32 (op "null_coalesce")
+										(e-tag @188.18-188.21 (name "Err")
+											(args
+												(e-runtime-error (tag "ident_not_in_scope"))))
+										(e-int @188.30-188.32 (value "12")))
+									(e-binop @188.35-188.40 (op "mul")
+										(e-int @188.35-188.36 (value "5"))
+										(e-int @188.39-188.40 (value "5"))))
+								(e-binop @188.44-188.71 (op "and")
+									(e-binop @188.44-188.54 (op "lt")
+										(e-binop @188.44-188.50 (op "add")
+											(e-int @188.44-188.46 (value "13"))
+											(e-int @188.49-188.50 (value "2")))
+										(e-int @188.53-188.54 (value "5")))
+									(e-binop @188.59-188.71 (op "ge")
+										(e-binop @188.59-188.65 (op "sub")
+											(e-int @188.59-188.61 (value "10"))
+											(e-int @188.64-188.65 (value "1")))
+										(e-int @188.69-188.71 (value "16")))))
+							(e-binop @188.75-188.86 (op "le")
+								(e-int @188.75-188.77 (value "12"))
+								(e-binop @188.81-188.86 (op "div")
+									(e-int @188.81-188.82 (value "3"))
+									(e-int @188.85-188.86 (value "5"))))))
+					(s-let @189.2-189.111
+						(p-assign @189.2-189.23 (ident "static_dispatch_style"))
+						(e-dot-access @189.26-189.111 (field "unknown")
+							(receiver
+								(e-dot-access @189.26-189.97 (field "unknown")
+									(receiver
+										(e-dot-access @189.26-189.66 (field "unknown")
+											(receiver
+												(e-runtime-error (tag "not_implemented")))))))))
+					(s-expr @190.2-190.29
+						(e-runtime-error (tag "not_implemented")))
+					(e-call @191.2-195.3
+						(e-lookup-external @191.2-191.14
+							(module-idx "0")
+							(target-node-idx "0"))
+						(e-string @192.3-194.18
+							(e-literal @192.4-192.14 (string "How about "))
+							(e-call @193.4-193.21
+								(e-runtime-error (tag "ident_not_in_scope"))
+								(e-lookup-local @193.14-193.20
+									(p-assign @146.2-146.18 (ident "number"))))
+							(e-literal @194.4-194.17 (string " as a string?")))))))
 		(annotation @144.1-144.6
 			(declared-type
 				(ty-fn @143.9-143.38 (effectful false)

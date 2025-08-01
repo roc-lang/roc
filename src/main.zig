@@ -3,26 +3,26 @@
 //! Result is at `./zig-out/bin/roc`
 
 const std = @import("std");
-const fmt = @import("fmt.zig");
-const base = @import("base.zig");
-const collections = @import("collections.zig");
-const reporting = @import("reporting.zig");
 const build_options = @import("build_options");
-// const coordinate = @import("coordinate.zig");
-const coordinate_simple = @import("coordinate_simple.zig");
+const builtin = @import("builtin");
+const base = @import("base");
+const collections = @import("collections");
+const reporting = @import("reporting");
+const parse = @import("parse");
+const tracy = @import("tracy");
 
-const tracy = @import("tracy.zig");
+const fmt = @import("fmt.zig");
+const coordinate_simple = @import("coordinate_simple.zig");
 const Filesystem = @import("fs/Filesystem.zig");
 const cli_args = @import("cli_args.zig");
 const cache_mod = @import("cache/mod.zig");
-const CacheManager = cache_mod.CacheManager;
-const CacheConfig = cache_mod.CacheConfig;
-const tokenize = @import("check/parse/tokenize.zig");
-const parse = @import("check/parse.zig");
 const bench = @import("bench.zig");
 const linker = @import("linker.zig");
 
-const builtin = @import("builtin");
+const CacheManager = cache_mod.CacheManager;
+const CacheConfig = cache_mod.CacheConfig;
+const tokenize = parse.tokenize;
+
 const read_roc_file_path_shim_lib = if (builtin.is_test) &[_]u8{} else @embedFile("libread_roc_file_path_shim.a");
 const c = std.c;
 
@@ -518,7 +518,15 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     } else null;
 
     // Process the file and get Reports
-    var process_result = coordinate_simple.processFile(gpa, Filesystem.default(), args.path, if (cache_manager) |*cm| cm else null, args.time) catch |err| handleProcessFileError(err, stderr, args.path);
+    var process_result = coordinate_simple.processFile(
+        gpa,
+        Filesystem.default(),
+        args.path,
+        if (cache_manager) |*cm| cm else null,
+        args.time,
+    ) catch |err| {
+        handleProcessFileError(err, stderr, args.path);
+    };
 
     defer process_result.deinit(gpa);
 
@@ -597,7 +605,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
         }
     }
 
-    printTimingBreakdown(stderr, process_result.timing);
+    printTimingBreakdown(stdout, process_result.timing);
 }
 
 fn printTimingBreakdown(writer: anytype, timing: ?coordinate_simple.TimingInfo) void {

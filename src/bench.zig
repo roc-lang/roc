@@ -1,13 +1,16 @@
 //! Benchmarking utility for the Roc compiler, exposed as --z-* arguments in the main binary.
 
 const std = @import("std");
-const fmt = @import("fmt.zig");
-const base = @import("base.zig");
-const collections = @import("collections.zig");
-const tracy = @import("tracy.zig");
+const base = @import("base");
+const collections = @import("collections");
+const parse = @import("parse");
+const compile = @import("compile");
 
-const tokenize = @import("check/parse/tokenize.zig");
-const parse = @import("check/parse.zig");
+const tracy = @import("tracy");
+const fmt = @import("fmt.zig");
+
+const tokenize = parse.tokenize;
+const ModuleEnv = compile.ModuleEnv;
 
 const Allocator = std.mem.Allocator;
 
@@ -60,7 +63,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
     std.debug.print("Total: {} bytes, {} lines\n", .{ metrics.total_bytes, metrics.total_lines });
 
     // Create a module environment for tokenization (reused for tokenizer, created per-iteration for parser)
-    var env: ?base.ModuleEnv = if (!is_parse) try base.ModuleEnv.init(gpa, "") else null;
+    var env: ?ModuleEnv = if (!is_parse) try ModuleEnv.init(gpa, "") else null;
     defer if (env) |*e| e.deinit();
 
     // Benchmark parameters
@@ -80,8 +83,12 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
         for (roc_files.items) |roc_file| {
             if (is_parse) {
                 // Parse mode
-                var parse_env = try base.ModuleEnv.init(gpa, roc_file.content);
-                var ir = try parse.parse(&parse_env, roc_file.content);
+
+                // ModuleEnv takes ownership of the source code, so we need to dupe it each iteration
+                const source_copy = try gpa.dupe(u8, roc_file.content);
+                var parse_env = try ModuleEnv.init(gpa, source_copy);
+
+                var ir = try parse.parse(&parse_env);
                 iteration_tokens += ir.tokens.tokens.len;
                 ir.deinit(gpa);
                 parse_env.deinit();

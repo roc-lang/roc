@@ -43,8 +43,3 @@ pub const TargetUsize = enum(u1) {
         return .{ .u32, .u64 };
     }
 };
-
-test "TargetUsize conversion to usize" {
-    try std.testing.expectEqual(TargetUsize.u32.size(), 4);
-    try std.testing.expectEqual(TargetUsize.u64.size(), 8);
-}

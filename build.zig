@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const modules = @import("src/build/modules.zig");
 const Dependency = std.Build.Dependency;
 const Import = std.Build.Module.Import;
 const InstallDir = std.Build.InstallDir;
@@ -17,8 +18,8 @@ pub fn build(b: *std.Build) void {
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
-    const update_expected_step = b.step("update-expected", "Update EXPECTED sections based on PROBLEMS in snapshots");
     const playground_step = b.step("playground", "Build the WASM playground");
+    const playground_test_step = b.step("playground-test", "Build the integration test suite for the WASM playground");
 
     // general configuration
     const target = b.standardTargetOptions(.{ .default_target = .{
@@ -27,6 +28,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const strip = b.option(bool, "strip", "Omit debug information");
     const no_bin = b.option(bool, "no-bin", "Skip emitting binaries (important for fast incremental compilation)") orelse false;
+    const trace_eval = b.option(bool, "trace-eval", "Enable detailed evaluation tracing for debugging") orelse false;
 
     // llvm configuration
     const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
@@ -42,29 +44,33 @@ pub fn build(b: *std.Build) void {
     }
 
     // tracy profiler configuration
-    const tracy = b.option([]const u8, "tracy", "Enable Tracy integration. Supply path to Tracy source");
-    const tracy_callstack = b.option(bool, "tracy-callstack", "Include callstack information with Tracy data. Does nothing if -Dtracy is not provided") orelse (tracy != null);
-    const tracy_allocation = b.option(bool, "tracy-allocation", "Include allocation information with Tracy data. Does nothing if -Dtracy is not provided") orelse (tracy != null);
-    const tracy_callstack_depth: u32 = b.option(u32, "tracy-callstack-depth", "Declare callstack depth for Tracy data. Does nothing if -Dtracy_callstack is not provided") orelse 10;
-    if (tracy_callstack) {
+    const flag_enable_tracy = b.option([]const u8, "tracy", "Enable Tracy integration. Supply path to Tracy source");
+    const flag_tracy_callstack = b.option(bool, "tracy-callstack", "Include callstack information with Tracy data. Does nothing if -Dtracy is not provided") orelse (flag_enable_tracy != null);
+    const flag_tracy_allocation = b.option(bool, "tracy-allocation", "Include allocation information with Tracy data. Does nothing if -Dtracy is not provided") orelse (flag_enable_tracy != null);
+    const flag_tracy_callstack_depth: u32 = b.option(u32, "tracy-callstack-depth", "Declare callstack depth for Tracy data. Does nothing if -Dtracy_callstack is not provided") orelse 10;
+    if (flag_tracy_callstack) {
         std.log.warn("Tracy callstack is enable. This can significantly skew timings, but is important for understanding source location. Be cautious when generating timing and analyzing results.", .{});
     }
 
     // Create compile time build options
     const build_options = b.addOptions();
-    build_options.addOption(bool, "enable_tracy", tracy != null);
+    build_options.addOption(bool, "enable_tracy", flag_enable_tracy != null);
+    build_options.addOption(bool, "trace_eval", trace_eval);
     build_options.addOption([]const u8, "compiler_version", getCompilerVersion(b, optimize));
-    if (target.result.os.tag == .macos and tracy_callstack) {
+    if (target.result.os.tag == .macos and flag_tracy_callstack) {
         std.log.warn("Tracy callstack does not work on MacOS, disabling.", .{});
         build_options.addOption(bool, "enable_tracy_callstack", false);
     } else {
-        build_options.addOption(bool, "enable_tracy_callstack", tracy_callstack);
+        build_options.addOption(bool, "enable_tracy_callstack", flag_tracy_callstack);
     }
-    build_options.addOption(bool, "enable_tracy_allocation", tracy_allocation);
-    build_options.addOption(u32, "tracy_callstack_depth", tracy_callstack_depth);
+    build_options.addOption(bool, "enable_tracy_allocation", flag_tracy_allocation);
+    build_options.addOption(u32, "tracy_callstack_depth", flag_tracy_callstack_depth);
+
+    const roc_modules = modules.RocModules.create(b, build_options);
 
     // add main roc exe
-    const roc_exe = addMainExe(b, build_options, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, tracy) orelse return;
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy) orelse return;
+    roc_modules.addAll(roc_exe);
     install_and_run(b, no_bin, roc_exe, roc_step, run_step);
 
     // Add snapshot tool
@@ -75,19 +81,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    add_tracy(b, build_options, snapshot_exe, target, false, tracy);
+    roc_modules.addAll(snapshot_exe);
+    add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
-
-    // Add update-expected tool
-    const update_expected_exe = b.addExecutable(.{
-        .name = "update-expected",
-        .root_source_file = b.path("src/update_expected.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    add_tracy(b, build_options, update_expected_exe, target, false, tracy);
-    install_and_run(b, no_bin, update_expected_exe, update_expected_step, update_expected_step);
 
     // Add playground WASM executable
     const playground_exe = b.addExecutable(.{
@@ -101,24 +97,42 @@ pub fn build(b: *std.Build) void {
     });
     playground_exe.entry = .disabled;
     playground_exe.rdynamic = true;
-    playground_exe.root_module.addOptions("build_options", build_options);
-    add_tracy(b, build_options, playground_exe, b.resolveTargetQuery(.{
+    roc_modules.addAll(playground_exe);
+
+    add_tracy(b, roc_modules.build_options, playground_exe, b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
     }), false, null);
 
-    const playground_install = b.addInstallArtifact(playground_exe, .{
-        .dest_dir = .{ .override = .{ .custom = "playground" } },
+    const playground_install = b.addInstallArtifact(playground_exe, .{});
+    playground_step.dependOn(&playground_install.step);
+
+    const bytebox = b.dependency("bytebox", .{
+        .target = target,
+        .optimize = optimize,
     });
 
-    const playground_html_install = b.addInstallFile(b.path("src/playground/index.html"), "playground/index.html");
-    const playground_css_install = b.addInstallFile(b.path("src/playground/styles.css"), "playground/styles.css");
-    const playground_js_install = b.addInstallFile(b.path("src/playground/app.js"), "playground/app.js");
+    // Add playground integration test executable
+    const playground_integration_test_exe = b.addExecutable(.{
+        .name = "playground_integration_test",
+        .root_source_file = b.path("test/playground-intergration/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    playground_integration_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+    playground_integration_test_exe.root_module.addAnonymousImport("playground_wasm", .{ .root_source_file = playground_install.emitted_bin });
+    playground_integration_test_exe.root_module.addImport("build_options", build_options.createModule());
+    roc_modules.addAll(playground_integration_test_exe);
 
-    playground_step.dependOn(&playground_install.step);
-    playground_step.dependOn(&playground_html_install.step);
-    playground_step.dependOn(&playground_css_install.step);
-    playground_step.dependOn(&playground_js_install.step);
+    const playground_test_install = b.addInstallArtifact(playground_integration_test_exe, .{});
+    playground_test_step.dependOn(&playground_test_install.step);
+
+    const run_playground_test = b.addRunArtifact(playground_integration_test_exe);
+    if (b.args) |args| {
+        run_playground_test.addArgs(args);
+    }
+    run_playground_test.step.dependOn(&playground_test_install.step);
+    playground_test_step.dependOn(&run_playground_test.step);
 
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
@@ -126,7 +140,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    all_tests.root_module.addOptions("build_options", build_options);
+    roc_modules.addAllToTest(all_tests);
     all_tests.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
 
     const builtins_tests = b.addTest(.{
@@ -136,9 +150,11 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     builtins_tests.root_module.stack_check = false;
+    builtins_tests.root_module.addImport("build_options", roc_modules.build_options);
 
     b.default_step.dependOn(&all_tests.step);
     b.default_step.dependOn(playground_step);
+    b.default_step.dependOn(&playground_test_install.step);
     b.default_step.dependOn(&builtins_tests.step);
     if (no_bin) {
         test_step.dependOn(&all_tests.step);
@@ -203,8 +219,8 @@ pub fn build(b: *std.Build) void {
             no_bin,
             target,
             optimize,
-            build_options,
-            tracy,
+            roc_modules,
+            flag_enable_tracy,
             name,
         );
     }
@@ -218,7 +234,7 @@ fn add_fuzz_target(
     no_bin: bool,
     target: ResolvedTarget,
     optimize: OptimizeMode,
-    build_options: *Step.Options,
+    roc_modules: modules.RocModules,
     tracy: ?[]const u8,
     name: []const u8,
 ) void {
@@ -232,7 +248,8 @@ fn add_fuzz_target(
         // Work around instrumentation bugs on mac without giving up perf on linux.
         .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
     });
-    add_tracy(b, build_options, fuzz_obj, target, false, tracy);
+    roc_modules.addAll(fuzz_obj);
+    add_tracy(b, roc_modules.build_options, fuzz_obj, target, false, tracy);
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
     const name_repro = b.fmt("repro-{s}", .{name});
@@ -262,7 +279,7 @@ fn add_fuzz_target(
 
 fn addMainExe(
     b: *std.Build,
-    build_options: *Step.Options,
+    roc_modules: modules.RocModules,
     target: ResolvedTarget,
     optimize: OptimizeMode,
     strip: ?bool,
@@ -326,7 +343,7 @@ fn addMainExe(
         try addStaticLlvmOptionsToModule(exe.root_module);
     }
 
-    add_tracy(b, build_options, exe, target, enable_llvm, tracy);
+    add_tracy(b, roc_modules.build_options, exe, target, enable_llvm, tracy);
     return exe;
 }
 
@@ -360,13 +377,13 @@ fn install_and_run(
 
 fn add_tracy(
     b: *std.Build,
-    build_options: *Step.Options,
+    module_build_options: *std.Build.Module,
     base: *Step.Compile,
     target: ResolvedTarget,
     links_llvm: bool,
     tracy: ?[]const u8,
 ) void {
-    base.root_module.addOptions("build_options", build_options);
+    base.root_module.addImport("build_options", module_build_options);
     if (tracy) |tracy_path| {
         const client_cpp = b.pathJoin(
             &[_][]const u8{ tracy_path, "public", "TracyClient.cpp" },

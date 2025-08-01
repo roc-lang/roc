@@ -26,22 +26,10 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - rigid_var_instantiation.md:13:5:13:8
 UNUSED VARIABLE - rigid_var_instantiation.md:10:5:10:8
+UNUSED VARIABLE - rigid_var_instantiation.md:13:5:13:8
 UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `str` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_str` to suppress this warning.
-The unused variable is declared here:
-**rigid_var_instantiation.md:13:5:13:8:**
-```roc
-    str = identity("hello")
-```
-    ^^^
-
-
 **UNUSED VARIABLE**
 Variable `num` is not used anywhere in your code.
 
@@ -50,6 +38,18 @@ The unused variable is declared here:
 **rigid_var_instantiation.md:10:5:10:8:**
 ```roc
     num = identity(42)
+```
+    ^^^
+
+
+**UNUSED VARIABLE**
+Variable `str` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_str` to suppress this warning.
+The unused variable is declared here:
+**rigid_var_instantiation.md:13:5:13:8:**
+```roc
+    str = identity("hello")
 ```
     ^^^
 
@@ -170,34 +170,37 @@ main! = |_| {
 					(ty-var @4.17-4.18 (name "a"))))))
 	(d-let
 		(p-assign @8.1-8.6 (ident "main!"))
-		(e-lambda @8.9-19.2
-			(args
-				(p-underscore @8.10-8.11))
-			(e-block @8.13-19.2
-				(s-let @10.5-10.23
-					(p-assign @10.5-10.8 (ident "num"))
-					(e-call @10.11-10.23
-						(e-lookup-local @10.11-10.19
-							(p-assign @5.1-5.9 (ident "identity")))
-						(e-int @10.20-10.22 (value "42"))))
-				(s-let @13.5-13.28
-					(p-assign @13.5-13.8 (ident "str"))
-					(e-call @13.11-13.28
-						(e-lookup-local @13.11-13.19
-							(p-assign @5.1-5.9 (ident "identity")))
-						(e-string @13.20-13.27
-							(e-literal @13.21-13.26 (string "hello")))))
-				(s-let @16.5-16.30
-					(p-assign @16.5-16.8 (ident "lst"))
-					(e-call @16.11-16.30
-						(e-lookup-local @16.11-16.19
-							(p-assign @5.1-5.9 (ident "identity")))
-						(e-list @16.20-16.29
-							(elems
-								(e-int @16.21-16.22 (value "1"))
-								(e-int @16.24-16.25 (value "2"))
-								(e-int @16.27-16.28 (value "3"))))))
-				(e-empty_record @18.5-18.7)))))
+		(e-closure @8.9-19.2
+			(captures
+				(capture @5.1-5.9 (ident "identity")))
+			(e-lambda @8.9-19.2
+				(args
+					(p-underscore @8.10-8.11))
+				(e-block @8.13-19.2
+					(s-let @10.5-10.23
+						(p-assign @10.5-10.8 (ident "num"))
+						(e-call @10.11-10.23
+							(e-lookup-local @10.11-10.19
+								(p-assign @5.1-5.9 (ident "identity")))
+							(e-int @10.20-10.22 (value "42"))))
+					(s-let @13.5-13.28
+						(p-assign @13.5-13.8 (ident "str"))
+						(e-call @13.11-13.28
+							(e-lookup-local @13.11-13.19
+								(p-assign @5.1-5.9 (ident "identity")))
+							(e-string @13.20-13.27
+								(e-literal @13.21-13.26 (string "hello")))))
+					(s-let @16.5-16.30
+						(p-assign @16.5-16.8 (ident "lst"))
+						(e-call @16.11-16.30
+							(e-lookup-local @16.11-16.19
+								(p-assign @5.1-5.9 (ident "identity")))
+							(e-list @16.20-16.29
+								(elems
+									(e-int @16.21-16.22 (value "1"))
+									(e-int @16.24-16.25 (value "2"))
+									(e-int @16.27-16.28 (value "3"))))))
+					(e-empty_record @18.5-18.7))))))
 ~~~
 # TYPES
 ~~~clojure

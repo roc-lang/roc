@@ -6,11 +6,13 @@
 //! in constant time. Storing IDs in each IR instead of strings also uses less memory in the IRs.
 
 const std = @import("std");
-const collections = @import("../collections.zig");
+const mod = @import("mod.zig");
 const Region = @import("Region.zig");
-const serialization = @import("../serialization/mod.zig");
+const serialization = @import("serialization");
+const CompactWriter = serialization.CompactWriter;
+const collections = @import("collections");
 
-const SmallStringInterner = collections.SmallStringInterner;
+const SmallStringInterner = mod.SmallStringInterner;
 
 const Ident = @This();
 
@@ -22,18 +24,9 @@ attributes: Attributes,
 
 /// Create a new identifier from a string.
 pub fn for_text(text: []const u8) Ident {
-    // Parse identifier attributes from the text
-    const is_ignored = std.mem.startsWith(u8, text, "_");
-    const is_effectful = std.mem.endsWith(u8, text, "!");
-    // TODO: parse reassignable attribute (var keyword handling)
-
     return Ident{
         .raw_text = text,
-        .attributes = Attributes{
-            .effectful = is_effectful,
-            .ignored = is_ignored,
-            .reassignable = false,
-        },
+        .attributes = Attributes.fromString(text),
     };
 }
 
@@ -67,18 +60,9 @@ pub fn from_bytes(bytes: []const u8) Error!Ident {
         }
     }
 
-    // Parse identifier attributes from the bytes
-    const is_ignored = std.mem.startsWith(u8, bytes, "_");
-    const is_effectful = std.mem.endsWith(u8, bytes, "!");
-    // TODO: parse reassignable attribute (var keyword handling)
-
     return Ident{
         .raw_text = bytes,
-        .attributes = Attributes{
-            .effectful = is_effectful,
-            .ignored = is_ignored,
-            .reassignable = false,
-        },
+        .attributes = Attributes.fromString(bytes),
     };
 }
 
@@ -95,19 +79,62 @@ pub const Attributes = packed struct(u3) {
     effectful: bool,
     ignored: bool,
     reassignable: bool,
+
+    pub fn fromString(text: []const u8) Attributes {
+        return .{
+            .effectful = std.mem.endsWith(u8, text, "!"),
+            .ignored = std.mem.startsWith(u8, text, "_"),
+            .reassignable = false,
+        };
+    }
 };
 
 /// An interner for identifier names.
 pub const Store = struct {
-    interner: SmallStringInterner = .{},
-    attributes: std.ArrayListUnmanaged(Attributes) = .{},
+    interner: SmallStringInterner,
+    attributes: collections.SafeList(Attributes) = .{},
     next_unique_name: u32 = 0,
+
+    /// Serialized representation of an Ident.Store
+    pub const Serialized = struct {
+        interner: SmallStringInterner.Serialized,
+        attributes: collections.SafeList(Attributes).Serialized,
+        next_unique_name: u32,
+
+        /// Serialize a Store into this Serialized struct, appending data to the writer
+        pub fn serialize(
+            self: *Serialized,
+            store: *const Store,
+            allocator: std.mem.Allocator,
+            writer: *CompactWriter,
+        ) std.mem.Allocator.Error!void {
+            try self.interner.serialize(&store.interner, allocator, writer);
+            try self.attributes.serialize(&store.attributes, allocator, writer);
+            self.next_unique_name = store.next_unique_name;
+        }
+
+        /// Deserialize this Serialized struct into a Store
+        pub fn deserialize(self: *Serialized, offset: i64) *Store {
+            // Ident.Store.Serialized should be at least as big as Ident.Store
+            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
+
+            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
+
+            store.* = Store{
+                .interner = self.interner.deserialize(offset).*,
+                .attributes = self.attributes.deserialize(offset).*,
+                .next_unique_name = self.next_unique_name,
+            };
+
+            return store;
+        }
+    };
 
     /// Initialize the memory for an `Ident.Store` with a specific capaicty.
     pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!Store {
         return .{
             .interner = try SmallStringInterner.initCapacity(gpa, capacity),
-            .attributes = try std.ArrayListUnmanaged(Attributes).initCapacity(gpa, capacity),
         };
     }
 
@@ -118,9 +145,8 @@ pub const Store = struct {
     }
 
     /// Insert a new identifier into the store.
-    pub fn insert(self: *Store, gpa: std.mem.Allocator, ident: Ident, region: Region) std.mem.Allocator.Error!Idx {
-        const idx = try self.interner.insert(gpa, ident.raw_text, region);
-        try self.attributes.append(gpa, ident.attributes);
+    pub fn insert(self: *Store, gpa: std.mem.Allocator, ident: Ident) std.mem.Allocator.Error!Idx {
+        const idx = try self.interner.insert(gpa, ident.raw_text);
 
         return Idx{
             .attributes = ident.attributes,
@@ -144,17 +170,23 @@ pub const Store = struct {
         var digit_index: u8 = 9;
         // The max u32 value is 4294967295 which is 10 digits
         var str_buffer = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-        while (id > 0) {
-            const digit = id % 10;
-            str_buffer[digit_index] = @as(u8, @intCast(digit)) + '0';
-
-            id = (id - digit) / 10;
+        // Special case for 0
+        if (id == 0) {
+            str_buffer[digit_index] = '0';
             digit_index -= 1;
+        } else {
+            while (id > 0) {
+                const digit = id % 10;
+                str_buffer[digit_index] = @as(u8, @intCast(digit)) + '0';
+
+                id = (id - digit) / 10;
+                digit_index -= 1;
+            }
         }
 
         const name = str_buffer[digit_index + 1 ..];
 
-        const idx = try self.interner.insert(gpa, name, Region.zero());
+        const idx = try self.interner.insert(gpa, name);
 
         const attributes = Attributes{
             .effectful = false,
@@ -162,7 +194,7 @@ pub const Store = struct {
             .reassignable = false,
         };
 
-        try self.attributes.append(gpa, attributes);
+        _ = try self.attributes.append(gpa, attributes);
 
         return Idx{
             .attributes = attributes,
@@ -170,46 +202,41 @@ pub const Store = struct {
         };
     }
 
-    /// Checks whether two identifiers have the same text.
-    ///
-    /// This runs in constant time because it just checks if both idents
-    /// point to the same deduped string.
-    pub fn identsHaveSameText(
-        self: *const Store,
-        first_idx: Idx,
-        second_idx: Idx,
-    ) bool {
-        return self.interner.indicesHaveSameText(
-            @enumFromInt(@as(u32, first_idx.idx)),
-            @enumFromInt(@as(u32, second_idx.idx)),
-        );
-    }
-
     /// Get the text for an identifier.
     pub fn getText(self: *const Store, idx: Idx) []u8 {
         return self.interner.getText(@enumFromInt(@as(u32, idx.idx)));
     }
 
+    /// Check if an identifier text already exists in the store.
+    pub fn contains(self: *const Store, text: []const u8) bool {
+        return self.interner.contains(text);
+    }
+
+    /// Find an identifier by its string, returning its index if it exists.
+    /// This is different from insert in that it's guaranteed not to modify the store.
+    pub fn findByString(self: *const Store, text: []const u8) ?Idx {
+        // Look up in the interner without inserting
+        const result = self.interner.findStringOrSlot(text);
+        const interner_idx = result.idx orelse return null;
+
+        // Create an Idx with inferred attributes from the text
+        return Idx{
+            .attributes = Attributes.fromString(text),
+            .idx = @as(u29, @intCast(@intFromEnum(interner_idx))),
+        };
+    }
+
+    /// Freeze the identifier store, preventing any new entries from being added.
+    pub fn freeze(self: *Store) void {
+        self.interner.freeze();
+    }
     /// Calculate the size needed to serialize this Ident.Store
     pub fn serializedSize(self: *const Store) usize {
         var size: usize = 0;
 
         // SmallStringInterner components
         size += @sizeOf(u32); // bytes_len
-        size += self.interner.bytes.items.len; // bytes data
-        size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
-
-        size += @sizeOf(u32); // outer_indices_len
-        size += self.interner.outer_indices.items.len * @sizeOf(@TypeOf(self.interner.outer_indices.items[0])); // outer_indices data
-        size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
-
-        size += @sizeOf(u32); // regions_len
-        size += self.interner.regions.items.len * @sizeOf(@TypeOf(self.interner.regions.items[0])); // regions data
-        size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
-
-        // Store components
-        size += @sizeOf(u32); // attributes_len
-        size += self.attributes.items.len * @sizeOf(u8); // attributes data (packed as bytes)
+        size += self.interner.bytes.len(); // bytes data
         size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
 
         size += @sizeOf(u32); // next_unique_name
@@ -226,48 +253,12 @@ pub const Store = struct {
         var offset: usize = 0;
 
         // Serialize interner bytes
-        const bytes_len = @as(u32, @intCast(self.interner.bytes.items.len));
+        const bytes_len = @as(u32, @intCast(self.interner.bytes.len()));
         @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = bytes_len;
         offset += @sizeOf(u32);
         if (bytes_len > 0) {
-            @memcpy(buffer[offset .. offset + bytes_len], self.interner.bytes.items);
+            @memcpy(buffer[offset .. offset + bytes_len], self.interner.bytes.items.items);
             offset += bytes_len;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Serialize interner outer_indices
-        const outer_indices_len = @as(u32, @intCast(self.interner.outer_indices.items.len));
-        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = outer_indices_len;
-        offset += @sizeOf(u32);
-        if (outer_indices_len > 0) {
-            const outer_indices_bytes = outer_indices_len * @sizeOf(@TypeOf(self.interner.outer_indices.items[0]));
-            @memcpy(buffer[offset .. offset + outer_indices_bytes], std.mem.sliceAsBytes(self.interner.outer_indices.items));
-            offset += outer_indices_bytes;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Serialize interner regions
-        const regions_len = @as(u32, @intCast(self.interner.regions.items.len));
-        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = regions_len;
-        offset += @sizeOf(u32);
-        if (regions_len > 0) {
-            const regions_bytes = regions_len * @sizeOf(@TypeOf(self.interner.regions.items[0]));
-            @memcpy(buffer[offset .. offset + regions_bytes], std.mem.sliceAsBytes(self.interner.regions.items));
-            offset += regions_bytes;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Serialize attributes
-        const attributes_len = @as(u32, @intCast(self.attributes.items.len));
-        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = attributes_len;
-        offset += @sizeOf(u32);
-        if (attributes_len > 0) {
-            // Serialize each Attributes as a single byte to avoid padding
-            for (self.attributes.items) |attr| {
-                const attr_bits: u3 = @bitCast(attr);
-                buffer[offset] = @as(u8, attr_bits);
-                offset += 1;
-            }
         }
         offset = std.mem.alignForward(usize, offset, @alignOf(u32));
 
@@ -294,54 +285,12 @@ pub const Store = struct {
         // Deserialize interner bytes
         const bytes_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
         offset += @sizeOf(u32);
-        var bytes = std.ArrayListUnmanaged(u8){};
+        var bytes = collections.SafeList(u8){};
         if (bytes_len > 0) {
             if (offset + bytes_len > buffer.len) return error.BufferTooSmall;
-            try bytes.appendSlice(gpa, buffer[offset .. offset + bytes_len]);
+            bytes = try collections.SafeList(u8).initCapacity(gpa, bytes_len);
+            _ = try bytes.appendSlice(gpa, buffer[offset .. offset + bytes_len]);
             offset += bytes_len;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Deserialize interner outer_indices
-        const outer_indices_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-        var outer_indices = std.ArrayListUnmanaged(@import("../collections/SmallStringInterner.zig").StringIdx){};
-        if (outer_indices_len > 0) {
-            const outer_indices_bytes = outer_indices_len * @sizeOf(@import("../collections/SmallStringInterner.zig").StringIdx);
-            if (offset + outer_indices_bytes > buffer.len) return error.BufferTooSmall;
-            const outer_indices_data = @as([*]const @import("../collections/SmallStringInterner.zig").StringIdx, @ptrCast(@alignCast(buffer.ptr + offset)));
-            try outer_indices.appendSlice(gpa, outer_indices_data[0..outer_indices_len]);
-            offset += outer_indices_bytes;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Deserialize interner regions
-        const regions_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-        var regions = std.ArrayListUnmanaged(Region){};
-        if (regions_len > 0) {
-            const regions_bytes = regions_len * @sizeOf(Region);
-            if (offset + regions_bytes > buffer.len) return error.BufferTooSmall;
-            const regions_data = @as([*]const Region, @ptrCast(@alignCast(buffer.ptr + offset)));
-            try regions.appendSlice(gpa, regions_data[0..regions_len]);
-            offset += regions_bytes;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Deserialize attributes
-        const attributes_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-        var attributes = std.ArrayListUnmanaged(Attributes){};
-        if (attributes_len > 0) {
-            if (offset + attributes_len > buffer.len) return error.BufferTooSmall;
-            try attributes.ensureTotalCapacity(gpa, attributes_len);
-            // Deserialize each Attributes from a single byte to avoid padding
-            for (0..attributes_len) |_| {
-                const attr_bits: u3 = @truncate(buffer[offset]);
-                const attr: Attributes = @bitCast(attr_bits);
-                attributes.appendAssumeCapacity(attr);
-                offset += 1;
-            }
         }
         offset = std.mem.alignForward(usize, offset, @alignOf(u32));
 
@@ -349,168 +298,48 @@ pub const Store = struct {
         if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
         const next_unique_name = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
 
-        // Rebuild the strings hash table
-        var strings = @import("../collections/SmallStringInterner.zig").StringIdx.Table{};
-        try strings.ensureTotalCapacityContext(gpa, @intCast(outer_indices.items.len), @import("../collections/SmallStringInterner.zig").StringIdx.TableContext{ .bytes = &bytes });
-
-        // Re-populate the hash table
-        for (outer_indices.items) |string_idx| {
-            const string_bytes = std.mem.sliceTo(bytes.items[@intFromEnum(string_idx)..], 0);
-            const entry = try strings.getOrPutContextAdapted(gpa, string_bytes, @import("../collections/SmallStringInterner.zig").StringIdx.TableAdapter{ .bytes = &bytes }, @import("../collections/SmallStringInterner.zig").StringIdx.TableContext{ .bytes = &bytes });
-            entry.key_ptr.* = string_idx;
-        }
+        // Create empty hash table
+        const hash_table = collections.SafeList(SmallStringInterner.Idx){};
 
         // Construct the interner
-        const interner = @import("../collections/SmallStringInterner.zig"){
+        const interner = SmallStringInterner{
             .bytes = bytes,
-            .strings = strings,
-            .outer_indices = outer_indices,
-            .regions = regions,
+            .hash_table = hash_table,
+            .entry_count = 0,
+            .frozen = if (std.debug.runtime_safety) false else {},
         };
 
         return Store{
             .interner = interner,
-            .attributes = attributes,
             .next_unique_name = next_unique_name,
         };
     }
 
-    /// Get the region for an identifier.
-    pub fn getRegion(self: *const Store, idx: Idx) Region {
-        return self.interner.getRegion(@enumFromInt(@as(u32, idx.idx)));
+    /// Serialize this Store to the given CompactWriter. The resulting Store
+    /// in the writer's buffer will have offsets instead of pointers. Calling any
+    /// methods on it or dereferencing its internal "pointers" (which are now
+    /// offsets) is illegal behavior!
+    pub fn serialize(
+        self: *const Store,
+        allocator: std.mem.Allocator,
+        writer: *serialization.CompactWriter,
+    ) std.mem.Allocator.Error!*const Store {
+        // First, write the Store struct itself
+        const offset_self = try writer.appendAlloc(allocator, Store);
+
+        // Then serialize the sub-structures and update the struct
+        offset_self.* = .{
+            .interner = (try self.interner.serialize(allocator, writer)).*,
+            .attributes = (try self.attributes.serialize(allocator, writer)).*,
+            .next_unique_name = self.next_unique_name,
+        };
+
+        return @constCast(offset_self);
+    }
+
+    /// Add the given offset to the memory addresses of all pointers in `self`.
+    pub fn relocate(self: *Store, offset: isize) void {
+        self.interner.relocate(offset);
+        self.attributes.relocate(offset);
     }
 };
-
-test "from_bytes validates empty text" {
-    const result = Ident.from_bytes("");
-    try std.testing.expectError(Error.EmptyText, result);
-}
-
-test "from_bytes validates null bytes" {
-    const text_with_null = "hello\x00world";
-    const result = Ident.from_bytes(text_with_null);
-    try std.testing.expectError(Error.ContainsNullByte, result);
-}
-
-test "from_bytes validates control characters" {
-    const text_with_control = "hello\x01world";
-    const result = Ident.from_bytes(text_with_control);
-    try std.testing.expectError(Error.ContainsControlCharacters, result);
-}
-
-test "from_bytes disallows common whitespace" {
-    const text_with_space = "hello world";
-    const result = Ident.from_bytes(text_with_space);
-    try std.testing.expect(result == Error.ContainsControlCharacters);
-
-    const text_with_tab = "hello\tworld";
-    const result2 = Ident.from_bytes(text_with_tab);
-    try std.testing.expect(result2 == Error.ContainsControlCharacters);
-
-    const text_with_newline = "hello\nworld";
-    const result3 = Ident.from_bytes(text_with_newline);
-    try std.testing.expect(result3 == Error.ContainsControlCharacters);
-
-    const text_with_cr = "hello\rworld";
-    const result4 = Ident.from_bytes(text_with_cr);
-    try std.testing.expect(result4 == Error.ContainsControlCharacters);
-}
-
-test "from_bytes creates valid identifier" {
-    const result = try Ident.from_bytes("valid_name!");
-    try std.testing.expectEqualStrings("valid_name!", result.raw_text);
-    try std.testing.expect(result.attributes.effectful == true);
-    try std.testing.expect(result.attributes.ignored == false);
-    try std.testing.expect(result.attributes.reassignable == false);
-}
-
-test "from_bytes creates ignored identifier" {
-    const result = try Ident.from_bytes("_ignored");
-    try std.testing.expectEqualStrings("_ignored", result.raw_text);
-    try std.testing.expect(result.attributes.effectful == false);
-    try std.testing.expect(result.attributes.ignored == true);
-    try std.testing.expect(result.attributes.reassignable == false);
-}
-
-test "Ident.Store serialization round-trip" {
-    const gpa = std.testing.allocator;
-
-    // Create original store and add some identifiers
-    var original_store = try Store.initCapacity(gpa, 16);
-    defer original_store.deinit(gpa);
-
-    const ident1 = Ident.for_text("hello");
-    const ident2 = Ident.for_text("world!");
-    const ident3 = Ident.for_text("_ignored");
-
-    const idx1 = try original_store.insert(gpa, ident1, Region.zero());
-    const idx2 = try original_store.insert(gpa, ident2, Region.zero());
-    const idx3 = try original_store.insert(gpa, ident3, Region.zero());
-
-    // Serialize
-    const serialized_size = original_store.serializedSize();
-    const buffer = try gpa.alignedAlloc(u8, @alignOf(u32), serialized_size);
-    defer gpa.free(buffer);
-
-    const serialized = try original_store.serializeInto(buffer, gpa);
-    try std.testing.expectEqual(serialized_size, serialized.len);
-
-    // Deserialize
-    var restored_store = try Store.deserializeFrom(serialized, gpa);
-    defer restored_store.deinit(gpa);
-
-    // Verify the identifiers are identical
-    try std.testing.expectEqualStrings("hello", restored_store.getText(idx1));
-    try std.testing.expectEqualStrings("world!", restored_store.getText(idx2));
-    try std.testing.expectEqualStrings("_ignored", restored_store.getText(idx3));
-
-    // Verify attributes are preserved
-    try std.testing.expect(restored_store.getText(idx1)[0] != '_'); // not ignored
-    try std.testing.expect(restored_store.getText(idx2)[restored_store.getText(idx2).len - 1] == '!'); // effectful
-    try std.testing.expect(restored_store.getText(idx3)[0] == '_'); // ignored
-
-    // Verify next_unique_name is preserved
-    try std.testing.expectEqual(original_store.next_unique_name, restored_store.next_unique_name);
-
-    // Verify structural integrity
-    try std.testing.expectEqual(original_store.attributes.items.len, restored_store.attributes.items.len);
-    try std.testing.expectEqual(original_store.interner.bytes.items.len, restored_store.interner.bytes.items.len);
-    try std.testing.expectEqual(original_store.interner.outer_indices.items.len, restored_store.interner.outer_indices.items.len);
-}
-
-test "Ident.Store serialization comprehensive" {
-    const gpa = std.testing.allocator;
-
-    var store = try Store.initCapacity(gpa, 8);
-    defer store.deinit(gpa);
-
-    // Test various identifier types and edge cases
-    const ident1 = Ident.for_text("hello");
-    const ident2 = Ident.for_text("world!");
-    const ident3 = Ident.for_text("_ignored");
-    const ident4 = Ident.for_text("a"); // single character
-    const ident5 = Ident.for_text("very_long_identifier_name_that_might_cause_issues"); // long name
-    const region = Region.zero();
-
-    _ = try store.insert(gpa, ident1, region);
-    _ = try store.insert(gpa, ident2, region);
-    _ = try store.insert(gpa, ident3, region);
-    _ = try store.insert(gpa, ident4, region);
-    _ = try store.insert(gpa, ident5, region);
-
-    // Add some unique names
-    _ = try store.genUnique(gpa);
-    _ = try store.genUnique(gpa);
-
-    // Test serialization
-    try serialization.testing.testSerialization(Store, &store, gpa);
-}
-
-test "Ident.Store empty store serialization" {
-    const gpa = std.testing.allocator;
-
-    var empty_store = try Store.initCapacity(gpa, 0);
-    defer empty_store.deinit(gpa);
-
-    try serialization.testing.testSerialization(Store, &empty_store, gpa);
-}

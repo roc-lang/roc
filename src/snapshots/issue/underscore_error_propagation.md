@@ -144,7 +144,7 @@ NO CHANGE
 			(ty-header @5.1-5.11 (name "BadDerived")))
 		(nominal @10.1-10.16 (type "GoodBase")
 			(ty-header @10.1-10.9 (name "GoodBase")))
-		(nominal @12.1-12.24 (type "Error")
+		(nominal @12.1-12.24 (type "GoodDerived")
 			(ty-header @12.1-12.12 (name "GoodDerived"))))
 	(expressions
 		(expr @8.9-8.15 (type "Error"))

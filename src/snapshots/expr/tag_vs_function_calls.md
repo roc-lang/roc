@@ -104,7 +104,7 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 	addOne: |x| x + 1,
 	result: addOne(5),
 	nested: Some(Ok(Just(42))),
-	tagList: [Some(1), Some(2), None, Some(3)]
+	tagList: [Some(1), Some(2), None, Some(3)],
 }
 ~~~
 # CANONICALIZE

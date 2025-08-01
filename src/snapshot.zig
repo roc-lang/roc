@@ -7,83 +7,26 @@
 //! the given Roc code snippet.
 
 const std = @import("std");
-const testing = std.testing;
-const Allocator = std.mem.Allocator;
-const base = @import("base.zig");
-const parallel = base.parallel;
-const canonicalize = @import("check/canonicalize.zig");
-const types_mod = @import("types.zig");
-const types_problem_mod = @import("check/check_types/problem.zig");
-const cache = @import("cache/mod.zig");
+const base = @import("base");
+const parse = @import("parse");
+const compile = @import("compile");
+const types = @import("types");
+const reporting = @import("reporting");
+const Can = @import("can");
+const Check = @import("check");
 
-const Solver = @import("check/check_types.zig");
-const CIR = canonicalize.CIR;
-const parse = @import("check/parse.zig");
+const cache = @import("cache/mod.zig");
 const fmt = @import("fmt.zig");
-const types = @import("types.zig");
-const reporting = @import("reporting.zig");
-const tokenize = @import("check/parse/tokenize.zig");
-const SExprTree = @import("base/SExprTree.zig");
 const repl = @import("repl/eval.zig");
 
+const ModuleEnv = compile.ModuleEnv;
+const Allocator = std.mem.Allocator;
+const SExprTree = base.SExprTree;
 const AST = parse.AST;
 const Report = reporting.Report;
-
-/// Categories of tokens for syntax highlighting
-const TokenCategory = enum {
-    keyword,
-    identifier,
-    string,
-    number,
-    operator,
-    bracket,
-    comment,
-    punctuation,
-    default,
-
-    pub fn toCssClass(self: TokenCategory) []const u8 {
-        return switch (self) {
-            .keyword => "token-keyword",
-            .identifier => "token-identifier",
-            .string => "token-string",
-            .number => "token-number",
-            .operator => "token-operator",
-            .bracket => "token-bracket",
-            .comment => "token-comment",
-            .punctuation => "token-punctuation",
-            .default => "token-default",
-        };
-    }
-};
-
-/// Convert a token type to its category for syntax highlighting
-fn tokenToCategory(token: tokenize.Token.Tag) TokenCategory {
-    return switch (token) {
-        // Keywords
-        .KwApp, .KwAs, .KwCrash, .KwDbg, .KwElse, .KwExpect, .KwExposes, .KwExposing, .KwFor, .KwGenerates, .KwHas, .KwHosted, .KwIf, .KwImplements, .KwImport, .KwImports, .KwIn, .KwInterface, .KwMatch, .KwModule, .KwPackage, .KwPackages, .KwPlatform, .KwProvides, .KwRequires, .KwReturn, .KwVar, .KwWhere, .KwWith => .keyword,
-
-        // Identifiers
-        .UpperIdent, .LowerIdent, .DotLowerIdent, .DotUpperIdent, .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .NamedUnderscore, .OpaqueName => .identifier,
-
-        // Strings
-        .StringStart, .StringEnd, .StringPart, .MultilineStringStart, .MultilineStringEnd, .SingleQuote, .MalformedSingleQuoteUnclosed => .string,
-
-        // Numbers
-        .Float, .Int, .DotInt, .NoSpaceDotInt, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits => .number,
-
-        // Operators
-        .OpPlus, .OpStar, .OpBinaryMinus, .OpUnaryMinus, .OpEquals, .OpNotEquals, .OpAnd, .OpOr, .OpGreaterThan, .OpLessThan, .OpGreaterThanOrEq, .OpLessThanOrEq, .OpAssign, .OpColonEqual, .OpArrow, .OpBackslash, .OpBar, .OpBang, .OpQuestion, .OpColon, .OpPercent, .OpDoubleSlash, .OpCaret, .OpAmpersand, .OpPizza, .OpSlash, .OpDoubleQuestion, .OpBackArrow, .OpFatArrow, .NoSpaceOpQuestion => .operator,
-
-        // Brackets
-        .OpenRound, .CloseRound, .OpenSquare, .CloseSquare, .OpenCurly, .CloseCurly => .bracket,
-
-        // Punctuation
-        .Comma, .Dot, .DoubleDot, .TripleDot, .Underscore => .punctuation,
-
-        // Everything else
-        else => .default,
-    };
-}
+const types_problem_mod = Check.problem;
+const tokenize = parse.tokenize;
+const parallel = base.parallel;
 
 var verbose_log: bool = false;
 var prng = std.Random.DefaultPrng.init(1234567890);
@@ -100,6 +43,573 @@ fn log(comptime fmt_str: []const u8, args: anytype) void {
 /// Always logs a warning message.
 fn warn(comptime fmt_str: []const u8, args: anytype) void {
     std.log.warn(fmt_str, args);
+}
+
+const UpdateCommand = enum {
+    /// Update the section to match the actual output/problems.
+    update,
+    /// Check that the section matches the actual output/problems.
+    check,
+    /// Don't do anything with the section.
+    none,
+};
+
+/// Represents a problem entry from PROBLEMS section
+const ProblemEntry = struct {
+    problem_type: []const u8,
+    file: []const u8,
+    start_line: u32,
+    start_col: u32,
+    end_line: u32,
+    end_col: u32,
+
+    fn format(self: ProblemEntry, writer: anytype) !void {
+        try writer.print("{s} - {s}:{d}:{d}:{d}:{d}", .{
+            self.problem_type,
+            self.file,
+            self.start_line,
+            self.start_col,
+            self.end_line,
+            self.end_col,
+        });
+    }
+};
+
+/// Parse a PROBLEMS entry to extract problem type and location
+fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_idx: usize) !?struct { entry: ?ProblemEntry, next_idx: usize } {
+    var idx = start_idx;
+
+    // Skip whitespace and empty lines
+    while (idx < content.len and (content[idx] == ' ' or content[idx] == '\t' or content[idx] == '\n' or content[idx] == '\r')) {
+        idx += 1;
+    }
+
+    if (idx >= content.len) return null;
+
+    // Check if we're at the start of a problem header
+    if (idx + 2 > content.len or !std.mem.eql(u8, content[idx .. idx + 2], "**")) {
+        return null;
+    }
+
+    // Find the end of the problem type
+    const type_start = idx + 2;
+    const type_end_search = std.mem.indexOfPos(u8, content, type_start, "**");
+    if (type_end_search == null) return null;
+    const type_end = type_end_search.?;
+
+    // Check if this is a problem header (all uppercase, no lowercase letters)
+    const potential_type = content[type_start..type_end];
+    var has_lowercase = false;
+    for (potential_type) |c| {
+        if (c >= 'a' and c <= 'z') {
+            has_lowercase = true;
+            break;
+        }
+    }
+
+    // If it has lowercase letters, this is not a problem header
+    if (has_lowercase) {
+        return null;
+    }
+
+    var problem_type = std.mem.trim(u8, potential_type, " \t\r\n");
+
+    // Handle compound error types like "NOT IMPLEMENTED - UNDEFINED VARIABLE"
+    // We only want the last part after the last " - "
+    if (std.mem.lastIndexOf(u8, problem_type, " - ")) |dash_idx| {
+        problem_type = std.mem.trim(u8, problem_type[dash_idx + 3 ..], " \t\r\n");
+    }
+
+    // Skip past the closing ** of the problem type
+    var current_idx = type_end + 2;
+
+    // Skip the rest of the line after the problem type
+    while (current_idx < content.len and content[current_idx] != '\n') {
+        current_idx += 1;
+    }
+    if (current_idx < content.len) current_idx += 1; // Skip the newline
+
+    // Now look for optional location on the next few lines
+    // We'll look until we hit another problem header or end of content
+    var location_file: []const u8 = "";
+    var location_start_line: u32 = 0;
+    var location_start_col: u32 = 0;
+    var location_end_line: u32 = 0;
+    var location_end_col: u32 = 0;
+    var found_location = false;
+
+    while (current_idx < content.len) {
+        // Skip whitespace at start of line
+        const line_start = current_idx;
+        while (current_idx < content.len and (content[current_idx] == ' ' or content[current_idx] == '\t')) {
+            current_idx += 1;
+        }
+
+        // Check if this line starts with ** (potential new problem or location)
+        if (current_idx + 2 <= content.len and std.mem.eql(u8, content[current_idx .. current_idx + 2], "**")) {
+            const inner_start = current_idx + 2;
+            const inner_end_search = std.mem.indexOfPos(u8, content, inner_start, "**");
+
+            if (inner_end_search) |inner_end| {
+                const inner_content = content[inner_start..inner_end];
+
+                // Check if this is a new problem header (no lowercase)
+                var inner_has_lowercase = false;
+                for (inner_content) |c| {
+                    if (c >= 'a' and c <= 'z') {
+                        inner_has_lowercase = true;
+                        break;
+                    }
+                }
+
+                if (!inner_has_lowercase) {
+                    // This is a new problem header, we're done
+                    break;
+                }
+
+                // Check if this looks like a location (contains .md: pattern)
+                if (std.mem.indexOf(u8, inner_content, ".md:")) |_| {
+                    var location = inner_content;
+                    // Strip trailing colon and whitespace
+                    location = std.mem.trimRight(u8, location, ": \t");
+
+                    // Count colons to determine format
+                    var colon_count: usize = 0;
+                    for (location) |c| {
+                        if (c == ':') colon_count += 1;
+                    }
+
+                    if (colon_count == 2) {
+                        // Format: file:line:col
+                        var parts = std.mem.tokenizeScalar(u8, location, ':');
+
+                        if (parts.next()) |file| {
+                            if (parts.next()) |line_str| {
+                                if (parts.next()) |col_str| {
+                                    if (std.fmt.parseInt(u32, line_str, 10) catch null) |line| {
+                                        if (std.fmt.parseInt(u32, col_str, 10) catch null) |col| {
+                                            location_file = file;
+                                            location_start_line = line;
+                                            location_start_col = col;
+                                            location_end_line = line;
+                                            location_end_col = col;
+                                            found_location = true;
+                                            current_idx = inner_end + 2;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if (colon_count == 4) {
+                        // Format: file:start_line:start_col:end_line:end_col
+                        var parts = std.mem.tokenizeScalar(u8, location, ':');
+
+                        if (parts.next()) |file| {
+                            if (parts.next()) |start_line_str| {
+                                if (parts.next()) |start_col_str| {
+                                    if (parts.next()) |end_line_str| {
+                                        if (parts.next()) |end_col_str| {
+                                            if (std.fmt.parseInt(u32, start_line_str, 10) catch null) |start_line| {
+                                                if (std.fmt.parseInt(u32, start_col_str, 10) catch null) |start_col| {
+                                                    if (std.fmt.parseInt(u32, end_line_str, 10) catch null) |end_line| {
+                                                        if (std.fmt.parseInt(u32, end_col_str, 10) catch null) |end_col| {
+                                                            location_file = file;
+                                                            location_start_line = start_line;
+                                                            location_start_col = start_col;
+                                                            location_end_line = end_line;
+                                                            location_end_col = end_col;
+                                                            found_location = true;
+                                                            current_idx = inner_end + 2;
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Skip to next line
+        current_idx = line_start;
+        while (current_idx < content.len and content[current_idx] != '\n') {
+            current_idx += 1;
+        }
+        if (current_idx < content.len) current_idx += 1;
+    }
+
+    // Find the next problem header to determine where this problem ends
+    var next_idx = current_idx;
+    while (next_idx < content.len) {
+        // Skip whitespace at start of line
+        while (next_idx < content.len and (content[next_idx] == ' ' or content[next_idx] == '\t')) {
+            next_idx += 1;
+        }
+
+        if (next_idx + 2 <= content.len and std.mem.eql(u8, content[next_idx .. next_idx + 2], "**")) {
+            const check_start = next_idx + 2;
+            const check_end = std.mem.indexOfPos(u8, content, check_start, "**");
+
+            if (check_end) |end| {
+                const check_content = content[check_start..end];
+
+                // Check if this is a problem header (no lowercase)
+                var check_has_lowercase = false;
+                for (check_content) |c| {
+                    if (c >= 'a' and c <= 'z') {
+                        check_has_lowercase = true;
+                        break;
+                    }
+                }
+
+                if (!check_has_lowercase) {
+                    // Found next problem header
+                    break;
+                }
+            }
+        }
+
+        // Move to next character
+        next_idx += 1;
+    }
+
+    return .{ .entry = ProblemEntry{
+        .problem_type = try allocator.dupe(u8, problem_type),
+        .file = try allocator.dupe(u8, location_file),
+        .start_line = location_start_line,
+        .start_col = location_start_col,
+        .end_line = location_end_line,
+        .end_col = location_end_col,
+    }, .next_idx = next_idx };
+}
+
+/// Parse all problems from PROBLEMS section
+fn parseProblemsSection(allocator: std.mem.Allocator, content: []const u8) !std.ArrayList(ProblemEntry) {
+    var problems = std.ArrayList(ProblemEntry).init(allocator);
+    errdefer {
+        for (problems.items) |p| {
+            allocator.free(p.problem_type);
+            allocator.free(p.file);
+        }
+        problems.deinit();
+    }
+
+    // Check if the entire content is just NIL
+    const trimmed_content = std.mem.trim(u8, content, " \t\r\n");
+    if (std.mem.eql(u8, trimmed_content, "NIL")) {
+        // NIL means there are no problems
+        return problems;
+    }
+
+    var idx: usize = 0;
+    while (idx < content.len) {
+        const result = try parseProblemEntry(allocator, content, idx);
+        if (result) |r| {
+            if (r.entry) |entry| {
+                try problems.append(entry);
+            }
+            idx = r.next_idx;
+        } else {
+            break;
+        }
+    }
+
+    return problems;
+}
+
+/// Generate EXPECTED content from problems
+fn generateExpectedContent(allocator: std.mem.Allocator, problems: []const ProblemEntry) ![]const u8 {
+    if (problems.len == 0) {
+        return try allocator.dupe(u8, "NIL");
+    }
+
+    var buffer = std.ArrayList(u8).init(allocator);
+    errdefer buffer.deinit();
+
+    for (problems, 0..) |problem, i| {
+        if (i > 0) {
+            try buffer.append('\n');
+        }
+        try problem.format(buffer.writer());
+    }
+
+    return buffer.toOwnedSlice();
+}
+
+/// Parse an EXPECTED line like "UNEXPECTED TOKEN IN EXPRESSION - record_field_update_error.md:1:10:1:15"
+fn parseExpectedLine(allocator: std.mem.Allocator, line: []const u8) !?ProblemEntry {
+    const trimmed = std.mem.trim(u8, line, " \t\r\n");
+    if (trimmed.len == 0) {
+        return null;
+    }
+
+    // Find the separator " - "
+    const separator = " - ";
+    const sep_index = std.mem.indexOf(u8, line, separator) orelse return null;
+
+    const problem_type = std.mem.trim(u8, line[0..sep_index], " \t");
+    const location = std.mem.trim(u8, line[sep_index + separator.len ..], " \t\r\n");
+
+    // Handle special case where location is just ":0:0:0:0" (no file)
+    if (std.mem.startsWith(u8, location, ":")) {
+        // Skip the first colon
+        var parts = std.mem.tokenizeScalar(u8, location[1..], ':');
+
+        const start_line_str = parts.next() orelse return null;
+        const start_col_str = parts.next() orelse return null;
+        const end_line_str = parts.next() orelse return null;
+        const end_col_str = parts.next() orelse return null;
+
+        return ProblemEntry{
+            .problem_type = try allocator.dupe(u8, problem_type),
+            .file = try allocator.dupe(u8, ""),
+            .start_line = try std.fmt.parseInt(u32, start_line_str, 10),
+            .start_col = try std.fmt.parseInt(u32, start_col_str, 10),
+            .end_line = try std.fmt.parseInt(u32, end_line_str, 10),
+            .end_col = try std.fmt.parseInt(u32, end_col_str, 10),
+        };
+    }
+
+    // Parse location "file.md:start_line:start_col:end_line:end_col"
+    var parts = std.mem.tokenizeScalar(u8, location, ':');
+
+    const file = parts.next() orelse return null;
+    const start_line_str = parts.next() orelse return null;
+    const start_col_str = parts.next() orelse return null;
+    const end_line_str = parts.next() orelse return null;
+    const end_col_str = parts.next() orelse return null;
+
+    return ProblemEntry{
+        .problem_type = try allocator.dupe(u8, problem_type),
+        .file = try allocator.dupe(u8, file),
+        .start_line = try std.fmt.parseInt(u32, start_line_str, 10),
+        .start_col = try std.fmt.parseInt(u32, start_col_str, 10),
+        .end_line = try std.fmt.parseInt(u32, end_line_str, 10),
+        .end_col = try std.fmt.parseInt(u32, end_col_str, 10),
+    };
+}
+
+/// Parse all problems from EXPECTED section
+fn parseExpectedSection(allocator: std.mem.Allocator, content: []const u8) !std.ArrayList(ProblemEntry) {
+    var problems = std.ArrayList(ProblemEntry).init(allocator);
+    errdefer {
+        for (problems.items) |p| {
+            allocator.free(p.problem_type);
+            allocator.free(p.file);
+        }
+        problems.deinit();
+    }
+
+    // Check if the entire content is just NIL
+    const trimmed_content = std.mem.trim(u8, content, " \t\r\n");
+    if (std.mem.eql(u8, trimmed_content, "NIL")) {
+        // NIL means we expect no problems
+        return problems;
+    }
+
+    var lines = std.mem.tokenizeScalar(u8, content, '\n');
+    while (lines.next()) |line| {
+        const problem = try parseExpectedLine(allocator, line);
+        if (problem) |p| {
+            try problems.append(p);
+        }
+    }
+
+    return problems;
+}
+
+/// Compare two problem entries for equality
+fn problemsEqual(a: ProblemEntry, b: ProblemEntry) bool {
+    return std.mem.eql(u8, a.problem_type, b.problem_type) and
+        std.mem.eql(u8, a.file, b.file) and
+        a.start_line == b.start_line and
+        a.start_col == b.start_col and
+        a.end_line == b.end_line and
+        a.end_col == b.end_col;
+}
+
+/// Generate all reports from the compilation pipeline
+fn generateAllReports(
+    allocator: std.mem.Allocator,
+    parse_ast: *AST,
+    can_ir: *ModuleEnv,
+    solver: *Check,
+    snapshot_path: []const u8,
+    module_env: *ModuleEnv,
+) !std.ArrayList(reporting.Report) {
+    var reports = std.ArrayList(reporting.Report).init(allocator);
+    errdefer reports.deinit();
+
+    // Generate tokenize reports
+    for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
+        const report = parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator) catch |err| {
+            std.debug.panic("Failed to create tokenize report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
+        };
+        try reports.append(report);
+    }
+
+    // Generate parse reports
+    for (parse_ast.parse_diagnostics.items) |diagnostic| {
+        const report = parse_ast.parseDiagnosticToReport(module_env.*, diagnostic, allocator, snapshot_path) catch |err| {
+            std.debug.panic("Failed to create parse report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
+        };
+        try reports.append(report);
+    }
+
+    // Generate canonicalization reports
+    const diagnostics = try can_ir.getDiagnostics();
+    defer allocator.free(diagnostics);
+    for (diagnostics) |diagnostic| {
+        const report = can_ir.diagnosticToReport(diagnostic, allocator, snapshot_path) catch |err| {
+            std.debug.panic("Failed to create canonicalization report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
+        };
+        try reports.append(report);
+    }
+
+    // Generate type checking reports
+    for (solver.problems.problems.items) |problem| {
+        const empty_modules: []const *ModuleEnv = &.{};
+        var report_builder = types_problem_mod.ReportBuilder.init(
+            allocator,
+            module_env,
+            can_ir,
+            &solver.snapshots,
+            snapshot_path,
+            empty_modules,
+        );
+        defer report_builder.deinit();
+
+        const report = report_builder.build(problem) catch |err| {
+            std.debug.panic("Failed to create type checking report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
+        };
+        try reports.append(report);
+    }
+
+    return reports;
+}
+
+/// Render reports to PROBLEMS section format (markdown and HTML)
+fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.ArrayList(reporting.Report)) !void {
+    // HTML PROBLEMS section
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                <div class="problems">
+        );
+    }
+
+    if (reports.items.len == 0) {
+        try output.md_writer.writeAll("NIL\n");
+        if (output.html_writer) |writer| {
+            try writer.writeAll("                    <p>NIL</p>\n");
+        }
+        log("reported NIL problems", .{});
+    } else {
+        // Render all reports in order
+        for (reports.items) |report| {
+            report.render(output.md_writer.any(), .markdown) catch |err| {
+                std.debug.panic("Failed to render report: {s}", .{@errorName(err)});
+            };
+
+            if (output.html_writer) |writer| {
+                try writer.writeAll("                    <div class=\"problem\">");
+                report.render(writer.any(), .markdown) catch |err| {
+                    std.debug.panic("Failed to render report to HTML: {s}", .{@errorName(err)});
+                };
+                try writer.writeAll("</div>\n");
+            }
+        }
+    }
+
+    if (output.html_writer) |writer| {
+        try writer.writeAll(
+            \\                </div>
+            \\
+        );
+    }
+}
+
+/// Render reports to EXPECTED section format (parsed problem entries)
+fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const std.ArrayList(reporting.Report)) ![]const u8 {
+    if (reports.items.len == 0) {
+        return try allocator.dupe(u8, "NIL");
+    }
+
+    // Render all reports to markdown and then parse the problems
+    var problems_buffer = std.ArrayList(u8).init(allocator);
+    defer problems_buffer.deinit();
+
+    // Render all reports to markdown
+    for (reports.items) |report| {
+        report.render(problems_buffer.writer().any(), .markdown) catch |err| {
+            std.debug.panic("Failed to render report for EXPECTED: {s}", .{@errorName(err)});
+        };
+    }
+
+    // Parse the rendered problems and convert to EXPECTED format
+    // TODO: rather than parsing markdown, we should directly generate EXPECTED format from the reports
+    var parsed_problems = try parseProblemsSection(allocator, problems_buffer.items);
+    defer {
+        for (parsed_problems.items) |p| {
+            allocator.free(p.problem_type);
+            allocator.free(p.file);
+        }
+        parsed_problems.deinit();
+    }
+
+    return try generateExpectedContent(allocator, parsed_problems.items);
+}
+
+/// Helper function to extract section content only
+fn extractSectionContent(content: []const u8, section_name: []const u8) ?[]const u8 {
+    var header_buf: [256]u8 = undefined;
+    const header = std.fmt.bufPrint(&header_buf, "# {s}\n", .{section_name}) catch return null;
+    const start_idx = std.mem.indexOf(u8, content, header) orelse return null;
+    const content_start = start_idx + header.len;
+
+    // Find the next section header
+    var next_section_idx = content.len;
+    var search_idx = content_start;
+    while (search_idx < content.len - 2) {
+        if (content[search_idx] == '\n' and
+            content[search_idx + 1] == '#' and
+            content[search_idx + 2] == ' ')
+        {
+            next_section_idx = search_idx + 1;
+            break;
+        }
+        search_idx += 1;
+    }
+
+    return std.mem.trim(u8, content[content_start..next_section_idx], " \t\r\n");
+}
+
+/// Helper function to get section info with start/end positions
+fn extractSectionInfo(content: []const u8, section_name: []const u8) ?struct { start: usize, end: usize } {
+    var header_buf: [256]u8 = undefined;
+    const header = std.fmt.bufPrint(&header_buf, "# {s}\n", .{section_name}) catch return null;
+    const start_idx = std.mem.indexOf(u8, content, header) orelse return null;
+
+    // Find the next section header
+    var next_section_idx = content.len;
+    var search_idx = start_idx + header.len;
+    while (search_idx < content.len - 2) {
+        if (content[search_idx] == '\n' and
+            content[search_idx + 1] == '#' and
+            content[search_idx + 2] == ' ')
+        {
+            next_section_idx = search_idx + 1;
+            break;
+        }
+        search_idx += 1;
+    }
+
+    return .{ .start = start_idx, .end = next_section_idx };
 }
 
 /// cli entrypoint for snapshot tool
@@ -121,6 +631,8 @@ pub fn main() !void {
     var debug_mode: bool = false;
     var max_threads: usize = 0;
     var expect_threads: bool = false;
+    var expected_section_command = UpdateCommand.none;
+    var output_section_command = UpdateCommand.none;
 
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--verbose")) {
@@ -135,6 +647,30 @@ pub fn main() !void {
                 std.process.exit(1);
             }
             expect_threads = true;
+        } else if (std.mem.eql(u8, arg, "--check-expected")) {
+            if (expected_section_command != .none) {
+                std.log.err("`--check-expected` and `--update-expected` are mutually exclusive and should only be specified once.", .{});
+                std.process.exit(1);
+            }
+            expected_section_command = .check;
+        } else if (std.mem.eql(u8, arg, "--update-expected")) {
+            if (expected_section_command != .none) {
+                std.log.err("`--check-expected` and `--update-expected` are mutually exclusive and should only be specified once.", .{});
+                std.process.exit(1);
+            }
+            expected_section_command = .update;
+        } else if (std.mem.eql(u8, arg, "--check-output")) {
+            if (output_section_command != .none) {
+                std.log.err("`--check-output` and `--update-output` are mutually exclusive and should only be specified once.", .{});
+                std.process.exit(1);
+            }
+            output_section_command = .check;
+        } else if (std.mem.eql(u8, arg, "--update-output")) {
+            if (output_section_command != .none) {
+                std.log.err("`--check-output` and `--update-output` are mutually exclusive and should only be specified once.", .{});
+                std.process.exit(1);
+            }
+            output_section_command = .update;
         } else if (std.mem.eql(u8, arg, "--fuzz-corpus")) {
             if (maybe_fuzz_corpus_path != null) {
                 std.log.err("`--fuzz-corpus` should only be specified once.", .{});
@@ -159,6 +695,8 @@ pub fn main() !void {
                 \\  --html          Generate HTML output files
                 \\  --debug         Use GeneralPurposeAllocator for debugging (default: c_allocator)
                 \\  --threads <n>   Number of threads to use (0 = auto-detect, 1 = single-threaded). Default: 0.
+                \\  --check-expected     Validate that EXPECTED sections match PROBLEMS sections
+                \\  --update-expected    Update EXPECTED sections based on PROBLEMS sections
                 \\  --fuzz-corpus <path>  Specify the path to the fuzz corpus
                 \\
                 \\Arguments:
@@ -189,6 +727,8 @@ pub fn main() !void {
     const config = Config{
         .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
         .generate_html = generate_html,
+        .expected_section_command = expected_section_command,
+        .output_section_command = output_section_command,
     };
 
     if (config.maybe_fuzz_corpus_path != null) {
@@ -221,7 +761,7 @@ pub fn main() !void {
     log("collected {d} work items in {d} ms", .{ work_list.items.len, collect_duration_ms });
 
     // Stage 2: Process work items (in parallel or single-threaded)
-    const result = try processWorkItems(gpa, work_list, max_threads, debug_mode, config);
+    const result = try processWorkItems(gpa, work_list, max_threads, debug_mode, &config);
 
     const duration_ms = timer.read() / std.time.ns_per_ms;
 
@@ -229,6 +769,48 @@ pub fn main() !void {
         "collected {d} items in {d} ms, processed {d} snapshots in {d} ms.",
         .{ work_list.items.len, collect_duration_ms, result.success, duration_ms },
     );
+
+    if (result.failed > 0) {
+        std.log.err("Failed to process {d} snapshots.", .{result.failed});
+        std.process.exit(1);
+    }
+}
+
+fn checkSnapshotExpectations(gpa: Allocator) !bool {
+    const config = Config{
+        .maybe_fuzz_corpus_path = null,
+        .generate_html = false,
+        .expected_section_command = .check,
+        .output_section_command = .check,
+        .disable_updates = true,
+    };
+    const snapshots_dir = "src/snapshots";
+    var work_list = WorkList.init(gpa);
+    defer {
+        for (work_list.items) |work_item| {
+            gpa.free(work_item.path);
+        }
+        work_list.deinit();
+    }
+    try collectWorkItems(gpa, snapshots_dir, &work_list);
+
+    var fail_count: usize = 0;
+
+    for (work_list.items) |work_item| {
+        const success = switch (work_item.kind) {
+            .snapshot_file => processSnapshotFile(gpa, work_item.path, &config) catch false,
+            .multi_file_snapshot => blk: {
+                const res = processMultiFileSnapshot(gpa, work_item.path, &config) catch {
+                    break :blk false;
+                };
+                break :blk res;
+            },
+        };
+        if (!success) {
+            fail_count += 1;
+        }
+    }
+    return fail_count == 0;
 }
 
 /// Check if a file has a valid snapshot extension
@@ -249,12 +831,13 @@ fn getMultiFileSnapshotType(path: []const u8) NodeType {
     return .file; // fallback, shouldn't happen if isMultiFileSnapshot was checked first
 }
 
-fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, generate_html: bool) !void {
+fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: *const Config) !bool {
+    var success: bool = true;
     log("Processing multi-file snapshot directory: {s}", .{dir_path});
 
     var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
-        warn("Failed to open directory {s}: {}", .{ dir_path, err });
-        return;
+        std.log.err("Failed to open directory {s}: {}", .{ dir_path, err });
+        return false;
     };
     defer dir.close();
 
@@ -305,26 +888,28 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, generate
     }
 
     // Delete existing .md files
-    iterator = dir.iterate();
-    var files_to_delete = std.ArrayList([]u8).init(allocator);
-    defer {
-        for (files_to_delete.items) |file_path| {
-            allocator.free(file_path);
+    if (!config.disable_updates) {
+        iterator = dir.iterate();
+        var files_to_delete = std.ArrayList([]u8).init(allocator);
+        defer {
+            for (files_to_delete.items) |file_path| {
+                allocator.free(file_path);
+            }
+            files_to_delete.deinit();
         }
-        files_to_delete.deinit();
-    }
 
-    while (try iterator.next()) |entry| {
-        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
-            const file_path = try allocator.dupe(u8, entry.name);
-            try files_to_delete.append(file_path);
+        while (try iterator.next()) |entry| {
+            if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
+                const file_path = try allocator.dupe(u8, entry.name);
+                try files_to_delete.append(file_path);
+            }
         }
-    }
 
-    for (files_to_delete.items) |file_name| {
-        dir.deleteFile(file_name) catch |err| {
-            warn("Failed to delete {s}: {}", .{ file_name, err });
-        };
+        for (files_to_delete.items) |file_name| {
+            dir.deleteFile(file_name) catch |err| {
+                warn("Failed to delete {s}: {}", .{ file_name, err });
+            };
+        }
     }
 
     // Find all .roc files and generate snapshots for each
@@ -367,12 +952,20 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, generate
             const expected_content = expected_sections.get(snapshot_file_name);
 
             // Process the .roc file as a snapshot
-            try processRocFileAsSnapshotWithExpected(allocator, snapshot_file_path, roc_content, meta, expected_content, generate_html);
+            success = try processRocFileAsSnapshotWithExpected(allocator, snapshot_file_path, roc_content, meta, expected_content, config) and success;
         }
     }
+
+    return success;
 }
 
-fn processRocFileAsSnapshot(allocator: Allocator, output_path: []const u8, roc_content: []const u8, meta: Meta, generate_html: bool) !void {
+fn processRocFileAsSnapshot(
+    allocator: Allocator,
+    output_path: []const u8,
+    roc_content: []const u8,
+    meta: Meta,
+    config: *const Config,
+) !bool {
     // Try to read existing EXPECTED section if the file exists
     var expected_content: ?[]const u8 = null;
     defer if (expected_content) |content| allocator.free(content);
@@ -406,31 +999,36 @@ fn processRocFileAsSnapshot(allocator: Allocator, output_path: []const u8, roc_c
         // File doesn't exist yet, that's fine
     }
 
-    try processRocFileAsSnapshotWithExpected(allocator, output_path, roc_content, meta, expected_content, generate_html);
+    try processRocFileAsSnapshotWithExpected(allocator, output_path, roc_content, meta, expected_content, config);
 }
 
-fn processSnapshotContent(allocator: Allocator, content: Content, output_path: []const u8, generate_html: bool) !void {
+fn processSnapshotContent(
+    allocator: Allocator,
+    content: Content,
+    output_path: []const u8,
+    config: *const Config,
+) !bool {
+    var success = true;
     log("Generating snapshot for: {s}", .{output_path});
 
     // Handle REPL snapshots separately
     if (content.meta.node_type == .repl) {
-        return processReplSnapshot(allocator, content, output_path, generate_html);
+        return processReplSnapshot(allocator, content, output_path, config);
     }
 
     // Process the content through the compilation pipeline
-    const source_copy = try allocator.dupe(u8, content.source);
-    var module_env = try base.ModuleEnv.init(allocator, source_copy);
+    var module_env = try ModuleEnv.init(allocator, content.source);
     defer module_env.deinit();
 
     // Parse the source code based on node type
     var parse_ast: AST = switch (content.meta.node_type) {
-        .file => try parse.parse(&module_env, content.source),
-        .header => try parse.parseHeader(&module_env, content.source),
-        .expr => try parse.parseExpr(&module_env, content.source),
-        .statement => try parse.parseStatement(&module_env, content.source),
-        .package => try parse.parse(&module_env, content.source),
-        .platform => try parse.parse(&module_env, content.source),
-        .app => try parse.parse(&module_env, content.source),
+        .file => try parse.parse(&module_env),
+        .header => try parse.parseHeader(&module_env),
+        .expr => try parse.parseExpr(&module_env),
+        .statement => try parse.parseStatement(&module_env),
+        .package => try parse.parse(&module_env),
+        .platform => try parse.parse(&module_env),
+        .app => try parse.parse(&module_env),
         .repl => unreachable, // Handled above
     };
     defer parse_ast.deinit(allocator);
@@ -443,13 +1041,13 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         basename[0..dot_idx]
     else
         basename;
-    var can_ir = try CIR.init(&module_env, module_name);
-    defer can_ir.deinit();
+    var can_ir = &module_env; // ModuleEnv contains the canonical IR
+    try can_ir.initCIRFields(allocator, module_name);
 
-    var can = try canonicalize.init(&can_ir, &parse_ast, null);
+    var can = try Can.init(can_ir, &parse_ast, null);
     defer can.deinit();
 
-    var maybe_expr_idx: ?CIR.Expr.Idx = null;
+    var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
 
     switch (content.meta.node_type) {
         .file => try can.canonicalizeFile(),
@@ -477,11 +1075,11 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
     can_ir.debugAssertArraysInSync();
 
     // Types
-    const empty_modules: []const *CIR = &.{};
-    var solver = try Solver.init(
+    const empty_modules: []const *ModuleEnv = &.{};
+    var solver = try Check.init(
         allocator,
-        &can_ir.env.types,
-        &can_ir,
+        &can_ir.types,
+        can_ir,
         empty_modules,
         &can_ir.store.regions,
     );
@@ -491,7 +1089,7 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
     solver.debugAssertArraysInSync();
 
     if (maybe_expr_idx) |expr_idx| {
-        _ = try solver.checkExpr(expr_idx);
+        _ = try solver.checkExpr(expr_idx.idx);
     } else {
         try solver.checkDefs();
     }
@@ -501,32 +1099,27 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
         // Generate original S-expression for comparison
         var original_tree = SExprTree.init(allocator);
         defer original_tree.deinit();
-        try CIR.pushToSExprTree(&can_ir, null, &original_tree, content.source);
+        try ModuleEnv.pushToSExprTree(can_ir, null, &original_tree);
 
         var original_sexpr = std.ArrayList(u8).init(allocator);
         defer original_sexpr.deinit();
         try original_tree.toStringPretty(original_sexpr.writer().any());
 
         // Create and serialize MmapCache
-        const cache_data = try cache.CacheModule.create(allocator, &module_env, &can_ir, 0, 0);
+        const cache_data = try cache.CacheModule.create(allocator, &module_env, can_ir, 0, 0);
         defer allocator.free(cache_data);
 
         // Deserialize back
         var loaded_cache = try cache.CacheModule.fromMappedMemory(cache_data);
 
-        // Restore ModuleEnv and CIR
-        // Duplicate source since restore takes ownership
-        const restored_source = try allocator.dupe(u8, content.source);
-        var restored = try loaded_cache.restore(allocator, module_name, restored_source);
+        // Restore ModuleEnv
+        var restored = try loaded_cache.restore(allocator, module_name, content.source);
         defer restored.module_env.deinit();
-        defer restored.cir.deinit();
-
-        restored.cir.env = &restored.module_env;
 
         // Generate S-expression from restored CIR
         var restored_tree = SExprTree.init(allocator);
         defer restored_tree.deinit();
-        try CIR.pushToSExprTree(&restored.cir, null, &restored_tree, content.source);
+        try ModuleEnv.pushToSExprTree(&restored.module_env, null, &restored_tree);
 
         var restored_sexpr = std.ArrayList(u8).init(allocator);
         defer restored_sexpr.deinit();
@@ -547,7 +1140,7 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
     var md_buffer = std.ArrayList(u8).init(allocator);
     defer md_buffer.deinit();
 
-    var html_buffer = if (generate_html) std.ArrayList(u8).init(allocator) else null;
+    var html_buffer = if (config.generate_html) std.ArrayList(u8).init(allocator) else null;
     defer if (html_buffer) |*buf| buf.deinit();
 
     var output = DualOutput.init(allocator, &md_buffer, if (html_buffer) |*buf| buf else null);
@@ -555,51 +1148,74 @@ fn processSnapshotContent(allocator: Allocator, content: Content, output_path: [
     // Generate HTML wrapper
     try generateHtmlWrapper(&output, &content);
 
+    // Generate reports once and use for both EXPECTED and PROBLEMS sections
+    var generated_reports = try generateAllReports(allocator, &parse_ast, can_ir, &solver, output_path, &module_env);
+    defer {
+        for (generated_reports.items) |*report| {
+            report.deinit();
+        }
+        generated_reports.deinit();
+    }
+
     // Generate all sections
     try generateMetaSection(&output, &content);
     try generateSourceSection(&output, &content);
-    try generateExpectedSection(&output, &content);
-    try generateProblemsSection(&output, &parse_ast, &can_ir, &solver, &content, output_path, &module_env);
+    success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
+    try generateProblemsSection(&output, &generated_reports);
     try generateTokensSection(&output, &parse_ast, &content, &module_env);
     try generateParseSection(&output, &content, &parse_ast, &module_env);
     try generateFormattedSection(&output, &content, &parse_ast);
-    try generateCanonicalizeSection(&output, &content, &can_ir, maybe_expr_idx);
-    try generateTypesSection(&output, &content, &can_ir, maybe_expr_idx);
+    try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
+    try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
 
     try generateHtmlClosing(&output);
 
-    // Write the markdown file
-    const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
-        warn("Failed to create {s}: {}", .{ output_path, err });
-        return;
-    };
-    defer md_file.close();
-
-    try md_file.writeAll(md_buffer.items);
-
-    if (html_buffer) |*buf| {
-        writeHtmlFile(allocator, output_path, buf) catch |err| {
-            warn("Failed to write HTML file for {s}: {}", .{ output_path, err });
+    if (!config.disable_updates) {
+        // Write the markdown file
+        const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+            std.log.err("Failed to create {s}: {}", .{ output_path, err });
+            return false;
         };
+        defer md_file.close();
+
+        try md_file.writeAll(md_buffer.items);
+
+        if (html_buffer) |*buf| {
+            writeHtmlFile(allocator, output_path, buf) catch |err| {
+                warn("Failed to write HTML file for {s}: {}", .{ output_path, err });
+            };
+        }
     }
+    return success;
 }
 
-fn processRocFileAsSnapshotWithExpected(allocator: Allocator, output_path: []const u8, roc_content: []const u8, meta: Meta, expected_content: ?[]const u8, generate_html: bool) !void {
+fn processRocFileAsSnapshotWithExpected(
+    allocator: Allocator,
+    output_path: []const u8,
+    roc_content: []const u8,
+    meta: Meta,
+    expected_content: ?[]const u8,
+    config: *const Config,
+) !bool {
     // Create content structure
     const content = Content{
         .meta = meta,
         .source = roc_content,
         .expected = expected_content,
+        .output = null,
         .formatted = null,
         .has_canonicalize = true,
     };
 
-    try processSnapshotContent(allocator, content, output_path, generate_html);
+    return try processSnapshotContent(allocator, content, output_path, config);
 }
 
 const Config = struct {
     maybe_fuzz_corpus_path: ?[]const u8,
     generate_html: bool,
+    expected_section_command: UpdateCommand,
+    output_section_command: UpdateCommand,
+    disable_updates: bool = false, // Disable updates for check mode
 };
 
 const ProcessResult = struct {
@@ -619,7 +1235,7 @@ const WorkList = std.ArrayList(WorkItem);
 
 const ProcessContext = struct {
     work_list: *WorkList,
-    config: Config,
+    config: *const Config,
     success_count: parallel.AtomicUsize,
     failed_count: parallel.AtomicUsize,
 };
@@ -628,12 +1244,12 @@ const ProcessContext = struct {
 fn processWorkItem(allocator: Allocator, context: *ProcessContext, item_id: usize) void {
     const work_item = context.work_list.items[item_id];
     const success = switch (work_item.kind) {
-        .snapshot_file => processSnapshotFile(allocator, work_item.path, context.config.maybe_fuzz_corpus_path, context.config.generate_html) catch false,
+        .snapshot_file => processSnapshotFile(allocator, work_item.path, context.config) catch false,
         .multi_file_snapshot => blk: {
-            processMultiFileSnapshot(allocator, work_item.path, context.config.generate_html) catch {
+            const res = processMultiFileSnapshot(allocator, work_item.path, context.config) catch {
                 break :blk false;
             };
-            break :blk true;
+            break :blk res;
         },
     };
 
@@ -645,7 +1261,7 @@ fn processWorkItem(allocator: Allocator, context: *ProcessContext, item_id: usiz
 }
 
 /// Stage 2: Process work items in parallel using the parallel utility
-fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, debug: bool, config: Config) !ProcessResult {
+fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, debug: bool, config: *const Config) !ProcessResult {
     if (work_list.items.len == 0) {
         return ProcessResult{ .success = 0, .failed = 0 };
     }
@@ -741,6 +1357,7 @@ const Section = union(enum) {
     meta,
     source,
     expected,
+    output,
     formatted,
     parse,
     canonicalize,
@@ -751,6 +1368,7 @@ const Section = union(enum) {
     pub const META = "# META\n~~~ini\n";
     pub const SOURCE = "# SOURCE\n~~~roc\n";
     pub const EXPECTED = "# EXPECTED\n";
+    pub const OUTPUT = "# OUTPUT\n";
     pub const FORMATTED = "# FORMATTED\n~~~roc\n";
     pub const PARSE = "# PARSE\n~~~clojure\n";
     pub const CANONICALIZE = "# CANONICALIZE\n~~~clojure\n";
@@ -764,6 +1382,7 @@ const Section = union(enum) {
         if (std.mem.startsWith(u8, str, META)) return .meta;
         if (std.mem.startsWith(u8, str, SOURCE)) return .source;
         if (std.mem.startsWith(u8, str, EXPECTED)) return .expected;
+        if (std.mem.startsWith(u8, str, OUTPUT)) return .output;
         if (std.mem.startsWith(u8, str, FORMATTED)) return .formatted;
         if (std.mem.startsWith(u8, str, PARSE)) return .parse;
         if (std.mem.startsWith(u8, str, CANONICALIZE)) return .canonicalize;
@@ -778,6 +1397,7 @@ const Section = union(enum) {
             .meta => META,
             .source => SOURCE,
             .expected => EXPECTED,
+            .output => OUTPUT,
             .formatted => FORMATTED,
             .parse => PARSE,
             .canonicalize => CANONICALIZE,
@@ -939,22 +1559,14 @@ pub const Content = struct {
     meta: Meta,
     source: []const u8,
     expected: ?[]const u8,
+    output: ?[]const u8,
     formatted: ?[]const u8,
     has_canonicalize: bool,
-
-    fn init(meta: Meta, source: []const u8, expected: ?[]const u8, formatted: ?[]const u8, has_canonicalize: bool) Content {
-        return .{
-            .meta = meta,
-            .source = source,
-            .expected = expected,
-            .formatted = formatted,
-            .has_canonicalize = has_canonicalize,
-        };
-    }
 
     fn from_ranges(ranges: std.AutoHashMap(Section, Section.Range), content: []const u8) Error!Content {
         var source: []const u8 = undefined;
         var expected: ?[]const u8 = undefined;
+        var output: ?[]const u8 = undefined;
         var formatted: ?[]const u8 = undefined;
         var has_canonicalize: bool = false;
 
@@ -970,6 +1582,12 @@ pub const Content = struct {
             expected = null;
         }
 
+        if (ranges.get(.output)) |value| {
+            output = value.extract(content);
+        } else {
+            output = null;
+        }
+
         if (ranges.get(.formatted)) |value| {
             formatted = value.extract(content);
         } else {
@@ -983,13 +1601,14 @@ pub const Content = struct {
         if (ranges.get(.meta)) |value| {
             const meta_txt = value.extract(content);
             const meta = try Meta.fromString(meta_txt);
-            return Content.init(
-                meta,
-                source,
-                expected,
-                formatted,
-                has_canonicalize,
-            );
+            return Content{
+                .meta = meta,
+                .source = source,
+                .expected = expected,
+                .output = output,
+                .formatted = formatted,
+                .has_canonicalize = has_canonicalize,
+            };
         } else {
             return Error.MissingSnapshotHeader;
         }
@@ -1122,10 +1741,62 @@ fn generateSourceSection(output: *DualOutput, content: *const Content) !void {
 }
 
 /// Generate EXPECTED section for both markdown and HTML
-fn generateExpectedSection(output: *DualOutput, content: *const Content) !void {
+fn generateExpectedSection(
+    output: *DualOutput,
+    snapshot_path: []const u8,
+    content: *const Content,
+    reports: *const std.ArrayList(reporting.Report),
+    config: *const Config,
+) !bool {
     try output.begin_section("EXPECTED");
+    var success = true;
 
-    if (content.expected) |expected| {
+    var expected_content: ?[]const u8 = null;
+    defer if (expected_content) |e| output.gpa.free(e);
+
+    const new_content = try renderReportsToExpectedContent(output.gpa, reports);
+    defer output.gpa.free(new_content);
+    switch (config.expected_section_command) {
+        .update => {
+            // Generate EXPECTED content using shared report generation
+            expected_content = new_content;
+        },
+        .check => {
+            // Use existing expected content or NIL
+            if (content.expected) |expected| {
+                expected_content = try output.gpa.dupe(u8, expected);
+            } else {
+                expected_content = try output.gpa.dupe(u8, "NIL");
+            }
+
+            if (!std.mem.eql(u8, new_content, expected_content.?)) {
+                // If the new content differs, we need to update the expected section
+                std.debug.print("Mismatch in EXPECTED section for {s}\n", .{snapshot_path});
+                std.debug.print("Expected:\n{s}\n", .{expected_content.?});
+                std.debug.print("Generated:\n{s}\n", .{new_content});
+                std.debug.print("Hint: use `--update-expected` to automatically update the expectations", .{});
+
+                success = false;
+            }
+        },
+        .none => {
+            // Use existing expected content or NIL
+            if (content.expected) |expected| {
+                expected_content = try output.gpa.dupe(u8, expected);
+            } else {
+                expected_content = try output.gpa.dupe(u8, "NIL");
+            }
+
+            if (!std.mem.eql(u8, new_content, expected_content.?)) {
+                // If the new content differs,
+                std.debug.print("Warning: Mismatch in EXPECTED section for {s}\n", .{snapshot_path});
+                std.debug.print("Hint: use `--check-expected` to give a more detailed report", .{});
+            }
+        },
+    }
+
+    // Write the expected content (either generated or existing)
+    if (expected_content) |expected| {
         try output.md_writer.writeAll(expected);
         try output.md_writer.writeByte('\n');
 
@@ -1153,184 +1824,22 @@ fn generateExpectedSection(output: *DualOutput, content: *const Content) !void {
                 \\
             );
         }
-    } else {
-        try output.md_writer.writeAll("NIL\n");
-
-        if (output.html_writer) |writer| {
-            try writer.writeAll(
-                \\                <div class="expected">
-                \\                    <p>NIL</p>
-                \\                </div>
-                \\
-            );
-        }
     }
 
     try output.end_section();
+
+    return success;
 }
 
-/// Generate PROBLEMS section for both markdown and HTML
-fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, solver: *Solver, content: *const Content, snapshot_path: []const u8, module_env: *base.ModuleEnv) !void {
+/// Generate PROBLEMS section for both markdown and HTML using shared report generation
+fn generateProblemsSection(output: *DualOutput, reports: *const std.ArrayList(reporting.Report)) !void {
     try output.begin_section("PROBLEMS");
-
-    // HTML PROBLEMS section
-    if (output.html_writer) |writer| {
-        try writer.writeAll(
-            \\                <div class="problems">
-        );
-    }
-
-    var tokenize_problems: usize = 0;
-    var parser_problems: usize = 0;
-    var canonicalize_problems: usize = 0;
-    var check_types_problem: usize = 0;
-
-    // Tokenize Diagnostics
-    for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-        tokenize_problems += 1;
-        var report: reporting.Report = parse_ast.tokenizeDiagnosticToReport(diagnostic, output.gpa) catch |err| {
-            try output.md_writer.print("Error creating tokenize report: {}\n", .{err});
-            if (output.html_writer) |writer| {
-                try writer.print("                    <p>Error creating tokenize report: {}</p>\n", .{err});
-            }
-            continue;
-        };
-        defer report.deinit();
-
-        report.render(output.md_writer.any(), .markdown) catch |err| {
-            try output.md_writer.print("Error rendering report: {}\n", .{err});
-        };
-
-        if (output.html_writer) |writer| {
-            try writer.writeAll("                    <div class=\"problem\">");
-            report.render(writer.any(), .markdown) catch |err| {
-                try writer.print("Error rendering report: {}", .{err});
-            };
-            try writer.writeAll("</div>\n");
-        }
-    }
-
-    // Parser Diagnostics
-    for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        parser_problems += 1;
-        var report: reporting.Report = parse_ast.parseDiagnosticToReport(module_env, diagnostic, output.gpa, snapshot_path) catch |err| {
-            try output.md_writer.print("Error creating parse report: {}\n", .{err});
-            if (output.html_writer) |writer| {
-                try writer.print("                    <p>Error creating parse report: {}</p>\n", .{err});
-            }
-            continue;
-        };
-        defer report.deinit();
-
-        report.render(output.md_writer.any(), .markdown) catch |err| {
-            try output.md_writer.print("Error rendering report: {}\n", .{err});
-        };
-
-        if (output.html_writer) |writer| {
-            try writer.writeAll("                    <div class=\"problem\">");
-            report.render(writer.any(), .markdown) catch |err| {
-                try writer.print("Error rendering report: {}", .{err});
-            };
-            try writer.writeAll("</div>\n");
-        }
-    }
-
-    // Canonicalization Diagnostics
-    const diagnostics = try can_ir.getDiagnostics();
-    // Don't free diagnostics here - CIR owns them and will free them in deinit()
-    for (diagnostics) |diagnostic| {
-        canonicalize_problems += 1;
-        var report: reporting.Report = can_ir.diagnosticToReport(diagnostic, output.gpa, content.source, snapshot_path) catch |err| {
-            try output.md_writer.print("Error creating canonicalization report: {}\n", .{err});
-            if (output.html_writer) |writer| {
-                try writer.print("                    <p>Error creating canonicalization report: {}</p>\n", .{err});
-            }
-            continue;
-        };
-        defer report.deinit();
-
-        report.render(output.md_writer.any(), .markdown) catch |err| {
-            try output.md_writer.print("Error rendering report: {}\n", .{err});
-        };
-
-        if (output.html_writer) |writer| {
-            try writer.writeAll("                    <div class=\"problem\">");
-            report.render(writer.any(), .markdown) catch |err| {
-                try writer.print("Error rendering report: {}", .{err});
-            };
-            try writer.writeAll("</div>\n");
-        }
-    }
-
-    // Check Types Problems
-    var problem_buf = std.ArrayList(u8).init(output.gpa);
-    defer problem_buf.deinit();
-
-    var problems_itr = solver.problems.problems.iterIndices();
-    while (problems_itr.next()) |problem_idx| {
-        check_types_problem += 1;
-        const problem = solver.problems.problems.get(problem_idx);
-        const empty_modules: []const *CIR = &.{};
-        var report_builder = types_problem_mod.ReportBuilder.init(
-            output.gpa,
-            module_env,
-            can_ir,
-            &solver.snapshots,
-            content.source,
-            snapshot_path,
-            empty_modules,
-        );
-        defer report_builder.deinit();
-
-        var report: reporting.Report = report_builder.build(problem) catch |err| {
-            try output.md_writer.print("Error creating type checking report: {}\n", .{err});
-            if (output.html_writer) |writer| {
-                try writer.print("                    <p>Error creating type checking report: {}</p>\n", .{err});
-            }
-            continue;
-        };
-        defer report.deinit();
-
-        report.render(output.md_writer.any(), .markdown) catch |err| {
-            try output.md_writer.print("Error rendering report: {}\n", .{err});
-        };
-
-        if (output.html_writer) |writer| {
-            try writer.writeAll("                    <div class=\"problem\">");
-            report.render(writer.any(), .markdown) catch |err| {
-                try writer.print("Error rendering report: {}", .{err});
-            };
-            try writer.writeAll("</div>\n");
-        }
-    }
-
-    const nil_problems = tokenize_problems == 0 and parser_problems == 0 and canonicalize_problems == 0 and check_types_problem == 0;
-
-    if (nil_problems) {
-        try output.md_writer.writeAll("NIL\n");
-        if (output.html_writer) |writer| {
-            try writer.writeAll("                    <p>NIL</p>\n");
-        }
-        log("reported NIL problems", .{});
-    } else {
-        log("reported {} token problems", .{tokenize_problems});
-        log("reported {} parser problems", .{parser_problems});
-        log("reported {} canonicalization problems", .{canonicalize_problems});
-        log("reported {} type problems", .{check_types_problem});
-    }
-
-    if (output.html_writer) |writer| {
-        try writer.writeAll(
-            \\                </div>
-            \\
-        );
-    }
-
+    try renderReportsToProblemsSection(output, reports);
     try output.end_section();
 }
 
 /// Generate TOKENS section for both markdown and HTML
-pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const Content, module_env: *base.ModuleEnv) !void {
+pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Content, module_env: *ModuleEnv) !void {
     try output.begin_section("TOKENS");
     try output.begin_code_block("zig");
 
@@ -1348,7 +1857,7 @@ pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *con
     const tokens = tokenizedBuffer.tokens.items(.tag);
     for (tokens, 0..) |tok, i| {
         const region = tokenizedBuffer.resolve(@intCast(i));
-        const info = try module_env.calcRegionInfo(content.source, region.start.offset, region.end.offset);
+        const info = module_env.calcRegionInfo(region);
 
         // Markdown token output
         try output.md_writer.print("{s}({d}:{d}-{d}:{d}),", .{
@@ -1362,7 +1871,7 @@ pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *con
 
         if (i + 1 < tokenizedBuffer.tokens.len) {
             const next_region = tokenizedBuffer.resolve(@intCast(i + 1));
-            if (source_contains_newline_in_range(parse_ast.env.source, region.end.offset, next_region.start.offset)) {
+            if (source_contains_newline_in_range(parse_ast.env.source, @min(region.end.offset, next_region.start.offset), @max(region.end.offset, next_region.start.offset))) {
                 try output.md_writer.writeAll("\n");
             }
         }
@@ -1407,7 +1916,7 @@ fn source_contains_newline_in_range(source: []const u8, start: usize, end: usize
 }
 
 /// Generate PARSE2 section using SExprTree for both markdown and HTML
-fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *base.ModuleEnv) !void {
+fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *ModuleEnv) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
 
@@ -1537,10 +2046,10 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
 }
 
 /// Generate CANONICALIZE section for both markdown and HTML
-fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+fn generateCanonicalizeSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?ModuleEnv.Expr.Idx) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
-    try can_ir.pushToSExprTree(maybe_expr_idx, &tree, content.source);
+    try can_ir.pushToSExprTree(maybe_expr_idx, &tree);
 
     try output.begin_section("CANONICALIZE");
     try output.begin_code_block("clojure");
@@ -1564,10 +2073,10 @@ fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can
 }
 
 /// Generate TYPES section for both markdown and HTML
-fn generateTypesSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?ModuleEnv.Expr.Idx) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
-    try can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree, content.source);
+    try can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree);
 
     try output.begin_section("TYPES");
     try output.begin_code_block("clojure");
@@ -1591,11 +2100,11 @@ fn generateTypesSection(output: *DualOutput, content: *const Content, can_ir: *C
 
 /// Generate TYPES section displaying types store for both markdown and HTML
 /// This is used for debugging.
-fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, can_ir: *CIR) !void {
+fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, can_ir: *ModuleEnv) !void {
     var solved = std.ArrayList(u8).init(output.gpa);
     defer solved.deinit();
 
-    try types_mod.writers.SExprWriter.allVarsToSExprStr(solved.writer().any(), gpa, can_ir.env);
+    try types.writers.SExprWriter.allVarsToSExprStr(solved.writer().any(), gpa, can_ir.env);
 
     // Markdown TYPES section
     try output.md_writer.writeAll(Section.TYPES);
@@ -1729,7 +2238,7 @@ fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.Ar
 }
 
 /// New unified processSnapshotFile function that generates both markdown and HTML simultaneously
-fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_corpus_path: ?[]const u8, generate_html: bool) !bool {
+fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config: *const Config) !bool {
     // Log the file path that was written to
     log("processing snapshot file: {s}", .{snapshot_path});
 
@@ -1775,15 +2284,16 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     };
 
     // Process the content through the shared compilation pipeline
-    processSnapshotContent(gpa, content, snapshot_path, generate_html) catch |err| {
+    const success = processSnapshotContent(gpa, content, snapshot_path, config) catch |err| {
         log("failed to process snapshot content: {s}", .{@errorName(err)});
         return false;
     };
 
     // If flag --fuzz-corpus is passed, write the SOURCE to our corpus
-    if (maybe_fuzz_corpus_path != null) {
+    if (config.maybe_fuzz_corpus_path) |path| {
         const rand_file_name = [_][]const u8{
-            maybe_fuzz_corpus_path.?, &[_]u8{
+            path,
+            &[_]u8{
                 rand.intRangeAtMost(u8, 'a', 'z'),
                 rand.intRangeAtMost(u8, 'a', 'z'),
                 rand.intRangeAtMost(u8, 'a', 'z'),
@@ -1803,7 +2313,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
         defer gpa.free(corpus_file_path);
 
         var corpus_file = std.fs.cwd().createFile(corpus_file_path, .{}) catch |err| {
-            log("failed to create file in '{s}': {s}", .{ maybe_fuzz_corpus_path.?, @errorName(err) });
+            std.log.err("failed to create file in '{s}': {s}", .{ config.maybe_fuzz_corpus_path.?, @errorName(err) });
             return false;
         };
         defer corpus_file.close();
@@ -1811,11 +2321,11 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
         try corpus_file.writer().writeAll(content.source);
     }
 
-    return true;
+    return success;
 }
 
-fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_corpus_path: ?[]const u8, generate_html: bool) !bool {
-    return processSnapshotFileUnified(gpa, snapshot_path, maybe_fuzz_corpus_path, generate_html);
+fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, config: *const Config) !bool {
+    return processSnapshotFileUnified(gpa, snapshot_path, config);
 }
 
 /// Extracts the sections from a snapshot file
@@ -1829,8 +2339,8 @@ pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
         // Look for section headers
         if (idx == 0 or (idx > 0 and content[idx - 1] == '\n')) {
             if (Section.fromString(content[idx..])) |section| {
-                // Only process META, SOURCE, and EXPECTED sections
-                if (section == .meta or section == .source or section == .expected) {
+                // Only process META, SOURCE, OUTPUT, and EXPECTED sections
+                if (section == .meta or section == .source or section == .expected or section == .output) {
                     const header_len = section.asString().len;
                     const start = idx + header_len;
 
@@ -1853,7 +2363,7 @@ pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
                             search_idx += 1;
                         }
                     } else {
-                        // For sections without ~~~ delimiters (EXPECTED)
+                        // For sections without ~~~ delimiters (EXPECTED, OUTPUT)
                         // Find the next section header
                         var search_idx = start;
                         while (search_idx < content.len) {
@@ -1884,14 +2394,15 @@ pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
     return try Content.from_ranges(ranges, content);
 }
 
-fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, generate_html: bool) !void {
+fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, config: *const Config) !bool {
+    var success = true;
     log("Processing REPL snapshot: {s}", .{output_path});
 
     // Buffer all output in memory before writing files
     var md_buffer = std.ArrayList(u8).init(allocator);
     defer md_buffer.deinit();
 
-    var html_buffer = if (generate_html) std.ArrayList(u8).init(allocator) else null;
+    var html_buffer = if (config.generate_html) std.ArrayList(u8).init(allocator) else null;
     defer if (html_buffer) |*buf| buf.deinit();
 
     var output = DualOutput.init(allocator, &md_buffer, if (html_buffer) |*buf| buf else null);
@@ -1902,30 +2413,33 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
     // Generate all sections
     try generateMetaSection(&output, &content);
     try generateSourceSection(&output, &content);
-    try generateReplExpectedSection(&output, &content);
+    success = try generateReplOutputSection(&output, output_path, &content, config) and success;
     try generateReplProblemsSection(&output, &content);
 
     try generateHtmlClosing(&output);
 
-    // Write the markdown file
-    const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
-        warn("Failed to create {s}: {}", .{ output_path, err });
-        return;
-    };
-    defer md_file.close();
-
-    try md_file.writeAll(md_buffer.items);
-
-    if (html_buffer) |*buf| {
-        writeHtmlFile(allocator, output_path, buf) catch |err| {
-            warn("Failed to write HTML file for {s}: {}", .{ output_path, err });
+    if (!config.disable_updates) {
+        // Write the markdown file
+        const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+            std.log.err("Failed to create {s}: {}", .{ output_path, err });
+            return false;
         };
+        defer md_file.close();
+
+        try md_file.writeAll(md_buffer.items);
+
+        if (html_buffer) |*buf| {
+            writeHtmlFile(allocator, output_path, buf) catch |err| {
+                warn("Failed to write HTML file for {s}: {}", .{ output_path, err });
+            };
+        }
     }
+
+    return success;
 }
 
-fn generateReplExpectedSection(output: *DualOutput, content: *const Content) !void {
-    try output.begin_section("EXPECTED");
-
+fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) !bool {
+    var success = true;
     // Parse REPL inputs from the source
     var lines = std.mem.tokenizeScalar(u8, content.source, '\n');
     var inputs = std.ArrayList([]const u8).init(output.gpa);
@@ -1956,61 +2470,106 @@ fn generateReplExpectedSection(output: *DualOutput, content: *const Content) !vo
         try actual_outputs.append(repl_output);
     }
 
-    // Compare with expected output if provided
-    if (content.expected) |expected| {
-        // Parse expected outputs
-        var expected_outputs = std.ArrayList([]const u8).init(output.gpa);
-        defer expected_outputs.deinit();
+    switch (config.output_section_command) {
+        .update => {
+            try output.begin_section("OUTPUT");
+            // Write actual outputs
+            for (actual_outputs.items, 0..) |repl_output, i| {
+                if (i > 0) {
+                    try output.md_writer.writeAll("---\n");
+                }
+                try output.md_writer.writeAll(repl_output);
+                try output.md_writer.writeByte('\n');
 
-        var expected_lines = std.mem.splitSequence(u8, expected, "\n---\n");
-        while (expected_lines.next()) |output_str| {
-            const trimmed = std.mem.trim(u8, output_str, " \t\r\n");
-            if (trimmed.len > 0) {
-                try expected_outputs.append(trimmed);
-            }
-        }
-
-        // Verify the outputs match
-        if (actual_outputs.items.len != expected_outputs.items.len) {
-            std.log.err("REPL output count mismatch: got {} outputs, expected {}", .{
-                actual_outputs.items.len,
-                expected_outputs.items.len,
-            });
-        } else {
-            for (actual_outputs.items, expected_outputs.items, 0..) |actual, expected_output, i| {
-                if (!std.mem.eql(u8, actual, expected_output)) {
-                    std.log.err("REPL output mismatch at index {}: got '{s}', expected '{s}'", .{
-                        i,
-                        actual,
-                        expected_output,
-                    });
+                // HTML output
+                if (output.html_writer) |writer| {
+                    if (i > 0) {
+                        try writer.writeAll("                <hr>\n");
+                    }
+                    try writer.writeAll("                <div class=\"repl-output\">");
+                    for (repl_output) |char| {
+                        try escapeHtmlChar(writer, char);
+                    }
+                    try writer.writeAll("</div>\n");
                 }
             }
-        }
+            try output.end_section();
+        },
+        .check, .none => {
+            const emit_error = config.output_section_command == .check;
+
+            // Compare with expected output if provided
+            if (content.output) |expected| {
+                try output.begin_section("OUTPUT");
+                // Parse expected outputs
+                var expected_outputs = std.ArrayList([]const u8).init(output.gpa);
+                defer expected_outputs.deinit();
+
+                var expected_lines = std.mem.splitSequence(u8, expected, "\n---\n");
+                while (expected_lines.next()) |output_str| {
+                    const trimmed = std.mem.trim(u8, output_str, " \t\r\n");
+                    if (trimmed.len > 0) {
+                        try expected_outputs.append(trimmed);
+                    }
+                }
+
+                // Verify the outputs match
+                if (actual_outputs.items.len != expected_outputs.items.len) {
+                    std.debug.print("REPL output count mismatch: got {} outputs, expected {} in {s}\n", .{
+                        actual_outputs.items.len,
+                        expected_outputs.items.len,
+                        snapshot_path,
+                    });
+                    success = success and !emit_error;
+                } else {
+                    for (actual_outputs.items, expected_outputs.items, 0..) |actual, expected_output, i| {
+                        if (!std.mem.eql(u8, actual, expected_output)) {
+                            success = success and !emit_error;
+                            std.debug.print("REPL output mismatch at index {}: got '{s}', expected '{s}' in {s}\n", .{
+                                i,
+                                actual,
+                                expected_output,
+                                snapshot_path,
+                            });
+                        }
+                    }
+                }
+
+                // Write the old outputs back to the file
+                for (expected_outputs.items, 0..) |expected_output, i| {
+                    if (i > 0) {
+                        try output.md_writer.writeAll("---\n");
+                    }
+                    try output.md_writer.writeAll(expected_output);
+                    try output.md_writer.writeByte('\n');
+
+                    // HTML output
+                    if (output.html_writer) |writer| {
+                        if (i > 0) {
+                            try writer.writeAll("                <hr>\n");
+                        }
+                        try writer.writeAll("                <div class=\"repl-output\">");
+                        for (expected_output) |char| {
+                            try escapeHtmlChar(writer, char);
+                        }
+                        try writer.writeAll("</div>\n");
+                    }
+                }
+                try output.end_section();
+            } else {
+                if (actual_outputs.items.len != 0) {
+                    std.debug.print("REPL output count mismatch: got {} outputs, expected {} in {s}\n", .{
+                        actual_outputs.items.len,
+                        0,
+                        snapshot_path,
+                    });
+                    success = success and !emit_error;
+                }
+            }
+        },
     }
 
-    // Write actual outputs
-    for (actual_outputs.items, 0..) |repl_output, i| {
-        if (i > 0) {
-            try output.md_writer.writeAll("---\n");
-        }
-        try output.md_writer.writeAll(repl_output);
-        try output.md_writer.writeByte('\n');
-
-        // HTML output
-        if (output.html_writer) |writer| {
-            if (i > 0) {
-                try writer.writeAll("                <hr>\n");
-            }
-            try writer.writeAll("                <div class=\"repl-output\">");
-            for (repl_output) |char| {
-                try escapeHtmlChar(writer, char);
-            }
-            try writer.writeAll("</div>\n");
-        }
-    }
-
-    try output.end_section();
+    return success;
 }
 
 fn generateReplProblemsSection(output: *DualOutput, content: *const Content) !void {
@@ -2028,4 +2587,11 @@ fn generateReplProblemsSection(output: *DualOutput, content: *const Content) !vo
     }
 
     try output.end_section();
+}
+
+test "snapshot validation" {
+    const allocator = std.testing.allocator;
+    if (!try checkSnapshotExpectations(allocator)) {
+        return error.SnapshotValidationFailed;
+    }
 }

@@ -19,13 +19,15 @@ PARSE ERROR - fuzz_crash_022.md:1:1:1:4
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_022.md:1:19:1:27
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:1:32:1:33
 PARSE ERROR - fuzz_crash_022.md:6:27:6:28
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:8:1:8:2
-MALFORMED TYPE - :0:0:0:0
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:8:7:8:8
+MALFORMED TYPE - fuzz_crash_022.md:1:19:1:27
 INVALID STATEMENT - fuzz_crash_022.md:1:28:1:31
 INVALID STATEMENT - fuzz_crash_022.md:1:32:1:33
 INVALID IF CONDITION - :0:0:0:0
 UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
-INVALID STATEMENT - fuzz_crash_022.md:8:1:8:2
+INVALID STATEMENT - fuzz_crash_022.md:8:1:8:6
+INVALID STATEMENT - fuzz_crash_022.md:8:7:8:8
+INVALID STATEMENT - fuzz_crash_022.md:8:9:8:25
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_package_or_platform_name`
@@ -76,19 +78,26 @@ getUser = |id| if (id > 1!) "big" else "l"
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **-** is not expected in an expression.
+The token **=** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_022.md:8:1:8:2:**
+**fuzz_crash_022.md:8:7:8:8:**
 ```roc
 -ain! = |_| getUser(900)
 ```
-^
+      ^
 
 
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
+
+**fuzz_crash_022.md:1:19:1:27:**
+```roc
+app [main!] { |f: platform "c" }
+```
+                  ^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement `expression` is not allowed at the top level.
@@ -133,11 +142,33 @@ getUser = |id| if (id > 1!) "big" else "l"
 The statement `expression` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**fuzz_crash_022.md:8:1:8:2:**
+**fuzz_crash_022.md:8:1:8:6:**
 ```roc
 -ain! = |_| getUser(900)
 ```
-^
+^^^^^
+
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_022.md:8:7:8:8:**
+```roc
+-ain! = |_| getUser(900)
+```
+      ^
+
+
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_022.md:8:9:8:25:**
+```roc
+-ain! = |_| getUser(900)
+```
+        ^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -177,15 +208,15 @@ OpUnaryMinus(8:1-8:2),LowerIdent(8:2-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Unde
 						(e-string-part @6.30-6.33 (raw "big")))
 					(e-string @6.40-6.43
 						(e-string-part @6.41-6.42 (raw "l"))))))
-		(e-malformed @8.1-8.2 (reason "expr_unexpected_token"))
-		(s-decl @8.2-8.25
-			(p-ident @8.2-8.6 (raw "ain!"))
-			(e-lambda @8.9-8.25
-				(args
-					(p-underscore))
-				(e-apply @8.13-8.25
-					(e-ident @8.13-8.20 (raw "getUser"))
-					(e-int @8.21-8.24 (raw "900")))))))
+		(unary "-"
+			(e-ident @8.2-8.6 (raw "ain!")))
+		(e-malformed @8.7-8.8 (reason "expr_unexpected_token"))
+		(e-lambda @8.9-8.25
+			(args
+				(p-underscore))
+			(e-apply @8.13-8.25
+				(e-ident @8.13-8.20 (raw "getUser"))
+				(e-int @8.21-8.24 (raw "900"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -198,7 +229,8 @@ UserId : U64
 ser : UserId -> Str
 getUser = |id| if  "big" else "l"
 
-ain! = |_| getUser(900)
+-ain!
+|_| getUser(900)
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -208,24 +240,7 @@ ain! = |_| getUser(900)
 		(e-lambda @6.11-6.43
 			(args
 				(p-assign @6.12-6.14 (ident "id")))
-			(e-if @6.16-6.43
-				(if-branches
-					(if-branch
-						(e-runtime-error (tag "if_condition_not_canonicalized"))
-						(e-string @6.29-6.34
-							(e-literal @6.30-6.33 (string "big")))))
-				(if-else
-					(e-string @6.40-6.43
-						(e-literal @6.41-6.42 (string "l")))))))
-	(d-let
-		(p-assign @8.2-8.6 (ident "ain!"))
-		(e-lambda @8.9-8.25
-			(args
-				(p-underscore @8.10-8.11))
-			(e-call @8.13-8.25
-				(e-lookup-local @8.13-8.20
-					(p-assign @6.1-6.8 (ident "getUser")))
-				(e-int @8.21-8.24 (value "900")))))
+			(e-runtime-error (tag "if_condition_not_canonicalized"))))
 	(s-alias-decl @3.1-3.13
 		(ty-header @3.1-3.7 (name "UserId"))
 		(ty @3.10-3.13 (name "U64"))))
@@ -234,12 +249,10 @@ ain! = |_| getUser(900)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.8 (type "_arg -> Str"))
-		(patt @8.2-8.6 (type "_arg -> Str")))
+		(patt @6.1-6.8 (type "_arg -> Error")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
 			(ty-header @3.1-3.7 (name "UserId"))))
 	(expressions
-		(expr @6.11-6.43 (type "_arg -> Str"))
-		(expr @8.9-8.25 (type "_arg -> Str"))))
+		(expr @6.11-6.43 (type "_arg -> Error"))))
 ~~~

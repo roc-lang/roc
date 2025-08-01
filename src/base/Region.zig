@@ -1,7 +1,7 @@
 //! A slice of a module's source code, used for highlighting code in diagnostics.
 
 const std = @import("std");
-const collections = @import("../collections.zig");
+const collections = @import("collections");
 
 const Self = @This();
 

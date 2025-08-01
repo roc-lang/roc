@@ -47,10 +47,6 @@ jobs:
       - name: execute llvm wasm tests with --release
         run: nix develop -c cargo test-gen-llvm-wasm --locked --release
 
-      - name: set env var and test website build script
-        run: |
-          nix develop -c bash www/build.sh
-
       - name: wasm repl tests
         run: nix develop -c crates/repl_test/test_wasm.sh
 

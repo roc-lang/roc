@@ -26,200 +26,26 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:4:12:4:13
-UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:7:22:7:23
-UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:10:28:10:29
-UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:13:29:13:30
-UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:16:19:16:20
-UNDEFINED VARIABLE - tuple_patterns.md:4:6:4:7
-UNDEFINED VARIABLE - tuple_patterns.md:4:9:4:10
-UNDEFINED VARIABLE - tuple_patterns.md:7:7:7:8
-UNDEFINED VARIABLE - tuple_patterns.md:7:10:7:11
-UNDEFINED VARIABLE - tuple_patterns.md:7:15:7:16
-UNDEFINED VARIABLE - tuple_patterns.md:7:18:7:19
-UNDEFINED VARIABLE - tuple_patterns.md:10:6:10:11
-UNDEFINED VARIABLE - tuple_patterns.md:10:13:10:19
-UNDEFINED VARIABLE - tuple_patterns.md:10:21:10:26
-UNDEFINED VARIABLE - tuple_patterns.md:13:6:13:10
-UNDEFINED VARIABLE - tuple_patterns.md:13:12:13:18
-UNDEFINED VARIABLE - tuple_patterns.md:13:20:13:27
-UNDEFINED VARIABLE - tuple_patterns.md:16:6:16:10
-UNDEFINED VARIABLE - tuple_patterns.md:16:12:16:17
+UNUSED VARIABLE - tuple_patterns.md:13:12:13:18
+UNUSED VARIABLE - tuple_patterns.md:7:7:7:8
+UNUSED VARIABLE - tuple_patterns.md:16:6:16:10
+UNUSED VARIABLE - tuple_patterns.md:7:15:7:16
+UNUSED VARIABLE - tuple_patterns.md:10:13:10:19
+UNUSED VARIABLE - tuple_patterns.md:13:6:13:10
+UNUSED VARIABLE - tuple_patterns.md:7:18:7:19
+UNUSED VARIABLE - tuple_patterns.md:13:20:13:27
+UNUSED VARIABLE - tuple_patterns.md:10:6:10:11
+UNUSED VARIABLE - tuple_patterns.md:16:12:16:17
+UNUSED VARIABLE - tuple_patterns.md:10:21:10:26
+UNUSED VARIABLE - tuple_patterns.md:4:6:4:7
+UNUSED VARIABLE - tuple_patterns.md:4:9:4:10
+UNUSED VARIABLE - tuple_patterns.md:7:10:7:11
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNUSED VARIABLE**
+Variable `string` is not used anywhere in your code.
 
-Here is the problematic code:
-**tuple_patterns.md:4:12:4:13:**
-```roc
-    (x, y) = (1, 2)
-```
-           ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**tuple_patterns.md:7:22:7:23:**
-```roc
-    ((a, b), (c, d)) = ((10, 20), (30, 40))
-```
-                     ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**tuple_patterns.md:10:28:10:29:**
-```roc
-    (first, second, third) = (100, 42, 200)
-```
-                           ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**tuple_patterns.md:13:29:13:30:**
-```roc
-    (name, string, boolean) = ("Alice", "fixed", True)
-```
-                            ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**tuple_patterns.md:16:19:16:20:**
-```roc
-    (list, hello) = ([1, 2, 3], "hello")
-```
-                  ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tuple_patterns.md:4:6:4:7:**
-```roc
-    (x, y) = (1, 2)
-```
-     ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `y` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tuple_patterns.md:4:9:4:10:**
-```roc
-    (x, y) = (1, 2)
-```
-        ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `a` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tuple_patterns.md:7:7:7:8:**
-```roc
-    ((a, b), (c, d)) = ((10, 20), (30, 40))
-```
-      ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tuple_patterns.md:7:10:7:11:**
-```roc
-    ((a, b), (c, d)) = ((10, 20), (30, 40))
-```
-         ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `c` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tuple_patterns.md:7:15:7:16:**
-```roc
-    ((a, b), (c, d)) = ((10, 20), (30, 40))
-```
-              ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tuple_patterns.md:7:18:7:19:**
-```roc
-    ((a, b), (c, d)) = ((10, 20), (30, 40))
-```
-                 ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `first` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tuple_patterns.md:10:6:10:11:**
-```roc
-    (first, second, third) = (100, 42, 200)
-```
-     ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `second` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tuple_patterns.md:10:13:10:19:**
-```roc
-    (first, second, third) = (100, 42, 200)
-```
-            ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `third` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tuple_patterns.md:10:21:10:26:**
-```roc
-    (first, second, third) = (100, 42, 200)
-```
-                    ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `name` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tuple_patterns.md:13:6:13:10:**
-```roc
-    (name, string, boolean) = ("Alice", "fixed", True)
-```
-     ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `string` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+If you don't need this variable, prefix it with an underscore like `_string` to suppress this warning.
+The unused variable is declared here:
 **tuple_patterns.md:13:12:13:18:**
 ```roc
     (name, string, boolean) = ("Alice", "fixed", True)
@@ -227,21 +53,23 @@ Is there an `import` or `exposing` missing up-top?
            ^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `boolean` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNUSED VARIABLE**
+Variable `a` is not used anywhere in your code.
 
-**tuple_patterns.md:13:20:13:27:**
+If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:7:7:7:8:**
 ```roc
-    (name, string, boolean) = ("Alice", "fixed", True)
+    ((a, b), (c, d)) = ((10, 20), (30, 40))
 ```
-                   ^^^^^^^
+      ^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `list` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNUSED VARIABLE**
+Variable `list` is not used anywhere in your code.
 
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
 **tuple_patterns.md:16:6:16:10:**
 ```roc
     (list, hello) = ([1, 2, 3], "hello")
@@ -249,15 +77,136 @@ Is there an `import` or `exposing` missing up-top?
      ^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `hello` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNUSED VARIABLE**
+Variable `c` is not used anywhere in your code.
 
+If you don't need this variable, prefix it with an underscore like `_c` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:7:15:7:16:**
+```roc
+    ((a, b), (c, d)) = ((10, 20), (30, 40))
+```
+              ^
+
+
+**UNUSED VARIABLE**
+Variable `second` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_second` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:10:13:10:19:**
+```roc
+    (first, second, third) = (100, 42, 200)
+```
+            ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `name` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:13:6:13:10:**
+```roc
+    (name, string, boolean) = ("Alice", "fixed", True)
+```
+     ^^^^
+
+
+**UNUSED VARIABLE**
+Variable `d` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_d` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:7:18:7:19:**
+```roc
+    ((a, b), (c, d)) = ((10, 20), (30, 40))
+```
+                 ^
+
+
+**UNUSED VARIABLE**
+Variable `boolean` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_boolean` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:13:20:13:27:**
+```roc
+    (name, string, boolean) = ("Alice", "fixed", True)
+```
+                   ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `first` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:10:6:10:11:**
+```roc
+    (first, second, third) = (100, 42, 200)
+```
+     ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `hello` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_hello` to suppress this warning.
+The unused variable is declared here:
 **tuple_patterns.md:16:12:16:17:**
 ```roc
     (list, hello) = ([1, 2, 3], "hello")
 ```
            ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `third` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_third` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:10:21:10:26:**
+```roc
+    (first, second, third) = (100, 42, 200)
+```
+                    ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `x` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:4:6:4:7:**
+```roc
+    (x, y) = (1, 2)
+```
+     ^
+
+
+**UNUSED VARIABLE**
+Variable `y` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:4:9:4:10:**
+```roc
+    (x, y) = (1, 2)
+```
+        ^
+
+
+**UNUSED VARIABLE**
+Variable `b` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:7:10:7:11:**
+```roc
+    ((a, b), (c, d)) = ((10, 20), (30, 40))
+```
+         ^
 
 
 # TOKENS
@@ -275,59 +224,59 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~clojure
 (e-block @1.1-19.2
 	(statements
-		(e-tuple @4.5-4.11
-			(e-ident @4.6-4.7 (raw "x"))
-			(e-ident @4.9-4.10 (raw "y")))
-		(e-malformed @4.12-4.13 (reason "expr_unexpected_token"))
-		(e-tuple @4.14-4.20
-			(e-int @4.15-4.16 (raw "1"))
-			(e-int @4.18-4.19 (raw "2")))
-		(e-tuple @7.5-7.21
-			(e-tuple @7.6-7.12
-				(e-ident @7.7-7.8 (raw "a"))
-				(e-ident @7.10-7.11 (raw "b")))
-			(e-tuple @7.14-7.20
-				(e-ident @7.15-7.16 (raw "c"))
-				(e-ident @7.18-7.19 (raw "d"))))
-		(e-malformed @7.22-7.23 (reason "expr_unexpected_token"))
-		(e-tuple @7.24-7.44
-			(e-tuple @7.25-7.33
-				(e-int @7.26-7.28 (raw "10"))
-				(e-int @7.30-7.32 (raw "20")))
-			(e-tuple @7.35-7.43
-				(e-int @7.36-7.38 (raw "30"))
-				(e-int @7.40-7.42 (raw "40"))))
-		(e-tuple @10.5-10.27
-			(e-ident @10.6-10.11 (raw "first"))
-			(e-ident @10.13-10.19 (raw "second"))
-			(e-ident @10.21-10.26 (raw "third")))
-		(e-malformed @10.28-10.29 (reason "expr_unexpected_token"))
-		(e-tuple @10.30-10.44
-			(e-int @10.31-10.34 (raw "100"))
-			(e-int @10.36-10.38 (raw "42"))
-			(e-int @10.40-10.43 (raw "200")))
-		(e-tuple @13.5-13.28
-			(e-ident @13.6-13.10 (raw "name"))
-			(e-ident @13.12-13.18 (raw "string"))
-			(e-ident @13.20-13.27 (raw "boolean")))
-		(e-malformed @13.29-13.30 (reason "expr_unexpected_token"))
-		(e-tuple @13.31-13.55
-			(e-string @13.32-13.39
-				(e-string-part @13.33-13.38 (raw "Alice")))
-			(e-string @13.41-13.48
-				(e-string-part @13.42-13.47 (raw "fixed")))
-			(e-tag @13.50-13.54 (raw "True")))
-		(e-tuple @16.5-16.18
-			(e-ident @16.6-16.10 (raw "list"))
-			(e-ident @16.12-16.17 (raw "hello")))
-		(e-malformed @16.19-16.20 (reason "expr_unexpected_token"))
-		(e-tuple @16.21-16.41
-			(e-list @16.22-16.31
-				(e-int @16.23-16.24 (raw "1"))
-				(e-int @16.26-16.27 (raw "2"))
-				(e-int @16.29-16.30 (raw "3")))
-			(e-string @16.33-16.40
-				(e-string-part @16.34-16.39 (raw "hello"))))
+		(s-decl @4.5-4.20
+			(p-tuple @4.5-4.11
+				(p-ident @4.6-4.7 (raw "x"))
+				(p-ident @4.9-4.10 (raw "y")))
+			(e-tuple @4.14-4.20
+				(e-int @4.15-4.16 (raw "1"))
+				(e-int @4.18-4.19 (raw "2"))))
+		(s-decl @7.5-7.44
+			(p-tuple @7.5-7.21
+				(p-tuple @7.6-7.12
+					(p-ident @7.7-7.8 (raw "a"))
+					(p-ident @7.10-7.11 (raw "b")))
+				(p-tuple @7.14-7.20
+					(p-ident @7.15-7.16 (raw "c"))
+					(p-ident @7.18-7.19 (raw "d"))))
+			(e-tuple @7.24-7.44
+				(e-tuple @7.25-7.33
+					(e-int @7.26-7.28 (raw "10"))
+					(e-int @7.30-7.32 (raw "20")))
+				(e-tuple @7.35-7.43
+					(e-int @7.36-7.38 (raw "30"))
+					(e-int @7.40-7.42 (raw "40")))))
+		(s-decl @10.5-10.44
+			(p-tuple @10.5-10.27
+				(p-ident @10.6-10.11 (raw "first"))
+				(p-ident @10.13-10.19 (raw "second"))
+				(p-ident @10.21-10.26 (raw "third")))
+			(e-tuple @10.30-10.44
+				(e-int @10.31-10.34 (raw "100"))
+				(e-int @10.36-10.38 (raw "42"))
+				(e-int @10.40-10.43 (raw "200"))))
+		(s-decl @13.5-13.55
+			(p-tuple @13.5-13.28
+				(p-ident @13.6-13.10 (raw "name"))
+				(p-ident @13.12-13.18 (raw "string"))
+				(p-ident @13.20-13.27 (raw "boolean")))
+			(e-tuple @13.31-13.55
+				(e-string @13.32-13.39
+					(e-string-part @13.33-13.38 (raw "Alice")))
+				(e-string @13.41-13.48
+					(e-string-part @13.42-13.47 (raw "fixed")))
+				(e-tag @13.50-13.54 (raw "True"))))
+		(s-decl @16.5-16.41
+			(p-tuple @16.5-16.18
+				(p-ident @16.6-16.10 (raw "list"))
+				(p-ident @16.12-16.17 (raw "hello")))
+			(e-tuple @16.21-16.41
+				(e-list @16.22-16.31
+					(e-int @16.23-16.24 (raw "1"))
+					(e-int @16.26-16.27 (raw "2"))
+					(e-int @16.29-16.30 (raw "3")))
+				(e-string @16.33-16.40
+					(e-string-part @16.34-16.39 (raw "hello")))))
 		(e-record @18.5-18.7)))
 ~~~
 # FORMATTED
@@ -335,29 +284,19 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 {
 
 	# Simple tuple destructuring
-	(x, y)
-	
-	(1, 2)
+	(x, y) = (1, 2)
 
 	# Nested tuple patterns
-	((a, b), (c, d))
-	
-	((10, 20), (30, 40))
+	((a, b), (c, d)) = ((10, 20), (30, 40))
 
 	# Mixed patterns with literals
-	(first, second, third)
-	
-	(100, 42, 200)
+	(first, second, third) = (100, 42, 200)
 
 	# Tuple with string and tag patterns
-	(name, string, boolean)
-	
-	("Alice", "fixed", True)
+	(name, string, boolean) = ("Alice", "fixed", True)
 
 	# Tuple with list pattern
-	(list, hello)
-	
-	([1, 2, 3], "hello")
+	(list, hello) = ([1, 2, 3], "hello")
 
 	{}
 }
@@ -365,28 +304,26 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-19.2
-	(s-expr @4.5-4.11
-		(e-tuple @4.5-4.11
-			(elems
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-runtime-error (tag "ident_not_in_scope")))))
-	(s-expr @4.14-4.20
+	(s-let @4.5-4.20
+		(p-tuple @4.5-4.11
+			(patterns
+				(p-assign @4.6-4.7 (ident "x"))
+				(p-assign @4.9-4.10 (ident "y"))))
 		(e-tuple @4.14-4.20
 			(elems
 				(e-int @4.15-4.16 (value "1"))
 				(e-int @4.18-4.19 (value "2")))))
-	(s-expr @7.5-7.21
-		(e-tuple @7.5-7.21
-			(elems
-				(e-tuple @7.6-7.12
-					(elems
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-runtime-error (tag "ident_not_in_scope"))))
-				(e-tuple @7.14-7.20
-					(elems
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-runtime-error (tag "ident_not_in_scope")))))))
-	(s-expr @7.24-7.44
+	(s-let @7.5-7.44
+		(p-tuple @7.5-7.21
+			(patterns
+				(p-tuple @7.6-7.12
+					(patterns
+						(p-assign @7.7-7.8 (ident "a"))
+						(p-assign @7.10-7.11 (ident "b"))))
+				(p-tuple @7.14-7.20
+					(patterns
+						(p-assign @7.15-7.16 (ident "c"))
+						(p-assign @7.18-7.19 (ident "d"))))))
 		(e-tuple @7.24-7.44
 			(elems
 				(e-tuple @7.25-7.33
@@ -397,25 +334,23 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(elems
 						(e-int @7.36-7.38 (value "30"))
 						(e-int @7.40-7.42 (value "40")))))))
-	(s-expr @10.5-10.27
-		(e-tuple @10.5-10.27
-			(elems
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-runtime-error (tag "ident_not_in_scope")))))
-	(s-expr @10.30-10.44
+	(s-let @10.5-10.44
+		(p-tuple @10.5-10.27
+			(patterns
+				(p-assign @10.6-10.11 (ident "first"))
+				(p-assign @10.13-10.19 (ident "second"))
+				(p-assign @10.21-10.26 (ident "third"))))
 		(e-tuple @10.30-10.44
 			(elems
 				(e-int @10.31-10.34 (value "100"))
 				(e-int @10.36-10.38 (value "42"))
 				(e-int @10.40-10.43 (value "200")))))
-	(s-expr @13.5-13.28
-		(e-tuple @13.5-13.28
-			(elems
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-runtime-error (tag "ident_not_in_scope")))))
-	(s-expr @13.31-13.55
+	(s-let @13.5-13.55
+		(p-tuple @13.5-13.28
+			(patterns
+				(p-assign @13.6-13.10 (ident "name"))
+				(p-assign @13.12-13.18 (ident "string"))
+				(p-assign @13.20-13.27 (ident "boolean"))))
 		(e-tuple @13.31-13.55
 			(elems
 				(e-string @13.32-13.39
@@ -424,12 +359,11 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(e-literal @13.42-13.47 (string "fixed")))
 				(e-nominal @13.50-13.54 (nominal "Bool")
 					(e-tag @13.50-13.54 (name "True"))))))
-	(s-expr @16.5-16.18
-		(e-tuple @16.5-16.18
-			(elems
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-runtime-error (tag "ident_not_in_scope")))))
-	(s-expr @16.21-16.41
+	(s-let @16.5-16.41
+		(p-tuple @16.5-16.18
+			(patterns
+				(p-assign @16.6-16.10 (ident "list"))
+				(p-assign @16.12-16.17 (ident "hello"))))
 		(e-tuple @16.21-16.41
 			(elems
 				(e-list @16.22-16.31

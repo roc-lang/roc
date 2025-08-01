@@ -8,18 +8,17 @@ type=expr
 -rec1.field
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - unary_negation_access.md:1:1:1:2
+UNDEFINED VARIABLE - unary_negation_access.md:1:2:1:6
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **-** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNDEFINED VARIABLE**
+Nothing is named `rec1` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-Here is the problematic code:
-**unary_negation_access.md:1:1:1:2:**
+**unary_negation_access.md:1:2:1:6:**
 ```roc
 -rec1.field
 ```
-^
+ ^^^^
 
 
 # TOKENS
@@ -28,19 +27,23 @@ OpUnaryMinus(1:1-1:2),LowerIdent(1:2-1:6),NoSpaceDotLowerIdent(1:6-1:12),EndOfFi
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.1-1.2 (reason "expr_unexpected_token"))
+(unary "-"
+	(e-field-access @1.2-1.12
+		(e-ident @1.2-1.6 (raw "rec1"))
+		(e-ident @1.6-1.12 (raw "field"))))
 ~~~
 # FORMATTED
 ~~~roc
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(e-unary-minus @1.1-1.12
+	(e-dot-access @1.2-1.12 (field "field")
+		(receiver
+			(e-runtime-error (tag "ident_not_in_scope")))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr @1.1-1.12 (type "Num(_size)"))
 ~~~

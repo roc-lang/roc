@@ -50,7 +50,7 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 ~~~
 # FORMATTED
 ~~~roc
-|{ name, age, ..a } as person| {greeting: "Hello ${name}", full_record: person, is_adult: age >= 18}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -60,11 +60,14 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 			(p-record-destructure @1.2-1.20
 				(destructs
 					(record-destruct @1.4-1.8 (label "name") (ident "name")
-						(required))
+						(required
+							(p-assign @1.4-1.8 (ident "name"))))
 					(record-destruct @1.10-1.13 (label "age") (ident "age")
-						(required))
+						(required
+							(p-assign @1.10-1.13 (ident "age"))))
 					(record-destruct @1.15-1.18 (label "a") (ident "a")
-						(required))))))
+						(required
+							(p-assign @1.15-1.18 (ident "a"))))))))
 	(e-record @1.32-1.103
 		(fields
 			(field (name "greeting")
@@ -79,11 +82,14 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 						(p-record-destructure @1.2-1.20
 							(destructs
 								(record-destruct @1.4-1.8 (label "name") (ident "name")
-									(required))
+									(required
+										(p-assign @1.4-1.8 (ident "name"))))
 								(record-destruct @1.10-1.13 (label "age") (ident "age")
-									(required))
+									(required
+										(p-assign @1.10-1.13 (ident "age"))))
 								(record-destruct @1.15-1.18 (label "a") (ident "a")
-									(required)))))))
+									(required
+										(p-assign @1.15-1.18 (ident "a")))))))))
 			(field (name "is_adult")
 				(e-binop @1.92-1.101 (op "ge")
 					(e-lookup-local @1.92-1.95

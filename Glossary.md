@@ -65,7 +65,7 @@ LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),Newline(1:1-1:1)
 A memory optimization technique where only one copy of each distinct value is stored in memory, regardless of how many times it appears in a program or [IR](#ir). For example, a function named `foo` may be called many times in a Roc file, but we store `foo` once and use an index to refer to `foo` at the call sites.
 
 Uses of interning:
-- new compiler: [collections/SmallStringInterner.zig](src/collections/SmallStringInterner.zig), [ident.zig](src/base/Ident.zig), [ModuleEnv.zig](src/base/ModuleEnv.zig), [tokenize.zig](src/check/parse/tokenize.zig), ...
+- new compiler: TODO
 - old compiler: [small_string_interner.rs](crates/compiler/collections/src/small_string_interner.rs), [mono_module.rs](crates/build/specialize_types/src/mono_module.rs), [format.rs](crates/cli/src/format.rs), ...
 - There are many more uses of interning, I recommend searching for "interner" (case-insensitive).
 
@@ -80,8 +80,8 @@ That ID is used in [IRs](#ir) instead of the actual text to save memory.
 Identifier in the compiler:
 - new compiler:
     - [Ident](src/base/Ident.zig)
-    - [Ident tokenization](src/check/parse/tokenize.zig): check the functions `chompIdentLower` and `chompIdentGeneral`, and their uses.
-    - [Ident parsing](src/check/parse/Parser.zig): search `Ident`
+    - [Ident tokenization](src/parse/tokenize.zig): check the functions `chompIdentLower` and `chompIdentGeneral`, and their uses.
+    - [Ident parsing](src/parse/Parser.zig): search `Ident`
 - old compiler:
     - [IdentStr](crates/compiler/ident/src/lib.rs)
     - [module/ident.rs](crates/compiler/module/src/ident.rs)
@@ -94,7 +94,7 @@ Many keywords can not be used as a variable name.
 We have an [overview of all Roc keywords](https://www.roc-lang.org/tutorial#reserved-keywords).
 
 Keywords in the compiler:
-- [new compiler](src/check/parse/tokenize.zig)
+- [new compiler](src/parse/tokenize.zig)
 - [old compiler](crates/compiler/parse/src/keyword.rs)
 
 ## Operator
@@ -104,7 +104,7 @@ Some examples: `+`, `=`, `==`, `>`. [A table of all operators in Roc](https://ww
 `+` is an example of binary operator because it works with two operands, e.g. `1 + 1`. Similarly `!` (e.g. `!Bool.false`) is a unary operator.
 
 Operators in the compiler:
-- New compiler: search `Op` in [tokenize.zig](src/check/parse/tokenize.zig)
+- New compiler: search `Op` in [tokenize.zig](src/parse/tokenize.zig)
 - Old compiler: search `operator_help` in [expr.rs](crates/compiler/parse/src/expr.rs)
 
 ## Syntax
@@ -112,7 +112,7 @@ Operators in the compiler:
 The set of rules that define the correct structure and format of statements, expressions, and code blocks. It specifies how code should be written so that it can be interpreted and executed correctly. In other words, syntax determines how symbols, keywords, and punctuation must be arranged to form valid source code.
 
 Syntax in the compiler:
-- New compiler: determined by the [tokenizer and parser](src/check/parse).
+- New compiler: determined by the [tokenizer and parser](src/parse).
 - Old compiler: determined by the [parser](crates/compiler/parse).
 
 ## Syntactic Sugar
@@ -126,7 +126,7 @@ Desugaring converts syntax sugar (like `x + 1`) into more fundamental operations
 [A table of all operators in Roc and what they desugar to](https://www.roc-lang.org/tutorial#operator-desugaring-table)
 
 Desugaring in the compiler:
-- New compiler: [canonicalize.zig (WIP)](src/check/canonicalize.zig)
+- New compiler: there is no desugaring in the new compiler, these are implicitly handled by the compiler but not modified into a different form or IR representation.
 - Old compiler: [desugar.rs](crates/check/can_solo/src/desugar.rs)
 
 ## Type Signature
@@ -142,7 +142,7 @@ In the compiler, the type signature specified in the source code has priority ov
 Type annotations are basically the same thing as type signatures and both terms are used interchangeably throughout the compiler.
 
 Type signature in the code base:
-- New compiler: [Parser.zig](src/check/parse/Parser.zig) (search signature)
+- New compiler: [Parser.zig](src/parse/Parser.zig) (search signature)
 - Old compiler: [ast.rs](crates/compiler/parse/src/ast.rs) (search TypeAnnotation)
 
 ## Type Alias
@@ -176,7 +176,7 @@ Graph a := Dict a (List a) where a implements Eq
 Type variables don't have to be a single letter, they just have to start with a lowercase letter.
 
 Parsing of type vars:
-- new compiler: search `ty_var` in [Parser.zig](src/check/parse/Parser.zig)
+- new compiler: search `ty_var` in [Parser.zig](src/parse/Parser.zig)
 - old compiler: search `parse_type_variable` in [type_annotation.rs](crates/compiler/parse/src/type_annotation.rs)
 
 ## Builtin
@@ -221,7 +221,7 @@ LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),Newline(1:1-1:1)
 ```
 
 New compiler:
-- [tokenize.zig](src/check/parse/tokenize.zig)
+- [tokenize.zig](src/parse/tokenize.zig)
 
 Old compiler:
 - We did not do a separate tokenization step, everything happened in the [parser](crates/compiler/parse/src/parser.rs).
@@ -253,7 +253,7 @@ Compared to raw source code, this structured format is much easier to analyze an
 The AST is created by the [parser](#parsing).
 
 New compiler:
-- See the `Node` struct in [this file](src/check/parse/AST.zig).
+- See the `Node` struct in [this file](src/parse/AST.zig).
 - You can see examples of ASTs in the .txt files in [this folder](src/snapshots).
 
 Old compiler:
@@ -266,7 +266,7 @@ Old compiler:
 The step where the compiler checks if the source code follows the correct structure or “grammar” of the programming language. It takes the tokens produced by [tokenization](#tokenization) and organizes them to see if they make sense together, like checking the structure of sentences in a language. If the code is correct, the parser builds a tree-like structure ([AST](#ast)) that shows how the code is organized. If not, it reports errors.
 
 Parser implementation:
-- new compiler: [src/check/parse](src/check/parse)
+- new compiler: [src/parse](src/parse)
 - old compiler: [crates/compiler/parse](crates/compiler/parse) (tokenization is not a separate step here)
 
 ## Symbol
@@ -398,7 +398,7 @@ In general, the rank tracks the number of [let-bindings](#let) a variable is "un
 have rank 1. A [let](#let) inside a top-level definition gets rank 2, and so on.
 
 An example:
-```roc 
+```roc
 foo = 3
 
 plus_five = |arg|
@@ -409,7 +409,7 @@ Here the rank of `foo` is 1 because it is at the top level and the rank of `x` i
 
 Imported variables get rank 2.
 
-Rank 0 is special, it is used for variables that are [generalized](#generalized). 
+Rank 0 is special, it is used for variables that are [generalized](#generalized).
 
 Keeping track of ranks makes type inference faster. You can see how ranks are used [here](crates/compiler/solve/src/solve.rs) (old compiler).
 
@@ -442,7 +442,7 @@ But the type annotation on take_first says it should be:
 
 Related definitions in the compiler:
 - old compiler: search "pub enum Content" in [types/src/subs.rs](crates/compiler/types/src/subs.rs)
-- new compiler: search "pub const Content" in [check/canonicalize/CIR.zig](src/check/canonicalize/CIR.zig)
+- new compiler: search "pub const Content" in [compile/CIR.zig](src/compile/CIR.zig)
 
 ## Flat Type
 
@@ -473,7 +473,7 @@ Canonicalization occurs on a single module (file) in isolation, so the work can 
 If the source code for a [module](#module) has not changed, the CanIR can simply be loaded from disk and used immediately.
 
 Implementation of Canonicalization:
-- new compiler: [canonicalize.zig](src/check/canonicalize.zig), [canonicalize folder](https://github.com/roc-lang/roc/tree/main/src/check/canonicalize)
+- new compiler: [canonicalize/Mod.zig](src/canonicalize/Mod.zig), [canonicalize folder](https://github.com/roc-lang/roc/tree/main/src/canonicalize)
 - old compiler: [can folder](crates/compiler/can)
 
 ## Lambda Set
@@ -618,7 +618,7 @@ make_cat_or_dog_sound = |is_dog|
             "Woof"
         else
             "Miauw"
-            
+
     Str.concat sound "!"
 ```
 
@@ -678,4 +678,20 @@ TODO
 
 TODO
 
-TODO
+## Algebraic Data Type
+
+(ADT)
+
+A custom type that can combine these simpler types:
+- Sum Types: a value can be one of several options, for example, with [Result](https://www.roc-lang.org/builtins/Result/) it can be either:
+  - `Ok(something)`
+  - `Err(some_error)`
+- Product Types: multiple pieces of data together, for example, A `Person` record might contain both a `name` and an `age`.
+
+An example of a combination:
+```roc
+NonEmptyList : [Head { x : U64, y : U64 }, Tail (List { x : U64, y : U64 })]
+```
+A `NonEmptyList` value has to be of the type `Head` or `Tail` (Sum) and `{ x : U64, y : U64 }` combines two `U64` (Product).
+
+Note: a sum or product type by itself is also an Algebraic Data Type.

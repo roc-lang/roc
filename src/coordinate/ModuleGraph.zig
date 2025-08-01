@@ -2,20 +2,21 @@
 //! compile a Roc program.
 
 const std = @import("std");
-const testing = std.testing;
-const base = @import("../base.zig");
-const cache = @import("../cache/mod.zig");
-const collections = @import("../collections.zig");
-const Can = @import("../check/canonicalize.zig");
-const Scope = @import("../check/canonicalize/Scope.zig");
-const parse = @import("../check/parse.zig");
-const Filesystem = @import("../fs/Filesystem.zig");
-const types = @import("../types.zig");
+const base = @import("base");
+const parse = @import("parse");
+const collections = @import("collections");
+const types = @import("types");
+const Can = @import("can");
 
+const cache = @import("../cache/mod.zig");
+const Filesystem = @import("../fs/Filesystem.zig");
+
+const Scope = Can.Scope;
 const Package = base.Package;
 const ModuleImport = base.ModuleImport;
 const ModuleWork = base.ModuleWork;
 const ModuleWorkIdx = base.ModuleWorkIdx;
+const testing = std.testing;
 
 const Self = @This();
 
@@ -111,7 +112,7 @@ fn loadOrCompileCanIr(
         // We should probably be reading the file on demand or something else. Leaving this
         // comment here so we discuss the plan and make the necessary changes.
         var module_env = base.ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
-        var parse_ir = parse.parse(&module_env, contents);
+        var parse_ir = parse.parse(&module_env);
         parse_ir.store.emptyScratch();
 
         // TODO Can we init CIR & the types store capacities based on the number

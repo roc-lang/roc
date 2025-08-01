@@ -12,9 +12,19 @@ import json.Json as MyJson
 main = MyJson.decode
 ~~~
 # EXPECTED
-NIL
+MODULE NOT FOUND - can_import_with_alias.md:3:1:3:27
 # PROBLEMS
-NIL
+**MODULE NOT FOUND**
+The module `json.Json` was not found in this Roc project.
+
+You're attempting to use this module here:
+**can_import_with_alias.md:3:1:3:27:**
+```roc
+import json.Json as MyJson
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),

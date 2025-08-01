@@ -6,12 +6,14 @@
 //! directives, and structural elements.
 
 const std = @import("std");
+const base = @import("base");
+const reporting = @import("reporting");
+const collections = @import("collections");
+
 const Allocator = std.mem.Allocator;
-const renderer = @import("renderer.zig");
-const RenderTarget = renderer.RenderTarget;
-const ReportingConfig = @import("config.zig").ReportingConfig;
-const RegionInfo = @import("../base.zig").RegionInfo;
-const collections = @import("../collections.zig");
+const ReportingConfig = reporting.ReportingConfig;
+const RenderTarget = reporting.RenderTarget;
+const RegionInfo = base.RegionInfo;
 
 /// A source code region with highlighting information.
 pub const SourceRegion = struct {
@@ -540,7 +542,7 @@ pub const Document = struct {
     /// Render the document to the specified writer and target format.
     pub fn render(self: *const Document, writer: anytype, target: RenderTarget, config: ReportingConfig) std.mem.Allocator.Error!void {
         _ = config; // TODO: Pass config to renderer when it supports it
-        try renderer.renderDocument(self, writer, target);
+        try reporting.renderDocument(self, writer, target);
     }
 };
 

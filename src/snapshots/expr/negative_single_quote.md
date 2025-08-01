@@ -24,7 +24,7 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpUnaryMinus(1:1-1:2),SingleQuote(1:2-1:5),EndOfFile(1:5-1:5),
+OpBinaryMinus(1:1-1:2),SingleQuote(1:2-1:5),EndOfFile(1:5-1:5),
 ~~~
 # PARSE
 ~~~clojure

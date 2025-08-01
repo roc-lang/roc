@@ -7,7 +7,7 @@ type=repl
 ~~~roc
 » if 5 > 3 (if 1 > 2 3 else 4) else 5
 ~~~
-# EXPECTED
+# OUTPUT
 4
 # PROBLEMS
 NIL

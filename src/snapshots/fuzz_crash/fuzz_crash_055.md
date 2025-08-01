@@ -9,21 +9,9 @@ module[]r:a	where
 module(a).h:s
 ~~~
 # EXPECTED
-UNDECLARED TYPE VARIABLE - fuzz_crash_055.md:2:13:2:14
+NIL
 # PROBLEMS
-**UNDECLARED TYPE VARIABLE**
-The type variable _s_ is not declared in this scope.
-
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**fuzz_crash_055.md:2:13:2:14:**
-```roc
-module(a).h:s
-```
-            ^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),LowerIdent(1:9-1:10),OpColon(1:10-1:11),LowerIdent(1:11-1:12),KwWhere(1:13-1:18),

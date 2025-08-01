@@ -128,11 +128,23 @@ h == foo
 }
 ~~~
 # EXPECTED
+PARSE ERROR - fuzz_crash_020.md:52:16:52:16
+PARSE ERROR - fuzz_crash_020.md:58:4:58:4
+PARSE ERROR - fuzz_crash_020.md:59:3:59:3
+PARSE ERROR - fuzz_crash_020.md:60:16:60:16
+PARSE ERROR - fuzz_crash_020.md:62:5:62:5
+PARSE ERROR - fuzz_crash_020.md:63:7:63:7
+PARSE ERROR - fuzz_crash_020.md:66:12:66:12
 UNDECLARED TYPE - fuzz_crash_020.md:13:13:13:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:13:19:13:21
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:19:4:19:6
+UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:20:12:20:13
 UNDECLARED TYPE - fuzz_crash_020.md:24:15:24:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:24:24:24:25
+MODULE NOT FOUND - fuzz_crash_020.md:4:1:4:34
+MODULE NOT FOUND - fuzz_crash_020.md:6:1:8:6
+MODULE NOT FOUND - fuzz_crash_020.md:10:1:10:19
+MODULE NOT FOUND - fuzz_crash_020.md:11:1:12:4
 UNDECLARED TYPE - fuzz_crash_020.md:37:7:37:9
 UNDEFINED VARIABLE - fuzz_crash_020.md:40:5:40:8
 UNDEFINED VARIABLE - fuzz_crash_020.md:42:4:42:5
@@ -167,16 +179,99 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:105:2:105:3
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_020.md:108:4:108:5
 UNDEFINED VARIABLE - fuzz_crash_020.md:108:6:108:8
-UNUSED VARIABLE - fuzz_crash_020.md:88:1:88:2
+UNUSED VARIABLE - fuzz_crash_020.md:87:2:87:3
 UNUSED VARIABLE - fuzz_crash_020.md:96:2:96:4
 UNUSED VARIABLE - fuzz_crash_020.md:76:2:76:3
-UNUSED VARIABLE - fuzz_crash_020.md:87:2:87:3
 UNDECLARED TYPE - fuzz_crash_020.md:116:5:116:6
 UNDEFINED VARIABLE - fuzz_crash_020.md:119:2:119:5
 UNDEFINED VARIABLE - fuzz_crash_020.md:120:1:120:2
 UNDEFINED VARIABLE - fuzz_crash_020.md:120:6:120:9
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_020.md:52:2:52:2
 # PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_020.md:52:16:52:16:**
+```roc
+	match a {lue  {
+```
+               
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_020.md:58:4:58:4:**
+```roc
+			1	"for" => 20[1, ] # t
+```
+   
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_020.md:59:3:59:3:**
+```roc
+		ment
+```
+  
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_020.md:60:16:60:16:**
+```roc
+		[1, 2, 3,est]123
+```
+               
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_020.md:62:5:62:5:**
+```roc
+		] 23
+```
+    
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_020.md:63:7:63:7:**
+```roc
+		3.1 314
+```
+      
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_020.md:66:12:66:12:**
+```roc
+		(1, 2, 3)123
+```
+           
+
+
 **UNDECLARED TYPE**
 The type _Lis_ is not declared in this scope.
 
@@ -214,6 +309,19 @@ This type variable is referenced here:
    ^^
 
 
+**UNDECLARED TYPE VARIABLE**
+The type variable _b_ is not declared in this scope.
+
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
+**fuzz_crash_020.md:20:12:20:13:**
+```roc
+			List(			b	) #z)
+```
+           ^
+
+
 **UNDECLARED TYPE**
 The type _O_ is not declared in this scope.
 
@@ -236,6 +344,51 @@ This type variable is referenced here:
 Som : { foo : O, bar : g }
 ```
                        ^
+
+
+**MODULE NOT FOUND**
+The module `pf.Stdout` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_020.md:4:1:4:34:**
+```roc
+import pf.Stdout exposing [line!]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Stdot` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_020.md:6:1:8:6:**
+```roc
+import Stdot
+		exposing [ #tem
+Cust]
+```
+
+
+**MODULE NOT FOUND**
+The module `Bae` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_020.md:10:1:10:19:**
+```roc
+import Bae as Gooe
+```
+^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Ba` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_020.md:11:1:12:4:**
+```roc
+import
+	Ba
+```
 
 
 **UNDECLARED TYPE**
@@ -610,15 +763,15 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable `t` is not used anywhere in your code.
+Variable `i` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_t` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_i` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_020.md:88:1:88:2:**
+**fuzz_crash_020.md:87:2:87:3:**
 ```roc
-t = [
+	i= "H, ${d}"
 ```
-^
+ ^
 
 
 **UNUSED VARIABLE**
@@ -641,18 +794,6 @@ The unused variable is declared here:
 **fuzz_crash_020.md:76:2:76:3:**
 ```roc
 	w = "d"
-```
- ^
-
-
-**UNUSED VARIABLE**
-Variable `i` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_i` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_020.md:87:2:87:3:**
-```roc
-	i= "H, ${d}"
 ```
  ^
 
@@ -1148,17 +1289,17 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 						(e-field-access @105.55-105.85
 							(e-field-access @105.55-105.79
 								(e-field-access @105.55-105.72
-									(e-question-suffix @105.55-105.65
+									(e-question-suffix @105.55-105.66
 										(e-apply @105.55-105.65
 											(e-ident @105.55-105.59 (raw "e_fn"))
 											(e-ident @105.60-105.64 (raw "arg1"))))
-									(e-question-suffix @105.66-105.71
+									(e-question-suffix @105.66-105.72
 										(e-apply @105.66-105.71
 											(e-ident @105.66-105.69 (raw "od")))))
-								(e-question-suffix @105.72-105.78
+								(e-question-suffix @105.72-105.79
 									(e-apply @105.72-105.78
 										(e-ident @105.72-105.76 (raw "ned")))))
-							(e-question-suffix @105.79-105.84
+							(e-question-suffix @105.79-105.85
 								(e-ident @105.79-105.84 (raw "recd"))))
 						(e-apply @106.2-110.3
 							(e-tag @106.2-106.7 (raw "Stdo!"))
@@ -1198,7 +1339,7 @@ import pf.Stdout exposing [line!]
 
 import Stdot
 	exposing [ # tem
-		Cust
+		Cust,
 	]
 
 import Bae as Gooe
@@ -1238,7 +1379,8 @@ add = |Rum| {
 me = |
 	a, # b,
 | # As
-	match a {		lue => {
+	match a {
+		lue => {
 			x
 		}
 		Blue => {
@@ -1246,7 +1388,9 @@ me = |
 		}
 		er # ent
 			=> # ent
-				1		"for" => 20		[
+				1
+		"for" => 20
+		[
 			1,
 		] # t
 			=> # t
@@ -1294,7 +1438,7 @@ ma = |_| {
 		line!("Ag ${n} to ${er}")
 		ber + n
 	}
-	rd = {foo: 123, bar: "H", baz: tag, qux: Ok(world), ned}
+	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world), ned }
 	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
 	m
 	(
@@ -1471,142 +1615,146 @@ expect {
 								(e-int @68.14-68.16 (value "12")))))))))
 	(d-let
 		(p-assign @75.1-75.3 (ident "ma"))
-		(e-lambda @75.5-111.2
-			(args
-				(p-underscore @75.6-75.7))
-			(e-block @75.9-111.2
-				(s-expr @75.11-75.12
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-let @76.2-76.9
-					(p-assign @76.2-76.3 (ident "w"))
-					(e-string @76.6-76.9
-						(e-literal @76.7-76.8 (string "d"))))
-				(s-var @77.2-77.14
-					(p-assign @77.2-77.14 (ident "er"))
-					(e-int @77.11-77.14 (value "123")))
-				(s-expect @78.2-78.14
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-return @79.2-80.6
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-expr @83.2-83.5
-					(e-not-implemented @1.1-1.1))
-				(s-expr @84.2-86.3
-					(e-call @84.2-86.3
-						(e-lookup-local @84.2-84.4
-							(p-assign @49.1-49.3 (ident "me")))
-						(e-not-implemented @1.1-1.1)))
-				(s-expr @86.11-86.17
-					(e-string @86.11-86.17
-						(e-literal @86.12-86.16 (string "Unr!"))))
-				(s-let @87.2-87.14
-					(p-assign @87.2-87.3 (ident "i"))
-					(e-string @87.5-87.14
-						(e-literal @87.6-87.9 (string "H, "))
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-literal @87.13-87.13 (string ""))))
-				(s-let @88.1-91.3
-					(p-assign @88.1-88.2 (ident "t"))
-					(e-list @88.5-91.3
-						(elems
-							(e-call @89.3-89.14
-								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-lookup-local @89.7-89.9
-									(p-assign @77.2-77.14 (ident "er"))))
-							(e-int @89.16-89.19 (value "456"))
-							(e-int @90.1-90.2 (value "9")))))
-				(s-let @96.2-96.59
-					(p-assign @96.2-96.4 (ident "rd"))
-					(e-record @96.7-96.59
-						(fields
-							(field (name "foo")
-								(e-int @96.14-96.17 (value "123")))
-							(field (name "bar")
-								(e-string @96.24-96.27
-									(e-literal @96.25-96.26 (string "H"))))
-							(field (name "baz")
-								(e-runtime-error (tag "ident_not_in_scope")))
-							(field (name "qux")
-								(e-tag @96.44-96.46 (name "Ok")
-									(args
-										(e-runtime-error (tag "ident_not_in_scope")))))
-							(field (name "ned")
-								(e-runtime-error (tag "ident_not_in_scope"))))))
-				(s-let @97.2-97.48
-					(p-assign @97.2-97.3 (ident "t"))
-					(e-tuple @97.6-97.48
-						(elems
-							(e-int @97.7-97.10 (value "123"))
-							(e-string @97.12-97.19
-								(e-literal @97.13-97.18 (string "World")))
+		(e-closure @75.5-111.2
+			(captures
+				(capture @97.2-97.3 (ident "t"))
+				(capture @49.1-49.3 (ident "me")))
+			(e-lambda @75.5-111.2
+				(args
+					(p-underscore @75.6-75.7))
+				(e-block @75.9-111.2
+					(s-expr @75.11-75.12
+						(e-runtime-error (tag "ident_not_in_scope")))
+					(s-let @76.2-76.9
+						(p-assign @76.2-76.3 (ident "w"))
+						(e-string @76.6-76.9
+							(e-literal @76.7-76.8 (string "d"))))
+					(s-var @77.2-77.14
+						(p-assign @77.2-77.14 (ident "er"))
+						(e-int @77.11-77.14 (value "123")))
+					(s-expect @78.2-78.14
+						(e-runtime-error (tag "ident_not_in_scope")))
+					(s-return @79.2-80.6
+						(e-runtime-error (tag "ident_not_in_scope")))
+					(s-expr @83.2-83.5
+						(e-not-implemented @1.1-1.1))
+					(s-expr @84.2-86.3
+						(e-call @84.2-86.3
+							(e-lookup-local @84.2-84.4
+								(p-assign @49.1-49.3 (ident "me")))
+							(e-not-implemented @1.1-1.1)))
+					(s-expr @86.11-86.17
+						(e-string @86.11-86.17
+							(e-literal @86.12-86.16 (string "Unr!"))))
+					(s-let @87.2-87.14
+						(p-assign @87.2-87.3 (ident "i"))
+						(e-string @87.5-87.14
+							(e-literal @87.6-87.9 (string "H, "))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @97.26-97.27 (name "O"))
-							(e-tuple @97.29-97.36
-								(elems
+							(e-literal @87.13-87.13 (string ""))))
+					(s-let @88.1-91.3
+						(p-assign @88.1-88.2 (ident "t"))
+						(e-list @88.5-91.3
+							(elems
+								(e-call @89.3-89.14
 									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-lookup-local @97.34-97.35
-										(p-assign @97.2-97.3 (ident "t")))))
-							(e-list @97.38-97.47
-								(elems
-									(e-int @97.39-97.40 (value "1"))
-									(e-int @97.42-97.43 (value "2"))
-									(e-int @97.45-97.46 (value "3")))))))
-				(s-expr @98.2-98.3
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-expr @98.4-104.3
-					(e-tuple @98.4-104.3
-						(elems
-							(e-int @99.3-99.6 (value "123"))
-							(e-string @100.3-100.10
-								(e-literal @100.4-100.9 (string "World")))
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @101.3-101.4 (name "O"))
-							(e-tuple @102.3-102.14
-								(elems
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-runtime-error (tag "ident_not_in_scope"))))
-							(e-list @103.3-103.12
-								(elems
-									(e-int @103.4-103.5 (value "1"))
-									(e-int @103.7-103.8 (value "2"))
-									(e-int @103.10-103.11 (value "3")))))))
-				(s-expr @105.2-105.54
-					(e-binop @105.2-105.54 (op "or")
-						(e-binop @105.2-105.43 (op "or")
-							(e-binop @105.2-105.12 (op "gt")
-								(e-binop @105.2-105.8 (op "null_coalesce")
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-int @105.6-105.8 (value "12")))
-								(e-int @105.11-105.12 (value "5")))
-							(e-binop @105.16-105.43 (op "and")
-								(e-binop @105.16-105.26 (op "lt")
-									(e-binop @105.16-105.22 (op "add")
-										(e-int @105.16-105.18 (value "13"))
-										(e-int @105.21-105.22 (value "2")))
-									(e-int @105.25-105.26 (value "5")))
-								(e-binop @105.31-105.43 (op "ge")
-									(e-binop @105.31-105.37 (op "sub")
-										(e-int @105.31-105.33 (value "10"))
-										(e-int @105.36-105.37 (value "1")))
-									(e-int @105.41-105.43 (value "16")))))
-						(e-binop @105.47-105.54 (op "le")
-							(e-int @105.47-105.49 (value "12"))
-							(e-int @105.53-105.54 (value "3")))))
-				(s-expr @105.55-105.85
-					(e-dot-access @105.55-105.85 (field "unknown")
-						(receiver
-							(e-dot-access @105.55-105.79 (field "unknown")
-								(receiver
-									(e-dot-access @105.55-105.72 (field "unknown")
-										(receiver
-											(e-runtime-error (tag "not_implemented")))))))))
-				(e-tag @106.2-106.7 (name "Stdo!")
-					(args
-						(e-string @107.3-109.6
-							(e-literal @107.4-107.6 (string "Ho"))
-							(e-call @108.4-108.9
+									(e-lookup-local @89.7-89.9
+										(p-assign @77.2-77.14 (ident "er"))))
+								(e-int @89.16-89.19 (value "456"))
+								(e-int @90.1-90.2 (value "9")))))
+					(s-let @96.2-96.59
+						(p-assign @96.2-96.4 (ident "rd"))
+						(e-record @96.7-96.59
+							(fields
+								(field (name "foo")
+									(e-int @96.14-96.17 (value "123")))
+								(field (name "bar")
+									(e-string @96.24-96.27
+										(e-literal @96.25-96.26 (string "H"))))
+								(field (name "baz")
+									(e-runtime-error (tag "ident_not_in_scope")))
+								(field (name "qux")
+									(e-tag @96.44-96.46 (name "Ok")
+										(args
+											(e-runtime-error (tag "ident_not_in_scope")))))
+								(field (name "ned")
+									(e-runtime-error (tag "ident_not_in_scope"))))))
+					(s-let @97.2-97.48
+						(p-assign @97.2-97.3 (ident "t"))
+						(e-tuple @97.6-97.48
+							(elems
+								(e-int @97.7-97.10 (value "123"))
+								(e-string @97.12-97.19
+									(e-literal @97.13-97.18 (string "World")))
 								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-runtime-error (tag "ident_not_in_scope")))
-							(e-literal @109.4-109.5 (string " "))))))))
+								(e-tag @97.26-97.27 (name "O"))
+								(e-tuple @97.29-97.36
+									(elems
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-lookup-local @97.34-97.35
+											(p-assign @97.2-97.3 (ident "t")))))
+								(e-list @97.38-97.47
+									(elems
+										(e-int @97.39-97.40 (value "1"))
+										(e-int @97.42-97.43 (value "2"))
+										(e-int @97.45-97.46 (value "3")))))))
+					(s-expr @98.2-98.3
+						(e-runtime-error (tag "ident_not_in_scope")))
+					(s-expr @98.4-104.3
+						(e-tuple @98.4-104.3
+							(elems
+								(e-int @99.3-99.6 (value "123"))
+								(e-string @100.3-100.10
+									(e-literal @100.4-100.9 (string "World")))
+								(e-runtime-error (tag "ident_not_in_scope"))
+								(e-tag @101.3-101.4 (name "O"))
+								(e-tuple @102.3-102.14
+									(elems
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-runtime-error (tag "ident_not_in_scope"))))
+								(e-list @103.3-103.12
+									(elems
+										(e-int @103.4-103.5 (value "1"))
+										(e-int @103.7-103.8 (value "2"))
+										(e-int @103.10-103.11 (value "3")))))))
+					(s-expr @105.2-105.54
+						(e-binop @105.2-105.54 (op "or")
+							(e-binop @105.2-105.43 (op "or")
+								(e-binop @105.2-105.12 (op "gt")
+									(e-binop @105.2-105.8 (op "null_coalesce")
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-int @105.6-105.8 (value "12")))
+									(e-int @105.11-105.12 (value "5")))
+								(e-binop @105.16-105.43 (op "and")
+									(e-binop @105.16-105.26 (op "lt")
+										(e-binop @105.16-105.22 (op "add")
+											(e-int @105.16-105.18 (value "13"))
+											(e-int @105.21-105.22 (value "2")))
+										(e-int @105.25-105.26 (value "5")))
+									(e-binop @105.31-105.43 (op "ge")
+										(e-binop @105.31-105.37 (op "sub")
+											(e-int @105.31-105.33 (value "10"))
+											(e-int @105.36-105.37 (value "1")))
+										(e-int @105.41-105.43 (value "16")))))
+							(e-binop @105.47-105.54 (op "le")
+								(e-int @105.47-105.49 (value "12"))
+								(e-int @105.53-105.54 (value "3")))))
+					(s-expr @105.55-105.85
+						(e-dot-access @105.55-105.85 (field "unknown")
+							(receiver
+								(e-dot-access @105.55-105.79 (field "unknown")
+									(receiver
+										(e-dot-access @105.55-105.72 (field "unknown")
+											(receiver
+												(e-runtime-error (tag "not_implemented")))))))))
+					(e-tag @106.2-106.7 (name "Stdo!")
+						(args
+							(e-string @107.3-109.6
+								(e-literal @107.4-107.6 (string "Ho"))
+								(e-call @108.4-108.9
+									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-runtime-error (tag "ident_not_in_scope")))
+								(e-literal @109.4-109.5 (string " ")))))))))
 	(d-let
 		(p-assign @114.1-114.2 (ident "e"))
 		(e-empty_record @114.5-114.7))
@@ -1617,25 +1765,23 @@ expect {
 				(ty-var @13.8-13.9 (name "b"))))
 		(ty-fn @13.13-13.33 (effectful false)
 			(ty @13.13-13.16 (name "Lis"))
-			(ty-tuple @13.18-13.22
-				(ty-var @13.19-13.21 (name "ab")))
+			(ty-malformed @13.19-13.21)
 			(ty-apply @13.26-13.33 (symbol "List")
 				(ty-var @13.31-13.32 (name "b")))))
 	(s-alias-decl @14.1-20.15
 		(ty-header @14.1-15.2 (name "MapML"))
 		(ty-fn @17.3-20.15 (effectful false)
 			(ty-apply @17.3-18.4 (symbol "List"))
-			(ty-tuple @19.3-19.7
-				(ty-var @19.4-19.6 (name "ab")))
+			(ty-malformed @19.4-19.6)
 			(ty-apply @20.4-20.15 (symbol "List")
-				(ty-var @20.12-20.13 (name "b")))))
+				(ty-malformed @20.12-20.13))))
 	(s-alias-decl @24.1-24.27
 		(ty-header @24.1-24.4 (name "Som"))
 		(ty-record @24.7-24.27
 			(field (field "foo")
 				(ty @24.15-24.16 (name "O")))
 			(field (field "bar")
-				(ty-var @24.24-24.25 (name "g")))))
+				(ty-malformed @24.24-24.25))))
 	(s-alias-decl @25.1-26.2
 		(ty-header @25.1-25.6 (name "Ml")
 			(ty-args

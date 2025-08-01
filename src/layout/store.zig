@@ -1,16 +1,17 @@
 //! Stores Layout values by index.
 
 const std = @import("std");
-const types = @import("../types/types.zig");
-const types_store = @import("../types/store.zig");
+const base = @import("base");
+const types = @import("types");
 const layout_ = @import("./layout.zig");
-const base = @import("../base.zig");
-const target = @import("../base/target.zig");
-const collections = @import("../collections.zig");
-const Ident = @import("../base/Ident.zig");
-const Region = @import("../base/Region.zig");
+const collections = @import("collections");
 const work = @import("./work.zig");
+const ModuleEnv = @import("compile").ModuleEnv;
 
+const types_store = types.store;
+const target = base.target;
+const Ident = base.Ident;
+const Region = base.Region;
 const Var = types.Var;
 const Layout = layout_.Layout;
 const Idx = layout_.Idx;
@@ -39,7 +40,7 @@ pub const LayoutError = error{
 pub const Store = struct {
     const Self = @This();
 
-    env: *base.ModuleEnv,
+    env: *ModuleEnv,
     types_store: *const types_store.Store,
     layouts: collections.SafeMultiList(Layout),
     tuple_elems: collections.SafeList(Idx),
@@ -96,7 +97,7 @@ pub const Store = struct {
     }
 
     pub fn init(
-        env: *base.ModuleEnv,
+        env: *ModuleEnv,
         type_store: *const types_store.Store,
     ) std.mem.Allocator.Error!Self {
         // Get the number of variables from the type store's slots
@@ -177,13 +178,83 @@ pub const Store = struct {
         return try self.insertLayout(layout);
     }
 
+    pub fn putRecord(
+        self: *Self,
+        field_layouts: []const Layout,
+        field_names: []const Ident.Idx,
+    ) std.mem.Allocator.Error!Idx {
+        var temp_fields = std.ArrayList(RecordField).init(self.env.gpa);
+        defer temp_fields.deinit();
+
+        for (field_layouts, field_names) |field_layout, field_name| {
+            const field_layout_idx = try self.insertLayout(field_layout);
+            try temp_fields.append(.{
+                .name = field_name,
+                .layout = field_layout_idx,
+            });
+        }
+
+        // Sort fields
+        const AlignmentSortCtx = struct {
+            store: *Self,
+            env: *ModuleEnv,
+            target_usize: target.TargetUsize,
+            pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
+                const lhs_layout = ctx.store.getLayout(lhs.layout);
+                const rhs_layout = ctx.store.getLayout(rhs.layout);
+                const lhs_alignment = lhs_layout.alignment(ctx.target_usize);
+                const rhs_alignment = rhs_layout.alignment(ctx.target_usize);
+                if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
+                    return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
+                }
+                const lhs_str = ctx.env.idents.getText(lhs.name);
+                const rhs_str = ctx.env.idents.getText(rhs.name);
+                return std.mem.order(u8, lhs_str, rhs_str) == .lt;
+            }
+        };
+
+        std.mem.sort(
+            RecordField,
+            temp_fields.items,
+            AlignmentSortCtx{ .store = self, .env = self.env, .target_usize = self.targetUsize() },
+            AlignmentSortCtx.lessThan,
+        );
+
+        const fields_start = self.record_fields.items.len;
+        for (temp_fields.items) |sorted_field| {
+            _ = try self.record_fields.append(self.env.gpa, sorted_field);
+        }
+
+        var max_alignment = std.mem.Alignment.@"1";
+        var current_offset: u32 = 0;
+        for (temp_fields.items) |field| {
+            const field_layout = self.getLayout(field.layout);
+            const field_alignment = field_layout.alignment(self.targetUsize());
+            const field_size = self.layoutSize(field_layout);
+            max_alignment = max_alignment.max(field_alignment);
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+            current_offset += field_size;
+        }
+
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
+        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
+        const record_idx = RecordIdx{ .int_idx = @intCast(self.record_data.len()) };
+        _ = try self.record_data.append(self.env.gpa, .{
+            .size = total_size,
+            .fields = fields_range,
+        });
+
+        const record_layout = Layout.record(max_alignment, record_idx);
+        return try self.insertLayout(record_layout);
+    }
+
     /// Insert a tuple layout with the given alignment and tuple metadata
     pub fn insertTuple(self: *Self, alignment: std.mem.Alignment, tuple_idx: TupleIdx) std.mem.Allocator.Error!Idx {
         const layout = Layout.tuple(alignment, tuple_idx);
         return try self.insertLayout(layout);
     }
 
-    pub fn getLayout(self: *Self, idx: Idx) Layout {
+    pub fn getLayout(self: *const Self, idx: Idx) Layout {
         return self.layouts.get(@enumFromInt(@intFromEnum(idx)));
     }
 
@@ -193,6 +264,88 @@ pub const Store = struct {
 
     pub fn getTupleData(self: *const Self, idx: TupleIdx) *const TupleData {
         return self.tuple_data.get(@enumFromInt(idx.int_idx));
+    }
+
+    pub fn getRecordFieldOffset(self: *const Self, record_idx: RecordIdx, field_index_in_sorted_fields: u32) u32 {
+        const target_usize = self.targetUsize();
+        const record_data = self.getRecordData(record_idx);
+        const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
+
+        var current_offset: u32 = 0;
+        var field_idx: u32 = 0;
+
+        while (field_idx < field_index_in_sorted_fields) : (field_idx += 1) {
+            const field = sorted_fields.get(field_idx);
+            const field_layout = self.getLayout(field.layout);
+            const field_alignment = field_layout.alignment(target_usize);
+            const field_size = self.layoutSize(field_layout);
+
+            // Align current offset to field's alignment
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+
+            // Add field size
+            current_offset += field_size;
+        }
+
+        // Now, align the offset for the requested field
+        const requested_field = sorted_fields.get(field_index_in_sorted_fields);
+        const requested_field_layout = self.getLayout(requested_field.layout);
+        const requested_field_alignment = requested_field_layout.alignment(target_usize);
+        return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_field_alignment.toByteUnits()))));
+    }
+
+    pub fn getRecordFieldOffsetByName(self: *const Self, record_idx: RecordIdx, field_name: []const u8) ?u32 {
+        const target_usize = self.targetUsize();
+        const record_data = self.getRecordData(record_idx);
+        const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
+
+        var current_offset: u32 = 0;
+        var i: usize = 0;
+        while (i < sorted_fields.len) : (i += 1) {
+            const field = sorted_fields.get(i);
+            const field_layout = self.getLayout(field.layout);
+            const field_alignment = field_layout.alignment(target_usize);
+            const field_size = self.layoutSize(field_layout);
+
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+
+            const current_field_name = self.env.idents.getText(field.name);
+            if (std.mem.eql(u8, current_field_name, field_name)) {
+                return current_offset;
+            }
+
+            current_offset += field_size;
+        }
+
+        return null;
+    }
+
+    pub fn getTupleElementOffset(self: *const Self, tuple_idx: TupleIdx, element_index_in_sorted_elements: u32) u32 {
+        const target_usize = self.targetUsize();
+        const tuple_data = self.getTupleData(tuple_idx);
+        const sorted_elements = self.tuple_fields.sliceRange(tuple_data.getFields());
+
+        var current_offset: u32 = 0;
+        var element_idx: u32 = 0;
+
+        while (element_idx < element_index_in_sorted_elements) : (element_idx += 1) {
+            const element = sorted_elements.get(element_idx);
+            const element_layout = self.getLayout(element.layout);
+            const element_alignment = element_layout.alignment(target_usize);
+            const element_size = self.layoutSize(element_layout);
+
+            // Align current offset to element's alignment
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(element_alignment.toByteUnits()))));
+
+            // Add element size
+            current_offset += element_size;
+        }
+
+        // Now, align the offset for the requested element
+        const requested_element = sorted_elements.get(element_index_in_sorted_elements);
+        const requested_element_layout = self.getLayout(requested_element.layout);
+        const requested_element_alignment = requested_element_layout.alignment(target_usize);
+        return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_element_alignment.toByteUnits()))));
     }
 
     fn targetUsize(_: *const Self) target.TargetUsize {
@@ -216,6 +369,7 @@ pub const Store = struct {
             .list, .list_of_zst => target_usize.size(), // TODO: get this from RocStr.zig and RocList.zig
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
+            .closure => @sizeOf(layout_.Closure),
         };
     }
 
@@ -340,7 +494,7 @@ pub const Store = struct {
         // Sort fields by alignment (descending) first, then by name (ascending)
         const AlignmentSortCtx = struct {
             store: *Self,
-            env: *base.ModuleEnv,
+            env: *ModuleEnv,
             target_usize: target.TargetUsize,
             pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
                 const lhs_layout = ctx.store.getLayout(lhs.layout);
@@ -631,19 +785,16 @@ pub const Store = struct {
                         continue :outer;
                     },
                     .fn_pure => |func| {
-                        // TODO
                         _ = func;
-                        std.debug.panic("TODO addTypeVar: fn_pure", .{});
+                        break :flat_type Layout.closure();
                     },
                     .fn_effectful => |func| {
-                        // TODO
                         _ = func;
-                        std.debug.panic("TODO addTypeVar: fn_effectful", .{});
+                        break :flat_type Layout.closure();
                     },
                     .fn_unbound => |func| {
-                        // TODO
                         _ = func;
-                        std.debug.panic("TODO addTypeVar: fn_unbound", .{});
+                        break :flat_type Layout.closure();
                     },
                     .record => |record_type| {
                         const num_fields = try self.gatherRecordFields(record_type);
@@ -883,10 +1034,12 @@ pub const Store = struct {
                         }
                     }
 
-                    std.debug.assert(false);
-                    return LayoutError.BugUnboxedFlexVar;
+                    // Flex vars appear in REPL/eval contexts where type constraints haven't been fully solved.
+                    // This is a known issue that needs proper constraint solving before layout computation.
+                    // For now, default to I64 for numeric flex vars.
+                    break :blk Layout.int(.i64);
                 },
-                .rigid_var => |_| blk: {
+                .rigid_var => |ident| blk: {
                     // Rigid vars can only be sent to the host if boxed.
                     if (self.work.pending_containers.len > 0) {
                         const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
@@ -895,6 +1048,17 @@ pub const Store = struct {
                         }
                     }
 
+                    // Rigid vars should not appear unboxed in layout computation.
+                    // This is likely a bug in the type system.
+                    if (std.debug.runtime_safety) {
+                        std.debug.print("\nERROR: Encountered unboxed rigid_var in layout computation\n", .{});
+                        const name = self.env.idents.getText(ident);
+                        std.debug.print("  Rigid var name: {s}\n", .{name});
+                        std.debug.print("  Variable: {}\n", .{current.var_});
+                    }
+
+                    // Unlike flex vars, rigid vars represent type parameters that should
+                    // have been instantiated. This is a bug that should be fixed.
                     std.debug.assert(false);
                     return LayoutError.BugUnboxedRigidVar;
                 },

@@ -5,8 +5,10 @@
 //! ANSI terminal colors, HTML colors, and plain text fallbacks.
 
 const std = @import("std");
-const Annotation = @import("document.zig").Annotation;
-const ReportingConfig = @import("config.zig").ReportingConfig;
+const reporting = @import("reporting");
+
+const Annotation = reporting.Annotation;
+const ReportingConfig = reporting.ReportingConfig;
 
 /// ANSI escape codes for terminal styling.
 pub const AnsiCodes = struct {

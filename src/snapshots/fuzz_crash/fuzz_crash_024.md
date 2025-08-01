@@ -15,7 +15,6 @@ var t= 0
 ~~~
 # EXPECTED
 UNCLOSED STRING - :0:0:0:0
-MISMATCHED BRACE - :0:0:0:0
 PARSE ERROR - fuzz_crash_024.md:1:9:1:15
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_024.md:1:24:1:32
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:4:8:4:9
@@ -24,9 +23,6 @@ INVALID STATEMENT - fuzz_crash_024.md:1:18:7:9
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
-
-**MISMATCHED BRACE**
-This brace does not match the corresponding opening brace.
 
 **PARSE ERROR**
 A parsing error occurred: `exposed_item_unexpected_token`
@@ -65,7 +61,7 @@ var t= ]
 
 
 **PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly_or_comma`
+A parsing error occurred: `expected_expr_close_curly`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
@@ -95,7 +91,7 @@ var t= 0
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),KwModule(1:9-1:15),CloseSquare(1:16-1:17),OpenCurly(1:18-1:19),LowerIdent(1:20-1:22),OpColon(1:22-1:23),KwPlatform(1:24-1:32),StringStart(1:33-1:34),StringPart(1:34-1:53),StringEnd(1:53-1:53),
-KwVar(4:1-4:4),LowerIdent(4:5-4:6),OpAssign(4:6-4:7),CloseCurly(4:8-4:9),
+KwVar(4:1-4:4),LowerIdent(4:5-4:6),OpAssign(4:6-4:7),CloseSquare(4:8-4:9),
 KwVar(7:1-7:4),LowerIdent(7:5-7:6),OpAssign(7:6-7:7),Int(7:8-7:9),EndOfFile(7:9-7:9),
 ~~~
 # PARSE

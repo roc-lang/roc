@@ -4,10 +4,13 @@
 //! (using type and target information from previous steps in compilation).
 
 const std = @import("std");
-const types = @import("../types/types.zig");
-const collections = @import("../collections.zig");
-const Ident = @import("../base/Ident.zig");
-const target = @import("../base/target.zig");
+const base = @import("base");
+const types = @import("types");
+const collections = @import("collections");
+const ModuleEnv = @import("compile").ModuleEnv;
+
+const Ident = base.Ident;
+const target = base.target;
 
 /// Tag for Layout variants
 pub const LayoutTag = enum(u4) {
@@ -18,6 +21,7 @@ pub const LayoutTag = enum(u4) {
     list_of_zst, // List of zero-sized types, e.g. List({}) - needs a special-cased runtime implementation
     record,
     tuple,
+    closure,
 };
 
 /// The Layout untagged union should take up this many bits in memory.
@@ -101,6 +105,17 @@ pub const Idx = enum(@Type(.{
     _,
 };
 
+/// Represents a closure with its captured environment
+pub const Closure = struct {
+    body_idx: ModuleEnv.Expr.Idx,
+    params: ModuleEnv.Pattern.Span,
+    captures_pattern_idx: ModuleEnv.Pattern.Idx,
+    // Layout index for the captured environment record
+    captures_layout_idx: Idx,
+    // Original lambda expression index for accessing captures
+    lambda_expr_idx: ModuleEnv.Expr.Idx,
+};
+
 /// The union portion of the Layout packed tagged union (the tag being LayoutTag).
 ///
 /// The largest variant must fit in 28 bits to leave room for the u4 tag
@@ -112,6 +127,7 @@ pub const LayoutUnion = packed union {
     list_of_zst: void,
     record: RecordLayout,
     tuple: TupleLayout,
+    closure: void,
 };
 
 /// Record field layout
@@ -282,6 +298,7 @@ pub const Layout = packed struct {
             .list, .list_of_zst => target_usize.alignment(),
             .record => self.data.record.alignment,
             .tuple => self.data.tuple.alignment,
+            .closure => target_usize.alignment(),
         };
     }
 
@@ -348,6 +365,13 @@ pub const Layout = packed struct {
     /// tuple layout with the given alignment and tuple metadata (e.g. size and field layouts)
     pub fn tuple(tuple_alignment: std.mem.Alignment, tuple_idx: TupleIdx) Layout {
         return Layout{ .data = .{ .tuple = .{ .alignment = tuple_alignment, .idx = tuple_idx } }, .tag = .tuple };
+    }
+
+    pub fn closure() Layout {
+        return Layout{
+            .data = .{ .closure = {} },
+            .tag = .closure,
+        };
     }
 };
 

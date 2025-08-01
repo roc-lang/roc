@@ -21,9 +21,19 @@ process! = |x| print_number!(multiply(x, 2))
 main! = process!(42)
 ~~~
 # EXPECTED
-NIL
+MODULE NOT FOUND - function_no_annotation.md:3:1:3:17
 # PROBLEMS
-NIL
+**MODULE NOT FOUND**
+The module `pf.Stdout` was not found in this Roc project.
+
+You're attempting to use this module here:
+**function_no_annotation.md:3:1:3:17:**
+```roc
+import pf.Stdout
+```
+^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),
@@ -114,18 +124,22 @@ NO CHANGE
 					(p-assign @9.18-9.19 (ident "n"))))))
 	(d-let
 		(p-assign @12.1-12.9 (ident "process!"))
-		(e-lambda @12.12-12.45
-			(args
-				(p-assign @12.13-12.14 (ident "x")))
-			(e-call @12.16-12.45
-				(e-lookup-local @12.16-12.29
-					(p-assign @9.1-9.14 (ident "print_number!")))
-				(e-call @12.30-12.44
-					(e-lookup-local @12.30-12.38
-						(p-assign @6.1-6.9 (ident "multiply")))
-					(e-lookup-local @12.39-12.40
-						(p-assign @12.13-12.14 (ident "x")))
-					(e-int @12.42-12.43 (value "2"))))))
+		(e-closure @12.12-12.45
+			(captures
+				(capture @6.1-6.9 (ident "multiply"))
+				(capture @9.1-9.14 (ident "print_number!")))
+			(e-lambda @12.12-12.45
+				(args
+					(p-assign @12.13-12.14 (ident "x")))
+				(e-call @12.16-12.45
+					(e-lookup-local @12.16-12.29
+						(p-assign @9.1-9.14 (ident "print_number!")))
+					(e-call @12.30-12.44
+						(e-lookup-local @12.30-12.38
+							(p-assign @6.1-6.9 (ident "multiply")))
+						(e-lookup-local @12.39-12.40
+							(p-assign @12.13-12.14 (ident "x")))
+						(e-int @12.42-12.43 (value "2")))))))
 	(d-let
 		(p-assign @14.1-14.6 (ident "main!"))
 		(e-call @14.9-14.21

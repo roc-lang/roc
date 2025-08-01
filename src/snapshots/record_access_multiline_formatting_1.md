@@ -30,17 +30,17 @@ DotLowerIdent(4:2-4:15),NoSpaceOpQuestion(4:15-4:16),EndOfFile(4:16-4:16),
 (e-field-access @1.1-4.16
 	(e-field-access @1.1-3.33
 		(e-field-access @1.1-2.28
-			(e-question-suffix @1.1-1.14
+			(e-question-suffix @1.1-1.15
 				(e-apply @1.1-1.14
 					(e-ident @1.1-1.8 (raw "some_fn"))
 					(e-ident @1.9-1.13 (raw "arg1"))))
-			(e-question-suffix @2.2-2.27
+			(e-question-suffix @2.2-2.28
 				(e-apply @2.2-2.27
 					(e-ident @2.2-2.25 (raw ".static_dispatch_method")))))
-		(e-question-suffix @3.2-3.32
+		(e-question-suffix @3.2-3.33
 			(e-apply @3.2-3.32
 				(e-ident @3.2-3.30 (raw ".next_static_dispatch_method")))))
-	(e-question-suffix @4.2-4.15
+	(e-question-suffix @4.2-4.16
 		(e-ident @4.2-4.15 (raw ".record_field"))))
 ~~~
 # FORMATTED
