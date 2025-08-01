@@ -15,6 +15,43 @@ test "eval simple number" {
     try runExpectInt("-1234", -1234, .no_trace);
 }
 
+test "eval boolean literals" {
+    try runExpectInt("True", 1, .no_trace);
+    try runExpectInt("False", 0, .no_trace);
+    try runExpectInt("Bool.True", 1, .no_trace);
+    try runExpectInt("Bool.False", 0, .no_trace);
+}
+
+test "eval unary not operator" {
+    try runExpectInt("!True", 0, .no_trace);
+    try runExpectInt("!False", 1, .no_trace);
+    try runExpectInt("!Bool.True", 0, .no_trace);
+    try runExpectInt("!Bool.False", 1, .no_trace);
+}
+
+test "eval double negation" {
+    try runExpectInt("!!True", 1, .no_trace);
+    try runExpectInt("!!False", 0, .no_trace);
+    try runExpectInt("!!!True", 0, .no_trace);
+    try runExpectInt("!!!False", 1, .no_trace);
+}
+
+test "eval boolean in lambda expressions" {
+    try runExpectInt("(|x| !x)(True)", 0, .no_trace);
+    try runExpectInt("(|x| !x)(False)", 1, .no_trace);
+    try runExpectInt("(|x, y| x and y)(True, False)", 0, .no_trace);
+    try runExpectInt("(|x, y| x or y)(False, True)", 1, .no_trace);
+    try runExpectInt("(|x| x and !x)(True)", 0, .no_trace);
+    try runExpectInt("(|x| x or !x)(False)", 1, .no_trace);
+}
+
+test "eval unary not in conditional expressions" {
+    try runExpectInt("if !True 42 else 99", 99, .no_trace);
+    try runExpectInt("if !False 42 else 99", 42, .no_trace);
+    try runExpectInt("if !!True 42 else 99", 42, .no_trace);
+    try runExpectInt("if !!False 42 else 99", 99, .no_trace);
+}
+
 test "if-else" {
     try runExpectInt("if (1 == 1) 42 else 99", 42, .no_trace);
     try runExpectInt("if (1 == 2) 42 else 99", 99, .no_trace);
