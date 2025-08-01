@@ -60,7 +60,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // Allocate space for ModuleEnv (not Serialized) since deserialize requires enough space
     const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv);
     const env_start_offset = writer.total_bytes - @sizeOf(ModuleEnv);
-    const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(env_ptr));
+    const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
     try serialized_ptr.serialize(&original, arena_alloc, &writer);
 
     // Write to file
@@ -68,7 +68,7 @@ test "ModuleEnv.Serialized roundtrip" {
 
     // Read back
     const file_size = try tmp_file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), file_size);
+    const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), @intCast(file_size));
     defer gpa.free(buffer);
     _ = try tmp_file.pread(buffer, 0);
 
@@ -133,7 +133,7 @@ test "ModuleEnv with types CompactWriter roundtrip" {
     // Allocate space for ModuleEnv (not Serialized) since deserialize requires enough space
     const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv);
     const env_start_offset = writer.total_bytes - @sizeOf(ModuleEnv);
-    const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(env_ptr));
+    const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
     try serialized_ptr.serialize(&original, arena_alloc, &writer);
 
     // Write to file
@@ -142,7 +142,7 @@ test "ModuleEnv with types CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), file_size);
+    const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -191,7 +191,7 @@ test "ModuleEnv empty CompactWriter roundtrip" {
     // Allocate space for ModuleEnv (not Serialized) since deserialize requires enough space
     const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv);
     const env_start_offset = writer.total_bytes - @sizeOf(ModuleEnv);
-    const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(env_ptr));
+    const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
     try serialized_ptr.serialize(&original, arena_alloc, &writer);
 
     // Write to file
@@ -200,7 +200,7 @@ test "ModuleEnv empty CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), file_size);
+    const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -261,7 +261,7 @@ test "ModuleEnv with source code CompactWriter roundtrip" {
     // Allocate space for ModuleEnv (not Serialized) since deserialize requires enough space
     const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv);
     const env_start_offset = writer.total_bytes - @sizeOf(ModuleEnv);
-    const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(env_ptr));
+    const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
     try serialized_ptr.serialize(&original, arena_alloc, &writer);
 
     // Write to file
@@ -270,7 +270,7 @@ test "ModuleEnv with source code CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), file_size);
+    const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);

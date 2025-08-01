@@ -1225,11 +1225,8 @@ pub const Serialized = struct {
             .imports = self.imports.deserialize(offset).*,
             .module_name = module_name,
             .diagnostics = self.diagnostics,
-            .store = self.store.deserialize(offset).*,
+            .store = self.store.deserialize(offset, gpa).*,
         };
-
-        // Set the store's gpa after deserialization
-        env.store.gpa = gpa;
 
         return env;
     }
