@@ -49,10 +49,12 @@ pub const Token = struct {
         MultilineStringStart, // the """ that starts a multiline string
         MultilineStringEnd, // the """ that ends a multiline string
         StringPart,
+        MalformedStringPart, // malformed, but should be treated similar to a StringPart in the parser
         SingleQuote,
         MalformedSingleQuoteUnclosed, // malformed, but should be treated similar to a SingleQuote in the parser
         MalformedSingleQuoteEmpty, // malformed, but should be treated similar to a SingleQuote in the parser
         MalformedSingleQuoteTooLong, // malformed, but should be treated similar to a SingleQuote in the parser
+        MalformedSingleQuoteInvalidEscapeSequence, // malformed, but should be treated similar to a SingleQuote in the parser
         Int,
         MalformedNumberBadSuffix, // malformed, but should be treated similar to an int in the parser
         MalformedNumberUnicodeSuffix, // malformed, but should be treated similar to an int in the parser
@@ -318,6 +320,8 @@ pub const Token = struct {
                 .MalformedSingleQuoteUnclosed,
                 .MalformedSingleQuoteEmpty,
                 .MalformedSingleQuoteTooLong,
+                .MalformedSingleQuoteInvalidEscapeSequence,
+                .MalformedStringPart,
                 => true,
             };
         }
@@ -556,9 +560,7 @@ pub const Cursor = struct {
         }
     }
 
-    /// Chomps "trivia" (whitespace, comments, etc.) and returns an optional indent.
-    /// If the chomped trivia includes a newline, returns the indent of the next (real) line.
-    /// Otherwise, returns null.
+    /// Chomps "trivia" (whitespace, comments, etc.).
     pub fn chompTrivia(self: *Cursor) void {
         while (self.pos < self.buf.len) {
             const b = self.buf[self.pos];
@@ -848,16 +850,30 @@ pub const Cursor = struct {
         }
     }
 
-    pub fn chompEscapeSequence(self: *Cursor) void {
+    pub fn chompEscapeSequence(self: *Cursor) !void {
         switch (self.peek() orelse 0) {
             '\\', '"', '\'', 'n', 'r', 't', '$' => {
                 self.pos += 1;
             },
             'u' => {
                 self.pos += 1;
-                self.require('(', .InvalidUnicodeEscapeSequence);
+
+                if (self.peek() == '(') {
+                    self.pos += 1;
+                } else {
+                    self.pushMessageHere(.InvalidUnicodeEscapeSequence);
+                    return error.InvalidUnicodeEscapeSequence;
+                }
+
+                const hex_start = self.pos;
                 while (true) {
                     if (self.peek() == ')') {
+                        if (self.pos == hex_start) {
+                            // Empty unicode escape sequence
+                            self.pushMessageHere(.InvalidUnicodeEscapeSequence);
+                            self.pos += 1;
+                            return error.InvalidUnicodeEscapeSequence;
+                        }
                         self.pos += 1;
                         break;
                     } else if (self.peek() != null) {
@@ -869,16 +885,17 @@ pub const Cursor = struct {
                             self.pos += 1;
                         } else {
                             self.pushMessageHere(.InvalidUnicodeEscapeSequence);
-                            break;
+                            return error.InvalidUnicodeEscapeSequence;
                         }
                     } else {
-                        break;
+                        self.pushMessageHere(.InvalidUnicodeEscapeSequence);
+                        return error.InvalidUnicodeEscapeSequence;
                     }
                 }
             },
             else => {
                 self.pushMessageHere(.InvalidEscapeSequence);
-                self.pos += 1;
+                return error.InvalidEscapeSequence;
             },
         }
     }
@@ -888,6 +905,7 @@ pub const Cursor = struct {
             Empty,
             Enough,
             TooLong,
+            Invalid,
         };
         std.debug.assert(self.peek() == '\'');
 
@@ -910,8 +928,10 @@ pub const Cursor = struct {
                         return .MalformedSingleQuoteEmpty;
                     },
                     '\\' => {
-                        self.chompEscapeSequence();
                         state = .Enough;
+                        self.chompEscapeSequence() catch {
+                            state = .Invalid;
+                        };
                     },
                     else => {
                         self.pos -= 1;
@@ -930,6 +950,12 @@ pub const Cursor = struct {
                 .TooLong => switch (c) {
                     '\'' => {
                         return .MalformedSingleQuoteTooLong;
+                    },
+                    else => {},
+                },
+                .Invalid => switch (c) {
+                    '\'' => {
+                        return .MalformedSingleQuoteInvalidEscapeSequence;
                     },
                     else => {},
                 },
@@ -1484,51 +1510,51 @@ pub const Tokenizer = struct {
 
     pub fn tokenizeStringLikeLiteralBody(self: *Tokenizer, kind: StringKind) std.mem.Allocator.Error!void {
         const start = self.cursor.pos;
-        var escape: bool = false;
+        var string_part_tag: Token.Tag = .StringPart;
         while (self.cursor.pos < self.cursor.buf.len) {
             const c = self.cursor.buf[self.cursor.pos];
-            if (escape) {
-                escape = false;
-                self.cursor.chompEscapeSequence();
+            if (c == '$' and self.cursor.peekAt(1) == open_curly) {
+                try self.pushTokenNormalHere(string_part_tag, start);
+                const dollar_start = self.cursor.pos;
+                self.cursor.pos += 2;
+                try self.pushTokenNormalHere(.OpenStringInterpolation, dollar_start);
+                try self.string_interpolation_stack.append(self.env.gpa, kind);
+                return;
+            } else if (c == '\n') {
+                try self.pushTokenNormalHere(string_part_tag, start);
+                if (kind == .single_line) {
+                    self.cursor.pushMessage(.UnclosedString, @intCast(start), @intCast(self.cursor.pos));
+                    try self.pushTokenNormalHere(.StringEnd, self.cursor.pos);
+                }
+                return;
+            } else if (kind == .single_line and c == '"') {
+                try self.pushTokenNormalHere(string_part_tag, start);
+                const string_part_end = self.cursor.pos;
+                self.cursor.pos += 1;
+                try self.pushTokenNormalHere(.StringEnd, string_part_end);
+                return;
+            } else if (kind == .multi_line and c == '"' and self.cursor.peekAt(1) == '"' and self.cursor.peekAt(2) == '"') {
+                try self.pushTokenNormalHere(string_part_tag, start);
+                const quote_start = self.cursor.pos;
+                self.cursor.pos += 3;
+                try self.pushTokenNormalHere(.MultilineStringEnd, quote_start);
+                return;
             } else {
-                if (c == '$' and self.cursor.peekAt(1) == open_curly) {
-                    try self.pushTokenNormalHere(.StringPart, start);
-                    const dollar_start = self.cursor.pos;
-                    self.cursor.pos += 2;
-                    try self.pushTokenNormalHere(.OpenStringInterpolation, dollar_start);
-                    try self.string_interpolation_stack.append(self.env.gpa, kind);
-                    return;
-                } else if (c == '\n') {
-                    try self.pushTokenNormalHere(.StringPart, start);
-                    if (kind == .single_line) {
-                        self.cursor.pushMessage(.UnclosedString, @intCast(start), @intCast(self.cursor.pos));
-                        try self.pushTokenNormalHere(.StringEnd, self.cursor.pos);
-                    }
-                    return;
-                } else if (kind == .single_line and c == '"') {
-                    try self.pushTokenNormalHere(.StringPart, start);
-                    const string_part_end = self.cursor.pos;
-                    self.cursor.pos += 1;
-                    try self.pushTokenNormalHere(.StringEnd, string_part_end);
-                    return;
-                } else if (kind == .multi_line and c == '"' and self.cursor.peekAt(1) == '"' and self.cursor.peekAt(2) == '"') {
-                    try self.pushTokenNormalHere(.StringPart, start);
-                    const quote_start = self.cursor.pos;
-                    self.cursor.pos += 3;
-                    try self.pushTokenNormalHere(.MultilineStringEnd, quote_start);
-                    return;
-                } else {
-                    escape = c == '\\';
+                // Handle UTF-8 sequences with printable character validation
+                _ = self.cursor.chompUTF8CodepointWithValidation();
 
-                    // Handle UTF-8 sequences with printable character validation
-                    _ = self.cursor.chompUTF8CodepointWithValidation();
+                const escape = c == '\\';
+                if (escape) {
+                    self.cursor.chompEscapeSequence() catch {
+                        string_part_tag = .MalformedStringPart;
+                    };
                 }
             }
         }
         if (kind == .single_line) {
             self.cursor.pushMessage(.UnclosedString, start, self.cursor.pos);
         }
-        try self.pushTokenNormalHere(.StringPart, start);
+        try self.pushTokenNormalHere(string_part_tag, start);
     }
 };
 
@@ -2173,6 +2199,8 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .MalformedSingleQuoteEmpty,
             .MalformedSingleQuoteTooLong,
             .MalformedSingleQuoteUnclosed,
+            .MalformedSingleQuoteInvalidEscapeSequence,
+            .MalformedStringPart,
             => {
                 return error.Unsupported;
             },

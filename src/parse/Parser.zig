@@ -2274,6 +2274,13 @@ pub fn parseStringExpr(self: *Parser) std.mem.Allocator.Error!AST.Expr.Idx {
                 }
                 self.advance(); // Advance past the CloseString Interpolation
             },
+            .MalformedStringPart => {
+                self.advance();
+                try self.pushDiagnostic(.string_unexpected_token, .{
+                    .start = self.pos,
+                    .end = self.pos,
+                });
+            },
             else => {
                 // Something is broken in the tokenizer if we get here!
                 return try self.pushMalformed(AST.Expr.Idx, .string_unexpected_token, self.pos);
@@ -2826,11 +2833,6 @@ pub fn parseRecord(self: *Parser, start: u32) std.mem.Allocator.Error!AST.Expr.I
         .ext = null,
         .region = .{ .start = start, .end = self.pos },
     } });
-}
-
-/// todo
-pub fn addProblem(self: *Parser, diagnostic: AST.Diagnostic) std.mem.Allocator.Error!void {
-    try self.diagnostics.append(diagnostic);
 }
 
 /// Binding power of the lhs and rhs of a particular operator.
