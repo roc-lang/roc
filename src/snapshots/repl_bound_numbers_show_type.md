@@ -13,9 +13,9 @@ type=repl
 # OUTPUT
 42
 ---
-3.14
+3.14e0
 ---
-1.5
+1.5e0
 ---
 255
 # PROBLEMS

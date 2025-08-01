@@ -104,7 +104,7 @@ pub fn deinit(store: *NodeStore) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 45;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 32;
+pub const MODULEENV_EXPR_NODE_COUNT = 33;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 13;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -543,6 +543,11 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
         },
         .expr_unary_minus => {
             return ModuleEnv.Expr{ .e_unary_minus = .{
+                .expr = @enumFromInt(node.data_1),
+            } };
+        },
+        .expr_unary_not => {
+            return ModuleEnv.Expr{ .e_unary_not = .{
                 .expr = @enumFromInt(node.data_1),
             } };
         },
@@ -1424,6 +1429,10 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
         },
         .e_unary_minus => |e| {
             node.tag = .expr_unary_minus;
+            node.data_1 = @intFromEnum(e.expr);
+        },
+        .e_unary_not => |e| {
+            node.tag = .expr_unary_not;
             node.data_1 = @intFromEnum(e.expr);
         },
         .e_block => |e| {

@@ -8,19 +8,21 @@ type=expr
 !(C(2))
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - not_tag.md:1:1:1:2
+TYPE MISMATCH - not_tag.md:1:1:1:8
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **!** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**not_tag.md:1:1:1:2:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**not_tag.md:1:1:1:8:**
 ```roc
 !(C(2))
 ```
-^
+^^^^^^^
 
+It is of type:
+    _Bool_
+
+But you are trying to use it as:
+    _[C(Num(_size))]_others_
 
 # TOKENS
 ~~~zig
@@ -28,19 +30,24 @@ OpBang(1:1-1:2),NoSpaceOpenRound(1:2-1:3),UpperIdent(1:3-1:4),NoSpaceOpenRound(1
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.1-1.2 (reason "expr_unexpected_token"))
+(unary "!"
+	(e-tuple @1.2-1.8
+		(e-apply @1.3-1.7
+			(e-tag @1.3-1.4 (raw "C"))
+			(e-int @1.5-1.6 (raw "2")))))
 ~~~
 # FORMATTED
 ~~~roc
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(e-unary-not @1.1-1.8
+	(e-tag @1.3-1.4 (name "C")
+		(args
+			(e-int @1.5-1.6 (value "2")))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr @1.1-1.8 (type "Error"))
 ~~~

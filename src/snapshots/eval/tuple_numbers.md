@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Simple lambda application evaluation
+description=Tuple containing various supported number formats
 type=expr
 ~~~
 # SOURCE

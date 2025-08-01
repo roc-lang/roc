@@ -791,6 +791,9 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
         .e_unary_minus => |unary| {
             does_fx = try self.checkUnaryMinusExpr(expr_idx, expr_region, unary);
         },
+        .e_unary_not => |unary| {
+            does_fx = try self.checkUnaryNotExpr(expr_idx, expr_region, unary);
+        },
         .e_block => |block| {
             // Check all statements in the block
             const statements = self.cir.store.sliceStatements(block.stmts);
@@ -1246,6 +1249,27 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: R
     // Unify operand and result with the number type
     _ = try self.unify(operand_var, num_var);
     _ = try self.unify(result_var, num_var);
+
+    return does_fx;
+}
+
+fn checkUnaryNotExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region, unary: ModuleEnv.Expr.UnaryNot) Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Check the operand expression
+    const does_fx = try self.checkExpr(unary.expr);
+
+    // For unary not, we constrain the operand and result to be booleans
+    const operand_var = @as(Var, @enumFromInt(@intFromEnum(unary.expr)));
+    const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+    // Create a fresh boolean variable for the operation
+    const bool_var = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+
+    // Unify operand and result with the boolean type
+    _ = try self.unify(operand_var, bool_var);
+    _ = try self.unify(result_var, bool_var);
 
     return does_fx;
 }

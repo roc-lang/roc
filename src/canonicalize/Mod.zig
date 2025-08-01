@@ -2555,6 +2555,17 @@ pub fn canonicalizeExpr(
 
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = can_operand.free_vars };
                 },
+                .OpBang => {
+                    // Canonicalize the operand expression
+                    const can_operand = (try self.canonicalizeExpr(unary.expr)) orelse return null;
+
+                    // Create unary not CIR expression
+                    const expr_idx = try self.env.addExprAndTypeVar(Expr{
+                        .e_unary_not = Expr.UnaryNot.init(can_operand.idx),
+                    }, Content{ .flex_var = null }, region);
+
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = can_operand.free_vars };
+                },
                 else => {
                     // Other operators not yet implemented or malformed
                     const feature = try self.env.strings.insert(self.env.gpa, "canonicalize unary_op expression (non-minus)");

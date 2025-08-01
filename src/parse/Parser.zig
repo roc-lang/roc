@@ -2035,6 +2035,17 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
                 .region = .{ .start = start, .end = self.pos },
             } });
         },
+        .OpBang => {
+            const operator_token = start;
+            self.advance(); // consume the bang token
+            // Parse the operand with high precedence (unary operators bind tightly)
+            const operand = try self.parseExprWithBp(100);
+            expr = try self.store.addExpr(.{ .unary_op = .{
+                .operator = operator_token,
+                .expr = operand,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+        },
         else => {
             return try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, start);
         },

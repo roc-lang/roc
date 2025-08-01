@@ -69,6 +69,7 @@ pub const Tag = enum {
     expr_record_update,
     expr_bin_op,
     expr_unary_minus,
+    expr_unary_not,
     expr_suffix_single_question,
     expr_if_then_else,
     expr_match,

@@ -98,6 +98,7 @@ const WorkKind = enum {
     w_binop_ge,
     w_binop_le,
     w_unary_minus,
+    w_unary_not,
     w_if_check_condition,
     w_lambda_call,
     w_lambda_return,
@@ -277,6 +278,9 @@ pub const Interpreter = struct {
                 },
                 .w_unary_minus => {
                     try self.completeUnaryMinus();
+                },
+                .w_unary_not => {
+                    try self.completeUnaryNot();
                 },
                 .w_if_check_condition => {
                     // The expr_idx encodes both the if expression and the branch index
@@ -760,6 +764,21 @@ pub const Interpreter = struct {
                 });
             },
 
+            // Unary not operation
+            .e_unary_not => |unary| {
+                // Push work to complete unary not after operand is evaluated
+                try self.work_stack.append(.{
+                    .kind = .w_unary_not,
+                    .expr_idx = expr_idx,
+                });
+
+                // Evaluate the operand expression
+                try self.work_stack.append(.{
+                    .kind = .w_eval_expr,
+                    .expr_idx = unary.expr,
+                });
+            },
+
             .e_block => |block| {
                 // Schedule cleanup work to run after the block is done.
                 self.schedule_work(.{
@@ -1034,6 +1053,37 @@ pub const Interpreter = struct {
         // Negate the value and write it back to the same location
         const result_val: i128 = -operand_val;
         self.writeIntToMemoryAndTrace(operand_value.ptr.?, result_val, operand_scalar.data.int);
+    }
+
+    fn completeUnaryNot(self: *Interpreter) EvalError!void {
+        // Pop the operand layout
+        const operand_value = try self.peekStackValue(1);
+        const operand_layout = operand_value.layout;
+
+        // For boolean operations, we expect a scalar boolean type
+        if (operand_layout.tag != .scalar) {
+            return error.LayoutError;
+        }
+
+        const operand_scalar = operand_layout.data.scalar;
+        if (operand_scalar.tag != .bool) {
+            return error.LayoutError;
+        }
+
+        // Read the boolean value from memory
+        const bool_ptr: *u8 = @ptrCast(operand_value.ptr.?);
+        const bool_val = bool_ptr.*;
+
+        self.traceInfo("Unary not operation: bool value = {}", .{bool_val});
+
+        // Boolean values: 0 = False, 1 = True
+        // Negate the boolean value
+        const result_val: u8 = if (bool_val == 0) 1 else 0;
+
+        self.traceInfo("Unary not operation: !{} = {}", .{ bool_val, result_val });
+
+        // Write the negated value back to the same location
+        bool_ptr.* = result_val;
     }
 
     fn checkIfCondition(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, branch_index: u16) EvalError!void {

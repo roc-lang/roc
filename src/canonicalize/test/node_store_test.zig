@@ -309,6 +309,9 @@ test "NodeStore round trip - Expressions" {
         .e_unary_minus = ModuleEnv.Expr.UnaryMinus.init(rand_idx(ModuleEnv.Expr.Idx)),
     });
     try expressions.append(ModuleEnv.Expr{
+        .e_unary_not = ModuleEnv.Expr.UnaryNot.init(rand_idx(ModuleEnv.Expr.Idx)),
+    });
+    try expressions.append(ModuleEnv.Expr{
         .e_dot_access = .{
             .receiver = rand_idx(ModuleEnv.Expr.Idx),
             .field_name = rand_ident_idx(),
