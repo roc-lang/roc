@@ -182,9 +182,10 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(ModuleEnv.Expr{
-        .e_frac_f64 = .{
-            .value = 3.14,
-        },
+        .e_frac_f32 = .{ .value = rand.random().float(f32) },
+    });
+    try expressions.append(ModuleEnv.Expr{
+        .e_frac_f64 = .{ .value = rand.random().float(f64) },
     });
     try expressions.append(ModuleEnv.Expr{
         .e_frac_dec = .{
@@ -908,6 +909,16 @@ test "NodeStore round trip - Pattern" {
     try patterns.append(ModuleEnv.Pattern{
         .str_literal = .{
             .literal = rand_idx(StringLiteral.Idx),
+        },
+    });
+    try patterns.append(ModuleEnv.Pattern{
+        .frac_f32_literal = .{
+            .value = rand.random().float(f32),
+        },
+    });
+    try patterns.append(ModuleEnv.Pattern{
+        .frac_f64_literal = .{
+            .value = rand.random().float(f64),
         },
     });
     try patterns.append(ModuleEnv.Pattern{ .underscore = {} });

@@ -453,6 +453,10 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
             // The type variable for this expression was already created with the
             // appropriate num_unbound or int_unbound content during canonicalization.
         },
+        .e_frac_f32 => |_| {
+            // Fractional literals have their type constraints (fits_in_f32, fits_in_dec)
+            // created during canonicalization. No additional checking needed here.
+        },
         .e_frac_f64 => |_| {
             // Fractional literals have their type constraints (fits_in_f32, fits_in_dec)
             // created during canonicalization. No additional checking needed here.

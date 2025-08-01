@@ -475,6 +475,17 @@ pub const Interpreter = struct {
                 }
             },
 
+            .e_frac_f32 => |float_lit| {
+                const layout_idx = try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const result_ptr = (try self.pushStackValue(expr_layout)).?;
+
+                const typed_ptr = @as(*f32, @ptrCast(@alignCast(result_ptr)));
+                typed_ptr.* = float_lit.value;
+
+                self.traceEnter("PUSH e_frac_f32 {}", .{float_lit.value});
+            },
+
             .e_frac_f64 => |float_lit| {
                 const layout_idx = try self.getLayoutIdx(expr_idx);
                 const expr_layout = self.layout_cache.getLayout(layout_idx);

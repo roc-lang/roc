@@ -104,13 +104,13 @@ pub fn deinit(store: *NodeStore) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 45;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 31;
+pub const MODULEENV_EXPR_NODE_COUNT = 32;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 13;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
-pub const MODULEENV_PATTERN_NODE_COUNT = 14;
+pub const MODULEENV_PATTERN_NODE_COUNT = 16;
 
 comptime {
     // Check the number of ModuleEnv.Diagnostic nodes
@@ -343,18 +343,11 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
                 },
             };
         },
+        .expr_frac_f32 => return ModuleEnv.Expr{ .e_frac_f32 = .{ .value = @bitCast(node.data_1) } },
         .expr_frac_f64 => {
-            // Get value from extra_data
-            const extra_data_idx = node.data_1;
-            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..2];
-            const value_as_u64: u64 = @bitCast(value_as_u32s.*);
-            const value: f64 = @bitCast(value_as_u64);
+            const raw: [2]u32 = .{ node.data_1, node.data_2 };
 
-            return ModuleEnv.Expr{
-                .e_frac_f64 = .{
-                    .value = value,
-                },
-            };
+            return ModuleEnv.Expr{ .e_frac_f64 = .{ .value = @bitCast(raw) } };
         },
         .expr_frac_dec => {
             // Get value from extra_data
@@ -872,6 +865,18 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
                 },
             };
         },
+        .pattern_f32_literal => return ModuleEnv.Pattern{
+            .frac_f32_literal = .{ .value = @bitCast(node.data_1) },
+        },
+        .pattern_f64_literal => {
+            const lower: u32 = node.data_1;
+            const upper: u32 = node.data_2;
+            const raw: u64 = (@as(u64, upper) << 32) | @as(u64, lower);
+
+            return ModuleEnv.Pattern{
+                .frac_f64_literal = .{ .value = @bitCast(raw) },
+            };
+        },
         .pattern_dec_literal => {
             const extra_data_idx = node.data_1;
             const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
@@ -1223,19 +1228,15 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
             node.data_1 = e.elems.span.start;
             node.data_2 = e.elems.span.len;
         },
+        .e_frac_f32 => |e| {
+            node.tag = Node.Tag.expr_frac_f32;
+            node.data_1 = @bitCast(e.value);
+        },
         .e_frac_f64 => |e| {
             node.tag = .expr_frac_f64;
-
-            // Store the f64 value in extra_data
-            const extra_data_start = store.extra_data.len();
-            const value_as_u64: u64 = @bitCast(e.value);
-            const value_as_u32s: [2]u32 = @bitCast(value_as_u64);
-            for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
-            }
-
-            // Store the extra_data index in data_1
-            node.data_1 = @intCast(extra_data_start);
+            const raw: [2]u32 = @bitCast(e.value);
+            node.data_1 = raw[0];
+            node.data_2 = raw[1];
         },
         .e_frac_dec => |e| {
             node.tag = .expr_frac_dec;
@@ -1721,7 +1722,18 @@ pub fn addPattern(store: *NodeStore, pattern: ModuleEnv.Pattern, region: base.Re
             node.tag = .pattern_str_literal;
             node.data_1 = @intFromEnum(p.literal);
         },
-
+        .frac_f32_literal => |p| {
+            node.tag = Node.Tag.pattern_f32_literal;
+            node.data_1 = @bitCast(p.value);
+        },
+        .frac_f64_literal => |p| {
+            node.tag = Node.Tag.pattern_f64_literal;
+            const raw: u64 = @bitCast(p.value);
+            const lower: u32 = @intCast(raw & 0xFFFFFFFF);
+            const upper: u32 = @intCast(raw >> 32);
+            node.data_1 = lower;
+            node.data_2 = upper;
+        },
         .underscore => {
             node.tag = .pattern_underscore;
         },

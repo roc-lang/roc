@@ -57,6 +57,10 @@ pub const Expr = union(enum) {
     e_int: struct {
         value: IntValue,
     },
+    /// A 32-bit floating-point literal.
+    e_frac_f32: struct {
+        value: f32,
+    },
     /// A 64-bit floating-point literal.
     /// Used for approximate decimal representations when F64 type is explicitly required for increased performance.
     ///
@@ -457,6 +461,24 @@ pub const Expr = union(enum) {
                 const value_i128: i128 = @bitCast(int_expr.value.bytes);
                 var value_buf: [40]u8 = undefined;
                 const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
+                try tree.pushStringPair("value", value_str);
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_frac_f32 => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-frac-f32");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                var value_buf: [512]u8 = undefined;
+                const value_str = if (e.value == 0)
+                    "0.0"
+                else if (@abs(e.value) < 1e-10 or @abs(e.value) > 1e10)
+                    std.fmt.bufPrint(&value_buf, "{e}", .{e.value}) catch "fmt_error"
+                else
+                    std.fmt.bufPrint(&value_buf, "{d}", .{e.value}) catch "fmt_error";
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
