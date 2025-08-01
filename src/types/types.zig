@@ -540,6 +540,25 @@ pub const Num = union(enum) {
 
     /// an int i128
     pub const int_i128: Num = Num{ .num_compact = Compact{ .int = .i128 } };
+
+    pub fn parseNumLiteralWithSuffix(text: []const u8) struct { num_text: []const u8, suffix: ?[]const u8 } {
+        var split_index: usize = text.len;
+        for (text, 0..) |char, i| {
+            if (char >= 'a' and char <= 'z') {
+                split_index = i;
+                break;
+            }
+        }
+
+        if (split_index == text.len) {
+            return .{ .num_text = text, .suffix = null };
+        } else {
+            return .{
+                .num_text = text[0..split_index],
+                .suffix = text[split_index..],
+            };
+        }
+    }
 };
 
 // nominal types //

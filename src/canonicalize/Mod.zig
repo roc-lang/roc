@@ -1785,26 +1785,19 @@ pub fn canonicalizeExpr(
         },
         .int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-
-            // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
+            const parsed = types.Num.parseNumLiteralWithSuffix(token_text);
 
             // Parse the integer value
-            const is_negated = token_text[0] == '-'; // Drop the negation for now, so all valid literals fit in u128
+            const is_negated = parsed.num_text[0] == '-';
             const after_minus_sign = @as(usize, @intFromBool(is_negated));
 
-            // The index the first *actual* digit (after minus sign, "0x" prefix, etc.) in the token
             var first_digit: usize = undefined;
-
-            const DEFAULT_BASE: u8 = 10; // default to base-10, naturally
+            const DEFAULT_BASE = 10;
             var int_base: u8 = undefined;
 
-            // If this begins with "0x" or "0b" or "Oo" then it's not base-10.
-            // We don't bother storing this info anywhere else besides token text,
-            // because we already have to look at the whole token to parse the digits
-            // into a number, so it will be in cache. It's also trivial to parse.
-            if (token_text[after_minus_sign] == '0' and token_text.len > after_minus_sign + 2) {
-                switch (token_text[after_minus_sign + 1]) {
+            if (parsed.num_text[after_minus_sign] == '0' and parsed.num_text.len > after_minus_sign + 2) {
+                switch (parsed.num_text[after_minus_sign + 1]) {
                     'x', 'X' => {
                         int_base = 16;
                         first_digit = after_minus_sign + 2;
@@ -1827,27 +1820,17 @@ pub fn canonicalizeExpr(
                 first_digit = after_minus_sign;
             }
 
-            const u128_val: u128 = std.fmt.parseInt(u128, token_text[first_digit..], int_base) catch {
+            const u128_val = std.fmt.parseInt(u128, parsed.num_text[first_digit..], int_base) catch {
                 // Any number literal that is too large for u128 is invalid, regardless of whether it had a minus sign!
-                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{
-                    .region = region,
-                } });
-                return CanonicalizedExpr{
-                    .idx = expr_idx,
-                    .free_vars = null,
-                };
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
             };
 
             // If this had a minus sign, but negating it would result in a negative number
             // that would be too low to fit in i128, then this int literal is also invalid.
             if (is_negated and u128_val > min_i128_negated) {
-                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{
-                    .region = region,
-                } });
-                return CanonicalizedExpr{
-                    .idx = expr_idx,
-                    .free_vars = null,
-                };
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
             }
 
             // Now we've confirmed that our int literal is one of these:
@@ -1870,6 +1853,51 @@ pub fn canonicalizeExpr(
             // These are special because they have a power-of-2 magnitude that fits exactly
             // in their signed type. We report them as needing one less bit to make the
             // standard "signed types have n-1 usable bits" logic work correctly.
+            if (parsed.suffix) |suffix| {
+                const type_content = blk: {
+                    if (std.mem.eql(u8, suffix, "u8")) {
+                        if (u128_val > std.math.maxInt(u8)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_u8 } };
+                    } else if (std.mem.eql(u8, suffix, "u16")) {
+                        if (u128_val > std.math.maxInt(u16)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_u16 } };
+                    } else if (std.mem.eql(u8, suffix, "u32")) {
+                        if (u128_val > std.math.maxInt(u32)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_u32 } };
+                    } else if (std.mem.eql(u8, suffix, "u64")) {
+                        if (u128_val > std.math.maxInt(u64)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_u64 } };
+                    } else if (std.mem.eql(u8, suffix, "u128")) {
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_u128 } };
+                    } else if (std.mem.eql(u8, suffix, "i8")) {
+                        if (i128_val < std.math.minInt(i8) or i128_val > std.math.maxInt(i8)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_i8 } };
+                    } else if (std.mem.eql(u8, suffix, "i16")) {
+                        if (i128_val < std.math.minInt(i16) or i128_val > std.math.maxInt(i16)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_i16 } };
+                    } else if (std.mem.eql(u8, suffix, "i32")) {
+                        if (i128_val < std.math.minInt(i32) or i128_val > std.math.maxInt(i32)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_i32 } };
+                    } else if (std.mem.eql(u8, suffix, "i64")) {
+                        if (i128_val < std.math.minInt(i64) or i128_val > std.math.maxInt(i64)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_i64 } };
+                    } else if (std.mem.eql(u8, suffix, "i128")) {
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_i128 } };
+                    } else {
+                        break :blk null;
+                    }
+                };
+
+                if (type_content) |content| {
+                    const expr_idx = try self.env.addExprAndTypeVar(
+                        .{ .e_int = .{ .value = .{ .bytes = @bitCast(i128_val), .kind = .i128 } } },
+                        content,
+                        region,
+                    );
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                }
+            }
+
             const is_negative_u1 = @as(u1, @intFromBool(is_negated));
             const is_power_of_2 = @as(u1, @intFromBool(u128_val != 0 and (u128_val & (u128_val - 1)) == 0));
             const is_minimum_signed = is_negative_u1 & is_power_of_2;
@@ -1895,13 +1923,14 @@ pub fn canonicalizeExpr(
             else
                 Content{ .structure = .{ .num = .{ .num_unbound = int_requirements } } };
 
-            // Add the expression and type variable atomically
-            const expr_idx = try self.env.addExprAndTypeVar(ModuleEnv.Expr{
-                .e_int = .{
-                    .value = .{ .bytes = @bitCast(i128_val), .kind = .i128 },
-                },
-            }, type_content, region);
-
+            const expr_idx = try self.env.addExprAndTypeVar(
+                ModuleEnv.Expr{ .e_int = .{ .value = ModuleEnv.IntValue{
+                    .bytes = @bitCast(i128_val),
+                    .kind = .i128,
+                } } },
+                type_content,
+                region,
+            );
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
         },
         .frac => |e| {
@@ -1909,6 +1938,49 @@ pub fn canonicalizeExpr(
 
             // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
+            const parsed_num = types.Num.parseNumLiteralWithSuffix(token_text);
+
+            if (parsed_num.suffix) |suffix| {
+                const f64_val = std.fmt.parseFloat(f64, parsed_num.num_text) catch {
+                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                };
+
+                if (std.mem.eql(u8, suffix, "f32")) {
+                    if (!fitsInF32(f64_val)) {
+                        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                    }
+                    const expr_idx = try self.env.addExprAndTypeVar(
+                        .{ .e_frac_f64 = .{ .value = f64_val } },
+                        .{ .structure = FlatType{ .num = Num.frac_f32 } },
+                        region,
+                    );
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                } else if (std.mem.eql(u8, suffix, "f64")) {
+                    const expr_idx = try self.env.addExprAndTypeVar(
+                        .{ .e_frac_f64 = .{ .value = f64_val } },
+                        .{ .structure = FlatType{ .num = Num.frac_f64 } },
+                        region,
+                    );
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                } else if (std.mem.eql(u8, suffix, "dec")) {
+                    if (!fitsInDec(f64_val)) {
+                        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                    }
+                    const dec_val = builtins.RocDec.fromF64(f64_val) orelse {
+                        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                    };
+                    const expr_idx = try self.env.addExprAndTypeVar(
+                        .{ .e_frac_dec = .{ .value = dec_val } },
+                        .{ .structure = FlatType{ .num = Num.frac_dec } },
+                        region,
+                    );
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                }
+            }
 
             const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
                 error.InvalidNumLiteral => {
