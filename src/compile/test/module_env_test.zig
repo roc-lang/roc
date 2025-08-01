@@ -78,8 +78,8 @@ test "ModuleEnv.Serialized roundtrip" {
 
     // Verify the data was preserved
     try testing.expectEqual(@as(usize, 2), env.ident_ids_for_slicing.len());
-    try testing.expectEqualStrings("hello", env.idents.getText(hello_idx));
-    try testing.expectEqualStrings("world", env.idents.getText(world_idx));
+    try testing.expectEqualStrings("hello", env.idents.getLowercase(hello_idx));
+    try testing.expectEqualStrings("world", env.idents.getLowercase(world_idx));
 
     try testing.expectEqual(@as(usize, 1), env.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
