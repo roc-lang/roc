@@ -347,15 +347,13 @@ test "scientific notation literals" {
 test "ModuleEnv serialization and interpreter evaluation" {
     // This test demonstrates that a ModuleEnv can be successfully:
     // 1. Created and used with the Interpreter to evaluate expressions
-    // 2. Serialized to bytes for storage/transfer
-    // 3. Deserialized from those bytes
-    // 4. Used with a new Interpreter to evaluate the same expressions
+    // 2. Serialized to bytes and written to disk
+    // 3. Deserialized from those bytes read back from disk
+    // 4. Used with a new Interpreter to evaluate the same expressions with identical results
     //
-    // Note: The full serialization/deserialization round-trip has alignment
-    // issues in debug builds that are also present in the existing
-    // "ModuleEnv.Serialized roundtrip" test. For now, we demonstrate
-    // the capability by testing evaluation before and after serialization
-    // setup steps.
+    // This verifies the complete round-trip of compilation state preservation
+    // through serialization, which is critical for incremental compilation
+    // and distributed build systems.
 
     const gpa = test_allocator;
     const source = "5 + 8";
@@ -423,11 +421,16 @@ test "ModuleEnv serialization and interpreter evaluation" {
         try testing.expectEqual(@as(i128, 13), int_val);
     }
 
-    // Test 2: Demonstrate serialization capability
+    // Test 2: Full serialization and deserialization with interpreter evaluation
     {
         var arena = std.heap.ArenaAllocator.init(gpa);
         defer arena.deinit();
         const arena_alloc = arena.allocator();
+
+        var tmp_dir = testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+        const tmp_file = try tmp_dir.dir.createFile("test_module_env.compact", .{ .read = true });
+        defer tmp_file.close();
 
         var writer = CompactWriter{
             .iovecs = .{},
@@ -435,47 +438,66 @@ test "ModuleEnv serialization and interpreter evaluation" {
         };
         defer writer.deinit(arena_alloc);
 
-        // Serialize the ModuleEnv
-        const serialized_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv.Serialized);
+        // Allocate space for ModuleEnv and serialize
+        const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv);
+        const env_start_offset = writer.total_bytes - @sizeOf(ModuleEnv);
+        const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(env_ptr));
         try serialized_ptr.serialize(&original_env, arena_alloc, &writer);
 
-        // Verify serialization succeeded
-        try testing.expect(writer.total_bytes > 0);
-        try testing.expect(writer.iovecs.items.len > 0);
+        // Write to file
+        try writer.writeGather(arena_alloc, tmp_file);
+
+        // Read back from file
+        const file_size = try tmp_file.getEndPos();
+        const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), file_size);
+        defer gpa.free(buffer);
+        _ = try tmp_file.pread(buffer, 0);
+
+        // Deserialize the ModuleEnv
+        const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
+        const deserialized_env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule");
+
+        // Verify basic deserialization worked
+        try testing.expectEqualStrings("TestModule", deserialized_env.module_name);
+        try testing.expectEqualStrings(source, deserialized_env.source);
+
+        // Test 3: Verify the deserialized ModuleEnv has the correct structure
+        try testing.expect(deserialized_env.types.len() > 0);
+        try testing.expect(deserialized_env.store.nodes.items.len > 0);
+
+        // Verify that the deserialized data matches the original data
+        try testing.expectEqual(original_env.types.len(), deserialized_env.types.len());
+        try testing.expectEqual(original_env.store.nodes.items.len, deserialized_env.store.nodes.items.len);
+        try testing.expectEqual(original_env.idents.interner.bytes.len(), deserialized_env.idents.interner.bytes.len());
+
+        // Test 4: Evaluate the same expression using the deserialized ModuleEnv
+        // The original expression index should still be valid since the NodeStore structure is preserved
+        {
+            var eval_stack = try stack.Stack.initCapacity(gpa, 1024);
+            defer eval_stack.deinit();
+
+            var layout_cache = try layout_store.Store.init(deserialized_env, &deserialized_env.types);
+            defer layout_cache.deinit();
+
+            var interpreter = try eval.Interpreter.init(
+                gpa,
+                deserialized_env,
+                &eval_stack,
+                &layout_cache,
+                &deserialized_env.types,
+            );
+            defer interpreter.deinit();
+
+            const result = try interpreter.eval(canonicalized_expr_idx.get_idx());
+
+            // Verify we get the same result from the deserialized ModuleEnv
+            try testing.expect(result.layout.tag == .scalar);
+            try testing.expect(result.layout.data.scalar.tag == .int);
+
+            const precision = result.layout.data.scalar.data.int;
+            const int_val = eval.readIntFromMemory(@ptrCast(result.ptr.?), precision);
+
+            try testing.expectEqual(@as(i128, 13), int_val);
+        }
     }
-
-    // Test 3: Demonstrate the ModuleEnv is still valid after serialization setup
-    {
-        var eval_stack = try stack.Stack.initCapacity(gpa, 1024);
-        defer eval_stack.deinit();
-
-        var layout_cache = try layout_store.Store.init(&original_env, &original_env.types);
-        defer layout_cache.deinit();
-
-        var interpreter = try eval.Interpreter.init(
-            gpa,
-            &original_env,
-            &eval_stack,
-            &layout_cache,
-            &original_env.types,
-        );
-        defer interpreter.deinit();
-
-        const result = try interpreter.eval(canonicalized_expr_idx.get_idx());
-
-        // Verify we still get the same result
-        try testing.expect(result.layout.tag == .scalar);
-        try testing.expect(result.layout.data.scalar.tag == .int);
-
-        const precision = result.layout.data.scalar.data.int;
-        const int_val = eval.readIntFromMemory(@ptrCast(result.ptr.?), precision);
-
-        try testing.expectEqual(@as(i128, 13), int_val);
-    }
-
-    // TODO: Add full deserialization test once the alignment issues in
-    // ModuleEnv.Serialized.deserialize() are resolved. The deserialize
-    // method has an assertion that Serialized >= ModuleEnv in size,
-    // but ModuleEnv contains additional fields (gpa, source, module_name)
-    // that make it larger than Serialized.
 }
