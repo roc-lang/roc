@@ -1210,23 +1210,21 @@ pub const Serialized = struct {
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
-        env.* = Self{
-            .gpa = gpa,
-            .idents = self.idents.deserialize(offset).*,
-            .ident_ids_for_slicing = self.ident_ids_for_slicing.deserialize(offset).*,
-            .strings = self.strings.deserialize(offset).*,
-            .types = self.types.deserialize(offset).*,
-            .exposed_items = self.exposed_items.deserialize(offset).*,
-            .line_starts = self.line_starts.deserialize(offset).*,
-            .source = source,
-            .all_defs = self.all_defs,
-            .all_statements = self.all_statements,
-            .external_decls = self.external_decls.deserialize(offset).*,
-            .imports = self.imports.deserialize(offset).*,
-            .module_name = module_name,
-            .diagnostics = self.diagnostics,
-            .store = self.store.deserialize(offset, gpa).*,
-        };
+        env.gpa = gpa;
+        env.idents = self.idents.deserialize(offset).*;
+        env.ident_ids_for_slicing = self.ident_ids_for_slicing.deserialize(offset).*;
+        env.strings = self.strings.deserialize(offset).*;
+        env.types = self.types.deserialize(offset).*;
+        env.exposed_items = self.exposed_items.deserialize(offset).*;
+        env.line_starts = self.line_starts.deserialize(offset).*;
+        env.source = source;
+        env.all_defs = self.all_defs;
+        env.all_statements = self.all_statements;
+        env.external_decls = self.external_decls.deserialize(offset).*;
+        env.imports = self.imports.deserialize(offset).*;
+        env.module_name = module_name;
+        env.diagnostics = self.diagnostics;
+        env.store = self.store.deserialize(offset, gpa).*;
 
         return env;
     }
@@ -1693,14 +1691,14 @@ fn pushExprTypesToSExprTree(self: *Self, expr_idx: Expr.Idx, tree: *SExprTree) s
 
     // Get the type variable for this expression
     const expr_var = varFrom(expr_idx);
-    
+
     // Create a TypeWriter to format the type
     var type_writer = try TypeWriter.init(self.gpa, self);
     defer type_writer.deinit();
 
     // Write the type to the buffer
     try type_writer.write(expr_var);
-    
+
     // Add the formatted type to the S-expression tree
     const type_str = type_writer.get();
     try tree.pushStringPair("expr_type", type_str);
