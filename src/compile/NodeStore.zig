@@ -3157,31 +3157,29 @@ pub const Serialized = struct {
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
 
-        // Deserialize the lists
-        store.nodes = self.nodes.deserialize(offset).*;
-        store.regions = self.regions.deserialize(offset).*;
-        store.extra_data = self.extra_data.deserialize(offset).*;
-
-        // Initialize scratch arrays as proper Scratch instances
-        store.scratch_statements = base.Scratch(ModuleEnv.Statement.Idx){ .items = .{} };
-        store.scratch_exprs = base.Scratch(ModuleEnv.Expr.Idx){ .items = .{} };
-        store.scratch_captures = base.Scratch(ModuleEnv.Expr.Capture.Idx){ .items = .{} };
-        store.scratch_patterns = base.Scratch(ModuleEnv.Pattern.Idx){ .items = .{} };
-        store.scratch_record_fields = base.Scratch(ModuleEnv.RecordField.Idx){ .items = .{} };
-        store.scratch_pattern_record_fields = base.Scratch(ModuleEnv.PatternRecordField.Idx){ .items = .{} };
-        store.scratch_record_destructs = base.Scratch(ModuleEnv.Pattern.RecordDestruct.Idx){ .items = .{} };
-        store.scratch_match_branches = base.Scratch(ModuleEnv.Expr.Match.Branch.Idx){ .items = .{} };
-        store.scratch_match_branch_patterns = base.Scratch(ModuleEnv.Expr.Match.BranchPattern.Idx){ .items = .{} };
-        store.scratch_if_branches = base.Scratch(ModuleEnv.Expr.IfBranch.Idx){ .items = .{} };
-        store.scratch_type_annos = base.Scratch(ModuleEnv.TypeAnno.Idx){ .items = .{} };
-        store.scratch_anno_record_fields = base.Scratch(ModuleEnv.TypeAnno.RecordField.Idx){ .items = .{} };
-        store.scratch_exposed_items = base.Scratch(ModuleEnv.ExposedItem.Idx){ .items = .{} };
-        store.scratch_defs = base.Scratch(ModuleEnv.Def.Idx){ .items = .{} };
-        store.scratch_where_clauses = base.Scratch(ModuleEnv.WhereClause.Idx){ .items = .{} };
-        store.scratch_diagnostics = base.Scratch(Diagnostic.Idx){ .items = .{} };
-
-        // Set gpa from parameter
-        store.gpa = gpa;
+        store.* = NodeStore{
+            .gpa = gpa,
+            .nodes = self.nodes.deserialize(offset).*,
+            .regions = self.regions.deserialize(offset).*,
+            .extra_data = self.extra_data.deserialize(offset).*,
+            // Initialize scratch arrays as proper Scratch instances
+            .scratch_statements = base.Scratch(ModuleEnv.Statement.Idx){ .items = .{} },
+            .scratch_exprs = base.Scratch(ModuleEnv.Expr.Idx){ .items = .{} },
+            .scratch_captures = base.Scratch(ModuleEnv.Expr.Capture.Idx){ .items = .{} },
+            .scratch_patterns = base.Scratch(ModuleEnv.Pattern.Idx){ .items = .{} },
+            .scratch_record_fields = base.Scratch(ModuleEnv.RecordField.Idx){ .items = .{} },
+            .scratch_pattern_record_fields = base.Scratch(ModuleEnv.PatternRecordField.Idx){ .items = .{} },
+            .scratch_record_destructs = base.Scratch(ModuleEnv.Pattern.RecordDestruct.Idx){ .items = .{} },
+            .scratch_match_branches = base.Scratch(ModuleEnv.Expr.Match.Branch.Idx){ .items = .{} },
+            .scratch_match_branch_patterns = base.Scratch(ModuleEnv.Expr.Match.BranchPattern.Idx){ .items = .{} },
+            .scratch_if_branches = base.Scratch(ModuleEnv.Expr.IfBranch.Idx){ .items = .{} },
+            .scratch_type_annos = base.Scratch(ModuleEnv.TypeAnno.Idx){ .items = .{} },
+            .scratch_anno_record_fields = base.Scratch(ModuleEnv.TypeAnno.RecordField.Idx){ .items = .{} },
+            .scratch_exposed_items = base.Scratch(ModuleEnv.ExposedItem.Idx){ .items = .{} },
+            .scratch_defs = base.Scratch(ModuleEnv.Def.Idx){ .items = .{} },
+            .scratch_where_clauses = base.Scratch(ModuleEnv.WhereClause.Idx){ .items = .{} },
+            .scratch_diagnostics = base.Scratch(Diagnostic.Idx){ .items = .{} },
+        };
 
         return store;
     }
