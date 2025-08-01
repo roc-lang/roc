@@ -179,6 +179,30 @@ pub const Pattern = union(enum) {
     dec_literal: struct {
         value: RocDec,
     },
+    /// Pattern that matches a specific f32 literal value exactly.
+    /// Used for exact matching in pattern expressions.
+    ///
+    /// ```roc
+    /// match value {
+    ///     3.14f32 => "pi"
+    ///     n => "other"
+    /// }
+    /// ```
+    frac_f32_literal: struct {
+        value: f32,
+    },
+    /// Pattern that matches a specific f64 literal value exactly.
+    /// Used for exact matching in pattern expressions.
+    ///
+    /// ```roc
+    /// match value {
+    ///     3.14f64 => "pi"
+    ///     n => "other"
+    /// }
+    /// ```
+    frac_f64_literal: struct {
+        value: f64,
+    },
 
     /// Pattern that matches a specific string literal exactly.
     /// Used for exact string matching in pattern expressions.
@@ -429,6 +453,30 @@ pub const Pattern = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-dec");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .frac_f32_literal => |p| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-frac-f32");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+
+                var value_buf: [40]u8 = undefined;
+                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{p.value}) catch "fmt_error";
+                try tree.pushStringPair("value", value_str);
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .frac_f64_literal => |p| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-frac-f64");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+
+                var value_buf: [40]u8 = undefined;
+                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{p.value}) catch "fmt_error";
+                try tree.pushStringPair("value", value_str);
+
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },

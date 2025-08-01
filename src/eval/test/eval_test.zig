@@ -2,6 +2,8 @@
 const std = @import("std");
 const helpers = @import("helpers.zig");
 const eval = @import("../interpreter.zig");
+const stack = @import("../stack.zig");
+const layout_store = @import("../../layout/store.zig");
 
 const EvalError = eval.EvalError;
 const runExpectInt = helpers.runExpectInt;
@@ -11,6 +13,43 @@ test "eval simple number" {
     try runExpectInt("1", 1, .no_trace);
     try runExpectInt("42", 42, .no_trace);
     try runExpectInt("-1234", -1234, .no_trace);
+}
+
+test "eval boolean literals" {
+    try runExpectInt("True", 1, .no_trace);
+    try runExpectInt("False", 0, .no_trace);
+    try runExpectInt("Bool.True", 1, .no_trace);
+    try runExpectInt("Bool.False", 0, .no_trace);
+}
+
+test "eval unary not operator" {
+    try runExpectInt("!True", 0, .no_trace);
+    try runExpectInt("!False", 1, .no_trace);
+    try runExpectInt("!Bool.True", 0, .no_trace);
+    try runExpectInt("!Bool.False", 1, .no_trace);
+}
+
+test "eval double negation" {
+    try runExpectInt("!!True", 1, .no_trace);
+    try runExpectInt("!!False", 0, .no_trace);
+    try runExpectInt("!!!True", 0, .no_trace);
+    try runExpectInt("!!!False", 1, .no_trace);
+}
+
+test "eval boolean in lambda expressions" {
+    try runExpectInt("(|x| !x)(True)", 0, .no_trace);
+    try runExpectInt("(|x| !x)(False)", 1, .no_trace);
+    try runExpectInt("(|x, y| x and y)(True, False)", 0, .no_trace);
+    try runExpectInt("(|x, y| x or y)(False, True)", 1, .no_trace);
+    try runExpectInt("(|x| x and !x)(True)", 0, .no_trace);
+    try runExpectInt("(|x| x or !x)(False)", 1, .no_trace);
+}
+
+test "eval unary not in conditional expressions" {
+    try runExpectInt("if !True 42 else 99", 99, .no_trace);
+    try runExpectInt("if !False 42 else 99", 42, .no_trace);
+    try runExpectInt("if !!True 42 else 99", 42, .no_trace);
+    try runExpectInt("if !!False 42 else 99", 99, .no_trace);
 }
 
 test "if-else" {
@@ -175,4 +214,107 @@ test "lambdas closures" {
         \\    }
         \\})(100))(20))(3)
     , 223, .trace);
+}
+
+// Helper function to test that evaluation succeeds without checking specific values
+fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !void {
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var eval_stack = try stack.Stack.initCapacity(std.testing.allocator, 1024);
+    defer eval_stack.deinit();
+
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+    defer layout_cache.deinit();
+
+    var interpreter = try eval.Interpreter.init(
+        std.testing.allocator,
+        resources.module_env,
+        &eval_stack,
+        &layout_cache,
+        &resources.module_env.types,
+    );
+    defer interpreter.deinit();
+
+    if (should_trace == .trace) {
+        interpreter.startTrace(std.io.getStdErr().writer().any());
+    }
+
+    const result = interpreter.eval(resources.expr_idx);
+
+    if (should_trace == .trace) {
+        interpreter.endTrace();
+    }
+
+    // Just verify that evaluation succeeded
+    _ = try result;
+}
+
+test "integer type evaluation" {
+    // Test integer types to verify basic evaluation works
+    // This should help us debug why 255u8 shows as 42 in REPL
+    try runExpectInt("255u8", 255, .trace);
+    try runExpectInt("42i32", 42, .no_trace);
+    try runExpectInt("123i64", 123, .no_trace);
+}
+
+test "decimal literal evaluation" {
+    // Test basic decimal literals - these should be parsed and evaluated correctly
+    try runExpectSuccess("1.5dec", .no_trace);
+    try runExpectSuccess("0.0dec", .no_trace);
+    try runExpectSuccess("123.456dec", .no_trace);
+    try runExpectSuccess("-1.5dec", .no_trace);
+}
+
+test "float literal evaluation" {
+    // Test float literals - these should work correctly
+    try runExpectSuccess("3.14f64", .no_trace);
+    try runExpectSuccess("2.5f32", .no_trace);
+    try runExpectSuccess("-3.14f64", .no_trace);
+    try runExpectSuccess("0.0f32", .no_trace);
+}
+
+test "comprehensive integer literal formats" {
+    // Test various integer literal formats and precisions
+
+    // Unsigned integers
+    try runExpectInt("0u8", 0, .no_trace);
+    try runExpectInt("255u8", 255, .no_trace);
+    try runExpectInt("1000u16", 1000, .no_trace);
+    try runExpectInt("65535u16", 65535, .no_trace);
+    try runExpectInt("100000u32", 100000, .no_trace);
+    try runExpectInt("999999999u64", 999999999, .no_trace);
+
+    // Signed integers
+    try runExpectInt("-128i8", -128, .no_trace);
+    try runExpectInt("127i8", 127, .no_trace);
+    try runExpectInt("-32768i16", -32768, .no_trace);
+    try runExpectInt("32767i16", 32767, .no_trace);
+    try runExpectInt("-2147483648i32", -2147483648, .no_trace);
+    try runExpectInt("2147483647i32", 2147483647, .no_trace);
+    try runExpectInt("-999999999i64", -999999999, .no_trace);
+    try runExpectInt("999999999i64", 999999999, .no_trace);
+
+    // Default integer type (i64)
+    try runExpectInt("42", 42, .no_trace);
+    try runExpectInt("-1234", -1234, .no_trace);
+    try runExpectInt("0", 0, .no_trace);
+}
+
+test "hexadecimal and binary integer literals" {
+    // Test alternative number bases
+    try runExpectInt("0xFF", 255, .no_trace);
+    try runExpectInt("0x10", 16, .no_trace);
+    try runExpectInt("0xDEADBEEF", 3735928559, .no_trace);
+    try runExpectInt("0b1010", 10, .no_trace);
+    try runExpectInt("0b11111111", 255, .no_trace);
+    try runExpectInt("0b0", 0, .no_trace);
+}
+
+test "scientific notation literals" {
+    // Test scientific notation - these get parsed as decimals or floats
+    try runExpectSuccess("1e5", .no_trace);
+    try runExpectSuccess("2.5e10", .no_trace);
+    try runExpectSuccess("1.5e-5", .no_trace);
+    try runExpectSuccess("-1.5e-5", .no_trace);
 }
