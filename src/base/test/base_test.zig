@@ -17,7 +17,7 @@ const FunctionArgs = base.FunctionArgs;
 const SmallCollections = base.SmallCollections;
 const SafeList = collections.SafeList;
 const RegionInfo = base.RegionInfo;
-const SmallStringInterner = base.SmallStringInterner;
+const IdentInterner = base.IdentInterner;
 const StringLiteral = base.StringLiteral;
 const TargetUsize = base.target.TargetUsize;
 
@@ -214,7 +214,6 @@ test "Ident.Store empty CompactWriter roundtrip" {
     try std.testing.expectEqual(@as(usize, 1), deserialized.interner.bytes.len());
     try std.testing.expectEqual(@as(u32, 0), deserialized.interner.entry_count);
     try std.testing.expectEqual(@as(usize, 0), deserialized.attributes.len());
-    try std.testing.expectEqual(@as(u32, 0), deserialized.next_unique_name);
 }
 
 test "Ident.Store basic CompactWriter roundtrip" {
@@ -284,7 +283,7 @@ test "Ident.Store basic CompactWriter roundtrip" {
 
     // Check the bytes length for validation
     const bytes_len = deserialized.interner.bytes.len();
-    const idx1_value = @intFromEnum(@as(SmallStringInterner.Idx, @enumFromInt(@as(u32, idx1.idx))));
+    const idx1_value = @intFromEnum(@as(IdentInterner.Idx, @enumFromInt(@as(u32, idx1.idx))));
 
     // Verify the index is valid
     if (bytes_len <= idx1_value) {
@@ -292,92 +291,12 @@ test "Ident.Store basic CompactWriter roundtrip" {
     }
 
     // Verify the identifiers are accessible
-    try std.testing.expectEqualStrings("hello", deserialized.getText(idx1));
-    try std.testing.expectEqualStrings("world!", deserialized.getText(idx2));
-    try std.testing.expectEqualStrings("_ignored", deserialized.getText(idx3));
-
-    // Verify next_unique_name is preserved
-    try std.testing.expectEqual(original.next_unique_name, deserialized.next_unique_name);
+    try std.testing.expectEqualStrings("hello", deserialized.getLowercase(idx1));
+    try std.testing.expectEqualStrings("world!", deserialized.getLowercase(idx2));
+    try std.testing.expectEqualStrings("_ignored", deserialized.getLowercase(idx3));
 
     // Verify the interner's entry count is preserved
     try std.testing.expectEqual(@as(u32, 3), deserialized.interner.entry_count);
-}
-
-test "Ident.Store with genUnique CompactWriter roundtrip" {
-    const gpa = std.testing.allocator;
-
-    // Create store and generate unique identifiers
-    var original = try Ident.Store.initCapacity(gpa, 10);
-    defer original.deinit(gpa);
-
-    // Add some regular identifiers
-    const ident1 = Ident.for_text("regular");
-    const idx1 = try original.insert(gpa, ident1);
-
-    // Generate unique identifiers
-    const unique1 = try original.genUnique(gpa);
-    const unique2 = try original.genUnique(gpa);
-    const unique3 = try original.genUnique(gpa);
-
-    // Verify unique names are correct
-    try std.testing.expectEqualStrings("0", original.getText(unique1));
-    try std.testing.expectEqualStrings("1", original.getText(unique2));
-    try std.testing.expectEqualStrings("2", original.getText(unique3));
-
-    // Verify next_unique_name was incremented
-    try std.testing.expectEqual(@as(u32, 3), original.next_unique_name);
-
-    // Create a temp file
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    const file = try tmp_dir.dir.createFile("test_unique_store.dat", .{ .read = true });
-    defer file.close();
-
-    // Serialize using arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-    };
-    defer writer.deinit(arena_allocator);
-
-    _ = try original.serialize(arena_allocator, &writer);
-
-    // Write to file
-    try writer.writeGather(arena_allocator, file);
-
-    // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-
-    // Ensure file size matches what we wrote
-    try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
-
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
-    defer gpa.free(buffer);
-
-    const bytes_read = try file.read(buffer);
-    try std.testing.expectEqual(writer.total_bytes, bytes_read);
-
-    // Cast and relocate
-    // The Store struct should be at the beginning (it was appended first)
-    const deserialized = @as(*Ident.Store, @ptrCast(@alignCast(buffer.ptr)));
-
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-
-    // Verify all identifiers
-
-    try std.testing.expectEqualStrings("regular", deserialized.getText(idx1));
-    try std.testing.expectEqualStrings("0", deserialized.getText(unique1));
-    try std.testing.expectEqualStrings("1", deserialized.getText(unique2));
-    try std.testing.expectEqualStrings("2", deserialized.getText(unique3));
-
-    // Verify next_unique_name is preserved
-    try std.testing.expectEqual(@as(u32, 3), deserialized.next_unique_name);
 }
 
 test "Ident.Store frozen state CompactWriter roundtrip" {
@@ -454,7 +373,7 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     defer original.deinit(gpa);
 
     // Test various identifier types and edge cases
-    // Note: SmallStringInterner starts with a 0 byte at index 0, so strings start at index 1
+    // Note: IdentInterner starts with a 0 byte at index 0, so strings start at index 1
     const test_idents = [_]struct { text: []const u8, expected_idx: u32 }{
         .{ .text = "hello", .expected_idx = 1 },
         .{ .text = "world!", .expected_idx = 7 },
@@ -479,10 +398,6 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
         // Verify the index matches expectation
         try std.testing.expectEqual(test_ident.expected_idx, idx.idx);
     }
-
-    // Add some unique names
-    const unique1 = try original.genUnique(gpa);
-    const unique2 = try original.genUnique(gpa);
 
     // Verify the interner's hash map is populated
     try std.testing.expect(original.interner.entry_count > 0);
@@ -532,20 +447,19 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     // Verify all identifiers (skip duplicate at end)
     for (test_idents[0..10], 0..) |test_ident, i| {
         const idx = indices.items[i];
-        const text = deserialized.getText(idx);
-        try std.testing.expectEqualStrings(test_ident.text, text);
+        const text = deserialized.getLowercase(idx);
+        // IdentInterner only lowercases the first character if it's uppercase ASCII
+        var expected_normalized: [256]u8 = undefined;
+        @memcpy(expected_normalized[0..test_ident.text.len], test_ident.text);
+        if (test_ident.text.len > 0 and test_ident.text[0] >= 'A' and test_ident.text[0] <= 'Z') {
+            expected_normalized[0] = test_ident.text[0] + ('a' - 'A');
+        }
+        try std.testing.expectEqualStrings(expected_normalized[0..test_ident.text.len], text);
     }
 
-    // Verify unique names
-    try std.testing.expectEqualStrings("0", deserialized.getText(unique1));
-    try std.testing.expectEqualStrings("1", deserialized.getText(unique2));
-
     // Verify the interner's entry count is preserved
-    // We inserted 10 unique strings + 2 generated unique names = 12 total
-    try std.testing.expectEqual(@as(u32, 12), deserialized.interner.entry_count);
-
-    // Verify next_unique_name
-    try std.testing.expectEqual(@as(u32, 2), deserialized.next_unique_name);
+    // We inserted 10 unique strings
+    try std.testing.expectEqual(@as(u32, 10), deserialized.interner.entry_count);
 }
 
 // TODO: CompactWriter doesn't support serializing multiple independent structures
@@ -627,18 +541,18 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
 //     deserialized3.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
 //     // Verify store 1
-//     try std.testing.expectEqualStrings("store1_ident", deserialized1.getText(idx1_1));
+//     try std.testing.expectEqualStrings("store1_ident", deserialized1.getLowercase(idx1_1));
 //     try std.testing.expectEqual(@as(u32, 1), deserialized1.next_unique_name);
 
 //     // Verify store 2 (frozen)
-//     try std.testing.expectEqualStrings("store2_ident!", deserialized2.getText(idx2_1));
-//     try std.testing.expectEqualStrings("_store2_ignored", deserialized2.getText(idx2_2));
+//     try std.testing.expectEqualStrings("store2_ident!", deserialized2.getLowercase(idx2_1));
+//     try std.testing.expectEqualStrings("_store2_ignored", deserialized2.getLowercase(idx2_2));
 //     if (std.debug.runtime_safety) {
 //         try std.testing.expect(deserialized2.interner.frozen);
 //     }
 
 //     // Verify store 3
-//     try std.testing.expectEqualStrings("store3", deserialized3.getText(idx3_1));
+//     try std.testing.expectEqualStrings("store3", deserialized3.getLowercase(idx3_1));
 
 //     // Verify entry counts are preserved
 //     try std.testing.expectEqual(@as(u32, 2), deserialized1.interner.entry_count); // store1_ident + 1 genUnique
@@ -866,11 +780,11 @@ test "get" {
     try std.testing.expectEqualStrings("line1", info2.calculateLineText(source, line_starts.items.items));
 }
 
-test "SmallStringInterner empty CompactWriter roundtrip" {
+test "IdentInterner empty CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
 
-    // Create an empty SmallStringInterner with proper initialization
-    var original = try SmallStringInterner.initCapacity(gpa, 0);
+    // Create an empty IdentInterner with proper initialization
+    var original = try IdentInterner.initCapacity(gpa, 0);
     defer original.deinit(gpa);
 
     // Create a temp file
@@ -905,8 +819,8 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     _ = try file.read(buffer);
 
     // Cast and relocate - empty interner should still work
-    // The SmallStringInterner struct is at the beginning of the buffer
-    const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
+    // The IdentInterner struct is at the beginning of the buffer
+    const deserialized = @as(*IdentInterner, @ptrCast(@alignCast(buffer.ptr)));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify empty - bytes starts with one zero byte, hash_table should be empty
@@ -914,11 +828,11 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     try std.testing.expectEqual(@as(u32, 0), deserialized.entry_count);
 }
 
-test "SmallStringInterner basic CompactWriter roundtrip" {
+test "IdentInterner basic CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
 
     // Create an interner with some strings
-    var original = try SmallStringInterner.initCapacity(gpa, 10);
+    var original = try IdentInterner.initCapacity(gpa, 10);
     defer original.deinit(gpa);
 
     // Insert test strings
@@ -930,12 +844,12 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
         "baz",
         "test string",
         "another test",
-        "", // empty string
+        "unique",
         "duplicate",
         "duplicate", // Should reuse the same index
     };
 
-    var indices = std.ArrayList(SmallStringInterner.Idx).init(gpa);
+    var indices = std.ArrayList(IdentInterner.Idx).init(gpa);
     defer indices.deinit();
 
     for (test_strings) |str| {
@@ -978,25 +892,31 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
     _ = try file.read(buffer);
 
     // Cast and relocate
-    const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
+    const deserialized = @as(*IdentInterner, @ptrCast(@alignCast(buffer.ptr)));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify all strings are accessible and correct
     for (test_strings[0..9], 0..) |expected_str, i| {
         const idx = indices.items[i];
-        const actual_str = deserialized.getText(idx);
-        try std.testing.expectEqualStrings(expected_str, actual_str);
+        const actual_str = deserialized.getLowercase(idx);
+        // IdentInterner only lowercases the first character if it's uppercase ASCII
+        var expected_normalized: [256]u8 = undefined;
+        @memcpy(expected_normalized[0..expected_str.len], expected_str);
+        if (expected_str.len > 0 and expected_str[0] >= 'A' and expected_str[0] <= 'Z') {
+            expected_normalized[0] = expected_str[0] + ('a' - 'A');
+        }
+        try std.testing.expectEqualStrings(expected_normalized[0..expected_str.len], actual_str);
     }
 
     // Verify the entry count is preserved after deserialization
     try std.testing.expectEqual(@as(u32, 9), deserialized.entry_count);
 }
 
-test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
+test "IdentInterner with populated hashmap CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
 
     // Create interner and populate it
-    var original = try SmallStringInterner.initCapacity(gpa, 20);
+    var original = try IdentInterner.initCapacity(gpa, 20);
     defer original.deinit(gpa);
 
     // Insert many strings to ensure the hash map is well populated
@@ -1054,7 +974,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     _ = try file.read(buffer);
 
     // Cast and relocate
-    const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
+    const deserialized = @as(*IdentInterner, @ptrCast(@alignCast(buffer.ptr)));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify the entry count is preserved after deserialization
@@ -1062,24 +982,24 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
 
     // But all strings should still be accessible
     // Note: Index 0 is reserved, so all indices are offset by 1
-    try std.testing.expectEqualStrings("first", deserialized.getText(@enumFromInt(1)));
-    try std.testing.expectEqualStrings("second", deserialized.getText(@enumFromInt(7)));
-    try std.testing.expectEqualStrings("third", deserialized.getText(@enumFromInt(14)));
-    try std.testing.expectEqualStrings("fourth", deserialized.getText(@enumFromInt(20)));
-    try std.testing.expectEqualStrings("fifth", deserialized.getText(@enumFromInt(27)));
-    try std.testing.expectEqualStrings("sixth", deserialized.getText(@enumFromInt(33)));
-    try std.testing.expectEqualStrings("seventh", deserialized.getText(@enumFromInt(39)));
-    try std.testing.expectEqualStrings("eighth", deserialized.getText(@enumFromInt(47)));
+    try std.testing.expectEqualStrings("first", deserialized.getLowercase(@enumFromInt(1)));
+    try std.testing.expectEqualStrings("second", deserialized.getLowercase(@enumFromInt(7)));
+    try std.testing.expectEqualStrings("third", deserialized.getLowercase(@enumFromInt(14)));
+    try std.testing.expectEqualStrings("fourth", deserialized.getLowercase(@enumFromInt(20)));
+    try std.testing.expectEqualStrings("fifth", deserialized.getLowercase(@enumFromInt(27)));
+    try std.testing.expectEqualStrings("sixth", deserialized.getLowercase(@enumFromInt(33)));
+    try std.testing.expectEqualStrings("seventh", deserialized.getLowercase(@enumFromInt(39)));
+    try std.testing.expectEqualStrings("eighth", deserialized.getLowercase(@enumFromInt(47)));
 
     // Verify the original had entries
     try std.testing.expect(original_entry_count > 0);
 }
 
-test "SmallStringInterner frozen state CompactWriter roundtrip" {
+test "IdentInterner frozen state CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
 
     // Create and populate interner
-    var original = try SmallStringInterner.initCapacity(gpa, 5);
+    var original = try IdentInterner.initCapacity(gpa, 5);
     defer original.deinit(gpa);
 
     _ = try original.insert(gpa, "test1");
@@ -1125,7 +1045,7 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
     _ = try file.read(buffer);
 
     // Cast and relocate
-    const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
+    const deserialized = @as(*IdentInterner, @ptrCast(@alignCast(buffer.ptr)));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify frozen state is preserved
@@ -1135,31 +1055,31 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
 
     // Verify strings are still accessible
     // Note: Index 0 is reserved for the unused marker, so strings start at index 1
-    try std.testing.expectEqualStrings("test1", deserialized.getText(@enumFromInt(1)));
-    try std.testing.expectEqualStrings("test2", deserialized.getText(@enumFromInt(7)));
+    try std.testing.expectEqualStrings("test1", deserialized.getLowercase(@enumFromInt(1)));
+    try std.testing.expectEqualStrings("test2", deserialized.getLowercase(@enumFromInt(7)));
 }
 
-test "SmallStringInterner edge cases CompactWriter roundtrip" {
+test "IdentInterner edge cases CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
 
     // Test with strings of various lengths and special characters
-    var original = try SmallStringInterner.initCapacity(gpa, 15);
+    var original = try IdentInterner.initCapacity(gpa, 15);
     defer original.deinit(gpa);
 
     const edge_cases = [_][]const u8{
-        "", // empty string
+        "x", // single char (replaced empty string)
         "a", // single char
         "ab", // two chars
-        "hello world with spaces",
-        "special\ncharacters\ttabs",
-        "unicode: 你好世界", // UTF-8
+        "hello_world_with_underscores", // replaced spaces with underscores (identifiers can't have spaces)
+        "special_characters", // removed control characters (identifiers can't have tabs/newlines)
+        "unicode_nihao", // replaced non-ASCII (identifiers should be ASCII)
         "very_long_string_that_is_much_longer_than_average_to_test_capacity_handling",
-        "\x00embedded", // string starting with null (though this might not work)
-        "end_with_space ",
-        " start_with_space",
+        "not_embedded", // removed null (identifiers can't have null bytes)
+        "end_with_underscore_", // replaced space
+        "_start_with_underscore", // replaced space
     };
 
-    var indices = std.ArrayList(SmallStringInterner.Idx).init(gpa);
+    var indices = std.ArrayList(IdentInterner.Idx).init(gpa);
     defer indices.deinit();
 
     for (edge_cases) |str| {
@@ -1199,37 +1119,37 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     _ = try file.read(buffer);
 
     // Cast and relocate
-    const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
+    const deserialized = @as(*IdentInterner, @ptrCast(@alignCast(buffer.ptr)));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify all edge cases
     for (edge_cases, 0..) |expected_str, i| {
         const idx = indices.items[i];
-        const actual_str = deserialized.getText(idx);
+        const actual_str = deserialized.getLowercase(idx);
 
-        // Special case: strings starting with null byte will be truncated to empty string
-        // This is a limitation of null-terminated string storage
-        if (expected_str.len > 0 and expected_str[0] == '\x00') {
-            try std.testing.expectEqualStrings("", actual_str);
-        } else {
-            try std.testing.expectEqualStrings(expected_str, actual_str);
+        // IdentInterner only lowercases the first character if it's uppercase ASCII
+        var expected_normalized: [256]u8 = undefined;
+        @memcpy(expected_normalized[0..expected_str.len], expected_str);
+        if (expected_str.len > 0 and expected_str[0] >= 'A' and expected_str[0] <= 'Z') {
+            expected_normalized[0] = expected_str[0] + ('a' - 'A');
         }
+        try std.testing.expectEqualStrings(expected_normalized[0..expected_str.len], actual_str);
     }
 }
 
 // TODO: CompactWriter doesn't support serializing multiple independent structures
 // This test needs to be redesigned to either use separate writers or a containing structure
-// test "SmallStringInterner multiple interners CompactWriter roundtrip" {
+// test "IdentInterner multiple interners CompactWriter roundtrip" {
 //     const gpa = std.testing.allocator;
 
 //     // Create multiple interners to test alignment and offset handling
-//     var interner1 = try SmallStringInterner.initCapacity(gpa, 5);
+//     var interner1 = try IdentInterner.initCapacity(gpa, 5);
 //     defer interner1.deinit(gpa);
 
-//     var interner2 = try SmallStringInterner.initCapacity(gpa, 5);
+//     var interner2 = try IdentInterner.initCapacity(gpa, 5);
 //     defer interner2.deinit(gpa);
 
-//     var interner3 = try SmallStringInterner.initCapacity(gpa, 5);
+//     var interner3 = try IdentInterner.initCapacity(gpa, 5);
 //     defer interner3.deinit(gpa);
 
 //     // Populate with different strings
@@ -1288,31 +1208,31 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
 //     _ = try file.read(buffer);
 
 //     // Cast and relocate all three
-//     const deserialized1 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset1)));
+//     const deserialized1 = @as(*IdentInterner, @ptrCast(@alignCast(buffer.ptr + offset1)));
 //     deserialized1.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
-//     const deserialized2 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset2)));
+//     const deserialized2 = @as(*IdentInterner, @ptrCast(@alignCast(buffer.ptr + offset2)));
 //     deserialized2.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
-//     const deserialized3 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset3)));
+//     const deserialized3 = @as(*IdentInterner, @ptrCast(@alignCast(buffer.ptr + offset3)));
 //     deserialized3.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
 //     // Verify interner 1
-//     try std.testing.expectEqualStrings("interner1_string1", deserialized1.getText(idx1_1));
-//     try std.testing.expectEqualStrings("interner1_string2", deserialized1.getText(idx1_2));
+//     try std.testing.expectEqualStrings("interner1_string1", deserialized1.getLowercase(idx1_1));
+//     try std.testing.expectEqualStrings("interner1_string2", deserialized1.getLowercase(idx1_2));
 //     try std.testing.expectEqual(@as(u32, 2), deserialized1.entry_count);
 
 //     // Verify interner 2 (frozen)
-//     try std.testing.expectEqualStrings("interner2_string1", deserialized2.getText(idx2_1));
-//     try std.testing.expectEqualStrings("interner2_string2", deserialized2.getText(idx2_2));
-//     try std.testing.expectEqualStrings("interner2_string3", deserialized2.getText(idx2_3));
+//     try std.testing.expectEqualStrings("interner2_string1", deserialized2.getLowercase(idx2_1));
+//     try std.testing.expectEqualStrings("interner2_string2", deserialized2.getLowercase(idx2_2));
+//     try std.testing.expectEqualStrings("interner2_string3", deserialized2.getLowercase(idx2_3));
 //     try std.testing.expectEqual(@as(u32, 3), deserialized2.entry_count);
 //     if (std.debug.runtime_safety) {
 //         try std.testing.expect(deserialized2.frozen);
 //     }
 
 //     // Verify interner 3
-//     try std.testing.expectEqualStrings("interner3_string1", deserialized3.getText(idx3_1));
+//     try std.testing.expectEqualStrings("interner3_string1", deserialized3.getLowercase(idx3_1));
 //     try std.testing.expectEqual(@as(u32, 1), deserialized3.entry_count);
 // } // End of commented test
 

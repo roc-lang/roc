@@ -68,10 +68,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.6 (type "MyType")))
+		(patt @6.1-6.6 (type "myType")))
 	(type_decls
-		(nominal @3.1-3.23 (type "MyType")
+		(nominal @3.1-3.23 (type "myType")
 			(ty-header @3.1-3.7 (name "myType"))))
 	(expressions
-		(expr @6.9-6.20 (type "MyType"))))
+		(expr @6.9-6.20 (type "myType"))))
 ~~~

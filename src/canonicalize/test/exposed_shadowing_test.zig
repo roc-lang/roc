@@ -83,7 +83,7 @@ test "exposed but not implemented - types" {
         switch (diag) {
             .exposed_but_not_implemented => |d| {
                 const ident_text = env.idents.getLowercase(d.ident);
-                if (std.mem.eql(u8, ident_text, "OtherType")) {
+                if (std.mem.eql(u8, ident_text, "otherType")) {
                     found_other_type_error = true;
                 }
             },
@@ -339,7 +339,7 @@ test "complex case with redundant, shadowing, and not implemented" {
             },
             .exposed_but_not_implemented => |d| {
                 const ident_text = env.idents.getLowercase(d.ident);
-                if (std.mem.eql(u8, ident_text, "NotImplemented")) {
+                if (std.mem.eql(u8, ident_text, "notImplemented")) {
                     found_not_implemented = true;
                 }
             },
@@ -386,7 +386,7 @@ test "exposed_items is populated correctly" {
     // Check that exposed_items contains all exposed items
     const foo_idx = env.idents.findByString("foo").?;
     const bar_idx = env.idents.findByString("bar").?;
-    const mytype_idx = env.idents.findByString("MyType").?;
+    const mytype_idx = env.idents.findByString("myType").?;
 
     try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(foo_idx)));
     try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(bar_idx)));
@@ -515,7 +515,7 @@ test "exposed_items handles identifiers with different attributes" {
 
 test "exposed items SExpr output distinguishes types from values" {
     const allocator = testing.allocator;
-    
+
     const source =
         \\module [get, post, Get, Post]
         \\
@@ -524,48 +524,80 @@ test "exposed items SExpr output distinguishes types from values" {
         \\Get : [A, B]
         \\Post : [X, Y]
     ;
-    
+
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
-    
+
     try env.initCIRFields(allocator, "Test");
-    
+
     var ast = try parse.parse(&env);
     defer ast.deinit(allocator);
-    
-    // Create SExprTree for testing
-    var tree = compile.SExprTree.init(allocator);
-    defer tree.deinit();
-    
+
     // Get the exposed items from the AST
-    const module_header = ast.store.getNode(ast.root_node_idx);
-    if (module_header.data.module_header) |header_idx| {
-        const header = ast.store.getModuleHeader(header_idx);
-        const exposed_items = ast.store.exposedItemSlice(header.exposes);
-        
+    const file = ast.store.getFile();
+    const header = ast.store.getHeader(file.header);
+    if (header == .module) {
+        const exposes_collection = ast.store.getCollection(header.module.exposes);
+        const exposed_items = ast.store.exposedItemSlice(.{ .span = exposes_collection.span });
+
         // Process each exposed item
         for (exposed_items) |item_idx| {
             const item = ast.store.getExposedItem(item_idx);
-            const name_str = env.idents.getLowercase(item.name);
-            
+
+            // Get the name based on the item type
+            const name_token = switch (item) {
+                .lower_ident => |li| li.ident,
+                .upper_ident => |ui| ui.ident,
+                .upper_ident_star => |uis| uis.ident,
+                .malformed => continue,
+            };
+
+            const name_ident = ast.tokens.resolveIdentifier(name_token) orelse continue;
+            const name_str = env.idents.getLowercase(name_ident);
+
+            // Check if it has an alias
+            const alias_token = switch (item) {
+                .lower_ident => |li| li.as,
+                .upper_ident => |ui| ui.as,
+                .upper_ident_star => null,
+                .malformed => null,
+            };
+
+            const alias_ident = if (alias_token) |tok| ast.tokens.resolveIdentifier(tok) else null;
+
             // Create a CIR exposed item
             const cir_item = compile.CIR.ExposedItem{
-                .name = item.name,
-                .alias = item.alias,
-                .is_wildcard = false,
+                .name = name_ident,
+                .alias = alias_ident,
+                .is_wildcard = item == .upper_ident_star,
+                .is_type = switch (item) {
+                    .lower_ident => false,
+                    .upper_ident, .upper_ident_star => true,
+                    .malformed => false,
+                },
             };
-            
+
+            // Create a fresh tree for this item
+            var item_tree = base.SExprTree.init(allocator);
+            defer item_tree.deinit();
+
             // Push to SExpr tree
-            try cir_item.pushToSExprTree(undefined, &env, &tree);
-            
+            try cir_item.pushToSExprTree(undefined, &env, &item_tree);
+
             // Get the string representation
             var buffer = std.ArrayList(u8).init(allocator);
             defer buffer.deinit();
-            try tree.printToWriter(buffer.writer());
-            
+            try item_tree.printTree(buffer.writer());
+
             // Check the output
             const output = buffer.items;
-            if (std.mem.eql(u8, name_str, "get") or std.mem.eql(u8, name_str, "post")) {
+            const is_value = switch (item) {
+                .lower_ident => true,
+                .upper_ident, .upper_ident_star => false,
+                .malformed => false,
+            };
+
+            if (is_value) {
                 // Values should use "exposed" and lowercase names
                 try testing.expect(std.mem.indexOf(u8, output, "(exposed") != null);
                 try testing.expect(std.mem.indexOf(u8, output, name_str) != null);
@@ -573,15 +605,13 @@ test "exposed items SExpr output distinguishes types from values" {
                 // Types should use "exposed-type" and uppercase names
                 try testing.expect(std.mem.indexOf(u8, output, "(exposed-type") != null);
                 // The uppercase version should be in the output
-                const uppercase = try env.idents.getUppercase(item.name);
+                const uppercase = try env.idents.getUppercase(name_ident);
                 var uppercase_buf = std.ArrayList(u8).init(allocator);
                 defer uppercase_buf.deinit();
                 try uppercase_buf.append(uppercase.first);
                 try uppercase_buf.appendSlice(uppercase.rest);
                 try testing.expect(std.mem.indexOf(u8, output, uppercase_buf.items) != null);
             }
-            
-            tree.clear();
         }
     }
 }

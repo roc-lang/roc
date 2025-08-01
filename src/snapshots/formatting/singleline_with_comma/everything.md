@@ -46,11 +46,11 @@ UNUSED VARIABLE - everything.md:26:10:26:11
 UNUSED VARIABLE - everything.md:27:9:27:10
 UNUSED VARIABLE - everything.md:28:11:28:12
 UNUSED VARIABLE - everything.md:29:10:29:11
-UNUSED VARIABLE - everything.md:23:2:23:4
-UNUSED VARIABLE - everything.md:19:2:19:4
-UNUSED VARIABLE - everything.md:20:2:20:4
 UNUSED VARIABLE - everything.md:22:2:22:4
 UNUSED VARIABLE - everything.md:21:2:21:4
+UNUSED VARIABLE - everything.md:20:2:20:4
+UNUSED VARIABLE - everything.md:19:2:19:4
+UNUSED VARIABLE - everything.md:23:2:23:4
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
@@ -75,7 +75,7 @@ B(b) : b where module(b).b1 : (b, b,) -> Str, module(b).b2 : (b, b,) -> Str,
 
 
 **MODULE NOT FOUND**
-The module `I1` was not found in this Roc project.
+The module `i1` was not found in this Roc project.
 
 You're attempting to use this module here:
 **everything.md:4:1:4:31:**
@@ -86,7 +86,7 @@ import I1 exposing [I11, I12,]
 
 
 **MODULE NOT FOUND**
-The module `I2` was not found in this Roc project.
+The module `i2` was not found in this Roc project.
 
 You're attempting to use this module here:
 **everything.md:5:1:5:47:**
@@ -145,42 +145,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `h5` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
-The unused variable is declared here:
-**everything.md:23:2:23:4:**
-```roc
-	h5 = (x, y,)
-```
- ^^
-
-
-**UNUSED VARIABLE**
-Variable `h1` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h1` to suppress this warning.
-The unused variable is declared here:
-**everything.md:19:2:19:4:**
-```roc
-	h1 = { h11: x, h12: x, h13: { h131: x, h132: y, }, }
-```
- ^^
-
-
-**UNUSED VARIABLE**
-Variable `h2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
-The unused variable is declared here:
-**everything.md:20:2:20:4:**
-```roc
-	h2 = h(x, y,)
-```
- ^^
-
-
-**UNUSED VARIABLE**
 Variable `h4` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h4` to suppress this warning.
@@ -200,6 +164,42 @@ The unused variable is declared here:
 **everything.md:21:2:21:4:**
 ```roc
 	h3 = A(x, y,)
+```
+ ^^
+
+
+**UNUSED VARIABLE**
+Variable `h2` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
+The unused variable is declared here:
+**everything.md:20:2:20:4:**
+```roc
+	h2 = h(x, y,)
+```
+ ^^
+
+
+**UNUSED VARIABLE**
+Variable `h1` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h1` to suppress this warning.
+The unused variable is declared here:
+**everything.md:19:2:19:4:**
+```roc
+	h1 = { h11: x, h12: x, h13: { h131: x, h132: y, }, }
+```
+ ^^
+
+
+**UNUSED VARIABLE**
+Variable `h5` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
+The unused variable is declared here:
+**everything.md:23:2:23:4:**
+```roc
+	h5 = (x, y,)
 ```
  ^^
 
@@ -609,17 +609,17 @@ h = |
 										(e-lookup-local @29.18-29.19
 											(p-assign @29.7-29.8 (ident "a"))))))))))))
 	(s-alias-decl @8.1-8.77
-		(ty-header @8.1-8.5 (name "A")
+		(ty-header @8.1-8.5 (name "a")
 			(ty-args
 				(ty-var @8.3-8.4 (name "a"))))
 		(ty-var @8.8-8.9 (name "a")))
 	(s-alias-decl @9.1-9.77
-		(ty-header @9.1-9.5 (name "B")
+		(ty-header @9.1-9.5 (name "b")
 			(ty-args
 				(ty-var @9.3-9.4 (name "b"))))
 		(ty-var @9.8-9.9 (name "b")))
 	(s-alias-decl @11.1-11.19
-		(ty-header @11.1-11.9 (name "C")
+		(ty-header @11.1-11.9 (name "c")
 			(ty-args
 				(ty-var @11.3-11.4 (name "a"))
 				(ty-var @11.6-11.7 (name "b"))))
@@ -627,7 +627,7 @@ h = |
 			(ty-var @11.13-11.14 (name "a"))
 			(ty-var @11.16-11.17 (name "b"))))
 	(s-alias-decl @12.1-12.20
-		(ty-header @12.1-12.9 (name "D")
+		(ty-header @12.1-12.9 (name "d")
 			(ty-args
 				(ty-var @12.3-12.4 (name "a"))
 				(ty-var @12.6-12.7 (name "b"))))
@@ -635,32 +635,32 @@ h = |
 			(ty-var @12.14-12.15 (name "a"))
 			(ty-var @12.17-12.18 (name "b"))))
 	(s-alias-decl @13.1-13.26
-		(ty-header @13.1-13.2 (name "E"))
+		(ty-header @13.1-13.2 (name "e"))
 		(ty-record @13.5-13.26
 			(field (field "a")
 				(ty @13.11-13.14 (name "Str")))
 			(field (field "b")
 				(ty @13.20-13.23 (name "Str")))))
 	(s-alias-decl @14.1-14.12
-		(ty-header @14.1-14.2 (name "F"))
+		(ty-header @14.1-14.2 (name "f"))
 		(ty-tag-union @14.5-14.12
 			(ty @14.6-14.7 (name "A"))
 			(ty @14.9-14.10 (name "B"))))
 	(s-import @4.1-4.31 (module "I1")
 		(exposes
-			(exposed (name "I11") (wildcard false))
-			(exposed (name "I12") (wildcard false))))
+			(exposed (name "i11") (wildcard false))
+			(exposed (name "i12") (wildcard false))))
 	(s-import @5.1-5.47 (module "I2")
 		(exposes
-			(exposed (name "I21") (alias "Ias1") (wildcard false))
-			(exposed (name "I22") (alias "Ias2") (wildcard false))))
+			(exposed (name "i21") (alias "ias1") (wildcard false))
+			(exposed (name "i22") (alias "ias2") (wildcard false))))
 	(s-type-anno @16.1-16.43 (name "g")
 		(ty-fn @16.5-16.11 (effectful false)
 			(ty-var @16.5-16.6 (name "e"))
 			(ty-var @16.10-16.11 (name "e")))
 		(where
-			(alias @16.18-16.29 (module-of "e") (ident "A"))
-			(alias @16.31-16.42 (module-of "e") (ident "B"))))
+			(alias @16.18-16.29 (module-of "e") (ident "a"))
+			(alias @16.31-16.42 (module-of "e") (ident "b"))))
 	(ext-decl @16.18-16.29 (ident "module(e).A") (kind "type"))
 	(ext-decl @16.31-16.42 (ident "module(e).B") (kind "type")))
 ~~~
@@ -668,30 +668,30 @@ h = |
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret")))
+		(patt @18.1-18.2 (type "[z1((field, field2)), z2(i, j), z3(k), z4(List(elem))]others, [z1((field3, field4)), z2(l, m), z3(n), z4(List(elem2))]others2 -> _ret")))
 	(type_decls
-		(alias @8.1-8.77 (type "A(a)")
-			(ty-header @8.1-8.5 (name "A")
+		(alias @8.1-8.77 (type "a(a)")
+			(ty-header @8.1-8.5 (name "a")
 				(ty-args
 					(ty-var @8.3-8.4 (name "a")))))
-		(alias @9.1-9.77 (type "B(b)")
-			(ty-header @9.1-9.5 (name "B")
+		(alias @9.1-9.77 (type "b(b)")
+			(ty-header @9.1-9.5 (name "b")
 				(ty-args
 					(ty-var @9.3-9.4 (name "b")))))
-		(alias @11.1-11.19 (type "C(a, b)")
-			(ty-header @11.1-11.9 (name "C")
+		(alias @11.1-11.19 (type "c(a, b)")
+			(ty-header @11.1-11.9 (name "c")
 				(ty-args
 					(ty-var @11.3-11.4 (name "a"))
 					(ty-var @11.6-11.7 (name "b")))))
-		(alias @12.1-12.20 (type "D(a, b)")
-			(ty-header @12.1-12.9 (name "D")
+		(alias @12.1-12.20 (type "d(a, b)")
+			(ty-header @12.1-12.9 (name "d")
 				(ty-args
 					(ty-var @12.3-12.4 (name "a"))
 					(ty-var @12.6-12.7 (name "b")))))
-		(alias @13.1-13.26 (type "E")
-			(ty-header @13.1-13.2 (name "E")))
-		(alias @14.1-14.12 (type "F")
-			(ty-header @14.1-14.2 (name "F"))))
+		(alias @13.1-13.26 (type "e")
+			(ty-header @13.1-13.2 (name "e")))
+		(alias @14.1-14.12 (type "f")
+			(ty-header @14.1-14.2 (name "f"))))
 	(expressions
-		(expr @18.5-31.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret"))))
+		(expr @18.5-31.2 (type "[z1((field, field2)), z2(i, j), z3(k), z4(List(elem))]others, [z1((field3, field4)), z2(l, m), z3(n), z4(List(elem2))]others2 -> _ret"))))
 ~~~

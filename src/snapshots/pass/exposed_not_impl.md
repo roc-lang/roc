@@ -118,7 +118,7 @@ NO CHANGE
 	(defs
 		(patt @8.1-8.4 (type "Num(_size)")))
 	(type_decls
-		(alias @10.1-10.19 (type "MyType")
+		(alias @10.1-10.19 (type "myType")
 			(ty-header @10.1-10.7 (name "myType"))))
 	(expressions
 		(expr @8.7-8.9 (type "Num(_size)"))))

@@ -474,7 +474,7 @@ This feature is not yet implemented: Exposed type 'write!' already imported from
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **MODULE NOT FOUND**
-The module `MALFORMED_IMPORT` was not found in this Roc project.
+The module `mALFORMED_IMPORT` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_023.md:6:1:12:4:**
@@ -501,7 +501,7 @@ import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*
 
 
 **MODULE NOT FOUND**
-The module `BadName` was not found in this Roc project.
+The module `badName` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_023.md:16:1:16:27:**
@@ -512,7 +512,7 @@ import BadName as GoodName
 
 
 **MODULE NOT FOUND**
-The module `BadNameMultiline` was not found in this Roc project.
+The module `badNameMultiline` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_023.md:17:1:20:20:**
@@ -2491,52 +2491,52 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @65.1-65.16 (type "Bool -> Num(_size)"))
+		(patt @65.1-65.16 (type "bool -> Num(_size)"))
 		(patt @68.1-68.8 (type "Error -> Error"))
 		(patt @80.1-80.11 (type "Error"))
 		(patt @144.1-144.6 (type "Error -> Error"))
 		(patt @199.1-199.6 (type "{}")))
 	(type_decls
-		(alias @22.1-22.41 (type "Map(a, b)")
+		(alias @22.1-22.41 (type "map(a, b)")
 			(ty-header @22.1-22.10 (name "map")
 				(ty-args
 					(ty-var @22.5-22.6 (name "a"))
 					(ty-var @22.8-22.9 (name "b")))))
-		(alias @23.1-34.5 (type "MapML(a, b)")
+		(alias @23.1-34.5 (type "mapML(a, b)")
 			(ty-header @23.1-26.2 (name "mapML")
 				(ty-args
 					(ty-var @24.2-24.3 (name "a"))
 					(ty-var @25.2-25.3 (name "b")))))
-		(alias @36.1-36.17 (type "Foo")
+		(alias @36.1-36.17 (type "foo")
 			(ty-header @36.1-36.4 (name "foo")))
-		(alias @38.1-41.2 (type "FooMultiline")
+		(alias @38.1-41.2 (type "fooMultiline")
 			(ty-header @38.1-38.13 (name "fooMultiline")))
-		(alias @43.1-43.43 (type "Some(a)")
+		(alias @43.1-43.43 (type "some(a)")
 			(ty-header @43.1-43.8 (name "some")
 				(ty-args
 					(ty-var @43.6-43.7 (name "a")))))
-		(alias @44.1-47.2 (type "SomeMl(a)")
+		(alias @44.1-47.2 (type "someMl(a)")
 			(ty-header @44.1-44.10 (name "someMl")
 				(ty-args
 					(ty-var @44.8-44.9 (name "a")))))
-		(alias @49.1-54.2 (type "SomeMultiline(a)")
+		(alias @49.1-54.2 (type "someMultiline(a)")
 			(ty-header @49.1-49.17 (name "someMultiline")
 				(ty-args
 					(ty-var @49.15-49.16 (name "a")))))
-		(alias @56.1-56.27 (type "Maybe(a)")
+		(alias @56.1-56.27 (type "maybe(a)")
 			(ty-header @56.1-56.9 (name "maybe")
 				(ty-args
 					(ty-var @56.7-56.8 (name "a")))))
-		(alias @58.1-61.2 (type "MaybeMultiline(a)")
+		(alias @58.1-61.2 (type "maybeMultiline(a)")
 			(ty-header @58.1-58.18 (name "maybeMultiline")
 				(ty-args
 					(ty-var @58.16-58.17 (name "a")))))
-		(alias @63.1-63.38 (type "SomeFunc(a)")
+		(alias @63.1-63.38 (type "someFunc(a)")
 			(ty-header @63.1-63.12 (name "someFunc")
 				(ty-args
 					(ty-var @63.10-63.11 (name "a"))))))
 	(expressions
-		(expr @65.19-65.40 (type "Bool -> Num(_size)"))
+		(expr @65.19-65.40 (type "bool -> Num(_size)"))
 		(expr @68.11-78.2 (type "Error -> Error"))
 		(expr @80.14-138.3 (type "Error"))
 		(expr @144.9-196.2 (type "Error -> Error"))

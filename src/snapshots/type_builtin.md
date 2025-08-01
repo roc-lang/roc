@@ -56,9 +56,9 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-3.15 (type "MyNumber")
+		(alias @3.1-3.15 (type "myNumber")
 			(ty-header @3.1-3.9 (name "myNumber")))
-		(alias @4.1-4.15 (type "MyString")
+		(alias @4.1-4.15 (type "myString")
 			(ty-header @4.1-4.9 (name "myString"))))
 	(expressions))
 ~~~

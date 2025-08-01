@@ -121,12 +121,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.8 (type "UserId -> Str"))
+		(patt @6.1-6.8 (type "userId -> Str"))
 		(patt @8.1-8.6 (type "_arg -> Str")))
 	(type_decls
-		(alias @3.1-3.13 (type "UserId")
+		(alias @3.1-3.13 (type "userId")
 			(ty-header @3.1-3.7 (name "userId"))))
 	(expressions
-		(expr @6.11-6.47 (type "UserId -> Str"))
+		(expr @6.11-6.47 (type "userId -> Str"))
 		(expr @8.9-8.25 (type "_arg -> Str"))))
 ~~~

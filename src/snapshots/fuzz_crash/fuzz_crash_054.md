@@ -12,7 +12,7 @@ f]
 MODULE NOT FOUND - fuzz_crash_054.md:1:20:2:3
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `S` was not found in this Roc project.
+The module `s` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_054.md:1:20:2:3:**

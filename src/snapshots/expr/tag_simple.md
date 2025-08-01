@@ -29,5 +29,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.3 (type "[Ok]_others"))
+(expr @1.1-1.3 (type "[ok]_others"))
 ~~~

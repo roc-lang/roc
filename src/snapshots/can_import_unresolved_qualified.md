@@ -261,7 +261,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @7.1-7.5 (type "Error"))
-		(patt @11.1-11.10 (type "Error -> Str"))
+		(patt @11.1-11.10 (type "Error -> str"))
 		(patt @15.1-15.15 (type "Error -> Error"))
 		(patt @18.1-18.7 (type "_a"))
 		(patt @21.1-21.7 (type "_a"))
@@ -269,7 +269,7 @@ NO CHANGE
 		(patt @27.1-27.7 (type "Error")))
 	(expressions
 		(expr @7.8-7.31 (type "Error"))
-		(expr @11.13-11.40 (type "Error -> Str"))
+		(expr @11.13-11.40 (type "Error -> str"))
 		(expr @15.18-15.51 (type "Error -> Error"))
 		(expr @18.10-18.28 (type "_a"))
 		(expr @21.10-21.31 (type "_a"))

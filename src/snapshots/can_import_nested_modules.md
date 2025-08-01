@@ -271,7 +271,7 @@ import utils.String.Format exposing [padLeft]
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `Config` imported into this Roc file.
+There is no module with the name `config` imported into this Roc file.
 
 You're attempting to use this module here:
 **can_import_nested_modules.md:8:15:8:30:**
@@ -293,7 +293,7 @@ parseConfig = |settings| Config.toString(settings)
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `HttpAuth` imported into this Roc file.
+There is no module with the name `httpAuth` imported into this Roc file.
 
 You're attempting to use this module here:
 **can_import_nested_modules.md:12:28:12:42:**
@@ -400,7 +400,7 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `HttpAuth` imported into this Roc file.
+There is no module with the name `httpAuth` imported into this Roc file.
 
 You're attempting to use this module here:
 **can_import_nested_modules.md:25:16:25:36:**
@@ -411,7 +411,7 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `HttpAuth` imported into this Roc file.
+There is no module with the name `httpAuth` imported into this Roc file.
 
 You're attempting to use this module here:
 **can_import_nested_modules.md:25:47:25:61:**
@@ -422,7 +422,7 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `HttpAuth` imported into this Roc file.
+There is no module with the name `httpAuth` imported into this Roc file.
 
 You're attempting to use this module here:
 **can_import_nested_modules.md:25:63:25:77:**
@@ -679,15 +679,15 @@ validateAuth = |creds| HttpAuth.validate(creds)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @9.1-9.12 (type "Error -> Str"))
-		(patt @13.1-13.13 (type "Str, Str -> Error"))
-		(patt @17.1-17.12 (type "Error, Str -> Error"))
-		(patt @22.1-22.13 (type "Str -> Str"))
+		(patt @9.1-9.12 (type "Error -> str"))
+		(patt @13.1-13.13 (type "str, str -> Error"))
+		(patt @17.1-17.12 (type "Error, str -> Error"))
+		(patt @22.1-22.13 (type "str -> str"))
 		(patt @26.1-26.13 (type "Error -> Error")))
 	(expressions
-		(expr @9.15-9.51 (type "Error -> Str"))
-		(expr @13.16-13.55 (type "Str, Str -> Error"))
-		(expr @17.15-18.60 (type "Error, Str -> Error"))
-		(expr @22.16-22.59 (type "Str -> Str"))
+		(expr @9.15-9.51 (type "Error -> str"))
+		(expr @13.16-13.55 (type "str, str -> Error"))
+		(expr @17.15-18.60 (type "Error, str -> Error"))
+		(expr @22.16-22.59 (type "str -> str"))
 		(expr @26.16-26.48 (type "Error -> Error"))))
 ~~~

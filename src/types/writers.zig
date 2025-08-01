@@ -98,7 +98,7 @@ pub const TypeWriter = struct {
         // Generate name: a, b, ..., z, aa, ab, ..., az, ba, ...
         // Skip any names that already exist in the identifier store
         // We need at most one more name than the number of existing identifiers
-        const max_attempts = self.env.idents.interner.entry_count + 1;
+        const max_attempts = self.idents.interner.entry_count + 1;
         var attempts: usize = 0;
         while (attempts < max_attempts) : (attempts += 1) {
             var n = self.next_name_index;
@@ -121,7 +121,7 @@ pub const TypeWriter = struct {
 
             // Check if this name already exists in the identifier store
             const candidate_name = name_buf[0..name_len];
-            const exists = self.env.idents.interner.contains(candidate_name);
+            const exists = self.idents.interner.contains(candidate_name);
 
             if (!exists) {
                 // This name is available, write it to the buffer
@@ -162,7 +162,7 @@ pub const TypeWriter = struct {
         var found = false;
 
         // We need at most as many attempts as there are existing identifiers
-        const max_attempts = self.env.idents.interner.entry_count;
+        const max_attempts = self.idents.interner.entry_count;
         var attempts: usize = 0;
         while (!found and attempts < max_attempts) : (attempts += 1) {
             var buf: [32]u8 = undefined;
@@ -178,7 +178,7 @@ pub const TypeWriter = struct {
             };
 
             // Check if this name already exists in the identifier store
-            const exists = self.env.idents.interner.contains(candidate_name);
+            const exists = self.idents.interner.contains(candidate_name);
 
             if (!exists) {
                 // This name is available, write it to the buffer
@@ -207,9 +207,9 @@ pub const TypeWriter = struct {
 
         // Check all identifiers in the store
         var i: u32 = 0;
-        while (i < self.env.idents.interner.entry_count) : (i += 1) {
+        while (i < self.idents.interner.entry_count) : (i += 1) {
             const ident_idx = Ident.Idx{ .idx = @truncate(i), .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
-            const existing_name = self.env.idents.getLowercase(ident_idx);
+            const existing_name = self.idents.getLowercase(ident_idx);
             if (std.mem.eql(u8, existing_name, candidate_name)) {
                 exists = true;
                 break;
@@ -337,7 +337,7 @@ pub const TypeWriter = struct {
                 switch (resolved.desc.content) {
                     .flex_var => |mb_ident_idx| {
                         if (mb_ident_idx) |ident_idx| {
-                            _ = try self.buf.writer().write(self.env.idents.getLowercase(ident_idx));
+                            _ = try self.buf.writer().write(self.idents.getLowercase(ident_idx));
                         } else {
                             // Check if this variable appears multiple times
                             const occurrences = self.countVarOccurrences(var_, root_var);
@@ -348,7 +348,7 @@ pub const TypeWriter = struct {
                         }
                     },
                     .rigid_var => |ident_idx| {
-                        _ = try self.buf.writer().write(self.env.idents.getLowercase(ident_idx));
+                        _ = try self.buf.writer().write(self.idents.getLowercase(ident_idx));
                     },
                     .alias => |alias| {
                         try self.writeAlias(alias, root_var);
@@ -370,7 +370,7 @@ pub const TypeWriter = struct {
 
     /// Write an alias type
     fn writeAlias(self: *Self, alias: Alias, root_var: Var) std.mem.Allocator.Error!void {
-        _ = try self.buf.writer().write(self.env.idents.getLowercase(alias.ident.ident_idx));
+        _ = try self.buf.writer().write(self.idents.getLowercase(alias.ident.ident_idx));
         var args_iter = self.types.iterAliasArgs(alias);
         if (args_iter.count() > 0) {
             _ = try self.buf.writer().write("(");
@@ -463,7 +463,7 @@ pub const TypeWriter = struct {
 
     /// Write a nominal type
     fn writeNominalType(self: *Self, nominal_type: NominalType, root_var: Var) std.mem.Allocator.Error!void {
-        _ = try self.buf.writer().write(self.env.idents.getLowercase(nominal_type.ident.ident_idx));
+        _ = try self.buf.writer().write(self.idents.getLowercase(nominal_type.ident.ident_idx));
 
         var args_iter = self.types.iterNominalArgs(nominal_type);
         if (args_iter.count() > 0) {
@@ -494,14 +494,14 @@ pub const TypeWriter = struct {
         const fields_slice = self.types.getRecordFieldsSlice(fields);
 
         // Write first field - we already verified that there's at least one field
-        _ = try self.buf.writer().write(self.env.idents.getLowercase(fields_slice.items(.name)[0]));
+        _ = try self.buf.writer().write(self.idents.getLowercase(fields_slice.items(.name)[0]));
         _ = try self.buf.writer().write(": ");
         try self.writeVarWithContext(fields_slice.items(.var_)[0], .RecordFieldContent, root_var);
 
         // Write remaining fields
         for (fields_slice.items(.name)[1..], fields_slice.items(.var_)[1..]) |name, var_| {
             _ = try self.buf.writer().write(", ");
-            _ = try self.buf.writer().write(self.env.idents.getLowercase(name));
+            _ = try self.buf.writer().write(self.idents.getLowercase(name));
             _ = try self.buf.writer().write(": ");
             try self.writeVarWithContext(var_, .RecordFieldContent, root_var);
         }
@@ -537,7 +537,7 @@ pub const TypeWriter = struct {
         _ = try self.buf.writer().write("{ ");
         for (fields.items(.name), fields.items(.var_), 0..) |field_name, field_var, i| {
             if (i > 0) _ = try self.buf.writer().write(", ");
-            _ = try self.buf.writer().write(self.env.idents.getLowercase(field_name));
+            _ = try self.buf.writer().write(self.idents.getLowercase(field_name));
             _ = try self.buf.writer().write(": ");
             try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
         }
@@ -552,7 +552,7 @@ pub const TypeWriter = struct {
                     const ext_fields = self.types.getRecordFieldsSlice(ext_record.fields);
                     for (ext_fields.items(.name), ext_fields.items(.var_)) |field_name, field_var| {
                         if (fields.len > 0 or ext_fields.len > 0) _ = try self.buf.writer().write(", ");
-                        _ = try self.buf.writer().write(self.env.idents.getLowercase(field_name));
+                        _ = try self.buf.writer().write(self.idents.getLowercase(field_name));
                         _ = try self.buf.writer().write(": ");
                         try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
                     }
@@ -576,7 +576,7 @@ pub const TypeWriter = struct {
                 // Show rigid vars with .. syntax
                 if (fields.len > 0) _ = try self.buf.writer().write(", ");
                 _ = try self.buf.writer().write("..");
-                _ = try self.buf.writer().write(self.env.idents.getLowercase(ident_idx));
+                _ = try self.buf.writer().write(self.idents.getLowercase(ident_idx));
             },
             else => {
                 if (fields.len > 0) _ = try self.buf.writer().write(", ");
@@ -598,7 +598,7 @@ pub const TypeWriter = struct {
                     const ext_fields = self.types.getRecordFieldsSlice(ext_record.fields);
                     for (ext_fields.items(.name), ext_fields.items(.var_)) |field_name, field_var| {
                         _ = try self.buf.writer().write(", ");
-                        _ = try self.buf.writer().write(self.env.idents.getLowercase(field_name));
+                        _ = try self.buf.writer().write(self.idents.getLowercase(field_name));
                         _ = try self.buf.writer().write(": ");
                         try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
                     }
@@ -622,7 +622,7 @@ pub const TypeWriter = struct {
                 // Show rigid vars with .. syntax
                 if (num_fields > 0) _ = try self.buf.writer().write(", ");
                 _ = try self.buf.writer().write("..");
-                _ = try self.buf.writer().write(self.env.idents.getLowercase(ident_idx));
+                _ = try self.buf.writer().write(self.idents.getLowercase(ident_idx));
             },
             else => {
                 // Show other types (aliases, errors, etc)
@@ -652,7 +652,7 @@ pub const TypeWriter = struct {
         switch (ext_resolved.desc.content) {
             .flex_var => |mb_ident_idx| {
                 if (mb_ident_idx) |ident_idx| {
-                    _ = try self.buf.writer().write(self.env.idents.getLowercase(ident_idx));
+                    _ = try self.buf.writer().write(self.idents.getLowercase(ident_idx));
                 } else {
                     // Check if this variable appears multiple times
                     const occurrences = self.countVarOccurrences(tag_union.ext, root_var);
@@ -669,7 +669,7 @@ pub const TypeWriter = struct {
                 },
             },
             .rigid_var => |ident_idx| {
-                _ = try self.buf.writer().write(self.env.idents.getLowercase(ident_idx));
+                _ = try self.buf.writer().write(self.idents.getLowercase(ident_idx));
                 _ = try self.buf.writer().write("(r)");
             },
             else => {
@@ -680,7 +680,7 @@ pub const TypeWriter = struct {
 
     /// Write a single tag
     fn writeTag(self: *Self, tag: Tag, root_var: Var) std.mem.Allocator.Error!void {
-        _ = try self.buf.writer().write(self.env.idents.getLowercase(tag.name));
+        _ = try self.buf.writer().write(self.idents.getLowercase(tag.name));
         const args = self.types.sliceVars(tag.args);
         if (args.len > 0) {
             _ = try self.buf.writer().write("(");

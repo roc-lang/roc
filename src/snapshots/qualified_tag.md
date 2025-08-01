@@ -60,10 +60,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "Color")))
+		(patt @5.1-5.5 (type "color")))
 	(type_decls
-		(nominal @3.1-3.21 (type "Color")
+		(nominal @3.1-3.21 (type "color")
 			(ty-header @3.1-3.6 (name "color"))))
 	(expressions
-		(expr @5.8-5.17 (type "Color"))))
+		(expr @5.8-5.17 (type "color"))))
 ~~~

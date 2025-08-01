@@ -134,7 +134,7 @@ import ModuleA.ModuleB exposing [TypeC]
 
 
 **MODULE NOT FOUND**
-The module `Color` was not found in this Roc project.
+The module `color` was not found in this Roc project.
 
 You're attempting to use this module here:
 **qualified_type_canonicalization.md:9:1:9:13:**
@@ -145,7 +145,7 @@ import Color
 
 
 **MODULE NOT FOUND**
-The module `ModuleA` was not found in this Roc project.
+The module `moduleA` was not found in this Roc project.
 
 You're attempting to use this module here:
 **qualified_type_canonicalization.md:10:1:10:15:**
@@ -189,7 +189,7 @@ import ModuleA.ModuleB exposing [TypeC]
 
 
 **MODULE NOT FOUND**
-The module `ExternalModule` was not found in this Roc project.
+The module `externalModule` was not found in this Roc project.
 
 You're attempting to use this module here:
 **qualified_type_canonicalization.md:11:1:11:32:**
@@ -254,7 +254,7 @@ multiLevelQualified = TypeC.new
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `Result` imported into this Roc file.
+There is no module with the name `result` imported into this Roc file.
 
 You're attempting to use this module here:
 **qualified_type_canonicalization.md:26:14:26:27:**
@@ -288,7 +288,7 @@ processColor = |color|
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `Result` imported into this Roc file.
+There is no module with the name `result` imported into this Roc file.
 
 You're attempting to use this module here:
 **qualified_type_canonicalization.md:39:13:39:26:**

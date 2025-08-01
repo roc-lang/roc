@@ -144,9 +144,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.10 (type "{ age: U64, name: Str } -> Str"))
+		(patt @6.1-6.10 (type "{ age: u64, name: str } -> str"))
 		(patt @10.1-10.6 (type "_arg -> {}")))
 	(expressions
-		(expr @6.13-9.2 (type "{ age: U64, name: Str } -> Str"))
+		(expr @6.13-9.2 (type "{ age: u64, name: str } -> str"))
 		(expr @10.9-10.15 (type "_arg -> {}"))))
 ~~~

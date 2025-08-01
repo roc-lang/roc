@@ -94,42 +94,6 @@ pub const Store = struct {
     interner: IdentInterner,
     attributes: collections.SafeList(Attributes) = .{},
 
-    /// Serialized representation of an Ident.Store
-    pub const Serialized = struct {
-        interner: SmallStringInterner.Serialized,
-        attributes: collections.SafeList(Attributes).Serialized,
-        next_unique_name: u32,
-
-        /// Serialize a Store into this Serialized struct, appending data to the writer
-        pub fn serialize(
-            self: *Serialized,
-            store: *const Store,
-            allocator: std.mem.Allocator,
-            writer: *CompactWriter,
-        ) std.mem.Allocator.Error!void {
-            try self.interner.serialize(&store.interner, allocator, writer);
-            try self.attributes.serialize(&store.attributes, allocator, writer);
-            self.next_unique_name = store.next_unique_name;
-        }
-
-        /// Deserialize this Serialized struct into a Store
-        pub fn deserialize(self: *Serialized, offset: i64) *Store {
-            // Ident.Store.Serialized should be at least as big as Ident.Store
-            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
-
-            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
-            const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
-
-            store.* = Store{
-                .interner = self.interner.deserialize(offset).*,
-                .attributes = self.attributes.deserialize(offset).*,
-                .next_unique_name = self.next_unique_name,
-            };
-
-            return store;
-        }
-    };
-
     /// Initialize the memory for an `Ident.Store` with a specific capaicty.
     pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!Store {
         return .{
@@ -289,6 +253,42 @@ pub const Store = struct {
         self.interner.relocate(offset);
         self.attributes.relocate(offset);
     }
+
+    /// Serialized representation of an Ident.Store
+    pub const Serialized = struct {
+        interner: IdentInterner,
+        attributes: collections.SafeList(Attributes).Serialized,
+
+        /// Serialize a Store into this Serialized struct, appending data to the writer
+        pub fn serialize(
+            self: *Serialized,
+            store: *const Store,
+            allocator: std.mem.Allocator,
+            writer: *CompactWriter,
+        ) std.mem.Allocator.Error!void {
+            self.interner = (try store.interner.serialize(allocator, writer)).*;
+            try self.attributes.serialize(&store.attributes, allocator, writer);
+        }
+
+        /// Deserialize this Serialized struct into a Store
+        pub fn deserialize(self: *Serialized, offset: i64) *Store {
+            // Ident.Store.Serialized should be at least as big as Ident.Store
+            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
+
+            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
+
+            store.* = Store{
+                .interner = self.interner,
+                .attributes = self.attributes.deserialize(offset).*,
+            };
+
+            // Relocate the interner
+            store.interner.relocate(@as(isize, @intCast(offset)));
+
+            return store;
+        }
+    };
 };
 
 test "from_bytes validates empty text" {

@@ -31,8 +31,8 @@ NOT IMPLEMENTED - :0:0:0:0
 UNDECLARED TYPE - fuzz_crash_032.md:6:25:6:30
 INVALID PATTERN - :0:0:0:0
 UNDECLARED TYPE - fuzz_crash_032.md:10:3:10:4
-EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:13:1:14
 EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:9:1:12
+EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:13:1:14
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **=** is not expected in an expression.
@@ -159,16 +159,6 @@ This type is referenced here:
 
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `r` is exposed, but it is not defined anywhere in this module.
-
-**fuzz_crash_032.md:1:13:1:14:**
-```roc
-module [tus,r]
-```
-            ^
-You can fix this by either defining `r` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
 The module header says that `tus` is exposed, but it is not defined anywhere in this module.
 
 **fuzz_crash_032.md:1:9:1:12:**
@@ -177,6 +167,16 @@ module [tus,r]
 ```
         ^^^
 You can fix this by either defining `tus` in this module, or by removing it from the list of exposed values.
+
+**EXPOSED BUT NOT DEFINED**
+The module header says that `r` is exposed, but it is not defined anywhere in this module.
+
+**fuzz_crash_032.md:1:13:1:14:**
+```roc
+module [tus,r]
+```
+            ^
+You can fix this by either defining `r` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -308,7 +308,7 @@ olor = |color| {
 					(ty-underscore @1.1-1.1)
 					(ty-var @5.13-5.16 (name "tus"))))))
 	(s-alias-decl @3.1-3.24
-		(ty-header @3.1-3.12 (name "LocalStatus"))
+		(ty-header @3.1-3.12 (name "localStatus"))
 		(ty-fn @3.14-3.24 (effectful true)
 			(ty-malformed @3.14-3.17)
 			(ty @3.21-3.24 (name "Loc")))))
@@ -320,7 +320,7 @@ olor = |color| {
 		(patt @6.1-6.5 (type "Error -> Error")))
 	(type_decls
 		(alias @3.1-3.24 (type "Error")
-			(ty-header @3.1-3.12 (name "LocalStatus"))))
+			(ty-header @3.1-3.12 (name "localStatus"))))
 	(expressions
 		(expr @6.8-12.2 (type "Error -> Error"))))
 ~~~

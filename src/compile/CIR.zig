@@ -248,15 +248,14 @@ pub const ExposedItem = struct {
     name: base.Ident.Idx,
     alias: ?base.Ident.Idx,
     is_wildcard: bool,
+    is_type: bool = false, // Default to false for backward compatibility
 
     pub fn pushToSExprTree(self: *const ExposedItem, _: anytype, cir: anytype, tree: anytype) !void {
         const begin = tree.beginNode();
-        
-        // Determine if this is a type based on the identifier
+
         const name_str = cir.idents.getLowercase(self.name);
-        const is_type = name_str.len > 0 and name_str[0] >= 'a' and name_str[0] <= 'z';
-        
-        if (is_type) {
+
+        if (self.is_type) {
             try tree.pushStaticAtom("exposed-type");
             // For types, capitalize the first letter
             const uppercase = try cir.idents.getUppercase(self.name);

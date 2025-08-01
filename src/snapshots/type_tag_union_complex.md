@@ -244,22 +244,22 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.14 (type "Result -> Str"))
-		(patt @22.1-22.15 (type "Response -> Str"))
+		(patt @18.1-18.14 (type "result -> Str"))
+		(patt @22.1-22.15 (type "response -> Str"))
 		(patt @24.1-24.6 (type "_arg -> {}")))
 	(type_decls
-		(alias @4.1-4.37 (type "Status")
+		(alias @4.1-4.37 (type "status")
 			(ty-header @4.1-4.7 (name "status")))
-		(alias @7.1-7.55 (type "Result")
+		(alias @7.1-7.55 (type "result")
 			(ty-header @7.1-7.7 (name "result")))
-		(alias @10.1-10.50 (type "Response")
+		(alias @10.1-10.50 (type "response")
 			(ty-header @10.1-10.9 (name "response")))
-		(alias @13.1-13.52 (type "UserState")
+		(alias @13.1-13.52 (type "userState")
 			(ty-header @13.1-13.10 (name "userState")))
-		(alias @14.1-14.58 (type "ConnectionState")
+		(alias @14.1-14.58 (type "connectionState")
 			(ty-header @14.1-14.16 (name "connectionState"))))
 	(expressions
-		(expr @18.17-18.38 (type "Result -> Str"))
-		(expr @22.18-22.39 (type "Response -> Str"))
+		(expr @18.17-18.38 (type "result -> Str"))
+		(expr @22.18-22.39 (type "response -> Str"))
 		(expr @24.9-24.15 (type "_arg -> {}"))))
 ~~~

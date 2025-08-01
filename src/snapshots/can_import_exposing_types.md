@@ -842,7 +842,7 @@ combineResults = |jsonResult, httpStatus|
 						(ty @49.57-49.65 (name "Response"))
 						(ty @49.67-49.72 (name "Error")))))))
 	(s-alias-decl @30.1-34.2
-		(ty-header @30.1-30.13 (name "ServerConfig"))
+		(ty-header @30.1-30.13 (name "serverConfig"))
 		(ty-record @30.16-34.2
 			(field (field "jsonConfig")
 				(ty @31.18-31.24 (name "Config")))
@@ -852,36 +852,36 @@ combineResults = |jsonResult, httpStatus|
 				(ty @33.23-33.31 (name "Response")))))
 	(s-import @3.1-3.49 (module "json.Json") (qualifier "json")
 		(exposes
-			(exposed (name "Value") (wildcard false))
-			(exposed (name "Error") (wildcard false))
-			(exposed (name "Config") (wildcard false))))
+			(exposed (name "value") (wildcard false))
+			(exposed (name "error") (wildcard false))
+			(exposed (name "config") (wildcard false))))
 	(s-import @4.1-4.64 (module "http.Client") (qualifier "http") (alias "Http")
 		(exposes
-			(exposed (name "Request") (wildcard false))
-			(exposed (name "Response") (wildcard false))
-			(exposed (name "Status") (wildcard false))))
+			(exposed (name "request") (wildcard false))
+			(exposed (name "response") (wildcard false))
+			(exposed (name "status") (wildcard false))))
 	(s-import @5.1-5.38 (module "utils.Result") (qualifier "utils")
 		(exposes
-			(exposed (name "Result") (wildcard false)))))
+			(exposed (name "result") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @9.1-9.10 (type "Str -> Error"))
+		(patt @9.1-9.10 (type "str -> Error"))
 		(patt @13.1-13.14 (type "Error -> Error"))
 		(patt @23.1-23.12 (type "Error, Error -> Error"))
 		(patt @38.1-38.13 (type "Error -> Error"))
-		(patt @42.1-42.15 (type "Error -> Str"))
+		(patt @42.1-42.15 (type "Error -> str"))
 		(patt @50.1-50.15 (type "Error, Error -> Error")))
 	(type_decls
-		(alias @30.1-34.2 (type "ServerConfig")
-			(ty-header @30.1-30.13 (name "ServerConfig"))))
+		(alias @30.1-34.2 (type "serverConfig")
+			(ty-header @30.1-30.13 (name "serverConfig"))))
 	(expressions
-		(expr @9.13-9.38 (type "Str -> Error"))
+		(expr @9.13-9.38 (type "str -> Error"))
 		(expr @13.17-19.2 (type "Error -> Error"))
 		(expr @23.15-27.6 (type "Error, Error -> Error"))
 		(expr @38.16-38.48 (type "Error -> Error"))
-		(expr @42.18-46.6 (type "Error -> Str"))
+		(expr @42.18-46.6 (type "Error -> str"))
 		(expr @50.18-54.6 (type "Error, Error -> Error"))))
 ~~~

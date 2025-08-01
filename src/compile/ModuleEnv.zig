@@ -909,10 +909,10 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             var report = Report.init(allocator, "TYPE NOT EXPOSED", .runtime_error);
 
-            const type_name_bytes = self.idents.getText(data.type_name);
+            const type_name_bytes = self.idents.getLowercase(data.type_name);
             const type_name = try report.addOwnedString(type_name_bytes);
 
-            const module_name_bytes = self.idents.getText(data.module_name);
+            const module_name_bytes = self.idents.getLowercase(data.module_name);
             const module_name = try report.addOwnedString(module_name_bytes);
 
             // Format the message to match origin/main
@@ -942,7 +942,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             var report = Report.init(allocator, "MODULE NOT FOUND", .runtime_error);
 
-            const module_name_bytes = self.idents.getText(data.module_name);
+            const module_name_bytes = self.idents.getLowercase(data.module_name);
             const module_name = try report.addOwnedString(module_name_bytes);
 
             // Format the message to match origin/main
@@ -970,7 +970,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             var report = Report.init(allocator, "MODULE NOT IMPORTED", .runtime_error);
 
-            const module_name_bytes = self.idents.getText(data.module_name);
+            const module_name_bytes = self.idents.getLowercase(data.module_name);
             const module_name = try report.addOwnedString(module_name_bytes);
 
             // Format the message to match origin/main

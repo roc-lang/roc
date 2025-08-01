@@ -14,9 +14,19 @@ sort : List(elem) -> List(elem) where module(elem).Sort
 sort = ...
 ~~~
 # EXPECTED
-NIL
+WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_alias_constraint.md:3:1:4:48
 # PROBLEMS
-NIL
+**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
+You cannot define a `where` clause inside a type declaration.
+
+You're attempting do this here:
+**where_clauses_alias_constraint.md:3:1:4:48:**
+```roc
+Sort(a) : a
+	where module(a).order : (a, a) -> [LT, EQ, GT]
+```
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),Comma(1:13-1:14),LowerIdent(1:15-1:19),CloseSquare(1:19-1:20),
@@ -85,17 +95,7 @@ NO CHANGE
 		(ty-header @3.1-3.8 (name "sort")
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))))
-		(ty-var @3.11-3.12 (name "a"))
-		(where
-			(method @4.8-4.48 (module-of "a") (ident "order")
-				(args
-					(ty-tuple @4.26-4.32
-						(ty-var @4.27-4.28 (name "a"))
-						(ty-var @4.30-4.31 (name "a"))))
-				(ty-tag-union @4.36-4.48
-					(ty @4.37-4.39 (name "LT"))
-					(ty @4.41-4.43 (name "EQ"))
-					(ty @4.45-4.47 (name "GT"))))))
+		(ty-var @3.11-3.12 (name "a")))
 	(s-type-anno @6.1-6.56 (name "sort")
 		(ty-fn @6.8-6.32 (effectful false)
 			(ty-apply @6.8-6.18 (symbol "List")
@@ -104,7 +104,6 @@ NO CHANGE
 				(ty-var @6.27-6.31 (name "elem"))))
 		(where
 			(alias @6.39-6.56 (module-of "elem") (ident "sort"))))
-	(ext-decl @4.8-4.48 (ident "module(a).order") (kind "value"))
 	(ext-decl @6.39-6.56 (ident "module(elem).Sort") (kind "type")))
 ~~~
 # TYPES
@@ -113,7 +112,7 @@ NO CHANGE
 	(defs
 		(patt @7.1-7.5 (type "Error -> Error")))
 	(type_decls
-		(alias @3.1-4.48 (type "Sort(a)")
+		(alias @3.1-4.48 (type "sort(a)")
 			(ty-header @3.1-3.8 (name "sort")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))))))

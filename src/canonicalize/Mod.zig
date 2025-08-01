@@ -1369,6 +1369,11 @@ fn convertASTExposesToCIR(
                 .name = name,
                 .alias = alias,
                 .is_wildcard = is_wildcard,
+                .is_type = switch (ast_exposed) {
+                    .lower_ident => false,
+                    .upper_ident, .upper_ident_star => true,
+                    .malformed => false,
+                },
             };
         };
 
@@ -3006,7 +3011,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
         const type_tok_idx = qualifier_toks[qualifier_toks.len - 1];
         const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
         const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
-        const type_tok_text = self.env.idents.getText(type_tok_ident);
+        const type_tok_text = self.env.idents.getLowercase(type_tok_ident);
 
         // Get the fully resolved module name from all but the last qualifier
         const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
@@ -3025,7 +3030,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
                 .region = region,
             } }), .free_vars = null };
         };
-        const module_name_text = self.env.idents.getText(module_name);
+        const module_name_text = self.env.idents.getLowercase(module_name);
 
         // Check if this module is imported in the current scope
         const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
@@ -3323,7 +3328,7 @@ fn canonicalizePattern(
         },
         .tag => |e| {
             const tag_name = self.parse_ir.tokens.resolveIdentifier(e.tag_tok) orelse return null;
-            const tag_name_text = self.parse_ir.env.idents.getText(tag_name);
+            const tag_name_text = self.parse_ir.env.idents.getLowercase(tag_name);
 
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
@@ -3414,7 +3419,7 @@ fn canonicalizePattern(
                 const type_tok_idx = qualifier_toks[qualifier_toks.len - 1];
                 const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
                 const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
-                const type_tok_text = self.env.idents.getText(type_tok_ident);
+                const type_tok_text = self.env.idents.getLowercase(type_tok_ident);
 
                 // Get the fully resolved module name from all but the last qualifier
                 const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
@@ -3433,7 +3438,7 @@ fn canonicalizePattern(
                         .region = region,
                     } });
                 };
-                const module_name_text = self.env.idents.getText(module_name);
+                const module_name_text = self.env.idents.getLowercase(module_name);
 
                 // Check if this module is imported in the current scope
                 const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
@@ -4623,7 +4628,7 @@ fn canonicalizeTypeAnnoBasicType(
                 .region = region,
             } }), .mb_local_decl = null };
         };
-        const module_name_text = self.env.idents.getText(module_name);
+        const module_name_text = self.env.idents.getLowercase(module_name);
 
         // Check if this module is imported in the current scope
         const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
@@ -4634,7 +4639,7 @@ fn canonicalizeTypeAnnoBasicType(
         };
 
         // Look up the target node index in the module's exposed_nodes
-        const type_name_text = self.env.idents.getText(type_name_ident);
+        const type_name_text = self.env.idents.getLowercase(type_name_ident);
         const target_node_idx, const type_content = blk: {
             const envs_map = self.module_envs orelse {
                 break :blk .{ 0, Content.err };
@@ -4771,7 +4776,7 @@ fn canonicalizeTypeAnnoTypeApplication(
                             switch (decl_anno) {
                                 .ty_var => |decl_ty| {
                                     const arg_var = ModuleEnv.varFrom(arg_anno_idx);
-                                    try rigid_substitution.put(self.env.idents.getText(decl_ty.name), arg_var);
+                                    try rigid_substitution.put(self.env.idents.getLowercase(decl_ty.name), arg_var);
                                 },
                                 // TODO(jared): Don't throw on underscore/malformed
                                 else => unreachable,
@@ -4830,7 +4835,7 @@ fn canonicalizeTypeAnnoTypeApplication(
                             switch (decl_anno) {
                                 .ty_var => |decl_ty| {
                                     const arg_var = ModuleEnv.varFrom(arg_anno_idx);
-                                    try rigid_substitution.put(self.env.idents.getText(decl_ty.name), arg_var);
+                                    try rigid_substitution.put(self.env.idents.getLowercase(decl_ty.name), arg_var);
                                 },
                                 // TODO(jared): Don't throw on underscore/malformed
                                 else => unreachable,

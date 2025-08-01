@@ -624,29 +624,29 @@ combineResults = |result1, result2|
 						(ty-var @30.67-30.70 (name "err")))))))
 	(s-import @3.1-3.56 (module "http.Client") (qualifier "http") (alias "Http")
 		(exposes
-			(exposed (name "Request") (wildcard false))
-			(exposed (name "Response") (wildcard false))))
+			(exposed (name "request") (wildcard false))
+			(exposed (name "response") (wildcard false))))
 	(s-import @4.1-4.17 (module "json.Json") (qualifier "json")
 		(exposes))
 	(s-import @5.1-5.38 (module "utils.Result") (qualifier "utils")
 		(exposes
-			(exposed (name "Result") (wildcard false)))))
+			(exposed (name "result") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @8.1-8.15 (type "Error -> Error"))
-		(patt @11.1-11.10 (type "Str -> Error"))
+		(patt @11.1-11.10 (type "str -> Error"))
 		(patt @14.1-14.10 (type "Error -> Error"))
 		(patt @23.1-23.7 (type "Error"))
-		(patt @27.1-27.15 (type "Error, Str -> Error"))
+		(patt @27.1-27.15 (type "Error, str -> Error"))
 		(patt @31.1-31.15 (type "Error, Error -> Error")))
 	(expressions
 		(expr @8.18-8.44 (type "Error -> Error"))
-		(expr @11.13-11.38 (type "Str -> Error"))
+		(expr @11.13-11.38 (type "str -> Error"))
 		(expr @14.13-20.2 (type "Error -> Error"))
 		(expr @23.10-23.28 (type "Error"))
-		(expr @27.18-27.82 (type "Error, Str -> Error"))
+		(expr @27.18-27.82 (type "Error, str -> Error"))
 		(expr @31.18-39.6 (type "Error, Error -> Error"))))
 ~~~

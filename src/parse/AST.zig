@@ -1889,30 +1889,6 @@ pub const TypeAnno = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .mod_ty => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-mod");
-                const attrs = tree.beginNode();
-
-                const mod_text = env.idents.getLowercase(a.mod_ident);
-                const type_text = env.idents.getLowercase(a.ty_ident);
-
-                // module attribute
-                const module_begin = tree.beginNode();
-                try tree.pushStaticAtom("module");
-                try tree.pushString(mod_text);
-                const attrs2 = tree.beginNode();
-                try tree.endNode(module_begin, attrs2);
-
-                // name attribute
-                const name_begin = tree.beginNode();
-                try tree.pushStaticAtom("name");
-                try tree.pushString(type_text);
-                const attrs3 = tree.beginNode();
-                try tree.endNode(name_begin, attrs3);
-
-                try tree.endNode(begin, attrs);
-            },
             .tag_union => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("ty-tag-union");

@@ -12,9 +12,20 @@ Cache(k, v) := Dict(U64, v)
 		module(k).hash : k -> U64
 ~~~
 # EXPECTED
-NIL
+WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_nominal_type.md:3:1:5:28
 # PROBLEMS
-NIL
+**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
+You cannot define a `where` clause inside a type declaration.
+
+You're attempting do this here:
+**where_clauses_nominal_type.md:3:1:5:28:**
+```roc
+Cache(k, v) := Dict(U64, v)
+	where
+		module(k).hash : k -> U64
+```
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),CloseSquare(1:14-1:15),
@@ -58,13 +69,7 @@ NO CHANGE
 				(ty-var @3.10-3.11 (name "v"))))
 		(ty-apply @3.16-3.28 (symbol "Dict")
 			(ty @3.21-3.24 (name "U64"))
-			(ty-var @3.26-3.27 (name "v")))
-		(where
-			(method @5.3-5.28 (module-of "k") (ident "hash")
-				(args
-					(ty-var @5.20-5.21 (name "k")))
-				(ty @5.25-5.28 (name "U64")))))
-	(ext-decl @5.3-5.28 (ident "module(k).hash") (kind "value")))
+			(ty-var @3.26-3.27 (name "v")))))
 ~~~
 # TYPES
 ~~~clojure

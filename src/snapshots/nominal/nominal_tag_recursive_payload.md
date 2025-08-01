@@ -81,12 +81,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.6 (type "ConsList(a)")))
+		(patt @6.1-6.6 (type "consList(a)")))
 	(type_decls
-		(nominal @3.1-3.40 (type "ConsList(a)")
+		(nominal @3.1-3.40 (type "consList(a)")
 			(ty-header @3.1-3.12 (name "consList")
 				(ty-args
 					(ty-var @3.10-3.11 (name "a"))))))
 	(expressions
-		(expr @6.9-6.21 (type "ConsList(a)"))))
+		(expr @6.9-6.21 (type "consList(a)"))))
 ~~~

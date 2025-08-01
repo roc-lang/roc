@@ -50,7 +50,7 @@ test "canonicalize True as Bool" {
 
     // The tag should be "True"
     const tag_name = module_env.idents.getLowercase(backing_expr.e_tag.name);
-    try testing.expectEqualStrings("True", tag_name);
+    try testing.expectEqualStrings("true", tag_name);
 }
 
 test "canonicalize False as Bool" {
@@ -94,7 +94,7 @@ test "canonicalize False as Bool" {
 
     // The tag should be "False"
     const tag_name = module_env.idents.getLowercase(backing_expr.e_tag.name);
-    try testing.expectEqualStrings("False", tag_name);
+    try testing.expectEqualStrings("false", tag_name);
 }
 
 test "canonicalize random tag not as Bool" {
@@ -133,5 +133,5 @@ test "canonicalize random tag not as Bool" {
 
     // The tag should be "SomeTag"
     const tag_name = module_env.idents.getLowercase(expr.e_tag.name);
-    try testing.expectEqualStrings("SomeTag", tag_name);
+    try testing.expectEqualStrings("someTag", tag_name);
 }

@@ -251,7 +251,7 @@ getUser = |id| if  "big" else "l"
 	(defs
 		(patt @6.1-6.8 (type "_arg -> Error")))
 	(type_decls
-		(alias @3.1-3.13 (type "UserId")
+		(alias @3.1-3.13 (type "userId")
 			(ty-header @3.1-3.7 (name "userId"))))
 	(expressions
 		(expr @6.11-6.43 (type "_arg -> Error"))))

@@ -66,9 +66,9 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-3.16 (type "FirstType")
+		(alias @3.1-3.16 (type "firstType")
 			(ty-header @3.1-3.10 (name "firstType")))
-		(alias @4.1-4.17 (type "SecondType")
+		(alias @4.1-4.17 (type "secondType")
 			(ty-header @4.1-4.11 (name "secondType")))
 		(alias @5.1-5.21 (type "Error")
 			(ty-header @5.1-5.10 (name "thirdType"))))

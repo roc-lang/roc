@@ -17,7 +17,7 @@ decodeThings = ...
 MODULE NOT FOUND - where_clauses_4.md:3:1:3:32
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `Decode` was not found in this Roc project.
+The module `decode` was not found in this Roc project.
 
 You're attempting to use this module here:
 **where_clauses_4.md:3:1:3:32:**

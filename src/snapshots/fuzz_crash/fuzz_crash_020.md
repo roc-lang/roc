@@ -358,7 +358,7 @@ import pf.Stdout exposing [line!]
 
 
 **MODULE NOT FOUND**
-The module `Stdot` was not found in this Roc project.
+The module `stdot` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_020.md:6:1:8:6:**
@@ -370,7 +370,7 @@ Cust]
 
 
 **MODULE NOT FOUND**
-The module `Bae` was not found in this Roc project.
+The module `bae` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_020.md:10:1:10:19:**
@@ -381,7 +381,7 @@ import Bae as Gooe
 
 
 **MODULE NOT FOUND**
-The module `Ba` was not found in this Roc project.
+The module `ba` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_020.md:11:1:12:4:**
@@ -1829,41 +1829,41 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @35.1-35.4 (type "Bool -> Num(_size)"))
-		(patt @38.1-38.4 (type "[Rum]_others -> Error"))
-		(patt @49.1-49.3 (type "[Blue]_others -> Error"))
-		(patt @75.1-75.3 (type "_arg -> [Stdo!(Str)]_others"))
+		(patt @35.1-35.4 (type "bool -> Num(_size)"))
+		(patt @38.1-38.4 (type "[rum]_others -> Error"))
+		(patt @49.1-49.3 (type "[blue]_others -> Error"))
+		(patt @75.1-75.3 (type "_arg -> [stdo!(Str)]_others"))
 		(patt @114.1-114.2 (type "{}")))
 	(type_decls
-		(alias @13.1-13.33 (type "Map(a, b)")
+		(alias @13.1-13.33 (type "map(a, b)")
 			(ty-header @13.1-13.10 (name "map")
 				(ty-args
 					(ty-var @13.5-13.6 (name "a"))
 					(ty-var @13.8-13.9 (name "b")))))
-		(alias @14.1-20.15 (type "MapML")
+		(alias @14.1-20.15 (type "mapML")
 			(ty-header @14.1-15.2 (name "mapML")))
-		(alias @24.1-24.27 (type "Som")
+		(alias @24.1-24.27 (type "som")
 			(ty-header @24.1-24.4 (name "som")))
-		(alias @25.1-26.2 (type "Ml(a)")
+		(alias @25.1-26.2 (type "ml(a)")
 			(ty-header @25.1-25.6 (name "ml")
 				(ty-args
 					(ty-var @25.4-25.5 (name "a")))))
-		(alias @28.1-29.2 (type "Soine(a)")
+		(alias @28.1-29.2 (type "soine(a)")
 			(ty-header @28.1-28.9 (name "soine")
 				(ty-args
 					(ty-var @28.7-28.8 (name "a")))))
-		(alias @30.1-30.19 (type "Maybe(a)")
+		(alias @30.1-30.19 (type "maybe(a)")
 			(ty-header @30.1-30.9 (name "maybe")
 				(ty-args
 					(ty-var @30.7-30.8 (name "a")))))
-		(alias @32.1-33.2 (type "Mayine(a)")
+		(alias @32.1-33.2 (type "mayine(a)")
 			(ty-header @32.1-32.10 (name "mayine")
 				(ty-args
 					(ty-var @32.8-32.9 (name "a"))))))
 	(expressions
-		(expr @35.7-35.28 (type "Bool -> Num(_size)"))
-		(expr @38.7-47.2 (type "[Rum]_others -> Error"))
-		(expr @49.6-69.3 (type "[Blue]_others -> Error"))
-		(expr @75.5-111.2 (type "_arg -> [Stdo!(Str)]_others"))
+		(expr @35.7-35.28 (type "bool -> Num(_size)"))
+		(expr @38.7-47.2 (type "[rum]_others -> Error"))
+		(expr @49.6-69.3 (type "[blue]_others -> Error"))
+		(expr @75.5-111.2 (type "_arg -> [stdo!(Str)]_others"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~

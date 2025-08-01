@@ -65,7 +65,7 @@ pub fn instantiateVar(
                 },
                 .apply_rigid_substitution => |rigid_subs_map| {
                     // Case 2: Apply rigid variable substitution (type alias instantiation)
-                    const ident_bytes = idents.getText(ident);
+                    const ident_bytes = idents.getLowercase(ident);
                     if (rigid_subs_map.get(ident_bytes)) |var_to_sub| {
                         try substitution.put(var_, var_to_sub);
                         return var_to_sub;
@@ -78,7 +78,7 @@ pub fn instantiateVar(
                 },
                 .generalize_rigid_to_flex => |flex_map| {
                     // Case 3: Convert rigid variables to fresh flex variables (function call instantiation)
-                    const ident_bytes = idents.getText(ident);
+                    const ident_bytes = idents.getLowercase(ident);
 
                     if (flex_map.get(ident_bytes)) |existing_flex_var| {
                         try substitution.put(var_, existing_flex_var);

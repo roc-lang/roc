@@ -1111,20 +1111,20 @@ is_named_color = |str| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.4 (type "U8, U8, U8 -> Color"))
-		(patt @21.1-21.5 (type "U8, U8, U8, Error -> Color"))
+		(patt @18.1-18.4 (type "u8, u8, u8 -> color"))
+		(patt @21.1-21.5 (type "u8, u8, u8, Error -> color"))
 		(patt @27.1-27.4 (type "Error"))
-		(patt @49.1-49.7 (type "Color -> Str"))
+		(patt @49.1-49.7 (type "color -> str"))
 		(patt @61.1-61.6 (type "Error -> Error"))
 		(patt @67.1-67.15 (type "_arg -> _ret")))
 	(type_decls
-		(nominal @10.1-15.2 (type "Color")
+		(nominal @10.1-15.2 (type "color")
 			(ty-header @10.1-10.6 (name "color"))))
 	(expressions
-		(expr @18.7-18.35 (type "U8, U8, U8 -> Color"))
-		(expr @21.8-24.2 (type "U8, U8, U8, Error -> Color"))
+		(expr @18.7-18.35 (type "u8, u8, u8 -> color"))
+		(expr @21.8-24.2 (type "u8, u8, u8, Error -> color"))
 		(expr @27.7-46.2 (type "Error"))
-		(expr @49.10-54.2 (type "Color -> Str"))
+		(expr @49.10-54.2 (type "color -> str"))
 		(expr @61.9-65.50 (type "Error -> Error"))
 		(expr @67.18-71.2 (type "_arg -> _ret"))))
 ~~~

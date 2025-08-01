@@ -217,9 +217,9 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_027.md:145:4:145:13
 UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
+UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
 UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
 UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
-UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
 UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
@@ -396,7 +396,7 @@ import pf.Stdout exposing [line!, e!]
 
 
 **MODULE NOT FOUND**
-The module `Stdot` was not found in this Roc project.
+The module `stdot` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_027.md:6:1:8:4:**
@@ -419,7 +419,7 @@ import pkg.S exposing [func as fry, Custom.*]
 
 
 **MODULE NOT FOUND**
-The module `Bae` was not found in this Roc project.
+The module `bae` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_027.md:12:1:12:19:**
@@ -430,7 +430,7 @@ import Bae as Gooe
 
 
 **MODULE NOT FOUND**
-The module `Ba` was not found in this Roc project.
+The module `ba` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_027.md:13:1:14:4:**
@@ -757,6 +757,18 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
+Variable `bsult` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_bsult` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:141:2:141:7:**
+```roc
+	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+```
+ ^^^^^
+
+
+**UNUSED VARIABLE**
 Variable `m_tuple` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_m_tuple` to suppress this warning.
@@ -776,18 +788,6 @@ The unused variable is declared here:
 **fuzz_crash_027.md:142:2:142:7:**
 ```roc
 	stale = some_fn(arg1)?.statod()?.ned()?.recd?
-```
- ^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `bsult` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_bsult` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:141:2:141:7:**
-```roc
-	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ```
  ^^^^^
 
@@ -848,10 +848,10 @@ add_one : U64 -> U64
           ^^^
 
 It is of type:
-    _U64_
+    _u64_
 
 But you are trying to use it as:
-    _Bool_
+    _Bool (from Bool)_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the third branch of this `match` differs from previous ones:
@@ -2066,7 +2066,7 @@ expect {
 			(declared-type
 				(ty-record @150.9-150.11))))
 	(s-alias-decl @15.1-15.41
-		(ty-header @15.1-15.10 (name "Map")
+		(ty-header @15.1-15.10 (name "map")
 			(ty-args
 				(ty-var @15.5-15.6 (name "a"))
 				(ty-var @15.8-15.9 (name "b"))))
@@ -2080,7 +2080,7 @@ expect {
 			(ty-apply @15.34-15.41 (symbol "List")
 				(ty-var @15.39-15.40 (name "b")))))
 	(s-alias-decl @16.1-24.15
-		(ty-header @16.1-19.2 (name "MapML")
+		(ty-header @16.1-19.2 (name "mapML")
 			(ty-args
 				(ty-var @17.2-17.3 (name "a"))
 				(ty-var @18.2-18.3 (name "b"))))
@@ -2093,12 +2093,12 @@ expect {
 			(ty-apply @24.4-24.15 (symbol "List")
 				(ty-var @24.12-24.13 (name "b")))))
 	(s-alias-decl @26.1-26.17
-		(ty-header @26.1-26.4 (name "Foo"))
+		(ty-header @26.1-26.4 (name "foo"))
 		(ty-tuple @26.7-26.17
 			(ty @26.8-26.11 (name "Bar"))
 			(ty @26.13-26.16 (name "Baz"))))
 	(s-alias-decl @32.1-32.35
-		(ty-header @32.1-32.8 (name "Some")
+		(ty-header @32.1-32.8 (name "some")
 			(ty-args
 				(ty-var @32.6-32.7 (name "a"))))
 		(ty-record @32.11-32.35
@@ -2108,21 +2108,21 @@ expect {
 			(field (field "bar")
 				(ty-malformed @32.32-32.33))))
 	(s-alias-decl @33.1-35.2
-		(ty-header @33.1-33.6 (name "Ml")
+		(ty-header @33.1-33.6 (name "ml")
 			(ty-args
 				(ty-var @33.4-33.5 (name "a"))))
 		(ty-record @33.9-35.2
 			(field (field "bar")
 				(ty @34.8-34.11 (name "Som")))))
 	(s-alias-decl @37.1-39.2
-		(ty-header @37.1-37.9 (name "Soine")
+		(ty-header @37.1-37.9 (name "soine")
 			(ty-args
 				(ty-var @37.7-37.8 (name "a"))))
 		(ty-record @37.12-39.2
 			(field (field "bar")
 				(ty @38.8-38.11 (name "Som")))))
 	(s-alias-decl @43.1-43.34
-		(ty-header @43.1-43.8 (name "Func")
+		(ty-header @43.1-43.8 (name "func")
 			(ty-args
 				(ty-var @43.6-43.7 (name "a"))))
 		(ty-fn @43.11-43.34 (effectful false)
@@ -2140,7 +2140,7 @@ expect {
 	(s-import @10.1-10.46 (module "pkg.S") (qualifier "pkg")
 		(exposes
 			(exposed (name "func") (alias "fry") (wildcard false))
-			(exposed (name "Custom") (wildcard true))))
+			(exposed (name "custom") (wildcard true))))
 	(s-import @12.1-12.19 (module "Bae") (alias "Gooe")
 		(exposes))
 	(s-import @13.1-14.4 (module "Ba")
@@ -2167,42 +2167,42 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @45.1-45.4 (type "Bool -> Num(_size)"))
+		(patt @45.1-45.4 (type "bool -> Num(_size)"))
 		(patt @48.1-48.8 (type "Error -> U64"))
 		(patt @60.1-60.11 (type "Error"))
 		(patt @100.1-100.6 (type "Error -> Error"))
 		(patt @151.1-151.6 (type "{}")))
 	(type_decls
-		(alias @15.1-15.41 (type "Map(a, b)")
-			(ty-header @15.1-15.10 (name "Map")
+		(alias @15.1-15.41 (type "map(a, b)")
+			(ty-header @15.1-15.10 (name "map")
 				(ty-args
 					(ty-var @15.5-15.6 (name "a"))
 					(ty-var @15.8-15.9 (name "b")))))
-		(alias @16.1-24.15 (type "MapML(a, b)")
-			(ty-header @16.1-19.2 (name "MapML")
+		(alias @16.1-24.15 (type "mapML(a, b)")
+			(ty-header @16.1-19.2 (name "mapML")
 				(ty-args
 					(ty-var @17.2-17.3 (name "a"))
 					(ty-var @18.2-18.3 (name "b")))))
-		(alias @26.1-26.17 (type "Foo")
-			(ty-header @26.1-26.4 (name "Foo")))
-		(alias @32.1-32.35 (type "Some(a)")
-			(ty-header @32.1-32.8 (name "Some")
+		(alias @26.1-26.17 (type "foo")
+			(ty-header @26.1-26.4 (name "foo")))
+		(alias @32.1-32.35 (type "some(a)")
+			(ty-header @32.1-32.8 (name "some")
 				(ty-args
 					(ty-var @32.6-32.7 (name "a")))))
-		(alias @33.1-35.2 (type "Ml(a)")
-			(ty-header @33.1-33.6 (name "Ml")
+		(alias @33.1-35.2 (type "ml(a)")
+			(ty-header @33.1-33.6 (name "ml")
 				(ty-args
 					(ty-var @33.4-33.5 (name "a")))))
-		(alias @37.1-39.2 (type "Soine(a)")
-			(ty-header @37.1-37.9 (name "Soine")
+		(alias @37.1-39.2 (type "soine(a)")
+			(ty-header @37.1-37.9 (name "soine")
 				(ty-args
 					(ty-var @37.7-37.8 (name "a")))))
-		(alias @43.1-43.34 (type "Func(a)")
-			(ty-header @43.1-43.8 (name "Func")
+		(alias @43.1-43.34 (type "func(a)")
+			(ty-header @43.1-43.8 (name "func")
 				(ty-args
 					(ty-var @43.6-43.7 (name "a"))))))
 	(expressions
-		(expr @45.7-45.28 (type "Bool -> Num(_size)"))
+		(expr @45.7-45.28 (type "bool -> Num(_size)"))
 		(expr @48.11-58.2 (type "Error -> U64"))
 		(expr @60.14-94.3 (type "Error"))
 		(expr @100.9-148.2 (type "Error -> Error"))

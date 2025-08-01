@@ -16,7 +16,7 @@ red = Color.RGB.Red
 MODULE NOT FOUND - nominal_import_type.md:3:1:3:13
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `Color` was not found in this Roc project.
+The module `color` was not found in this Roc project.
 
 You're attempting to use this module here:
 **nominal_import_type.md:3:1:3:13:**

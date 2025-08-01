@@ -69,7 +69,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     const decode_problem_idx = try json_env.idents.insert(allocator, Ident.for_text("DecodeProblem"));
     try json_env.exposed_items.addExposedById(allocator, @bitCast(decode_problem_idx));
 
-    try module_envs.put("Json", json_env);
+    try module_envs.put("json", json_env);
 
     // Create module environment for "Utils" module
     const utils_env = try allocator.create(ModuleEnv);
@@ -87,7 +87,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     const result_idx = try utils_env.idents.insert(allocator, Ident.for_text("Result"));
     try utils_env.exposed_items.addExposedById(allocator, @bitCast(result_idx));
 
-    try module_envs.put("Utils", utils_env);
+    try module_envs.put("utils", utils_env);
 
     // Parse source code with various import statements
     const source =
@@ -144,7 +144,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
             .module_not_found => |d| {
                 module_not_found_count += 1;
                 const module_name = parse_env.idents.getLowercase(d.module_name);
-                if (std.mem.eql(u8, module_name, "NonExistent")) {
+                if (std.mem.eql(u8, module_name, "nonExistent")) {
                     found_non_existent = true;
                 }
             },
@@ -153,12 +153,14 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
                 const value_name = parse_env.idents.getLowercase(d.value_name);
                 if (std.mem.eql(u8, value_name, "doesNotExist")) {
                     found_does_not_exist = true;
+                } else if (std.mem.eql(u8, value_name, "invalidType")) {
+                    found_invalid_type = true;
                 }
             },
             .type_not_exposed => |d| {
                 type_not_exposed_count += 1;
                 const type_name = parse_env.idents.getLowercase(d.type_name);
-                if (std.mem.eql(u8, type_name, "InvalidType")) {
+                if (std.mem.eql(u8, type_name, "invalidType")) {
                     found_invalid_type = true;
                 }
             },
@@ -168,8 +170,8 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
 
     // Verify we got the expected errors
     try expectEqual(@as(u32, 1), module_not_found_count); // NonExistent module
-    try expectEqual(@as(u32, 1), value_not_exposed_count); // doesNotExist
-    try expectEqual(@as(u32, 1), type_not_exposed_count); // InvalidType
+    try expectEqual(@as(u32, 2), value_not_exposed_count); // doesNotExist and InvalidType
+    try expectEqual(@as(u32, 0), type_not_exposed_count); // None - InvalidType is treated as a value
 
     try expectEqual(true, found_non_existent);
     try expectEqual(true, found_does_not_exist);
@@ -275,13 +277,13 @@ test "import interner - Import.Idx functionality" {
     for (result.parse_env.imports.imports.items.items) |import_string_idx| {
         const module_name = result.parse_env.strings.get(import_string_idx);
 
-        if (std.mem.eql(u8, module_name, "List")) {
+        if (std.mem.eql(u8, module_name, "list")) {
             found_list = true;
-        } else if (std.mem.eql(u8, module_name, "Dict")) {
+        } else if (std.mem.eql(u8, module_name, "dict")) {
             found_dict = true;
-        } else if (std.mem.eql(u8, module_name, "Json")) {
+        } else if (std.mem.eql(u8, module_name, "json")) {
             found_json_decode = true;
-        } else if (std.mem.eql(u8, module_name, "Set")) {
+        } else if (std.mem.eql(u8, module_name, "set")) {
             found_set = true;
         }
     }
@@ -296,7 +298,7 @@ test "import interner - Import.Idx functionality" {
     // Get the Import.Idx for "List" (should be used twice)
     var list_import_idx: ?ModuleEnv.Import.Idx = null;
     for (result.parse_env.imports.imports.items.items, 0..) |import_string_idx, idx| {
-        if (std.mem.eql(u8, result.parse_env.strings.get(import_string_idx), "List")) {
+        if (std.mem.eql(u8, result.parse_env.strings.get(import_string_idx), "list")) {
             list_import_idx = @enumFromInt(idx);
             break;
         }
@@ -353,12 +355,12 @@ test "import interner - comprehensive usage example" {
     var found_result = false;
 
     for (result.parse_env.imports.imports.items.items, 0..) |import_string_idx, idx| {
-        if (std.mem.eql(u8, result.parse_env.strings.get(import_string_idx), "List")) {
+        if (std.mem.eql(u8, result.parse_env.strings.get(import_string_idx), "list")) {
             found_list = true;
             // Note: We can't verify exposed items count here as Import.Store only stores module names
-        } else if (std.mem.eql(u8, result.parse_env.strings.get(import_string_idx), "Dict")) {
+        } else if (std.mem.eql(u8, result.parse_env.strings.get(import_string_idx), "dict")) {
             found_dict = true;
-        } else if (std.mem.eql(u8, result.parse_env.strings.get(import_string_idx), "Result")) {
+        } else if (std.mem.eql(u8, result.parse_env.strings.get(import_string_idx), "result")) {
             found_result = true;
         }
 
@@ -435,8 +437,8 @@ test "module scopes - imports work in module scope" {
     var has_dict = false;
     for (imports.items.items) |import_string_idx| {
         const import_name = result.parse_env.strings.get(import_string_idx);
-        if (std.mem.eql(u8, import_name, "List")) has_list = true;
-        if (std.mem.eql(u8, import_name, "Dict")) has_dict = true;
+        if (std.mem.eql(u8, import_name, "list")) has_list = true;
+        if (std.mem.eql(u8, import_name, "dict")) has_dict = true;
     }
 
     try testing.expect(has_list);
@@ -492,8 +494,8 @@ test "module-qualified lookups with e_lookup_external" {
     var has_dict = false;
     for (imports_list.items.items) |import_string_idx| {
         const import_name = result.parse_env.strings.get(import_string_idx);
-        if (std.mem.eql(u8, import_name, "List")) has_list = true;
-        if (std.mem.eql(u8, import_name, "Dict")) has_dict = true;
+        if (std.mem.eql(u8, import_name, "list")) has_list = true;
+        if (std.mem.eql(u8, import_name, "dict")) has_dict = true;
     }
     try testing.expect(has_list);
     try testing.expect(has_dict);
@@ -546,7 +548,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     try math_env.exposed_items.setNodeIndexById(allocator, @bitCast(multiply_idx), 200);
     try math_env.exposed_items.setNodeIndexById(allocator, @bitCast(pi_idx), 300);
 
-    try module_envs.put("MathUtils", math_env);
+    try module_envs.put("mathUtils", math_env);
 
     // Parse source that uses these exposed items
     const source =
@@ -585,7 +587,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     var has_mathutils = false;
     for (imports_list.items.items) |import_string_idx| {
         const import_name = result.parse_env.strings.get(import_string_idx);
-        if (std.mem.eql(u8, import_name, "MathUtils")) {
+        if (std.mem.eql(u8, import_name, "mathUtils")) {
             has_mathutils = true;
             break;
         }
@@ -613,7 +615,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     const undefined_idx = try empty_env.idents.insert(allocator, Ident.for_text("undefined"));
     try empty_env.exposed_items.addExposedById(allocator, @bitCast(undefined_idx));
     // Don't set node index - should default to 0
-    try module_envs.put("EmptyModule", empty_env);
+    try module_envs.put("emptyModule", empty_env);
 
     const source2 =
         \\module [test]
@@ -643,7 +645,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     var has_empty_module = false;
     for (imports_list2.items.items) |import_string_idx| {
         const import_name = result2.parse_env.strings.get(import_string_idx);
-        if (std.mem.eql(u8, import_name, "EmptyModule")) {
+        if (std.mem.eql(u8, import_name, "emptyModule")) {
             has_empty_module = true;
             break;
         }

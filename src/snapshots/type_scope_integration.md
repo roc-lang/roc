@@ -110,13 +110,13 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @4.1-4.10 (type "Foo")
+		(alias @4.1-4.10 (type "foo")
 			(ty-header @4.1-4.4 (name "foo")))
-		(alias @7.1-7.10 (type "Foo")
+		(alias @7.1-7.10 (type "foo")
 			(ty-header @7.1-7.4 (name "foo")))
 		(alias @10.1-10.25 (type "Error")
 			(ty-header @10.1-10.4 (name "bar")))
-		(alias @13.1-13.10 (type "Baz")
+		(alias @13.1-13.10 (type "baz")
 			(ty-header @13.1-13.4 (name "baz"))))
 	(expressions))
 ~~~
