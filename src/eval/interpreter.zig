@@ -38,6 +38,7 @@ const build_options = @import("build_options");
 const layout_store = @import("../layout/store.zig");
 const stack = @import("stack.zig");
 const collections = @import("collections");
+const builtins = @import("builtins");
 
 const SExprTree = base.SExprTree;
 const types_store = types.store;
@@ -45,6 +46,7 @@ const target = base.target;
 const Layout = layout.Layout;
 const LayoutTag = layout.LayoutTag;
 const target_usize = base.target.Target.native.target_usize;
+const RocDec = builtins.RocDec;
 
 /// Debug configuration set at build time using flag `zig build test -Dtrace-eval`
 ///
@@ -798,7 +800,43 @@ pub const Interpreter = struct {
                 }
             },
 
-            .e_str, .e_str_segment, .e_list, .e_dot_access, .e_lookup_external, .e_match, .e_frac_dec, .e_dec_small, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
+            .e_frac_dec => |dec_lit| {
+                const layout_idx = try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const result_ptr = (try self.pushStackValue(expr_layout)).?;
+
+                // Store RocDec value directly in memory
+                const typed_ptr = @as(*RocDec, @ptrCast(@alignCast(result_ptr)));
+                typed_ptr.* = dec_lit.value;
+
+                self.traceInfo(
+                    "Pushed decimal literal {}",
+                    .{dec_lit.value.num},
+                );
+            },
+
+            .e_dec_small => |small_dec| {
+                const layout_idx = try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const result_ptr = (try self.pushStackValue(expr_layout)).?;
+
+                // Convert small decimal to RocDec
+                // e_dec_small stores numerator/10^denominator_power_of_ten
+                // RocDec stores value * 10^18
+                // So we need: numerator * 10^(18-denominator_power_of_ten)
+                const scale_factor = std.math.pow(i128, 10, RocDec.decimal_places - small_dec.denominator_power_of_ten);
+                const dec_value = RocDec{ .num = @as(i128, small_dec.numerator) * scale_factor };
+
+                const typed_ptr = @as(*RocDec, @ptrCast(@alignCast(result_ptr)));
+                typed_ptr.* = dec_value;
+
+                self.traceInfo(
+                    "Pushed small decimal literal: numerator={}, denom_pow={}, result={}",
+                    .{ small_dec.numerator, small_dec.denominator_power_of_ten, dec_value.num },
+                );
+            },
+
+            .e_str, .e_str_segment, .e_list, .e_dot_access, .e_lookup_external, .e_match, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
                 return error.LayoutError;
             },
 

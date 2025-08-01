@@ -214,7 +214,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     }
 }
 
-fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!struct {
+pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
     can: *Can,
@@ -303,7 +303,7 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) st
     };
 }
 
-fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype) void {
+pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype) void {
     resources.checker.deinit();
     resources.can.deinit();
     resources.parse_ast.deinit(allocator);
