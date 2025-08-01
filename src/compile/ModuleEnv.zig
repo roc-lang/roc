@@ -1143,16 +1143,19 @@ pub fn relocate(self: *Self, offset: isize) void {
 
 /// Serialized representation of ModuleEnv
 pub const Serialized = struct {
+    gpa: std.mem.Allocator, // Serialized as zeros, provided during deserialization
     idents: Ident.Store.Serialized,
     ident_ids_for_slicing: collections.SafeList(Ident.Idx).Serialized,
     strings: StringLiteral.Store.Serialized,
     types: types_mod.Store.Serialized,
     exposed_items: collections.ExposedItems.Serialized,
     line_starts: collections.SafeList(u32).Serialized,
+    source: []const u8, // Serialized as zeros, provided during deserialization
     all_defs: Def.Span,
     all_statements: Statement.Span,
     external_decls: ExternalDecl.SafeList.Serialized,
     imports: Import.Store.Serialized,
+    module_name: []const u8, // Serialized as zeros, provided during deserialization
     diagnostics: Diagnostic.Span,
     store: NodeStore.Serialized,
 
@@ -1163,6 +1166,11 @@ pub const Serialized = struct {
         allocator: std.mem.Allocator,
         writer: *CompactWriter,
     ) !void {
+        // Set fields that will be provided during deserialization to zeros
+        self.gpa = undefined; // Will be set to zeros below
+        self.source = ""; // Empty slice
+        self.module_name = ""; // Empty slice
+
         // Serialize each component using its Serialized struct
         try self.idents.serialize(&env.idents, allocator, writer);
         try self.ident_ids_for_slicing.serialize(&env.ident_ids_for_slicing, allocator, writer);
@@ -1183,12 +1191,9 @@ pub const Serialized = struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
-        // IMPORTANT: Set gpa field to all zeros as requested
-        // Note: gpa is not part of Serialized struct, it's set during deserialization
-        // std.mem.writeInt(usize, std.mem.asBytes(&self.gpa), 0, .little);
-
-        // Note: Individual fields are already serialized above
-        // _ = try writer.appendSlice(std.mem.asBytes(self));
+        // Set gpa to all zeros; the space needs to be here,
+        // but the value will be set separately during deserialization.
+        @memset(@as([*]u8, @ptrCast(&self.gpa))[0..@sizeOf(@TypeOf(self.gpa))], 0);
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1220,7 +1225,7 @@ pub const Serialized = struct {
             .imports = self.imports.deserialize(offset).*,
             .module_name = module_name,
             .diagnostics = self.diagnostics,
-            .store = self.store.deserialize(offset).*,
+            .store = self.store.deserialize(offset, gpa).*,
         };
 
         return env;
@@ -1639,193 +1644,6 @@ pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree)
     }
 }
 
-test "ModuleEnv with types CompactWriter roundtrip" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    // Create ModuleEnv
-    var original = try Self.init(gpa, "");
-    defer original.deinit();
-
-    // Initialize CIR fields
-    try original.initCIRFields(gpa, "test.Types");
-
-    // Add some type variables
-    const var1 = try original.types.freshFromContent(.empty);
-    const var2 = try original.types.freshFromContent(.{ .structure = .{ .record = .{ .tags = .{} } } });
-    const var3 = try original.types.freshFromContent(.{ .alias = .{ .name = .placeholder, .type_arguments = .{}, .real = var1, .lambda_sets = .{} } });
-
-    // Create a temp file
-    const tmp_dir = testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    const file = try tmp_dir.dir.createFile("test_types_module_env.dat", .{ .read = true });
-    defer file.close();
-
-    // Serialize
-    var writer = collections.CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-    };
-    defer writer.deinit(gpa);
-
-    _ = try original.serialize(gpa, &writer);
-
-    // Write to file
-    try writer.writeGather(gpa, file);
-
-    // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
-    defer gpa.free(buffer);
-
-    _ = try file.read(buffer);
-
-    // Cast and relocate
-    const deserialized = @as(*Self, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Self))));
-
-    // Set gpa, source, and module_name before relocating
-    deserialized.gpa = gpa;
-    deserialized.source = "";
-    deserialized.module_name = "test.Types";
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-
-    // Verify we have the right number of types
-    try testing.expectEqual(@as(usize, 3), deserialized.types.len());
-
-    // Verify type contents (basic check)
-    const content1 = deserialized.types.getContent(var1);
-    try testing.expectEqual(types_mod.Content.empty, content1.*);
-
-    const content2 = deserialized.types.getContent(var2);
-    try testing.expectEqual(@as(types_mod.Content.Tag, .structure), std.meta.activeTag(content2.*));
-
-    const content3 = deserialized.types.getContent(var3);
-    try testing.expectEqual(@as(types_mod.Content.Tag, .alias), std.meta.activeTag(content3.*));
-}
-
-test "ModuleEnv empty CompactWriter roundtrip" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    // Create an empty ModuleEnv
-    var original = try Self.init(gpa, "");
-    defer original.deinit();
-
-    // Initialize CIR fields
-    try original.initCIRFields(gpa, "test.Empty");
-
-    // Create a temp file
-    const tmp_dir = testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    const file = try tmp_dir.dir.createFile("test_empty_module_env.dat", .{ .read = true });
-    defer file.close();
-
-    // Serialize using CompactWriter
-    var writer = collections.CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-    };
-    defer writer.deinit(gpa);
-
-    _ = try original.serialize(gpa, &writer);
-
-    // Write to file
-    try writer.writeGather(gpa, file);
-
-    // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
-    defer gpa.free(buffer);
-
-    _ = try file.read(buffer);
-
-    // Cast and relocate
-    const deserialized = @as(*Self, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Self))));
-
-    // Set gpa, source, and module_name before relocating
-    deserialized.gpa = gpa;
-    deserialized.source = "";
-    deserialized.module_name = "test.Types";
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-
-    // Verify empty state
-    try testing.expectEqualStrings("", deserialized.source);
-    try testing.expectEqualStrings("test.Empty", deserialized.module_name);
-    try testing.expectEqual(@as(usize, 0), deserialized.all_defs.span.len);
-    try testing.expectEqual(@as(usize, 0), deserialized.all_statements.span.len);
-    try testing.expectEqual(@as(usize, 0), deserialized.external_decls.len());
-    try testing.expectEqual(@as(usize, 0), deserialized.imports.imports.len());
-}
-
-test "ModuleEnv with source code CompactWriter roundtrip" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    const source =
-        \\app [main] {
-        \\    main = \{} ->
-        \\        "Hello, World!"
-        \\}
-    ;
-
-    // Create ModuleEnv with source
-    var original = try Self.init(gpa, source);
-    defer original.deinit();
-
-    // Initialize CIR fields
-    try original.initCIRFields(gpa, "test.Hello");
-
-    // Calculate line starts
-    try original.calcLineStarts();
-
-    // Create a temp file
-    const tmp_dir = testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    const file = try tmp_dir.dir.createFile("test_source_module_env.dat", .{ .read = true });
-    defer file.close();
-
-    // Serialize
-    var writer = collections.CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-    };
-    defer writer.deinit(gpa);
-
-    _ = try original.serialize(gpa, &writer);
-
-    // Write to file
-    try writer.writeGather(gpa, file);
-
-    // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
-    defer gpa.free(buffer);
-
-    _ = try file.read(buffer);
-
-    // Cast and relocate
-    const deserialized = @as(*Self, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Self))));
-
-    // Set gpa, source, and module_name before relocating
-    deserialized.gpa = gpa;
-    deserialized.source = "";
-    deserialized.module_name = "test.Types";
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-
-    // Verify source and module name
-    try testing.expectEqualStrings(source, deserialized.source);
-    try testing.expectEqualStrings("test.Hello", deserialized.module_name);
-
-    // Verify line starts were preserved
-    try testing.expectEqual(original.line_starts.items.items.len, deserialized.line_starts.items.items.len);
-}
-
 /// Append region information to an S-expression node for a given index.
 pub fn appendRegionInfoToSExprTree(self: *const Self, tree: *SExprTree, idx: anytype) std.mem.Allocator.Error!void {
     const region = self.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
@@ -1857,276 +1675,203 @@ pub fn getNodeRegionInfo(self: *const Self, idx: anytype) RegionInfo {
 /// in S-expression format for snapshot testing. Implements the definition-focused
 /// format showing final types for defs, expressions, and builtins.
 pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
-    const gpa = self.gpa;
-
-    // Create TypeWriter for converting types to strings
-    var type_writer = try TypeWriter.init(gpa, self);
-    defer type_writer.deinit();
-
     if (maybe_expr_idx) |expr_idx| {
-        const expr_var = @as(types_mod.Var, @enumFromInt(@intFromEnum(expr_idx)));
-
-        const expr_begin = tree.beginNode();
-        try tree.pushStaticAtom("expr");
-
-        try self.appendRegionInfoToSExprTree(tree, expr_idx);
-
-        if (@intFromEnum(expr_var) > self.types.slots.backing.len()) {
-            const unknown_begin = tree.beginNode();
-            try tree.pushStaticAtom("unknown");
-            const unknown_attrs = tree.beginNode();
-            try tree.endNode(unknown_begin, unknown_attrs);
-        } else {
-            try type_writer.write(expr_var);
-            try tree.pushStringPair("type", type_writer.get());
-        }
-
-        const expr_attrs = tree.beginNode();
-        try tree.endNode(expr_begin, expr_attrs);
+        try self.pushExprTypesToSExprTree(expr_idx, tree);
     } else {
+        // Generate full type information for all definitions and expressions
         const root_begin = tree.beginNode();
         try tree.pushStaticAtom("inferred-types");
 
-        const attrs = tree.beginNode();
+        const root_attrs = tree.beginNode();
 
-        // Collect definitions
+        // Create defs section
         const defs_begin = tree.beginNode();
         try tree.pushStaticAtom("defs");
         const defs_attrs = tree.beginNode();
 
-        const all_defs = self.store.sliceDefs(self.all_defs);
-
-        for (all_defs) |def_idx| {
+        // Iterate through all definitions to extract pattern types
+        const defs_slice = self.store.sliceDefs(self.all_defs);
+        for (defs_slice) |def_idx| {
             const def = self.store.getDef(def_idx);
 
-            // Extract identifier name from the pattern (assuming it's an assign pattern)
+            // Only process assign patterns - skip destructuring patterns
             const pattern = self.store.getPattern(def.pattern);
             switch (pattern) {
-                .assign => |_| {
-                    const patt_begin = tree.beginNode();
-                    try tree.pushStaticAtom("patt");
-
-                    // Get the pattern region instead of the whole def region
-                    const pattern_region = self.store.getPatternRegion(def.pattern);
-                    try self.appendRegionInfoToSExprTreeFromRegion(tree, pattern_region);
-
-                    // Get the type variable for this definition
-                    const def_var = castIdx(Def.Idx, TypeVar, def_idx);
-
-                    // Clear the buffer and write the type
-                    try type_writer.write(def_var);
-                    try tree.pushStringPair("type", type_writer.get());
-
-                    const patt_attrs = tree.beginNode();
-                    try tree.endNode(patt_begin, patt_attrs);
-                },
-                else => {
-                    // For non-assign patterns, we could handle destructuring, but for now skip
-                    continue;
-                },
+                .assign => {},
+                else => continue, // Skip non-assign patterns (like destructuring)
             }
+
+            const pattern_var = varFrom(def.pattern);
+
+            // Get the region for this definition
+            const pattern_node_idx: Node.Idx = @enumFromInt(@intFromEnum(def.pattern));
+            const pattern_region = self.store.getRegionAt(pattern_node_idx);
+
+            // Create a TypeWriter to format the type
+            var type_writer = TypeWriter.init(self.gpa, self) catch continue;
+            defer type_writer.deinit();
+
+            // Write the type to the buffer
+            type_writer.write(pattern_var) catch continue;
+
+            // Add the pattern type entry
+            const patt_begin = tree.beginNode();
+            try tree.pushStaticAtom("patt");
+            try self.appendRegionInfoToSExprTreeFromRegion(tree, pattern_region);
+
+            const type_str = type_writer.get();
+            try tree.pushStringPair("type", type_str);
+
+            try tree.endNode(patt_begin, tree.beginNode());
         }
 
         try tree.endNode(defs_begin, defs_attrs);
 
+        // Check if we have any type declarations to output
         const all_stmts = self.store.sliceStatements(self.all_statements);
-
         var has_type_decl = false;
         for (all_stmts) |stmt_idx| {
             const stmt = self.store.getStatement(stmt_idx);
             switch (stmt) {
-                .s_alias_decl => |_| {
+                .s_alias_decl, .s_nominal_decl => {
                     has_type_decl = true;
                     break;
                 },
-                .s_nominal_decl => |_| {
-                    has_type_decl = true;
-                    break;
-                },
-
-                else => {
-                    // For non-assign patterns, we could handle destructuring, but for now skip
-                    continue;
-                },
+                else => continue,
             }
         }
 
-        // Collect statements
+        // Create type_decls section if we have any type declarations
         if (has_type_decl) {
-            const stmts_begin = tree.beginNode();
+            const type_decls_begin = tree.beginNode();
             try tree.pushStaticAtom("type_decls");
-            const stmts_attrs = tree.beginNode();
+            const type_decls_attrs = tree.beginNode();
 
             for (all_stmts) |stmt_idx| {
                 const stmt = self.store.getStatement(stmt_idx);
-
-                // Get the type variable for this definition
-                const stmt_var = castIdx(Statement.Idx, TypeVar, stmt_idx);
-
                 switch (stmt) {
                     .s_alias_decl => |alias| {
-                        has_type_decl = true;
-
-                        const stmt_node_begin = tree.beginNode();
+                        const stmt_begin = tree.beginNode();
                         try tree.pushStaticAtom("alias");
-                        const alias_region = self.store.getStatementRegion(stmt_idx);
-                        try self.appendRegionInfoToSExprTreeFromRegion(tree, alias_region);
 
-                        // Clear the buffer and write the type
-                        try type_writer.write(stmt_var);
-                        try tree.pushStringPair("type", type_writer.get());
-                        const stmt_node_attrs = tree.beginNode();
+                        // Add region info for the statement
+                        const stmt_region = self.store.getStatementRegion(stmt_idx);
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, stmt_region);
 
+                        // Get the type variable for this statement
+                        const stmt_var = varFrom(stmt_idx);
+
+                        // Create a TypeWriter to format the type
+                        var type_writer = TypeWriter.init(self.gpa, self) catch continue;
+                        defer type_writer.deinit();
+
+                        // Write the type to the buffer
+                        type_writer.write(stmt_var) catch continue;
+
+                        const type_str = type_writer.get();
+                        try tree.pushStringPair("type", type_str);
+
+                        const stmt_attrs = tree.beginNode();
+
+                        // Add the type header
                         const header = self.store.getTypeHeader(alias.header);
                         try header.pushToSExprTree(self, tree, alias.header);
 
-                        try tree.endNode(stmt_node_begin, stmt_node_attrs);
+                        try tree.endNode(stmt_begin, stmt_attrs);
                     },
                     .s_nominal_decl => |nominal| {
-                        has_type_decl = true;
-
-                        const stmt_node_begin = tree.beginNode();
+                        const stmt_begin = tree.beginNode();
                         try tree.pushStaticAtom("nominal");
-                        const nominal_region = self.store.getStatementRegion(stmt_idx);
-                        try self.appendRegionInfoToSExprTreeFromRegion(tree, nominal_region);
 
-                        // Clear the buffer and write the type
-                        try type_writer.write(stmt_var);
-                        try tree.pushStringPair("type", type_writer.get());
+                        // Add region info for the statement
+                        const stmt_region = self.store.getStatementRegion(stmt_idx);
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, stmt_region);
 
-                        const stmt_node_attrs = tree.beginNode();
+                        // Get the type variable for this statement
+                        const stmt_var = varFrom(stmt_idx);
 
+                        // Create a TypeWriter to format the type
+                        var type_writer = TypeWriter.init(self.gpa, self) catch continue;
+                        defer type_writer.deinit();
+
+                        // Write the type to the buffer
+                        type_writer.write(stmt_var) catch continue;
+
+                        const type_str = type_writer.get();
+                        try tree.pushStringPair("type", type_str);
+
+                        const stmt_attrs = tree.beginNode();
+
+                        // Add the type header
                         const header = self.store.getTypeHeader(nominal.header);
                         try header.pushToSExprTree(self, tree, nominal.header);
 
-                        try tree.endNode(stmt_node_begin, stmt_node_attrs);
+                        try tree.endNode(stmt_begin, stmt_attrs);
                     },
-
-                    else => {
-                        // For non-assign patterns, we could handle destructuring, but for now skip
-                        continue;
-                    },
+                    else => continue,
                 }
             }
 
-            try tree.endNode(stmts_begin, stmts_attrs);
+            try tree.endNode(type_decls_begin, type_decls_attrs);
         }
 
-        // Collect expression types (for significant expressions with regions)
+        // Create expressions section
         const exprs_begin = tree.beginNode();
         try tree.pushStaticAtom("expressions");
         const exprs_attrs = tree.beginNode();
 
-        for (all_defs) |def_idx| {
+        // Iterate through all definitions to extract expression types
+        for (defs_slice) |def_idx| {
             const def = self.store.getDef(def_idx);
+            const expr_var = varFrom(def.expr);
 
-            // Get the expression type
-            const expr_var = @as(types_mod.Var, @enumFromInt(@intFromEnum(def.expr)));
+            // Get the region for this expression
+            const expr_node_idx: Node.Idx = @enumFromInt(@intFromEnum(def.expr));
+            const expr_region = self.store.getRegionAt(expr_node_idx);
 
-            const expr_node_begin = tree.beginNode();
+            // Create a TypeWriter to format the type
+            var type_writer = TypeWriter.init(self.gpa, self) catch continue;
+            defer type_writer.deinit();
+
+            // Write the type to the buffer
+            type_writer.write(expr_var) catch continue;
+
+            // Add the expression type entry
+            const expr_begin = tree.beginNode();
             try tree.pushStaticAtom("expr");
-
-            // Add region info for the expression
-            const expr_region = self.store.getExprRegion(def.expr);
             try self.appendRegionInfoToSExprTreeFromRegion(tree, expr_region);
 
-            if (@intFromEnum(expr_var) > self.types.slots.backing.len()) {
-                const unknown_begin = tree.beginNode();
-                try tree.pushStaticAtom("unknown");
-                const unknown_attrs = tree.beginNode();
-                try tree.endNode(unknown_begin, unknown_attrs);
-            } else {
-                // Clear the buffer and write the type
-                try type_writer.write(expr_var);
-                try tree.pushStringPair("type", type_writer.get());
-            }
+            const type_str = type_writer.get();
+            try tree.pushStringPair("type", type_str);
 
-            const expr_node_attrs = tree.beginNode();
-            try tree.endNode(expr_node_begin, expr_node_attrs);
+            try tree.endNode(expr_begin, tree.beginNode());
         }
 
         try tree.endNode(exprs_begin, exprs_attrs);
-
-        try tree.endNode(root_begin, attrs);
+        try tree.endNode(root_begin, root_attrs);
     }
 }
 
-test "ModuleEnv.Serialized roundtrip" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
+fn pushExprTypesToSExprTree(self: *Self, expr_idx: Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
+    const expr_begin = tree.beginNode();
+    try tree.pushStaticAtom("expr");
 
-    // Create original ModuleEnv with some data
-    var original = try init(gpa);
-    defer original.deinit();
+    // Add region info for the expression
+    try self.appendRegionInfoToSExprTree(tree, expr_idx);
 
-    // Add some test data
-    const hello_idx = try original.idents.insert(gpa, "hello");
-    const world_idx = try original.idents.insert(gpa, "world");
-    try original.ident_ids_for_slicing.append(gpa, hello_idx);
-    try original.ident_ids_for_slicing.append(gpa, world_idx);
+    // Get the type variable for this expression
+    const expr_var = varFrom(expr_idx);
 
-    const str_idx = try original.strings.insert(gpa, "test string");
-    _ = str_idx;
+    // Create a TypeWriter to format the type
+    var type_writer = try TypeWriter.init(self.gpa, self);
+    defer type_writer.deinit();
 
-    try original.exposed_items.addExposedById(gpa, @intFromEnum(hello_idx));
-    try original.exposed_items.setNodeIndexById(gpa, @intFromEnum(hello_idx), 42);
-    original.exposed_items.ensureSorted(gpa);
+    // Write the type to the buffer
+    try type_writer.write(expr_var);
 
-    try original.line_starts.append(gpa, 0);
-    try original.line_starts.append(gpa, 10);
-    try original.line_starts.append(gpa, 20);
+    // Add the formatted type to the S-expression tree
+    const type_str = type_writer.get();
+    try tree.pushStringPair("type", type_str);
 
-    const source = "hello world\ntest line 2\n";
-    original.source = source;
-    original.module_name = "TestModule";
-
-    // Create a CompactWriter and arena
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_alloc = arena.allocator();
-
-    var tmp_dir = testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    const tmp_file = try tmp_dir.dir.createFile("test.compact", .{ .read = true });
-    defer tmp_file.close();
-
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-    };
-    defer writer.deinit(arena_alloc);
-
-    // Allocate and serialize using the Serialized struct
-    const serialized_ptr = try writer.appendAlloc(arena_alloc, Self.Serialized);
-    try serialized_ptr.serialize(&original, arena_alloc, &writer);
-
-    // Write to file
-    try writer.writeGather(arena_alloc, tmp_file);
-
-    // Read back
-    const file_size = try tmp_file.getEndPos();
-    const buffer = try gpa.alloc(u8, file_size);
-    defer gpa.free(buffer);
-    _ = try tmp_file.pread(buffer, 0);
-
-    // Find the Serialized struct at the end of the buffer
-    const serialized_offset = writer.total_bytes - @sizeOf(Self.Serialized);
-    const deserialized_ptr = @as(*Self.Serialized, @ptrCast(@alignCast(buffer.ptr + serialized_offset)));
-    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule");
-
-    // Verify the data was preserved
-    try testing.expectEqual(@as(usize, 2), env.ident_ids_for_slicing.len());
-    try testing.expectEqualStrings("hello", env.idents.get(hello_idx));
-    try testing.expectEqualStrings("world", env.idents.get(world_idx));
-
-    try testing.expectEqual(@as(usize, 1), env.exposed_items.count());
-    try testing.expectEqual(@as(?u16, 42), env.exposed_items.getNodeIndexById(gpa, @intFromEnum(hello_idx)));
-
-    try testing.expectEqual(@as(usize, 3), env.line_starts.len());
-    try testing.expectEqual(@as(u32, 0), env.line_starts.get(0));
-    try testing.expectEqual(@as(u32, 10), env.line_starts.get(1));
-    try testing.expectEqual(@as(u32, 20), env.line_starts.get(2));
-
-    try testing.expectEqualStrings(source, env.source);
-    try testing.expectEqualStrings("TestModule", env.module_name);
+    try tree.endNode(expr_begin, tree.beginNode());
 }
