@@ -31,14 +31,12 @@ pub const TestAllocator = struct {
             allocator_initialized = true;
         }
 
-        // TODO something proper here
         _ = alignment;
-        const allign = 8;
 
         // Allocate memory using the testing allocator
         const ptr = std.testing.allocator.alignedAlloc(
             u8,
-            allign,
+            null, // TODO null means natural alignment, is this right here??
             size,
         ) catch {
             return null;
