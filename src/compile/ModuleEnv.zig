@@ -1676,10 +1676,81 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExpr
     if (maybe_expr_idx) |expr_idx| {
         try self.pushExprTypesToSExprTree(expr_idx, tree);
     } else {
-        // No expression provided, just push empty types
-        const types_begin = tree.beginNode();
-        try tree.pushStaticAtom("types");
-        try tree.endNode(types_begin, tree.beginNode());
+        // Generate full type information for all definitions and expressions
+        const root_begin = tree.beginNode();
+        try tree.pushStaticAtom("inferred-types");
+
+        const root_attrs = tree.beginNode();
+
+        // Create defs section
+        const defs_begin = tree.beginNode();
+        try tree.pushStaticAtom("defs");
+        const defs_attrs = tree.beginNode();
+
+        // Iterate through all definitions to extract pattern types
+        const defs_slice = self.store.sliceDefs(self.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = self.store.getDef(def_idx);
+            const pattern_var = varFrom(def.pattern);
+
+            // Get the region for this definition
+            const pattern_node_idx: Node.Idx = @enumFromInt(@intFromEnum(def.pattern));
+            const pattern_region = self.store.getRegionAt(pattern_node_idx);
+
+            // Create a TypeWriter to format the type
+            var type_writer = TypeWriter.init(self.gpa, self) catch continue;
+            defer type_writer.deinit();
+
+            // Write the type to the buffer
+            type_writer.write(pattern_var) catch continue;
+
+            // Add the pattern type entry
+            const patt_begin = tree.beginNode();
+            try tree.pushStaticAtom("patt");
+            try self.appendRegionInfoToSExprTreeFromRegion(tree, pattern_region);
+
+            const type_str = type_writer.get();
+            try tree.pushStringPair("type", type_str);
+
+            try tree.endNode(patt_begin, tree.beginNode());
+        }
+
+        try tree.endNode(defs_begin, defs_attrs);
+
+        // Create expressions section
+        const exprs_begin = tree.beginNode();
+        try tree.pushStaticAtom("expressions");
+        const exprs_attrs = tree.beginNode();
+
+        // Iterate through all definitions to extract expression types
+        for (defs_slice) |def_idx| {
+            const def = self.store.getDef(def_idx);
+            const expr_var = varFrom(def.expr);
+
+            // Get the region for this expression
+            const expr_node_idx: Node.Idx = @enumFromInt(@intFromEnum(def.expr));
+            const expr_region = self.store.getRegionAt(expr_node_idx);
+
+            // Create a TypeWriter to format the type
+            var type_writer = TypeWriter.init(self.gpa, self) catch continue;
+            defer type_writer.deinit();
+
+            // Write the type to the buffer
+            type_writer.write(expr_var) catch continue;
+
+            // Add the expression type entry
+            const expr_begin = tree.beginNode();
+            try tree.pushStaticAtom("expr");
+            try self.appendRegionInfoToSExprTreeFromRegion(tree, expr_region);
+
+            const type_str = type_writer.get();
+            try tree.pushStringPair("type", type_str);
+
+            try tree.endNode(expr_begin, tree.beginNode());
+        }
+
+        try tree.endNode(exprs_begin, exprs_attrs);
+        try tree.endNode(root_begin, root_attrs);
     }
 }
 
