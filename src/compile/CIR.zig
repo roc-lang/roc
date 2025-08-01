@@ -387,6 +387,8 @@ pub const Import = struct {
 
         pub const Serialized = struct {
             imports: collections.SafeList(base.StringLiteral.Idx).Serialized,
+            // Placeholder to match Store size - not serialized
+            map: std.AutoHashMapUnmanaged(base.StringLiteral.Idx, Import.Idx) = .{},
 
             /// Serialize a Store into this Serialized struct, appending data to the writer
             pub fn serialize(
@@ -401,17 +403,10 @@ pub const Import = struct {
 
             /// Deserialize this Serialized struct into a Store
             pub fn deserialize(self: *Serialized, offset: i64) *Store {
-                // Import.Store.Serialized should be at least as big as Import.Store
-                std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
-
-                // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+                // Overwrite ourself with the deserialized version, and return our pointer after casting it to Store.
                 const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
-
-                store.* = Store{
-                    .map = .{}, // Map will be empty after deserialization (only used for deduplication during insertion)
-                    .imports = self.imports.deserialize(offset).*,
-                };
-
+                store.map = .{}; // Map will be empty after deserialization (only used for deduplication during insertion)
+                store.imports = self.imports.deserialize(offset).*;
                 return store;
             }
         };
