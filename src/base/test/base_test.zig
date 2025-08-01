@@ -1594,96 +1594,63 @@ test "StringLiteral.Store frozen state CompactWriter roundtrip" {
     }
 }
 
-// TODO: CompactWriter doesn't support serializing multiple independent structures
-// This test needs to be redesigned to either use separate writers or a containing structure
-// test "StringLiteral.Store multiple stores CompactWriter roundtrip" {
-//     const gpa = std.testing.allocator;
+test "StringLiteral.Store.Serialized roundtrip" {
+    const gpa = std.testing.allocator;
 
-//     // Create multiple stores
-//     var store1 = StringLiteral.Store{};
-//     defer store1.deinit(gpa);
+    // Create original store and add some strings
+    var original = StringLiteral.Store{};
+    defer original.deinit(gpa);
 
-//     var store2 = StringLiteral.Store{};
-//     defer store2.deinit(gpa);
+    const idx1 = try original.insert(gpa, "hello");
+    const idx2 = try original.insert(gpa, "world");
+    const idx3 = try original.insert(gpa, "foo bar baz");
 
-//     var store3 = StringLiteral.Store{};
-//     defer store3.deinit(gpa);
+    // Freeze the store in debug mode
+    original.freeze();
 
-//     // Populate differently
-//     const idx1_1 = try store1.insert(gpa, "store1_string1");
-//     const idx1_2 = try store1.insert(gpa, "store1_string2");
+    // Create a CompactWriter and arena
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
 
-//     const idx2_1 = try store2.insert(gpa, "store2_string1");
-//     store2.freeze();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_file = try tmp_dir.dir.createFile("test.compact", .{ .read = true });
+    defer tmp_file.close();
 
-//     // store3 left empty
+    var writer = CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(arena_alloc);
 
-//     // Create a temp file
-//     var tmp_dir = std.testing.tmpDir(.{});
-//     defer tmp_dir.cleanup();
+    // Allocate and serialize using the Serialized struct
+    const serialized_ptr = try writer.appendAlloc(arena_alloc, StringLiteral.Store.Serialized);
+    try serialized_ptr.serialize(&original, arena_alloc, &writer);
 
-//     const file = try tmp_dir.dir.createFile("test_multiple_stringlit.dat", .{ .read = true });
-//     defer file.close();
+    // Write to file
+    try writer.writeGather(arena_alloc, tmp_file);
 
-//     // Use arena allocator for serialization
-//     var arena = std.heap.ArenaAllocator.init(gpa);
-//     defer arena.deinit();
-//     const arena_allocator = arena.allocator();
+    // Read back
+    const file_size = try tmp_file.getEndPos();
+    const buffer = try gpa.alloc(u8, @as(usize, @intCast(file_size)));
+    defer gpa.free(buffer);
+    _ = try tmp_file.pread(buffer, 0);
 
-//     // Serialize all three
-//     var writer = CompactWriter{
-//         .iovecs = .{},
-//         .total_bytes = 0,
-//     };
-//     defer writer.deinit(arena_allocator);
+    // Deserialize
+    const deserialized_ptr = @as(*StringLiteral.Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
+    const store = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
 
-//     // Track where each store starts in the serialized data
-//     const offset1: usize = 0; // First store starts at 0
-//     _ = try store1.serialize(arena_allocator, &writer);
-//     const offset1_end = writer.total_bytes;
+    // Verify the strings are accessible
+    try std.testing.expectEqualStrings("hello", store.get(idx1));
+    try std.testing.expectEqualStrings("world", store.get(idx2));
+    try std.testing.expectEqualStrings("foo bar baz", store.get(idx3));
 
-//     const offset2 = offset1_end; // Second store starts where first ended
-//     _ = try store2.serialize(arena_allocator, &writer);
-//     const offset2_end = writer.total_bytes;
-
-//     const offset3 = offset2_end; // Third store starts where second ended
-//     _ = try store3.serialize(arena_allocator, &writer);
-//
-
-//     // Write to file
-//     try writer.writeGather(arena_allocator, file);
-
-//     // Read back
-//     try file.seekTo(0);
-//     const file_size = try file.getEndPos();
-//     const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
-//     defer gpa.free(buffer);
-
-//     _ = try file.read(buffer);
-
-//     // Cast and relocate all three
-//     const deserialized1 = @as(*StringLiteral.Store, @ptrCast(@alignCast(buffer.ptr + offset1)));
-//     deserialized1.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-
-//     const deserialized2 = @as(*StringLiteral.Store, @ptrCast(@alignCast(buffer.ptr + offset2)));
-//     deserialized2.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-
-//     const deserialized3 = @as(*StringLiteral.Store, @ptrCast(@alignCast(buffer.ptr + offset3)));
-//     deserialized3.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-
-//     // Verify store 1
-//     try std.testing.expectEqualStrings("store1_string1", deserialized1.get(idx1_1));
-//     try std.testing.expectEqualStrings("store1_string2", deserialized1.get(idx1_2));
-
-//     // Verify store 2 (frozen)
-//     try std.testing.expectEqualStrings("store2_string1", deserialized2.get(idx2_1));
-//     if (std.debug.runtime_safety) {
-//         try std.testing.expect(deserialized2.frozen);
-//     }
-
-//     // Verify store 3 (empty)
-//     try std.testing.expectEqual(@as(usize, 0), deserialized3.buffer.len());
-// } // End of commented test
+    // Verify frozen state is preserved
+    if (std.debug.runtime_safety) {
+        try std.testing.expect(store.frozen);
+    }
+}
 
 test "StringLiteral.Store edge case indices CompactWriter roundtrip" {
     const gpa = std.testing.allocator;

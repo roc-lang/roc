@@ -672,6 +672,54 @@ pub const Store = struct {
 
     // serialization //
 
+    /// Serialized representation of types store
+    pub const Serialized = struct {
+        gpa: Allocator,
+        slots: SlotStore.Serialized,
+        descs: DescStore.Serialized,
+        vars: VarSafeList.Serialized,
+        record_fields: RecordFieldSafeMultiList.Serialized,
+        tags: TagSafeMultiList.Serialized,
+
+        /// Serialize a Store into this Serialized struct, appending data to the writer
+        pub fn serialize(
+            self: *Serialized,
+            store: *const Store,
+            allocator: Allocator,
+            writer: *serialization.CompactWriter,
+        ) Allocator.Error!void {
+            // Serialize each component
+            try self.slots.serialize(&store.slots, allocator, writer);
+            try self.descs.serialize(&store.descs, allocator, writer);
+            try self.vars.serialize(&store.vars, allocator, writer);
+            try self.record_fields.serialize(&store.record_fields, allocator, writer);
+            try self.tags.serialize(&store.tags, allocator, writer);
+
+            // Store the allocator
+            self.gpa = allocator;
+        }
+
+        /// Deserialize this Serialized struct into a Store
+        pub fn deserialize(self: *Serialized, offset: i64) *Store {
+            // types.Store.Serialized should be at least as big as types.Store
+            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
+
+            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
+
+            store.* = Store{
+                .gpa = self.gpa,
+                .slots = self.slots.deserialize(offset).*,
+                .descs = self.descs.deserialize(offset).*,
+                .vars = self.vars.deserialize(offset).*,
+                .record_fields = self.record_fields.deserialize(offset).*,
+                .tags = self.tags.deserialize(offset).*,
+            };
+
+            return store;
+        }
+    };
+
     /// Serialize this Store to the given CompactWriter
     pub fn serialize(
         self: *const Self,
@@ -870,6 +918,36 @@ const SlotStore = struct {
         self.backing.deinit(gpa);
     }
 
+    /// Serialized representation of SlotStore
+    pub const Serialized = struct {
+        backing: collections.SafeList(Slot).Serialized,
+
+        /// Serialize a SlotStore into this Serialized struct, appending data to the writer
+        pub fn serialize(
+            self: *Serialized,
+            slot_store: *const SlotStore,
+            allocator: Allocator,
+            writer: *serialization.CompactWriter,
+        ) Allocator.Error!void {
+            try self.backing.serialize(&slot_store.backing, allocator, writer);
+        }
+
+        /// Deserialize this Serialized struct into a SlotStore
+        pub fn deserialize(self: *Serialized, offset: i64) *SlotStore {
+            // SlotStore.Serialized should be at least as big as SlotStore
+            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(SlotStore));
+
+            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            const slot_store = @as(*SlotStore, @ptrFromInt(@intFromPtr(self)));
+
+            slot_store.* = SlotStore{
+                .backing = self.backing.deserialize(offset).*,
+            };
+
+            return slot_store;
+        }
+    };
+
     /// Insert a new slot into the store
     fn insert(self: *Self, gpa: Allocator, typ: Slot) std.mem.Allocator.Error!Idx {
         const safe_idx = try self.backing.append(gpa, typ);
@@ -948,6 +1026,36 @@ const DescStore = struct {
     pub fn deinit(self: *Self, gpa: Allocator) void {
         self.backing.deinit(gpa);
     }
+
+    /// Serialized representation of DescStore
+    pub const Serialized = struct {
+        backing: DescSafeMultiList.Serialized,
+
+        /// Serialize a DescStore into this Serialized struct, appending data to the writer
+        pub fn serialize(
+            self: *Serialized,
+            desc_store: *const DescStore,
+            allocator: Allocator,
+            writer: *serialization.CompactWriter,
+        ) Allocator.Error!void {
+            try self.backing.serialize(&desc_store.backing, allocator, writer);
+        }
+
+        /// Deserialize this Serialized struct into a DescStore
+        pub fn deserialize(self: *Serialized, offset: i64) *DescStore {
+            // DescStore.Serialized should be at least as big as DescStore
+            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(DescStore));
+
+            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            const desc_store = @as(*DescStore, @ptrFromInt(@intFromPtr(self)));
+
+            desc_store.* = DescStore{
+                .backing = self.backing.deserialize(offset).*,
+            };
+
+            return desc_store;
+        }
+    };
 
     /// Insert a value into the store
     fn insert(self: *Self, gpa: Allocator, typ: Desc) std.mem.Allocator.Error!Idx {
@@ -1366,6 +1474,159 @@ test "Store comprehensive CompactWriter roundtrip" {
         },
         else => unreachable,
     }
+}
+
+test "SlotStore.Serialized roundtrip" {
+    const gpa = std.testing.allocator;
+    const CompactWriter = serialization.CompactWriter;
+
+    var slot_store = try SlotStore.init(gpa, 4);
+    defer slot_store.deinit(gpa);
+
+    // Add some slots
+    _ = try slot_store.insert(gpa, .{ .root = @enumFromInt(100) });
+    _ = try slot_store.insert(gpa, .{ .redirect = @enumFromInt(0) });
+    _ = try slot_store.insert(gpa, .{ .root = @enumFromInt(200) });
+
+    // Create temp file
+    const tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const file = try tmp_dir.dir.createFile("test_slot_store_serialized.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize using SlotStore.Serialized
+    var writer = CompactWriter{ .iovecs = .{}, .total_bytes = 0 };
+    defer writer.deinit(gpa);
+
+    const serialized_ptr = try writer.appendAlloc(gpa, SlotStore.Serialized);
+    try serialized_ptr.serialize(&slot_store, gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+    _ = try file.read(buffer);
+
+    // Deserialize
+    const deser_ptr = @as(*SlotStore.Serialized, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(SlotStore.Serialized))));
+    const deserialized = deser_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify
+    try std.testing.expectEqual(@as(usize, 3), deserialized.backing.len());
+    try std.testing.expectEqual(Slot{ .root = @enumFromInt(100) }, deserialized.get(@enumFromInt(0)));
+    try std.testing.expectEqual(Slot{ .redirect = @enumFromInt(0) }, deserialized.get(@enumFromInt(1)));
+    try std.testing.expectEqual(Slot{ .root = @enumFromInt(200) }, deserialized.get(@enumFromInt(2)));
+}
+
+test "DescStore.Serialized roundtrip" {
+    const gpa = std.testing.allocator;
+    const CompactWriter = serialization.CompactWriter;
+
+    var desc_store = try DescStore.init(gpa, 4);
+    defer desc_store.deinit(gpa);
+
+    // Add some descriptors
+    const desc1 = Descriptor{
+        .content = Content{ .flex_var = null },
+        .rank = Rank.generalized,
+        .mark = Mark.none,
+    };
+    const desc2 = Descriptor{
+        .content = Content{ .structure = .{ .str = {} } },
+        .rank = Rank.top_level,
+        .mark = Mark.visited,
+    };
+
+    _ = try desc_store.insert(gpa, desc1);
+    _ = try desc_store.insert(gpa, desc2);
+
+    // Create temp file
+    const tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const file = try tmp_dir.dir.createFile("test_desc_store_serialized.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize using DescStore.Serialized
+    var writer = CompactWriter{ .iovecs = .{}, .total_bytes = 0 };
+    defer writer.deinit(gpa);
+
+    const serialized_ptr = try writer.appendAlloc(gpa, DescStore.Serialized);
+    try serialized_ptr.serialize(&desc_store, gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+    _ = try file.read(buffer);
+
+    // Deserialize
+    const deser_ptr = @as(*DescStore.Serialized, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(DescStore.Serialized))));
+    const deserialized = deser_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify
+    try std.testing.expectEqual(@as(usize, 2), deserialized.backing.backing.len());
+    try std.testing.expectEqual(desc1, deserialized.get(@enumFromInt(0)));
+    try std.testing.expectEqual(desc2, deserialized.get(@enumFromInt(1)));
+}
+
+test "Store.Serialized roundtrip" {
+    const gpa = std.testing.allocator;
+    const CompactWriter = serialization.CompactWriter;
+
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    // Create some type variables
+    const flex_var = try store.fresh();
+    const str_var = try store.freshFromContent(Content{ .structure = .{ .str = {} } });
+    const redirect_var = try store.freshRedirect(flex_var);
+
+    // Create temp file
+    const tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const file = try tmp_dir.dir.createFile("test_store_serialized.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize using Store.Serialized
+    var writer = CompactWriter{ .iovecs = .{}, .total_bytes = 0 };
+    defer writer.deinit(gpa);
+
+    const serialized_ptr = try writer.appendAlloc(gpa, Store.Serialized);
+    try serialized_ptr.serialize(&store, gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+    _ = try file.read(buffer);
+
+    // Deserialize
+    const deser_ptr = @as(*Store.Serialized, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Store.Serialized))));
+    const deserialized = deser_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify the store was deserialized correctly
+    try std.testing.expectEqual(@as(usize, 3), deserialized.len());
+
+    const flex_resolved = deserialized.resolveVar(flex_var);
+    try std.testing.expectEqual(Content{ .flex_var = null }, flex_resolved.desc.content);
+
+    const str_resolved = deserialized.resolveVar(str_var);
+    try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, str_resolved.desc.content);
+
+    const redirect_resolved = deserialized.resolveVar(redirect_var);
+    try std.testing.expectEqual(flex_resolved.desc_idx, redirect_resolved.desc_idx);
 }
 
 test "Store multiple instances CompactWriter roundtrip" {

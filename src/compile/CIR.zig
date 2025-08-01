@@ -7,6 +7,8 @@ const collections = @import("collections");
 const base = @import("base");
 const reporting = @import("reporting");
 const builtins = @import("builtins");
+const serialization = @import("serialization");
+const CompactWriter = serialization.CompactWriter;
 
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
@@ -349,7 +351,7 @@ pub const Import = struct {
         pub fn serialize(
             self: *const Store,
             allocator: std.mem.Allocator,
-            writer: *collections.CompactWriter,
+            writer: *CompactWriter,
         ) std.mem.Allocator.Error!*const Store {
             // First, write the Store struct itself
             const offset_self = try writer.appendAlloc(allocator, Store);
@@ -369,6 +371,37 @@ pub const Import = struct {
             // It's only used for deduplication during insertion
             self.imports.relocate(offset);
         }
+
+        pub const Serialized = struct {
+            imports: collections.SafeList(base.StringLiteral.Idx).Serialized,
+
+            /// Serialize a Store into this Serialized struct, appending data to the writer
+            pub fn serialize(
+                self: *Serialized,
+                store: *const Store,
+                allocator: std.mem.Allocator,
+                writer: *CompactWriter,
+            ) std.mem.Allocator.Error!void {
+                // Serialize the imports SafeList
+                try self.imports.serialize(&store.imports, allocator, writer);
+            }
+
+            /// Deserialize this Serialized struct into a Store
+            pub fn deserialize(self: *Serialized, offset: i64) *Store {
+                // Import.Store.Serialized should be at least as big as Import.Store
+                std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
+
+                // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+                const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
+
+                store.* = Store{
+                    .map = .{}, // Map will be empty after deserialization (only used for deduplication during insertion)
+                    .imports = self.imports.deserialize(offset).*,
+                };
+
+                return store;
+            }
+        };
     };
 };
 
@@ -704,4 +737,66 @@ test "Import.Store uses interned string deduplication" {
     const idx4 = try store.getOrPut(gpa, &string_store1, "other.Module");
     try testing.expect(idx4 != idx1);
     try testing.expectEqual(@as(usize, 2), store.imports.len());
+}
+
+test "Import.Store.Serialized roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create original store and add some imports
+    var original = Import.Store.init();
+    defer original.deinit(gpa);
+
+    // Create a string store for interning module names
+    var string_store = try base.StringLiteral.Store.initCapacityBytes(gpa, 1024);
+    defer string_store.deinit(gpa);
+
+    // Add some imports
+    const idx1 = try original.getOrPut(gpa, &string_store, "Std.List");
+    const idx2 = try original.getOrPut(gpa, &string_store, "Std.Dict");
+    const idx3 = try original.getOrPut(gpa, &string_store, "App.Model");
+
+    // Create a CompactWriter and arena
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_file = try tmp_dir.dir.createFile("test_import_store_serialized.dat", .{ .read = true });
+    defer tmp_file.close();
+
+    var writer = collections.CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(arena_alloc);
+
+    // Allocate and serialize using the Serialized struct
+    const serialized_ptr = try writer.appendAlloc(arena_alloc, Import.Store.Serialized);
+    try serialized_ptr.serialize(&original, arena_alloc, &writer);
+
+    // Write to file
+    try writer.writeGather(arena_alloc, tmp_file);
+
+    // Read back
+    const file_size = try tmp_file.getEndPos();
+    const buffer = try gpa.alloc(u8, file_size);
+    defer gpa.free(buffer);
+    _ = try tmp_file.pread(buffer, 0);
+
+    // Deserialize
+    const deserialized_ptr = @as(*Import.Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
+    const store = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify the imports are accessible
+    try testing.expectEqual(@as(usize, 3), store.imports.len());
+
+    // The map should be empty after deserialization
+    try testing.expectEqual(@as(usize, 0), store.map.count());
+
+    // Verify the import indices match
+    try testing.expectEqual(string_store.get(original.imports.getAssume(@intFromEnum(idx1))), string_store.get(store.imports.getAssume(@intFromEnum(idx1))));
+    try testing.expectEqual(string_store.get(original.imports.getAssume(@intFromEnum(idx2))), string_store.get(store.imports.getAssume(@intFromEnum(idx2))));
+    try testing.expectEqual(string_store.get(original.imports.getAssume(@intFromEnum(idx3))), string_store.get(store.imports.getAssume(@intFromEnum(idx3))));
 }

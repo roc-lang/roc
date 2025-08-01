@@ -166,4 +166,39 @@ pub const Store = struct {
     pub fn relocate(self: *Store, offset: isize) void {
         self.buffer.relocate(offset);
     }
+
+    /// Serialized representation of a Store
+    pub const Serialized = struct {
+        buffer: collections.SafeList(u8).Serialized,
+        frozen: if (std.debug.runtime_safety) bool else void,
+
+        /// Serialize a Store into this Serialized struct, appending data to the writer
+        pub fn serialize(
+            self: *Serialized,
+            store: *const Store,
+            allocator: std.mem.Allocator,
+            writer: *CompactWriter,
+        ) std.mem.Allocator.Error!void {
+            // Serialize the buffer SafeList
+            try self.buffer.serialize(&store.buffer, allocator, writer);
+            // Copy the frozen field
+            self.frozen = store.frozen;
+        }
+
+        /// Deserialize this Serialized struct into a Store
+        pub fn deserialize(self: *Serialized, offset: i64) *Store {
+            // StringLiteral.Store.Serialized should be at least as big as StringLiteral.Store
+            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
+
+            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
+
+            store.* = Store{
+                .buffer = self.buffer.deserialize(offset).*,
+                .frozen = self.frozen,
+            };
+
+            return store;
+        }
+    };
 };
