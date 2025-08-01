@@ -214,6 +214,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     }
 }
 
+/// Parse and canonicalize an expression.
 pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
@@ -303,6 +304,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     };
 }
 
+/// Cleanup resources allocated by parseAndCanonicalizeExpr.
 pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype) void {
     resources.checker.deinit();
     resources.can.deinit();
