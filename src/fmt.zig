@@ -1497,9 +1497,6 @@ const Formatter = struct {
             },
             .package => |p| {
                 try fmt.pushAll("package");
-                defer {
-                    fmt.curr_indent = 0;
-                }
                 const multiline = fmt.ast.regionIsMultiline(p.region);
                 if (multiline) {
                     _ = try fmt.flushCommentsAfter(p.region.start);
@@ -1534,9 +1531,8 @@ const Formatter = struct {
                 );
             },
             .platform => |p| {
-                const multiline = fmt.ast.regionIsMultiline(p.region);
                 try fmt.pushAll("platform");
-                if (multiline and try fmt.flushCommentsAfter(p.region.start)) {
+                if (try fmt.flushCommentsAfter(p.region.start)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 } else {
@@ -1545,14 +1541,15 @@ const Formatter = struct {
                 try fmt.push('"');
                 try fmt.pushTokenText(p.name);
                 try fmt.push('"');
+
                 _ = try fmt.flushCommentsAfter(p.name + 1);
-                fmt.curr_indent = start_indent + 1; // Reset to always be this
                 try fmt.ensureNewline();
+                fmt.curr_indent = start_indent + 1;
                 try fmt.pushIndent();
 
                 try fmt.pushAll("requires");
                 const rigids = fmt.ast.store.getCollection(p.requires_rigids);
-                if (multiline and try fmt.flushCommentsBefore(rigids.region.start)) {
+                if (try fmt.flushCommentsBefore(rigids.region.start)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 } else {
@@ -1565,25 +1562,23 @@ const Formatter = struct {
                     fmt.ast.store.exposedItemSlice(.{ .span = rigids.span }),
                     Formatter.formatExposedItem,
                 );
-                if (multiline and try fmt.flushCommentsBefore(rigids.region.end)) {
+                if (try fmt.flushCommentsBefore(rigids.region.end)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 } else {
                     try fmt.push(' ');
                 }
-                // Signatures
                 _ = try fmt.formatTypeAnno(p.requires_signatures);
+
                 const signatures_region = fmt.nodeRegion(@intFromEnum(p.requires_signatures));
-                if (multiline and try fmt.flushCommentsBefore(signatures_region.end)) {
-                    fmt.curr_indent = start_indent + 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.newline();
-                    try fmt.pushIndent();
-                }
-                const exposes = fmt.ast.store.getCollection(p.exposes);
+                _ = try fmt.flushCommentsBefore(signatures_region.end);
+                try fmt.ensureNewline();
+                fmt.curr_indent = start_indent + 1;
+                try fmt.pushIndent();
+
                 try fmt.pushAll("exposes");
-                if (multiline and try fmt.flushCommentsBefore(exposes.region.start)) {
+                const exposes = fmt.ast.store.getCollection(p.exposes);
+                if (try fmt.flushCommentsBefore(exposes.region.start)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 } else {
@@ -1596,16 +1591,15 @@ const Formatter = struct {
                     fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }),
                     Formatter.formatExposedItem,
                 );
-                if (multiline and try fmt.flushCommentsBefore(exposes.region.end)) {
-                    fmt.curr_indent = start_indent + 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.newline();
-                    try fmt.pushIndent();
-                }
+
+                _ = try fmt.flushCommentsBefore(exposes.region.end);
+                try fmt.ensureNewline();
+                fmt.curr_indent = start_indent + 1;
+                try fmt.pushIndent();
+
                 try fmt.pushAll("packages");
                 const packages = fmt.ast.store.getCollection(p.packages);
-                if (multiline and try fmt.flushCommentsBefore(packages.region.start)) {
+                if (try fmt.flushCommentsBefore(packages.region.start)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 } else {
@@ -1618,16 +1612,15 @@ const Formatter = struct {
                     fmt.ast.store.recordFieldSlice(.{ .span = packages.span }),
                     Formatter.formatRecordField,
                 );
-                if (multiline and try fmt.flushCommentsBefore(packages.region.end)) {
-                    fmt.curr_indent = start_indent + 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.newline();
-                    try fmt.pushIndent();
-                }
+
+                _ = try fmt.flushCommentsBefore(packages.region.end);
+                try fmt.ensureNewline();
+                fmt.curr_indent = start_indent + 1;
+                try fmt.pushIndent();
+
                 try fmt.pushAll("provides");
                 const provides = fmt.ast.store.getCollection(p.provides);
-                if (multiline and try fmt.flushCommentsBefore(provides.region.start)) {
+                if (try fmt.flushCommentsBefore(provides.region.start)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 } else {
