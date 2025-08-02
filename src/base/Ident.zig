@@ -124,21 +124,22 @@ pub const Idx = packed struct(u32) {
         std.debug.assert(!(string.len == 1 and (unused or reused)));
 
         // If it ends with `!` (with or without an underscore after it), it's effectful.
-        const fx = '!' == string[string.len - @intFromBool(reused)];
+        const fx_check_index = string.len - @as(usize, @intFromBool(reused));
+        const fx = fx_check_index > 0 and string[fx_check_index - 1] == '!';
 
         // Skip the underscore prefix if there was one.
-        const first_non_attr_index = @intFromBool(unused);
+        const first_non_attr_index: usize = @intFromBool(unused);
         const char0 = string[first_non_attr_index];
 
-        // Small idx supports unused, reused, and fx, but not more than one at once. (Those are very rare idents!)
-        const attr_count = @intFromBool(unused) + @intFromBool(reused) + @intFromBool(fx);
+        // Get the total number of attributes (unused, reused, effectful)
+        const attr_count: usize = @intFromBool(unused) + @intFromBool(reused) + @intFromBool(fx);
 
         // Length without underscore/bang prefix/suffix.
         const len = string.len - attr_count;
 
         // Treat double underscore prefix as a big idx. This will be a warning anyway,
         // so it should come up almost never in practice, and this avoids edge cases.
-        if (attr_count > 1 or len > 4 or char0 == '_' or char0 < 'A' or char0 > 'z') {
+        if (len > 4 or char0 == '_' or char0 < 'A' or char0 > 'z') {
             return null;
         }
 
@@ -149,19 +150,24 @@ pub const Idx = packed struct(u32) {
         // len would only be 0 here for inputs of `__` or `_!_`, but we should have already early-returned for those.
         std.debug.assert(len > 0);
 
-        // Branchlessly get the chars after the first non-attr char, defaulting to last char instead of
-        // reading out of bounds. (We'll branchlessly set any out-of-bounds ones to zero later.)
-        const last_char_index = len - 1;
-        const chars: [3]u8 = .{
-            string[@min(1 + first_non_attr_index, last_char_index)],
-            string[@min(2 + first_non_attr_index, last_char_index)],
-            string[@min(3 + first_non_attr_index, last_char_index)],
-        };
+        // Get the characters after the first one
+        var char1: u8 = 0;
+        var char2: u8 = 0;
+        var char3: u8 = 0;
+
+        if (len >= 2) {
+            char1 = string[1 + first_non_attr_index];
+        }
+        if (len >= 3) {
+            char2 = string[2 + first_non_attr_index];
+        }
+        if (len >= 4) {
+            char3 = string[3 + first_non_attr_index];
+        }
 
         // If any char is outside the ASCII range (e.g. it's Unicode), this is a big index.
         // (We don't need to test for lower bounds because tokenization would have already verified that.)
-        // This also catches weird cases like `foo!__` (which wouldn't have been caught before this).
-        if (chars[0] > 'z' or chars[1] > 'z' or chars[2] > 'z') {
+        if (char1 > 'z' or char2 > 'z' or char3 > 'z') {
             return null;
         }
 
@@ -171,12 +177,11 @@ pub const Idx = packed struct(u32) {
                 .small = .{
                     .char0 = @as(u7, @intCast(char0)),
                     .is_unused = unused,
-                    // Branchlessly zero the out-of-bounds chars.
-                    .char1 = if (len >= 2) chars[0] else 0,
+                    .char1 = @as(u7, @intCast(char1)),
                     .is_reused = reused,
-                    .char2 = if (len >= 3) chars[1] else 0,
+                    .char2 = @as(u7, @intCast(char2)),
                     .is_effectful = fx,
-                    .char3 = if (len >= 4) chars[2] else 0,
+                    .char3 = @as(u7, @intCast(char3)),
                 },
             },
         };
@@ -377,8 +382,15 @@ pub const Store = struct {
         self.attributes.deinit(gpa);
     }
 
-    /// Insert a new identifier into the store.
+    /// Insert a new nonempty identifier into the store.
     pub fn insert(self: *Store, gpa: std.mem.Allocator, ident: Ident) std.mem.Allocator.Error!Idx {
+        std.debug.assert(ident.raw_text.len > 0);
+        // First try to create a small identifier
+        if (Idx.try_inline(ident.raw_text)) |small_idx| {
+            return small_idx;
+        }
+
+        // Fall back to big identifier in the interner
         const idx = try self.interner.insert(gpa, ident.raw_text);
 
         return Idx{
@@ -461,9 +473,15 @@ pub const Store = struct {
         return self.interner.contains(text);
     }
 
-    /// Find an identifier by its string, returning its index if it exists.
+    /// Find an identifier by its nonempty string, returning its index if it exists.
     /// This is different from insert in that it's guaranteed not to modify the store.
     pub fn findByString(self: *const Store, text: []const u8) ?Idx {
+        std.debug.assert(text.len > 0);
+        // First try to create a small identifier
+        if (Idx.try_inline(text)) |small_idx| {
+            return small_idx;
+        }
+
         // Look up in the interner without inserting
         const result = self.interner.findStringOrSlot(text);
         const interner_idx = result.idx orelse return null;
