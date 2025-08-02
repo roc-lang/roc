@@ -9,7 +9,6 @@ const std = @import("std");
 const builtins = @import("builtins");
 
 const WithOverflow = builtins.utils.WithOverflow;
-const RocCrashed = builtins.host_abi.RocCrashed;
 const Ordering = builtins.utils.Ordering;
 const RocList = builtins.list.RocList;
 const RocOps = builtins.utils.RocOps;
@@ -149,12 +148,7 @@ pub fn exportPow(
                         return value;
                     } else |err| switch (err) {
                         error.Overflow => {
-                            const utf8_bytes = "Integer raised to power overflowed!";
-                            const roc_crashed_args = RocCrashed{
-                                .utf8_bytes = utf8_bytes,
-                                .len = utf8_bytes.len,
-                            };
-                            roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+                            roc_ops.crash("Integer raised to power overflowed!");
                         },
                         error.Underflow => return 0,
                     }
@@ -330,12 +324,7 @@ pub fn exportDivCeil(
             roc_ops: *RocOps,
         ) callconv(.C) T {
             return math.divCeil(T, a, b) catch {
-                const utf8_bytes = "Integer division by 0!";
-                const roc_crashed_args = RocCrashed{
-                    .utf8_bytes = utf8_bytes,
-                    .len = utf8_bytes.len,
-                };
-                roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+                roc_ops.crash("Integer division by 0!");
             };
         }
     }.func;
@@ -472,12 +461,7 @@ pub fn exportAddOrPanic(
         ) callconv(.C) T {
             const result = addWithOverflow(T, self, other);
             if (result.has_overflowed) {
-                const utf8_bytes = "Integer addition overflowed!";
-                const roc_crashed_args = RocCrashed{
-                    .utf8_bytes = utf8_bytes,
-                    .len = utf8_bytes.len,
-                };
-                roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+                roc_ops.crash("Integer addition overflowed!");
             } else {
                 return result.value;
             }
@@ -555,12 +539,7 @@ pub fn exportSubOrPanic(
         ) callconv(.C) T {
             const result = subWithOverflow(T, self, other);
             if (result.has_overflowed) {
-                const utf8_bytes = "Integer subtraction overflowed!";
-                const roc_crashed_args = RocCrashed{
-                    .utf8_bytes = utf8_bytes,
-                    .len = utf8_bytes.len,
-                };
-                roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+                roc_ops.crash("Integer subtraction overflowed!");
             } else {
                 return result.value;
             }
@@ -758,12 +737,7 @@ pub fn exportMulOrPanic(
         ) callconv(.C) T {
             const result = @call(.always_inline, mulWithOverflow, .{ T, self, other });
             if (result.has_overflowed) {
-                const utf8_bytes = "Integer multiplication overflowed!";
-                const roc_crashed_args = RocCrashed{
-                    .utf8_bytes = utf8_bytes,
-                    .len = utf8_bytes.len,
-                };
-                roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+                roc_ops.crash("Integer multiplication overflowed!");
             } else {
                 return result.value;
             }

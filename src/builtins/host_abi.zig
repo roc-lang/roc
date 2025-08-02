@@ -56,6 +56,15 @@ pub const RocOps = struct {
     /// it wants to provide to the Roc program for the Roc program to call
     /// (e.g. I/O operations and such).
     host_fns: *anyopaque,
+
+    /// Helper function to crash the Roc program, returns control to the host.
+    pub fn crash(self: *RocOps, msg: []const u8) noreturn {
+        const roc_crashed_args = RocCrashed{
+            .utf8_bytes = @constCast(msg.ptr),
+            .len = msg.len,
+        };
+        self.roc_crashed(&roc_crashed_args, self);
+    }
 };
 
 /// When RocOps.roc_alloc gets called, it will be passed one of these.

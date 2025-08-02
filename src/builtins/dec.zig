@@ -8,7 +8,6 @@ const std = @import("std");
 const builtins = @import("builtins");
 
 const U256 = builtins.num.U256;
-const RocCrashed = builtins.host_abi.RocCrashed;
 const WithOverflow = builtins.utils.WithOverflow;
 const NumParseResult = builtins.dec.NumParseResult;
 const RocOps = builtins.host_abi.RocOps;
@@ -283,12 +282,7 @@ pub const RocDec = extern struct {
         const answer = RocDec.addWithOverflow(self, other);
 
         if (answer.has_overflowed) {
-            const utf8_bytes = "Decimal addition overflowed!";
-            const roc_crashed_args = RocCrashed{
-                .utf8_bytes = @constCast(utf8_bytes.ptr),
-                .len = utf8_bytes.len,
-            };
-            roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+            roc_ops.crash("Decimal addition overflowed!");
         } else {
             return answer.value;
         }
@@ -322,12 +316,7 @@ pub const RocDec = extern struct {
         const answer = RocDec.subWithOverflow(self, other);
 
         if (answer.has_overflowed) {
-            const utf8_bytes = "Decimal subtraction overflowed!";
-            const roc_crashed_args = RocCrashed{
-                .utf8_bytes = @constCast(utf8_bytes.ptr),
-                .len = utf8_bytes.len,
-            };
-            roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+            roc_ops.crash("Decimal subtraction overflowed!");
         } else {
             return answer.value;
         }
@@ -499,12 +488,7 @@ pub const RocDec = extern struct {
     ) RocDec {
         // sqrt(-n) is an error
         if (self.num < 0) {
-            const utf8_bytes = "Square root by 0!";
-            const roc_crashed_args = RocCrashed{
-                .utf8_bytes = @constCast(utf8_bytes.ptr),
-                .len = utf8_bytes.len,
-            };
-            roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+            roc_ops.crash("Square root by 0!");
         }
 
         return fromF64(std.math.sqrt(self.toF64())).?;
@@ -518,12 +502,7 @@ pub const RocDec = extern struct {
         const answer = RocDec.mulWithOverflow(self, other);
 
         if (answer.has_overflowed) {
-            const utf8_bytes = "Decimal multiplication overflowed!";
-            const roc_crashed_args = RocCrashed{
-                .utf8_bytes = @constCast(utf8_bytes.ptr),
-                .len = utf8_bytes.len,
-            };
-            roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+            roc_ops.crash("Decimal multiplication overflowed!");
         } else {
             return answer.value;
         }
@@ -552,12 +531,7 @@ pub const RocDec = extern struct {
 
         // (n / 0) is an error
         if (denominator_i128 == 0) {
-            const utf8_bytes = "Decimal division by 0!";
-            const roc_crashed_args = RocCrashed{
-                .utf8_bytes = @constCast(utf8_bytes.ptr),
-                .len = utf8_bytes.len,
-            };
-            roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+            roc_ops.crash("Decimal division by 0!");
         }
 
         // (0 / n) is always 0
@@ -591,12 +565,7 @@ pub const RocDec = extern struct {
             if (denominator_i128 == one_point_zero_i128) {
                 return self;
             } else {
-                const utf8_bytes = "Decimal division overflow in numerator!";
-                const roc_crashed_args = RocCrashed{
-                    .utf8_bytes = @constCast(utf8_bytes.ptr),
-                    .len = utf8_bytes.len,
-                };
-                roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+                roc_ops.crash("Decimal division overflow in numerator!");
             }
         }
 
@@ -609,12 +578,7 @@ pub const RocDec = extern struct {
             if (numerator_i128 == one_point_zero_i128) {
                 return other;
             } else {
-                const utf8_bytes = "Decimal division overflow in denominator!";
-                const roc_crashed_args = RocCrashed{
-                    .utf8_bytes = @constCast(utf8_bytes.ptr),
-                    .len = utf8_bytes.len,
-                };
-                roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+                roc_ops.crash("Decimal division overflow in denominator!");
             }
         }
 
@@ -625,12 +589,7 @@ pub const RocDec = extern struct {
         if (answer.hi == 0 and answer.lo <= math.maxInt(i128)) {
             unsigned_answer = @as(i128, @intCast(answer.lo));
         } else {
-            const utf8_bytes = "Decimal division overflow!";
-            const roc_crashed_args = RocCrashed{
-                .utf8_bytes = @constCast(utf8_bytes.ptr),
-                .len = utf8_bytes.len,
-            };
-            roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+            roc_ops.crash("Decimal division overflow!");
         }
 
         return RocDec{ .num = if (is_answer_negative) -unsigned_answer else unsigned_answer };
@@ -1058,12 +1017,7 @@ pub fn fromF64C(
     if (@call(.always_inline, RocDec.fromF64, .{arg})) |dec| {
         return dec.num;
     } else {
-        const utf8_bytes = "Decimal conversion from f64 failed!";
-        const roc_crashed_args = RocCrashed{
-            .utf8_bytes = @constCast(utf8_bytes.ptr),
-            .len = utf8_bytes.len,
-        };
-        roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+        roc_ops.crash("Decimal conversion from f64 failed!");
     }
 }
 
@@ -1076,12 +1030,7 @@ pub fn fromF32C(
     if (@call(.always_inline, RocDec.fromF64, .{arg_f64})) |dec| {
         return dec.num;
     } else {
-        const utf8_bytes = "Decimal conversion from f32!";
-        const roc_crashed_args = RocCrashed{
-            .utf8_bytes = @constCast(utf8_bytes.ptr),
-            .len = utf8_bytes.len,
-        };
-        roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+        roc_ops.crash("Decimal conversion from f32!");
     }
 }
 
@@ -1101,12 +1050,7 @@ pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
 
             const answer = @mulWithOverflow(this, RocDec.one_point_zero_i128);
             if (answer[1] == 1) {
-                const utf8_bytes = "Decimal conversion from Integer failed!";
-                const roc_crashed_args = RocCrashed{
-                    .utf8_bytes = @constCast(utf8_bytes.ptr),
-                    .len = utf8_bytes.len,
-                };
-                roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+                roc_ops.crash("Decimal conversion from Integer failed!");
             } else {
                 return answer[0];
             }
@@ -1146,12 +1090,7 @@ pub fn negateC(
     roc_ops: *RocOps,
 ) callconv(.C) i128 {
     return if (@call(.always_inline, RocDec.negate, .{arg})) |dec| dec.num else {
-        const utf8_bytes = "Decimal negation overflow!";
-        const roc_crashed_args = RocCrashed{
-            .utf8_bytes = @constCast(utf8_bytes.ptr),
-            .len = utf8_bytes.len,
-        };
-        roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+        roc_ops.crash("Decimal negation overflow!");
     };
 }
 
@@ -1161,12 +1100,7 @@ pub fn absC(
     roc_ops: *RocOps,
 ) callconv(.C) i128 {
     const result = @call(.always_inline, RocDec.abs, .{arg}) catch {
-        const utf8_bytes = "Decimal absolute value overflow!";
-        const roc_crashed_args = RocCrashed{
-            .utf8_bytes = @constCast(utf8_bytes.ptr),
-            .len = utf8_bytes.len,
-        };
-        roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+        roc_ops.crash("Decimal absolute value overflow!");
     };
     return result.num;
 }

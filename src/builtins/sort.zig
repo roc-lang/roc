@@ -12,7 +12,6 @@ const LT = Ordering.LT;
 const EQ = Ordering.EQ;
 const Ordering = builtins.utils.Ordering;
 const RocOps = builtins.utils.RocOps;
-const RocCrashed = builtins.host_abi.RocCrashed;
 const testing = std.testing;
 
 /// TODO
@@ -93,20 +92,10 @@ pub fn fluxsort(
                 // Copy to original array as sorted.
                 @memcpy(array[0..(len * element_width)], @as([*]u8, @ptrCast(collect_ptr))[0..(len * element_width)]);
             } else {
-                const utf8_bytes = "Out of memory while trying to allocate for sorting";
-                const roc_crashed_args = RocCrashed{
-                    .utf8_bytes = utf8_bytes,
-                    .len = utf8_bytes.len,
-                };
-                roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+                roc_ops.crash("Out of memory while trying to allocate for sorting");
             }
         } else {
-            const utf8_bytes = "Out of memory while trying to allocate for sorting";
-            const roc_crashed_args = RocCrashed{
-                .utf8_bytes = utf8_bytes,
-                .len = utf8_bytes.len,
-            };
-            roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+            roc_ops.crash("Out of memory while trying to allocate for sorting");
         }
     }
 }
@@ -943,20 +932,10 @@ pub fn quadsort(
                 // Copy to original array as sorted.
                 @memcpy(array[0..(len * element_width)], @as([*]u8, @ptrCast(collect_ptr))[0..(len * element_width)]);
             } else {
-                const utf8_bytes = "Out of memory while trying to allocate for sorting";
-                const roc_crashed_args = RocCrashed{
-                    .utf8_bytes = utf8_bytes,
-                    .len = utf8_bytes.len,
-                };
-                roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+                roc_ops.crash("Out of memory while trying to allocate for sorting");
             }
         } else {
-            const utf8_bytes = "Out of memory while trying to allocate for sorting";
-            const roc_crashed_args = RocCrashed{
-                .utf8_bytes = utf8_bytes,
-                .len = utf8_bytes.len,
-            };
-            roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+            roc_ops.crash("Out of memory while trying to allocate for sorting");
         }
     }
 }
