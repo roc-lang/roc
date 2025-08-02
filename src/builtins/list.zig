@@ -35,10 +35,12 @@ pub const RocList = extern struct {
     // Note we storing an allocation pointer, the pointer must be right shifted by one.
     capacity_or_alloc_ptr: usize,
 
+    /// Returns the number of elements in the list.
     pub inline fn len(self: RocList) usize {
         return self.length;
     }
 
+    /// Returns the total capacity of the list.
     pub fn getCapacity(self: RocList) usize {
         const list_capacity = self.capacity_or_alloc_ptr;
         const slice_capacity = self.length;
@@ -47,6 +49,7 @@ pub const RocList = extern struct {
         return capacity;
     }
 
+    /// Returns true if this list is a seamless slice.
     pub fn isSeamlessSlice(self: RocList) bool {
         return @as(isize, @bitCast(self.capacity_or_alloc_ptr)) < 0;
     }
@@ -408,7 +411,6 @@ pub fn listWithCapacity(
         inc,
         .InPlace,
         roc_ops,
-        roc_ops,
     );
 }
 
@@ -609,7 +611,6 @@ pub fn listSwap(
                 elements_refcounted,
                 inc,
                 dec,
-                roc_ops,
                 roc_ops,
             );
         }
