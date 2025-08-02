@@ -117,13 +117,19 @@ fn readFromWindowsSharedMemory(roc_alloc: *const fn (size: usize, alignment: u32
 }
 
 fn readFromPosixSharedMemory(roc_alloc: *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque) RocStr {
-    const shm_name = "/ROC_FILE_TO_INTERPRET";
-
-    // Open the shared memory object
-    const shm_fd = posix.shm_open(shm_name, 0, 0); // O_RDONLY = 0
-    if (shm_fd < 0) {
+    // Get the file descriptor from environment variable
+    const fd_str = std.process.getEnvVarOwned(std.heap.page_allocator, "__ROC_INTERNAL_SHM_FD") catch {
+        std.debug.print("SHIM: __ROC_INTERNAL_SHM_FD not found in environment\n", .{});
         return RocStr.empty();
-    }
+    };
+    defer std.heap.page_allocator.free(fd_str);
+
+    const shm_fd = std.fmt.parseInt(c_int, fd_str, 10) catch {
+        std.debug.print("SHIM: Failed to parse fd from env var: {s}\n", .{fd_str});
+        return RocStr.empty();
+    };
+
+    std.debug.print("SHIM: Got fd {} from environment\n", .{shm_fd});
     defer _ = posix.close(shm_fd);
 
     // Get shared memory size
