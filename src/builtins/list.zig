@@ -1,9 +1,7 @@
-//! Builtin list operations and data structures for the Roc runtime.
+//! Runtime implementation of Roc's List type with reference counting and memory optimization.
 //!
-//! This module provides the core implementation of Roc's List type, including
-//! operations for creation, manipulation, sorting, and memory management.
-//! It defines the RocList structure and associated functions that are called
-//! from compiled Roc code to handle list operations efficiently.
+//! Lists use copy-on-write semantics to minimize allocations when shared across contexts.
+//! Seamless slice optimization reduces memory overhead for substring operations.
 const std = @import("std");
 const builtins = @import("builtins");
 
@@ -25,7 +23,7 @@ const HasTagId = *const fn (u16, ?[*]u8) callconv(.C) extern struct { matched: b
 pub const SEAMLESS_SLICE_BIT: usize =
     @as(usize, @bitCast(@as(isize, std.math.minInt(isize))));
 
-/// TODO: Document the RocList struct.
+/// Runtime representation of Roc's List type with reference counting and seamless slice optimization.
 pub const RocList = extern struct {
     bytes: ?[*]u8,
     length: usize,
@@ -370,12 +368,12 @@ pub const RocList = extern struct {
     }
 };
 
-/// TODO: Document listIncref.
+/// Increment the reference count.
 pub fn listIncref(list: RocList, amount: isize, elements_refcounted: bool) callconv(.C) void {
     list.incref(amount, elements_refcounted);
 }
 
-/// TODO: Document listDecref.
+/// Decrement reference count and deallocate when no longer shared.
 pub fn listDecref(
     list: RocList,
     alignment: u32,
@@ -393,7 +391,7 @@ pub fn listDecref(
     );
 }
 
-/// TODO: Document listWithCapacity.
+/// Create an empty list with pre-allocated capacity to avoid reallocation during growth.
 pub fn listWithCapacity(
     capacity: u64,
     alignment: u32,
@@ -414,7 +412,7 @@ pub fn listWithCapacity(
     );
 }
 
-/// TODO: Document listReserve.
+/// Ensure the list has capacity for additional elements to prevent reallocation.
 pub fn listReserve(
     list: RocList,
     alignment: u32,
@@ -448,7 +446,7 @@ pub fn listReserve(
     }
 }
 
-/// TODO: Document listReleaseExcessCapacity.
+/// Reduce memory usage by trimming unused capacity when list has shrunk significantly.
 pub fn listReleaseExcessCapacity(
     list: RocList,
     alignment: u32,
@@ -489,7 +487,7 @@ pub fn listReleaseExcessCapacity(
     }
 }
 
-/// TODO: Document listAppendUnsafe.
+/// Add element to end of list. Caller must ensure sufficient capacity exists.
 pub fn listAppendUnsafe(
     list: RocList,
     element: Opaque,
@@ -534,7 +532,7 @@ fn listAppend(
     return listAppendUnsafe(with_capacity, element, element_width, copy);
 }
 
-/// TODO: Document listPrepend.
+/// Add element to beginning of list, shifting existing elements.
 pub fn listPrepend(
     list: RocList,
     alignment: u32,
@@ -575,7 +573,7 @@ pub fn listPrepend(
     return with_capacity;
 }
 
-/// TODO: Document listSwap.
+/// Exchange elements at two positions within the list.
 pub fn listSwap(
     list: RocList,
     alignment: u32,
@@ -705,7 +703,7 @@ pub fn listSublist(
     return RocList.empty();
 }
 
-/// TODO: Document listDropAt.
+/// Remove element at specified index, shifting remaining elements.
 pub fn listDropAt(
     list: RocList,
     alignment: u32,
@@ -816,7 +814,7 @@ pub fn listDropAt(
     }
 }
 
-/// TODO: Document listSortWith.
+/// Sort list elements using provided comparison function for custom ordering.
 pub fn listSortWith(
     input: RocList,
     cmp: CompareFn,
@@ -1046,7 +1044,7 @@ pub fn listConcat(
     return output;
 }
 
-/// TODO: Document listReplaceInPlace.
+/// Replace element at index, returning original value. No allocation when unique.
 pub fn listReplaceInPlace(
     list: RocList,
     index: u64,
@@ -1065,7 +1063,7 @@ pub fn listReplaceInPlace(
     return listReplaceInPlaceHelp(list, @as(usize, @intCast(index)), element, element_width, out_element, copy);
 }
 
-/// TODO: Document listReplace.
+/// Replace element at index, ensuring list uniqueness through copy-on-write.
 pub fn listReplace(
     list: RocList,
     alignment: u32,
@@ -1117,14 +1115,14 @@ inline fn listReplaceInPlaceHelp(
     return list;
 }
 
-/// TODO: Document listIsUnique.
+/// Check if list has exclusive ownership for safe in-place modification.
 pub fn listIsUnique(
     list: RocList,
 ) callconv(.C) bool {
     return list.isEmpty() or list.isUnique();
 }
 
-/// TODO: Document listClone.
+/// Create independent copy for safe mutation when list is shared.
 pub fn listClone(
     list: RocList,
     alignment: u32,
@@ -1137,14 +1135,14 @@ pub fn listClone(
     return list.makeUnique(alignment, element_width, elements_refcounted, inc, dec, roc_ops);
 }
 
-/// TODO: Document listCapacity.
+/// Get current allocated capacity for growth planning.
 pub fn listCapacity(
     list: RocList,
 ) callconv(.C) usize {
     return list.getCapacity();
 }
 
-/// TODO: Document listAllocationPtr.
+/// Get raw memory pointer for direct access patterns.
 pub fn listAllocationPtr(
     list: RocList,
 ) callconv(.C) ?[*]u8 {
@@ -1153,7 +1151,7 @@ pub fn listAllocationPtr(
 
 fn rcNone(_: ?[*]u8) callconv(.C) void {}
 
-/// TODO: Document listConcatUtf8.
+/// Append UTF-8 string bytes to list for efficient string-to-bytes conversion.
 pub fn listConcatUtf8(
     list: RocList,
     string: RocStr,

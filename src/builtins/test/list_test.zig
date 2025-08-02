@@ -12,6 +12,11 @@ const listAppendUnsafe = builtins.list.listAppendUnsafe;
 const listPrepend = builtins.list.listPrepend;
 const listDropAt = builtins.list.listDropAt;
 const listReplace = builtins.list.listReplace;
+const listReplaceInPlace = builtins.list.listReplaceInPlace;
+const listAllocationPtr = builtins.list.listAllocationPtr;
+const listIncref = builtins.list.listIncref;
+const listDecref = builtins.list.listDecref;
+const listSwap = builtins.list.listSwap;
 const rcNone = builtins.utils.rcNone;
 
 test "listConcat: non-unique with unique overlapping" {
@@ -1167,4 +1172,602 @@ test "complex reference counting: empty list operations" {
     try std.testing.expect(empty_list.isUnique());
     try std.testing.expect(empty_list.isEmpty());
     try std.testing.expectEqual(@as(usize, 0), empty_list.len());
+}
+
+test "listReplaceInPlace basic functionality" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Copy function for u8 elements
+    const copy_fn = struct {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+            if (dest != null and src != null) {
+                const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
+                const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
+                dest_ptr.* = src_ptr.*;
+            }
+        }
+    }.copy;
+
+    // Create a list with multiple elements
+    const data = [_]u8{ 10, 20, 30, 40 };
+    const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
+
+    // Replace element at index 2 (value 30) with 99
+    const new_element: u8 = 99;
+    var out_element: u8 = 0;
+    const result = listReplaceInPlace(list, 2, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u8), @as(?[*]u8, @ptrCast(&out_element)), copy_fn);
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 4), result.len());
+    try std.testing.expectEqual(@as(u8, 30), out_element); // original value
+
+    const elements_ptr = result.elements(u8);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..result.len()];
+    try std.testing.expectEqual(@as(u8, 10), elements[0]);
+    try std.testing.expectEqual(@as(u8, 20), elements[1]);
+    try std.testing.expectEqual(@as(u8, 99), elements[2]); // replaced value
+    try std.testing.expectEqual(@as(u8, 40), elements[3]);
+}
+
+test "listReplaceInPlace first and last elements" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Copy function for i32 elements
+    const copy_fn = struct {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+            if (dest != null and src != null) {
+                const dest_ptr = @as(*i32, @ptrCast(@alignCast(dest)));
+                const src_ptr = @as(*i32, @ptrCast(@alignCast(src)));
+                dest_ptr.* = src_ptr.*;
+            }
+        }
+    }.copy;
+
+    // Test replacing first element
+    const data = [_]i32{ 100, 200, 300 };
+    const list1 = RocList.fromSlice(i32, data[0..], false, test_env.getOps());
+
+    const new_first: i32 = -999;
+    var out_first: i32 = 0;
+    const result1 = listReplaceInPlace(list1, 0, @as(?[*]u8, @ptrCast(@constCast(&new_first))), @sizeOf(i32), @as(?[*]u8, @ptrCast(&out_first)), copy_fn);
+    defer result1.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+
+    try std.testing.expectEqual(@as(i32, 100), out_first);
+    const elements1_ptr = result1.elements(i32);
+    try std.testing.expect(elements1_ptr != null);
+    const elements1 = elements1_ptr.?[0..result1.len()];
+    try std.testing.expectEqual(@as(i32, -999), elements1[0]);
+
+    // Test replacing last element
+    const list2 = RocList.fromSlice(i32, data[0..], false, test_env.getOps());
+
+    const new_last: i32 = 999;
+    var out_last: i32 = 0;
+    const result2 = listReplaceInPlace(list2, 2, @as(?[*]u8, @ptrCast(@constCast(&new_last))), @sizeOf(i32), @as(?[*]u8, @ptrCast(&out_last)), copy_fn);
+    defer result2.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+
+    try std.testing.expectEqual(@as(i32, 300), out_last);
+    const elements2_ptr = result2.elements(i32);
+    try std.testing.expect(elements2_ptr != null);
+    const elements2 = elements2_ptr.?[0..result2.len()];
+    try std.testing.expectEqual(@as(i32, 999), elements2[2]);
+}
+
+test "listReplaceInPlace single element list" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Copy function for u16 elements
+    const copy_fn = struct {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+            if (dest != null and src != null) {
+                const dest_ptr = @as(*u16, @ptrCast(@alignCast(dest)));
+                const src_ptr = @as(*u16, @ptrCast(@alignCast(src)));
+                dest_ptr.* = src_ptr.*;
+            }
+        }
+    }.copy;
+
+    // Create a list with a single element
+    const data = [_]u16{42};
+    const list = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
+
+    // Replace the only element (index 0)
+    const new_element: u16 = 84;
+    var out_element: u16 = 0;
+    const result = listReplaceInPlace(list, 0, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u16), @as(?[*]u8, @ptrCast(&out_element)), copy_fn);
+    defer result.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 1), result.len());
+    try std.testing.expectEqual(@as(u16, 42), out_element); // original value
+
+    const elements_ptr = result.elements(u16);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..result.len()];
+    try std.testing.expectEqual(@as(u16, 84), elements[0]); // replaced value
+}
+
+test "listReplaceInPlace vs listReplace comparison" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Copy function for u8 elements
+    const copy_fn = struct {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+            if (dest != null and src != null) {
+                const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
+                const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
+                dest_ptr.* = src_ptr.*;
+            }
+        }
+    }.copy;
+
+    const data = [_]u8{ 1, 2, 3, 4, 5 };
+
+    // Test listReplaceInPlace
+    const list1 = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
+    const new_element1: u8 = 99;
+    var out_element1: u8 = 0;
+    const result1 = listReplaceInPlace(list1, 2, @as(?[*]u8, @ptrCast(@constCast(&new_element1))), @sizeOf(u8), @as(?[*]u8, @ptrCast(&out_element1)), copy_fn);
+    defer result1.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+
+    // Test listReplace with same parameters
+    const list2 = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
+    const new_element2: u8 = 99;
+    var out_element2: u8 = 0;
+    const result2 = listReplace(list2, @alignOf(u8), 2, @as(?[*]u8, @ptrCast(@constCast(&new_element2))), @sizeOf(u8), false, rcNone, rcNone, @as(?[*]u8, @ptrCast(&out_element2)), copy_fn, test_env.getOps());
+    defer result2.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+
+    // Both should produce the same result
+    try std.testing.expect(result1.eql(result2));
+    try std.testing.expectEqual(out_element1, out_element2);
+}
+
+test "listAllocationPtr basic functionality" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Test with regular list
+    const data = [_]u8{ 1, 2, 3, 4 };
+    const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+
+    const alloc_ptr = listAllocationPtr(list);
+    try std.testing.expect(alloc_ptr != null);
+
+    // The allocation pointer should be valid and accessible
+    if (alloc_ptr) |ptr| {
+        // Should be able to access the data through the allocation pointer
+        _ = ptr; // Just verify it's not null
+    }
+}
+
+test "listAllocationPtr empty list" {
+    var test_env = builtins.utils.TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const empty_list = RocList.empty();
+    defer empty_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+
+    const alloc_ptr = listAllocationPtr(empty_list);
+    // Empty lists may have null allocation pointer
+    _ = alloc_ptr; // Just verify the function doesn't crash
+}
+
+test "listIncref and listDecref public functions" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const data = [_]u8{ 10, 20, 30 };
+    const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
+
+    // Should be unique initially
+    try std.testing.expect(list.isUnique());
+
+    // Use public listIncref function
+    listIncref(list, 1, false);
+
+    // Should no longer be unique
+    try std.testing.expect(!list.isUnique());
+
+    // Use public listDecref function
+    listDecref(list, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+
+    // Should be unique again
+    try std.testing.expect(list.isUnique());
+
+    // Final cleanup
+    listDecref(list, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+}
+
+test "integration: prepend then drop operations" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Copy function for u8 elements
+    const copy_fn = struct {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+            if (dest != null and src != null) {
+                const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
+                const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
+                dest_ptr.* = src_ptr.*;
+            }
+        }
+    }.copy;
+
+    // Start with a basic list
+    const initial_data = [_]u8{ 5, 10, 15 };
+    var list = RocList.fromSlice(u8, initial_data[0..], false, test_env.getOps());
+
+    // Prepend multiple elements
+    const element1: u8 = 1;
+    list = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u8), false, rcNone, copy_fn, test_env.getOps());
+
+    const element2: u8 = 2;
+    list = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u8), false, rcNone, copy_fn, test_env.getOps());
+
+    // Now we should have [2, 1, 5, 10, 15]
+    try std.testing.expectEqual(@as(usize, 5), list.len());
+
+    // Drop the middle element (index 2, value 5)
+    list = listDropAt(list, @alignOf(u8), @sizeOf(u8), false, 2, rcNone, rcNone, test_env.getOps());
+
+    // Now we should have [2, 1, 10, 15]
+    try std.testing.expectEqual(@as(usize, 4), list.len());
+
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+
+    const elements_ptr = list.elements(u8);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..list.len()];
+    try std.testing.expectEqual(@as(u8, 2), elements[0]);
+    try std.testing.expectEqual(@as(u8, 1), elements[1]);
+    try std.testing.expectEqual(@as(u8, 10), elements[2]);
+    try std.testing.expectEqual(@as(u8, 15), elements[3]);
+}
+
+test "integration: concat then sublist operations" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Create two lists to concatenate
+    const data1 = [_]i16{ 100, 200 };
+    const list1 = RocList.fromSlice(i16, data1[0..], false, test_env.getOps());
+
+    const data2 = [_]i16{ 300, 400, 500 };
+    const list2 = RocList.fromSlice(i16, data2[0..], false, test_env.getOps());
+
+    // Concatenate them
+    const concatenated = listConcat(list1, list2, @alignOf(i16), @sizeOf(i16), false, rcNone, rcNone, test_env.getOps());
+
+    // Should have [100, 200, 300, 400, 500]
+    try std.testing.expectEqual(@as(usize, 5), concatenated.len());
+
+    // Extract a sublist from the middle
+    const sublist = builtins.list.listSublist(concatenated, @alignOf(i16), @sizeOf(i16), false, 1, 3, rcNone, test_env.getOps());
+    defer sublist.decref(@alignOf(i16), @sizeOf(i16), false, rcNone, test_env.getOps());
+
+    // Should have [200, 300, 400]
+    try std.testing.expectEqual(@as(usize, 3), sublist.len());
+
+    const elements_ptr = sublist.elements(i16);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..sublist.len()];
+    try std.testing.expectEqual(@as(i16, 200), elements[0]);
+    try std.testing.expectEqual(@as(i16, 300), elements[1]);
+    try std.testing.expectEqual(@as(i16, 400), elements[2]);
+}
+
+test "integration: replace then swap operations" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Copy function for u32 elements
+    const copy_fn = struct {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+            if (dest != null and src != null) {
+                const dest_ptr = @as(*u32, @ptrCast(@alignCast(dest)));
+                const src_ptr = @as(*u32, @ptrCast(@alignCast(src)));
+                dest_ptr.* = src_ptr.*;
+            }
+        }
+    }.copy;
+
+    // Start with a list
+    const data = [_]u32{ 10, 20, 30, 40 };
+    var list = RocList.fromSlice(u32, data[0..], false, test_env.getOps());
+
+    // Replace element at index 1 (20 -> 99)
+    const new_element: u32 = 99;
+    var out_element: u32 = 0;
+    list = listReplace(list, @alignOf(u32), 1, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u32), false, rcNone, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
+
+    try std.testing.expectEqual(@as(u32, 20), out_element);
+
+    // Now we should have [10, 99, 30, 40]
+    // Swap elements at indices 0 and 2 (10 <-> 30)
+    list = listSwap(list, @alignOf(u32), @sizeOf(u32), 0, 2, false, rcNone, rcNone, builtins.utils.UpdateMode.Immutable, copy_fn, test_env.getOps());
+
+    defer list.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+
+    // Now we should have [30, 99, 10, 40]
+    try std.testing.expectEqual(@as(usize, 4), list.len());
+
+    const elements_ptr = list.elements(u32);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..list.len()];
+    try std.testing.expectEqual(@as(u32, 30), elements[0]); // swapped from index 2
+    try std.testing.expectEqual(@as(u32, 99), elements[1]); // replaced value
+    try std.testing.expectEqual(@as(u32, 10), elements[2]); // swapped from index 0
+    try std.testing.expectEqual(@as(u32, 40), elements[3]); // unchanged
+}
+
+test "stress: large list operations" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Create a large list (1000 elements)
+    const large_size = 1000;
+    var large_data: [large_size]u16 = undefined;
+    for (large_data[0..], 0..) |*elem, i| {
+        elem.* = @as(u16, @intCast(i));
+    }
+
+    const large_list = RocList.fromSlice(u16, large_data[0..], false, test_env.getOps());
+
+    // Test capacity operations on large list
+    try std.testing.expectEqual(@as(usize, large_size), large_list.len());
+    try std.testing.expect(large_list.getCapacity() >= large_size);
+
+    // Test sublist on large list (note: listSublist consumes the original list)
+    const mid_sublist = builtins.list.listSublist(large_list, @alignOf(u16), @sizeOf(u16), false, 400, 200, rcNone, test_env.getOps());
+    defer mid_sublist.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 200), mid_sublist.len());
+
+    // Verify the sublist contains correct values
+    const sub_elements_ptr = mid_sublist.elements(u16);
+    try std.testing.expect(sub_elements_ptr != null);
+    const sub_elements = sub_elements_ptr.?[0..mid_sublist.len()];
+    try std.testing.expectEqual(@as(u16, 400), sub_elements[0]); // first element of sublist
+    try std.testing.expectEqual(@as(u16, 599), sub_elements[199]); // last element of sublist
+}
+
+test "stress: many small operations" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Copy function for u8 elements
+    const copy_fn = struct {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+            if (dest != null and src != null) {
+                const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
+                const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
+                dest_ptr.* = src_ptr.*;
+            }
+        }
+    }.copy;
+
+    // Start with a list with some capacity
+    var list = builtins.list.listWithCapacity(50, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+
+    // Add many elements using listAppendUnsafe
+    var i: u8 = 0;
+    while (i < 20) : (i += 1) {
+        list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&i))), @sizeOf(u8), copy_fn);
+    }
+
+    try std.testing.expectEqual(@as(usize, 20), list.len());
+
+    // Verify the elements are correct
+    const elements_ptr = list.elements(u8);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..list.len()];
+
+    for (elements, 0..) |elem, idx| {
+        try std.testing.expectEqual(@as(u8, @intCast(idx)), elem);
+    }
+
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+}
+
+test "memory management: capacity boundary conditions" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Create a list with exact capacity
+    const exact_capacity: usize = 10;
+    var list = builtins.list.listWithCapacity(exact_capacity, @alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+
+    try std.testing.expect(list.getCapacity() >= exact_capacity);
+    try std.testing.expectEqual(@as(usize, 0), list.len());
+
+    // Use listReserve to ensure we have exactly the capacity we want
+    list = builtins.list.listReserve(list, @alignOf(u32), exact_capacity, @sizeOf(u32), false, rcNone, builtins.utils.UpdateMode.Immutable, test_env.getOps());
+    defer list.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+
+    // Verify capacity management functions work correctly
+    const initial_capacity = list.getCapacity();
+    try std.testing.expect(initial_capacity >= exact_capacity);
+
+    const capacity_via_function = builtins.list.listCapacity(list);
+    try std.testing.expectEqual(initial_capacity, capacity_via_function);
+}
+
+test "memory management: release excess capacity edge cases" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Create a list with minimal data but large capacity
+    const data = [_]u8{42};
+    const small_list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
+
+    // Reserve much more capacity than needed
+    const oversized_list = builtins.list.listReserve(small_list, @alignOf(u8), 1000, @sizeOf(u8), false, rcNone, builtins.utils.UpdateMode.Immutable, test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 1), oversized_list.len());
+    try std.testing.expect(oversized_list.getCapacity() >= 1000);
+
+    // Release excess capacity
+    const trimmed_list = builtins.list.listReleaseExcessCapacity(oversized_list, @alignOf(u8), @sizeOf(u8), false, rcNone, rcNone, builtins.utils.UpdateMode.Immutable, test_env.getOps());
+    defer trimmed_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+
+    // Should maintain content but reduce capacity
+    try std.testing.expectEqual(@as(usize, 1), trimmed_list.len());
+    try std.testing.expect(trimmed_list.getCapacity() < 1000);
+    try std.testing.expect(trimmed_list.getCapacity() >= trimmed_list.len());
+
+    // Verify content is preserved
+    const elements_ptr = trimmed_list.elements(u8);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..trimmed_list.len()];
+    try std.testing.expectEqual(@as(u8, 42), elements[0]);
+}
+
+test "boundary conditions: zero-sized operations" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Test sublist with zero length from various starting positions
+    const data = [_]u16{ 1, 2, 3, 4, 5 };
+
+    // Zero-length sublist from start
+    const list1 = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
+    const empty_start = builtins.list.listSublist(list1, @alignOf(u16), @sizeOf(u16), false, 0, 0, rcNone, test_env.getOps());
+    defer empty_start.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    try std.testing.expectEqual(@as(usize, 0), empty_start.len());
+
+    // Zero-length sublist from middle
+    const list2 = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
+    const empty_mid = builtins.list.listSublist(list2, @alignOf(u16), @sizeOf(u16), false, 2, 0, rcNone, test_env.getOps());
+    defer empty_mid.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    try std.testing.expectEqual(@as(usize, 0), empty_mid.len());
+
+    // Zero-length sublist from end
+    const list3 = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
+    const empty_end = builtins.list.listSublist(list3, @alignOf(u16), @sizeOf(u16), false, 5, 0, rcNone, test_env.getOps());
+    defer empty_end.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    try std.testing.expectEqual(@as(usize, 0), empty_end.len());
+}
+
+test "boundary conditions: maximum index operations" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const data = [_]u8{ 10, 20, 30 };
+
+    // Test dropAt with index at boundary (last valid index)
+    const list1 = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
+    const dropped_last = listDropAt(list1, @alignOf(u8), @sizeOf(u8), false, 2, rcNone, rcNone, test_env.getOps());
+    defer dropped_last.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 2), dropped_last.len());
+    const elements_ptr = dropped_last.elements(u8);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..dropped_last.len()];
+    try std.testing.expectEqual(@as(u8, 10), elements[0]);
+    try std.testing.expectEqual(@as(u8, 20), elements[1]);
+
+    // Test dropAt with out-of-bounds index (should return original list)
+    const list2 = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
+    const dropped_oob = listDropAt(list2, @alignOf(u8), @sizeOf(u8), false, 10, rcNone, rcNone, test_env.getOps());
+    defer dropped_oob.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 3), dropped_oob.len());
+}
+
+test "memory management: clone with different update modes" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const data = [_]i32{ 100, 200, 300, 400 };
+    const original = RocList.fromSlice(i32, data[0..], false, test_env.getOps());
+
+    // Make the list non-unique
+    original.incref(1, false);
+    defer original.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+
+    // Clone should create an independent copy
+    const cloned = builtins.list.listClone(original, @alignOf(i32), @sizeOf(i32), false, rcNone, rcNone, test_env.getOps());
+    defer cloned.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+
+    // Verify independence - they should have the same content but different memory
+    try std.testing.expect(cloned.eql(original));
+    try std.testing.expect(cloned.isUnique());
+
+    // Verify they can be modified independently by testing capacity operations
+    const cloned_capacity = cloned.getCapacity();
+    const original_capacity = original.getCapacity();
+
+    // Both should have valid capacities
+    try std.testing.expect(cloned_capacity >= cloned.len());
+    try std.testing.expect(original_capacity >= original.len());
+
+    // Cleanup is handled by defer statement above
+}
+
+test "boundary conditions: swap with identical indices" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Copy function for u8 elements
+    const copy_fn = struct {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+            if (dest != null and src != null) {
+                const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
+                const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
+                dest_ptr.* = src_ptr.*;
+            }
+        }
+    }.copy;
+
+    const data = [_]u8{ 10, 20, 30, 40 };
+    const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
+
+    // Swap element with itself (index 2 with index 2)
+    const swapped = listSwap(list, @alignOf(u8), @sizeOf(u8), 2, 2, false, rcNone, rcNone, builtins.utils.UpdateMode.Immutable, copy_fn, test_env.getOps());
+    defer swapped.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+
+    // Should be unchanged
+    try std.testing.expectEqual(@as(usize, 4), swapped.len());
+    const elements_ptr = swapped.elements(u8);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..swapped.len()];
+
+    for (data, 0..) |expected, i| {
+        try std.testing.expectEqual(expected, elements[i]);
+    }
+}
+
+test "memory management: multiple reserve operations" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Start with a small list
+    const data = [_]u8{ 1, 2 };
+    var list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
+
+    // Reserve capacity multiple times, each time increasing
+    list = builtins.list.listReserve(list, @alignOf(u8), 10, @sizeOf(u8), false, rcNone, builtins.utils.UpdateMode.Immutable, test_env.getOps());
+    try std.testing.expect(list.getCapacity() >= 12); // 2 existing + 10 spare
+
+    list = builtins.list.listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, rcNone, builtins.utils.UpdateMode.Immutable, test_env.getOps());
+    try std.testing.expect(list.getCapacity() >= 22); // 2 existing + 20 spare
+
+    list = builtins.list.listReserve(list, @alignOf(u8), 5, @sizeOf(u8), false, rcNone, builtins.utils.UpdateMode.Immutable, test_env.getOps());
+    // Should not decrease capacity, so still >= 22
+    try std.testing.expect(list.getCapacity() >= 22);
+
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+
+    // Verify content is preserved through all operations
+    try std.testing.expectEqual(@as(usize, 2), list.len());
+    const elements_ptr = list.elements(u8);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..list.len()];
+    try std.testing.expectEqual(@as(u8, 1), elements[0]);
+    try std.testing.expectEqual(@as(u8, 2), elements[1]);
 }
