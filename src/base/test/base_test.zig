@@ -1768,3 +1768,92 @@ test "TargetUsize conversion to usize" {
     try std.testing.expectEqual(TargetUsize.u32.size(), 4);
     try std.testing.expectEqual(TargetUsize.u64.size(), 8);
 }
+
+test "Bool identifier debug - corruption detection" {
+    const gpa = std.testing.allocator;
+
+    // Create a store
+    var store = try Ident.Store.initCapacity(gpa, 16);
+    defer store.deinit(gpa);
+
+    // Test the Bool identifier specifically
+    const bool_ident = Ident.for_text("Bool");
+    const bool_idx = try store.insert(gpa, bool_ident);
+
+    // Get the text and verify it's correct
+    const retrieved_text = store.getText(bool_idx);
+    std.debug.print("DEBUG TEST: Bool identifier text: '{s}'\n", .{retrieved_text});
+
+    // This should pass - if it fails, we have corruption
+    try std.testing.expectEqualStrings("Bool", retrieved_text);
+
+    // Test serialization round-trip
+    const serialized = bool_idx.toU32();
+    const deserialized = Ident.Idx.fromU32(serialized);
+    const roundtrip_text = store.getText(deserialized);
+
+    std.debug.print("DEBUG TEST: Round-trip text: '{s}'\n", .{roundtrip_text});
+    try std.testing.expectEqualStrings("Bool", roundtrip_text);
+
+    // Verify the indices are the same
+    try std.testing.expectEqual(bool_idx.toU32(), deserialized.toU32());
+}
+
+test "SmallIdx bit layout analysis for Bool" {
+    // Test the bit layout directly to understand potential corruption
+    // Create inline Bool identifier
+    const maybe_bool_idx = Ident.Idx.try_inline("Bool");
+    try std.testing.expect(maybe_bool_idx != null);
+
+    const bool_idx = maybe_bool_idx.?;
+    const inner = bool_idx.toInner();
+    try std.testing.expect(inner.is_small);
+
+    const small = inner.data.small;
+
+    // Print the bit layout for analysis
+    std.debug.print("\n=== SmallIdx Bit Layout Analysis ===\n", .{});
+    std.debug.print("Bool SmallIdx bits: 0b{b:0>31} (0x{x:0>8})\n", .{ small.bits, small.bits });
+
+    // Extract each character
+    const c0 = small.char0();
+    const c1 = small.char1();
+    const c2 = small.char2();
+    const c3 = small.char3();
+
+    std.debug.print("Characters: c0='{}' c1='{}' c2='{}' c3='{}'\n", .{ @as(u8, c0), @as(u8, c1), @as(u8, c2), @as(u8, c3) });
+    std.debug.print("Character values: c0={} c1={} c2={} c3={}\n", .{ c0, c1, c2, c3 });
+    std.debug.print("Character bits: c0=0b{b:0>7} c1=0b{b:0>7} c2=0b{b:0>7} c3=0b{b:0>7}\n", .{ c0, c1, c2, c3 });
+
+    // Verify the characters are correct
+    try std.testing.expectEqual(@as(u7, 'B'), c0);
+    try std.testing.expectEqual(@as(u7, 'o'), c1);
+    try std.testing.expectEqual(@as(u7, 'o'), c2);
+    try std.testing.expectEqual(@as(u7, 'l'), c3);
+
+    // Check attributes
+    const unused = small.is_unused();
+    const reused = small.is_reused();
+    const effectful = small.is_effectful();
+
+    std.debug.print("Attributes: unused={} reused={} effectful={}\n", .{ unused, reused, effectful });
+
+    try std.testing.expect(!unused);
+    try std.testing.expect(!reused);
+    try std.testing.expect(!effectful);
+
+    // Test bit extraction manually
+    std.debug.print("Manual bit extraction:\n", .{});
+    std.debug.print("  bits & 0x7F = {} (should be {})\n", .{ small.bits & 0x7F, 'B' });
+    std.debug.print("  (bits >> 7) & 0x7F = {} (should be {})\n", .{ (small.bits >> 7) & 0x7F, 'o' });
+    std.debug.print("  (bits >> 14) & 0x7F = {} (should be {})\n", .{ (small.bits >> 14) & 0x7F, 'o' });
+    std.debug.print("  (bits >> 21) & 0x7F = {} (should be {})\n", .{ (small.bits >> 21) & 0x7F, 'l' });
+    std.debug.print("  (bits >> 28) & 1 = {} (unused)\n", .{(small.bits >> 28) & 1});
+    std.debug.print("  (bits >> 29) & 1 = {} (reused)\n", .{(small.bits >> 29) & 1});
+    std.debug.print("  (bits >> 30) & 1 = {} (effectful)\n", .{(small.bits >> 30) & 1});
+
+    // Test reconstruction
+    const reconstructed = small.getText();
+    std.debug.print("Reconstructed text: '{s}'\n", .{reconstructed});
+    try std.testing.expectEqualStrings("Bool", reconstructed);
+}

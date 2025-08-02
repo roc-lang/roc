@@ -87,11 +87,13 @@ pub const Idx = enum(u32) {
     }
 
     pub fn toU32(self: Idx) u32 {
-        return @intFromEnum(self);
+        const result = @intFromEnum(self);
+        return result;
     }
 
     pub fn fromU32(value: u32) Idx {
-        return @enumFromInt(value);
+        const result = @as(Idx, @enumFromInt(value));
+        return result;
     }
 
     pub fn invalid() Idx {
@@ -99,12 +101,16 @@ pub const Idx = enum(u32) {
         return @enumFromInt(0);
     }
 
-    fn toInner(self: Idx) InnerIdx {
-        return @as(InnerIdx, @bitCast(@intFromEnum(self)));
+    pub fn toInner(self: Idx) InnerIdx {
+        const enum_val = @intFromEnum(self);
+        const result = @as(InnerIdx, @bitCast(enum_val));
+        return result;
     }
 
     fn fromInner(inner: InnerIdx) Idx {
-        return @as(Idx, @enumFromInt(@as(u32, @bitCast(inner))));
+        const bitcast_val = @as(u32, @bitCast(inner));
+        const result = @as(Idx, @enumFromInt(bitcast_val));
+        return result;
     }
 
     /// Get the underlying interner index for big identifiers (for testing purposes)
@@ -239,10 +245,12 @@ const InnerIdx = packed struct(u32) {
             return null;
         }
 
+        const small_idx = SmallIdx.create(@as(u7, @intCast(char0)), @as(u7, @intCast(char1)), @as(u7, @intCast(char2)), @as(u7, @intCast(char3)), unused, reused, fx);
+
         return .{
             .is_small = true,
             .data = .{
-                .small = SmallIdx.create(@as(u7, @intCast(char0)), @as(u7, @intCast(char1)), @as(u7, @intCast(char2)), @as(u7, @intCast(char3)), unused, reused, fx),
+                .small = small_idx,
             },
         };
     }
@@ -262,35 +270,39 @@ const SmallIdx = packed struct(u31) {
 
     // Bit layout: [char0:7][char1:7][char2:7][char3:7][unused:1][reused:1][effectful:1]
 
-    fn char0(self: *const @This()) u7 {
-        return @as(u7, @intCast(self.bits & 0x7F));
+    pub fn char0(self: *const @This()) u7 {
+        const result = @as(u7, @intCast(self.bits & 0x7F));
+        return result;
     }
 
-    fn char1(self: *const @This()) u7 {
-        return @as(u7, @intCast((self.bits >> 7) & 0x7F));
+    pub fn char1(self: *const @This()) u7 {
+        const result = @as(u7, @intCast((self.bits >> 7) & 0x7F));
+        return result;
     }
 
-    fn char2(self: *const @This()) u7 {
-        return @as(u7, @intCast((self.bits >> 14) & 0x7F));
+    pub fn char2(self: *const @This()) u7 {
+        const result = @as(u7, @intCast((self.bits >> 14) & 0x7F));
+        return result;
     }
 
-    fn char3(self: *const @This()) u7 {
-        return @as(u7, @intCast((self.bits >> 21) & 0x7F));
+    pub fn char3(self: *const @This()) u7 {
+        const result = @as(u7, @intCast((self.bits >> 21) & 0x7F));
+        return result;
     }
 
-    fn is_unused(self: *const @This()) bool {
+    pub fn is_unused(self: *const @This()) bool {
         return (self.bits >> 28) & 1 != 0;
     }
 
-    fn is_reused(self: *const @This()) bool {
+    pub fn is_reused(self: *const @This()) bool {
         return (self.bits >> 29) & 1 != 0;
     }
 
-    fn is_effectful(self: *const @This()) bool {
+    pub fn is_effectful(self: *const @This()) bool {
         return (self.bits >> 30) & 1 != 0;
     }
 
-    fn create(c0: u7, c1: u7, c2: u7, c3: u7, unused: bool, reused: bool, effectful: bool) @This() {
+    pub fn create(c0: u7, c1: u7, c2: u7, c3: u7, unused: bool, reused: bool, effectful: bool) @This() {
         var bits: u31 = 0;
         bits |= @as(u31, c0);
         bits |= @as(u31, c1) << 7;
@@ -299,6 +311,7 @@ const SmallIdx = packed struct(u31) {
         bits |= @as(u31, @intFromBool(unused)) << 28;
         bits |= @as(u31, @intFromBool(reused)) << 29;
         bits |= @as(u31, @intFromBool(effectful)) << 30;
+
         return .{ .bits = bits };
     }
 
@@ -365,7 +378,7 @@ const SmallIdx = packed struct(u31) {
 
     /// Reconstruct the text from the packed character fields.
     /// Uses a thread-local rotating buffer to handle multiple concurrent accesses.
-    fn getText(self: *const @This()) []u8 {
+    pub fn getText(self: *const @This()) []u8 {
         // Thread-local rotating buffers to handle multiple concurrent identifiers
         // Max length: 1 (underscore prefix) + 4 (chars) + 1 (exclamation) + 1 (underscore suffix) = 7
         const S = struct {
@@ -402,6 +415,52 @@ const SmallIdx = packed struct(u31) {
         }
 
         // Add exclamation suffix if effectful
+        if (self.is_effectful()) {
+            buffer[len] = '!';
+            len += 1;
+        }
+
+        // Add underscore suffix if reused
+        if (self.is_reused()) {
+            buffer[len] = '_';
+            len += 1;
+        }
+
+        return buffer[0..len];
+    }
+
+    /// Write the text from the packed character fields to a provided buffer.
+    /// Returns the slice of the buffer that was written to.
+    /// Buffer must be at least 7 bytes (max: 1 underscore + 4 chars + 1 exclamation + 1 underscore).
+    pub fn writeTextToBuffer(self: *const @This(), buffer: []u8) []u8 {
+        std.debug.assert(buffer.len >= 7);
+
+        var len: usize = 0;
+
+        // Add underscore prefix if unused
+        if (self.is_unused()) {
+            buffer[len] = '_';
+            len += 1;
+        }
+
+        // Add main characters (char0 is always present since len > 0)
+        buffer[len] = @as(u8, @intCast(self.char0()));
+        len += 1;
+
+        if (self.char1() != 0) {
+            buffer[len] = @as(u8, @intCast(self.char1()));
+            len += 1;
+        }
+        if (self.char2() != 0) {
+            buffer[len] = @as(u8, @intCast(self.char2()));
+            len += 1;
+        }
+        if (self.char3() != 0) {
+            buffer[len] = @as(u8, @intCast(self.char3()));
+            len += 1;
+        }
+
+        // Add exclamation if effectful
         if (self.is_effectful()) {
             buffer[len] = '!';
             len += 1;
@@ -635,6 +694,26 @@ pub const Store = struct {
             .big => |big| {
                 // For big identifiers, look up in the interner
                 return self.interner.getText(@enumFromInt(@as(u32, big.idx)));
+            },
+        }
+    }
+
+    /// Write the text for an identifier to a provided buffer.
+    /// Returns the slice of the buffer that was written to.
+    /// Buffer must be at least 256 bytes for big identifiers, or 7 bytes for small identifiers.
+    pub fn writeTextToBuffer(self: *const Store, idx: Idx, buffer: []u8) []u8 {
+        const inner = idx.toInner();
+        switch (inner.toVariant()) {
+            .small => |small| {
+                // For small identifiers, write directly to buffer
+                return small.writeTextToBuffer(buffer);
+            },
+            .big => |big| {
+                // For big identifiers, copy from the interner
+                const text = self.interner.getText(@enumFromInt(@as(u32, big.idx)));
+                std.debug.assert(buffer.len >= text.len);
+                @memcpy(buffer[0..text.len], text);
+                return buffer[0..text.len];
             },
         }
     }

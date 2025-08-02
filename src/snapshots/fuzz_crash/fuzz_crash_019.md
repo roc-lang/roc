@@ -648,7 +648,7 @@ t = [
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `RGB` in this scope.
+Nothing is named `tag` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **fuzz_crash_019.md:97:21:97:24:**

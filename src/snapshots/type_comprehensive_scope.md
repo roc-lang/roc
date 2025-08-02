@@ -138,7 +138,7 @@ CloseCurly(38:1-38:2),EndOfFile(38:2-38:2),
 			(exposed-upper-ident @1.16-1.22 (text "Person"))
 			(exposed-upper-ident @1.24-1.30 (text "Result"))
 			(exposed-upper-ident @1.32-1.36 (text "Tree"))
-			(exposed-upper-ident @1.38-1.42 (text "pode"))))
+			(exposed-upper-ident @1.38-1.42 (text "Node"))))
 	(statements
 		(s-type-decl @4.1-4.12
 			(header @4.1-4.6 (name "MyU64")
@@ -315,7 +315,7 @@ Complex : {
 			(ty-apply @12.28-12.36 (symbol "Err")
 				(ty-var @12.32-12.35 (name "err")))))
 	(s-alias-decl @15.1-15.37
-		(ty-header @15.1-15.8 (name "Pair")
+		(ty-header @15.1-15.8 (name "Tree")
 			(ty-args
 				(ty-var @15.6-15.7 (name "a"))))
 		(ty-tag-union @15.11-15.37

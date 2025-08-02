@@ -789,7 +789,7 @@ h = |x, y| {
 				(ty-var @14.3-14.4 (name "a"))))
 		(ty-var @14.8-14.9 (name "a")))
 	(s-alias-decl @24.1-33.11
-		(ty-header @24.1-24.5 (name "b")
+		(ty-header @24.1-24.5 (name "B")
 			(ty-args
 				(ty-var @24.3-24.4 (name "b"))))
 		(ty-var @24.8-24.9 (name "b")))
@@ -827,7 +827,7 @@ h = |x, y| {
 			(exposed (name "I12") (wildcard false))))
 	(s-import @8.1-11.2 (module "I2")
 		(exposes
-			(exposed (name "I21") (alias "Ias1") (wildcard false))
+			(exposed (name "R21") (alias "Ias1") (wildcard false))
 			(exposed (name "I22") (alias "Ias2") (wildcard false))))
 	(s-type-anno @58.1-58.42 (name "g")
 		(ty-fn @58.5-58.11 (effectful false)
