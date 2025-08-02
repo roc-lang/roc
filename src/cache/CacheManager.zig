@@ -269,9 +269,8 @@ pub const CacheManager = struct {
         // Users can use --no-cache to see diagnostic reports
         const reports = try self.allocator.alloc(reporting.Report, 0);
 
-        // Allocate and copy ModuleEnv to heap for ownership
-        const module_env = try self.allocator.create(ModuleEnv);
-        module_env.* = restored.module_env;
+        // The restored ModuleEnv is a pointer, use it directly
+        const module_env = restored.module_env;
 
         // CIR is now just an alias for ModuleEnv
         const cir = module_env;
