@@ -427,13 +427,6 @@ fn expectEqualTypeAnno(expected: AST.TypeAnno, actual: AST.TypeAnno) !void {
             try testing.expectEqual(expected_ty.qualifiers.span, actual_ty.qualifiers.span);
             try testing.expectEqual(expected_ty.region, actual_ty.region);
         },
-        .mod_ty => |expected_mod_ty| {
-            const actual_mod_ty = actual.mod_ty;
-            // Use .eql() for Ident.Idx comparison
-            try testing.expect(expected_mod_ty.mod_ident.eql(actual_mod_ty.mod_ident));
-            try testing.expect(expected_mod_ty.ty_ident.eql(actual_mod_ty.ty_ident));
-            try testing.expectEqual(expected_mod_ty.region, actual_mod_ty.region);
-        },
         .tag_union => |expected_tag_union| {
             const actual_tag_union = actual.tag_union;
             try testing.expectEqual(expected_tag_union.tags.span, actual_tag_union.tags.span);
@@ -637,13 +630,6 @@ test "NodeStore round trip - TypeAnno" {
             .qualifiers = AST.Token.Span{ .span = rand_span() },
             .region = rand_region(),
             .token = rand_token_idx(),
-        },
-    });
-    try ty_annos.append(AST.TypeAnno{
-        .mod_ty = .{
-            .mod_ident = rand_ident_idx(),
-            .ty_ident = rand_ident_idx(),
-            .region = rand_region(),
         },
     });
     try ty_annos.append(AST.TypeAnno{

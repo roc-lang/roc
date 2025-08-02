@@ -165,12 +165,12 @@ CloseCurly(25:1-25:2),EndOfFile(25:2-25:2),
 								(e-ident @23.15-23.21 (raw "double"))
 								(e-int @23.22-23.23 (raw "4"))))
 						(e-binop @24.5-24.42 (op "+")
-							(e-ident @24.5-24.12 (raw "result1"))
-							(e-binop @24.15-24.42 (op "+")
-								(e-ident @24.15-24.22 (raw "result2"))
-								(e-binop @24.25-24.42 (op "+")
-									(e-ident @24.25-24.32 (raw "result3"))
-									(e-ident @24.35-24.42 (raw "result4")))))))))))
+							(e-binop @24.5-24.32 (op "+")
+								(e-binop @24.5-24.22 (op "+")
+									(e-ident @24.5-24.12 (raw "result1"))
+									(e-ident @24.15-24.22 (raw "result2")))
+								(e-ident @24.25-24.32 (raw "result3")))
+							(e-ident @24.35-24.42 (raw "result4")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -290,16 +290,16 @@ main! = |_| {
 								(p-assign @17.1-17.7 (ident "double")))
 							(e-int @23.22-23.23 (value "4"))))
 					(e-binop @24.5-24.42 (op "add")
-						(e-lookup-local @24.5-24.12
-							(p-assign @20.5-20.12 (ident "result1")))
-						(e-binop @24.15-24.42 (op "add")
-							(e-lookup-local @24.15-24.22
-								(p-assign @21.5-21.12 (ident "result2")))
-							(e-binop @24.25-24.42 (op "add")
-								(e-lookup-local @24.25-24.32
-									(p-assign @22.5-22.12 (ident "result3")))
-								(e-lookup-local @24.35-24.42
-									(p-assign @23.5-23.12 (ident "result4")))))))))))
+						(e-binop @24.5-24.32 (op "add")
+							(e-binop @24.5-24.22 (op "add")
+								(e-lookup-local @24.5-24.12
+									(p-assign @20.5-20.12 (ident "result1")))
+								(e-lookup-local @24.15-24.22
+									(p-assign @21.5-21.12 (ident "result2"))))
+							(e-lookup-local @24.25-24.32
+								(p-assign @22.5-22.12 (ident "result3"))))
+						(e-lookup-local @24.35-24.42
+							(p-assign @23.5-23.12 (ident "result4")))))))))
 ~~~
 # TYPES
 ~~~clojure

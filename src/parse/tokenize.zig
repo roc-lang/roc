@@ -406,6 +406,8 @@ pub const Token = struct {
 
     pub const valid_number_suffixes = std.StaticStringMap(void).initComptime(.{
         .{ "dec", .{} },
+        .{ "f32", .{} },
+        .{ "f64", .{} },
         .{ "i128", .{} },
         .{ "i16", .{} },
         .{ "i32", .{} },
@@ -444,7 +446,7 @@ pub const TokenizedBuffer = struct {
 
     /// Loads the current token if it is an identifier.
     /// Otherwise returns null.
-    pub fn resolveIdentifier(self: *TokenizedBuffer, token: Token.Idx) ?base.Ident.Idx {
+    pub fn resolveIdentifier(self: *const TokenizedBuffer, token: Token.Idx) ?base.Ident.Idx {
         const tag = self.tokens.items(.tag)[@intCast(token)];
         const extra = self.tokens.items(.extra)[@intCast(token)];
         if (tag.hasUnderscoreFlags()) {

@@ -115,10 +115,10 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 				(p-ident @7.12-7.13 (raw "z"))
 				(p-list-rest @7.15-7.25 (name "more")))
 			(e-binop @7.30-7.39 (op "+")
-				(e-ident @7.30-7.31 (raw "x"))
-				(e-binop @7.34-7.39 (op "+")
-					(e-ident @7.34-7.35 (raw "y"))
-					(e-ident @7.38-7.39 (raw "z")))))))
+				(e-binop @7.30-7.35 (op "+")
+					(e-ident @7.30-7.31 (raw "x"))
+					(e-ident @7.34-7.35 (raw "y")))
+				(e-ident @7.38-7.39 (raw "z"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -201,13 +201,13 @@ match list {
 								(p-assign @1.1-1.1 (ident "more"))))))
 				(value
 					(e-binop @7.30-7.39 (op "add")
-						(e-lookup-local @7.30-7.31
-							(p-assign @7.6-7.7 (ident "x")))
-						(e-binop @7.34-7.39 (op "add")
+						(e-binop @7.30-7.35 (op "add")
+							(e-lookup-local @7.30-7.31
+								(p-assign @7.6-7.7 (ident "x")))
 							(e-lookup-local @7.34-7.35
-								(p-assign @7.9-7.10 (ident "y")))
-							(e-lookup-local @7.38-7.39
-								(p-assign @7.12-7.13 (ident "z"))))))))))
+								(p-assign @7.9-7.10 (ident "y"))))
+						(e-lookup-local @7.38-7.39
+							(p-assign @7.12-7.13 (ident "z")))))))))
 ~~~
 # TYPES
 ~~~clojure

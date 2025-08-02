@@ -241,6 +241,10 @@ fn expectEqualDiagnostics(expected: ModuleEnv.Diagnostic, actual: ModuleEnv.Diag
             const a = actual.crash_expects_string;
             try testing.expectEqual(e.region, a.region);
         },
+        .where_clause_not_allowed_in_type_decl => |e| {
+            const a = actual.where_clause_not_allowed_in_type_decl;
+            try testing.expectEqual(e.region, a.region);
+        },
     }
 }
 
@@ -298,13 +302,11 @@ fn expectEqualStatements(expected: ModuleEnv.Statement, actual: ModuleEnv.Statem
             const a = actual.s_alias_decl;
             try testing.expectEqual(e.header, a.header);
             try testing.expectEqual(e.anno, a.anno);
-            try testing.expectEqual(e.where, a.where);
         },
         .s_nominal_decl => |e| {
             const a = actual.s_nominal_decl;
             try testing.expectEqual(e.header, a.header);
             try testing.expectEqual(e.anno, a.anno);
-            try testing.expectEqual(e.where, a.where);
         },
         .s_type_anno => |e| {
             const a = actual.s_type_anno;
@@ -467,6 +469,14 @@ fn expectEqualExpressions(expected: ModuleEnv.Expr, actual: ModuleEnv.Expr) !voi
         .e_ellipsis => {
             // No fields to compare
         },
+        .e_frac_f32 => |e| {
+            const a = actual.e_frac_f32;
+            try testing.expectEqual(e.value, a.value);
+        },
+        .e_unary_not => |e| {
+            const a = actual.e_unary_not;
+            try testing.expectEqual(e.expr, a.expr);
+        },
         .e_unary_minus => |e| {
             const a = actual.e_unary_minus;
             try testing.expectEqual(e.expr, a.expr);
@@ -578,6 +588,14 @@ fn expectEqualPatterns(expected: ModuleEnv.Pattern, actual: ModuleEnv.Pattern) !
             const actual_error = actual.runtime_error;
             // Compare diagnostic indices as integers to avoid untagged union comparison issues
             try testing.expectEqual(@intFromEnum(expected_error.diagnostic), @intFromEnum(actual_error.diagnostic));
+        },
+        .frac_f32_literal => |expected_f32| {
+            const actual_f32 = actual.frac_f32_literal;
+            try testing.expectEqual(expected_f32.value, actual_f32.value);
+        },
+        .frac_f64_literal => |expected_f64| {
+            const actual_f64 = actual.frac_f64_literal;
+            try testing.expectEqual(expected_f64.value, actual_f64.value);
         },
     }
 }
@@ -771,7 +789,6 @@ test "NodeStore round trip - Statements" {
         .s_alias_decl = .{
             .header = rand_idx(ModuleEnv.TypeHeader.Idx),
             .anno = rand_idx(ModuleEnv.TypeAnno.Idx),
-            .where = null,
         },
     });
 
@@ -779,7 +796,6 @@ test "NodeStore round trip - Statements" {
         .s_nominal_decl = .{
             .header = rand_idx(ModuleEnv.TypeHeader.Idx),
             .anno = rand_idx(ModuleEnv.TypeAnno.Idx),
-            .where = null,
         },
     });
 
@@ -819,9 +835,10 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(ModuleEnv.Expr{
-        .e_frac_f64 = .{
-            .value = 3.14,
-        },
+        .e_frac_f32 = .{ .value = rand.random().float(f32) },
+    });
+    try expressions.append(ModuleEnv.Expr{
+        .e_frac_f64 = .{ .value = rand.random().float(f64) },
     });
     try expressions.append(ModuleEnv.Expr{
         .e_frac_dec = .{
@@ -943,6 +960,9 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(ModuleEnv.Expr{
         .e_unary_minus = ModuleEnv.Expr.UnaryMinus.init(rand_idx(ModuleEnv.Expr.Idx)),
+    });
+    try expressions.append(ModuleEnv.Expr{
+        .e_unary_not = ModuleEnv.Expr.UnaryNot.init(rand_idx(ModuleEnv.Expr.Idx)),
     });
     try expressions.append(ModuleEnv.Expr{
         .e_dot_access = .{
@@ -1154,6 +1174,12 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(ModuleEnv.Diagnostic{
         .malformed_where_clause = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(ModuleEnv.Diagnostic{
+        .where_clause_not_allowed_in_type_decl = .{
             .region = rand_region(),
         },
     });
@@ -1531,6 +1557,16 @@ test "NodeStore round trip - Pattern" {
     try patterns.append(ModuleEnv.Pattern{
         .str_literal = .{
             .literal = rand_idx(StringLiteral.Idx),
+        },
+    });
+    try patterns.append(ModuleEnv.Pattern{
+        .frac_f32_literal = .{
+            .value = rand.random().float(f32),
+        },
+    });
+    try patterns.append(ModuleEnv.Pattern{
+        .frac_f64_literal = .{
+            .value = rand.random().float(f64),
         },
     });
     try patterns.append(ModuleEnv.Pattern{ .underscore = {} });

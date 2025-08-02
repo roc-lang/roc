@@ -117,6 +117,8 @@ h = |x, y| {
 }
 ~~~
 # EXPECTED
+WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:14:1:23:11
+WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:24:1:33:11
 MODULE NOT FOUND - everything.md:4:1:7:2
 MODULE NOT FOUND - everything.md:8:1:11:2
 UNUSED VARIABLE - everything.md:90:5:90:6
@@ -129,6 +131,44 @@ UNUSED VARIABLE - everything.md:73:2:73:4
 UNUSED VARIABLE - everything.md:77:2:77:4
 UNUSED VARIABLE - everything.md:81:2:81:4
 # PROBLEMS
+**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
+You cannot define a `where` clause inside a type declaration.
+
+You're attempting do this here:
+**everything.md:14:1:23:11:**
+```roc
+A(a) : a
+	where
+		module(a).a1 : (
+			a,
+			a
+		) -> Str,
+		module(a).a2 : (
+			a,
+			a
+		) -> Str
+```
+
+
+**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
+You cannot define a `where` clause inside a type declaration.
+
+You're attempting do this here:
+**everything.md:24:1:33:11:**
+```roc
+B(b) : b
+	where
+		module(b).b1 : (
+			b,
+			b
+		) -> Str,
+		module(b).b2 : (
+			b,
+			b
+		) -> Str
+```
+
+
 **MODULE NOT FOUND**
 The module `I1` was not found in this Roc project.
 
@@ -648,9 +688,9 @@ h = |x, y| {
 		(e-closure @60.5-110.2
 			(captures
 				(capture @99.5-99.6 (ident "a"))
-				(capture @105.5-105.6 (ident "a"))
-				(capture @60.1-60.2 (ident "h"))
 				(capture @89.5-89.6 (ident "a"))
+				(capture @60.1-60.2 (ident "h"))
+				(capture @105.5-105.6 (ident "a"))
 				(capture @94.4-94.5 (ident "a")))
 			(e-lambda @60.5-110.2
 				(args
@@ -747,38 +787,12 @@ h = |x, y| {
 		(ty-header @14.1-14.5 (name "A")
 			(ty-args
 				(ty-var @14.3-14.4 (name "a"))))
-		(ty-var @14.8-14.9 (name "a"))
-		(where
-			(method @16.3-19.11 (module-of "a") (ident "a1")
-				(args
-					(ty-tuple @16.18-19.4
-						(ty-var @17.4-17.5 (name "a"))
-						(ty-var @18.4-18.5 (name "a"))))
-				(ty @19.8-19.11 (name "Str")))
-			(method @20.3-23.11 (module-of "a") (ident "a2")
-				(args
-					(ty-tuple @20.18-23.4
-						(ty-var @21.4-21.5 (name "a"))
-						(ty-var @22.4-22.5 (name "a"))))
-				(ty @23.8-23.11 (name "Str")))))
+		(ty-var @14.8-14.9 (name "a")))
 	(s-alias-decl @24.1-33.11
 		(ty-header @24.1-24.5 (name "B")
 			(ty-args
 				(ty-var @24.3-24.4 (name "b"))))
-		(ty-var @24.8-24.9 (name "b"))
-		(where
-			(method @26.3-29.11 (module-of "b") (ident "b1")
-				(args
-					(ty-tuple @26.18-29.4
-						(ty-var @27.4-27.5 (name "b"))
-						(ty-var @28.4-28.5 (name "b"))))
-				(ty @29.8-29.11 (name "Str")))
-			(method @30.3-33.11 (module-of "b") (ident "b2")
-				(args
-					(ty-tuple @30.18-33.4
-						(ty-var @31.4-31.5 (name "b"))
-						(ty-var @32.4-32.5 (name "b"))))
-				(ty @33.8-33.11 (name "Str")))))
+		(ty-var @24.8-24.9 (name "b")))
 	(s-alias-decl @35.1-41.2
 		(ty-header @35.1-38.2 (name "C")
 			(ty-args
@@ -822,10 +836,6 @@ h = |x, y| {
 		(where
 			(alias @58.18-58.29 (module-of "e") (ident "A"))
 			(alias @58.31-58.42 (module-of "e") (ident "B"))))
-	(ext-decl @16.3-19.11 (ident "module(a).a1") (kind "value"))
-	(ext-decl @20.3-23.11 (ident "module(a).a2") (kind "value"))
-	(ext-decl @26.3-29.11 (ident "module(b).b1") (kind "value"))
-	(ext-decl @30.3-33.11 (ident "module(b).b2") (kind "value"))
 	(ext-decl @58.18-58.29 (ident "module(e).A") (kind "type"))
 	(ext-decl @58.31-58.42 (ident "module(e).B") (kind "type")))
 ~~~

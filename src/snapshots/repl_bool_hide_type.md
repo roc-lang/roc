@@ -11,6 +11,6 @@ type=repl
 # OUTPUT
 1
 ---
-1
+0
 # PROBLEMS
 NIL

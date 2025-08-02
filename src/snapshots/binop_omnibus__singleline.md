@@ -28,16 +28,16 @@ UpperIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),LowerIdent(1:5-1:8),CloseRound(1:8
 # PARSE
 ~~~clojure
 (e-binop @1.1-1.69 (op "or")
-	(e-binop @1.1-1.54 (op "or")
-		(e-binop @1.1-1.23 (op ">")
-			(e-binop @1.1-1.15 (op "??")
-				(e-apply @1.1-1.9
-					(e-tag @1.1-1.4 (raw "Err"))
-					(e-ident @1.5-1.8 (raw "foo")))
-				(e-int @1.13-1.15 (raw "12")))
-			(e-binop @1.18-1.23 (op "*")
-				(e-int @1.18-1.19 (raw "5"))
-				(e-int @1.22-1.23 (raw "5"))))
+	(e-binop @1.1-1.23 (op ">")
+		(e-binop @1.1-1.15 (op "??")
+			(e-apply @1.1-1.9
+				(e-tag @1.1-1.4 (raw "Err"))
+				(e-ident @1.5-1.8 (raw "foo")))
+			(e-int @1.13-1.15 (raw "12")))
+		(e-binop @1.18-1.23 (op "*")
+			(e-int @1.18-1.19 (raw "5"))
+			(e-int @1.22-1.23 (raw "5"))))
+	(e-binop @1.27-1.69 (op "or")
 		(e-binop @1.27-1.54 (op "and")
 			(e-binop @1.27-1.37 (op "<")
 				(e-binop @1.27-1.33 (op "+")
@@ -48,12 +48,12 @@ UpperIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),LowerIdent(1:5-1:8),CloseRound(1:8
 				(e-binop @1.42-1.48 (op "-")
 					(e-int @1.42-1.44 (raw "10"))
 					(e-int @1.47-1.48 (raw "1")))
-				(e-int @1.52-1.54 (raw "16")))))
-	(e-binop @1.58-1.69 (op "<=")
-		(e-int @1.58-1.60 (raw "12"))
-		(e-binop @1.64-1.69 (op "/")
-			(e-int @1.64-1.65 (raw "3"))
-			(e-int @1.68-1.69 (raw "5")))))
+				(e-int @1.52-1.54 (raw "16"))))
+		(e-binop @1.58-1.69 (op "<=")
+			(e-int @1.58-1.60 (raw "12"))
+			(e-binop @1.64-1.69 (op "/")
+				(e-int @1.64-1.65 (raw "3"))
+				(e-int @1.68-1.69 (raw "5"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -62,16 +62,16 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-binop @1.1-1.69 (op "or")
-	(e-binop @1.1-1.54 (op "or")
-		(e-binop @1.1-1.23 (op "gt")
-			(e-binop @1.1-1.15 (op "null_coalesce")
-				(e-tag @1.1-1.4 (name "Err")
-					(args
-						(e-runtime-error (tag "ident_not_in_scope"))))
-				(e-int @1.13-1.15 (value "12")))
-			(e-binop @1.18-1.23 (op "mul")
-				(e-int @1.18-1.19 (value "5"))
-				(e-int @1.22-1.23 (value "5"))))
+	(e-binop @1.1-1.23 (op "gt")
+		(e-binop @1.1-1.15 (op "null_coalesce")
+			(e-tag @1.1-1.4 (name "Err")
+				(args
+					(e-runtime-error (tag "ident_not_in_scope"))))
+			(e-int @1.13-1.15 (value "12")))
+		(e-binop @1.18-1.23 (op "mul")
+			(e-int @1.18-1.19 (value "5"))
+			(e-int @1.22-1.23 (value "5"))))
+	(e-binop @1.27-1.69 (op "or")
 		(e-binop @1.27-1.54 (op "and")
 			(e-binop @1.27-1.37 (op "lt")
 				(e-binop @1.27-1.33 (op "add")
@@ -82,12 +82,12 @@ NO CHANGE
 				(e-binop @1.42-1.48 (op "sub")
 					(e-int @1.42-1.44 (value "10"))
 					(e-int @1.47-1.48 (value "1")))
-				(e-int @1.52-1.54 (value "16")))))
-	(e-binop @1.58-1.69 (op "le")
-		(e-int @1.58-1.60 (value "12"))
-		(e-binop @1.64-1.69 (op "div")
-			(e-int @1.64-1.65 (value "3"))
-			(e-int @1.68-1.69 (value "5")))))
+				(e-int @1.52-1.54 (value "16"))))
+		(e-binop @1.58-1.69 (op "le")
+			(e-int @1.58-1.60 (value "12"))
+			(e-binop @1.64-1.69 (op "div")
+				(e-int @1.64-1.65 (value "3"))
+				(e-int @1.68-1.69 (value "5"))))))
 ~~~
 # TYPES
 ~~~clojure

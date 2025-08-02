@@ -11,6 +11,7 @@ const reporting = @import("reporting");
 const parse = @import("parse");
 const tracy = @import("tracy");
 
+const SharedMemoryAllocator = @import("./SharedMemoryAllocator.zig");
 const fmt = @import("fmt.zig");
 const coordinate_simple = @import("coordinate_simple.zig");
 const Filesystem = @import("fs/Filesystem.zig");
@@ -63,6 +64,9 @@ const Allocator = std.mem.Allocator;
 const ColorPalette = reporting.ColorPalette;
 
 const legalDetailsFileContent = @embedFile("legal_details");
+
+/// Default size for shared memory allocator (1GB)
+const SHARED_MEMORY_SIZE = 1 * 1024 * 1024 * 1024;
 
 /// The CLI entrypoint for the Roc compiler.
 pub fn main() !void {

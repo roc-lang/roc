@@ -8,43 +8,17 @@ type=file
 module[]{R}
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_065.md:1:9:1:10
-PARSE ERROR - fuzz_crash_065.md:1:11:1:12
+INVALID STATEMENT - fuzz_crash_065.md:1:9:1:12
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**INVALID STATEMENT**
+The statement `expression` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-Here is the problematic code:
-**fuzz_crash_065.md:1:9:1:10:**
+**fuzz_crash_065.md:1:9:1:12:**
 ```roc
 module[]{R}
 ```
-        ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-Here is the problematic code:
-**fuzz_crash_065.md:1:11:1:12:**
-```roc
-module[]{R}
-```
-          ^
+        ^^^
 
 
 # TOKENS
@@ -57,13 +31,16 @@ KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),OpenCurly(1:9-1:10),U
 	(module @1.1-1.9
 		(exposes @1.7-1.9))
 	(statements
-		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
-		(s-malformed @1.10-1.12 (tag "expected_colon_after_type_annotation"))))
+		(e-block @1.9-1.12
+			(statements
+				(e-tag @1.10-1.11 (raw "R"))))))
 ~~~
 # FORMATTED
 ~~~roc
 module []
-
+{
+	R
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

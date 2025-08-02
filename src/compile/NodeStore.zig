@@ -4,6 +4,8 @@ const std = @import("std");
 const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
+const serialization = @import("serialization");
+const CompactWriter = serialization.CompactWriter;
 const Node = @import("Node.zig");
 const ModuleEnv = @import("compile").ModuleEnv;
 const RocDec = ModuleEnv.RocDec;
@@ -58,18 +60,18 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .extra_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 2),
         .scratch_statements = try base.Scratch(ModuleEnv.Statement.Idx).init(gpa),
         .scratch_exprs = try base.Scratch(ModuleEnv.Expr.Idx).init(gpa),
-        .scratch_patterns = try base.Scratch(ModuleEnv.Pattern.Idx).init(gpa),
         .scratch_record_fields = try base.Scratch(ModuleEnv.RecordField.Idx).init(gpa),
-        .scratch_pattern_record_fields = try base.Scratch(ModuleEnv.PatternRecordField.Idx).init(gpa),
-        .scratch_record_destructs = try base.Scratch(ModuleEnv.Pattern.RecordDestruct.Idx).init(gpa),
         .scratch_match_branches = try base.Scratch(ModuleEnv.Expr.Match.Branch.Idx).init(gpa),
         .scratch_match_branch_patterns = try base.Scratch(ModuleEnv.Expr.Match.BranchPattern.Idx).init(gpa),
         .scratch_if_branches = try base.Scratch(ModuleEnv.Expr.IfBranch.Idx).init(gpa),
+        .scratch_where_clauses = try base.Scratch(ModuleEnv.WhereClause.Idx).init(gpa),
+        .scratch_patterns = try base.Scratch(ModuleEnv.Pattern.Idx).init(gpa),
+        .scratch_pattern_record_fields = try base.Scratch(ModuleEnv.PatternRecordField.Idx).init(gpa),
+        .scratch_record_destructs = try base.Scratch(ModuleEnv.Pattern.RecordDestruct.Idx).init(gpa),
         .scratch_type_annos = try base.Scratch(ModuleEnv.TypeAnno.Idx).init(gpa),
         .scratch_anno_record_fields = try base.Scratch(ModuleEnv.TypeAnno.RecordField.Idx).init(gpa),
         .scratch_exposed_items = try base.Scratch(ModuleEnv.ExposedItem.Idx).init(gpa),
         .scratch_defs = try base.Scratch(ModuleEnv.Def.Idx).init(gpa),
-        .scratch_where_clauses = try base.Scratch(ModuleEnv.WhereClause.Idx).init(gpa),
         .scratch_diagnostics = try base.Scratch(ModuleEnv.Diagnostic.Idx).init(gpa),
         .scratch_captures = try base.Scratch(ModuleEnv.Expr.Capture.Idx).init(gpa),
     };
@@ -80,37 +82,37 @@ pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
     store.regions.deinit(store.gpa);
     store.extra_data.deinit(store.gpa);
-    store.scratch_statements.items.deinit(store.gpa);
-    store.scratch_exprs.items.deinit(store.gpa);
-    store.scratch_captures.items.deinit(store.gpa);
-    store.scratch_patterns.items.deinit(store.gpa);
-    store.scratch_record_fields.items.deinit(store.gpa);
-    store.scratch_pattern_record_fields.items.deinit(store.gpa);
-    store.scratch_record_destructs.items.deinit(store.gpa);
-    store.scratch_match_branches.items.deinit(store.gpa);
-    store.scratch_match_branch_patterns.items.deinit(store.gpa);
-    store.scratch_if_branches.items.deinit(store.gpa);
-    store.scratch_type_annos.items.deinit(store.gpa);
-    store.scratch_anno_record_fields.items.deinit(store.gpa);
-    store.scratch_exposed_items.items.deinit(store.gpa);
-    store.scratch_defs.items.deinit(store.gpa);
-    store.scratch_where_clauses.items.deinit(store.gpa);
-    store.scratch_diagnostics.items.deinit(store.gpa);
+    store.scratch_statements.deinit(store.gpa);
+    store.scratch_exprs.deinit(store.gpa);
+    store.scratch_record_fields.deinit(store.gpa);
+    store.scratch_match_branches.deinit(store.gpa);
+    store.scratch_match_branch_patterns.deinit(store.gpa);
+    store.scratch_if_branches.deinit(store.gpa);
+    store.scratch_where_clauses.deinit(store.gpa);
+    store.scratch_patterns.deinit(store.gpa);
+    store.scratch_pattern_record_fields.deinit(store.gpa);
+    store.scratch_record_destructs.deinit(store.gpa);
+    store.scratch_type_annos.deinit(store.gpa);
+    store.scratch_anno_record_fields.deinit(store.gpa);
+    store.scratch_exposed_items.deinit(store.gpa);
+    store.scratch_defs.deinit(store.gpa);
+    store.scratch_diagnostics.deinit(store.gpa);
+    store.scratch_captures.deinit(store.gpa);
 }
 
 /// Compile-time constants for union variant counts to ensure we don't miss cases
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 44;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 45;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 31;
+pub const MODULEENV_EXPR_NODE_COUNT = 33;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 13;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
-pub const MODULEENV_PATTERN_NODE_COUNT = 14;
+pub const MODULEENV_PATTERN_NODE_COUNT = 16;
 
 comptime {
     // Check the number of ModuleEnv.Diagnostic nodes
@@ -238,46 +240,18 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
             };
         },
         .statement_alias_decl => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(extra_data[0]));
-            const header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(extra_data[1]));
-            const has_where = extra_data[2] != 0;
-
-            const where_clause = if (has_where) blk: {
-                const where_start = extra_data[3];
-                const where_len = extra_data[4];
-                break :blk ModuleEnv.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
-            } else null;
-
             return ModuleEnv.Statement{
                 .s_alias_decl = .{
-                    .header = header,
-                    .anno = anno,
-                    .where = where_clause,
+                    .header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(node.data_1)),
+                    .anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(node.data_2)),
                 },
             };
         },
         .statement_nominal_decl => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(extra_data[0]));
-            const header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(extra_data[1]));
-            const has_where = extra_data[2] != 0;
-
-            const where_clause = if (has_where) blk: {
-                const where_start = extra_data[3];
-                const where_len = extra_data[4];
-                break :blk ModuleEnv.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
-            } else null;
-
             return ModuleEnv.Statement{
                 .s_nominal_decl = .{
-                    .header = header,
-                    .anno = anno,
-                    .where = where_clause,
+                    .header = @as(ModuleEnv.TypeHeader.Idx, @enumFromInt(node.data_1)),
+                    .anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(node.data_2)),
                 },
             };
         },
@@ -371,18 +345,11 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
                 },
             };
         },
+        .expr_frac_f32 => return ModuleEnv.Expr{ .e_frac_f32 = .{ .value = @bitCast(node.data_1) } },
         .expr_frac_f64 => {
-            // Get value from extra_data
-            const extra_data_idx = node.data_1;
-            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..2];
-            const value_as_u64: u64 = @bitCast(value_as_u32s.*);
-            const value: f64 = @bitCast(value_as_u64);
+            const raw: [2]u32 = .{ node.data_1, node.data_2 };
 
-            return ModuleEnv.Expr{
-                .e_frac_f64 = .{
-                    .value = value,
-                },
-            };
+            return ModuleEnv.Expr{ .e_frac_f64 = .{ .value = @bitCast(raw) } };
         },
         .expr_frac_dec => {
             // Get value from extra_data
@@ -578,6 +545,11 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
         },
         .expr_unary_minus => {
             return ModuleEnv.Expr{ .e_unary_minus = .{
+                .expr = @enumFromInt(node.data_1),
+            } };
+        },
+        .expr_unary_not => {
+            return ModuleEnv.Expr{ .e_unary_not = .{
                 .expr = @enumFromInt(node.data_1),
             } };
         },
@@ -900,6 +872,18 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
                 },
             };
         },
+        .pattern_f32_literal => return ModuleEnv.Pattern{
+            .frac_f32_literal = .{ .value = @bitCast(node.data_1) },
+        },
+        .pattern_f64_literal => {
+            const lower: u32 = node.data_1;
+            const upper: u32 = node.data_2;
+            const raw: u64 = (@as(u64, upper) << 32) | @as(u64, lower);
+
+            return ModuleEnv.Pattern{
+                .frac_f64_literal = .{ .value = @bitCast(raw) },
+            };
+        },
         .pattern_dec_literal => {
             const extra_data_idx = node.data_1;
             const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
@@ -1157,49 +1141,13 @@ pub fn addStatement(store: *NodeStore, statement: ModuleEnv.Statement, region: b
         },
         .s_alias_decl => |s| {
             node.tag = .statement_alias_decl;
-
-            // Store type_decl data in extra_data
-            const extra_start = store.extra_data.len();
-
-            // Store anno idx
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
-            // Store header idx
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.header));
-            // Store where clause information
-            if (s.where) |where_clause| {
-                // Store where clause span start and len
-                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
-                _ = try store.extra_data.append(store.gpa, where_clause.span.start);
-                _ = try store.extra_data.append(store.gpa, where_clause.span.len);
-            } else {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
-            }
-
-            // Store the extra data start position in the node
-            node.data_1 = extra_start;
+            node.data_1 = @intFromEnum(s.header);
+            node.data_2 = @intFromEnum(s.anno);
         },
         .s_nominal_decl => |s| {
             node.tag = .statement_nominal_decl;
-
-            // Store type_decl data in extra_data
-            const extra_start = store.extra_data.len();
-
-            // Store anno idx
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
-            // Store header idx
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.header));
-            // Store where clause information
-            if (s.where) |where_clause| {
-                // Store where clause span start and len
-                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
-                _ = try store.extra_data.append(store.gpa, where_clause.span.start);
-                _ = try store.extra_data.append(store.gpa, where_clause.span.len);
-            } else {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
-            }
-
-            // Store the extra data start position in the node
-            node.data_1 = extra_start;
+            node.data_1 = @intFromEnum(s.header);
+            node.data_2 = @intFromEnum(s.anno);
         },
         .s_type_anno => |s| {
             node.tag = .statement_type_anno;
@@ -1287,19 +1235,15 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
             node.data_1 = e.elems.span.start;
             node.data_2 = e.elems.span.len;
         },
+        .e_frac_f32 => |e| {
+            node.tag = Node.Tag.expr_frac_f32;
+            node.data_1 = @bitCast(e.value);
+        },
         .e_frac_f64 => |e| {
             node.tag = .expr_frac_f64;
-
-            // Store the f64 value in extra_data
-            const extra_data_start = store.extra_data.len();
-            const value_as_u64: u64 = @bitCast(e.value);
-            const value_as_u32s: [2]u32 = @bitCast(value_as_u64);
-            for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
-            }
-
-            // Store the extra_data index in data_1
-            node.data_1 = @intCast(extra_data_start);
+            const raw: [2]u32 = @bitCast(e.value);
+            node.data_1 = raw[0];
+            node.data_2 = raw[1];
         },
         .e_frac_dec => |e| {
             node.tag = .expr_frac_dec;
@@ -1489,6 +1433,10 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
             node.tag = .expr_unary_minus;
             node.data_1 = @intFromEnum(e.expr);
         },
+        .e_unary_not => |e| {
+            node.tag = .expr_unary_not;
+            node.data_1 = @intFromEnum(e.expr);
+        },
         .e_block => |e| {
             node.tag = .expr_block;
             node.data_1 = e.stmts.span.start;
@@ -1533,32 +1481,27 @@ pub fn addRecordField(store: *NodeStore, recordField: ModuleEnv.RecordField, reg
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addRecordDestruct(store: *NodeStore, record_destruct: ModuleEnv.Pattern.RecordDestruct, region: base.Region) std.mem.Allocator.Error!ModuleEnv.Pattern.RecordDestruct.Idx {
-    var node = Node{
+    const extra_data_start = @as(u32, @intCast(store.extra_data.len()));
+    const node = Node{
         .data_1 = @bitCast(record_destruct.label),
         .data_2 = @bitCast(record_destruct.ident),
-        .data_3 = 0,
+        .data_3 = extra_data_start,
         .tag = .record_destruct,
     };
 
     // Store kind in extra_data
     switch (record_destruct.kind) {
         .Required => |pattern_idx| {
-            const extra_data_start = @as(u32, @intCast(store.extra_data.len()));
             // Store kind tag (0 for Required)
             _ = try store.extra_data.append(store.gpa, 0);
             // Store pattern index
             _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
-            node.data_3 = extra_data_start;
         },
         .SubPattern => |sub_pattern| {
-            const extra_data_start = @as(u32, @intCast(store.extra_data.len()));
-
             // Store kind tag (1 for SubPattern)
             _ = try store.extra_data.append(store.gpa, 1);
             // Store sub-pattern index
             _ = try store.extra_data.append(store.gpa, @intFromEnum(sub_pattern));
-
-            node.data_3 = extra_data_start;
         },
     }
 
@@ -1790,7 +1733,18 @@ pub fn addPattern(store: *NodeStore, pattern: ModuleEnv.Pattern, region: base.Re
             node.tag = .pattern_str_literal;
             node.data_1 = @intFromEnum(p.literal);
         },
-
+        .frac_f32_literal => |p| {
+            node.tag = Node.Tag.pattern_f32_literal;
+            node.data_1 = @bitCast(p.value);
+        },
+        .frac_f64_literal => |p| {
+            node.tag = Node.Tag.pattern_f64_literal;
+            const raw: u64 = @bitCast(p.value);
+            const lower: u32 = @intCast(raw & 0xFFFFFFFF);
+            const upper: u32 = @intCast(raw >> 32);
+            node.data_1 = lower;
+            node.data_2 = upper;
+        },
         .underscore => {
             node.tag = .pattern_underscore;
         },
@@ -1810,7 +1764,7 @@ pub fn addPatternRecordField(store: *NodeStore, patternRecordField: ModuleEnv.Pa
     _ = store;
     _ = patternRecordField;
 
-    return .{ .id = @enumFromInt(0) };
+    return @enumFromInt(0);
 }
 
 /// Adds a type annotation to the store.
@@ -2054,10 +2008,12 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: ModuleEnv.Pattern.RecordD
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
     const node = store.nodes.get(node_idx);
 
+    std.debug.assert(node.tag == .record_destruct);
+
     // Retrieve kind from extra_data if it exists
-    const kind = if (node.data_3 != 0) blk: {
+    const kind = blk: {
         const extra_start = node.data_3;
-        const extra_data = store.extra_data.items.items[extra_start..];
+        const extra_data = store.extra_data.items.items[extra_start..][0..2];
         const kind_tag = extra_data[0];
 
         break :blk switch (kind_tag) {
@@ -2065,10 +2021,6 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: ModuleEnv.Pattern.RecordD
             1 => ModuleEnv.Pattern.RecordDestruct.Kind{ .SubPattern = @enumFromInt(extra_data[1]) },
             else => unreachable,
         };
-    } else blk: {
-        // This should not happen with properly canonicalized code
-        const dummy_pattern_idx: ModuleEnv.Pattern.Idx = @enumFromInt(0);
-        break :blk ModuleEnv.Pattern.RecordDestruct.Kind{ .Required = dummy_pattern_idx };
     };
 
     return ModuleEnv.Pattern.RecordDestruct{
@@ -2359,12 +2311,12 @@ pub fn sliceMatchBranchPatterns(store: *const NodeStore, span: ModuleEnv.Expr.Ma
 
 /// Creates a slice corresponding to a span.
 pub fn firstFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @enumFromInt(store.extra_data.items[span.start]));
+    return @as(T, @enumFromInt(store.extra_data.items.items[span.start]));
 }
 
 /// Creates a slice corresponding to a span.
 pub fn lastFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @enumFromInt(store.extra_data.items[span.start + span.len - 1]));
+    return @as(T, @enumFromInt(store.extra_data.items.items[span.start + span.len - 1]));
 }
 
 /// Retrieve a slice of IfBranch Idx's from a span
@@ -2550,6 +2502,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
         },
         .malformed_where_clause => |r| {
             node.tag = .diag_malformed_where_clause;
+            region = r.region;
+        },
+        .where_clause_not_allowed_in_type_decl => |r| {
+            node.tag = .diag_where_clause_not_allowed_in_type_decl;
             region = r.region;
         },
         .var_across_function_boundary => |r| {
@@ -2870,6 +2826,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
         .diag_malformed_where_clause => return ModuleEnv.Diagnostic{ .malformed_where_clause = .{
             .region = store.getRegionAt(node_idx),
         } },
+        .diag_where_clause_not_allowed_in_type_decl => return ModuleEnv.Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
+            .region = store.getRegionAt(node_idx),
+        } },
         .diag_type_alias_redeclared => return ModuleEnv.Diagnostic{ .type_alias_redeclared = .{
             .name = @bitCast(node.data_1),
             .redeclared_region = store.getRegionAt(node_idx),
@@ -3128,7 +3087,7 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
 pub fn serialize(
     self: *const NodeStore,
     allocator: std.mem.Allocator,
-    writer: *collections.CompactWriter,
+    writer: *CompactWriter,
 ) std.mem.Allocator.Error!*const NodeStore {
     // First, write the NodeStore struct itself
     const offset_self = try writer.appendAlloc(allocator, NodeStore);
@@ -3170,6 +3129,83 @@ pub fn relocate(self: *NodeStore, offset: isize) void {
     // Note: scratch arrays are empty after deserialization, so no need to relocate
 }
 
+/// Serialized representation of NodeStore
+pub const Serialized = struct {
+    nodes: Node.List.Serialized,
+    regions: Region.List.Serialized,
+    extra_data: collections.SafeList(u32).Serialized,
+    // Scratch arrays - not serialized, just placeholders to match NodeStore size
+    // TODO move these out of NodeStore so that we don't need to serialize and
+    // deserialize a bunch of zeros for these; it's a waste of space.
+    scratch_statements: std.ArrayListUnmanaged(ModuleEnv.Statement.Idx) = .{},
+    scratch_exprs: std.ArrayListUnmanaged(ModuleEnv.Expr.Idx) = .{},
+    scratch_record_fields: std.ArrayListUnmanaged(ModuleEnv.RecordField.Idx) = .{},
+    scratch_match_branches: std.ArrayListUnmanaged(ModuleEnv.Expr.Match.Branch.Idx) = .{},
+    scratch_match_branch_patterns: std.ArrayListUnmanaged(ModuleEnv.Expr.Match.BranchPattern.Idx) = .{},
+    scratch_if_branches: std.ArrayListUnmanaged(ModuleEnv.Expr.IfBranch.Idx) = .{},
+    scratch_where_clauses: std.ArrayListUnmanaged(ModuleEnv.WhereClause.Idx) = .{},
+    scratch_patterns: std.ArrayListUnmanaged(ModuleEnv.Pattern.Idx) = .{},
+    scratch_pattern_record_fields: std.ArrayListUnmanaged(ModuleEnv.PatternRecordField.Idx) = .{},
+    scratch_record_destructs: std.ArrayListUnmanaged(ModuleEnv.Pattern.RecordDestruct.Idx) = .{},
+    scratch_type_annos: std.ArrayListUnmanaged(ModuleEnv.TypeAnno.Idx) = .{},
+    scratch_anno_record_fields: std.ArrayListUnmanaged(ModuleEnv.TypeAnno.RecordField.Idx) = .{},
+    scratch_exposed_items: std.ArrayListUnmanaged(ModuleEnv.ExposedItem.Idx) = .{},
+    scratch_defs: std.ArrayListUnmanaged(ModuleEnv.Def.Idx) = .{},
+    scratch_diagnostics: std.ArrayListUnmanaged(Diagnostic.Idx) = .{},
+    scratch_captures: std.ArrayListUnmanaged(ModuleEnv.Expr.Capture.Idx) = .{},
+    gpa: std.mem.Allocator = undefined,
+
+    /// Serialize a NodeStore into this Serialized struct, appending data to the writer
+    pub fn serialize(
+        self: *Serialized,
+        store: *const NodeStore,
+        allocator: std.mem.Allocator,
+        writer: *CompactWriter,
+    ) std.mem.Allocator.Error!void {
+        // Serialize nodes
+        try self.nodes.serialize(&store.nodes, allocator, writer);
+        // Serialize regions
+        try self.regions.serialize(&store.regions, allocator, writer);
+        // Serialize extra_data
+        try self.extra_data.serialize(&store.extra_data, allocator, writer);
+    }
+
+    /// Deserialize this Serialized struct into a NodeStore
+    pub fn deserialize(self: *Serialized, offset: i64, gpa: std.mem.Allocator) *NodeStore {
+        // NodeStore.Serialized should be at least as big as NodeStore
+        std.debug.assert(@sizeOf(Serialized) >= @sizeOf(NodeStore));
+
+        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+        const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
+
+        store.* = NodeStore{
+            .gpa = gpa,
+            .nodes = self.nodes.deserialize(offset).*,
+            .regions = self.regions.deserialize(offset).*,
+            .extra_data = self.extra_data.deserialize(offset).*,
+            // Initialize scratch arrays as proper Scratch instances
+            .scratch_statements = base.Scratch(ModuleEnv.Statement.Idx){ .items = .{} },
+            .scratch_exprs = base.Scratch(ModuleEnv.Expr.Idx){ .items = .{} },
+            .scratch_captures = base.Scratch(ModuleEnv.Expr.Capture.Idx){ .items = .{} },
+            .scratch_patterns = base.Scratch(ModuleEnv.Pattern.Idx){ .items = .{} },
+            .scratch_record_fields = base.Scratch(ModuleEnv.RecordField.Idx){ .items = .{} },
+            .scratch_pattern_record_fields = base.Scratch(ModuleEnv.PatternRecordField.Idx){ .items = .{} },
+            .scratch_record_destructs = base.Scratch(ModuleEnv.Pattern.RecordDestruct.Idx){ .items = .{} },
+            .scratch_match_branches = base.Scratch(ModuleEnv.Expr.Match.Branch.Idx){ .items = .{} },
+            .scratch_match_branch_patterns = base.Scratch(ModuleEnv.Expr.Match.BranchPattern.Idx){ .items = .{} },
+            .scratch_if_branches = base.Scratch(ModuleEnv.Expr.IfBranch.Idx){ .items = .{} },
+            .scratch_type_annos = base.Scratch(ModuleEnv.TypeAnno.Idx){ .items = .{} },
+            .scratch_anno_record_fields = base.Scratch(ModuleEnv.TypeAnno.RecordField.Idx){ .items = .{} },
+            .scratch_exposed_items = base.Scratch(ModuleEnv.ExposedItem.Idx){ .items = .{} },
+            .scratch_defs = base.Scratch(ModuleEnv.Def.Idx){ .items = .{} },
+            .scratch_where_clauses = base.Scratch(ModuleEnv.WhereClause.Idx){ .items = .{} },
+            .scratch_diagnostics = base.Scratch(Diagnostic.Idx){ .items = .{} },
+        };
+
+        return store;
+    }
+};
+
 test "NodeStore empty CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -3186,7 +3222,7 @@ test "NodeStore empty CompactWriter roundtrip" {
     defer file.close();
 
     // Serialize using CompactWriter
-    var writer = collections.CompactWriter{
+    var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
@@ -3255,7 +3291,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     defer file.close();
 
     // Serialize
-    var writer = collections.CompactWriter{
+    var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };
@@ -3362,7 +3398,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     defer file.close();
 
     // Serialize
-    var writer = collections.CompactWriter{
+    var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
     };

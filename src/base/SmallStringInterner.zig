@@ -218,3 +218,45 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.bytes.relocate(offset);
     self.hash_table.relocate(offset);
 }
+
+/// Serialized representation of a SmallStringInterner
+pub const Serialized = struct {
+    bytes: collections.SafeList(u8).Serialized,
+    hash_table: collections.SafeList(Idx).Serialized,
+    entry_count: u32,
+    frozen: if (std.debug.runtime_safety) bool else void,
+
+    /// Serialize a SmallStringInterner into this Serialized struct, appending data to the writer
+    pub fn serialize(
+        self: *Serialized,
+        interner: *const Self,
+        allocator: std.mem.Allocator,
+        writer: *CompactWriter,
+    ) std.mem.Allocator.Error!void {
+        // Serialize the bytes SafeList
+        try self.bytes.serialize(&interner.bytes, allocator, writer);
+        // Serialize the hash_table SafeList
+        try self.hash_table.serialize(&interner.hash_table, allocator, writer);
+        // Copy simple values directly
+        self.entry_count = interner.entry_count;
+        self.frozen = interner.frozen;
+    }
+
+    /// Deserialize this Serialized struct into a SmallStringInterner
+    pub fn deserialize(self: *Serialized, offset: i64) *Self {
+        // Self.Serialized should be at least as big as Self
+        std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Self));
+
+        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+        const interner = @as(*Self, @ptrCast(self));
+
+        interner.* = .{
+            .bytes = self.bytes.deserialize(offset).*,
+            .hash_table = self.hash_table.deserialize(offset).*,
+            .entry_count = self.entry_count,
+            .frozen = self.frozen,
+        };
+
+        return interner;
+    }
+};

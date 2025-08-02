@@ -330,15 +330,15 @@ EndOfFile(72:1-72:1),
 								(args
 									(p-ident @30.29-30.30 (raw "b")))
 								(e-binop @30.32-30.109 (op "or")
-									(e-binop @30.32-30.82 (op "or")
-										(e-tuple @30.32-30.55
-											(e-binop @30.33-30.54 (op "and")
-												(e-binop @30.33-30.41 (op ">=")
-													(e-ident @30.33-30.34 (raw "b"))
-													(e-single-quote @30.38-30.41 (raw "'0'")))
-												(e-binop @30.46-30.54 (op "<=")
-													(e-ident @30.46-30.47 (raw "b"))
-													(e-single-quote @30.51-30.54 (raw "'9'")))))
+									(e-tuple @30.32-30.55
+										(e-binop @30.33-30.54 (op "and")
+											(e-binop @30.33-30.41 (op ">=")
+												(e-ident @30.33-30.34 (raw "b"))
+												(e-single-quote @30.38-30.41 (raw "'0'")))
+											(e-binop @30.46-30.54 (op "<=")
+												(e-ident @30.46-30.47 (raw "b"))
+												(e-single-quote @30.51-30.54 (raw "'9'")))))
+									(e-binop @30.59-30.109 (op "or")
 										(e-tuple @30.59-30.82
 											(e-binop @30.60-30.81 (op "and")
 												(e-binop @30.60-30.68 (op ">=")
@@ -346,15 +346,15 @@ EndOfFile(72:1-72:1),
 													(e-single-quote @30.65-30.68 (raw "'a'")))
 												(e-binop @30.73-30.81 (op "<=")
 													(e-ident @30.73-30.74 (raw "b"))
-													(e-single-quote @30.78-30.81 (raw "'f'"))))))
-									(e-tuple @30.86-30.109
-										(e-binop @30.87-30.108 (op "and")
-											(e-binop @30.87-30.95 (op ">=")
-												(e-ident @30.87-30.88 (raw "b"))
-												(e-single-quote @30.92-30.95 (raw "'A'")))
-											(e-binop @30.100-30.108 (op "<=")
-												(e-ident @30.100-30.101 (raw "b"))
-												(e-single-quote @30.105-30.108 (raw "'F'"))))))))
+													(e-single-quote @30.78-30.81 (raw "'f'")))))
+										(e-tuple @30.86-30.109
+											(e-binop @30.87-30.108 (op "and")
+												(e-binop @30.87-30.95 (op ">=")
+													(e-ident @30.87-30.88 (raw "b"))
+													(e-single-quote @30.92-30.95 (raw "'A'")))
+												(e-binop @30.100-30.108 (op "<=")
+													(e-ident @30.100-30.101 (raw "b"))
+													(e-single-quote @30.105-30.108 (raw "'F'")))))))))
 						(e-match
 							(e-ident @32.11-32.16 (raw "bytes"))
 							(branches
@@ -372,34 +372,34 @@ EndOfFile(72:1-72:1),
 											(s-decl @34.13-40.45
 												(p-ident @34.13-34.21 (raw "is_valid"))
 												(e-binop @35.17-40.45 (op "and")
-													(e-binop @35.17-39.45 (op "and")
-														(e-binop @35.17-38.45 (op "and")
-															(e-binop @35.17-37.45 (op "and")
-																(e-binop @35.17-36.45 (op "and")
-																	(e-field-access @35.17-35.41
-																		(e-ident @35.17-35.18 (raw "a"))
-																		(e-apply @35.18-35.41
-																			(e-ident @35.18-35.39 (raw "is_char_in_hex_range"))))
-																	(e-field-access @36.21-36.45
-																		(e-ident @36.21-36.22 (raw "b"))
-																		(e-apply @36.22-36.45
-																			(e-ident @36.22-36.43 (raw "is_char_in_hex_range")))))
-																(e-field-access @37.21-37.45
-																	(e-ident @37.21-37.22 (raw "c"))
-																	(e-apply @37.22-37.45
-																		(e-ident @37.22-37.43 (raw "is_char_in_hex_range")))))
-															(e-field-access @38.21-38.45
-																(e-ident @38.21-38.22 (raw "d"))
-																(e-apply @38.22-38.45
-																	(e-ident @38.22-38.43 (raw "is_char_in_hex_range")))))
-														(e-field-access @39.21-39.45
-															(e-ident @39.21-39.22 (raw "e"))
-															(e-apply @39.22-39.45
-																(e-ident @39.22-39.43 (raw "is_char_in_hex_range")))))
-													(e-field-access @40.21-40.45
-														(e-ident @40.21-40.22 (raw "f"))
-														(e-apply @40.22-40.45
-															(e-ident @40.22-40.43 (raw "is_char_in_hex_range"))))))
+													(e-field-access @35.17-35.41
+														(e-ident @35.17-35.18 (raw "a"))
+														(e-apply @35.18-35.41
+															(e-ident @35.18-35.39 (raw "is_char_in_hex_range"))))
+													(e-binop @36.21-40.45 (op "and")
+														(e-field-access @36.21-36.45
+															(e-ident @36.21-36.22 (raw "b"))
+															(e-apply @36.22-36.45
+																(e-ident @36.22-36.43 (raw "is_char_in_hex_range"))))
+														(e-binop @37.21-40.45 (op "and")
+															(e-field-access @37.21-37.45
+																(e-ident @37.21-37.22 (raw "c"))
+																(e-apply @37.22-37.45
+																	(e-ident @37.22-37.43 (raw "is_char_in_hex_range"))))
+															(e-binop @38.21-40.45 (op "and")
+																(e-field-access @38.21-38.45
+																	(e-ident @38.21-38.22 (raw "d"))
+																	(e-apply @38.22-38.45
+																		(e-ident @38.22-38.43 (raw "is_char_in_hex_range"))))
+																(e-binop @39.21-40.45 (op "and")
+																	(e-field-access @39.21-39.45
+																		(e-ident @39.21-39.22 (raw "e"))
+																		(e-apply @39.22-39.45
+																			(e-ident @39.22-39.43 (raw "is_char_in_hex_range"))))
+																	(e-field-access @40.21-40.45
+																		(e-ident @40.21-40.22 (raw "f"))
+																		(e-apply @40.22-40.45
+																			(e-ident @40.22-40.43 (raw "is_char_in_hex_range"))))))))))
 											(e-if-then-else @42.13-42.125
 												(e-ident @42.16-42.24 (raw "is_valid"))
 												(e-apply @42.25-42.43
@@ -623,10 +623,10 @@ hex = |str| {
 			is_valid = 
 				a.is_char_in_hex_range()
 					and b.is_char_in_hex_range()
-					and c.is_char_in_hex_range()
-					and d.is_char_in_hex_range()
-					and e.is_char_in_hex_range()
-					and f.is_char_in_hex_range()
+						and c.is_char_in_hex_range()
+							and d.is_char_in_hex_range()
+								and e.is_char_in_hex_range()
+									and f.is_char_in_hex_range()
 
 			if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
 		}
@@ -751,16 +751,16 @@ is_named_color = |str| {
 							(args
 								(p-assign @30.29-30.30 (ident "b")))
 							(e-binop @30.32-30.109 (op "or")
-								(e-binop @30.32-30.82 (op "or")
-									(e-binop @30.33-30.54 (op "and")
-										(e-binop @30.33-30.41 (op "ge")
-											(e-lookup-local @30.33-30.34
-												(p-assign @30.29-30.30 (ident "b")))
-											(e-int @30.38-30.41 (value "48")))
-										(e-binop @30.46-30.54 (op "le")
-											(e-lookup-local @30.46-30.47
-												(p-assign @30.29-30.30 (ident "b")))
-											(e-int @30.51-30.54 (value "57"))))
+								(e-binop @30.33-30.54 (op "and")
+									(e-binop @30.33-30.41 (op "ge")
+										(e-lookup-local @30.33-30.34
+											(p-assign @30.29-30.30 (ident "b")))
+										(e-int @30.38-30.41 (value "48")))
+									(e-binop @30.46-30.54 (op "le")
+										(e-lookup-local @30.46-30.47
+											(p-assign @30.29-30.30 (ident "b")))
+										(e-int @30.51-30.54 (value "57"))))
+								(e-binop @30.59-30.109 (op "or")
 									(e-binop @30.60-30.81 (op "and")
 										(e-binop @30.60-30.68 (op "ge")
 											(e-lookup-local @30.60-30.61
@@ -769,16 +769,16 @@ is_named_color = |str| {
 										(e-binop @30.73-30.81 (op "le")
 											(e-lookup-local @30.73-30.74
 												(p-assign @30.29-30.30 (ident "b")))
-											(e-int @30.78-30.81 (value "102")))))
-								(e-binop @30.87-30.108 (op "and")
-									(e-binop @30.87-30.95 (op "ge")
-										(e-lookup-local @30.87-30.88
-											(p-assign @30.29-30.30 (ident "b")))
-										(e-int @30.92-30.95 (value "65")))
-									(e-binop @30.100-30.108 (op "le")
-										(e-lookup-local @30.100-30.101
-											(p-assign @30.29-30.30 (ident "b")))
-										(e-int @30.105-30.108 (value "70")))))))
+											(e-int @30.78-30.81 (value "102"))))
+									(e-binop @30.87-30.108 (op "and")
+										(e-binop @30.87-30.95 (op "ge")
+											(e-lookup-local @30.87-30.88
+												(p-assign @30.29-30.30 (ident "b")))
+											(e-int @30.92-30.95 (value "65")))
+										(e-binop @30.100-30.108 (op "le")
+											(e-lookup-local @30.100-30.101
+												(p-assign @30.29-30.30 (ident "b")))
+											(e-int @30.105-30.108 (value "70"))))))))
 					(e-match @32.5-45.6
 						(match @32.5-45.6
 							(cond
@@ -802,40 +802,40 @@ is_named_color = |str| {
 											(s-let @34.13-40.45
 												(p-assign @34.13-34.21 (ident "is_valid"))
 												(e-binop @35.17-40.45 (op "and")
-													(e-binop @35.17-39.45 (op "and")
-														(e-binop @35.17-38.45 (op "and")
-															(e-binop @35.17-37.45 (op "and")
-																(e-binop @35.17-36.45 (op "and")
-																	(e-dot-access @35.17-35.41 (field "is_char_in_hex_range")
-																		(receiver
-																			(e-lookup-local @35.17-35.18
-																				(p-assign @33.15-33.16 (ident "a"))))
-																		(args))
-																	(e-dot-access @36.21-36.45 (field "is_char_in_hex_range")
-																		(receiver
-																			(e-lookup-local @36.21-36.22
-																				(p-assign @33.18-33.19 (ident "b"))))
-																		(args)))
-																(e-dot-access @37.21-37.45 (field "is_char_in_hex_range")
-																	(receiver
-																		(e-lookup-local @37.21-37.22
-																			(p-assign @33.21-33.22 (ident "c"))))
-																	(args)))
-															(e-dot-access @38.21-38.45 (field "is_char_in_hex_range")
-																(receiver
-																	(e-lookup-local @38.21-38.22
-																		(p-assign @33.24-33.25 (ident "d"))))
-																(args)))
-														(e-dot-access @39.21-39.45 (field "is_char_in_hex_range")
-															(receiver
-																(e-lookup-local @39.21-39.22
-																	(p-assign @33.27-33.28 (ident "e"))))
-															(args)))
-													(e-dot-access @40.21-40.45 (field "is_char_in_hex_range")
+													(e-dot-access @35.17-35.41 (field "is_char_in_hex_range")
 														(receiver
-															(e-lookup-local @40.21-40.22
-																(p-assign @33.30-33.31 (ident "f"))))
-														(args))))
+															(e-lookup-local @35.17-35.18
+																(p-assign @33.15-33.16 (ident "a"))))
+														(args))
+													(e-binop @36.21-40.45 (op "and")
+														(e-dot-access @36.21-36.45 (field "is_char_in_hex_range")
+															(receiver
+																(e-lookup-local @36.21-36.22
+																	(p-assign @33.18-33.19 (ident "b"))))
+															(args))
+														(e-binop @37.21-40.45 (op "and")
+															(e-dot-access @37.21-37.45 (field "is_char_in_hex_range")
+																(receiver
+																	(e-lookup-local @37.21-37.22
+																		(p-assign @33.21-33.22 (ident "c"))))
+																(args))
+															(e-binop @38.21-40.45 (op "and")
+																(e-dot-access @38.21-38.45 (field "is_char_in_hex_range")
+																	(receiver
+																		(e-lookup-local @38.21-38.22
+																			(p-assign @33.24-33.25 (ident "d"))))
+																	(args))
+																(e-binop @39.21-40.45 (op "and")
+																	(e-dot-access @39.21-39.45 (field "is_char_in_hex_range")
+																		(receiver
+																			(e-lookup-local @39.21-39.22
+																				(p-assign @33.27-33.28 (ident "e"))))
+																		(args))
+																	(e-dot-access @40.21-40.45 (field "is_char_in_hex_range")
+																		(receiver
+																			(e-lookup-local @40.21-40.22
+																				(p-assign @33.30-33.31 (ident "f"))))
+																		(args))))))))
 											(e-if @42.13-42.125
 												(if-branches
 													(if-branch

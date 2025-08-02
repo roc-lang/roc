@@ -169,7 +169,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.source, parse_ast);
         return error.ParsingFailed;
     }
@@ -202,7 +202,7 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.source, parse_ast);
         return error.ParsingFailed;
     }
@@ -1292,7 +1292,7 @@ const Formatter = struct {
                     const pattern_region = fmt.nodeRegion(@intFromEnum(p));
                     _ = try fmt.formatPattern(p);
                     fmt.curr_indent = curr_indent;
-                    if (i < (a.patterns.span.len - 1)) {
+                    if (i < a.patterns.span.len - 1) {
                         if (multiline) {
                             _ = try fmt.flushCommentsBefore(pattern_region.end);
                             try fmt.ensureNewline();
@@ -1302,8 +1302,7 @@ const Formatter = struct {
                         }
                         try fmt.push('|');
                         const next_region = fmt.nodeRegion(@intFromEnum(patterns[i + 1]));
-                        const flushed = try fmt.flushCommentsBefore(next_region.start);
-                        if (flushed) {
+                        if (multiline and try fmt.flushCommentsBefore(next_region.start)) {
                             fmt.curr_indent += 1;
                             try fmt.pushIndent();
                         } else {
@@ -1844,11 +1843,6 @@ const Formatter = struct {
                 }
 
                 try fmt.pushTokenText(t.token);
-            },
-            .mod_ty => |t| {
-                try fmt.pushTokenText(t.region.start);
-                try fmt.pushAll(".");
-                try fmt.pushTokenText(t.region.end - 1);
             },
             .tuple => |t| {
                 region = t.region;

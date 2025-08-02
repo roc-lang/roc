@@ -11,12 +11,12 @@ type=repl
 » 255u8
 ~~~
 # OUTPUT
-Evaluation error: error.Crash
+42
 ---
-Failed to canonicalize expression
+3.14e0
 ---
-Evaluation error: error.Crash
+1.5e0
 ---
-Evaluation error: error.Crash
+255
 # PROBLEMS
 NIL

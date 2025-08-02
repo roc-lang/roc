@@ -19,6 +19,7 @@ pub fn build(b: *std.Build) void {
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
     const playground_step = b.step("playground", "Build the WASM playground");
+    const playground_test_step = b.step("playground-test", "Build the integration test suite for the WASM playground");
 
     // general configuration
     const target = b.standardTargetOptions(.{ .default_target = .{
@@ -106,6 +107,33 @@ pub fn build(b: *std.Build) void {
     const playground_install = b.addInstallArtifact(playground_exe, .{});
     playground_step.dependOn(&playground_install.step);
 
+    const bytebox = b.dependency("bytebox", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Add playground integration test executable
+    const playground_integration_test_exe = b.addExecutable(.{
+        .name = "playground_integration_test",
+        .root_source_file = b.path("test/playground-intergration/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    playground_integration_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+    playground_integration_test_exe.root_module.addAnonymousImport("playground_wasm", .{ .root_source_file = playground_install.emitted_bin });
+    playground_integration_test_exe.root_module.addImport("build_options", build_options.createModule());
+    roc_modules.addAll(playground_integration_test_exe);
+
+    const playground_test_install = b.addInstallArtifact(playground_integration_test_exe, .{});
+    playground_test_step.dependOn(&playground_test_install.step);
+
+    const run_playground_test = b.addRunArtifact(playground_integration_test_exe);
+    if (b.args) |args| {
+        run_playground_test.addArgs(args);
+    }
+    run_playground_test.step.dependOn(&playground_test_install.step);
+    playground_test_step.dependOn(&run_playground_test.step);
+
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
         .target = target,
@@ -126,6 +154,7 @@ pub fn build(b: *std.Build) void {
 
     b.default_step.dependOn(&all_tests.step);
     b.default_step.dependOn(playground_step);
+    b.default_step.dependOn(&playground_test_install.step);
     b.default_step.dependOn(&builtins_tests.step);
     if (no_bin) {
         test_step.dependOn(&all_tests.step);
