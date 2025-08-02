@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const math = std.math;
 const utils = @import("utils.zig");
 const expect = @import("expect.zig");
+const panic_utils = @import("panic.zig");
 const dbg_utils = @import("dbg.zig");
 
 const ROC_BUILTINS = "roc_builtins";
