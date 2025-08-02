@@ -2138,7 +2138,7 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    var module_env = try ModuleEnv.init(gpa, try gpa.dupe(u8, input));
+    var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
     var parse_ast = try parse.parse(&module_env);
