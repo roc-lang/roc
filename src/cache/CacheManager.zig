@@ -129,7 +129,11 @@ pub const CacheManager = struct {
             return;
         };
 
-        const cache_data = Cache.create(self.allocator, process_result.cir, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
+        // Create arena for serialization
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+
+        const cache_data = Cache.create(self.allocator, arena.allocator(), process_result.cir, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to serialize cache data: {}", .{err});
             }
@@ -263,15 +267,11 @@ pub const CacheManager = struct {
         // since we don't have access to the original source path
         const module_name = "cached_module";
         // Transfer ownership of source to the restored ModuleEnv
-        const restored = cache.restore(self.allocator, module_name, source) catch return error.RestoreError;
+        const module_env = cache.restore(self.allocator, module_name, source) catch return error.RestoreError;
 
         // Reports are not cached - they need to be recomputed if needed
         // Users can use --no-cache to see diagnostic reports
         const reports = try self.allocator.alloc(reporting.Report, 0);
-
-        // Allocate and copy ModuleEnv to heap for ownership
-        const module_env = try self.allocator.create(ModuleEnv);
-        module_env.* = restored.module_env;
 
         // CIR is now just an alias for ModuleEnv
         const cir = module_env;

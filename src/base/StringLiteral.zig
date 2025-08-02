@@ -95,30 +95,6 @@ pub const Store = struct {
         return std.mem.alignForward(usize, raw_size, serialization.SERIALIZATION_ALIGNMENT);
     }
 
-    /// Serialize this StringLiteral.Store into the provided buffer
-    /// Buffer must be at least serializedSize() bytes
-    pub fn serializeInto(self: *const Store, buffer: []u8) ![]u8 {
-        const size = self.serializedSize();
-        if (buffer.len < size) return error.BufferTooSmall;
-
-        // Write buffer length
-        const len_ptr = @as(*u32, @ptrCast(@alignCast(buffer.ptr)));
-        len_ptr.* = @intCast(self.buffer.len());
-
-        // Write buffer data
-        if (self.buffer.len() > 0) {
-            @memcpy(buffer[@sizeOf(u32) .. @sizeOf(u32) + self.buffer.len()], self.buffer.items.items);
-        }
-
-        // Zero out any padding bytes
-        const actual_size = @sizeOf(u32) + self.buffer.len();
-        if (actual_size < size) {
-            @memset(buffer[actual_size..size], 0);
-        }
-
-        return buffer[0..size];
-    }
-
     /// Deserialize a StringLiteral.Store from the provided buffer
     pub fn deserializeFrom(buffer: []const u8, gpa: std.mem.Allocator) !Store {
         if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
