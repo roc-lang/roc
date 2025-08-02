@@ -634,7 +634,6 @@ pub const RecordField = struct {
 
     /// Compare two RecordField values for equality
     pub fn eql(self: Self, other: Self) bool {
-        // Use the custom eql method for Ident.Idx comparison
         return self.name.eql(other.name) and self.var_ == other.var_;
     }
 
@@ -689,7 +688,6 @@ pub const Tag = struct {
 
     /// Compare two Tag values for equality
     pub fn eql(self: Self, other: Self) bool {
-        // Use the custom eql method for Ident.Idx comparison
         return self.name.eql(other.name) and
             self.args.start == other.args.start and
             self.args.count == other.args.count;
