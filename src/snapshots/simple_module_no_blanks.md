@@ -14,7 +14,7 @@ world = "World"
 MODULE NOT FOUND - simple_module_no_blanks.md:2:1:2:17
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `Pf.Stdout` was not found in this Roc project.
+The module `pf.Stdout` was not found in this Roc project.
 
 You're attempting to use this module here:
 **simple_module_no_blanks.md:2:1:2:17:**

@@ -41,7 +41,7 @@ MODULE NOT IMPORTED - can_import_unresolved_qualified.md:14:41:14:61
 UNUSED VARIABLE - can_import_unresolved_qualified.md:15:19:15:22
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `Json.Json` was not found in this Roc project.
+The module `json.Json` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_unresolved_qualified.md:3:1:3:17:**
@@ -52,7 +52,7 @@ import json.Json
 
 
 **MODULE NOT FOUND**
-The module `Http.Client` was not found in this Roc project.
+The module `http.Client` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_unresolved_qualified.md:4:1:4:27:**

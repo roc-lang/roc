@@ -86,24 +86,24 @@ MyType2 : Module.Thingy
 
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `add_one` is exposed, but it is not defined anywhere in this module.
+The module header says that `Add_one` is exposed, but it is not defined anywhere in this module.
 
 **type_declarations.md:1:42:1:49:**
 ```roc
 module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
 ```
                                          ^^^^^^^
-You can fix this by either defining `add_one` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `Add_one` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `main!` is exposed, but it is not defined anywhere in this module.
+The module header says that `Main!` is exposed, but it is not defined anywhere in this module.
 
 **type_declarations.md:1:51:1:56:**
 ```roc
 module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
 ```
                                                   ^^^^^
-You can fix this by either defining `main!` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `Main!` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig

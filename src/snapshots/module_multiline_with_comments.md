@@ -16,24 +16,24 @@ EXPOSED BUT NOT DEFINED - module_multiline_with_comments.md:3:3:3:12
 EXPOSED BUT NOT DEFINED - module_multiline_with_comments.md:4:3:4:11
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
-The module header says that `something` is exposed, but it is not defined anywhere in this module.
+The module header says that `Something` is exposed, but it is not defined anywhere in this module.
 
 **module_multiline_with_comments.md:3:3:3:12:**
 ```roc
 		something, # Comment after exposed item
 ```
   ^^^^^^^^^
-You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `Something` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `someType` is exposed, but it is not defined anywhere in this module.
+The module header says that `SomeType` is exposed, but it is not defined anywhere in this module.
 
 **module_multiline_with_comments.md:4:3:4:11:**
 ```roc
 		SomeType, # Comment after final exposed item
 ```
   ^^^^^^^^
-You can fix this by either defining `someType` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `SomeType` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig

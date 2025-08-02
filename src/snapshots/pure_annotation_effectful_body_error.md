@@ -19,7 +19,7 @@ main! = bad_function("This should fail")
 MODULE NOT FOUND - pure_annotation_effectful_body_error.md:3:1:3:17
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `Pf.Stdout` was not found in this Roc project.
+The module `pf.Stdout` was not found in this Roc project.
 
 You're attempting to use this module here:
 **pure_annotation_effectful_body_error.md:3:1:3:17:**

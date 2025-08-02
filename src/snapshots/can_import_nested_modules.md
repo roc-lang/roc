@@ -161,7 +161,7 @@ import utils.String.Format exposing [padLeft]
 
 
 **MODULE NOT FOUND**
-The module `Json.Parser` was not found in this Roc project.
+The module `json.Parser` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_nested_modules.md:3:1:3:19:**
@@ -183,7 +183,7 @@ import json.Parser.Config
 
 
 **MODULE NOT FOUND**
-The module `Http.Client` was not found in this Roc project.
+The module `http.Client` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_nested_modules.md:4:1:4:19:**

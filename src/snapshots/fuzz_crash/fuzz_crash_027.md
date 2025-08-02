@@ -385,7 +385,7 @@ Func(a) : Maybe(a), a -> Maybe(a)
 
 
 **MODULE NOT FOUND**
-The module `Pf.Stdout` was not found in this Roc project.
+The module `pf.Stdout` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_027.md:4:1:4:38:**
@@ -408,7 +408,7 @@ import Stdot
 
 
 **MODULE NOT FOUND**
-The module `Pkg.S` was not found in this Roc project.
+The module `pkg.S` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_027.md:10:1:10:46:**

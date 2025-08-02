@@ -448,7 +448,7 @@ This type is referenced here:
 
 
 **MODULE NOT FOUND**
-The module `Pf.Stdout` was not found in this Roc project.
+The module `pf.Stdout` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_023.md:4:1:4:42:**
@@ -490,7 +490,7 @@ import # Comment after import keyword
 
 
 **MODULE NOT FOUND**
-The module `Pkg.Something` was not found in this Roc project.
+The module `pkg.Something` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_023.md:14:1:14:82:**
@@ -2463,7 +2463,7 @@ expect {
 	(s-import @14.1-14.82 (module "pkg.Something") (qualifier "pkg")
 		(exposes
 			(exposed (name "func") (alias "function") (wildcard false))
-			(exposed (name "Type") (alias "valueCategory") (wildcard false))
+			(exposed (name "Type") (alias "ValueCategory") (wildcard false))
 			(exposed (name "Custom") (wildcard true))))
 	(s-import @16.1-16.27 (module "BadName") (alias "GoodName")
 		(exposes))

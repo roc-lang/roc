@@ -47,7 +47,7 @@ MODULE NOT FOUND - can_import_comprehensive.md:4:1:4:48
 MODULE NOT FOUND - can_import_comprehensive.md:5:1:5:27
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `Json.Json` was not found in this Roc project.
+The module `json.Json` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_comprehensive.md:3:1:3:17:**
@@ -58,7 +58,7 @@ import json.Json
 
 
 **MODULE NOT FOUND**
-The module `Http.Client` was not found in this Roc project.
+The module `http.Client` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_comprehensive.md:4:1:4:48:**
@@ -69,7 +69,7 @@ import http.Client as Http exposing [get, post]
 
 
 **MODULE NOT FOUND**
-The module `Utils.String` was not found in this Roc project.
+The module `utils.String` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_comprehensive.md:5:1:5:27:**

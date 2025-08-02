@@ -119,7 +119,7 @@ This type is referenced here:
 
 
 **MODULE NOT FOUND**
-The module `Json.Json` was not found in this Roc project.
+The module `json.Json` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_exposing_types.md:3:1:3:49:**
@@ -130,7 +130,7 @@ import json.Json exposing [Value, Error, Config]
 
 
 **MODULE NOT FOUND**
-The module `Http.Client` was not found in this Roc project.
+The module `http.Client` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_exposing_types.md:4:1:4:64:**
@@ -141,7 +141,7 @@ import http.Client as Http exposing [Request, Response, Status]
 
 
 **MODULE NOT FOUND**
-The module `Utils.Result` was not found in this Roc project.
+The module `utils.Result` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_exposing_types.md:5:1:5:38:**

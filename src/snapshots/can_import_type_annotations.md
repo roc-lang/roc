@@ -56,7 +56,7 @@ MODULE NOT IMPORTED - can_import_type_annotations.md:26:18:26:36
 MODULE NOT IMPORTED - can_import_type_annotations.md:26:64:26:81
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `Http.Client` was not found in this Roc project.
+The module `http.Client` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_type_annotations.md:3:1:3:56:**
@@ -67,7 +67,7 @@ import http.Client as Http exposing [Request, Response]
 
 
 **MODULE NOT FOUND**
-The module `Json.Json` was not found in this Roc project.
+The module `json.Json` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_type_annotations.md:4:1:4:17:**
@@ -78,7 +78,7 @@ import json.Json
 
 
 **MODULE NOT FOUND**
-The module `Utils.Result` was not found in this Roc project.
+The module `utils.Result` was not found in this Roc project.
 
 You're attempting to use this module here:
 **can_import_type_annotations.md:5:1:5:38:**

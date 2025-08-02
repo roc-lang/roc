@@ -347,7 +347,7 @@ Som : { foo : O, bar : g }
 
 
 **MODULE NOT FOUND**
-The module `Pf.Stdout` was not found in this Roc project.
+The module `pf.Stdout` was not found in this Roc project.
 
 You're attempting to use this module here:
 **fuzz_crash_020.md:4:1:4:34:**

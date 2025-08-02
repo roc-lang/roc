@@ -18,24 +18,24 @@ EXPOSED BUT NOT DEFINED - hosted.md:2:2:2:4
 EXPOSED BUT NOT DEFINED - hosted.md:3:2:3:4
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
-The module header says that `a!` is exposed, but it is not defined anywhere in this module.
+The module header says that `A!` is exposed, but it is not defined anywhere in this module.
 
 **hosted.md:2:2:2:4:**
 ```roc
 	a!,
 ```
  ^^
-You can fix this by either defining `a!` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `A!` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `b!` is exposed, but it is not defined anywhere in this module.
+The module header says that `B!` is exposed, but it is not defined anywhere in this module.
 
 **hosted.md:3:2:3:4:**
 ```roc
 	b!,
 ```
  ^^
-You can fix this by either defining `b!` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `B!` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig

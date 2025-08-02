@@ -20,7 +20,7 @@ main! = |_| {}
 MODULE NOT FOUND - type_record_effectful.md:3:1:3:17
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `Pf.Stdout` was not found in this Roc project.
+The module `pf.Stdout` was not found in this Roc project.
 
 You're attempting to use this module here:
 **type_record_effectful.md:3:1:3:17:**

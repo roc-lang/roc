@@ -24,7 +24,7 @@ main! = process!(42)
 MODULE NOT FOUND - function_no_annotation.md:3:1:3:17
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `Pf.Stdout` was not found in this Roc project.
+The module `pf.Stdout` was not found in this Roc project.
 
 You're attempting to use this module here:
 **function_no_annotation.md:3:1:3:17:**

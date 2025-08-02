@@ -23,24 +23,24 @@ EXPOSED BUT NOT DEFINED - package.md:3:3:3:5
 EXPOSED BUT NOT DEFINED - package.md:4:3:4:5
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
-The module header says that `a!` is exposed, but it is not defined anywhere in this module.
+The module header says that `A!` is exposed, but it is not defined anywhere in this module.
 
 **package.md:3:3:3:5:**
 ```roc
 		a!,
 ```
   ^^
-You can fix this by either defining `a!` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `A!` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `b!` is exposed, but it is not defined anywhere in this module.
+The module header says that `B!` is exposed, but it is not defined anywhere in this module.
 
 **package.md:4:3:4:5:**
 ```roc
 		b!,
 ```
   ^^
-You can fix this by either defining `b!` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `B!` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig

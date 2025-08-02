@@ -540,8 +540,8 @@ NO CHANGE
 			(exposed (name "I12") (wildcard false))))
 	(s-import @5.1-5.46 (module "I2")
 		(exposes
-			(exposed (name "I21") (alias "ias1") (wildcard false))
-			(exposed (name "I22") (alias "ias2") (wildcard false))))
+			(exposed (name "I21") (alias "Ias1") (wildcard false))
+			(exposed (name "I22") (alias "Ias2") (wildcard false))))
 	(s-type-anno @16.1-16.42 (name "g")
 		(ty-fn @16.5-16.11 (effectful false)
 			(ty-var @16.5-16.6 (name "e"))

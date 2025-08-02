@@ -43,24 +43,24 @@ module [foo, bar, MyType, OtherType, foo, MyType]
 You can remove the duplicate entry to fix this warning.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `bar` is exposed, but it is not defined anywhere in this module.
+The module header says that `Bar` is exposed, but it is not defined anywhere in this module.
 
 **exposed_not_impl.md:1:14:1:17:**
 ```roc
 module [foo, bar, MyType, OtherType, foo, MyType]
 ```
              ^^^
-You can fix this by either defining `bar` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `Bar` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `otherType` is exposed, but it is not defined anywhere in this module.
+The module header says that `OtherType` is exposed, but it is not defined anywhere in this module.
 
 **exposed_not_impl.md:1:27:1:36:**
 ```roc
 module [foo, bar, MyType, OtherType, foo, MyType]
 ```
                           ^^^^^^^^^
-You can fix this by either defining `otherType` in this module, or by removing it from the list of exposed values.
+You can fix this by either defining `OtherType` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
