@@ -27,13 +27,13 @@ type=expr
 ~~~
 # EXPECTED
 EMPTY TUPLE NOT ALLOWED - tuple_comprehensive.md:9:10:9:12
-UNUSED VARIABLE - tuple_comprehensive.md:14:2:14:7
-UNUSED VARIABLE - tuple_comprehensive.md:13:2:13:8
-UNUSED VARIABLE - tuple_comprehensive.md:11:2:11:6
-UNUSED VARIABLE - tuple_comprehensive.md:10:2:10:8
-UNUSED VARIABLE - tuple_comprehensive.md:12:2:12:8
 UNUSED VARIABLE - tuple_comprehensive.md:16:2:16:13
 UNUSED VARIABLE - tuple_comprehensive.md:15:2:15:11
+UNUSED VARIABLE - tuple_comprehensive.md:11:2:11:6
+UNUSED VARIABLE - tuple_comprehensive.md:13:2:13:8
+UNUSED VARIABLE - tuple_comprehensive.md:10:2:10:8
+UNUSED VARIABLE - tuple_comprehensive.md:12:2:12:8
+UNUSED VARIABLE - tuple_comprehensive.md:14:2:14:7
 # PROBLEMS
 **EMPTY TUPLE NOT ALLOWED**
 I am part way through parsing this tuple, but it is empty:

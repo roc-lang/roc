@@ -172,11 +172,11 @@ pub const Idx = packed struct(u32) {
                     .char0 = @as(u7, @intCast(char0)),
                     .is_unused = unused,
                     // Branchlessly zero the out-of-bounds chars.
-                    .char1 = if (last_char_index >= 0) chars[0] else 0,
+                    .char1 = if (len >= 2) chars[0] else 0,
                     .is_reused = reused,
-                    .char2 = if (last_char_index >= 1) chars[1] else 0,
+                    .char2 = if (len >= 3) chars[1] else 0,
                     .is_effectful = fx,
-                    .char3 = if (last_char_index >= 2) chars[2] else 0,
+                    .char3 = if (len >= 4) chars[2] else 0,
                 },
             },
         };
@@ -206,6 +206,104 @@ const SmallIdx = packed struct(u31) {
             .ignored = self.is_unused,
             .reassignable = self.is_reused,
         };
+    }
+
+    /// Reconstruct the text from the packed character fields by value.
+    /// Uses a thread-local buffer that's valid until the next call to this function.
+    fn getTextFromValue(small_idx: @This()) []u8 {
+        // Thread-local buffer to hold the reconstructed text
+        // Max length: 1 (underscore prefix) + 4 (chars) + 1 (exclamation) + 1 (underscore suffix) = 7
+        const S = struct {
+            var buffer: [7]u8 = undefined;
+        };
+        
+        var len: usize = 0;
+        
+        // Add underscore prefix if unused
+        if (small_idx.is_unused) {
+            S.buffer[len] = '_';
+            len += 1;
+        }
+        
+        // Add main characters (char0 is always present since len > 0)
+        S.buffer[len] = @as(u8, @intCast(small_idx.char0));
+        len += 1;
+        
+        if (small_idx.char1 != 0) {
+            S.buffer[len] = small_idx.char1;
+            len += 1;
+        }
+        if (small_idx.char2 != 0) {
+            S.buffer[len] = small_idx.char2;
+            len += 1;
+        }
+        if (small_idx.char3 != 0) {
+            S.buffer[len] = small_idx.char3;
+            len += 1;
+        }
+        
+        // Add exclamation if effectful
+        if (small_idx.is_effectful) {
+            S.buffer[len] = '!';
+            len += 1;
+        }
+        
+        // Add underscore suffix if reused
+        if (small_idx.is_reused) {
+            S.buffer[len] = '_';
+            len += 1;
+        }
+        
+        return S.buffer[0..len];
+    }
+
+    /// Reconstruct the text from the packed character fields.
+    /// Uses a thread-local buffer that's valid until the next call to this function.
+    fn getText(self: *const @This()) []u8 {
+        // Thread-local buffer to hold the reconstructed text
+        // Max length: 1 (underscore prefix) + 4 (chars) + 1 (exclamation) + 1 (underscore suffix) = 7
+        const S = struct {
+            var buffer: [7]u8 = undefined;
+        };
+        
+        var len: usize = 0;
+        
+        // Add underscore prefix if unused
+        if (self.is_unused) {
+            S.buffer[len] = '_';
+            len += 1;
+        }
+        
+        // Add the core characters
+        S.buffer[len] = @as(u8, @intCast(self.char0));
+        len += 1;
+        
+        if (self.char1 != 0) {
+            S.buffer[len] = @as(u8, @intCast(self.char1));
+            len += 1;
+        }
+        if (self.char2 != 0) {
+            S.buffer[len] = @as(u8, @intCast(self.char2));
+            len += 1;
+        }
+        if (self.char3 != 0) {
+            S.buffer[len] = @as(u8, @intCast(self.char3));
+            len += 1;
+        }
+        
+        // Add exclamation suffix if effectful
+        if (self.is_effectful) {
+            S.buffer[len] = '!';
+            len += 1;
+        }
+        
+        // Add underscore suffix if reused
+        if (self.is_reused) {
+            S.buffer[len] = '_';
+            len += 1;
+        }
+        
+        return S.buffer[0..len];
     }
 };
 
@@ -349,7 +447,13 @@ pub const Store = struct {
 
     /// Get the text for an identifier.
     pub fn getText(self: *const Store, idx: Idx) []u8 {
-        return self.interner.getText(@enumFromInt(@as(u32, idx.getIdx())));
+        if (idx.is_small) {
+            // For small identifiers, reconstruct the text from packed characters
+            return SmallIdx.getTextFromValue(idx.data.small);
+        } else {
+            // For big identifiers, look up in the interner
+            return self.interner.getText(@enumFromInt(@as(u32, idx.getIdx())));
+        }
     }
 
     /// Check if an identifier text already exists in the store.
