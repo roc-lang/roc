@@ -769,30 +769,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `stale` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_stale` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:142:2:142:7:**
-```roc
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
-```
- ^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `bsult` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_bsult` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:141:2:141:7:**
-```roc
-	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-```
- ^^^^^
-
-
-**UNUSED VARIABLE**
 Variable `tag_with` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_tag_with` to suppress this warning.
@@ -826,6 +802,30 @@ The unused variable is declared here:
 	list = [
 ```
  ^^^^
+
+
+**UNUSED VARIABLE**
+Variable `bsult` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_bsult` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:141:2:141:7:**
+```roc
+	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+```
+ ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `stale` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_stale` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:142:2:142:7:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+ ^^^^^
 
 
 **UNDECLARED TYPE**

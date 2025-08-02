@@ -774,30 +774,6 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_023.md:166:2:166:6:**
-```roc
-	list = [
-```
- ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `static_dispatch_style` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_static_dispatch_style` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_023.md:189:2:189:23:**
-```roc
-	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-```
- ^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
 Variable `interpolated` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_interpolated` to suppress this warning.
@@ -822,18 +798,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `multiline_tuple` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_multiline_tuple` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_023.md:180:2:180:17:**
-```roc
-	multiline_tuple = (
-```
- ^^^^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
 Variable `bin_op_result` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_bin_op_result` to suppress this warning.
@@ -846,6 +810,30 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
+Variable `multiline_tuple` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_multiline_tuple` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:180:2:180:17:**
+```roc
+	multiline_tuple = (
+```
+ ^^^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `static_dispatch_style` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_static_dispatch_style` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:189:2:189:23:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+ ^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
 Variable `tag_with_payload` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_tag_with_payload` to suppress this warning.
@@ -855,6 +843,18 @@ The unused variable is declared here:
 	tag_with_payload = Ok(number)
 ```
  ^^^^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `list` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:166:2:166:6:**
+```roc
+	list = [
+```
+ ^^^^
 
 
 **UNDECLARED TYPE**

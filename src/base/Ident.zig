@@ -66,10 +66,8 @@ pub fn from_bytes(bytes: []const u8) Error!Ident {
     };
 }
 
-pub const Idx = struct {
-    // std.meta.eql doesn't work well with packed unions, so we expose a plain u32
-    // and then cast it when doing methods.
-    value: u32,
+pub const Idx = enum(u32) {
+    _,
 
     pub fn attributes(self: *const @This()) Attributes {
         return self.toInner().attributes();
@@ -88,27 +86,36 @@ pub const Idx = struct {
         return Idx.fromInner(InnerIdx.try_inline(string) orelse return null);
     }
 
+    pub fn toU32(self: Idx) u32 {
+        return @intFromEnum(self);
+    }
+
+    pub fn fromU32(value: u32) Idx {
+        return @enumFromInt(value);
+    }
+
+    pub fn invalid() Idx {
+        // Create an invalid identifier with index 0
+        return @enumFromInt(0);
+    }
+
     fn toInner(self: Idx) InnerIdx {
-        return @as(InnerIdx, @bitCast(self));
+        return @as(InnerIdx, @bitCast(@intFromEnum(self)));
     }
 
     fn fromInner(inner: InnerIdx) Idx {
-        return @as(Idx, @bitCast(inner));
+        return @as(Idx, @enumFromInt(@as(u32, @bitCast(inner))));
     }
 };
 
 const InnerIdx = packed struct(u32) {
-    pub const InnerIdxData = packed union { small: SmallIdx, big: BigIdx };
-
     is_small: bool,
-    data: InnerIdxData,
+    data: packed union { small: SmallIdx, big: BigIdx },
 
     pub fn attributes(self: *const @This()) Attributes {
-        if (self.is_small) {
-            const small = self.data.small;
-            return small.attributes();
-        } else {
-            return self.data.big.attributes;
+        switch (self.toVariant()) {
+            .small => |small| return small.attributes(),
+            .big => |big| return big.attributes,
         }
     }
 
@@ -123,7 +130,7 @@ const InnerIdx = packed struct(u32) {
 
     // Support for std.testing.expectEqual by implementing format
     pub fn format(
-        self: Idx,
+        self: InnerIdx,
         comptime fmt: []const u8,
         options: std.fmt.FormatOptions,
         writer: anytype,
@@ -131,12 +138,28 @@ const InnerIdx = packed struct(u32) {
         _ = fmt;
         _ = options;
 
+        switch (self.toVariant()) {
+            .small => |small| {
+                // Small identifiers don't have a real index in the store
+                try writer.print("Ident.Idx({s})", .{small.asString()});
+            },
+            .big => |big| {
+                // Format as the underlying u32 value for debugging
+                try writer.print("Ident.Idx({d})", .{big.idx});
+            },
+        }
+    }
+
+    const Variant = union(enum) {
+        small: SmallIdx,
+        big: BigIdx,
+    };
+
+    fn toVariant(self: InnerIdx) Variant {
         if (self.is_small) {
-            // Small identifiers don't have a real index in the store
-            try writer.print("Ident.Idx({s})", .{self.data.small.asString()});
+            return .{ .small = self.data.small };
         } else {
-            // Format as the underlying u32 value for debugging
-            try writer.print("Ident.Idx({d})", .{self.data.big.idx});
+            return .{ .big = self.data.big };
         }
     }
 
@@ -264,15 +287,15 @@ const SmallIdx = packed struct(u31) {
         len += 1;
 
         if (small_idx.char1 != 0) {
-            S.buffer[len] = small_idx.char1;
+            S.buffer[len] = @as(u8, @intCast(small_idx.char1));
             len += 1;
         }
         if (small_idx.char2 != 0) {
-            S.buffer[len] = small_idx.char2;
+            S.buffer[len] = @as(u8, @intCast(small_idx.char2));
             len += 1;
         }
         if (small_idx.char3 != 0) {
-            S.buffer[len] = small_idx.char3;
+            S.buffer[len] = @as(u8, @intCast(small_idx.char3));
             len += 1;
         }
 
@@ -338,6 +361,10 @@ const SmallIdx = packed struct(u31) {
         }
 
         return S.buffer[0..len];
+    }
+
+    fn asString(self: *const @This()) []u8 {
+        return self.getText();
     }
 };
 
@@ -415,8 +442,11 @@ pub const Store = struct {
     pub fn insert(self: *Store, gpa: std.mem.Allocator, ident: Ident) std.mem.Allocator.Error!Idx {
         std.debug.assert(ident.raw_text.len > 0);
         // First try to create a small identifier
-        if (Idx.try_inline(ident.raw_text)) |small_idx| {
-            return small_idx;
+        // Only try inline if the string doesn't start with a digit
+        if (ident.raw_text[0] < '0' or ident.raw_text[0] > '9') {
+            if (Idx.try_inline(ident.raw_text)) |small_idx| {
+                return small_idx;
+            }
         }
 
         // Fall back to big identifier in the interner
@@ -488,12 +518,16 @@ pub const Store = struct {
 
     /// Get the text for an identifier.
     pub fn getText(self: *const Store, idx: Idx) []u8 {
-        if (idx.is_small) {
-            // For small identifiers, reconstruct the text from packed characters
-            return SmallIdx.getTextFromValue(idx.data.small);
-        } else {
-            // For big identifiers, look up in the interner
-            return self.interner.getText(@enumFromInt(@as(u32, idx.getIdx())));
+        const inner = idx.toInner();
+        switch (inner.toVariant()) {
+            .small => |small| {
+                // For small identifiers, reconstruct the text from packed characters
+                return SmallIdx.getTextFromValue(small);
+            },
+            .big => |big| {
+                // For big identifiers, look up in the interner
+                return self.interner.getText(@enumFromInt(@as(u32, big.idx)));
+            },
         }
     }
 
@@ -507,8 +541,11 @@ pub const Store = struct {
     pub fn findByString(self: *const Store, text: []const u8) ?Idx {
         std.debug.assert(text.len > 0);
         // First try to create a small identifier
-        if (Idx.try_inline(text)) |small_idx| {
-            return small_idx;
+        // Only try inline if the string doesn't start with a digit
+        if (text[0] < '0' or text[0] > '9') {
+            if (Idx.try_inline(text)) |small_idx| {
+                return small_idx;
+            }
         }
 
         // Look up in the interner without inserting

@@ -388,9 +388,9 @@ test "exposed_items is populated correctly" {
     const bar_idx = env.idents.findByString("bar").?;
     const mytype_idx = env.idents.findByString("MyType").?;
 
-    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(foo_idx)));
-    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(bar_idx)));
-    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(mytype_idx)));
+    try testing.expect(env.exposed_items.containsById(env.gpa, foo_idx.toU32()));
+    try testing.expect(env.exposed_items.containsById(env.gpa, bar_idx.toU32()));
+    try testing.expect(env.exposed_items.containsById(env.gpa, mytype_idx.toU32()));
 }
 
 test "exposed_items persists after canonicalization" {
@@ -423,9 +423,9 @@ test "exposed_items persists after canonicalization" {
     const y_idx = env.idents.findByString("y").?;
     const z_idx = env.idents.findByString("z").?;
 
-    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(x_idx)));
-    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(y_idx)));
-    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(z_idx)));
+    try testing.expect(env.exposed_items.containsById(env.gpa, x_idx.toU32()));
+    try testing.expect(env.exposed_items.containsById(env.gpa, y_idx.toU32()));
+    try testing.expect(env.exposed_items.containsById(env.gpa, z_idx.toU32()));
 
     // Verify the map persists in env after canonicalization is complete
     try testing.expectEqual(@as(usize, 3), env.exposed_items.count());
@@ -463,9 +463,9 @@ test "exposed_items never has entries removed" {
     const bar_idx = env.idents.findByString("bar").?;
     const baz_idx = env.idents.findByString("baz").?;
 
-    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(foo_idx)));
-    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(bar_idx)));
-    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(baz_idx)));
+    try testing.expect(env.exposed_items.containsById(env.gpa, foo_idx.toU32()));
+    try testing.expect(env.exposed_items.containsById(env.gpa, bar_idx.toU32()));
+    try testing.expect(env.exposed_items.containsById(env.gpa, baz_idx.toU32()));
 
     // Should have exactly 3 unique entries
     try testing.expectEqual(@as(usize, 3), env.exposed_items.count());
@@ -501,14 +501,14 @@ test "exposed_items handles identifiers with different attributes" {
     const foo_idx = env.idents.findByString("foo").?;
     const foo_effectful_idx = env.idents.findByString("foo!").?;
 
-    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(foo_idx)));
-    try testing.expect(env.exposed_items.containsById(env.gpa, @bitCast(foo_effectful_idx)));
+    try testing.expect(env.exposed_items.containsById(env.gpa, foo_idx.toU32()));
+    try testing.expect(env.exposed_items.containsById(env.gpa, foo_effectful_idx.toU32()));
 
     // Should have exactly 2 entries - if we only used u29 without attributes, they might incorrectly merge
     try testing.expectEqual(@as(usize, 2), env.exposed_items.count());
 
     // Verify they have different full u32 values (index + attributes)
-    const foo_u32 = @as(u32, @bitCast(foo_idx));
-    const foo_effectful_u32 = @as(u32, @bitCast(foo_effectful_idx));
+    const foo_u32 = foo_idx.toU32();
+    const foo_effectful_u32 = foo_effectful_idx.toU32();
     try testing.expect(foo_u32 != foo_effectful_u32);
 }

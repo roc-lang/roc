@@ -763,18 +763,6 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable `i` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_i` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_020.md:87:2:87:3:**
-```roc
-	i= "H, ${d}"
-```
- ^
-
-
-**UNUSED VARIABLE**
 Variable `rd` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rd` to suppress this warning.
@@ -784,6 +772,18 @@ The unused variable is declared here:
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 ```
  ^^
+
+
+**UNUSED VARIABLE**
+Variable `i` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_i` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_020.md:87:2:87:3:**
+```roc
+	i= "H, ${d}"
+```
+ ^
 
 
 **UNUSED VARIABLE**

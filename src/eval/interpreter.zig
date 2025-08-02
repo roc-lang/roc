@@ -873,7 +873,7 @@ pub const Interpreter = struct {
                 try self.work_stack.append(.{
                     .kind = .w_dot_access,
                     .expr_idx = expr_idx,
-                    .extra = @bitCast(dot_access.field_name),
+                    .extra = dot_access.field_name.toU32(),
                 });
 
                 // Evaluate the receiver expression
@@ -1470,7 +1470,7 @@ pub const Interpreter = struct {
         const record_value = try self.popStackValue();
 
         // Get the field name
-        const field_name_ident: base.Ident.Idx = @bitCast(field_name_idx);
+        const field_name_ident = base.Ident.Idx.fromU32(field_name_idx);
         const field_name = self.env.idents.getText(field_name_ident);
 
         // The record must have a record layout

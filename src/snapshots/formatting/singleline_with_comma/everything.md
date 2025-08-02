@@ -145,18 +145,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `h5` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
-The unused variable is declared here:
-**everything.md:23:2:23:4:**
-```roc
-	h5 = (x, y,)
-```
- ^^
-
-
-**UNUSED VARIABLE**
 Variable `h1` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h1` to suppress this warning.
@@ -164,18 +152,6 @@ The unused variable is declared here:
 **everything.md:19:2:19:4:**
 ```roc
 	h1 = { h11: x, h12: x, h13: { h131: x, h132: y, }, }
-```
- ^^
-
-
-**UNUSED VARIABLE**
-Variable `h2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
-The unused variable is declared here:
-**everything.md:20:2:20:4:**
-```roc
-	h2 = h(x, y,)
 ```
  ^^
 
@@ -193,6 +169,18 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
+Variable `h2` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
+The unused variable is declared here:
+**everything.md:20:2:20:4:**
+```roc
+	h2 = h(x, y,)
+```
+ ^^
+
+
+**UNUSED VARIABLE**
 Variable `h3` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h3` to suppress this warning.
@@ -200,6 +188,18 @@ The unused variable is declared here:
 **everything.md:21:2:21:4:**
 ```roc
 	h3 = A(x, y,)
+```
+ ^^
+
+
+**UNUSED VARIABLE**
+Variable `h5` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
+The unused variable is declared here:
+**everything.md:23:2:23:4:**
+```roc
+	h5 = (x, y,)
 ```
  ^^
 

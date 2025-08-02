@@ -211,7 +211,7 @@ pub fn introduceTypeDecl(
     // Check if already exists in current scope by comparing text content
     var iter = scope.type_decls.iterator();
     while (iter.next()) |entry| {
-        if (name.idx == entry.key_ptr.idx) {
+        if (name == entry.key_ptr.*) {
             // Type redeclaration is an error, not just a warning
             return TypeIntroduceResult{ .redeclared_error = entry.value_ptr.* };
         }
@@ -240,7 +240,7 @@ pub fn lookupTypeDecl(scope: *const Scope, name: Ident.Idx) TypeLookupResult {
     // Search by comparing text content, not identifier index
     var iter = scope.type_decls.iterator();
     while (iter.next()) |entry| {
-        if (name.idx == entry.key_ptr.idx) {
+        if (name == entry.key_ptr.*) {
             return TypeLookupResult{ .found = entry.value_ptr.* };
         }
     }
@@ -259,7 +259,7 @@ pub fn updateTypeDecl(
     // Find the existing entry by comparing text content
     var iter = scope.type_decls.iterator();
     while (iter.next()) |entry| {
-        if (name.idx == entry.key_ptr.idx) {
+        if (name == entry.key_ptr.*) {
             // Update the existing entry with the new statement index
             entry.value_ptr.* = new_type_decl;
             return;
@@ -280,7 +280,7 @@ pub fn introduceTypeVar(
     // Check if already exists in current scope by comparing text content
     var iter = scope.type_vars.iterator();
     while (iter.next()) |entry| {
-        if (name.idx == entry.key_ptr.idx) {
+        if (name == entry.key_ptr.*) {
             // Type variable already exists in this scope
             return TypeVarIntroduceResult{ .already_in_scope = entry.value_ptr.* };
         }
@@ -306,7 +306,7 @@ pub fn lookupTypeVar(scope: *const Scope, name: Ident.Idx) TypeVarLookupResult {
     // Search by comparing text content, not identifier index
     var iter = scope.type_vars.iterator();
     while (iter.next()) |entry| {
-        if (name.idx == entry.key_ptr.idx) {
+        if (name == entry.key_ptr.*) {
             return TypeVarLookupResult{ .found = entry.value_ptr.* };
         }
     }
@@ -318,7 +318,7 @@ pub fn lookupModuleAlias(scope: *const Scope, name: Ident.Idx) ModuleAliasLookup
     // Search by comparing text content, not identifier index
     var iter = scope.module_aliases.iterator();
     while (iter.next()) |entry| {
-        if (name.idx == entry.key_ptr.idx) {
+        if (name == entry.key_ptr.*) {
             return ModuleAliasLookupResult{ .found = entry.value_ptr.* };
         }
     }
@@ -336,7 +336,7 @@ pub fn introduceModuleAlias(
     // Check if already exists in current scope by comparing text content
     var iter = scope.module_aliases.iterator();
     while (iter.next()) |entry| {
-        if (alias_name.idx == entry.key_ptr.idx) {
+        if (alias_name == entry.key_ptr.*) {
             // Module alias already exists in this scope
             return ModuleAliasIntroduceResult{ .already_in_scope = entry.value_ptr.* };
         }
@@ -362,7 +362,7 @@ pub fn lookupExposedItem(scope: *const Scope, name: Ident.Idx) ExposedItemLookup
     // Search by comparing text content, not identifier index
     var iter = scope.exposed_items.iterator();
     while (iter.next()) |entry| {
-        if (name.idx == entry.key_ptr.idx) {
+        if (name == entry.key_ptr.*) {
             return ExposedItemLookupResult{ .found = entry.value_ptr.* };
         }
     }
@@ -380,7 +380,7 @@ pub fn introduceExposedItem(
     // Check if already exists in current scope by comparing text content
     var iter = scope.exposed_items.iterator();
     while (iter.next()) |entry| {
-        if (item_name.idx == entry.key_ptr.idx) {
+        if (item_name == entry.key_ptr.*) {
             // Exposed item already exists in this scope
             return ExposedItemIntroduceResult{ .already_in_scope = entry.value_ptr.* };
         }

@@ -23,11 +23,11 @@ test "rigid variables need instantiation - multiple type parameters" {
 
     // Create rigid type variables 'a' and 'b' (like in `swap : (a, b) -> (b, a)`)
     const rigid_a = try store.fresh();
-    const rigid_a_content = types.Content{ .rigid_var = @bitCast(@as(u32, 1)) };
+    const rigid_a_content = types.Content{ .rigid_var = base.Ident.Idx.fromU32(1) };
     try store.setVarContent(rigid_a, rigid_a_content);
 
     const rigid_b = try store.fresh();
-    const rigid_b_content = types.Content{ .rigid_var = @bitCast(@as(u32, 2)) };
+    const rigid_b_content = types.Content{ .rigid_var = base.Ident.Idx.fromU32(2) };
     try store.setVarContent(rigid_b, rigid_b_content);
 
     // Create tuple types for the argument and return
@@ -71,7 +71,7 @@ test "rigid vs flex variable instantiation behavior" {
 
     // Test that both rigid and flex variables need instantiation
     const rigid_var = try store.fresh();
-    try store.setVarContent(rigid_var, types.Content{ .rigid_var = @bitCast(@as(u32, 1)) });
+    try store.setVarContent(rigid_var, types.Content{ .rigid_var = base.Ident.Idx.fromU32(1) });
     try std.testing.expect(store.needsInstantiation(rigid_var));
 
     const flex_var = try store.fresh();

@@ -39,7 +39,7 @@ fn rand_span() base.DataSpan {
 
 /// Generate a random identifier index.
 fn rand_ident_idx() Ident.Idx {
-    return @bitCast(rand.random().int(u32));
+    return Ident.Idx.fromU32(rand.random().int(u32));
 }
 
 /// Helper to create a random region.

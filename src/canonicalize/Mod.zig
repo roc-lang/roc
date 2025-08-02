@@ -351,7 +351,7 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void 
             types.TypeIdent{ .ident_idx = type_ident },
             anno_var,
             &.{},
-            try ir.idents.insert(gpa, base.Ident.for_text(ir.module_name)),
+            try ir.idents.insert(gpa, base.Ident.for_text(if (ir.module_name.len > 0) ir.module_name else "Test")),
         ),
         Region.zero(),
     );
@@ -568,7 +568,7 @@ pub fn canonicalizeFile(
                     if (self.parse_ir.store.getPattern(decl.pattern) == .ident) {
                         const pattern_ident = self.parse_ir.store.getPattern(decl.pattern).ident;
                         if (self.parse_ir.tokens.resolveIdentifier(pattern_ident.ident_tok)) |decl_ident| {
-                            if (anno_info.name.idx == decl_ident.idx) {
+                            if (anno_info.name == decl_ident) {
                                 // This declaration matches the type annotation
                                 const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
                                 const type_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, pattern_region, TypeVar);
@@ -599,7 +599,7 @@ pub fn canonicalizeFile(
                         const idx = try self.env.idents.insert(self.env.gpa, ident);
                         // Store the def index as u16 in exposed_items
                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                        try self.env.exposed_items.setNodeIndexById(self.env.gpa, @bitCast(idx), def_idx_u16);
+                        try self.env.exposed_items.setNodeIndexById(self.env.gpa, idx.toU32(), def_idx_u16);
                     }
 
                     _ = self.exposed_ident_texts.remove(ident_text);
@@ -868,7 +868,7 @@ fn createExposedScope(
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
                     // Add to exposed_items for permanent storage (unconditionally)
-                    try self.env.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
+                    try self.env.exposed_items.addExposedById(gpa, ident_idx.toU32());
 
                     // Use a dummy pattern index - we just need to track that it's exposed
                     const dummy_idx = @as(Pattern.Idx, @enumFromInt(0));
@@ -901,7 +901,7 @@ fn createExposedScope(
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
                     // Add to exposed_items for permanent storage (unconditionally)
-                    try self.env.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
+                    try self.env.exposed_items.addExposedById(gpa, ident_idx.toU32());
 
                     // Use a dummy statement index - we just need to track that it's exposed
                     const dummy_idx = @as(Statement.Idx, @enumFromInt(0));
@@ -934,7 +934,7 @@ fn createExposedScope(
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
                     // Add to exposed_items for permanent storage (unconditionally)
-                    try self.env.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
+                    try self.env.exposed_items.addExposedById(gpa, ident_idx.toU32());
 
                     // Use a dummy statement index - we just need to track that it's exposed
                     const dummy_idx = @as(Statement.Idx, @enumFromInt(0));
@@ -1355,7 +1355,7 @@ fn introduceExposedItemsIntoScope(
             // We need to look up by string because the identifiers are from different modules
             // First, try to find this identifier in the target module's ident store
             const is_exposed = if (module_env.idents.findByString(item_name_text)) |target_ident|
-                module_env.exposed_items.containsById(self.env.gpa, @bitCast(target_ident))
+                module_env.exposed_items.containsById(self.env.gpa, target_ident.toU32())
             else
                 false;
 
@@ -1703,7 +1703,7 @@ pub fn canonicalizeExpr(
                             const target_node_idx = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
                                     if (module_env.idents.findByString(field_text)) |target_ident| {
-                                        break :blk module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse 0;
+                                        break :blk module_env.exposed_items.getNodeIndexById(self.env.gpa, target_ident.toU32()) orelse 0;
                                     } else {
                                         break :blk 0;
                                     }
@@ -1767,7 +1767,7 @@ pub fn canonicalizeExpr(
                             const target_node_idx = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
                                     if (module_env.idents.findByString(field_text)) |target_ident| {
-                                        break :blk module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse 0;
+                                        break :blk module_env.exposed_items.getNodeIndexById(self.env.gpa, target_ident.toU32()) orelse 0;
                                     } else {
                                         break :blk 0;
                                     }
@@ -2257,7 +2257,7 @@ pub fn canonicalizeExpr(
                     // Check for duplicate field names
                     var found_duplicate = false;
                     for (self.scratch_seen_record_fields.sliceFromStart(seen_fields_top)) |seen_field| {
-                        if (field_name_ident.idx == seen_field.ident.idx) {
+                        if (field_name_ident == seen_field.ident) {
                             // Found a duplicate - add diagnostic
                             const diagnostic = Diagnostic{
                                 .duplicate_record_field = .{
@@ -3099,7 +3099,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
                 } }), .free_vars = null };
             };
 
-            const other_module_node_id = module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse {
+            const other_module_node_id = module_env.exposed_items.getNodeIndexById(self.env.gpa, target_ident.toU32()) orelse {
                 // Type is not exposed by the module
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, ModuleEnv.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -3653,7 +3653,7 @@ fn canonicalizePattern(
                         } });
                     };
 
-                    const other_module_node_id = module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse {
+                    const other_module_node_id = module_env.exposed_items.getNodeIndexById(self.env.gpa, target_ident.toU32()) orelse {
                         // Type is not exposed by the module
                         return try self.env.pushMalformed(Pattern.Idx, ModuleEnv.Diagnostic{ .type_not_exposed = .{
                             .module_name = module_name,
@@ -4471,7 +4471,7 @@ fn processCollectedTypeVars(self: *Self) std.mem.Allocator.Error!void {
         // Check if there are any other occurrences of this variable
         var i: usize = 0;
         while (i < self.scratch_type_var_validation.items.items.len) {
-            if (self.scratch_type_var_validation.items.items[i].idx == first_ident.idx) {
+            if (self.scratch_type_var_validation.items.items[i] == first_ident) {
                 found_another = true;
                 // Remove this occurrence by swapping with the last element and shrinking
                 const last = self.scratch_type_var_validation.items.items.len - 1;
@@ -4844,7 +4844,7 @@ fn canonicalizeTypeAnnoBasicType(
                 } }), .mb_local_decl = null };
             };
 
-            const other_module_node_id = module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse {
+            const other_module_node_id = module_env.exposed_items.getNodeIndexById(self.env.gpa, target_ident.toU32()) orelse {
                 // Type is not exposed by the module
                 return .{ .anno_idx = try self.env.pushMalformed(TypeAnno.Idx, ModuleEnv.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -5437,7 +5437,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
     if (node.tag == .malformed) {
         // Create a malformed type header with an invalid identifier
         return try self.env.addTypeHeaderAndTypeVar(.{
-            .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Invalid identifier
+            .name = base.Ident.Idx.invalid(), // Invalid identifier
             .args = .{ .span = .{ .start = 0, .len = 0 } },
         }, Content{ .flex_var = null }, node_region);
     }
@@ -5449,7 +5449,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
     const name_ident = self.parse_ir.tokens.resolveIdentifier(ast_header.name) orelse {
         // If we can't resolve the identifier, create a malformed header with invalid identifier
         return try self.env.addTypeHeaderAndTypeVar(.{
-            .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Invalid identifier
+            .name = base.Ident.Idx.invalid(), // Invalid identifier
             .args = .{ .span = .{ .start = 0, .len = 0 } },
         }, Content{ .flex_var = null }, region);
     };
@@ -5906,7 +5906,7 @@ fn scopeContains(
 
         var iter = map.iterator();
         while (iter.next()) |entry| {
-            if (name.idx == entry.key_ptr.idx) {
+            if (name == entry.key_ptr.*) {
                 return entry.value_ptr.*;
             }
         }
@@ -5987,7 +5987,7 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
             if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
                 // Check if we already have this type variable
                 for (self.scratch_idents.sliceFromStart(idents_start_idx)) |existing| {
-                    if (existing.idx == ident.idx) return; // Already added
+                    if (existing == ident) return; // Already added
                 }
                 _ = try self.scratch_idents.append(self.env.gpa, ident);
             }
@@ -5996,7 +5996,7 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
             if (self.parse_ir.tokens.resolveIdentifier(underscore_ty_var.tok)) |ident| {
                 // Check if we already have this type variable
                 for (self.scratch_idents.sliceFromStart(idents_start_idx)) |existing| {
-                    if (existing.idx == ident.idx) return; // Already added
+                    if (existing == ident) return; // Already added
                 }
                 try self.scratch_idents.append(self.env.gpa, ident);
             }
@@ -6042,7 +6042,7 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
     switch (ast_anno) {
         .ty_var => |ty_var| {
             if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
-                if (ident.idx == target_ident.idx) {
+                if (ident == target_ident) {
                     return self.parse_ir.tokenizedRegionToRegion(ty_var.region);
                 }
             }
@@ -6050,7 +6050,7 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
         },
         .underscore_type_var => |underscore_ty_var| {
             if (self.parse_ir.tokens.resolveIdentifier(underscore_ty_var.tok)) |ident| {
-                if (ident.idx == target_ident.idx) {
+                if (ident == target_ident) {
                     return self.parse_ir.tokenizedRegionToRegion(underscore_ty_var.region);
                 }
             }
@@ -6143,7 +6143,7 @@ fn scopeIntroduceInternal(
 
                 var iter = map.iterator();
                 while (iter.next()) |entry| {
-                    if (ident_idx.idx == entry.key_ptr.idx) {
+                    if (ident_idx == entry.key_ptr.*) {
                         declaration_scope_idx = scope_idx;
                         break;
                     }
@@ -6193,7 +6193,7 @@ fn scopeIntroduceInternal(
 
     var iter = map.iterator();
     while (iter.next()) |entry| {
-        if (ident_idx.idx == entry.key_ptr.idx) {
+        if (ident_idx == entry.key_ptr.*) {
             // Duplicate in same scope - still introduce but return shadowing warning
             try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
             return Scope.IntroduceResult{ .shadowing_warning = entry.value_ptr.* };
@@ -6207,7 +6207,7 @@ fn scopeIntroduceInternal(
 
 /// Check if an identifier is marked as ignored (underscore prefix)
 fn identIsIgnored(ident_idx: base.Ident.Idx) bool {
-    return ident_idx.attributes.ignored;
+    return ident_idx.attributes().ignored;
 }
 
 /// Handle unused variable checking and diagnostics
@@ -6778,7 +6778,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const target_node_idx = if (self.module_envs) |envs_map| blk: {
         if (envs_map.get(module_text)) |module_env| {
             if (module_env.idents.findByString(field_text)) |target_ident| {
-                break :blk module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse 0;
+                break :blk module_env.exposed_items.getNodeIndexById(self.env.gpa, target_ident.toU32()) orelse 0;
             } else {
                 break :blk 0;
             }
