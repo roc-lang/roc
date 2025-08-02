@@ -198,17 +198,19 @@ const BigIdx = packed struct(u31) {
 };
 
 const SmallIdx = packed struct(u31) {
-    small_attrs: enum(u2) { none, unused, reused, fx },
-    char0: u5,
-    char1: u8,
-    char2: u8,
-    char3: u8,
+    char0: u7,
+    is_unused: bool,
+    char1: u7,
+    is_reused: bool,
+    char2: u7,
+    is_effectful: bool,
+    char3: u7,
 
     fn attributes(self: *const @This()) Attributes {
         return .{
-            .effectful = self.small_attrs == .fx,
-            .ignored = self.small_attrs == .unused,
-            .reassignable = self.small_attrs == .reused,
+            .effectful = self.is_effectful,
+            .ignored = self.is_unused,
+            .reassignable = self.is_reused,
         };
     }
 };
