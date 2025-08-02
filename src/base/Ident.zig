@@ -106,6 +106,17 @@ pub const Idx = enum(u32) {
     fn fromInner(inner: InnerIdx) Idx {
         return @as(Idx, @enumFromInt(@as(u32, @bitCast(inner))));
     }
+
+    /// Get the underlying interner index for big identifiers (for testing purposes)
+    /// Returns null for small/inline identifiers
+    pub fn getInternerIdx(self: Idx) ?u32 {
+        const inner = self.toInner();
+        if (inner.is_small) {
+            return null;
+        } else {
+            return @as(u32, inner.data.big.idx);
+        }
+    }
 };
 
 const InnerIdx = packed struct(u32) {
@@ -172,8 +183,10 @@ const InnerIdx = packed struct(u32) {
         const unused = string[0] == '_'; // If it starts with _, this identifier is unused - e.g. `_foo`.
         const reused = string[string.len - 1] == '_'; // If it ends with _, this is reused via `var` - e.g. `foo_`.
 
-        // Solo underscore should not have been tokenized as an identifier.
-        std.debug.assert(!(string.len == 1 and (unused or reused)));
+        // Solo underscore (or single-character with special attributes) should be treated as big identifier
+        if (string.len == 1 and (unused or reused)) {
+            return null;
+        }
 
         // If it ends with `!` (with or without an underscore after it), it's effectful.
         const fx_check_index = string.len - @as(usize, @intFromBool(reused));
@@ -184,7 +197,10 @@ const InnerIdx = packed struct(u32) {
         const char0 = string[first_non_attr_index];
 
         // Get the total number of attributes (unused, reused, effectful)
-        const attr_count: usize = @intFromBool(unused) + @intFromBool(reused) + @intFromBool(fx);
+        const unused_count = @as(usize, @intFromBool(unused));
+        const reused_count = @as(usize, @intFromBool(reused));
+        const fx_count = @as(usize, @intFromBool(fx));
+        const attr_count: usize = unused_count + reused_count + fx_count;
 
         // Length without underscore/bang prefix/suffix.
         const len = string.len - attr_count;
@@ -208,13 +224,13 @@ const InnerIdx = packed struct(u32) {
         var char3: u8 = 0;
 
         if (len >= 2) {
-            char1 = string[1 + first_non_attr_index];
+            char1 = string[first_non_attr_index + 1];
         }
         if (len >= 3) {
-            char2 = string[2 + first_non_attr_index];
+            char2 = string[first_non_attr_index + 2];
         }
         if (len >= 4) {
-            char3 = string[3 + first_non_attr_index];
+            char3 = string[first_non_attr_index + 3];
         }
 
         // If any char is outside the ASCII range (e.g. it's Unicode), this is a big index.
@@ -226,15 +242,7 @@ const InnerIdx = packed struct(u32) {
         return .{
             .is_small = true,
             .data = .{
-                .small = .{
-                    .char0 = @as(u7, @intCast(char0)),
-                    .is_unused = unused,
-                    .char1 = @as(u7, @intCast(char1)),
-                    .is_reused = reused,
-                    .char2 = @as(u7, @intCast(char2)),
-                    .is_effectful = fx,
-                    .char3 = @as(u7, @intCast(char3)),
-                },
+                .small = SmallIdx.create(@as(u7, @intCast(char0)), @as(u7, @intCast(char1)), @as(u7, @intCast(char2)), @as(u7, @intCast(char3)), unused, reused, fx),
             },
         };
     }
@@ -249,118 +257,218 @@ const BigIdx = packed struct(u31) {
 };
 
 const SmallIdx = packed struct(u31) {
-    char0: u7,
-    is_unused: bool,
-    char1: u7,
-    is_reused: bool,
-    char2: u7,
-    is_effectful: bool,
-    char3: u7,
+    // Store as a simple integer to avoid bit packing issues
+    bits: u31,
+
+    // Bit layout: [char0:7][char1:7][char2:7][char3:7][unused:1][reused:1][effectful:1]
+
+    fn char0(self: *const @This()) u7 {
+        return @as(u7, @intCast(self.bits & 0x7F));
+    }
+
+    fn char1(self: *const @This()) u7 {
+        return @as(u7, @intCast((self.bits >> 7) & 0x7F));
+    }
+
+    fn char2(self: *const @This()) u7 {
+        return @as(u7, @intCast((self.bits >> 14) & 0x7F));
+    }
+
+    fn char3(self: *const @This()) u7 {
+        return @as(u7, @intCast((self.bits >> 21) & 0x7F));
+    }
+
+    fn is_unused(self: *const @This()) bool {
+        return (self.bits >> 28) & 1 != 0;
+    }
+
+    fn is_reused(self: *const @This()) bool {
+        return (self.bits >> 29) & 1 != 0;
+    }
+
+    fn is_effectful(self: *const @This()) bool {
+        return (self.bits >> 30) & 1 != 0;
+    }
+
+    fn create(c0: u7, c1: u7, c2: u7, c3: u7, unused: bool, reused: bool, effectful: bool) @This() {
+        var bits: u31 = 0;
+        bits |= @as(u31, c0);
+        bits |= @as(u31, c1) << 7;
+        bits |= @as(u31, c2) << 14;
+        bits |= @as(u31, c3) << 21;
+        bits |= @as(u31, @intFromBool(unused)) << 28;
+        bits |= @as(u31, @intFromBool(reused)) << 29;
+        bits |= @as(u31, @intFromBool(effectful)) << 30;
+        return .{ .bits = bits };
+    }
 
     fn attributes(self: *const @This()) Attributes {
         return .{
-            .effectful = self.is_effectful,
-            .ignored = self.is_unused,
-            .reassignable = self.is_reused,
+            .effectful = self.is_effectful(),
+            .ignored = self.is_unused(),
+            .reassignable = self.is_reused(),
         };
     }
 
     /// Reconstruct the text from the packed character fields by value.
-    /// Uses a thread-local buffer that's valid until the next call to this function.
+    /// Uses a thread-local rotating buffer to handle multiple concurrent accesses.
     fn getTextFromValue(small_idx: @This()) []u8 {
-        // Thread-local buffer to hold the reconstructed text
+        // Thread-local rotating buffers to handle multiple concurrent identifiers
         // Max length: 1 (underscore prefix) + 4 (chars) + 1 (exclamation) + 1 (underscore suffix) = 7
         const S = struct {
-            var buffer: [7]u8 = undefined;
+            var buffers: [16][7]u8 = [_][7]u8{[_]u8{0} ** 7} ** 16;
+            var current_index: usize = 0;
         };
+
+        const buffer = &S.buffers[S.current_index];
+        S.current_index = (S.current_index + 1) % S.buffers.len;
 
         var len: usize = 0;
 
         // Add underscore prefix if unused
-        if (small_idx.is_unused) {
-            S.buffer[len] = '_';
+        if (small_idx.is_unused()) {
+            buffer[len] = '_';
             len += 1;
         }
 
         // Add main characters (char0 is always present since len > 0)
-        S.buffer[len] = @as(u8, @intCast(small_idx.char0));
+        buffer[len] = @as(u8, @intCast(small_idx.char0()));
         len += 1;
 
-        if (small_idx.char1 != 0) {
-            S.buffer[len] = @as(u8, @intCast(small_idx.char1));
+        if (small_idx.char1() != 0) {
+            buffer[len] = @as(u8, @intCast(small_idx.char1()));
             len += 1;
         }
-        if (small_idx.char2 != 0) {
-            S.buffer[len] = @as(u8, @intCast(small_idx.char2));
+        if (small_idx.char2() != 0) {
+            buffer[len] = @as(u8, @intCast(small_idx.char2()));
             len += 1;
         }
-        if (small_idx.char3 != 0) {
-            S.buffer[len] = @as(u8, @intCast(small_idx.char3));
+        if (small_idx.char3() != 0) {
+            buffer[len] = @as(u8, @intCast(small_idx.char3()));
             len += 1;
         }
 
         // Add exclamation if effectful
-        if (small_idx.is_effectful) {
-            S.buffer[len] = '!';
+        if (small_idx.is_effectful()) {
+            buffer[len] = '!';
             len += 1;
         }
 
         // Add underscore suffix if reused
-        if (small_idx.is_reused) {
-            S.buffer[len] = '_';
+        if (small_idx.is_reused()) {
+            buffer[len] = '_';
             len += 1;
         }
 
-        return S.buffer[0..len];
+        return buffer[0..len];
     }
 
     /// Reconstruct the text from the packed character fields.
-    /// Uses a thread-local buffer that's valid until the next call to this function.
+    /// Uses a thread-local rotating buffer to handle multiple concurrent accesses.
     fn getText(self: *const @This()) []u8 {
-        // Thread-local buffer to hold the reconstructed text
+        // Thread-local rotating buffers to handle multiple concurrent identifiers
         // Max length: 1 (underscore prefix) + 4 (chars) + 1 (exclamation) + 1 (underscore suffix) = 7
         const S = struct {
-            var buffer: [7]u8 = undefined;
+            var buffers: [16][7]u8 = [_][7]u8{[_]u8{0} ** 7} ** 16;
+            var current_index: usize = 0;
         };
+
+        const buffer = &S.buffers[S.current_index];
+        S.current_index = (S.current_index + 1) % S.buffers.len;
 
         var len: usize = 0;
 
         // Add underscore prefix if unused
-        if (self.is_unused) {
-            S.buffer[len] = '_';
+        if (self.is_unused()) {
+            buffer[len] = '_';
             len += 1;
         }
 
         // Add the core characters
-        S.buffer[len] = @as(u8, @intCast(self.char0));
+        buffer[len] = @as(u8, @intCast(self.char0()));
         len += 1;
 
-        if (self.char1 != 0) {
-            S.buffer[len] = @as(u8, @intCast(self.char1));
+        if (self.char1() != 0) {
+            buffer[len] = @as(u8, @intCast(self.char1()));
             len += 1;
         }
-        if (self.char2 != 0) {
-            S.buffer[len] = @as(u8, @intCast(self.char2));
+        if (self.char2() != 0) {
+            buffer[len] = @as(u8, @intCast(self.char2()));
             len += 1;
         }
-        if (self.char3 != 0) {
-            S.buffer[len] = @as(u8, @intCast(self.char3));
+        if (self.char3() != 0) {
+            buffer[len] = @as(u8, @intCast(self.char3()));
             len += 1;
         }
 
         // Add exclamation suffix if effectful
-        if (self.is_effectful) {
-            S.buffer[len] = '!';
+        if (self.is_effectful()) {
+            buffer[len] = '!';
             len += 1;
         }
 
         // Add underscore suffix if reused
-        if (self.is_reused) {
-            S.buffer[len] = '_';
+        if (self.is_reused()) {
+            buffer[len] = '_';
             len += 1;
         }
 
-        return S.buffer[0..len];
+        return buffer[0..len];
+    }
+
+    /// Reconstruct the text from the packed character fields, allocating a new string.
+    /// This is safer than getText when multiple identifiers are being processed concurrently.
+    fn getTextFromValueAlloc(small_idx: @This(), allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        // Calculate the length first
+        var len: usize = 0;
+        if (small_idx.is_unused()) len += 1; // underscore prefix
+        len += 1; // char0 is always present
+        if (small_idx.char1() != 0) len += 1;
+        if (small_idx.char2() != 0) len += 1;
+        if (small_idx.char3() != 0) len += 1;
+        if (small_idx.is_effectful()) len += 1; // exclamation
+        if (small_idx.is_reused()) len += 1; // underscore suffix
+
+        // Allocate the buffer
+        const buffer = try allocator.alloc(u8, len);
+        var idx: usize = 0;
+
+        // Add underscore prefix if unused
+        if (small_idx.is_unused()) {
+            buffer[idx] = '_';
+            idx += 1;
+        }
+
+        // Add the core characters
+        buffer[idx] = @as(u8, @intCast(small_idx.char0()));
+        idx += 1;
+
+        if (small_idx.char1() != 0) {
+            buffer[idx] = @as(u8, @intCast(small_idx.char1()));
+            idx += 1;
+        }
+        if (small_idx.char2() != 0) {
+            buffer[idx] = @as(u8, @intCast(small_idx.char2()));
+            idx += 1;
+        }
+        if (small_idx.char3() != 0) {
+            buffer[idx] = @as(u8, @intCast(small_idx.char3()));
+            idx += 1;
+        }
+
+        // Add exclamation suffix if effectful
+        if (small_idx.is_effectful()) {
+            buffer[idx] = '!';
+            idx += 1;
+        }
+
+        // Add underscore suffix if reused
+        if (small_idx.is_reused()) {
+            buffer[idx] = '_';
+            idx += 1;
+        }
+
+        return buffer;
     }
 
     fn asString(self: *const @This()) []u8 {
@@ -527,6 +635,23 @@ pub const Store = struct {
             .big => |big| {
                 // For big identifiers, look up in the interner
                 return self.interner.getText(@enumFromInt(@as(u32, big.idx)));
+            },
+        }
+    }
+
+    /// Get the text for an identifier, allocating a new string for small identifiers.
+    /// This is safer than getText when multiple identifiers are being processed concurrently.
+    pub fn getTextAlloc(self: *const Store, idx: Idx, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        const inner = idx.toInner();
+        switch (inner.toVariant()) {
+            .small => |small| {
+                // For small identifiers, allocate and reconstruct the text from packed characters
+                return try SmallIdx.getTextFromValueAlloc(small, allocator);
+            },
+            .big => |big| {
+                // For big identifiers, clone the text from the interner
+                const text = self.interner.getText(@enumFromInt(@as(u32, big.idx)));
+                return try allocator.dupe(u8, text);
             },
         }
     }

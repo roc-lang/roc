@@ -31,8 +31,8 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
+UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
 TYPE MISMATCH - crash_and_ellipsis_test.md:8:20:8:23
 TYPE MISMATCH - crash_and_ellipsis_test.md:14:26:14:29

@@ -216,13 +216,13 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
 UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_027.md:145:4:145:13
-UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
-UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
-UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
-UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
-UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
-UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
 UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
+UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
+UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
+UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
+UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
+UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
+UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TYPE MISMATCH - fuzz_crash_027.md:47:11:47:14
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
@@ -745,54 +745,6 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNUSED VARIABLE**
-Variable `record` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:131:2:131:8:**
-```roc
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-```
- ^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `m_tuple` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_m_tuple` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:133:2:133:9:**
-```roc
-	m_tuple = (
-```
- ^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `tag_with` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_tag_with` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:119:2:119:10:**
-```roc
-	tag_with = Ok(number)
-```
- ^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `ited` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_ited` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:120:2:120:6:**
-```roc
-	ited = "Hello, ${world}"
-```
- ^^^^
-
-
-**UNUSED VARIABLE**
 Variable `list` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
@@ -802,6 +754,18 @@ The unused variable is declared here:
 	list = [
 ```
  ^^^^
+
+
+**UNUSED VARIABLE**
+Variable `record` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:131:2:131:8:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+ ^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -826,6 +790,42 @@ The unused variable is declared here:
 	stale = some_fn(arg1)?.statod()?.ned()?.recd?
 ```
  ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `ited` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_ited` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:120:2:120:6:**
+```roc
+	ited = "Hello, ${world}"
+```
+ ^^^^
+
+
+**UNUSED VARIABLE**
+Variable `m_tuple` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_m_tuple` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:133:2:133:9:**
+```roc
+	m_tuple = (
+```
+ ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `tag_with` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_tag_with` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:119:2:119:10:**
+```roc
+	tag_with = Ok(number)
+```
+ ^^^^^^^^
 
 
 **UNDECLARED TYPE**

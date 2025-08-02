@@ -26,18 +26,18 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - rigid_var_instantiation.md:10:5:10:8
-UNUSED VARIABLE - rigid_var_instantiation.md:13:5:13:8
 UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
+UNUSED VARIABLE - rigid_var_instantiation.md:13:5:13:8
+UNUSED VARIABLE - rigid_var_instantiation.md:10:5:10:8
 # PROBLEMS
 **UNUSED VARIABLE**
-Variable `num` is not used anywhere in your code.
+Variable `lst` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_num` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_lst` to suppress this warning.
 The unused variable is declared here:
-**rigid_var_instantiation.md:10:5:10:8:**
+**rigid_var_instantiation.md:16:5:16:8:**
 ```roc
-    num = identity(42)
+    lst = identity([1, 2, 3])
 ```
     ^^^
 
@@ -55,13 +55,13 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `lst` is not used anywhere in your code.
+Variable `num` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_lst` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_num` to suppress this warning.
 The unused variable is declared here:
-**rigid_var_instantiation.md:16:5:16:8:**
+**rigid_var_instantiation.md:10:5:10:8:**
 ```roc
-    lst = identity([1, 2, 3])
+    num = identity(42)
 ```
     ^^^
 

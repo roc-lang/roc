@@ -125,11 +125,11 @@ UNUSED VARIABLE - everything.md:90:5:90:6
 UNUSED VARIABLE - everything.md:95:4:95:5
 UNUSED VARIABLE - everything.md:100:5:100:6
 UNUSED VARIABLE - everything.md:106:5:106:6
-UNUSED VARIABLE - everything.md:81:2:81:4
 UNUSED VARIABLE - everything.md:61:2:61:4
-UNUSED VARIABLE - everything.md:69:2:69:4
-UNUSED VARIABLE - everything.md:77:2:77:4
 UNUSED VARIABLE - everything.md:73:2:73:4
+UNUSED VARIABLE - everything.md:69:2:69:4
+UNUSED VARIABLE - everything.md:81:2:81:4
+UNUSED VARIABLE - everything.md:77:2:77:4
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
@@ -256,13 +256,13 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `h4` is not used anywhere in your code.
+Variable `h3` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_h4` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_h3` to suppress this warning.
 The unused variable is declared here:
-**everything.md:77:2:77:4:**
+**everything.md:73:2:73:4:**
 ```roc
-	h4 = [
+	h3 = A(
 ```
  ^^
 
@@ -280,18 +280,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `h3` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h3` to suppress this warning.
-The unused variable is declared here:
-**everything.md:73:2:73:4:**
-```roc
-	h3 = A(
-```
- ^^
-
-
-**UNUSED VARIABLE**
 Variable `h5` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
@@ -299,6 +287,18 @@ The unused variable is declared here:
 **everything.md:81:2:81:4:**
 ```roc
 	h5 = (
+```
+ ^^
+
+
+**UNUSED VARIABLE**
+Variable `h4` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h4` to suppress this warning.
+The unused variable is declared here:
+**everything.md:77:2:77:4:**
+```roc
+	h4 = [
 ```
  ^^
 
@@ -789,7 +789,7 @@ h = |x, y| {
 				(ty-var @14.3-14.4 (name "a"))))
 		(ty-var @14.8-14.9 (name "a")))
 	(s-alias-decl @24.1-33.11
-		(ty-header @24.1-24.5 (name "B")
+		(ty-header @24.1-24.5 (name "b")
 			(ty-args
 				(ty-var @24.3-24.4 (name "b"))))
 		(ty-var @24.8-24.9 (name "b")))
@@ -843,7 +843,7 @@ h = |x, y| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @60.1-60.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret")))
+		(patt @60.1-60.2 (type "[Z1((field, field2)), Z2(a, b), Z3(c), Z4(List(elem))]others, [Z1((field3, field4)), Z2(d, e), Z3(f), Z4(List(elem2))]others2 -> _ret")))
 	(type_decls
 		(alias @14.1-23.11 (type "A(a)")
 			(ty-header @14.1-14.5 (name "A")
@@ -868,5 +868,5 @@ h = |x, y| {
 		(alias @53.1-56.2 (type "F")
 			(ty-header @53.1-53.2 (name "F"))))
 	(expressions
-		(expr @60.5-110.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret"))))
+		(expr @60.5-110.2 (type "[Z1((field, field2)), Z2(a, b), Z3(c), Z4(List(elem))]others, [Z1((field3, field4)), Z2(d, e), Z3(f), Z4(List(elem2))]others2 -> _ret"))))
 ~~~

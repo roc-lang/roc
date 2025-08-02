@@ -46,11 +46,11 @@ UNUSED VARIABLE - everything.md:26:10:26:11
 UNUSED VARIABLE - everything.md:27:9:27:10
 UNUSED VARIABLE - everything.md:28:11:28:12
 UNUSED VARIABLE - everything.md:29:10:29:11
-UNUSED VARIABLE - everything.md:23:2:23:4
 UNUSED VARIABLE - everything.md:19:2:19:4
-UNUSED VARIABLE - everything.md:20:2:20:4
-UNUSED VARIABLE - everything.md:22:2:22:4
 UNUSED VARIABLE - everything.md:21:2:21:4
+UNUSED VARIABLE - everything.md:20:2:20:4
+UNUSED VARIABLE - everything.md:23:2:23:4
+UNUSED VARIABLE - everything.md:22:2:22:4
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
@@ -157,13 +157,13 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `h4` is not used anywhere in your code.
+Variable `h3` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_h4` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_h3` to suppress this warning.
 The unused variable is declared here:
-**everything.md:22:2:22:4:**
+**everything.md:21:2:21:4:**
 ```roc
-	h4 = [x, y]
+	h3 = A(x, y)
 ```
  ^^
 
@@ -181,18 +181,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `h3` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h3` to suppress this warning.
-The unused variable is declared here:
-**everything.md:21:2:21:4:**
-```roc
-	h3 = A(x, y)
-```
- ^^
-
-
-**UNUSED VARIABLE**
 Variable `h5` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
@@ -200,6 +188,18 @@ The unused variable is declared here:
 **everything.md:23:2:23:4:**
 ```roc
 	h5 = (x, y)
+```
+ ^^
+
+
+**UNUSED VARIABLE**
+Variable `h4` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h4` to suppress this warning.
+The unused variable is declared here:
+**everything.md:22:2:22:4:**
+```roc
+	h4 = [x, y]
 ```
  ^^
 
@@ -556,7 +556,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret")))
+		(patt @18.1-18.2 (type "[Z1((field, field2)), Z2(a, b), Z3(c), Z4(List(elem))]others, [Z1((field3, field4)), Z2(d, e), Z3(f), Z4(List(elem2))]others2 -> _ret")))
 	(type_decls
 		(alias @8.1-8.74 (type "A(a)")
 			(ty-header @8.1-8.5 (name "A")
@@ -581,5 +581,5 @@ NO CHANGE
 		(alias @14.1-14.11 (type "F")
 			(ty-header @14.1-14.2 (name "F"))))
 	(expressions
-		(expr @18.5-31.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret"))))
+		(expr @18.5-31.2 (type "[h1((field, field2)), Z2(a, b), Z3(c), Z4(List(elem))]others, [Z1((field3, field4)), Z2(d, e), Z3(f), Z4(List(elem2))]others2 -> _ret"))))
 ~~~

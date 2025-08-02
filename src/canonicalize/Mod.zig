@@ -2826,10 +2826,8 @@ pub fn canonicalizeExpr(
             // Keep track of the start position for statements
             const stmt_start = self.env.store.scratch_statements.top();
 
-            // TODO Use a temporary scratch space for the block's free variables
-            //
-            // I apologize for leaving these AutoHashMapUnmanaged's here ... but it's a workaround
-            // to land a working closure capture implementation, and we can optimize this later. Forgive me.
+            // TODO: Optimize this to use a scratch space allocator for better performance
+            // Current implementation uses individual hash maps which could be pooled
             var bound_vars = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
             defer bound_vars.deinit(self.env.gpa);
 

@@ -263,14 +263,20 @@ pub const Statement = union(enum) {
                 try tree.pushStaticAtom("s-import");
                 const region = ir.store.getStatementRegion(stmt_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("module", ir.idents.getText(s.module_name_tok));
+                const module_name = try ir.getIdentTextAlloc(s.module_name_tok, tree.allocator);
+                defer tree.allocator.free(module_name);
+                try tree.pushStringPair("module", module_name);
 
                 if (s.qualifier_tok) |qualifier| {
-                    try tree.pushStringPair("qualifier", ir.getIdentText(qualifier));
+                    const qualifier_text = try ir.getIdentTextAlloc(qualifier, tree.allocator);
+                    defer tree.allocator.free(qualifier_text);
+                    try tree.pushStringPair("qualifier", qualifier_text);
                 }
 
                 if (s.alias_tok) |alias| {
-                    try tree.pushStringPair("alias", ir.getIdentText(alias));
+                    const alias_text = try ir.getIdentTextAlloc(alias, tree.allocator);
+                    defer tree.allocator.free(alias_text);
+                    try tree.pushStringPair("alias", alias_text);
                 }
 
                 const attrs = tree.beginNode();
@@ -315,7 +321,9 @@ pub const Statement = union(enum) {
                 try tree.pushStaticAtom("s-type-anno");
                 const region = ir.store.getStatementRegion(stmt_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("name", ir.getIdentText(s.name));
+                const name_text = try ir.getIdentTextAlloc(s.name, tree.allocator);
+                defer tree.allocator.free(name_text);
+                try tree.pushStringPair("name", name_text);
                 const attrs = tree.beginNode();
 
                 try ir.store.getTypeAnno(s.anno).pushToSExprTree(ir, tree, s.anno);

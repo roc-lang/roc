@@ -89,18 +89,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `result5` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_result5` to suppress this warning.
-The unused variable is declared here:
-**type_var_name_avoids_collision.md:61:5:61:12:**
-```roc
-    result5 = finalIdentity(3.14)
-```
-    ^^^^^^^
-
-
-**UNUSED VARIABLE**
 Variable `result4` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_result4` to suppress this warning.
@@ -108,6 +96,18 @@ The unused variable is declared here:
 **type_var_name_avoids_collision.md:60:5:60:12:**
 ```roc
     result4 = yetAnotherIdentity(True)
+```
+    ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `result5` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result5` to suppress this warning.
+The unused variable is declared here:
+**type_var_name_avoids_collision.md:61:5:61:12:**
+```roc
+    result5 = finalIdentity(3.14)
 ```
     ^^^^^^^
 
@@ -587,13 +587,13 @@ main! = |_| {
 (inferred-types
 	(defs
 		(patt @4.1-4.2 (type "Num(_size)"))
-		(patt @7.1-7.9 (type "_arg2 -> _ret"))
+		(patt @7.1-7.9 (type "_arg -> _ret"))
 		(patt @10.1-10.2 (type "Str"))
 		(patt @11.1-11.2 (type "Frac(_size)"))
 		(patt @12.1-12.2 (type "Bool"))
 		(patt @13.1-13.2 (type "Bool"))
-		(patt @16.1-16.16 (type "_arg2 -> _ret"))
-		(patt @20.1-20.8 (type "_arg2, _arg3 -> (_field, _field2)"))
+		(patt @16.1-16.16 (type "_arg -> _ret"))
+		(patt @20.1-20.8 (type "_arg, _arg2 -> (_field, _field2)"))
 		(patt @23.1-23.2 (type "Num(_size)"))
 		(patt @24.1-24.2 (type "Num(_size)"))
 		(patt @25.1-25.2 (type "Num(_size)"))
@@ -615,20 +615,20 @@ main! = |_| {
 		(patt @41.1-41.2 (type "Num(_size)"))
 		(patt @42.1-42.2 (type "Num(_size)"))
 		(patt @43.1-43.2 (type "Num(_size)"))
-		(patt @46.1-46.19 (type "_arg2 -> _ret"))
+		(patt @46.1-46.19 (type "_arg -> _ret"))
 		(patt @49.1-49.3 (type "Num(_size)"))
 		(patt @50.1-50.3 (type "Num(_size)"))
-		(patt @53.1-53.14 (type "_arg2 -> _ret"))
-		(patt @55.1-55.6 (type "_arg2 -> Num(_size)")))
+		(patt @53.1-53.14 (type "_arg -> _ret"))
+		(patt @55.1-55.6 (type "_arg -> Num(_size)")))
 	(expressions
 		(expr @4.5-4.7 (type "Num(_size)"))
-		(expr @7.12-7.17 (type "_arg2 -> _ret"))
+		(expr @7.12-7.17 (type "_arg -> _ret"))
 		(expr @10.5-10.12 (type "Str"))
 		(expr @11.5-11.9 (type "Frac(_size)"))
 		(expr @12.5-12.9 (type "Bool"))
 		(expr @13.5-13.10 (type "Bool"))
-		(expr @16.19-16.24 (type "_arg2 -> _ret"))
-		(expr @20.11-20.42 (type "_arg2, _arg3 -> (_field, _field2)"))
+		(expr @16.19-16.24 (type "_arg -> _ret"))
+		(expr @20.11-20.42 (type "_arg, _arg2 -> (_field, _field2)"))
 		(expr @23.5-23.6 (type "Num(_size)"))
 		(expr @24.5-24.6 (type "Num(_size)"))
 		(expr @25.5-25.6 (type "Num(_size)"))
@@ -650,9 +650,9 @@ main! = |_| {
 		(expr @41.5-41.7 (type "Num(_size)"))
 		(expr @42.5-42.7 (type "Num(_size)"))
 		(expr @43.5-43.7 (type "Num(_size)"))
-		(expr @46.22-46.31 (type "_arg2 -> _ret"))
+		(expr @46.22-46.31 (type "_arg -> _ret"))
 		(expr @49.6-49.9 (type "Num(_size)"))
 		(expr @50.6-50.9 (type "Num(_size)"))
-		(expr @53.17-53.30 (type "_arg2 -> _ret"))
-		(expr @55.9-65.2 (type "_arg2 -> Num(_size)"))))
+		(expr @53.17-53.30 (type "_arg -> _ret"))
+		(expr @55.9-65.2 (type "_arg -> Num(_size)"))))
 ~~~

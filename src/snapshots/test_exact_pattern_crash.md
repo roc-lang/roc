@@ -328,7 +328,7 @@ main = {
 	(defs
 		(patt @8.1-8.10 (type "(a, b) -> (b, a)"))
 		(patt @12.1-12.9 (type "Error"))
-		(patt @17.1-17.5 (type "_e")))
+		(patt @17.1-17.5 (type "_a")))
 	(type_decls
 		(alias @4.1-4.20 (type "Pair(a, b)")
 			(ty-header @4.1-4.11 (name "Pair")
@@ -338,5 +338,5 @@ main = {
 	(expressions
 		(expr @8.13-8.28 (type "(a, b) -> (b, a)"))
 		(expr @12.12-12.39 (type "Error"))
-		(expr @17.8-26.2 (type "_e"))))
+		(expr @17.8-26.2 (type "_a"))))
 ~~~

@@ -95,7 +95,9 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStaticAtom("ty-apply");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("symbol", ir.getIdentText(a.symbol));
+                const symbol_text = try ir.getIdentTextAlloc(a.symbol, tree.allocator);
+                defer tree.allocator.free(symbol_text);
+                try tree.pushStringPair("symbol", symbol_text);
                 const attrs = tree.beginNode();
 
                 const args_slice = ir.store.sliceTypeAnnos(a.args);
@@ -129,7 +131,9 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStaticAtom("ty-var");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("name", ir.getIdentText(tv.name));
+                const name_text = try ir.getIdentTextAlloc(tv.name, tree.allocator);
+                defer tree.allocator.free(name_text);
+                try tree.pushStringPair("name", name_text);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -146,7 +150,9 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStaticAtom("ty");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("name", ir.getIdentText(t.symbol));
+                const name_text = try ir.getIdentTextAlloc(t.symbol, tree.allocator);
+                defer tree.allocator.free(name_text);
+                try tree.pushStringPair("name", name_text);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -195,7 +201,9 @@ pub const TypeAnno = union(enum) {
 
                     const field_begin = tree.beginNode();
                     try tree.pushStaticAtom("field");
-                    try tree.pushStringPair("field", ir.getIdentText(field.name));
+                    const field_text = try ir.getIdentTextAlloc(field.name, tree.allocator);
+                    defer tree.allocator.free(field_text);
+                    try tree.pushStringPair("field", field_text);
                     const field_attrs = tree.beginNode();
 
                     try ir.store.getTypeAnno(field.ty).pushToSExprTree(ir, tree, field.ty);

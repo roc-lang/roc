@@ -1074,6 +1074,9 @@ fn processSnapshotContent(
     // Assert that everything is in-sync
     can_ir.debugAssertArraysInSync();
 
+    // Ensure exposed items are sorted before any serialization
+    can_ir.exposed_items.ensureSorted(allocator);
+
     // Types
     const empty_modules: []const *ModuleEnv = &.{};
     var solver = try Check.init(

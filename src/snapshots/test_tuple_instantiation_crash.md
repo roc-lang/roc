@@ -122,8 +122,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @5.1-5.5 (type "Error"))
-		(patt @9.1-9.5 (type "_c")))
+		(patt @9.1-9.5 (type "_a")))
 	(expressions
 		(expr @5.8-5.23 (type "Error"))
-		(expr @9.8-9.18 (type "_c"))))
+		(expr @9.8-9.18 (type "_a"))))
 ~~~

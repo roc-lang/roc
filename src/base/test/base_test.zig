@@ -145,6 +145,77 @@ test "from_bytes disallows common whitespace" {
     try std.testing.expect(result4 == Ident.Error.ContainsControlCharacters);
 }
 
+test "comprehensive SmallIdx roundtrip" {
+    // Create a store for testing
+    var store = try Ident.Store.initCapacity(std.testing.allocator, 16);
+    defer store.deinit(std.testing.allocator);
+
+    // Test all combinations of strings with underscores and exclamation marks
+    const base_strings = [_][]const u8{ "a", "ab", "abc", "abcd" };
+
+    // For each base string, test all combinations:
+    // - no prefix/suffix
+    // - _ prefix only
+    // - _ suffix only
+    // - _ prefix and suffix
+    // - ! suffix only
+    // - _ prefix and ! suffix
+    // - _ suffix and ! suffix
+    // - _ prefix, _ suffix, and ! suffix
+
+    for (base_strings) |base_str| {
+        // Test all 8 combinations
+        const test_cases = [_][]const u8{
+            base_str, // no prefix/suffix
+            try std.fmt.allocPrint(std.testing.allocator, "_{s}", .{base_str}), // _ prefix only
+            try std.fmt.allocPrint(std.testing.allocator, "{s}_", .{base_str}), // _ suffix only
+            try std.fmt.allocPrint(std.testing.allocator, "_{s}_", .{base_str}), // _ prefix and suffix
+            try std.fmt.allocPrint(std.testing.allocator, "{s}!", .{base_str}), // ! suffix only
+            try std.fmt.allocPrint(std.testing.allocator, "_{s}!", .{base_str}), // _ prefix and ! suffix
+            try std.fmt.allocPrint(std.testing.allocator, "{s}!_", .{base_str}), // ! and _ suffix (effectful and reused)
+            try std.fmt.allocPrint(std.testing.allocator, "_{s}!_", .{base_str}), // _ prefix, ! and _ suffix
+        };
+
+        for (test_cases) |test_str| {
+            defer if (test_str.ptr != base_str.ptr) std.testing.allocator.free(test_str);
+
+            // If it's supposed to be inlinable (length <= 4 after removing attributes)
+            const raw_len = blk: {
+                var len = test_str.len;
+                if (std.mem.startsWith(u8, test_str, "_")) len -= 1;
+                // Check suffix attributes (order matters: !_ not _!)
+                if (std.mem.endsWith(u8, test_str, "!_")) {
+                    len -= 2; // both ! and _
+                } else if (std.mem.endsWith(u8, test_str, "_")) {
+                    len -= 1; // just _
+                } else if (std.mem.endsWith(u8, test_str, "!")) {
+                    len -= 1; // just !
+                }
+                break :blk len;
+            };
+
+            // Try to create a small inline identifier
+            const maybe_idx = Ident.Idx.try_inline(test_str);
+
+            if (raw_len <= 4) {
+                // Should be inlinable
+                try std.testing.expect(maybe_idx != null);
+                const idx = maybe_idx.?;
+
+                // Get string back through the store
+                const result = try store.getTextAlloc(idx, std.testing.allocator);
+                defer std.testing.allocator.free(result);
+
+                // Verify roundtrip
+                try std.testing.expectEqualStrings(test_str, result);
+            } else {
+                // Should not be inlinable
+                try std.testing.expect(maybe_idx == null);
+            }
+        }
+    }
+}
+
 test "from_bytes creates valid identifier" {
     const result = try Ident.from_bytes("valid_name!");
     try std.testing.expectEqualStrings("valid_name!", result.raw_text);
@@ -284,14 +355,14 @@ test "Ident.Store basic CompactWriter roundtrip" {
 
     // Check the bytes length for validation
     _ = deserialized.interner.bytes.len();
-    // TEMPORARILY DISABLED: idx field no longer accessible directly
-    // const idx1_value = @intFromEnum(@as(SmallStringInterner.Idx, @enumFromInt(@as(u32, idx1.idx))));
 
-    // TEMPORARILY DISABLED: idx field no longer accessible directly
-    // Verify the index is valid
-    // if (bytes_len <= idx1_value) {
-    //     return error.InvalidIndex;
-    // }
+    // Verify the identifier indices are valid (for big identifiers only)
+    if (idx1.getInternerIdx()) |idx1_value| {
+        const bytes_len = deserialized.interner.bytes.len();
+        if (bytes_len <= idx1_value) {
+            return error.InvalidIndex;
+        }
+    }
 
     // Verify the identifiers are accessible
     try std.testing.expectEqualStrings("hello", deserialized.getText(idx1));
@@ -456,19 +527,18 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     defer original.deinit(gpa);
 
     // Test various identifier types and edge cases
-    // Note: SmallStringInterner starts with a 0 byte at index 0, so strings start at index 1
-    const test_idents = [_]struct { text: []const u8, expected_idx: u32 }{
-        .{ .text = "hello", .expected_idx = 1 },
-        .{ .text = "world!", .expected_idx = 7 },
-        .{ .text = "_ignored", .expected_idx = 14 },
-        .{ .text = "a", .expected_idx = 23 }, // single character
-        .{ .text = "very_long_identifier_name_that_might_cause_issues", .expected_idx = 25 },
-        .{ .text = "effectful!", .expected_idx = 75 },
-        .{ .text = "_", .expected_idx = 86 }, // Just underscore
-        .{ .text = "CamelCase", .expected_idx = 88 },
-        .{ .text = "snake_case", .expected_idx = 98 },
-        .{ .text = "SCREAMING_CASE", .expected_idx = 109 },
-        .{ .text = "hello", .expected_idx = 1 }, // duplicate, should reuse
+    const test_idents = [_]struct { text: []const u8 }{
+        .{ .text = "hello" },
+        .{ .text = "world!" },
+        .{ .text = "_ignored" },
+        .{ .text = "a" }, // single character (may be inlined)
+        .{ .text = "very_long_identifier_name_that_might_cause_issues" },
+        .{ .text = "effectful!" },
+        .{ .text = "_" }, // Just underscore
+        .{ .text = "CamelCase" },
+        .{ .text = "snake_case" },
+        .{ .text = "SCREAMING_CASE" },
+        .{ .text = "hello" }, // duplicate, should reuse
     };
 
     var indices = std.ArrayList(Ident.Idx).init(gpa);
@@ -478,9 +548,9 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
         const ident = Ident.for_text(test_ident.text);
         const idx = try original.insert(gpa, ident);
         try indices.append(idx);
-        // Verify the index matches expectation
-        // TEMPORARILY DISABLED: idx field no longer accessible directly
-        // try std.testing.expectEqual(test_ident.expected_idx, idx.idx);
+
+        // Verify the text can be retrieved
+        try std.testing.expectEqualStrings(test_ident.text, original.getText(idx));
     }
 
     // Add some unique names
@@ -544,8 +614,8 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     try std.testing.expectEqualStrings("1", deserialized.getText(unique2));
 
     // Verify the interner's entry count is preserved
-    // We inserted 10 unique strings + 2 generated unique names = 12 total
-    try std.testing.expectEqual(@as(u32, 12), deserialized.interner.entry_count);
+    // We inserted 10 unique strings (9 stored in interner, 1 inlined) + 2 generated unique names = 11 total stored
+    try std.testing.expectEqual(@as(u32, 11), deserialized.interner.entry_count);
 
     // Verify next_unique_name
     try std.testing.expectEqual(@as(u32, 2), deserialized.next_unique_name);

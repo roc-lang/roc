@@ -263,6 +263,9 @@ fn processSourceInternal(
     try czer
         .canonicalizeFile();
 
+    // Ensure exposed items are sorted before any serialization
+    cir.exposed_items.ensureSorted(gpa);
+
     collectTiming(config, &timer, &timing_info, "canonicalize_ns");
 
     // Assert that everything is in-sync
