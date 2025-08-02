@@ -14,8 +14,6 @@ const serialization = @import("serialization");
 const SExprTree = base.SExprTree;
 const Filesystem = @import("../fs/Filesystem.zig");
 
-const SERIALIZATION_ALIGNMENT = 16;
-
 const Allocator = std.mem.Allocator;
 const TypeStore = types.Store;
 const ModuleEnv = compile.ModuleEnv;
@@ -42,9 +40,6 @@ pub const Header = struct {
     /// Diagnostic counts for accurate reporting when loading from cache
     error_count: u32,
     warning_count: u32,
-
-    /// Padding to ensure alignment
-    _padding: [12]u8 = [_]u8{0} ** 12,
 
     /// Error specific to initializing a Header from bytes
     pub const InitError = error{
@@ -79,11 +74,9 @@ pub const Header = struct {
 /// Memory-mapped cache that can be read directly from disk
 pub const CacheModule = struct {
     header: *const Header,
-    data: []align(SERIALIZATION_ALIGNMENT) const u8,
+    data: []align(@alignOf(ModuleEnv)) const u8,
 
     /// Create a cache by serializing ModuleEnv and CIR data
-    /// @param allocator - Allocator for the returned cache data
-    /// @param arena_allocator - Arena allocator for temporary serialization data
     pub fn create(
         allocator: Allocator,
         arena_allocator: Allocator,
@@ -91,7 +84,7 @@ pub const CacheModule = struct {
         _: *const ModuleEnv, // ModuleEnv contains the canonical IR
         error_count: u32,
         warning_count: u32,
-    ) ![]align(SERIALIZATION_ALIGNMENT) u8 {
+    ) ![]align(@alignOf(ModuleEnv)) u8 {
         const CompactWriter = serialization.CompactWriter;
 
         // Create CompactWriter
@@ -111,9 +104,9 @@ pub const CacheModule = struct {
         const total_data_size = writer.total_bytes;
 
         // Allocate cache_data for header + data
-        const header_size = std.mem.alignForward(usize, @sizeOf(Header), SERIALIZATION_ALIGNMENT);
+        const header_size = std.mem.alignForward(usize, @sizeOf(Header), @alignOf(ModuleEnv));
         const total_size = header_size + total_data_size;
-        const cache_data = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, total_size);
+        const cache_data = try allocator.alignedAlloc(u8, @alignOf(ModuleEnv), total_size);
         errdefer allocator.free(cache_data);
 
         // Initialize header
@@ -124,7 +117,6 @@ pub const CacheModule = struct {
             .data_size = @intCast(total_data_size),
             .error_count = error_count,
             .warning_count = warning_count,
-            ._padding = [_]u8{0} ** 12,
         };
 
         // Consolidate the scattered iovecs into the cache data buffer
@@ -140,7 +132,7 @@ pub const CacheModule = struct {
     }
 
     /// Load a cache from memory-mapped data
-    pub fn fromMappedMemory(mapped_data: []align(SERIALIZATION_ALIGNMENT) const u8) !CacheModule {
+    pub fn fromMappedMemory(mapped_data: []align(@alignOf(ModuleEnv)) const u8) !CacheModule {
         if (mapped_data.len < @sizeOf(Header)) {
             return error.BufferTooSmall;
         }
@@ -156,12 +148,12 @@ pub const CacheModule = struct {
         if (mapped_data.len < expected_total_size) return error.BufferTooSmall;
 
         // Get data section (must be aligned)
-        const header_size = std.mem.alignForward(usize, @sizeOf(Header), SERIALIZATION_ALIGNMENT);
+        const header_size = std.mem.alignForward(usize, @sizeOf(Header), @alignOf(ModuleEnv));
         const data = mapped_data[header_size .. header_size + header.data_size];
 
         return CacheModule{
             .header = header,
-            .data = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(data)),
+            .data = @as([]align(@alignOf(ModuleEnv)) const u8, @alignCast(data)),
         };
     }
 
@@ -222,11 +214,11 @@ pub const CacheModule = struct {
         allocator: Allocator,
         file_path: []const u8,
         filesystem: anytype,
-    ) ![]align(SERIALIZATION_ALIGNMENT) u8 {
+    ) ![]align(@alignOf(ModuleEnv)) u8 {
         const file_data = try filesystem.readFile(file_path, allocator);
         defer allocator.free(file_data);
 
-        const buffer = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, file_data.len);
+        const buffer = try allocator.alignedAlloc(u8, @alignOf(ModuleEnv), file_data.len);
         @memcpy(buffer, file_data);
 
         return buffer;
@@ -235,14 +227,14 @@ pub const CacheModule = struct {
     /// Tagged union to represent cache data that can be either memory-mapped or heap-allocated
     pub const CacheData = union(enum) {
         mapped: struct {
-            ptr: [*]align(SERIALIZATION_ALIGNMENT) const u8,
+            ptr: [*]align(@alignOf(ModuleEnv)) const u8,
             len: usize,
             unaligned_ptr: [*]const u8,
             unaligned_len: usize,
         },
-        allocated: []align(SERIALIZATION_ALIGNMENT) const u8,
+        allocated: []align(@alignOf(ModuleEnv)) const u8,
 
-        pub fn data(self: CacheData) []align(SERIALIZATION_ALIGNMENT) const u8 {
+        pub fn data(self: CacheData) []align(@alignOf(ModuleEnv)) const u8 {
             return switch (self) {
                 .mapped => |m| m.ptr[0..m.len],
                 .allocated => |a| a,
@@ -324,7 +316,7 @@ pub const CacheModule = struct {
             // Find the aligned portion within the mapped memory
             const unaligned_ptr = @as([*]const u8, @ptrCast(result.ptr));
             const addr = @intFromPtr(unaligned_ptr);
-            const aligned_addr = std.mem.alignForward(usize, addr, SERIALIZATION_ALIGNMENT);
+            const aligned_addr = std.mem.alignForward(usize, addr, @alignOf(ModuleEnv));
             const offset = aligned_addr - addr;
 
             if (offset >= file_size_usize) {
@@ -336,7 +328,7 @@ pub const CacheModule = struct {
                 return CacheData{ .allocated = data };
             }
 
-            const aligned_ptr = @as([*]align(SERIALIZATION_ALIGNMENT) const u8, @ptrFromInt(aligned_addr));
+            const aligned_ptr = @as([*]align(@alignOf(ModuleEnv)) const u8, @ptrFromInt(aligned_addr));
             const aligned_len = file_size_usize - offset;
 
             return CacheData{
@@ -361,11 +353,6 @@ pub const Diagnostics = struct {
     header_size: u32,
     data_size: u32,
 };
-
-test "Header alignment" {
-    // Verify the header is properly aligned
-    try std.testing.expect(@sizeOf(Header) % SERIALIZATION_ALIGNMENT == 0);
-}
 
 test "create and restore cache" {
     // This test is skipepd for now, but will be replaced by the iovecs/relocation approach anyway.

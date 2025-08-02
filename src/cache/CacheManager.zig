@@ -9,7 +9,6 @@ const Cache = cache_mod.CacheModule;
 const CacheConfig = cache_mod.CacheConfig;
 const CacheStats = cache_mod.CacheStats;
 const CacheReporting = @import("CacheReporting.zig");
-const SERIALIZATION_ALIGNMENT = 16;
 const coordinate_simple = @import("../coordinate_simple.zig");
 
 const Allocator = std.mem.Allocator;
@@ -115,7 +114,7 @@ pub const CacheManager = struct {
     ///
     /// Serializes the ProcessResult and stores it in the cache using BLAKE3-based
     /// filenames with subdirectory splitting.
-    pub fn store(self: *Self, cache_key: [32]u8, process_result: *const coordinate_simple.ProcessResult) !void {
+    pub fn store(self: *Self, cache_key: [32]u8, process_result: *const coordinate_simple.ProcessResult, arena_allocator: Allocator) !void {
         if (!self.config.enabled) {
             return;
         }
@@ -129,11 +128,7 @@ pub const CacheManager = struct {
             return;
         };
 
-        // Create arena for serialization
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena.deinit();
-
-        const cache_data = Cache.create(self.allocator, arena.allocator(), process_result.cir, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
+        const cache_data = Cache.create(self.allocator, arena_allocator, process_result.cir, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to serialize cache data: {}", .{err});
             }
@@ -249,7 +244,7 @@ pub const CacheManager = struct {
     /// The caller must not free it after calling this function.
     fn restoreFromCache(
         self: *Self,
-        cache_data: []align(SERIALIZATION_ALIGNMENT) const u8,
+        cache_data: []align(@alignOf(ModuleEnv)) const u8,
         source: []const u8,
     ) !struct {
         result: coordinate_simple.ProcessResult,
