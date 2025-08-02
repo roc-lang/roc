@@ -5,16 +5,17 @@
 //! both direct sorting for small lists and indirect pointer-based sorting for
 //! larger lists to optimize memory usage and cache performance.
 const std = @import("std");
-const testing = std.testing;
+const builtins = @import("builtins");
 
-const utils = @import("utils.zig");
-const roc_panic = @import("panic.zig").panic_help;
-
-const Ordering = utils.Ordering;
 const GT = Ordering.GT;
 const LT = Ordering.LT;
 const EQ = Ordering.EQ;
-const Opaque = ?[*]u8;
+const Ordering = builtins.utils.Ordering;
+const RocOps = builtins.utils.RocOps;
+const testing = std.testing;
+
+/// TODO
+pub const Opaque = ?[*]u8;
 const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.C) u8;
 const CopyFn = *const fn (Opaque, Opaque) callconv(.C) void;
 const IncN = *const fn (?[*]u8, usize) callconv(.C) void;
@@ -48,6 +49,7 @@ pub fn fluxsort(
     element_width: usize,
     alignment: u32,
     copy: CopyFn,
+    roc_ops: *RocOps,
 ) void {
     // Note, knowing constant versions of element_width and copy could have huge perf gains.
     // Hopefully llvm will essentially always do it via constant argument propagation and inlining.
@@ -57,43 +59,43 @@ pub fn fluxsort(
     // Also, for numeric types, inlining the compare function can be a 2x perf gain.
     if (len < 132) {
         // Just quadsort it.
-        quadsort(array, len, cmp, cmp_data, data_is_owned_runtime, inc_n_data, element_width, alignment, copy);
+        quadsort(array, len, cmp, cmp_data, data_is_owned_runtime, inc_n_data, element_width, alignment, copy, roc_ops);
     } else if (element_width <= MAX_ELEMENT_BUFFER_SIZE) {
         if (data_is_owned_runtime) {
-            fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_data, false);
+            fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_data, false, roc_ops);
         } else {
-            fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data, false);
+            fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data, false, roc_ops);
         }
     } else {
-        if (utils.alloc(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
+        if (roc_ops(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
             // Build list of pointers to sort.
             const arr_ptr = @as([*]Opaque, @ptrCast(@alignCast(alloc_ptr)));
-            defer utils.dealloc(alloc_ptr, @alignOf(usize));
+            defer roc_ops(alloc_ptr, @alignOf(usize));
             for (0..len) |i| {
                 arr_ptr[i] = array + i * element_width;
             }
 
             // Sort.
             if (data_is_owned_runtime) {
-                fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_data, true);
+                fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_data, true, roc_ops);
             } else {
-                fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_data, true);
+                fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_data, true, roc_ops);
             }
 
-            if (utils.alloc(len * element_width, alignment)) |collect_ptr| {
+            if (roc_ops(len * element_width, alignment)) |collect_ptr| {
                 // Collect sorted pointers into correct order.
-                defer utils.dealloc(collect_ptr, alignment);
+                defer roc_ops(collect_ptr, alignment);
                 for (0..len) |i| {
-                    copy(collect_ptr + i * element_width, arr_ptr[i]);
+                    copy(@as([*]u8, @ptrCast(collect_ptr)) + i * element_width, arr_ptr[i]);
                 }
 
                 // Copy to original array as sorted.
-                @memcpy(array[0..(len * element_width)], collect_ptr[0..(len * element_width)]);
+                @memcpy(array[0..(len * element_width)], @as([*]u8, @ptrCast(collect_ptr))[0..(len * element_width)]);
             } else {
-                roc_panic("Out of memory while trying to allocate for sorting", 0);
+                roc_ops.crash("Out of memory while trying to allocate for sorting");
             }
         } else {
-            roc_panic("Out of memory while trying to allocate for sorting", 0);
+            roc_ops.crash("Out of memory while trying to allocate for sorting");
         }
     }
 }
@@ -109,14 +111,27 @@ fn fluxsort_direct(
     comptime data_is_owned: bool,
     inc_n_data: IncN,
     comptime indirect: bool,
+    roc_ops: *RocOps,
 ) void {
-    if (utils.alloc(len * element_width, alignment)) |swap| {
-        flux_analyze(array, len, swap, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect);
+    if (roc_ops(len * element_width, alignment)) |swap| {
+        flux_analyze(array, len, @as([*]u8, @ptrCast(swap)), len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect);
 
-        utils.dealloc(swap, alignment);
+        roc_ops(swap, alignment);
     } else {
         // Fallback to quadsort. It has ways to use less memory.
-        quadsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, data_is_owned, inc_n_data, indirect);
+        quadsort_direct(
+            array,
+            len,
+            cmp,
+            cmp_data,
+            element_width,
+            alignment,
+            copy,
+            data_is_owned,
+            inc_n_data,
+            indirect,
+            roc_ops,
+        );
     }
 }
 
@@ -542,7 +557,7 @@ fn flux_partition(
 ///
 /// Warning, on early return, the partitions of the array will be split over array and swap.
 /// The returned size is the number of elements in the array.
-fn flux_default_partition(
+pub fn flux_default_partition(
     array: [*]u8,
     swap: [*]u8,
     x: [*]u8,
@@ -611,7 +626,7 @@ fn flux_default_partition(
 /// Finally, copy from swap into array and finish sorting the part of the array less than pivot.
 /// This is reverse cause it copies elements greater than the pivot into the array.
 /// Elements are expected to at most be the same size as the pivot.
-fn flux_reverse_partition(
+pub fn flux_reverse_partition(
     array: [*]u8,
     swap: [*]u8,
     x: [*]u8,
@@ -661,131 +676,6 @@ fn flux_reverse_partition(
     flux_partition(array, swap, array, pivot, arr_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect);
 }
 
-test "flux_default_partition" {
-    var expected: [32]i64 = undefined;
-    var test_count: i64 = 0;
-    var pivot: i64 = 0;
-
-    var arr: [32]i64 = undefined;
-    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    var swap: [32]i64 = undefined;
-    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
-
-    arr = [32]i64{
-        1, 3, 5, 7, 9,  11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31,
-        2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32,
-    };
-    expected = [32]i64{
-        // <= pivot first half
-        1,  3,  5,  7,  9,  11, 13, 15,
-        // <= pivot second half
-        2,  4,  6,  8,  10, 12, 14, 16,
-        // > pivot first half
-        17, 19, 21, 23, 25, 27, 29, 31,
-        // > pivot second half
-        18, 20, 22, 24, 26, 28, 30, 32,
-    };
-    pivot = 16;
-    var arr_len = flux_default_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr_len, 16);
-    try testing.expectEqualSlices(i64, arr[0..16], expected[0..16]);
-    try testing.expectEqualSlices(i64, swap[0..16], expected[16..32]);
-
-    arr = [32]i64{
-        1, 3, 5, 7, 9,  11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31,
-        2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32,
-    };
-    expected = [32]i64{
-        // <= pivot first half
-        1,  3,  5,  7,  9,  11, 13, 15, 17, 19, 21, 23,
-        // <= pivot second half
-        2,  4,  6,  8,  10, 12, 14, 16, 18, 20, 22, 24,
-        // > pivot first half
-        25, 27, 29, 31,
-        // > pivot second half
-        26, 28, 30, 32,
-    };
-    pivot = 24;
-    arr_len = flux_default_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr_len, 24);
-    try testing.expectEqualSlices(i64, arr[0..24], expected[0..24]);
-    try testing.expectEqualSlices(i64, swap[0..8], expected[24..32]);
-
-    arr = [32]i64{
-        1, 3, 5, 7, 9,  11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31,
-        2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32,
-    };
-    expected = [32]i64{
-        // <= pivot first half
-        1, 3, 5, 7, 9,  11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31,
-        // <= pivot second half
-        2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32,
-    };
-    pivot = 32;
-    arr_len = flux_default_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr_len, 32);
-    try testing.expectEqualSlices(i64, arr[0..32], expected[0..32]);
-
-    arr = [32]i64{
-        1,  3,  5,  7,  9,  11, 13, 15,
-        2,  4,  6,  8,  10, 12, 14, 16,
-        18, 20, 22, 24, 26, 28, 30, 32,
-        17, 19, 21, 23, 25, 27, 29, 31,
-    };
-    for (0..31) |i| {
-        expected[i] = @intCast(i + 1);
-    }
-    pivot = 16;
-    arr_len = flux_default_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr_len, 0);
-    try testing.expectEqualSlices(i64, arr[0..32], expected[0..32]);
-}
-
-test "flux_reverse_partition" {
-    const expected = [32]i64{
-        1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16,
-        17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
-    };
-    var test_count: i64 = 0;
-    var pivot: i64 = 0;
-
-    var arr: [32]i64 = undefined;
-    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    var swap: [32]i64 = undefined;
-    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
-
-    arr = [32]i64{
-        1, 3, 5, 7, 9,  11, 13, 15, 17, 17, 17, 17, 17, 17, 17, 17,
-        2, 4, 6, 8, 10, 12, 14, 16, 17, 17, 17, 17, 17, 17, 17, 17,
-    };
-    pivot = 17;
-    flux_reverse_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-
-    arr = [32]i64{
-        1,  17, 3,  17, 5,  17, 7,  17, 9,  17, 11, 17, 13, 17, 15, 17,
-        17, 2,  17, 4,  17, 6,  17, 8,  17, 10, 17, 12, 17, 14, 17, 16,
-    };
-    pivot = 17;
-    flux_reverse_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-
-    arr = [32]i64{
-        15, 17, 13, 17, 11, 17, 9,  17, 7,  17, 5,  17, 3,  17, 1,  17,
-        17, 16, 17, 14, 17, 12, 17, 10, 17, 8,  17, 6,  17, 4,  17, 2,
-    };
-    pivot = 17;
-    flux_reverse_partition(arr_ptr, swap_ptr, arr_ptr, @ptrCast(&pivot), 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-}
-
 // ================ Pivot Selection ===========================================
 // Used for selecting the quicksort pivot for various sized arrays.
 
@@ -793,7 +683,7 @@ test "flux_reverse_partition" {
 /// Only used for super large arrays, assumes the minimum cube root is 32.
 /// Out is set to the median.
 /// Generic is set to true if all elements selected for the median are the same.
-fn median_of_cube_root(
+pub fn median_of_cube_root(
     array: [*]u8,
     swap: [*]u8,
     x_ptr: [*]u8,
@@ -832,7 +722,7 @@ fn median_of_cube_root(
 }
 
 /// Returns the median of 9 evenly distributed elements from a list.
-fn median_of_nine(
+pub fn median_of_nine(
     array: [*]u8,
     len: usize,
     cmp: CompareFn,
@@ -879,7 +769,7 @@ fn median_of_nine(
 
 /// Ensures the middle two elements of the array are the middle two elements by sorting.
 /// Does not care about the rest of the elements and can overwrite them.
-fn trim_four(
+pub fn trim_four(
     initial_ptr_a: [*]u8,
     cmp: CompareFn,
     cmp_data: Opaque,
@@ -930,7 +820,7 @@ fn trim_four(
 
 /// Attempts to find the median of 2 binary arrays of len.
 /// Set out to the larger median from the two lists.
-fn binary_median(
+pub fn binary_median(
     initial_ptr_a: [*]u8,
     initial_ptr_b: [*]u8,
     initial_len: usize,
@@ -961,136 +851,6 @@ fn binary_median(
     }
     const from = if (compare(cmp, cmp_data, ptr_a, ptr_b, indirect) == GT) ptr_a else ptr_b;
     copy(out, from);
-}
-
-test "median_of_cube_root" {
-    var test_count: i64 = 0;
-    var out: i64 = 0;
-    var generic = false;
-
-    var swap: [32]i64 = undefined;
-    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
-    {
-        var arr: [32]i64 = undefined;
-        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-
-        arr = [32]i64{
-            1, 3, 5, 7, 9,  11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31,
-            2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32,
-        };
-        median_of_cube_root(arr_ptr, swap_ptr, arr_ptr, 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&generic), @ptrCast(&out), false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(out, 17);
-        try testing.expectEqual(generic, false);
-
-        for (0..32) |i| {
-            arr[i] = 7;
-        }
-        median_of_cube_root(arr_ptr, swap_ptr, arr_ptr, 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&generic), @ptrCast(&out), false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(out, 7);
-        try testing.expectEqual(generic, true);
-
-        for (0..32) |i| {
-            arr[i] = 7 + @as(i64, @intCast(i % 2));
-        }
-        median_of_cube_root(arr_ptr, swap_ptr, arr_ptr, 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&generic), @ptrCast(&out), false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(out, 8);
-        try testing.expectEqual(generic, false);
-    }
-}
-
-test "median_of_nine" {
-    var test_count: i64 = 0;
-    var out: i64 = 0;
-
-    {
-        var arr: [9]i64 = undefined;
-        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-
-        arr = [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 };
-        median_of_nine(arr_ptr, 10, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&out), false);
-        try testing.expectEqual(test_count, 0);
-        // Note: median is not guaranteed to be exact. in this case:
-        // [2, 3], [6, 7] -> [3, 6] -> [3, 6, 9] -> 6
-        try testing.expectEqual(out, 6);
-
-        arr = [9]i64{ 1, 3, 5, 7, 9, 2, 4, 6, 8 };
-        median_of_nine(arr_ptr, 10, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&out), false);
-        try testing.expectEqual(test_count, 0);
-        // Note: median is not guaranteed to be exact. in this case:
-        // [3, 5], [4, 6] -> [4, 5] -> [4, 5, 8] -> 5
-        try testing.expectEqual(out, 5);
-
-        arr = [9]i64{ 2, 3, 9, 4, 5, 7, 8, 6, 1 };
-        median_of_nine(arr_ptr, 10, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&out), false);
-        try testing.expectEqual(test_count, 0);
-        // Note: median is not guaranteed to be exact. in this case:
-        // [3, 4], [5, 6] -> [4, 5] -> [1, 4, 5] -> 4
-        try testing.expectEqual(out, 4);
-    }
-}
-
-test "trim_four" {
-    var test_count: i64 = 0;
-
-    var arr: [4]i64 = undefined;
-    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-
-    arr = [4]i64{ 1, 2, 3, 4 };
-    trim_four(arr_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, [4]i64{ 1, 2, 3, 4 });
-
-    arr = [4]i64{ 2, 3, 1, 4 };
-    trim_four(arr_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, [4]i64{ 2, 3, 2, 4 });
-
-    arr = [4]i64{ 4, 3, 2, 1 };
-    trim_four(arr_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, [4]i64{ 3, 2, 3, 2 });
-}
-
-test "binary_median" {
-    var test_count: i64 = 0;
-    var out: i64 = 0;
-
-    {
-        var arr: [10]i64 = undefined;
-        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-
-        arr = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-        binary_median(arr_ptr, arr_ptr + 5 * @sizeOf(i64), 5, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&out), false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(out, 6);
-
-        arr = [10]i64{ 1, 3, 5, 7, 9, 2, 4, 6, 8, 10 };
-        binary_median(arr_ptr, arr_ptr + 5 * @sizeOf(i64), 5, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&out), false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(out, 5);
-    }
-    {
-        var arr: [16]i64 = undefined;
-        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-
-        arr = [16]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
-        binary_median(arr_ptr, arr_ptr + 8 * @sizeOf(i64), 8, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&out), false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(out, 9);
-
-        arr = [16]i64{ 1, 3, 5, 7, 9, 11, 13, 15, 2, 4, 6, 8, 10, 12, 14, 16 };
-        binary_median(arr_ptr, arr_ptr + 8 * @sizeOf(i64), 8, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&out), false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(out, 9);
-
-        arr = [16]i64{ 9, 10, 11, 12, 13, 14, 15, 16, 1, 2, 3, 4, 5, 6, 7, 8 };
-        binary_median(arr_ptr, arr_ptr + 8 * @sizeOf(i64), 8, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&out), false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(out, 9);
-    }
 }
 
 // ================ Quadsort ==================================================
@@ -1132,6 +892,7 @@ pub fn quadsort(
     element_width: usize,
     alignment: u32,
     copy: CopyFn,
+    roc_ops: *RocOps,
 ) void {
     // Note, knowing constant versions of element_width and copy could have huge perf gains.
     // Hopefully llvm will essentially always do it via constant argument propagation and inlining.
@@ -1141,40 +902,40 @@ pub fn quadsort(
     // Also, for numeric types, inlining the compare function can be a 2x perf gain.
     if (element_width <= MAX_ELEMENT_BUFFER_SIZE) {
         if (data_is_owned_runtime) {
-            quadsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_data, false);
+            quadsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_data, false, roc_ops);
         } else {
-            quadsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data, false);
+            quadsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data, false, roc_ops);
         }
     } else {
-        if (utils.alloc(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
+        if (roc_ops(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
             // Build list of pointers to sort.
             const arr_ptr = @as([*]Opaque, @ptrCast(@alignCast(alloc_ptr)));
-            defer utils.dealloc(alloc_ptr, @alignOf(usize));
+            defer roc_ops(alloc_ptr, @alignOf(usize));
             for (0..len) |i| {
                 arr_ptr[i] = array + i * element_width;
             }
 
             // Sort.
             if (data_is_owned_runtime) {
-                quadsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_data, true);
+                quadsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_data, true, roc_ops);
             } else {
-                quadsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_data, true);
+                quadsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_data, true, roc_ops);
             }
 
-            if (utils.alloc(len * element_width, alignment)) |collect_ptr| {
+            if (roc_ops(len * element_width, alignment)) |collect_ptr| {
                 // Collect sorted pointers into correct order.
-                defer utils.dealloc(collect_ptr, alignment);
+                defer roc_ops(collect_ptr, alignment);
                 for (0..len) |i| {
-                    copy(collect_ptr + i * element_width, arr_ptr[i]);
+                    copy(@as([*]u8, @ptrCast(collect_ptr)) + i * element_width, arr_ptr[i]);
                 }
 
                 // Copy to original array as sorted.
-                @memcpy(array[0..(len * element_width)], collect_ptr[0..(len * element_width)]);
+                @memcpy(array[0..(len * element_width)], @as([*]u8, @ptrCast(collect_ptr))[0..(len * element_width)]);
             } else {
-                roc_panic("Out of memory while trying to allocate for sorting", 0);
+                roc_ops.crash("Out of memory while trying to allocate for sorting");
             }
         } else {
-            roc_panic("Out of memory while trying to allocate for sorting", 0);
+            roc_ops.crash("Out of memory while trying to allocate for sorting");
         }
     }
 }
@@ -1190,6 +951,7 @@ fn quadsort_direct(
     comptime data_is_owned: bool,
     inc_n_data: IncN,
     comptime indirect: bool,
+    roc_ops: *RocOps,
 ) void {
     const arr_ptr = array;
     if (len < 32) {
@@ -1209,12 +971,12 @@ fn quadsort_direct(
         //     while (swap_len * 8 <= len) : (swap_len *= 4) {}
         // }
 
-        if (utils.alloc(swap_len * element_width, alignment)) |swap| {
-            const block_len = quad_merge(arr_ptr, len, swap, swap_len, 32, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect);
+        if (roc_ops(swap_len * element_width, alignment)) |swap| {
+            const block_len = quad_merge(arr_ptr, len, @ptrCast(swap), swap_len, 32, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect);
 
-            rotate_merge(arr_ptr, len, swap, swap_len, block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect);
+            rotate_merge(arr_ptr, len, @ptrCast(swap), swap_len, block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect);
 
-            utils.dealloc(swap, alignment);
+            roc_ops(swap, alignment);
         } else {
             // Fallback to still sort even when out of memory.
             @call(.never_inline, quadsort_stack_swap, .{ arr_ptr, len, cmp, cmp_data, data_is_owned, inc_n_data, element_width, copy, indirect });
@@ -1246,7 +1008,8 @@ fn quadsort_stack_swap(
 // These are used as backup if the swap size is not large enough.
 // Also can be used for the final merge to reduce memory footprint.
 
-fn rotate_merge(
+/// TODO
+pub fn rotate_merge(
     array: [*]u8,
     len: usize,
     swap: [*]u8,
@@ -1348,7 +1111,7 @@ fn rotate_merge_block(
 }
 
 /// Binary search, but more cache friendly!
-fn monobound_binary_first(
+pub fn monobound_binary_first(
     array: [*]u8,
     initial_top: usize,
     value_ptr: [*]u8,
@@ -1386,7 +1149,7 @@ fn monobound_binary_first(
 }
 
 /// Swap two neighboring chunks of an array quickly with limited memory.
-fn trinity_rotation(
+pub fn trinity_rotation(
     array: [*]u8,
     len: usize,
     swap: [*]u8,
@@ -1545,125 +1308,10 @@ fn trinity_rotation(
     }
 }
 
-test "rotate_merge" {
-    const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-    var test_count: i64 = 0;
-
-    var arr: [10]i64 = undefined;
-    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    var swap: [10]i64 = undefined;
-    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
-
-    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
-    rotate_merge(arr_ptr, 10, swap_ptr, 10, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-
-    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
-    rotate_merge(arr_ptr, 9, swap_ptr, 9, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-
-    arr = [10]i64{ 3, 4, 6, 9, 1, 2, 5, 10, 7, 8 };
-    rotate_merge(arr_ptr, 10, swap_ptr, 10, 4, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-
-    // Limited swap, can't finish merge
-    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
-    rotate_merge(arr_ptr, 10, swap_ptr, 4, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-}
-
-test "monobound_binary_first" {
-    var test_count: i64 = 0;
-
-    var arr = [25]i64{ 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 43, 45, 47, 49 };
-    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    var value: i64 = undefined;
-    const value_ptr = @as([*]u8, @ptrCast(&value));
-
-    value = 7;
-    var res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(res, 3);
-
-    value = 39;
-    res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(res, 19);
-
-    value = 40;
-    res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(res, 20);
-
-    value = -10;
-    res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(res, 0);
-
-    value = 10000;
-    res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(res, 25);
-}
-
-test "trinity_rotation" {
-    {
-        var arr: [10]i64 = undefined;
-        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        var swap: [10]i64 = undefined;
-        const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
-
-        // Even.
-        arr = [10]i64{ 6, 7, 8, 9, 10, 1, 2, 3, 4, 5 };
-        trinity_rotation(arr_ptr, 10, swap_ptr, 10, 5, @sizeOf(i64), &test_i64_copy);
-        try testing.expectEqual(arr, [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
-
-        // left large, right fits in swap.
-        arr = [10]i64{ 3, 4, 5, 6, 7, 8, 9, 10, 1, 2 };
-        trinity_rotation(arr_ptr, 10, swap_ptr, 10, 8, @sizeOf(i64), &test_i64_copy);
-        try testing.expectEqual(arr, [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
-
-        // right large, left fits in swap.
-        arr = [10]i64{ 9, 10, 1, 2, 3, 4, 5, 6, 7, 8 };
-        trinity_rotation(arr_ptr, 10, swap_ptr, 10, 2, @sizeOf(i64), &test_i64_copy);
-        try testing.expectEqual(arr, [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
-
-        // left large, no swap.
-        arr = [10]i64{ 3, 4, 5, 6, 7, 8, 9, 10, 1, 2 };
-        trinity_rotation(arr_ptr, 10, swap_ptr, 0, 8, @sizeOf(i64), &test_i64_copy);
-        try testing.expectEqual(arr, [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
-
-        // right large, no swap.
-        arr = [10]i64{ 9, 10, 1, 2, 3, 4, 5, 6, 7, 8 };
-        trinity_rotation(arr_ptr, 10, swap_ptr, 0, 2, @sizeOf(i64), &test_i64_copy);
-        try testing.expectEqual(arr, [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
-    }
-    {
-        var arr: [16]i64 = undefined;
-        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        var swap: [5]i64 = undefined;
-        const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
-
-        // left larger, bridge in swap.
-        arr = [16]i64{ 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 1, 2, 3, 4, 5, 6 };
-        trinity_rotation(arr_ptr, 16, swap_ptr, 5, 10, @sizeOf(i64), &test_i64_copy);
-        try testing.expectEqual(arr, [16]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 });
-
-        // // right large, bridge in swap.
-        arr = [16]i64{ 11, 12, 13, 14, 15, 16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-        trinity_rotation(arr_ptr, 16, swap_ptr, 5, 6, @sizeOf(i64), &test_i64_copy);
-        try testing.expectEqual(arr, [16]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 });
-    }
-}
-
 // ================ Unbalanced Merges =========================================
 
 /// Merges the remaining blocks at the tail of the array.
-fn tail_merge(
+pub fn tail_merge(
     array: [*]u8,
     len: usize,
     swap: [*]u8,
@@ -1695,7 +1343,7 @@ fn tail_merge(
 
 /// Merges a full left block with a smaller than block size right chunk.
 /// The merge goes from tail to head.
-fn partial_backwards_merge(
+pub fn partial_backwards_merge(
     array: [*]u8,
     len: usize,
     swap: [*]u8,
@@ -1934,7 +1582,7 @@ fn partial_forward_merge_left_tail_2(
 
 /// Merges a full left block with a smaller than block size right chunk.
 /// The merge goes from head to tail.
-fn partial_forward_merge(
+pub fn partial_forward_merge(
     array: [*]u8,
     len: usize,
     swap: [*]u8,
@@ -2098,148 +1746,12 @@ fn partial_forward_merge_left_head_2(
     return false;
 }
 
-test "tail_merge" {
-    var test_count: i64 = 0;
-    const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-
-    var arr: [10]i64 = undefined;
-    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    var swap: [10]i64 = undefined;
-    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
-
-    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
-    tail_merge(arr_ptr, 10, swap_ptr, 10, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-
-    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
-    tail_merge(arr_ptr, 9, swap_ptr, 9, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-
-    arr = [10]i64{ 3, 4, 6, 9, 1, 2, 5, 10, 7, 8 };
-    tail_merge(arr_ptr, 10, swap_ptr, 10, 4, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-}
-
-test "partial_backwards_merge" {
-    var test_count: i64 = 0;
-    {
-        const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-
-        var arr: [10]i64 = undefined;
-        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        var swap: [10]i64 = undefined;
-        const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
-
-        arr = [10]i64{ 3, 4, 5, 6, 7, 8, 1, 2, 9, 10 };
-        partial_backwards_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, expected);
-
-        arr = [10]i64{ 2, 4, 6, 8, 9, 10, 1, 3, 5, 7 };
-        partial_backwards_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, expected);
-
-        arr = [10]i64{ 1, 2, 3, 4, 5, 6, 8, 9, 10, 7 };
-        partial_backwards_merge(arr_ptr, 10, swap_ptr, 10, 9, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, expected);
-
-        arr = [10]i64{ 1, 2, 4, 5, 6, 8, 9, 3, 7, 10 };
-        partial_backwards_merge(arr_ptr, 10, swap_ptr, 9, 7, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, expected);
-    }
-
-    {
-        var expected: [64]i64 = undefined;
-        for (0..64) |i| {
-            expected[i] = @intCast(i + 1);
-        }
-
-        var arr: [64]i64 = undefined;
-        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        var swap: [64]i64 = undefined;
-        const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
-
-        // chunks
-        for (0..16) |i| {
-            arr[i] = @intCast(i + 17);
-        }
-        for (0..16) |i| {
-            arr[i + 16] = @intCast(i + 49);
-        }
-        for (0..16) |i| {
-            arr[i + 32] = @intCast(i + 1);
-        }
-        for (0..16) |i| {
-            arr[i + 48] = @intCast(i + 33);
-        }
-        partial_backwards_merge(arr_ptr, 64, swap_ptr, 64, 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, expected);
-
-        // chunks with break
-        for (0..16) |i| {
-            arr[i] = @intCast(i + 17);
-        }
-        for (0..16) |i| {
-            arr[i + 32] = @intCast(i + 1);
-        }
-        for (0..16) |i| {
-            arr[i + 16] = @intCast(i + 49);
-        }
-        for (0..16) |i| {
-            arr[i + 48] = @intCast(i + 34);
-        }
-        arr[16] = 33;
-        arr[63] = 49;
-
-        partial_backwards_merge(arr_ptr, 64, swap_ptr, 64, 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, expected);
-    }
-}
-
-test "partial_forward_merge" {
-    var test_count: i64 = 0;
-    const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-
-    var arr: [10]i64 = undefined;
-    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    var swap: [10]i64 = undefined;
-    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
-
-    arr = [10]i64{ 3, 4, 5, 6, 7, 8, 1, 2, 9, 10 };
-    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-
-    arr = [10]i64{ 2, 4, 6, 8, 9, 10, 1, 3, 5, 7 };
-    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-
-    arr = [10]i64{ 1, 2, 3, 4, 5, 6, 8, 9, 10, 7 };
-    partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 9, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-
-    arr = [10]i64{ 1, 2, 4, 5, 6, 8, 9, 3, 7, 10 };
-    partial_forward_merge(arr_ptr, 10, swap_ptr, 9, 7, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-}
-
 // ================ Quad Merge Support ========================================
 
 /// Merges an array of of sized blocks of sorted elements with a tail.
 /// Returns the block length of sorted runs after the call.
 /// This is needed if the merge ran out of swap space.
-fn quad_merge(
+pub fn quad_merge(
     array: [*]u8,
     len: usize,
     swap: [*]u8,
@@ -2276,7 +1788,7 @@ fn quad_merge(
 }
 
 /// Merges 4 even sized blocks of sorted elements.
-fn quad_merge_block(
+pub fn quad_merge_block(
     array: [*]u8,
     swap: [*]u8,
     block_len: usize,
@@ -2338,7 +1850,7 @@ fn quad_merge_block(
 }
 
 /// Cross merge attempts to merge two arrays in chunks of multiple elements.
-fn cross_merge(
+pub fn cross_merge(
     dest: [*]u8,
     src: [*]u8,
     left_len: usize,
@@ -2463,149 +1975,6 @@ fn cross_merge(
     }
 }
 
-test "quad_merge" {
-    var test_count: i64 = 0;
-    const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-
-    var arr: [10]i64 = undefined;
-    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    var swap: [10]i64 = undefined;
-    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
-    var size: usize = undefined;
-
-    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
-    size = quad_merge(arr_ptr, 10, swap_ptr, 10, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-    try testing.expectEqual(size, 16);
-
-    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
-    size = quad_merge(arr_ptr, 9, swap_ptr, 9, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-    try testing.expectEqual(size, 16);
-
-    arr = [10]i64{ 3, 4, 6, 9, 1, 2, 5, 10, 7, 8 };
-    size = quad_merge(arr_ptr, 10, swap_ptr, 10, 4, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-    try testing.expectEqual(size, 8);
-
-    // Limited swap, can't finish merge
-    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
-    size = quad_merge(arr_ptr, 10, swap_ptr, 4, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, [10]i64{ 1, 3, 4, 5, 6, 7, 8, 9, 2, 10 });
-    try testing.expectEqual(size, 4);
-
-    arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 9, 2, 10 };
-    size = quad_merge(arr_ptr, 10, swap_ptr, 3, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, [10]i64{ 5, 6, 7, 8, 1, 3, 4, 9, 2, 10 });
-    try testing.expectEqual(size, 4);
-}
-
-test "quad_merge_block" {
-    var test_count: i64 = 0;
-    const expected = [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 };
-
-    var arr: [8]i64 = undefined;
-    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    var swap: [8]i64 = undefined;
-    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
-
-    // case 0 - totally unsorted
-    arr = [8]i64{ 7, 8, 5, 6, 3, 4, 1, 2 };
-    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-
-    // case 1 - first half sorted
-    arr = [8]i64{ 5, 6, 7, 8, 3, 4, 1, 2 };
-    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-
-    // case 2 - second half sorted
-    arr = [8]i64{ 7, 8, 5, 6, 1, 2, 3, 4 };
-    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-
-    // case 3 both haves sorted
-    arr = [8]i64{ 1, 3, 5, 7, 2, 4, 6, 8 };
-    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-
-    // case 3 - lucky, sorted
-    arr = [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 };
-    quad_merge_block(arr_ptr, swap_ptr, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    // try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(arr, expected);
-}
-
-test "cross_merge" {
-    var test_count: i64 = 0;
-    var expected: [64]i64 = undefined;
-    for (0..64) |i| {
-        expected[i] = @intCast(i + 1);
-    }
-
-    var src: [64]i64 = undefined;
-    var dest: [64]i64 = undefined;
-    const src_ptr = @as([*]u8, @ptrCast(&src[0]));
-    const dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
-
-    // Opitimal case, ordered but swapped
-    for (0..32) |i| {
-        src[i] = @intCast(i + 33);
-    }
-    for (0..32) |i| {
-        src[i + 32] = @intCast(i + 1);
-    }
-    cross_merge(dest_ptr, src_ptr, 32, 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(dest, expected);
-
-    // will fallback, every other
-    for (0..32) |i| {
-        src[i * 2] = @intCast(i * 2 + 1);
-        src[i * 2 + 1] = @intCast(i * 2 + 2);
-    }
-    cross_merge(dest_ptr, src_ptr, 32, 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(dest, expected);
-
-    // super uneven
-    for (0..20) |i| {
-        src[i] = @intCast(i + 45);
-    }
-    for (0..44) |i| {
-        src[i + 20] = @intCast(i + 1);
-    }
-    cross_merge(dest_ptr, src_ptr, 20, 44, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(dest, expected);
-
-    // chunks
-    for (0..16) |i| {
-        src[i] = @intCast(i + 17);
-    }
-    for (0..16) |i| {
-        src[i + 16] = @intCast(i + 49);
-    }
-    for (0..16) |i| {
-        src[i + 32] = @intCast(i + 1);
-    }
-    for (0..16) |i| {
-        src[i + 48] = @intCast(i + 33);
-    }
-    cross_merge(dest_ptr, src_ptr, 32, 32, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(dest, expected);
-}
-
 // ================ 32 Element Blocks =========================================
 
 const QuadSwapResult = enum {
@@ -2614,7 +1983,7 @@ const QuadSwapResult = enum {
 };
 
 /// Starts with an unsorted array and turns it into sorted blocks of length 32.
-fn quad_swap(
+pub fn quad_swap(
     array: [*]u8,
     len: usize,
     cmp: CompareFn,
@@ -2880,7 +2249,7 @@ fn quad_swap(
 
 /// Merge 4 sorted arrays of length 2 into a sorted array of length 8 using swap space.
 /// Requires that the refcount of cmp_data be incremented 16 times.
-fn quad_swap_merge(
+pub fn quad_swap_merge(
     array: [*]u8,
     swap: [*]u8,
     cmp: CompareFn,
@@ -2896,7 +2265,7 @@ fn quad_swap_merge(
 }
 
 /// Reverse values from start to end.
-fn quad_reversal(
+pub fn quad_reversal(
     start: [*]u8,
     end: [*]u8,
     element_width: usize,
@@ -2945,107 +2314,12 @@ fn quad_reversal(
     }
 }
 
-test "quad_swap" {
-    var test_count: i64 = 0;
-    var arr: [75]i64 = undefined;
-    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-
-    arr = [75]i64{
-        // multiple ordered chunks
-        1,  3,  5,  7,  9,  11, 13, 15,
-        33, 34, 35, 36, 37, 38, 39, 40,
-        // partially ordered
-        41, 42, 45, 46, 43, 44, 47, 48,
-        // multiple reverse chunks
-        70, 69, 68, 67, 66, 65, 64, 63,
-        16, 14, 12, 10, 8,  6,  4,  2,
-        // another ordered
-        49, 50, 51, 52, 53, 54, 55, 56,
-        // unordered
-        23, 21, 19, 20, 24, 22, 18, 17,
-        // partially reversed
-        32, 31, 28, 27, 30, 29, 26, 25,
-        // awkward tail
-        62, 59, 61, 60, 71, 73, 75, 74,
-        72, 58, 57,
-    };
-
-    var result = quad_swap(arr_ptr, 75, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(result, .unfinished);
-    try testing.expectEqual(arr, [75]i64{
-        // first 32 elements sorted (with 8 reversed that get flipped here)
-        1,  2,  3,  4,  5,  6,  7,  8,
-        9,  10, 11, 12, 13, 14, 15, 16,
-        33, 34, 35, 36, 37, 38, 39, 40,
-        41, 42, 43, 44, 45, 46, 47, 48,
-        // second 32 elements sorted (with 8 reversed that get flipped here)
-        17, 18, 19, 20, 21, 22, 23, 24,
-        25, 26, 27, 28, 29, 30, 31, 32,
-        49, 50, 51, 52, 53, 54, 55, 56,
-        63, 64, 65, 66, 67, 68, 69, 70,
-        // awkward tail
-        57, 58, 59, 60, 61, 62, 71, 72,
-        73, 74, 75,
-    });
-
-    // Just reversed.
-    var expected: [75]i64 = undefined;
-    for (0..75) |i| {
-        expected[i] = @intCast(i + 1);
-        arr[i] = @intCast(75 - i);
-    }
-    result = quad_swap(arr_ptr, 75, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-    try testing.expectEqual(test_count, 0);
-    try testing.expectEqual(result, .sorted);
-    try testing.expectEqual(arr, expected);
-}
-
-test "quad_swap_merge" {
-    var arr: [8]i64 = undefined;
-    var swap: [8]i64 = undefined;
-    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
-
-    arr = [8]i64{ 5, 6, 7, 8, 1, 2, 3, 4 };
-    swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    quad_swap_merge(arr_ptr, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    try testing.expectEqual(arr, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
-
-    arr = [8]i64{ 5, 7, 1, 3, 6, 8, 2, 4 };
-    swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    quad_swap_merge(arr_ptr, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    try testing.expectEqual(arr, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
-
-    arr = [8]i64{ 1, 8, 3, 4, 5, 6, 2, 7 };
-    swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    quad_swap_merge(arr_ptr, swap_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    try testing.expectEqual(arr, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
-}
-
-test "quad_reversal" {
-    {
-        var arr = [8]i64{ 8, 7, 6, 5, 4, 3, 2, 1 };
-        const start_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        const end_ptr = @as([*]u8, @ptrCast(&arr[7]));
-        quad_reversal(start_ptr, end_ptr, @sizeOf(i64), &test_i64_copy);
-        try testing.expectEqual(arr, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
-    }
-    {
-        var arr = [9]i64{ 9, 8, 7, 6, 5, 4, 3, 2, 1 };
-        const start_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        const end_ptr = @as([*]u8, @ptrCast(&arr[8]));
-        quad_reversal(start_ptr, end_ptr, @sizeOf(i64), &test_i64_copy);
-        try testing.expectEqual(arr, [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
-    }
-}
-
 // ================ Small Arrays ==============================================
 // Below are functions for sorting under 32 element arrays.
 
 /// Uses swap space to sort the tail of an array.
 /// The array should generally be under 32 elements in length.
-fn tail_swap(
+pub fn tail_swap(
     array: [*]u8,
     len: usize,
     swap: [*]u8,
@@ -3090,7 +2364,7 @@ fn tail_swap(
 
 /// Merges two neighboring sorted arrays into dest.
 /// Left and right length mus be same or within 1 element.
-fn parity_merge(
+pub fn parity_merge(
     dest: [*]u8,
     src: [*]u8,
     left_len: usize,
@@ -3134,88 +2408,11 @@ fn parity_merge(
     tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp, cmp_data, element_width, copy, indirect);
 }
 
-test "tail_swap" {
-    var test_count: i64 = 0;
-    var swap: [31]i64 = undefined;
-    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
-
-    var arr: [31]i64 = undefined;
-    var expected: [31]i64 = undefined;
-    for (0..31) |i| {
-        arr[i] = @intCast(i + 1);
-        expected[i] = @intCast(i + 1);
-    }
-    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-
-    for (0..10) |seed| {
-        var rng = std.Random.DefaultPrng.init(seed);
-        rng.random().shuffle(i64, arr[0..]);
-
-        tail_swap(arr_ptr, 31, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, expected);
-    }
-}
-
-test "parity_merge" {
-    var test_count: i64 = 0;
-    {
-        var dest: [8]i64 = undefined;
-        const dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
-
-        var arr: [8]i64 = undefined;
-        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-
-        arr = [8]i64{ 1, 3, 5, 7, 2, 4, 6, 8 };
-        dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-        parity_merge(dest_ptr, arr_ptr, 4, 4, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
-
-        arr = [8]i64{ 5, 6, 7, 8, 1, 2, 3, 4 };
-        dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-        parity_merge(dest_ptr, arr_ptr, 4, 4, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
-    }
-    {
-        var dest: [9]i64 = undefined;
-        const dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
-
-        var arr: [9]i64 = undefined;
-        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-
-        arr = [9]i64{ 1, 3, 5, 8, 2, 4, 6, 7, 9 };
-        dest = [9]i64{ 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-        parity_merge(dest_ptr, arr_ptr, 4, 5, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(dest, [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
-
-        arr = [9]i64{ 6, 7, 8, 9, 1, 2, 3, 4, 5 };
-        dest = [9]i64{ 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-        parity_merge(dest_ptr, arr_ptr, 4, 5, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(dest, [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
-
-        arr = [9]i64{ 1, 3, 5, 7, 8, 2, 4, 6, 9 };
-        dest = [9]i64{ 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-        parity_merge(dest_ptr, arr_ptr, 5, 4, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(dest, [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
-
-        arr = [9]i64{ 5, 6, 7, 8, 9, 1, 2, 3, 4 };
-        dest = [9]i64{ 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-        parity_merge(dest_ptr, arr_ptr, 5, 4, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(dest, [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
-    }
-}
-
 // ================ Tiny Arrays ===============================================
 // Below are functions for sorting 0 to 7 element arrays.
 
 /// Sort arrays of 0 to 7 elements.
-fn tiny_sort(
+pub fn tiny_sort(
     array: [*]u8,
     len: usize,
     swap: [*]u8,
@@ -3522,83 +2719,6 @@ fn parity_swap_seven(
     copy(arr_ptr, from);
 }
 
-test "tiny_sort" {
-    var test_count: i64 = 0;
-    var swap: [7]i64 = undefined;
-    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
-
-    {
-        var arr: [7]i64 = undefined;
-        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-
-        arr = [7]i64{ 3, 1, 2, 5, 4, 7, 6 };
-        tiny_sort(arr_ptr, 7, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, [7]i64{ 1, 2, 3, 4, 5, 6, 7 });
-
-        arr = [7]i64{ 7, 6, 5, 4, 3, 2, 1 };
-        tiny_sort(arr_ptr, 7, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, [7]i64{ 1, 2, 3, 4, 5, 6, 7 });
-    }
-    {
-        var arr: [6]i64 = undefined;
-        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-
-        arr = [6]i64{ 3, 1, 2, 6, 4, 5 };
-        tiny_sort(arr_ptr, 6, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, [6]i64{ 1, 2, 3, 4, 5, 6 });
-
-        arr = [6]i64{ 6, 5, 4, 3, 2, 1 };
-        tiny_sort(arr_ptr, 6, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, [6]i64{ 1, 2, 3, 4, 5, 6 });
-    }
-    {
-        var arr: [5]i64 = undefined;
-        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-
-        arr = [5]i64{ 2, 1, 4, 3, 5 };
-        tiny_sort(arr_ptr, 5, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, [5]i64{ 1, 2, 3, 4, 5 });
-
-        arr = [5]i64{ 5, 4, 3, 2, 1 };
-        tiny_sort(arr_ptr, 5, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, [5]i64{ 1, 2, 3, 4, 5 });
-    }
-    {
-        var arr: [4]i64 = undefined;
-        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-
-        arr = [4]i64{ 4, 2, 1, 3 };
-        tiny_sort(arr_ptr, 4, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, [4]i64{ 1, 2, 3, 4 });
-
-        arr = [4]i64{ 2, 1, 4, 3 };
-        tiny_sort(arr_ptr, 4, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, [4]i64{ 1, 2, 3, 4 });
-    }
-    {
-        var arr = [3]i64{ 2, 3, 1 };
-        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        tiny_sort(arr_ptr, 3, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, [3]i64{ 1, 2, 3 });
-    }
-    {
-        var arr = [2]i64{ 2, 1 };
-        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        tiny_sort(arr_ptr, 2, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
-        try testing.expectEqual(test_count, 0);
-        try testing.expectEqual(arr, [2]i64{ 1, 2 });
-    }
-}
-
 // ================ Primitives ================================================
 // Below are sorting primitives that attempt to be branchless.
 // They all also are always inline for performance.
@@ -3606,7 +2726,7 @@ test "tiny_sort" {
 
 /// Merge two neighboring sorted 4 element arrays into dest.
 /// Requires that the refcount of cmp_data be incremented 8 times.
-inline fn parity_merge_four(
+pub inline fn parity_merge_four(
     dest: [*]u8,
     array: [*]u8,
     cmp: CompareFn,
@@ -3638,7 +2758,7 @@ inline fn parity_merge_four(
 
 /// Merge two neighboring sorted 2 element arrays into dest.
 /// Requires that the refcount of cmp_data be incremented 4 times.
-inline fn parity_merge_two(
+pub inline fn parity_merge_two(
     dest: [*]u8,
     array: [*]u8,
     cmp: CompareFn,
@@ -3669,7 +2789,7 @@ inline fn parity_merge_two(
 /// Inlining will remove the extra level of pointer indirection here.
 /// It is just used to allow mutating the input pointers.
 /// Requires that the refcount of cmp_data be incremented 1 time.
-inline fn head_branchless_merge(
+pub inline fn head_branchless_merge(
     dest: *[*]u8,
     left: *[*]u8,
     right: *[*]u8,
@@ -3694,7 +2814,7 @@ inline fn head_branchless_merge(
 /// Inlining will remove the extra level of pointer indirection here.
 /// It is just used to allow mutating the input pointers.
 /// Requires that the refcount of cmp_data be incremented 1 time.
-inline fn tail_branchless_merge(
+pub inline fn tail_branchless_merge(
     dest: *[*]u8,
     left: *[*]u8,
     right: *[*]u8,
@@ -3716,7 +2836,7 @@ inline fn tail_branchless_merge(
 
 /// Swaps the element at ptr with the element after it if the element is greater than the next.
 /// Requires that the refcount of cmp_data be incremented 1 time.
-inline fn swap_branchless(
+pub inline fn swap_branchless(
     ptr: [*]u8,
     tmp: [*]u8,
     cmp: CompareFn,
@@ -3787,152 +2907,8 @@ inline fn compare_inc(
     return compare(cmp, cmp_data, lhs, rhs, indirect);
 }
 
-test "parity_merge_four" {
-    var arr: [8]i64 = undefined;
-    var dest: [8]i64 = undefined;
-    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    const dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
-
-    arr = [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 };
-    dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    parity_merge_four(dest_ptr, arr_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
-
-    arr = [8]i64{ 5, 6, 7, 8, 1, 2, 3, 4 };
-    dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    parity_merge_four(dest_ptr, arr_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
-
-    arr = [8]i64{ 1, 3, 5, 7, 2, 4, 6, 8 };
-    dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    parity_merge_four(dest_ptr, arr_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    try testing.expectEqual(dest, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
-}
-
-test "parity_merge_two" {
-    var arr: [4]i64 = undefined;
-    var dest: [4]i64 = undefined;
-    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    const dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
-
-    arr = [4]i64{ 1, 2, 3, 4 };
-    dest = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(dest_ptr, arr_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
-
-    arr = [4]i64{ 1, 3, 2, 4 };
-    dest = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(dest_ptr, arr_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
-
-    arr = [4]i64{ 3, 4, 1, 2 };
-    dest = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(dest_ptr, arr_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
-
-    arr = [4]i64{ 2, 4, 1, 3 };
-    dest = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(dest_ptr, arr_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
-
-    arr = [4]i64{ 1, 4, 2, 3 };
-    dest = [4]i64{ 0, 0, 0, 0 };
-    parity_merge_two(dest_ptr, arr_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    try testing.expectEqual(dest, [4]i64{ 1, 2, 3, 4 });
-}
-
-test "head_branchless_merge" {
-    var dest = [6]i64{ 0, 0, 0, 0, 0, 0 };
-    var left = [4]i64{ 1, 7, 10, 22 };
-    var right = [4]i64{ 2, 2, 8, 22 };
-    var dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
-    var left_ptr = @as([*]u8, @ptrCast(&left[0]));
-    var right_ptr = @as([*]u8, @ptrCast(&right[0]));
-
-    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    head_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-
-    try testing.expectEqual(dest, [6]i64{ 1, 2, 2, 7, 8, 10 });
-}
-
-test "tail_branchless_merge" {
-    var dest = [6]i64{ 0, 0, 0, 0, 0, 0 };
-    var left = [4]i64{ -22, 1, 7, 10 };
-    var right = [4]i64{ -22, 2, 2, 8 };
-    var dest_ptr = @as([*]u8, @ptrCast(&dest[dest.len - 1]));
-    var left_ptr = @as([*]u8, @ptrCast(&left[left.len - 1]));
-    var right_ptr = @as([*]u8, @ptrCast(&right[right.len - 1]));
-
-    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    tail_branchless_merge(&dest_ptr, &left_ptr, &right_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-
-    try testing.expectEqual(dest, [6]i64{ 1, 2, 2, 7, 8, 10 });
-}
-
-test "swap" {
-    var arr: [2]i64 = undefined;
-    var tmp: i64 = undefined;
-    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    const tmp_ptr = @as([*]u8, @ptrCast(&tmp));
-
-    arr = [2]i64{ 10, 20 };
-    swap_branchless(arr_ptr, tmp_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    try testing.expectEqual(arr, [2]i64{ 10, 20 });
-
-    arr = [2]i64{ 77, -12 };
-    swap_branchless(arr_ptr, tmp_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    try testing.expectEqual(arr, [2]i64{ -12, 77 });
-
-    arr = [2]i64{ -22, -22 };
-    swap_branchless(arr_ptr, tmp_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);
-    try testing.expectEqual(arr, [2]i64{ -22, -22 });
-}
-
 /// Copies the value pointed to by `src_ptr` into the location pointed to by `dst_ptr`.
 /// Both pointers must be valid and properly aligned.
 pub fn pointer_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.C) void {
     @as(*usize, @alignCast(@ptrCast(dst_ptr))).* = @as(*usize, @alignCast(@ptrCast(src_ptr))).*;
-}
-
-fn test_i64_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.C) u8 {
-    const a = @as(*i64, @alignCast(@ptrCast(a_ptr))).*;
-    const b = @as(*i64, @alignCast(@ptrCast(b_ptr))).*;
-
-    const gt = @as(u8, @intFromBool(a > b));
-    const lt = @as(u8, @intFromBool(a < b));
-
-    // Eq = 0
-    // GT = 1
-    // LT = 2
-    return lt + lt + gt;
-}
-
-fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.C) u8 {
-    const a = @as(*i64, @alignCast(@ptrCast(a_ptr))).*;
-    const b = @as(*i64, @alignCast(@ptrCast(b_ptr))).*;
-
-    const gt = @as(u8, @intFromBool(a > b));
-    const lt = @as(u8, @intFromBool(a < b));
-
-    @as(*isize, @ptrCast(@alignCast(count_ptr))).* -= 1;
-    // Eq = 0
-    // GT = 1
-    // LT = 2
-    return lt + lt + gt;
-}
-
-fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.C) void {
-    @as(*i64, @alignCast(@ptrCast(dst_ptr))).* = @as(*i64, @alignCast(@ptrCast(src_ptr))).*;
-}
-
-fn test_inc_n_data(count_ptr: Opaque, n: usize) callconv(.C) void {
-    @as(*isize, @ptrCast(@alignCast(count_ptr))).* += @intCast(n);
 }
