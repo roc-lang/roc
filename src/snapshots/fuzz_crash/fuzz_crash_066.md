@@ -57,7 +57,9 @@ UpperIdent(3:1-3:2),OpColon(3:2-3:3),OpenSquare(3:3-3:4),Int(3:4-3:5),CloseSquar
 ~~~roc
 module []
 
-C : []
+C : [
+	,
+]
 ~~~
 # CANONICALIZE
 ~~~clojure

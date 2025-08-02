@@ -735,7 +735,7 @@ const Formatter = struct {
     };
 
     fn formatCollection(fmt: *Formatter, region: AST.TokenizedRegion, braces: Braces, comptime T: type, items: []T, formatter: fn (*Formatter, T) anyerror!AST.TokenizedRegion) !void {
-        const multiline = fmt.ast.regionIsMultiline(region);
+        const multiline = fmt.collectionWillBeMultiline(region, T, items);
         const curr_indent = fmt.curr_indent;
         defer {
             fmt.curr_indent = curr_indent;
@@ -2027,87 +2027,73 @@ const Formatter = struct {
         const tags = fmt.ast.tokens.tokens.items(.tag);
         return std.debug.print("[{s}@{d}...{s}@{d}]\n", .{ @tagName(tags[region.start]), region.start, @tagName(tags[region.end - 1]), region.end - 1 });
     }
-};
 
-fn moduleFmtsSame(source: []const u8) !void {
-    const gpa = std.testing.allocator;
+    fn itemWillBeMultiline(fmt: *Formatter, comptime T: type, item: T) bool {
+        switch (T) {
+            AST.Expr.Idx => {
+                const expr = fmt.ast.store.getExpr(item);
+                switch (expr) {
+                    .block => return true,
+                    .malformed => return true,
+                    else => return false,
+                }
+            },
+            AST.Pattern.Idx => {
+                const pattern = fmt.ast.store.getPattern(item);
+                switch (pattern) {
+                    .malformed => return true,
+                    else => return false,
+                }
+            },
+            AST.PatternRecordField.Idx => {
+                // const patternRecordField = fmt.ast.store.getPatternRecordField(item);
+                return false;
+            },
+            AST.ExposedItem.Idx => {
+                const exposedItem = fmt.ast.store.getExposedItem(item);
+                switch (exposedItem) {
+                    .malformed => return true,
+                    else => return false,
+                }
+            },
+            AST.RecordField.Idx => {
+                const recordField = fmt.ast.store.getRecordField(item);
+                if (recordField.value) |value| {
+                    return fmt.itemWillBeMultiline(AST.Expr.Idx, value);
+                }
+                return false;
+            },
+            AST.TypeAnno.Idx => {
+                const typeAnno = fmt.ast.store.getTypeAnno(item);
+                switch (typeAnno) {
+                    .malformed => return true,
+                    else => return false,
+                }
+            },
+            AST.AnnoRecordField.Idx => {
+                // const annoRecordField = fmt.ast.store.getAnnoRecordField(item);
+                return false;
+            },
+            else => unreachable,
+        }
 
-    var env = try ModuleEnv.init(gpa, try gpa.dupe(u8, source));
-    defer env.deinit();
-
-    var parse_ast = parse(&env, source);
-    defer parse_ast.deinit(gpa);
-
-    // @Anthony / @Josh shouldn't these be added to the ModuleEnv (env) so they are in the arena
-    // and then they are cleaned up when the arena is deinitialized at the end of program compilation
-    // or included in the cached build
-    defer gpa.free(parse_ast.errors);
-
-    if (parse_ast.errors.len > 0) {
-        try printParseErrors(gpa, source, parse_ast);
-        std.debug.panic("Test failed with parse errors", .{});
+        return true;
     }
 
-    var result = std.ArrayList(u8).init(gpa);
-    defer result.deinit();
-    try formatAst(parse_ast, result.writer().any());
+    fn collectionWillBeMultiline(fmt: *Formatter, region: AST.TokenizedRegion, comptime T: type, items: []T) bool {
+        if (fmt.ast.regionIsMultiline(region)) {
+            return true;
+        }
 
-    try std.testing.expectEqualStrings(source, result.items);
-}
+        for (items) |item| {
+            if (fmt.itemWillBeMultiline(T, item)) {
+                return true;
+            }
+        }
 
-fn exprFmtsSame(source: []const u8, flags: FormatFlags) !void {
-    try exprFmtsTo(source, source, flags);
-}
-fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !void {
-    const gpa = std.testing.allocator;
-
-    var env = try ModuleEnv.init(gpa, try gpa.dupe(u8, source));
-    defer env.deinit();
-
-    var messages: [1]tokenize.Diagnostic = undefined;
-    const msg_slice = messages[0..];
-
-    var tokenizer_ = tokenize.Tokenizer.init(&env, source, msg_slice);
-    tokenizer_.tokenize();
-    const result = tokenizer_.finishAndDeinit();
-
-    var parser = Parser.init(result.tokens);
-    defer parser.deinit();
-
-    const expr = parser.parseExpr();
-
-    const errors = try parser.diagnostics.toOwnedSlice(gpa);
-
-    var parse_ast = AST{
-        .source = source,
-        .tokens = result.tokens,
-        .store = parser.store,
-        .errors = errors,
-    };
-    defer parse_ast.deinit(std.testing.allocator);
-    defer std.testing.allocator.free(parse_ast.errors);
-
-    std.testing.expectEqualSlices(AST.Diagnostic, &[_]AST.Diagnostic{}, parse_ast.errors) catch {
-        std.debug.print("Tokens:\n{any}", .{result.tokens.tokens.items(.tag)});
-        std.debug.panic("Test failed with parse errors", .{});
-    };
-
-    var fmt_result = std.ArrayList(u8).init(gpa);
-    defer fmt_result.deinit();
-    var formatter = Formatter.init(parse_ast, fmt_result.writer().any());
-    formatter.flags = flags;
-    _ = try formatter.formatExpr(expr);
-    try formatter.flush();
-
-    try std.testing.expectEqualStrings(expected, fmt_result.items);
-}
-
-fn moduleFmtsTo(source: []const u8, to: []const u8) !void {
-    const gpa = std.testing.allocator;
-    const result = try moduleFmtsStable(gpa, source, false);
-    defer gpa.free(result);
-    try std.testing.expectEqualStrings(to, result);
-}
+        return false;
+    }
+};
 
 /// Asserts a module when formatted twice in a row results in the same final output.
 /// Returns that final output.

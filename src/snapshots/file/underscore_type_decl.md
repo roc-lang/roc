@@ -354,8 +354,14 @@ module []
 
 import Module exposing [Pair]
 
-(, y)
-(, )
+(
+	,
+	y,
+)
+(
+	,
+	,
+)
 
 ~~~
 # CANONICALIZE
