@@ -66,12 +66,279 @@ pub fn from_bytes(bytes: []const u8) Error!Ident {
     };
 }
 
+pub const Idx = struct {
+    // std.meta.eql doesn't work well with packed unions, so we expose a plain u32
+    // and then cast it when doing methods.
+    value: u32,
+
+    pub fn attributes(self: *const @This()) Attributes {
+        return self.toInner().attributes();
+    }
+
+    pub fn format(
+        self: Idx,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        return self.toInner().format(fmt, options, writer);
+    }
+
+    pub fn try_inline(string: []const u8) ?@This() {
+        return Idx.fromInner(InnerIdx.try_inline(string) orelse return null);
+    }
+
+    fn toInner(self: Idx) InnerIdx {
+        return @as(InnerIdx, @bitCast(self));
+    }
+
+    fn fromInner(inner: InnerIdx) Idx {
+        return @as(Idx, @bitCast(inner));
+    }
+};
+
+const InnerIdx = packed struct(u32) {
+    pub const InnerIdxData = packed union { small: SmallIdx, big: BigIdx };
+
+    is_small: bool,
+    data: InnerIdxData,
+
+    pub fn attributes(self: *const @This()) Attributes {
+        if (self.is_small) {
+            const small = self.data.small;
+            return small.attributes();
+        } else {
+            return self.data.big.attributes;
+        }
+    }
+
+    pub fn getIdx(self: *const @This()) u28 {
+        if (self.is_small) {
+            // Small identifiers don't have a real index in the store
+            return 0;
+        } else {
+            return self.data.big.idx;
+        }
+    }
+
+    // Support for std.testing.expectEqual by implementing format
+    pub fn format(
+        self: Idx,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        if (self.is_small) {
+            // Small identifiers don't have a real index in the store
+            try writer.print("Ident.Idx({s})", .{self.data.small.asString()});
+        } else {
+            // Format as the underlying u32 value for debugging
+            try writer.print("Ident.Idx({d})", .{self.data.big.idx});
+        }
+    }
+
+    /// Given a nonempty ident string that does not start with a digit, try to construct an inline Idx.
+    fn try_inline(string: []const u8) ?@This() {
+        std.debug.assert(string.len > 0);
+        // Ident strings must never start with digits.
+        std.debug.assert(string[0] < '0' or string[0] > '9');
+
+        const unused = string[0] == '_'; // If it starts with _, this identifier is unused - e.g. `_foo`.
+        const reused = string[string.len - 1] == '_'; // If it ends with _, this is reused via `var` - e.g. `foo_`.
+
+        // Solo underscore should not have been tokenized as an identifier.
+        std.debug.assert(!(string.len == 1 and (unused or reused)));
+
+        // If it ends with `!` (with or without an underscore after it), it's effectful.
+        const fx_check_index = string.len - @as(usize, @intFromBool(reused));
+        const fx = fx_check_index > 0 and string[fx_check_index - 1] == '!';
+
+        // Skip the underscore prefix if there was one.
+        const first_non_attr_index: usize = @intFromBool(unused);
+        const char0 = string[first_non_attr_index];
+
+        // Get the total number of attributes (unused, reused, effectful)
+        const attr_count: usize = @intFromBool(unused) + @intFromBool(reused) + @intFromBool(fx);
+
+        // Length without underscore/bang prefix/suffix.
+        const len = string.len - attr_count;
+
+        // Treat double underscore prefix as a big idx. This will be a warning anyway,
+        // so it should come up almost never in practice, and this avoids edge cases.
+        if (len > 4 or char0 == '_' or char0 < 'A' or char0 > 'z') {
+            return null;
+        }
+
+        // All the other ASCII chars between `Z` and `a` are invalid identifiers (`[`, `\`, `]`, `^`, '`'),
+        // so tokenization should not have let them get through here.
+        std.debug.assert((char0 >= 'A' and char0 <= 'Z') or (char0 >= 'a' and char0 <= 'z'));
+
+        // len would only be 0 here for inputs of `__` or `_!_`, but we should have already early-returned for those.
+        std.debug.assert(len > 0);
+
+        // Get the characters after the first one
+        var char1: u8 = 0;
+        var char2: u8 = 0;
+        var char3: u8 = 0;
+
+        if (len >= 2) {
+            char1 = string[1 + first_non_attr_index];
+        }
+        if (len >= 3) {
+            char2 = string[2 + first_non_attr_index];
+        }
+        if (len >= 4) {
+            char3 = string[3 + first_non_attr_index];
+        }
+
+        // If any char is outside the ASCII range (e.g. it's Unicode), this is a big index.
+        // (We don't need to test for lower bounds because tokenization would have already verified that.)
+        if (char1 > 'z' or char2 > 'z' or char3 > 'z') {
+            return null;
+        }
+
+        return .{
+            .is_small = true,
+            .data = .{
+                .small = .{
+                    .char0 = @as(u7, @intCast(char0)),
+                    .is_unused = unused,
+                    .char1 = @as(u7, @intCast(char1)),
+                    .is_reused = reused,
+                    .char2 = @as(u7, @intCast(char2)),
+                    .is_effectful = fx,
+                    .char3 = @as(u7, @intCast(char3)),
+                },
+            },
+        };
+    }
+};
+
 /// The index from the store, with the attributes packed into unused bytes.
 ///
 /// With 29-bits for the ID we can store up to 536,870,912 identifiers.
-pub const Idx = packed struct(u32) {
+const BigIdx = packed struct(u31) {
     attributes: Attributes,
-    idx: u29,
+    idx: u28,
+};
+
+const SmallIdx = packed struct(u31) {
+    char0: u7,
+    is_unused: bool,
+    char1: u7,
+    is_reused: bool,
+    char2: u7,
+    is_effectful: bool,
+    char3: u7,
+
+    fn attributes(self: *const @This()) Attributes {
+        return .{
+            .effectful = self.is_effectful,
+            .ignored = self.is_unused,
+            .reassignable = self.is_reused,
+        };
+    }
+
+    /// Reconstruct the text from the packed character fields by value.
+    /// Uses a thread-local buffer that's valid until the next call to this function.
+    fn getTextFromValue(small_idx: @This()) []u8 {
+        // Thread-local buffer to hold the reconstructed text
+        // Max length: 1 (underscore prefix) + 4 (chars) + 1 (exclamation) + 1 (underscore suffix) = 7
+        const S = struct {
+            var buffer: [7]u8 = undefined;
+        };
+
+        var len: usize = 0;
+
+        // Add underscore prefix if unused
+        if (small_idx.is_unused) {
+            S.buffer[len] = '_';
+            len += 1;
+        }
+
+        // Add main characters (char0 is always present since len > 0)
+        S.buffer[len] = @as(u8, @intCast(small_idx.char0));
+        len += 1;
+
+        if (small_idx.char1 != 0) {
+            S.buffer[len] = small_idx.char1;
+            len += 1;
+        }
+        if (small_idx.char2 != 0) {
+            S.buffer[len] = small_idx.char2;
+            len += 1;
+        }
+        if (small_idx.char3 != 0) {
+            S.buffer[len] = small_idx.char3;
+            len += 1;
+        }
+
+        // Add exclamation if effectful
+        if (small_idx.is_effectful) {
+            S.buffer[len] = '!';
+            len += 1;
+        }
+
+        // Add underscore suffix if reused
+        if (small_idx.is_reused) {
+            S.buffer[len] = '_';
+            len += 1;
+        }
+
+        return S.buffer[0..len];
+    }
+
+    /// Reconstruct the text from the packed character fields.
+    /// Uses a thread-local buffer that's valid until the next call to this function.
+    fn getText(self: *const @This()) []u8 {
+        // Thread-local buffer to hold the reconstructed text
+        // Max length: 1 (underscore prefix) + 4 (chars) + 1 (exclamation) + 1 (underscore suffix) = 7
+        const S = struct {
+            var buffer: [7]u8 = undefined;
+        };
+
+        var len: usize = 0;
+
+        // Add underscore prefix if unused
+        if (self.is_unused) {
+            S.buffer[len] = '_';
+            len += 1;
+        }
+
+        // Add the core characters
+        S.buffer[len] = @as(u8, @intCast(self.char0));
+        len += 1;
+
+        if (self.char1 != 0) {
+            S.buffer[len] = @as(u8, @intCast(self.char1));
+            len += 1;
+        }
+        if (self.char2 != 0) {
+            S.buffer[len] = @as(u8, @intCast(self.char2));
+            len += 1;
+        }
+        if (self.char3 != 0) {
+            S.buffer[len] = @as(u8, @intCast(self.char3));
+            len += 1;
+        }
+
+        // Add exclamation suffix if effectful
+        if (self.is_effectful) {
+            S.buffer[len] = '!';
+            len += 1;
+        }
+
+        // Add underscore suffix if reused
+        if (self.is_reused) {
+            S.buffer[len] = '_';
+            len += 1;
+        }
+
+        return S.buffer[0..len];
+    }
 };
 
 /// Identifier attributes such as if it is effectful, ignored, or reassignable.
@@ -144,14 +411,26 @@ pub const Store = struct {
         self.attributes.deinit(gpa);
     }
 
-    /// Insert a new identifier into the store.
+    /// Insert a new nonempty identifier into the store.
     pub fn insert(self: *Store, gpa: std.mem.Allocator, ident: Ident) std.mem.Allocator.Error!Idx {
+        std.debug.assert(ident.raw_text.len > 0);
+        // First try to create a small identifier
+        if (Idx.try_inline(ident.raw_text)) |small_idx| {
+            return small_idx;
+        }
+
+        // Fall back to big identifier in the interner
         const idx = try self.interner.insert(gpa, ident.raw_text);
 
-        return Idx{
-            .attributes = ident.attributes,
-            .idx = @as(u29, @intCast(@intFromEnum(idx))),
-        };
+        return Idx.fromInner(InnerIdx{
+            .is_small = false,
+            .data = .{
+                .big = .{
+                    .attributes = ident.attributes,
+                    .idx = @as(u28, @intCast(@intFromEnum(idx))),
+                },
+            },
+        });
     }
 
     /// Generate a new identifier that is unique within this module.
@@ -196,15 +475,26 @@ pub const Store = struct {
 
         _ = try self.attributes.append(gpa, attributes);
 
-        return Idx{
-            .attributes = attributes,
-            .idx = @truncate(@intFromEnum(idx)),
-        };
+        return Idx.fromInner(InnerIdx{
+            .is_small = false,
+            .data = .{
+                .big = .{
+                    .attributes = attributes,
+                    .idx = @as(u28, @intCast(@intFromEnum(idx))),
+                },
+            },
+        });
     }
 
     /// Get the text for an identifier.
     pub fn getText(self: *const Store, idx: Idx) []u8 {
-        return self.interner.getText(@enumFromInt(@as(u32, idx.idx)));
+        if (idx.is_small) {
+            // For small identifiers, reconstruct the text from packed characters
+            return SmallIdx.getTextFromValue(idx.data.small);
+        } else {
+            // For big identifiers, look up in the interner
+            return self.interner.getText(@enumFromInt(@as(u32, idx.getIdx())));
+        }
     }
 
     /// Check if an identifier text already exists in the store.
@@ -212,18 +502,29 @@ pub const Store = struct {
         return self.interner.contains(text);
     }
 
-    /// Find an identifier by its string, returning its index if it exists.
+    /// Find an identifier by its nonempty string, returning its index if it exists.
     /// This is different from insert in that it's guaranteed not to modify the store.
     pub fn findByString(self: *const Store, text: []const u8) ?Idx {
+        std.debug.assert(text.len > 0);
+        // First try to create a small identifier
+        if (Idx.try_inline(text)) |small_idx| {
+            return small_idx;
+        }
+
         // Look up in the interner without inserting
         const result = self.interner.findStringOrSlot(text);
         const interner_idx = result.idx orelse return null;
 
         // Create an Idx with inferred attributes from the text
-        return Idx{
-            .attributes = Attributes.fromString(text),
-            .idx = @as(u29, @intCast(@intFromEnum(interner_idx))),
-        };
+        return Idx.fromInner(InnerIdx{
+            .is_small = false,
+            .data = .{
+                .big = .{
+                    .attributes = Attributes.fromString(text),
+                    .idx = @as(u28, @intCast(@intFromEnum(interner_idx))),
+                },
+            },
+        });
     }
 
     /// Freeze the identifier store, preventing any new entries from being added.
@@ -343,3 +644,465 @@ pub const Store = struct {
         self.attributes.relocate(offset);
     }
 };
+test "from_bytes validates empty text" {
+    const result = Ident.from_bytes("");
+    try std.testing.expectError(Error.EmptyText, result);
+}
+
+test "from_bytes validates null bytes" {
+    const text_with_null = "hello\x00world";
+    const result = Ident.from_bytes(text_with_null);
+    try std.testing.expectError(Error.ContainsNullByte, result);
+}
+
+test "from_bytes validates control characters" {
+    const text_with_control = "hello\x01world";
+    const result = Ident.from_bytes(text_with_control);
+    try std.testing.expectError(Error.ContainsControlCharacters, result);
+}
+
+test "from_bytes disallows common whitespace" {
+    const text_with_space = "hello world";
+    const result = Ident.from_bytes(text_with_space);
+    try std.testing.expect(result == Error.ContainsControlCharacters);
+
+    const text_with_tab = "hello\tworld";
+    const result2 = Ident.from_bytes(text_with_tab);
+    try std.testing.expect(result2 == Error.ContainsControlCharacters);
+
+    const text_with_newline = "hello\nworld";
+    const result3 = Ident.from_bytes(text_with_newline);
+    try std.testing.expect(result3 == Error.ContainsControlCharacters);
+
+    const text_with_cr = "hello\rworld";
+    const result4 = Ident.from_bytes(text_with_cr);
+    try std.testing.expect(result4 == Error.ContainsControlCharacters);
+}
+
+test "from_bytes creates valid identifier" {
+    const result = try Ident.from_bytes("valid_name!");
+    try std.testing.expectEqualStrings("valid_name!", result.raw_text);
+    try std.testing.expect(result.attributes.effectful == true);
+    try std.testing.expect(result.attributes.ignored == false);
+    try std.testing.expect(result.attributes.reassignable == false);
+}
+
+test "from_bytes creates ignored identifier" {
+    const result = try Ident.from_bytes("_ignored");
+    try std.testing.expectEqualStrings("_ignored", result.raw_text);
+    try std.testing.expect(result.attributes.effectful == false);
+    try std.testing.expect(result.attributes.ignored == true);
+    try std.testing.expect(result.attributes.reassignable == false);
+}
+
+test "Ident.Store empty CompactWriter roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create an empty Store
+    var original = try Store.initCapacity(gpa, 0);
+    defer original.deinit(gpa);
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_empty_store.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize using CompactWriter
+    var writer = collections.CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Store))));
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify empty
+    try testing.expectEqual(@as(usize, 0), deserialized.interner.bytes.len());
+    try testing.expectEqual(@as(usize, 0), deserialized.interner.strings.count());
+    try testing.expectEqual(@as(usize, 0), deserialized.attributes.len());
+    try testing.expectEqual(@as(u32, 0), deserialized.next_unique_name);
+}
+
+test "Ident.Store basic CompactWriter roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create original store and add some identifiers
+    var original = try Store.initCapacity(gpa, 16);
+    defer original.deinit(gpa);
+
+    const ident1 = Ident.for_text("hello");
+    const ident2 = Ident.for_text("world!");
+    const ident3 = Ident.for_text("_ignored");
+
+    const idx1 = try original.insert(gpa, ident1);
+    const idx2 = try original.insert(gpa, ident2);
+    const idx3 = try original.insert(gpa, ident3);
+
+    // Verify the attributes in the indices
+    try testing.expect(!idx1.attributes.effectful);
+    try testing.expect(!idx1.attributes.ignored);
+    try testing.expect(idx2.attributes.effectful);
+    try testing.expect(!idx2.attributes.ignored);
+    try testing.expect(!idx3.attributes.effectful);
+    try testing.expect(idx3.attributes.ignored);
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_basic_store.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize using CompactWriter
+    var writer = collections.CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Store))));
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify the identifiers are accessible
+    try testing.expectEqualStrings("hello", deserialized.getText(idx1));
+    try testing.expectEqualStrings("world!", deserialized.getText(idx2));
+    try testing.expectEqualStrings("_ignored", deserialized.getText(idx3));
+
+    // Verify next_unique_name is preserved
+    try testing.expectEqual(original.next_unique_name, deserialized.next_unique_name);
+
+    // Verify the interner's hash map is empty after deserialization
+    try testing.expectEqual(@as(usize, 0), deserialized.interner.strings.count());
+}
+
+test "Ident.Store with genUnique CompactWriter roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create store and generate unique identifiers
+    var original = try Store.initCapacity(gpa, 10);
+    defer original.deinit(gpa);
+
+    // Add some regular identifiers
+    const ident1 = Ident.for_text("regular");
+    const idx1 = try original.insert(gpa, ident1);
+
+    // Generate unique identifiers
+    const unique1 = try original.genUnique(gpa);
+    const unique2 = try original.genUnique(gpa);
+    const unique3 = try original.genUnique(gpa);
+
+    // Verify unique names are correct
+    try testing.expectEqualStrings("0", original.getText(unique1));
+    try testing.expectEqualStrings("1", original.getText(unique2));
+    try testing.expectEqualStrings("2", original.getText(unique3));
+
+    // Verify next_unique_name was incremented
+    try testing.expectEqual(@as(u32, 3), original.next_unique_name);
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_unique_store.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize
+    var writer = collections.CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Store))));
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify all identifiers
+    try testing.expectEqualStrings("regular", deserialized.getText(idx1));
+    try testing.expectEqualStrings("0", deserialized.getText(unique1));
+    try testing.expectEqualStrings("1", deserialized.getText(unique2));
+    try testing.expectEqualStrings("2", deserialized.getText(unique3));
+
+    // Verify next_unique_name is preserved
+    try testing.expectEqual(@as(u32, 3), deserialized.next_unique_name);
+}
+
+test "Ident.Store frozen state CompactWriter roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create and populate store
+    var original = try Store.initCapacity(gpa, 5);
+    defer original.deinit(gpa);
+
+    _ = try original.insert(gpa, Ident.for_text("test1"));
+    _ = try original.insert(gpa, Ident.for_text("test2"));
+
+    // Freeze the store
+    original.freeze();
+
+    // Verify interner is frozen
+    if (std.debug.runtime_safety) {
+        try testing.expect(original.interner.frozen);
+    }
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_frozen_store.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize
+    var writer = collections.CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Store))));
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify frozen state is preserved
+    if (std.debug.runtime_safety) {
+        try testing.expect(deserialized.interner.frozen);
+    }
+}
+
+test "Ident.Store comprehensive CompactWriter roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create store with various identifiers
+    var original = try Store.initCapacity(gpa, 20);
+    defer original.deinit(gpa);
+
+    // Test various identifier types and edge cases
+    const test_idents = [_]struct { text: []const u8, expected_idx: u32 }{
+        .{ .text = "hello", .expected_idx = 0 },
+        .{ .text = "world!", .expected_idx = 6 },
+        .{ .text = "_ignored", .expected_idx = 13 },
+        .{ .text = "a", .expected_idx = 22 }, // single character
+        .{ .text = "very_long_identifier_name_that_might_cause_issues", .expected_idx = 24 },
+        .{ .text = "effectful!", .expected_idx = 75 },
+        .{ .text = "_", .expected_idx = 86 }, // Just underscore
+        .{ .text = "CamelCase", .expected_idx = 88 },
+        .{ .text = "snake_case", .expected_idx = 98 },
+        .{ .text = "SCREAMING_CASE", .expected_idx = 109 },
+        .{ .text = "hello", .expected_idx = 0 }, // duplicate, should reuse
+    };
+
+    var indices = std.ArrayList(Idx).init(gpa);
+    defer indices.deinit();
+
+    for (test_idents) |test_ident| {
+        const ident = Ident.for_text(test_ident.text);
+        const idx = try original.insert(gpa, ident);
+        try indices.append(idx);
+        try testing.expectEqual(test_ident.expected_idx, idx.getIdx());
+    }
+
+    // Add some unique names
+    const unique1 = try original.genUnique(gpa);
+    const unique2 = try original.genUnique(gpa);
+
+    // Verify the interner's hash map is populated
+    try testing.expect(original.interner.strings.count() > 0);
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_comprehensive_store.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize
+    var writer = collections.CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Store))));
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify all identifiers (skip duplicate at end)
+    for (test_idents[0..10], 0..) |test_ident, i| {
+        const idx = indices.items[i];
+        const text = deserialized.getText(idx);
+        try testing.expectEqualStrings(test_ident.text, text);
+    }
+
+    // Verify unique names
+    try testing.expectEqualStrings("0", deserialized.getText(unique1));
+    try testing.expectEqualStrings("1", deserialized.getText(unique2));
+
+    // Verify the interner's hash map is empty after deserialization
+    try testing.expectEqual(@as(usize, 0), deserialized.interner.strings.count());
+
+    // Verify next_unique_name
+    try testing.expectEqual(@as(u32, 2), deserialized.next_unique_name);
+}
+
+test "Ident.Store multiple stores CompactWriter roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create multiple stores to test alignment
+    var store1 = try Store.initCapacity(gpa, 5);
+    defer store1.deinit(gpa);
+
+    var store2 = try Store.initCapacity(gpa, 5);
+    defer store2.deinit(gpa);
+
+    var store3 = try Store.initCapacity(gpa, 5);
+    defer store3.deinit(gpa);
+
+    // Populate stores differently
+    const idx1_1 = try store1.insert(gpa, Ident.for_text("store1_ident"));
+    _ = try store1.genUnique(gpa);
+
+    const idx2_1 = try store2.insert(gpa, Ident.for_text("store2_ident!"));
+    const idx2_2 = try store2.insert(gpa, Ident.for_text("_store2_ignored"));
+    store2.freeze();
+
+    const idx3_1 = try store3.insert(gpa, Ident.for_text("store3"));
+
+    // Create a temp file
+    const tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile("test_multiple_stores.dat", .{ .read = true });
+    defer file.close();
+
+    // Serialize all three
+    var writer = collections.CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(gpa);
+
+    _ = try store1.serialize(gpa, &writer);
+    const offset1 = writer.total_bytes - @sizeOf(Store);
+
+    _ = try store2.serialize(gpa, &writer);
+    const offset2 = writer.total_bytes - @sizeOf(Store);
+
+    _ = try store3.serialize(gpa, &writer);
+    const offset3 = writer.total_bytes - @sizeOf(Store);
+
+    // Write to file
+    try writer.writeGather(gpa, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate all three
+    const deserialized1 = @as(*Store, @ptrCast(@alignCast(buffer.ptr + offset1)));
+    deserialized1.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    const deserialized2 = @as(*Store, @ptrCast(@alignCast(buffer.ptr + offset2)));
+    deserialized2.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    const deserialized3 = @as(*Store, @ptrCast(@alignCast(buffer.ptr + offset3)));
+    deserialized3.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify store 1
+    try testing.expectEqualStrings("store1_ident", deserialized1.getText(idx1_1));
+    try testing.expectEqual(@as(u32, 1), deserialized1.next_unique_name);
+
+    // Verify store 2 (frozen)
+    try testing.expectEqualStrings("store2_ident!", deserialized2.getText(idx2_1));
+    try testing.expectEqualStrings("_store2_ignored", deserialized2.getText(idx2_2));
+    if (std.debug.runtime_safety) {
+        try testing.expect(deserialized2.interner.frozen);
+    }
+
+    // Verify store 3
+    try testing.expectEqualStrings("store3", deserialized3.getText(idx3_1));
+
+    // Verify all have empty hash maps
+    try testing.expectEqual(@as(usize, 0), deserialized1.interner.strings.count());
+    try testing.expectEqual(@as(usize, 0), deserialized2.interner.strings.count());
+    try testing.expectEqual(@as(usize, 0), deserialized3.interner.strings.count());
+}
