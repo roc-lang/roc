@@ -29,24 +29,26 @@
 
 const std = @import("std");
 const base = @import("base");
-const ModuleEnv = @import("compile").ModuleEnv;
 const types = @import("types");
-const layout = @import("../layout/layout.zig");
-const layout_ = @import("../layout/layout.zig");
-const Closure = layout_.Closure;
-const build_options = @import("build_options");
-const layout_store = @import("../layout/store.zig");
-const stack = @import("stack.zig");
-const collections = @import("collections");
+const compile = @import("compile");
 const builtins = @import("builtins");
+const collections = @import("collections");
 
+const layout_store = @import("../layout/store.zig");
+const layout_ = @import("../layout/layout.zig");
+const layout = @import("../layout/layout.zig");
+const build_options = @import("build_options");
+const stack = @import("stack.zig");
+
+const ModuleEnv = compile.ModuleEnv;
+const LayoutTag = layout.LayoutTag;
+const RocDec = builtins.dec.RocDec;
 const SExprTree = base.SExprTree;
+const Closure = layout_.Closure;
+const Layout = layout.Layout;
+const target_usize = base.target.Target.native.target_usize;
 const types_store = types.store;
 const target = base.target;
-const Layout = layout.Layout;
-const LayoutTag = layout.LayoutTag;
-const target_usize = base.target.Target.native.target_usize;
-const RocDec = builtins.RocDec;
 
 /// Debug configuration set at build time using flag `zig build test -Dtrace-eval`
 ///

@@ -81,6 +81,9 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
     try args.append("-o");
     try args.append(config.output_path);
 
+    // Suppress LLD warnings
+    try args.append("-w");
+
     // Add platform-specific flags
     switch (builtin.target.os.tag) {
         .macos => {

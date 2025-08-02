@@ -14,7 +14,6 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Build and run the roc cli");
     const roc_step = b.step("roc", "Build the roc compiler without running it");
     const test_step = b.step("test", "Run all tests included in src/tests.zig");
-    const builtins_test_step = b.step("test-builtins", "Run tests for builtins code");
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
@@ -143,34 +142,18 @@ pub fn build(b: *std.Build) void {
     roc_modules.addAllToTest(all_tests);
     all_tests.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
 
-    const builtins_tests = b.addTest(.{
-        .root_source_file = b.path("src/builtins/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    builtins_tests.root_module.stack_check = false;
-    builtins_tests.root_module.addImport("build_options", roc_modules.build_options);
-
     b.default_step.dependOn(&all_tests.step);
     b.default_step.dependOn(playground_step);
     b.default_step.dependOn(&playground_test_install.step);
-    b.default_step.dependOn(&builtins_tests.step);
     if (no_bin) {
         test_step.dependOn(&all_tests.step);
-        test_step.dependOn(&builtins_tests.step);
     } else {
         const run_tests = b.addRunArtifact(all_tests);
         test_step.dependOn(&run_tests.step);
 
-        const run_builtins_tests = b.addRunArtifact(builtins_tests);
-        builtins_test_step.dependOn(&run_builtins_tests.step);
-        test_step.dependOn(&run_builtins_tests.step);
-
         // Add success message after all tests complete
         const tests_passed_step = b.addSystemCommand(&.{ "echo", "All tests passed!" });
         tests_passed_step.step.dependOn(&run_tests.step);
-        tests_passed_step.step.dependOn(&run_builtins_tests.step);
         test_step.dependOn(&tests_passed_step.step);
     }
 
@@ -306,6 +289,9 @@ fn addMainExe(
         .strip = strip,
     });
     host_lib.linkLibC();
+    const builtins = b.addModule("builtins", .{ .root_source_file = b.path("src/builtins/mod.zig") });
+    builtins.addImport("builtins", builtins);
+    host_lib.root_module.addImport("builtins", builtins);
 
     // Install host.a to the output directory
     const install_host = b.addInstallArtifact(host_lib, .{});
@@ -320,6 +306,7 @@ fn addMainExe(
         .strip = strip,
     });
     shim_lib.linkLibC();
+    shim_lib.root_module.addImport("builtins", builtins);
 
     // Install shim.a to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});

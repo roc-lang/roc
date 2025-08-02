@@ -17,7 +17,7 @@ const tracy = @import("tracy");
 pub const Scope = @import("Scope.zig");
 
 const tokenize = parse.tokenize;
-const RocDec = builtins.RocDec;
+const RocDec = builtins.dec.RocDec;
 const CompileNodeStore = compile.NodeStore;
 const AST = parse.AST;
 const Token = tokenize.Token;
@@ -1999,7 +1999,7 @@ pub fn canonicalizeExpr(
                         const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
                     }
-                    const dec_val = builtins.RocDec.fromF64(f64_val) orelse {
+                    const dec_val = RocDec.fromF64(f64_val) orelse {
                         const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
                     };
@@ -3427,7 +3427,7 @@ fn canonicalizePattern(
                         const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                         return malformed_idx;
                     }
-                    const dec_val = builtins.RocDec.fromF64(f64_val) orelse {
+                    const dec_val = RocDec.fromF64(f64_val) orelse {
                         const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                         return malformed_idx;
                     };

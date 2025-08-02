@@ -14,9 +14,9 @@
 //! ```
 const std = @import("std");
 const builtin = @import("builtin");
+const builtins = @import("builtins");
 const math = std.math;
-const utils = @import("utils.zig");
-const panic_utils = @import("panic.zig");
+const utils = builtins.utils;
 
 const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
@@ -260,8 +260,6 @@ comptime {
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
     exportUtilsFn(utils.dictPseudoSeed, "dict_pseudo_seed");
-
-    @export(&panic_utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .weak });
 }
 
 // Export helpers - Must be run inside a comptime

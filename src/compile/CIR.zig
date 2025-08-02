@@ -291,7 +291,7 @@ pub const IntValue = struct {
 
 // RocDec type definition (for missing export)
 // Must match the structure of builtins.RocDec
-pub const RocDec = builtins.RocDec;
+pub const RocDec = builtins.dec.RocDec;
 
 /// Converts a RocDec to an i128 integer
 pub fn toI128(self: RocDec) i128 {

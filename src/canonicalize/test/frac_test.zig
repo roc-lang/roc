@@ -11,8 +11,10 @@ const parse = @import("parse");
 const Can = @import("can");
 const compile = @import("compile");
 const types = @import("types");
-const RocDec = @import("builtins").RocDec;
+const builtins = @import("builtins");
+
 const ModuleEnv = compile.ModuleEnv;
+const RocDec = builtins.dec.RocDec;
 
 // Note: Each test should create its own GPA to avoid memory leak detection issues
 
