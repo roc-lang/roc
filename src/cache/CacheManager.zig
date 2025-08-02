@@ -263,14 +263,11 @@ pub const CacheManager = struct {
         // since we don't have access to the original source path
         const module_name = "cached_module";
         // Transfer ownership of source to the restored ModuleEnv
-        const restored = cache.restore(self.allocator, module_name, source) catch return error.RestoreError;
+        const module_env = cache.restore(self.allocator, module_name, source) catch return error.RestoreError;
 
         // Reports are not cached - they need to be recomputed if needed
         // Users can use --no-cache to see diagnostic reports
         const reports = try self.allocator.alloc(reporting.Report, 0);
-
-        // The restored ModuleEnv is a pointer, use it directly
-        const module_env = restored.module_env;
 
         // CIR is now just an alias for ModuleEnv
         const cir = module_env;

@@ -1113,13 +1113,13 @@ fn processSnapshotContent(
         var loaded_cache = try cache.CacheModule.fromMappedMemory(cache_data);
 
         // Restore ModuleEnv
-        var restored = try loaded_cache.restore(allocator, module_name, content.source);
-        defer restored.deinit();
+        const restored_env = try loaded_cache.restore(allocator, module_name, content.source);
+        // Note: restored_env points to data within the cache, so we don't free it
 
-        // Generate S-expression from restored CIR
+        // Generate S-expression from restored ModuleEnv
         var restored_tree = SExprTree.init(allocator);
         defer restored_tree.deinit();
-        try ModuleEnv.pushToSExprTree(restored.module_env, null, &restored_tree);
+        try ModuleEnv.pushToSExprTree(restored_env, null, &restored_tree);
 
         var restored_sexpr = std.ArrayList(u8).init(allocator);
         defer restored_sexpr.deinit();

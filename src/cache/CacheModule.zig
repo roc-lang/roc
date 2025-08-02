@@ -45,8 +45,7 @@ pub const Header = struct {
     /// Total size of the data section (excluding this header)
     data_size: u32,
 
-    // TODO implement this properly.. just stubbed out for now.
-    // CRC32 checksum of the data section
+    /// Checksum field (currently unused but kept for future compatibility)
     checksum: u32,
 
     /// Component locations in the data section
@@ -137,18 +136,15 @@ pub const CacheModule = struct {
         // Get the total size
         const total_data_size = writer.total_bytes;
         
-        // Allocate buffer for header + data
+        // Allocate cache_data for header + data
         const header_size = std.mem.alignForward(usize, @sizeOf(Header), SERIALIZATION_ALIGNMENT);
         const total_size = header_size + total_data_size;
-        const buffer = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, total_size);
-        errdefer allocator.free(buffer);
-        
-        // Zero-initialize buffer
-        @memset(buffer, 0);
+        const cache_data = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, total_size);
+        errdefer allocator.free(cache_data);
         
         // Initialize header with simple component info 
         // We'll store the entire serialized ModuleEnv as one component
-        const header = @as(*Header, @ptrCast(buffer.ptr));
+        const header = @as(*Header, @ptrCast(cache_data.ptr));
         header.* = Header{
             .magic = CACHE_MAGIC,
             .version = CACHE_VERSION,
@@ -171,17 +167,14 @@ pub const CacheModule = struct {
         };
         
         // Copy the serialized data after the header
-        const data_section = buffer[header_size..];
+        const data_section = cache_data[header_size..];
         var write_offset: usize = 0;
         for (writer.iovecs.items) |iovec| {
             @memcpy(data_section[write_offset..][0..iovec.iov_len], iovec.iov_base[0..iovec.iov_len]);
             write_offset += iovec.iov_len;
         }
         
-        // TODO: Calculate and store checksum
-        // header.checksum = std.hash.Crc32.hash(data_section[0..total_data_size]);
-        
-        return buffer;
+        return cache_data;
     }
 
     /// Load a cache from memory-mapped data
@@ -204,36 +197,16 @@ pub const CacheModule = struct {
         const header_size = std.mem.alignForward(usize, @sizeOf(Header), SERIALIZATION_ALIGNMENT);
         const data = mapped_data[header_size .. header_size + header.data_size];
 
-        // TODO Validate checksum
-        // const calculated_checksum = std.hash.Crc32.hash(data);
-        // if (header.checksum != calculated_checksum) return error.ChecksumMismatch;
-
         return CacheModule{
             .header = header,
             .data = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(data)),
         };
     }
 
-    /// Restored data from cache
-    pub const RestoredData = struct {
-        module_env: *ModuleEnv,
-        _cache_data: *const CacheModule,
-        
-        // CIR is now just an alias for ModuleEnv, so we only need one field
-        // For backward compatibility, provide a getter
-        pub fn cir(self: *const RestoredData) *const ModuleEnv {
-            return self.module_env;
-        }
-        
-        pub fn deinit(_: *const RestoredData) void {
-            // The ModuleEnv references data in the cache, so we don't free it here
-            // The cache data will be freed by the caller
-        }
-    };
 
-    /// Restore ModuleEnv and CIR from the cached data
+    /// Restore ModuleEnv from the cached data
     /// IMPORTANT: This expects source to remain valid for the lifetime of the restored ModuleEnv.
-    pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8, source: []const u8) !RestoredData {
+    pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8, source: []const u8) !*ModuleEnv {
         // Since we stored the entire ModuleEnv as one blob in node_store,
         // we need to deserialize it from there
         const serialized_data = self.getComponentData(.node_store);
@@ -253,13 +226,7 @@ pub const CacheModule = struct {
         // Deserialize the ModuleEnv
         const module_env_ptr: *ModuleEnv = deserialized_ptr.deserialize(offset, allocator, source, module_name);
         
-        // Create result struct
-        const result = RestoredData{
-            .module_env = module_env_ptr,
-            ._cache_data = self,
-        };
-        
-        return result;
+        return module_env_ptr;
     }
 
     /// Get the raw data for a specific component
@@ -559,16 +526,16 @@ test "create and restore cache" {
     // Validate cache
     try cache.validate();
 
-    // Restore ModuleEnv and CIR
+    // Restore ModuleEnv
     // Duplicate source since restore takes ownership
-    const restored = try cache.restore(gpa, "TestModule", source);
-    defer restored.deinit();
+    const restored_env = try cache.restore(gpa, "TestModule", source);
+    // Note: restored_env points to data within the cache, so we don't free it
 
-    // Generate S-expression from restored CIR
+    // Generate S-expression from restored ModuleEnv
     var restored_tree = SExprTree.init(gpa);
     defer restored_tree.deinit();
 
-    try restored.module_env.pushToSExprTree(null, &restored_tree);
+    try restored_env.pushToSExprTree(null, &restored_tree);
 
     var restored_sexpr = std.ArrayList(u8).init(gpa);
     defer restored_sexpr.deinit();
@@ -699,14 +666,14 @@ test "cache filesystem roundtrip with in-memory storage" {
 
     // Restore from the roundtrip cache
     // Duplicate source since restore takes ownership
-    const restored = try roundtrip_cache.restore(gpa, "TestModule", source);
-    defer restored.deinit();
+    const restored_env = try roundtrip_cache.restore(gpa, "TestModule", source);
+    // Note: restored_env points to data within the cache, so we don't free it
 
-    // Generate S-expression from restored CIR
+    // Generate S-expression from restored ModuleEnv
     var restored_tree = SExprTree.init(gpa);
     defer restored_tree.deinit();
 
-    try restored.module_env.pushToSExprTree(null, &restored_tree);
+    try restored_env.pushToSExprTree(null, &restored_tree);
 
     var restored_sexpr = std.ArrayList(u8).init(gpa);
     defer restored_sexpr.deinit();
