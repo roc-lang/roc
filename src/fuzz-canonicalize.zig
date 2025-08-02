@@ -75,7 +75,6 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
                 @panic("No Space Left");
             },
         }
-        return;
     };
     defer result.deinit(gpa);
 
