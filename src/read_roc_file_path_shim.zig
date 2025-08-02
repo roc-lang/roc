@@ -2,61 +2,20 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const c = std.c;
-const RocStr = extern struct {
-    bytes: ?[*]u8,
-    length: usize,
-    capacity_or_alloc_ptr: usize,
+const builtins = @import("builtins");
 
-    const SMALL_STRING_SIZE = @sizeOf(RocStr);
-    const MASK_ISIZE: isize = std.math.minInt(isize);
-    const MASK: usize = @as(usize, @bitCast(MASK_ISIZE));
-
-    pub inline fn empty() RocStr {
-        return RocStr{
-            .length = 0,
-            .bytes = null,
-            .capacity_or_alloc_ptr = MASK,
-        };
-    }
-
-    pub fn isSmallStr(self: RocStr) bool {
-        return @as(isize, @bitCast(self.capacity_or_alloc_ptr)) < 0;
-    }
-
-    fn asArray(self: RocStr) [@sizeOf(RocStr)]u8 {
-        const as_ptr = @as([*]const u8, @ptrCast(&self));
-        const slice = as_ptr[0..@sizeOf(RocStr)];
-        return slice.*;
-    }
-
-    pub fn asU8ptrMut(self: *RocStr) [*]u8 {
-        if (self.isSmallStr()) {
-            return @as([*]u8, @ptrCast(self));
-        } else {
-            return @as([*]u8, @ptrCast(self.bytes));
-        }
-    }
-
-    pub fn setLen(self: *RocStr, length: usize) void {
-        if (self.isSmallStr()) {
-            self.asU8ptrMut()[@sizeOf(RocStr) - 1] = @as(u8, @intCast(length)) | 0b1000_0000;
-        } else {
-            self.length = length;
-        }
-    }
-};
+const RocStr = builtins.str.RocStr;
 
 // Platform-specific shared memory implementation
 const is_windows = builtin.target.os.tag == .windows;
 
 // POSIX shared memory functions
 const posix = if (!is_windows) struct {
-    extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: c.mode_t) c_int;
+    extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
     extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
-    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: c.off_t) ?*anyopaque;
+    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: std.c.off_t) ?*anyopaque;
     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
-    extern "c" fn fstat(fd: c_int, buf: *c.Stat) c_int;
+    extern "c" fn fstat(fd: c_int, buf: *std.c.Stat) c_int;
     extern "c" fn close(fd: c_int) c_int;
 } else struct {};
 
@@ -81,15 +40,17 @@ const windows = if (is_windows) struct {
 /// Exported symbol that reads a string from shared memory ROC_FILE_TO_INTERPRET
 /// Returns a RocStr to the caller
 /// Expected format in shared memory: [usize length][u8... data]
-export fn roc_entrypoint(roc_alloc: *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque) RocStr {
-    if (comptime is_windows) {
-        return readFromWindowsSharedMemory(roc_alloc);
-    } else {
-        return readFromPosixSharedMemory(roc_alloc);
-    }
+export fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque) callconv(.C) void {
+    const result = if (comptime is_windows)
+        readFromWindowsSharedMemory(ops)
+    else
+        readFromPosixSharedMemory(ops);
+
+    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(ret_ptr));
+    roc_str_ptr.* = result;
 }
 
-fn readFromWindowsSharedMemory(roc_alloc: *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque) RocStr {
+fn readFromWindowsSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
     const handle_str = std.process.getEnvVarOwned(std.heap.page_allocator, "__ROC_INTERNAL_SHM_HANDLE") catch {
         return RocStr.empty();
     };
@@ -114,10 +75,10 @@ fn readFromWindowsSharedMemory(roc_alloc: *const fn (size: usize, alignment: u32
     // Get pointer to string data
     const string_data = @as([*]u8, @ptrCast(mapped_ptr)) + @sizeOf(usize);
 
-    return createRocStrFromData(roc_alloc, string_data, string_length);
+    return createRocStrFromData(ops, string_data, string_length);
 }
 
-fn readFromPosixSharedMemory(roc_alloc: *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque) RocStr {
+fn readFromPosixSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
     const fd_str = std.process.getEnvVarOwned(std.heap.page_allocator, "__ROC_INTERNAL_SHM_FD") catch {
         return RocStr.empty();
     };
@@ -130,7 +91,7 @@ fn readFromPosixSharedMemory(roc_alloc: *const fn (size: usize, alignment: u32) 
     defer _ = posix.close(shm_fd);
 
     // Get shared memory size
-    var stat_buf: c.Stat = undefined;
+    var stat_buf: std.c.Stat = undefined;
     if (posix.fstat(shm_fd, &stat_buf) != 0) {
         return RocStr.empty();
     }
@@ -165,10 +126,10 @@ fn readFromPosixSharedMemory(roc_alloc: *const fn (size: usize, alignment: u32) 
     // Get pointer to string data
     const string_data = mapped_memory.ptr + @sizeOf(usize);
 
-    return createRocStrFromData(roc_alloc, string_data, string_length);
+    return createRocStrFromData(ops, string_data, string_length);
 }
 
-fn createRocStrFromData(roc_alloc: *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque, string_data: [*]u8, string_length: usize) RocStr {
+fn createRocStrFromData(ops: *builtins.host_abi.RocOps, string_data: [*]u8, string_length: usize) RocStr {
     // For small strings, we can create them directly
     if (string_length <= @sizeOf(RocStr) - 1) {
         var result = RocStr.empty();
@@ -177,11 +138,15 @@ fn createRocStrFromData(roc_alloc: *const fn (size: usize, alignment: u32) callc
         return result;
     }
 
-    // For larger strings, allocate memory using roc_alloc
+    // For larger strings, allocate memory using RocOps
     const alignment = @alignOf(usize);
-    const alloc_ptr = roc_alloc(string_length, alignment) orelse {
-        return RocStr.empty();
+    var roc_alloc = builtins.host_abi.RocAlloc{
+        .alignment = alignment,
+        .length = string_length,
+        .answer = undefined,
     };
+    ops.roc_alloc(&roc_alloc, ops.env);
+    const alloc_ptr = roc_alloc.answer;
 
     // Create a RocStr with the allocated memory
     const result = RocStr{

@@ -287,47 +287,6 @@ pub fn SafeList(comptime T: type) type {
         }
 
         /// Serialize this list into the provided buffer
-        /// Returns the slice of buffer that was written to
-        pub fn serializeInto(self: *const SafeList(T), buffer: []align(SERIALIZATION_ALIGNMENT) u8) ![]align(SERIALIZATION_ALIGNMENT) const u8 {
-            const size = self.serializedSize();
-            if (buffer.len < size) return error.BufferTooSmall;
-
-            // Write count
-            const count_ptr = @as(*u32, @ptrCast(@alignCast(buffer.ptr)));
-            count_ptr.* = @intCast(self.items.items.len);
-
-            var offset: usize = @sizeOf(u32);
-
-            // Check if T has custom serialization
-            if (comptime switch (@typeInfo(T)) {
-                .@"struct", .@"union", .@"enum", .@"opaque" => @hasDecl(T, "serializeInto"),
-                else => false,
-            }) {
-                // Use custom serialization for each item
-                for (self.items.items) |*item| {
-                    const item_buffer = buffer[offset..];
-                    const item_slice = try item.serializeInto(item_buffer);
-                    offset += item_slice.len;
-                }
-            } else {
-                // Use memcpy for POD types
-                if (@typeInfo(T) == .@"struct" or @typeInfo(T) == .int or @typeInfo(T) == .float or @typeInfo(T) == .@"enum") {
-                    const data_ptr = @as([*]T, @ptrCast(@alignCast(buffer.ptr + @sizeOf(u32))));
-                    @memcpy(data_ptr[0..self.items.items.len], self.items.items);
-                    offset += self.items.items.len * @sizeOf(T);
-                } else {
-                    @compileError("Cannot serialize non-POD type " ++ @typeName(T) ++ " without custom serialization methods");
-                }
-            }
-
-            // Zero out any padding bytes
-            if (offset < size) {
-                @memset(buffer[offset..size], 0);
-            }
-
-            return buffer[0..size];
-        }
-
         /// Deserialize from buffer, using provided allocator
         pub fn deserializeFrom(buffer: []align(@alignOf(T)) const u8, allocator: Allocator) !SafeList(T) {
             if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
@@ -615,36 +574,6 @@ pub fn SafeMultiList(comptime T: type) type {
             const raw_size = @sizeOf(u32) + (self.items.len * @sizeOf(T));
             // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
             return std.mem.alignForward(usize, raw_size, SERIALIZATION_ALIGNMENT);
-        }
-
-        /// Serialize this list into the provided buffer
-        /// Returns the slice of buffer that was written to
-        pub fn serializeInto(self: *const SafeMultiList(T), buffer: []align(SERIALIZATION_ALIGNMENT) u8) ![]align(SERIALIZATION_ALIGNMENT) const u8 {
-            const size = self.serializedSize();
-            if (buffer.len < size) return error.BufferTooSmall;
-
-            // Write count
-            const count_ptr = @as(*u32, @ptrCast(@alignCast(buffer.ptr)));
-            count_ptr.* = @intCast(self.items.len);
-
-            // If T is a POD type, serialize each item
-            if (@typeInfo(T) == .@"struct" or @typeInfo(T) == .int or @typeInfo(T) == .float) {
-                const data_ptr = @as([*]T, @ptrCast(@alignCast(buffer.ptr + @sizeOf(u32))));
-                // Copy each item from the MultiArrayList to contiguous memory
-                for (0..self.items.len) |i| {
-                    data_ptr[i] = self.items.get(i);
-                }
-            } else {
-                @compileError("Cannot serialize non-POD type " ++ @typeName(T));
-            }
-
-            // Zero out any padding bytes
-            const actual_size = @sizeOf(u32) + (self.items.len * @sizeOf(T));
-            if (actual_size < size) {
-                @memset(buffer[actual_size..size], 0);
-            }
-
-            return buffer[0..size];
         }
 
         /// Deserialize from buffer, using provided allocator
@@ -2865,65 +2794,6 @@ test "SafeMultiList CompactWriter empty with capacity" {
     try testing.expectEqual(@as(usize, 0), deserialized.len());
     // Capacity should be 0 after compaction
     try testing.expectEqual(@as(usize, 0), deserialized.items.capacity);
-}
-
-test "SafeList comprehensive serialization framework test" {
-    const gpa = testing.allocator;
-
-    var list = try SafeList(u32).initCapacity(gpa, 8);
-    defer list.deinit(gpa);
-
-    // Add various test data including edge cases
-    _ = try list.append(gpa, 0); // minimum value
-    _ = try list.append(gpa, 42);
-    _ = try list.append(gpa, 123);
-    _ = try list.append(gpa, 0xFFFFFFFF); // maximum value
-    _ = try list.append(gpa, 999);
-
-    // Test serialization using the testing framework
-    try serialization.testing.testSerialization(SafeList(u32), &list, gpa);
-}
-
-test "SafeList empty list serialization framework test" {
-    const gpa = testing.allocator;
-
-    var empty_list = SafeList(u32){};
-    defer empty_list.deinit(gpa);
-
-    try serialization.testing.testSerialization(SafeList(u32), &empty_list, gpa);
-}
-
-test "SafeMultiList comprehensive serialization framework test" {
-    const gpa = testing.allocator;
-
-    const TestStruct = struct {
-        x: u32,
-        y: u32,
-    };
-
-    var list = try SafeMultiList(TestStruct).initCapacity(gpa, 4);
-    defer list.deinit(gpa);
-
-    // Add various test data including edge cases
-    _ = try list.append(gpa, TestStruct{ .x = 0, .y = 0 }); // minimum values
-    _ = try list.append(gpa, TestStruct{ .x = 42, .y = 123 });
-    _ = try list.append(gpa, TestStruct{ .x = 0xFFFFFFFF, .y = 0xFFFFFFFF }); // maximum values
-
-    // Test serialization using the testing framework
-    try serialization.testing.testSerialization(SafeMultiList(TestStruct), &list, gpa);
-}
-
-test "SafeMultiList empty list serialization framework test" {
-    const gpa = testing.allocator;
-
-    const TestStruct = struct {
-        val: u32,
-    };
-
-    var empty_list = SafeMultiList(TestStruct){};
-    defer empty_list.deinit(gpa);
-
-    try serialization.testing.testSerialization(SafeMultiList(TestStruct), &empty_list, gpa);
 }
 
 test "SafeMultiList.Serialized roundtrip" {

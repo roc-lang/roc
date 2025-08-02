@@ -10,6 +10,7 @@ const collections = @import("collections");
 const types = @import("types");
 const parse = @import("parse");
 const compile = @import("compile");
+const serialization = @import("serialization");
 const SExprTree = base.SExprTree;
 const Filesystem = @import("../fs/Filesystem.zig");
 
@@ -27,12 +28,6 @@ const SafeStringHashMap = collections.SafeStringHashMap;
 const CACHE_MAGIC: u32 = 0x524F4343; // "ROCC" in ASCII
 const CACHE_VERSION: u32 = 1;
 
-/// Component metadata for locating data in the cache
-const ComponentInfo = struct {
-    offset: u32,
-    length: u32,
-};
-
 /// Cache header that gets written to disk before the cached data
 pub const Header = struct {
     /// Magic number for validation
@@ -44,37 +39,18 @@ pub const Header = struct {
     /// Total size of the data section (excluding this header)
     data_size: u32,
 
-    // TODO implement this properly.. just stubbed out for now.
-    // CRC32 checksum of the data section
-    checksum: u32,
-
-    /// Component locations in the data section
-    node_store: ComponentInfo,
-    string_store: ComponentInfo,
-    ident_ids_for_slicing: ComponentInfo,
-    ident_store: ComponentInfo,
-    line_starts: ComponentInfo,
-    types_store: ComponentInfo,
-    exposed_items: ComponentInfo,
-    external_decls: ComponentInfo,
-
-    /// Spans can be stored directly since they're small
-    all_defs: ModuleEnv.Def.Span,
-    all_statements: ModuleEnv.Statement.Span,
-
     /// Diagnostic counts for accurate reporting when loading from cache
     error_count: u32,
     warning_count: u32,
 
-    /// Fixed padding to ensure alignment
-    _padding: [24]u8 = [_]u8{0} ** 24,
+    /// Padding to ensure alignment
+    _padding: [12]u8 = [_]u8{0} ** 12,
 
     /// Error specific to initializing a Header from bytes
     pub const InitError = error{
         PartialRead,
         InvalidMagic,
         InvalidVersion,
-        ChecksumMismatch,
     };
 
     /// Verify that the given buffer begins with a valid Header
@@ -106,118 +82,61 @@ pub const CacheModule = struct {
     data: []align(SERIALIZATION_ALIGNMENT) const u8,
 
     /// Create a cache by serializing ModuleEnv and CIR data
+    /// @param allocator - Allocator for the returned cache data
+    /// @param arena_allocator - Arena allocator for temporary serialization data
     pub fn create(
         allocator: Allocator,
+        arena_allocator: Allocator,
         module_env: *const ModuleEnv,
         _: *const ModuleEnv, // ModuleEnv contains the canonical IR
         error_count: u32,
         warning_count: u32,
     ) ![]align(SERIALIZATION_ALIGNMENT) u8 {
-        // Calculate component sizes
-        const node_store_size = module_env.store.serializedSize();
-        const string_store_size = module_env.strings.serializedSize();
-        const ident_ids_size = module_env.ident_ids_for_slicing.serializedSize();
-        const ident_store_size = module_env.idents.serializedSize();
-        const line_starts_size = module_env.line_starts.serializedSize();
-        const types_store_size = module_env.types.serializedSize();
-        const exposed_items_size = module_env.exposed_items.serializedSize();
-        const external_decls_size = module_env.external_decls.serializedSize();
+        const CompactWriter = serialization.CompactWriter;
 
-        // Calculate aligned offsets
-        var offset: u32 = 0;
+        // Create CompactWriter
+        var writer = CompactWriter{
+            .iovecs = .{},
+            .total_bytes = 0,
+        };
 
-        // Ensure each offset is aligned to SERIALIZATION_ALIGNMENT
-        const node_store_offset = offset;
-        offset += @intCast(node_store_size);
+        // Allocate space for ModuleEnv.Serialized
+        const env_ptr = try writer.appendAlloc(arena_allocator, ModuleEnv);
+        const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
 
-        offset = @intCast(std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT));
-        const string_store_offset = offset;
-        offset += @intCast(string_store_size);
+        // Serialize the ModuleEnv
+        try serialized_ptr.serialize(module_env, arena_allocator, &writer);
 
-        offset = @intCast(std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT));
-        const ident_ids_offset = offset;
-        offset += @intCast(ident_ids_size);
+        // Get the total size
+        const total_data_size = writer.total_bytes;
 
-        offset = @intCast(std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT));
-        const ident_store_offset = offset;
-        offset += @intCast(ident_store_size);
-
-        offset = @intCast(std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT));
-        const line_starts_offset = offset;
-        offset += @intCast(line_starts_size);
-
-        offset = @intCast(std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT));
-        const types_store_offset = offset;
-        offset += @intCast(types_store_size);
-
-        offset = @intCast(std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT));
-        const exposed_items_offset = offset;
-        offset += @intCast(exposed_items_size);
-
-        offset = @intCast(std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT));
-        const external_decls_offset = offset;
-        offset += @intCast(external_decls_size);
-        offset = @intCast(std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT));
-
-        const total_data_size = offset;
-
-        // Allocate buffer for header + data
+        // Allocate cache_data for header + data
         const header_size = std.mem.alignForward(usize, @sizeOf(Header), SERIALIZATION_ALIGNMENT);
         const total_size = header_size + total_data_size;
-        const buffer = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, total_size);
-
-        // Zero-initialize buffer for proper CRC calculation
-        @memset(buffer, 0);
+        const cache_data = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, total_size);
+        errdefer allocator.free(cache_data);
 
         // Initialize header
-        const header = @as(*Header, @ptrCast(buffer.ptr));
+        const header = @as(*Header, @ptrCast(cache_data.ptr));
         header.* = Header{
             .magic = CACHE_MAGIC,
             .version = CACHE_VERSION,
-            .data_size = total_data_size,
-            .checksum = 0, // Will be calculated after data is written
-            .node_store = .{ .offset = node_store_offset, .length = @intCast(node_store_size) },
-            .string_store = .{ .offset = string_store_offset, .length = @intCast(string_store_size) },
-            .ident_ids_for_slicing = .{ .offset = ident_ids_offset, .length = @intCast(ident_ids_size) },
-            .ident_store = .{ .offset = ident_store_offset, .length = @intCast(ident_store_size) },
-            .line_starts = .{ .offset = line_starts_offset, .length = @intCast(line_starts_size) },
-            .types_store = .{ .offset = types_store_offset, .length = @intCast(types_store_size) },
-            .exposed_items = .{ .offset = exposed_items_offset, .length = @intCast(exposed_items_size) },
-            .external_decls = .{ .offset = external_decls_offset, .length = @intCast(external_decls_size) },
-            .all_defs = module_env.all_defs,
-            .all_statements = module_env.all_statements,
+            .data_size = @intCast(total_data_size),
             .error_count = error_count,
             .warning_count = warning_count,
+            ._padding = [_]u8{0} ** 12,
         };
 
-        // Get data section (must be aligned)
-        const data_section = @as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[header_size..]));
+        // Consolidate the scattered iovecs into the cache data buffer
+        const data_section = cache_data[header_size..];
+        var offset: usize = 0;
+        for (writer.iovecs.items) |iovec| {
+            const end = offset + iovec.iov_len;
+            @memcpy(data_section[offset..end], iovec.iov_base[0..iovec.iov_len]);
+            offset = end;
+        }
 
-        // Assert all offsets are aligned (in debug mode)
-        std.debug.assert(node_store_offset % SERIALIZATION_ALIGNMENT == 0);
-        std.debug.assert(string_store_offset % SERIALIZATION_ALIGNMENT == 0);
-        std.debug.assert(ident_ids_offset % SERIALIZATION_ALIGNMENT == 0);
-        std.debug.assert(ident_store_offset % SERIALIZATION_ALIGNMENT == 0);
-        std.debug.assert(line_starts_offset % SERIALIZATION_ALIGNMENT == 0);
-        std.debug.assert(types_store_offset % SERIALIZATION_ALIGNMENT == 0);
-        std.debug.assert(exposed_items_offset % SERIALIZATION_ALIGNMENT == 0);
-        std.debug.assert(external_decls_offset % SERIALIZATION_ALIGNMENT == 0);
-
-        // Serialize each component
-        // Since we've ensured all offsets are aligned, we can safely alignCast the slices
-        _ = try module_env.store.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(data_section[node_store_offset .. node_store_offset + node_store_size])));
-        _ = try module_env.strings.serializeInto(data_section[string_store_offset .. string_store_offset + string_store_size]);
-        _ = try module_env.ident_ids_for_slicing.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(data_section[ident_ids_offset .. ident_ids_offset + ident_ids_size])));
-        _ = try module_env.idents.serializeInto(data_section[ident_store_offset .. ident_store_offset + ident_store_size], allocator);
-        _ = try module_env.line_starts.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(data_section[line_starts_offset .. line_starts_offset + line_starts_size])));
-        _ = try module_env.types.serializeInto(data_section[types_store_offset .. types_store_offset + types_store_size], allocator);
-        _ = try module_env.exposed_items.serializeInto(data_section[exposed_items_offset .. exposed_items_offset + exposed_items_size]);
-        _ = try module_env.external_decls.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(data_section[external_decls_offset .. external_decls_offset + external_decls_size])));
-
-        // TODO Calculate and store checksum
-        // header.checksum = std.hash.Crc32.hash(data_section[0..total_data_size]);
-
-        return buffer;
+        return cache_data;
     }
 
     /// Load a cache from memory-mapped data
@@ -240,117 +159,34 @@ pub const CacheModule = struct {
         const header_size = std.mem.alignForward(usize, @sizeOf(Header), SERIALIZATION_ALIGNMENT);
         const data = mapped_data[header_size .. header_size + header.data_size];
 
-        // TODO Validate checksum
-        // const calculated_checksum = std.hash.Crc32.hash(data);
-        // if (header.checksum != calculated_checksum) return error.ChecksumMismatch;
-
         return CacheModule{
             .header = header,
             .data = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(data)),
         };
     }
 
-    /// Restored data from cache
-    pub const RestoredData = struct {
-        module_env: ModuleEnv,
-        // CIR is now just an alias for ModuleEnv, so we only need one field
-        // For backward compatibility, provide a getter
-        pub fn cir(self: *const RestoredData) *const ModuleEnv {
-            return &self.module_env;
-        }
-    };
-
-    /// Restore ModuleEnv and CIR from the cached data
+    /// Restore ModuleEnv from the cached data
     /// IMPORTANT: This expects source to remain valid for the lifetime of the restored ModuleEnv.
-    pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8, source: []const u8) !RestoredData {
-        // Deserialize each component
-        var node_store = try NodeStore.deserializeFrom(
-            @as([]align(@alignOf(Node)) const u8, @alignCast(self.getComponentData(.node_store))),
-            allocator,
-        );
-        errdefer node_store.deinit();
+    pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8, source: []const u8) !*ModuleEnv {
+        // The entire data section contains the serialized ModuleEnv
+        const serialized_data = self.data;
 
-        var strings = try base.StringLiteral.Store.deserializeFrom(self.getComponentData(.string_store), allocator);
-        errdefer strings.deinit(allocator);
+        // The ModuleEnv.Serialized should be at the beginning of the data
+        if (serialized_data.len < @sizeOf(ModuleEnv)) {
+            return error.BufferTooSmall;
+        }
 
-        var ident_ids_for_slicing = try SafeList(base.Ident.Idx).deserializeFrom(
-            @as([]align(@alignOf(base.Ident.Idx)) const u8, @alignCast(self.getComponentData(.ident_ids_for_slicing))),
-            allocator,
-        );
-        errdefer ident_ids_for_slicing.deinit(allocator);
+        // Get pointer to the serialized ModuleEnv
+        const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(@constCast(serialized_data.ptr))));
 
-        var idents = try base.Ident.Store.deserializeFrom(self.getComponentData(.ident_store), allocator);
-        errdefer idents.deinit(allocator);
+        // Calculate the offset from the beginning of the serialized data
+        const buffer_start = @intFromPtr(serialized_data.ptr);
+        const offset = @as(i64, @intCast(buffer_start));
 
-        var line_starts = try SafeList(u32).deserializeFrom(
-            @as([]align(@alignOf(u32)) const u8, @alignCast(self.getComponentData(.line_starts))),
-            allocator,
-        );
-        errdefer line_starts.deinit(allocator);
+        // Deserialize the ModuleEnv
+        const module_env_ptr: *ModuleEnv = deserialized_ptr.deserialize(offset, allocator, source, module_name);
 
-        var types_store = try TypeStore.deserializeFrom(self.getComponentData(.types_store), allocator);
-        errdefer types_store.deinit();
-
-        var exposed_items = try collections.ExposedItems.deserializeFrom(self.getComponentData(.exposed_items), allocator);
-        errdefer exposed_items.deinit(allocator);
-
-        // Create ModuleEnv from deserialized components
-        var module_env = ModuleEnv{
-            .gpa = allocator,
-            .idents = idents,
-            .ident_ids_for_slicing = ident_ids_for_slicing,
-            .strings = strings,
-            .types = types_store,
-            .exposed_items = exposed_items,
-            .line_starts = line_starts,
-            .source = source,
-            // Module compilation fields - will be initialized after
-            .all_defs = undefined,
-            .all_statements = undefined,
-            .external_decls = undefined,
-            .imports = undefined,
-            .module_name = undefined,
-            .diagnostics = undefined,
-            .store = undefined,
-        };
-        errdefer module_env.deinit();
-
-        // Deserialize external_decls
-        var external_decls = try ModuleEnv.ExternalDecl.SafeList.deserializeFrom(
-            @as([]align(@alignOf(ModuleEnv.ExternalDecl)) const u8, @alignCast(self.getComponentData(.external_decls))),
-            allocator,
-        );
-        errdefer external_decls.deinit(allocator);
-
-        // Update module_env with CIR-specific fields
-        module_env.store = node_store;
-        module_env.all_defs = self.header.all_defs;
-        module_env.all_statements = self.header.all_statements;
-        module_env.external_decls = external_decls;
-        module_env.imports = ModuleEnv.Import.Store.init();
-        module_env.module_name = module_name;
-
-        // Create result struct
-        const result = RestoredData{
-            .module_env = module_env,
-        };
-
-        return result;
-    }
-
-    /// Get the raw data for a specific component
-    pub fn getComponentData(self: *const CacheModule, comptime component: ComponentType) []const u8 {
-        const info = switch (component) {
-            .node_store => self.header.node_store,
-            .string_store => self.header.string_store,
-            .ident_ids_for_slicing => self.header.ident_ids_for_slicing,
-            .ident_store => self.header.ident_store,
-            .line_starts => self.header.line_starts,
-            .types_store => self.header.types_store,
-            .exposed_items => self.header.exposed_items,
-            .external_decls => self.header.external_decls,
-        };
-        return self.data[info.offset .. info.offset + info.length];
+        return module_env_ptr;
     }
 
     /// Get diagnostic information about the cache
@@ -359,39 +195,14 @@ pub const CacheModule = struct {
             .total_size = @sizeOf(Header) + self.header.data_size,
             .header_size = @sizeOf(Header),
             .data_size = self.header.data_size,
-            .checksum = self.header.checksum,
-            .component_sizes = .{
-                .node_store = self.header.node_store.length,
-                .string_store = self.header.string_store.length,
-                .ident_ids_for_slicing = self.header.ident_ids_for_slicing.length,
-                .ident_store = self.header.ident_store.length,
-                .line_starts = self.header.line_starts.length,
-                .types_store = self.header.types_store.length,
-                .exposed_items = self.header.exposed_items.length,
-                .external_decls = self.header.external_decls.length,
-            },
         };
     }
 
     /// Validate the cache structure and integrity
     pub fn validate(self: *const CacheModule) !void {
-        // Validate component offsets are within bounds
-        inline for (std.meta.fields(ComponentType)) |field| {
-            const component = @field(ComponentType, field.name);
-            const info = switch (component) {
-                .node_store => self.header.node_store,
-                .string_store => self.header.string_store,
-                .ident_ids_for_slicing => self.header.ident_ids_for_slicing,
-                .ident_store => self.header.ident_store,
-                .line_starts => self.header.line_starts,
-                .types_store => self.header.types_store,
-                .exposed_items => self.header.exposed_items,
-                .external_decls => self.header.external_decls,
-            };
-
-            if (info.offset + info.length > self.header.data_size) {
-                return error.ComponentOutOfBounds;
-            }
+        // Just validate that we have data
+        if (self.data.len != self.header.data_size) {
+            return error.DataSizeMismatch;
         }
     }
 
@@ -544,34 +355,11 @@ pub const CacheModule = struct {
     }
 };
 
-/// Enum for component types
-const ComponentType = enum {
-    node_store,
-    string_store,
-    ident_ids_for_slicing,
-    ident_store,
-    line_starts,
-    types_store,
-    exposed_items,
-    external_decls,
-};
-
 /// Diagnostic information about a cache
 pub const Diagnostics = struct {
     total_size: u32,
     header_size: u32,
     data_size: u32,
-    checksum: u32,
-    component_sizes: struct {
-        node_store: u32,
-        string_store: u32,
-        ident_ids_for_slicing: u32,
-        ident_store: u32,
-        line_starts: u32,
-        types_store: u32,
-        exposed_items: u32,
-        external_decls: u32,
-    },
 };
 
 test "Header alignment" {
@@ -625,8 +413,12 @@ test "create and restore cache" {
     defer original_sexpr.deinit();
     try original_tree.toStringPretty(original_sexpr.writer().any());
 
+    // Create arena for serialization
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
     // Create cache from real data
-    const cache_data = try CacheModule.create(gpa, &module_env, cir, 0, 0);
+    const cache_data = try CacheModule.create(gpa, arena.allocator(), &module_env, cir, 0, 0);
     defer gpa.free(cache_data);
 
     // Load cache
@@ -635,18 +427,16 @@ test "create and restore cache" {
     // Validate cache
     try cache.validate();
 
-    // Restore ModuleEnv and CIR
+    // Restore ModuleEnv
     // Duplicate source since restore takes ownership
-    const restored = try cache.restore(gpa, "TestModule", source);
+    const restored_env = try cache.restore(gpa, "TestModule", source);
+    // Note: restored_env points to data within the cache, so we don't free it
 
-    var restored_module_env = restored.module_env;
-    defer restored_module_env.deinit();
-
-    // Generate S-expression from restored CIR
+    // Generate S-expression from restored ModuleEnv
     var restored_tree = SExprTree.init(gpa);
     defer restored_tree.deinit();
 
-    try restored_module_env.pushToSExprTree(null, &restored_tree);
+    try restored_env.pushToSExprTree(null, &restored_tree);
 
     var restored_sexpr = std.ArrayList(u8).init(gpa);
     defer restored_sexpr.deinit();
@@ -699,8 +489,12 @@ test "cache filesystem roundtrip with in-memory storage" {
     defer original_sexpr.deinit();
     try original_tree.toStringPretty(original_sexpr.writer().any());
 
+    // Create arena for serialization
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
     // Create cache from real data
-    const cache_data = try CacheModule.create(gpa, &module_env, cir, 0, 0);
+    const cache_data = try CacheModule.create(gpa, arena.allocator(), &module_env, cir, 0, 0);
     defer gpa.free(cache_data);
 
     // In-memory file storage for comprehensive mock filesystem
@@ -766,7 +560,7 @@ test "cache filesystem roundtrip with in-memory storage" {
 
     // Read the cache back from mock filesystem
     const read_cache_data = try CacheModule.readFromFile(gpa, test_path, filesystem);
-    defer gpa.free(read_cache_data);
+    // Don't free immediately - the restored ModuleEnv references this data
 
     // Verify the read data matches the original
     try std.testing.expectEqualSlices(u8, cache_data, read_cache_data);
@@ -777,16 +571,14 @@ test "cache filesystem roundtrip with in-memory storage" {
 
     // Restore from the roundtrip cache
     // Duplicate source since restore takes ownership
-    const restored = try roundtrip_cache.restore(gpa, "TestModule", source);
+    const restored_env = try roundtrip_cache.restore(gpa, "TestModule", source);
+    // Note: restored_env points to data within the cache, so we don't free it
 
-    var restored_module_env = restored.module_env;
-    defer restored_module_env.deinit();
-
-    // Generate S-expression from restored CIR
+    // Generate S-expression from restored ModuleEnv
     var restored_tree = SExprTree.init(gpa);
     defer restored_tree.deinit();
 
-    try restored_module_env.pushToSExprTree(null, &restored_tree);
+    try restored_env.pushToSExprTree(null, &restored_tree);
 
     var restored_sexpr = std.ArrayList(u8).init(gpa);
     defer restored_sexpr.deinit();
@@ -799,4 +591,7 @@ test "cache filesystem roundtrip with in-memory storage" {
     // Get diagnostics to ensure they're preserved
     const diagnostics = roundtrip_cache.getDiagnostics();
     try std.testing.expect(diagnostics.total_size > 0);
+
+    // Free the cache data after we're done with the ModuleEnv
+    gpa.free(read_cache_data);
 }
