@@ -9,7 +9,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 
-const RocOps = builtins.RocOps;
+const RocOps = builtins.host_abi.RocOps;
 const RocDealloc = builtins.host_abi.RocDealloc;
 const RocAlloc = builtins.host_abi.RocAlloc;
 const RocRealloc = builtins.host_abi.RocRealloc;
@@ -168,7 +168,7 @@ pub const IncN = fn (?[*]u8, u64) callconv(.C) void;
 pub const Dec = fn (?[*]u8) callconv(.C) void;
 /// TODO
 pub const REFCOUNT_MAX_ISIZE: isize = 0;
-
+/// TODO
 pub fn rcNone(_: ?[*]u8) callconv(.C) void {}
 
 /// Enum representing different integer widths and signedness for runtime type information

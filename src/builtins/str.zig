@@ -8,7 +8,7 @@ const builtins = @import("builtins");
 const std = @import("std");
 
 const RocList = builtins.list.RocList;
-const RocOps = builtins.RocOps;
+const RocOps = builtins.host_abi.RocOps;
 const UpdateMode = builtins.utils.UpdateMode;
 const utils = builtins.utils;
 const ascii = std.ascii;
@@ -26,7 +26,9 @@ const MASK_ISIZE: isize = std.math.minInt(isize);
 const MASK: usize = @as(usize, @bitCast(MASK_ISIZE));
 const SEAMLESS_SLICE_BIT: usize = MASK;
 
+/// TODO
 pub const SMALL_STR_MAX_LENGTH = SMALL_STRING_SIZE - 1;
+
 const SMALL_STRING_SIZE = @sizeOf(RocStr);
 
 fn init_blank_small_string(comptime n: usize) [n]u8 {
@@ -575,6 +577,7 @@ fn initFromSmallStr(
     return RocStr.init(slice_bytes, len, roc_ops);
 }
 
+/// TODO
 pub fn strSplitOnHelp(
     array: [*]RocStr,
     string: RocStr,
@@ -649,6 +652,7 @@ pub fn substringUnsafeC(
     return substringUnsafe(string, start, length, roc_ops);
 }
 
+/// TODO
 pub fn substringUnsafe(
     string: RocStr,
     start: usize,
@@ -770,6 +774,7 @@ pub fn strConcatC(
     return @call(.always_inline, strConcat, .{ arg1, arg2, roc_ops });
 }
 
+/// TODO
 pub fn strConcat(
     arg1: RocStr,
     arg2: RocStr,
@@ -812,6 +817,7 @@ pub fn strJoinWithC(
     return @call(.always_inline, strJoinWith, .{ roc_list_str, separator, roc_ops });
 }
 
+/// TODO
 pub fn strJoinWith(
     list: RocListStr,
     separator: RocStr,
@@ -880,6 +886,7 @@ inline fn strToBytes(
     }
 }
 
+/// TODO
 pub const FromUtf8Result = extern struct {
     byte_index: u64,
     string: RocStr,
@@ -1107,6 +1114,7 @@ pub fn isValidUnicode(buf: []const u8) bool {
     return @call(.always_inline, unicode.utf8ValidateSlice, .{buf[i..]});
 }
 
+/// TODO
 pub const Utf8DecodeError = error{
     UnexpectedEof,
     Utf8InvalidStartByte,
@@ -1144,6 +1152,7 @@ pub const Utf8ByteProblem = enum(u8) {
     UnexpectedEndOfSequence = 5,
 };
 
+/// TODO
 pub fn validateUtf8Bytes(
     bytes: [*]u8,
     length: usize,
@@ -1152,6 +1161,7 @@ pub fn validateUtf8Bytes(
     return fromUtf8(RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = length }, .Immutable, roc_ops);
 }
 
+/// TODO
 pub fn validateUtf8BytesX(
     str: RocList,
     roc_ops: *RocOps,
@@ -1159,6 +1169,7 @@ pub fn validateUtf8BytesX(
     return fromUtf8(str, .Immutable, roc_ops);
 }
 
+/// TODO
 pub fn sliceHelp(
     bytes: [*]const u8,
     length: usize,
@@ -1172,6 +1183,7 @@ pub fn sliceHelp(
     return list;
 }
 
+/// TODO
 pub fn toErrUtf8ByteResponse(index: usize, problem: Utf8ByteProblem) FromUtf8Result {
     return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = @as(u64, @intCast(index)), .problem_code = problem };
 }
@@ -1181,6 +1193,7 @@ pub fn toErrUtf8ByteResponse(index: usize, problem: Utf8ByteProblem) FromUtf8Res
 //
 // If we tested with big strings, we'd have to deallocate the output string, but never the input list
 
+/// TODO
 pub fn isWhitespace(codepoint: u21) bool {
     // https://www.unicode.org/Public/UCD/latest/ucd/PropList.txt
     return switch (codepoint) {
@@ -1513,6 +1526,7 @@ pub fn reserveC(
     return reserve(string, @intCast(spare_u64), roc_ops);
 }
 
+/// TODO
 pub fn reserve(
     string: RocStr,
     spare: usize,

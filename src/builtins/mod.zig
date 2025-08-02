@@ -8,8 +8,3 @@ pub const num = @import("num.zig");
 pub const sort = @import("sort.zig");
 pub const str = @import("str.zig");
 pub const utils = @import("utils.zig");
-
-pub const RocDec = dec.RocDec;
-pub const RocStr = str.RocStr;
-pub const RocList = list.RocList;
-pub const RocOps = host_abi.RocOps;

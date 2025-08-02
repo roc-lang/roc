@@ -1029,6 +1029,7 @@ fn quadsort_stack_swap(
 // These are used as backup if the swap size is not large enough.
 // Also can be used for the final merge to reduce memory footprint.
 
+/// TODO
 pub fn rotate_merge(
     array: [*]u8,
     len: usize,

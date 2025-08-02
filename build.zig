@@ -289,6 +289,9 @@ fn addMainExe(
         .strip = strip,
     });
     host_lib.linkLibC();
+    const builtins = b.addModule("builtins", .{ .root_source_file = b.path("src/builtins/mod.zig") });
+    builtins.addImport("builtins", builtins);
+    host_lib.root_module.addImport("builtins", builtins);
 
     // Install host.a to the output directory
     const install_host = b.addInstallArtifact(host_lib, .{});

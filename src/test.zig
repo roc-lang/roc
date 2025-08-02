@@ -5,7 +5,6 @@
 //! discovered and executed during the test phase.
 
 const std = @import("std");
-const builtins = @import("builtins");
 
 test {
     std.testing.refAllDecls(@import("base"));

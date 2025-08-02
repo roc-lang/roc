@@ -17,7 +17,7 @@ const tracy = @import("tracy");
 pub const Scope = @import("Scope.zig");
 
 const tokenize = parse.tokenize;
-const RocDec = builtins.RocDec;
+const RocDec = builtins.dec.RocDec;
 const CompileNodeStore = compile.NodeStore;
 const AST = parse.AST;
 const Token = tokenize.Token;

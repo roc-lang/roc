@@ -1,3 +1,5 @@
+//! TODO
+
 const std = @import("std");
 const builtins = @import("builtins");
 const expect = std.testing.expect;
@@ -9,8 +11,8 @@ const ReverseUtf8View = builtins.str.ReverseUtf8View;
 const FromUtf8Result = builtins.str.FromUtf8Result;
 const RocListStr = builtins.str.RocListStr;
 const TestEnv = builtins.utils.TestEnv;
-const RocList = builtins.RocList;
-const RocStr = builtins.RocStr;
+const RocList = builtins.list.RocList;
+const RocStr = builtins.str.RocStr;
 const numberOfNextCodepointBytes = builtins.str.numberOfNextCodepointBytes;
 const toErrUtf8ByteResponse = builtins.str.toErrUtf8ByteResponse;
 const validateUtf8BytesX = builtins.str.validateUtf8BytesX;
