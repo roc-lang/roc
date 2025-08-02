@@ -919,7 +919,12 @@ fn swapElements(
     return swap(element_width, element_at_i, element_at_j, copy);
 }
 
-/// TODO: Document listConcat.
+/// Concatenates two lists into a new list containing all elements from both lists.
+///
+/// ## Ownership and Memory Management
+/// **IMPORTANT**: This function CONSUMES both input lists (`list_a` and `list_b`).
+/// The caller must NOT call `decref` on either input list after calling this function,
+/// as this function handles their cleanup internally.
 pub fn listConcat(
     list_a: RocList,
     list_b: RocList,
