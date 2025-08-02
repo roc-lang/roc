@@ -143,7 +143,7 @@ pub const Idx = packed struct(u32) {
 
         // All the other ASCII chars between `Z` and `a` are invalid identifiers (`[`, `\`, `]`, `^`, '`'),
         // so tokenization should not have let them get through here.
-        std.debug.assert(char0 <= 'Z' and char0 >= 'a');
+        std.debug.assert((char0 >= 'A' and char0 <= 'Z') or (char0 >= 'a' and char0 <= 'z'));
 
         // len would only be 0 here for inputs of `__` or `_!_`, but we should have already early-returned for those.
         std.debug.assert(len > 0);
@@ -151,7 +151,7 @@ pub const Idx = packed struct(u32) {
         // Branchlessly get the chars after the first non-attr char, defaulting to last char instead of
         // reading out of bounds. (We'll branchlessly set any out-of-bounds ones to zero later.)
         const last_char_index = len - 1;
-        const chars: [5]u8 = .{
+        const chars: [3]u8 = .{
             string[@min(1 + first_non_attr_index, last_char_index)],
             string[@min(2 + first_non_attr_index, last_char_index)],
             string[@min(3 + first_non_attr_index, last_char_index)],
@@ -164,24 +164,17 @@ pub const Idx = packed struct(u32) {
             return null;
         }
 
-        // Branchlessly convert to small_attrs using only bit shifts (after optimizations) and add/subtract.
-        const small_attrs = @intFromBool(unused) + (@intFromBool(reused) * 2) + (@intFromBool(fx) * 4) - @intFromBool(fx);
-
-        // Did our arithmetic give a plausible answer?
-        std.debug.assert(small_attrs < 4);
-
-        // Convert char0 to u5 range while normalizing case (we don't store capitalization of identifiers).
-        const u5_first_char = char0 - if (char0 >= 'a') (65 + 32) else 65;
-
         return .{
             .is_small = true,
             .data = .{
                 .small = .{
-                    .small_attrs = @enumFromInt(small_attrs),
-                    .char0 = @as(u5, @intCast(u5_first_char)),
+                    .char0 = @as(u7, @intCast(char0)),
+                    .is_unused = unused,
                     // Branchlessly zero the out-of-bounds chars.
                     .char1 = if (last_char_index >= 0) chars[0] else 0,
+                    .is_reused = reused,
                     .char2 = if (last_char_index >= 1) chars[1] else 0,
+                    .is_effectful = fx,
                     .char3 = if (last_char_index >= 2) chars[2] else 0,
                 },
             },

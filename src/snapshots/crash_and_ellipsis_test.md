@@ -33,8 +33,8 @@ INVALID LAMBDA - :0:0:0:0
 INVALID STATEMENT - crash_and_ellipsis_test.md:9:23:9:48
 INVALID LAMBDA - :0:0:0:0
 INVALID STATEMENT - crash_and_ellipsis_test.md:13:29:13:35
-UNUSED VARIABLE - crash_and_ellipsis_test.md:17:5:17:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:18:5:18:12
+UNUSED VARIABLE - crash_and_ellipsis_test.md:17:5:17:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:16:5:16:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -90,18 +90,6 @@ testCrashSimple = |_| crash "oops"
 
 
 **UNUSED VARIABLE**
-Variable `result2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_result2` to suppress this warning.
-The unused variable is declared here:
-**crash_and_ellipsis_test.md:17:5:17:12:**
-```roc
-    result2 = testCrash(42)
-```
-    ^^^^^^^
-
-
-**UNUSED VARIABLE**
 Variable `result3` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
@@ -109,6 +97,18 @@ The unused variable is declared here:
 **crash_and_ellipsis_test.md:18:5:18:12:**
 ```roc
     result3 = testCrashSimple(42)
+```
+    ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `result2` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result2` to suppress this warning.
+The unused variable is declared here:
+**crash_and_ellipsis_test.md:17:5:17:12:**
+```roc
+    result2 = testCrash(42)
 ```
     ^^^^^^^
 

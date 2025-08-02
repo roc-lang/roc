@@ -123,11 +123,11 @@ UNUSED VARIABLE - everything.md:90:5:90:6
 UNUSED VARIABLE - everything.md:95:4:95:5
 UNUSED VARIABLE - everything.md:100:5:100:6
 UNUSED VARIABLE - everything.md:106:5:106:6
-UNUSED VARIABLE - everything.md:81:2:81:4
 UNUSED VARIABLE - everything.md:61:2:61:4
 UNUSED VARIABLE - everything.md:69:2:69:4
-UNUSED VARIABLE - everything.md:77:2:77:4
 UNUSED VARIABLE - everything.md:73:2:73:4
+UNUSED VARIABLE - everything.md:77:2:77:4
+UNUSED VARIABLE - everything.md:81:2:81:4
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `I1` was not found in this Roc project.
@@ -204,18 +204,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `h5` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
-The unused variable is declared here:
-**everything.md:81:2:81:4:**
-```roc
-	h5 = (
-```
- ^^
-
-
-**UNUSED VARIABLE**
 Variable `h1` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h1` to suppress this warning.
@@ -223,18 +211,6 @@ The unused variable is declared here:
 **everything.md:61:2:61:4:**
 ```roc
 	h1 = {
-```
- ^^
-
-
-**UNUSED VARIABLE**
-Variable `h2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
-The unused variable is declared here:
-**everything.md:69:2:69:4:**
-```roc
-	h2 = h(
 ```
  ^^
 
@@ -252,6 +228,18 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
+Variable `h2` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
+The unused variable is declared here:
+**everything.md:69:2:69:4:**
+```roc
+	h2 = h(
+```
+ ^^
+
+
+**UNUSED VARIABLE**
 Variable `h3` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h3` to suppress this warning.
@@ -259,6 +247,18 @@ The unused variable is declared here:
 **everything.md:73:2:73:4:**
 ```roc
 	h3 = A(
+```
+ ^^
+
+
+**UNUSED VARIABLE**
+Variable `h5` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
+The unused variable is declared here:
+**everything.md:81:2:81:4:**
+```roc
+	h5 = (
 ```
  ^^
 

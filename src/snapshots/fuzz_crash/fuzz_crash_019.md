@@ -764,18 +764,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `w` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_w` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:76:2:76:3:**
-```roc
-	w = "d"
-```
- ^
-
-
-**UNUSED VARIABLE**
 Variable `rd` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rd` to suppress this warning.
@@ -785,6 +773,18 @@ The unused variable is declared here:
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 ```
  ^^
+
+
+**UNUSED VARIABLE**
+Variable `w` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_w` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_019.md:76:2:76:3:**
+```roc
+	w = "d"
+```
+ ^
 
 
 **UNDECLARED TYPE**
