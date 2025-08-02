@@ -325,8 +325,7 @@ const Formatter = struct {
 
     fn formatStatement(fmt: *Formatter, si: AST.Statement.Idx) !void {
         const statement = fmt.ast.store.getStatement(si);
-        const node_region = fmt.nodeRegion(@intFromEnum(si));
-        const multiline = fmt.ast.regionIsMultiline(node_region);
+        const multiline = fmt.nodeWillBeMultiline(AST.Statement.Idx, si);
         const orig_indent = fmt.curr_indent;
         defer {
             fmt.curr_indent = orig_indent;
@@ -431,7 +430,8 @@ const Formatter = struct {
                     // work correctly, the exposed items have to be in a new Node type that
                     // will have its own region.
                     // Include the open and close squares.
-                    const items_multiline = fmt.ast.regionIsMultiline(.{ .start = items_region.start - 1, .end = items_region.end + 1 });
+                    const items_multiline = fmt.ast.regionIsMultiline(.{ .start = items_region.start - 1, .end = items_region.end + 1 }) or
+                        fmt.nodesWillBeMultiline(AST.ExposedItem.Idx, items);
                     const braces = Braces.square;
                     try fmt.push(braces.start());
                     if (items.len == 0) {
@@ -606,81 +606,38 @@ const Formatter = struct {
         }
     }
 
-    /// Check if there's a newline in the source text before the given token
-    fn hasNewlineBefore(fmt: *Formatter, token_idx: Token.Idx) bool {
-        if (token_idx == 0) return false;
-
-        const current_region = fmt.ast.tokens.resolve(token_idx);
-        const prev_region = fmt.ast.tokens.resolve(token_idx - 1);
-
-        // Check if there's a newline in the source between the previous and current token
-        const between_start = prev_region.end.offset;
-        const between_end = current_region.start.offset;
-
-        for (fmt.ast.env.source[between_start..between_end]) |c| {
-            if (c == '\n') {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /// Check if there's a newline in the source text after the given token
-    fn hasNewlineAfter(fmt: *Formatter, token_idx: Token.Idx) bool {
-        if (token_idx + 1 >= fmt.ast.tokens.tokens.len) return false;
-
-        const current_region = fmt.ast.tokens.resolve(token_idx);
-        const next_region = fmt.ast.tokens.resolve(token_idx + 1);
-
-        // Check if there's a newline in the source between the current and next token
-        const between_start = current_region.end.offset;
-        const between_end = next_region.start.offset;
-
-        for (fmt.ast.env.source[between_start..between_end]) |c| {
-            if (c == '\n') {
-                return true;
-            }
-        }
-        return false;
-    }
-
     fn formatWhereConstraint(fmt: *Formatter, w: AST.Collection.Idx, multiline: bool) !void {
         const start_indent = fmt.curr_indent;
         defer fmt.curr_indent = start_indent;
         const clause_coll = fmt.ast.store.getCollection(w);
         const clause_slice = fmt.ast.store.whereClauseSlice(.{ .span = clause_coll.span });
-        const clauses_region = fmt.regionInSlice(AST.WhereClause.Idx, clause_slice);
-        const clauses_are_multiline = clause_slice.len > 0 and fmt.ast.regionIsMultiline(clauses_region);
+        const clauses_are_multiline = fmt.collectionWillBeMultiline(AST.WhereClause.Idx, w);
 
         if (!multiline) {
-            if (clauses_are_multiline) {
-                try fmt.ensureNewline();
-                fmt.curr_indent += 1;
-                try fmt.pushIndent();
-            } else {
-                try fmt.push(' ');
-            }
+            try fmt.push(' ');
         }
 
         try fmt.pushAll("where");
 
         for (clause_slice, 0..) |clause, i| {
-            const clause_region = fmt.nodeRegion(@intFromEnum(clause));
-            const flushed_after_clause = try fmt.flushCommentsBefore(clause_region.start);
+            if (clauses_are_multiline) {
+                const clause_region = fmt.nodeRegion(@intFromEnum(clause));
+                _ = try fmt.flushCommentsBefore(clause_region.start);
+            }
             if (i == 0) {
-                if ((clauses_are_multiline or flushed_after_clause)) {
+                if (clauses_are_multiline) {
                     fmt.curr_indent += 1;
                 } else {
                     try fmt.push(' ');
                 }
             }
-            if (clauses_are_multiline or flushed_after_clause) {
+            if (clauses_are_multiline) {
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
             }
-            try fmt.formatWhereClause(clause, clauses_are_multiline or flushed_after_clause);
+            try fmt.formatWhereClause(clause);
             if (i < clause_slice.len - 1) {
-                if (clauses_are_multiline or flushed_after_clause) {
+                if (clauses_are_multiline) {
                     try fmt.push(',');
                 } else {
                     try fmt.pushAll(", ");
@@ -735,7 +692,7 @@ const Formatter = struct {
     };
 
     fn formatCollection(fmt: *Formatter, region: AST.TokenizedRegion, braces: Braces, comptime T: type, items: []T, formatter: fn (*Formatter, T) anyerror!AST.TokenizedRegion) !void {
-        const multiline = fmt.ast.regionIsMultiline(region) or fmt.collectionWillBeMultiline(T, items);
+        const multiline = fmt.ast.regionIsMultiline(region) or fmt.nodesWillBeMultiline(T, items);
         const curr_indent = fmt.curr_indent;
         defer {
             fmt.curr_indent = curr_indent;
@@ -798,7 +755,7 @@ const Formatter = struct {
     fn formatExprInner(fmt: *Formatter, ei: AST.Expr.Idx, format_behavior: ExprFormatBehavior) anyerror!AST.TokenizedRegion {
         const expr = fmt.ast.store.getExpr(ei);
         const region = fmt.nodeRegion(@intFromEnum(ei));
-        const multiline = fmt.ast.regionIsMultiline(region);
+        const multiline = fmt.nodeWillBeMultiline(AST.Expr.Idx, ei);
         const indent_modifier: u32 = @intFromBool(format_behavior == .no_indent_on_access and fmt.curr_indent > 0);
         const curr_indent: u32 = fmt.curr_indent - indent_modifier;
         defer {
@@ -830,7 +787,9 @@ const Formatter = struct {
                             // So we'll widen the region by one token for calculating multliline.
                             // Ideally, we'd also check if the expr itself is multiline, and if we will end up flushing, but
                             // we'll leave it as is for now
-                            const part_is_multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = part_region.start - 1, .end = part_region.end });
+                            const part_is_multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = part_region.start - 1, .end = part_region.end + 1 }) or
+                                fmt.nodeWillBeMultiline(AST.Expr.Idx, idx);
+
                             if (part_is_multiline) {
                                 _ = try fmt.flushCommentsBefore(part_region.start);
                                 try fmt.ensureNewline();
@@ -901,7 +860,6 @@ const Formatter = struct {
                 try fmt.formatCollection(region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(t.items), Formatter.formatExpr);
             },
             .record => |r| {
-                const is_multiline = fmt.ast.regionIsMultiline(r.region);
                 try fmt.push('{');
 
                 const fields = fmt.ast.store.recordFieldSlice(r.fields);
@@ -909,7 +867,7 @@ const Formatter = struct {
 
                 // Handle extension if present
                 if (r.ext) |ext| {
-                    if (is_multiline) {
+                    if (multiline) {
                         _ = try fmt.flushCommentsAfter(r.region.start);
                         fmt.curr_indent += 1;
                         try fmt.ensureNewline();
@@ -922,14 +880,14 @@ const Formatter = struct {
                     has_extension = true;
 
                     try fmt.push(',');
-                    if (fields.len > 0 and is_multiline) {
+                    if (multiline and fields.len > 0) {
                         try fmt.newline();
                         try fmt.pushIndent();
                     }
                 }
 
                 // Format fields
-                if (is_multiline and !has_extension and fields.len > 0) {
+                if (multiline and !has_extension and fields.len > 0) {
                     _ = try fmt.flushCommentsAfter(r.region.start);
                     fmt.curr_indent += 1;
                     try fmt.ensureNewline();
@@ -937,11 +895,11 @@ const Formatter = struct {
                 }
 
                 for (fields, 0..) |field_idx, i| {
-                    if (!is_multiline) {
+                    if (!multiline) {
                         try fmt.push(' ');
                     }
                     const field_region = try fmt.formatRecordField(field_idx);
-                    if (is_multiline) {
+                    if (multiline) {
                         try fmt.push(',');
                         _ = try fmt.flushCommentsAfter(field_region.end);
                         try fmt.ensureNewline();
@@ -954,7 +912,7 @@ const Formatter = struct {
                 }
 
                 if (has_extension or fields.len > 0) {
-                    if (is_multiline) {
+                    if (multiline) {
                         fmt.curr_indent -= 1;
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
@@ -968,7 +926,9 @@ const Formatter = struct {
                 const args = fmt.ast.store.patternSlice(l.args);
                 const body_region = fmt.nodeRegion(@intFromEnum(l.body));
                 const args_region = fmt.regionInSlice(AST.Pattern.Idx, args);
-                const args_are_multiline = args.len > 0 and fmt.ast.regionIsMultiline(.{ .start = args_region.start - 1, .end = args_region.end + 1 });
+                const args_are_multiline = args.len > 0 and
+                    (fmt.ast.regionIsMultiline(.{ .start = args_region.start - 1, .end = args_region.end + 1 }) or
+                        fmt.nodesWillBeMultiline(AST.Pattern.Idx, args));
                 try fmt.push('|');
                 if (args_are_multiline) {
                     fmt.curr_indent += 1;
@@ -1165,7 +1125,7 @@ const Formatter = struct {
 
     fn formatPatternRecordField(fmt: *Formatter, idx: AST.PatternRecordField.Idx) !AST.TokenizedRegion {
         const field = fmt.ast.store.getPatternRecordField(idx);
-        const multiline = fmt.ast.regionIsMultiline(field.region);
+        const multiline = fmt.nodeWillBeMultiline(AST.PatternRecordField.Idx, idx);
         const curr_indent = fmt.curr_indent;
         defer {
             fmt.curr_indent = curr_indent;
@@ -1203,6 +1163,7 @@ const Formatter = struct {
     fn formatPattern(fmt: *Formatter, pi: AST.Pattern.Idx) !AST.TokenizedRegion {
         const pattern = fmt.ast.store.getPattern(pi);
         var region = AST.TokenizedRegion{ .start = 0, .end = 0 };
+        const multiline = fmt.nodeWillBeMultiline(AST.Pattern.Idx, pi);
         switch (pattern) {
             .ident => |i| {
                 region = i.region;
@@ -1259,7 +1220,6 @@ const Formatter = struct {
                 }
                 try fmt.pushAll("..");
                 if (r.name) |n| {
-                    const multiline = fmt.ast.regionIsMultiline(region);
                     if (multiline and try fmt.flushCommentsAfter(region.start)) {
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
@@ -1286,7 +1246,6 @@ const Formatter = struct {
                     fmt.curr_indent = curr_indent;
                 }
                 region = a.region;
-                const multiline = fmt.ast.regionIsMultiline(region);
                 const patterns = fmt.ast.store.patternSlice(a.patterns);
                 for (patterns, 0..) |p, i| {
                     const pattern_region = fmt.nodeRegion(@intFromEnum(p));
@@ -1363,9 +1322,10 @@ const Formatter = struct {
         defer {
             fmt.curr_indent = start_indent;
         }
+
+        const multiline = fmt.nodeWillBeMultiline(AST.Header.Idx, hi);
         switch (header) {
             .app => |a| {
-                const multiline = fmt.ast.regionIsMultiline(a.region);
                 const provides = fmt.ast.store.getCollection(a.provides);
                 try fmt.pushAll("app");
                 if (multiline and try fmt.flushCommentsAfter(a.region.start)) {
@@ -1392,7 +1352,7 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 const packages = fmt.ast.store.getCollection(a.packages);
-                const packages_multiline = fmt.ast.regionIsMultiline(packages.region);
+                const packages_multiline = fmt.collectionWillBeMultiline(AST.RecordField.Idx, a.packages);
                 try fmt.push('{');
                 if (packages_multiline) {
                     fmt.curr_indent += 1;
@@ -1461,7 +1421,6 @@ const Formatter = struct {
             },
             .module => |m| {
                 try fmt.pushAll("module");
-                const multiline = fmt.ast.regionIsMultiline(m.region);
                 const exposes = fmt.ast.store.getCollection(m.exposes);
                 if (multiline and try fmt.flushCommentsBefore(exposes.region.start)) {
                     fmt.curr_indent += 1;
@@ -1479,7 +1438,6 @@ const Formatter = struct {
             },
             .hosted => |h| {
                 try fmt.pushAll("hosted");
-                const multiline = fmt.ast.regionIsMultiline(h.region);
                 const exposes = fmt.ast.store.getCollection(h.exposes);
                 if (multiline and try fmt.flushCommentsBefore(exposes.region.start)) {
                     fmt.curr_indent += 1;
@@ -1496,16 +1454,6 @@ const Formatter = struct {
                 );
             },
             .package => |p| {
-                const exposes = fmt.ast.store.getCollection(p.exposes);
-                const exposesItems = fmt.ast.store.exposedItemSlice(.{ .span = exposes.span });
-
-                const packages = fmt.ast.store.getCollection(p.packages);
-                const packagesItems = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
-
-                const multiline = fmt.ast.regionIsMultiline(p.region) or
-                    fmt.collectionWillBeMultiline(AST.ExposedItem.Idx, exposesItems) or
-                    fmt.collectionWillBeMultiline(AST.RecordField.Idx, packagesItems);
-
                 try fmt.pushAll("package");
                 if (multiline) {
                     _ = try fmt.flushCommentsAfter(p.region.start);
@@ -1516,6 +1464,8 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 // TODO: This needs to be extended to the next CloseSquare
+                const exposes = fmt.ast.store.getCollection(p.exposes);
+                const exposesItems = fmt.ast.store.exposedItemSlice(.{ .span = exposes.span });
                 try fmt.formatCollection(
                     exposes.region,
                     .square,
@@ -1529,6 +1479,8 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
+                const packages = fmt.ast.store.getCollection(p.packages);
+                const packagesItems = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
                 try fmt.formatCollection(
                     packages.region,
                     .curly,
@@ -1675,14 +1627,12 @@ const Formatter = struct {
 
     fn formatTypeHeader(fmt: *Formatter, header: AST.TypeHeader.Idx) !void {
         // Check if the type header node is malformed before calling getTypeHeader
-        const header_node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(header)));
-        if (header_node.tag == .malformed) {
+        const h = fmt.ast.store.getTypeHeader(header) catch {
             // Handle malformed type header by outputting placeholder text
             try fmt.pushAll("<malformed>");
             return;
-        }
+        };
 
-        const h = fmt.ast.store.getTypeHeader(header);
         try fmt.pushTokenText(h.name);
         if (h.args.span.len > 0) {
             try fmt.formatCollection(h.region, .round, AST.TypeAnno.Idx, fmt.ast.store.typeAnnoSlice(h.args), Formatter.formatTypeAnno);
@@ -1700,7 +1650,7 @@ const Formatter = struct {
                 return AST.TokenizedRegion{ .start = 0, .end = 0 };
             },
         };
-        const multiline = fmt.ast.regionIsMultiline(field.region);
+        const multiline = fmt.nodeWillBeMultiline(AST.AnnoRecordField.Idx, idx);
         try fmt.pushTokenText(field.name);
         if (multiline and try fmt.flushCommentsAfter(field.name)) {
             fmt.curr_indent += 1;
@@ -1720,23 +1670,22 @@ const Formatter = struct {
         return field.region;
     }
 
-    fn formatWhereClause(fmt: *Formatter, idx: AST.WhereClause.Idx, multiline: bool) !void {
+    fn formatWhereClause(fmt: *Formatter, idx: AST.WhereClause.Idx) !void {
         const clause = fmt.ast.store.getWhereClause(idx);
         const start_indent = fmt.curr_indent;
         defer fmt.curr_indent = start_indent;
+
+        const multiline = fmt.nodeWillBeMultiline(AST.WhereClause.Idx, idx);
         switch (clause) {
             .mod_method => |c| {
                 try fmt.pushAll("module(");
-                const varNeedsFlush = fmt.hasNewlineBefore(c.var_tok) or fmt.hasNewlineAfter(c.var_tok);
-                if (varNeedsFlush) {
-                    _ = try fmt.flushCommentsBefore(c.var_tok);
-                    fmt.curr_indent += 1;
+                if (multiline and try fmt.flushCommentsBefore(c.var_tok)) {
+                    fmt.curr_indent = start_indent + 1;
                     try fmt.pushIndent();
                 }
                 try fmt.pushTokenText(c.var_tok);
-                if (varNeedsFlush) {
-                    _ = try fmt.flushCommentsAfter(c.var_tok);
-                    fmt.curr_indent -= 1;
+                if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
+                    fmt.curr_indent = start_indent;
                     try fmt.pushIndent();
                 }
                 try fmt.push(')');
@@ -1745,9 +1694,8 @@ const Formatter = struct {
                 try fmt.pushAll(" :");
                 const args_coll = fmt.ast.store.getCollection(c.args);
                 const ret_region = fmt.nodeRegion(@intFromEnum(c.ret_anno));
-                const fn_type_region = AST.TokenizedRegion{ .start = args_coll.region.start, .end = ret_region.end };
-                const fn_type_multiline = fmt.ast.regionIsMultiline(fn_type_region);
 
+                fmt.curr_indent = start_indent;
                 if (args_coll.span.len > 0) {
                     if (multiline and try fmt.flushCommentsBefore(args_coll.region.start)) {
                         fmt.curr_indent += 1;
@@ -1759,20 +1707,20 @@ const Formatter = struct {
                     // Format function arguments without parentheses (like regular function types)
                     for (args, 0..) |arg_idx, i| {
                         const arg_region = fmt.nodeRegion(@intFromEnum(arg_idx));
-                        if (fn_type_multiline and i > 0) {
+                        if (multiline and i > 0) {
                             _ = try fmt.flushCommentsBefore(arg_region.start);
                             try fmt.ensureNewline();
                             try fmt.pushIndent();
                         }
                         _ = try fmt.formatTypeAnno(arg_idx);
                         if (i < args.len - 1) {
-                            if (fn_type_multiline) {
+                            if (multiline) {
                                 try fmt.push(',');
                             } else {
                                 try fmt.pushAll(", ");
                             }
                         } else {
-                            if (fn_type_multiline and try fmt.flushCommentsAfter(arg_region.end - 1)) {
+                            if (multiline and try fmt.flushCommentsAfter(arg_region.end - 1)) {
                                 fmt.curr_indent += 1;
                                 try fmt.pushIndent();
                                 try fmt.pushAll("->");
@@ -1782,7 +1730,7 @@ const Formatter = struct {
                         }
                     }
                 }
-                if (fn_type_multiline and try fmt.flushCommentsBefore(ret_region.start)) {
+                if (multiline and try fmt.flushCommentsBefore(ret_region.start)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 } else {
@@ -1792,16 +1740,13 @@ const Formatter = struct {
             },
             .mod_alias => |c| {
                 try fmt.pushAll("module(");
-                const varNeedsFlush = fmt.hasNewlineBefore(c.var_tok) or fmt.hasNewlineAfter(c.var_tok);
-                if (varNeedsFlush) {
-                    _ = try fmt.flushCommentsBefore(c.var_tok);
-                    fmt.curr_indent += 1;
+                if (multiline and try fmt.flushCommentsBefore(c.var_tok)) {
+                    fmt.curr_indent = start_indent + 1;
                     try fmt.pushIndent();
                 }
                 try fmt.pushTokenText(c.var_tok);
-                if (varNeedsFlush) {
-                    _ = try fmt.flushCommentsAfter(c.var_tok);
-                    fmt.curr_indent -= 1;
+                if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
+                    fmt.curr_indent = start_indent;
                     try fmt.pushIndent();
                 }
                 try fmt.push(')');
@@ -1817,6 +1762,7 @@ const Formatter = struct {
     fn formatTypeAnno(fmt: *Formatter, anno: AST.TypeAnno.Idx) !AST.TokenizedRegion {
         const a = fmt.ast.store.getTypeAnno(anno);
         var region = AST.TokenizedRegion{ .start = 0, .end = 0 };
+        const multiline = fmt.nodeWillBeMultiline(AST.TypeAnno.Idx, anno);
         switch (a) {
             .apply => |app| {
                 const slice = fmt.ast.store.typeAnnoSlice(app.args);
@@ -1858,7 +1804,6 @@ const Formatter = struct {
             },
             .@"fn" => |f| {
                 region = f.region;
-                const multiline = fmt.ast.regionIsMultiline(region);
 
                 const args = fmt.ast.store.typeAnnoSlice(f.args);
                 for (args, 0..) |idx, i| {
@@ -1889,7 +1834,6 @@ const Formatter = struct {
             },
             .parens => |p| {
                 region = p.region;
-                const multiline = fmt.ast.regionIsMultiline(region);
                 try fmt.push('(');
                 if (multiline) {
                     _ = try fmt.flushCommentsAfter(region.start);
@@ -2035,66 +1979,206 @@ const Formatter = struct {
         return std.debug.print("[{s}@{d}...{s}@{d}]\n", .{ @tagName(tags[region.start]), region.start, @tagName(tags[region.end - 1]), region.end - 1 });
     }
 
-    fn itemWillBeMultiline(fmt: *Formatter, comptime T: type, item: T) bool {
+    fn nodeWillBeMultiline(fmt: *Formatter, comptime T: type, item: T) bool {
         switch (T) {
             AST.Expr.Idx => {
                 const expr = fmt.ast.store.getExpr(item);
+                if (fmt.ast.regionIsMultiline(expr.to_tokenized_region())) {
+                    return true;
+                }
+
                 switch (expr) {
                     .block => return true,
-                    .malformed => return true,
+                    .tuple => |t| {
+                        if (fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(t.items))) {
+                            return true;
+                        }
+
+                        return false;
+                    },
+                    .apply => |a| {
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, a.@"fn")) {
+                            return true;
+                        }
+
+                        if (fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(a.args))) {
+                            return true;
+                        }
+
+                        return false;
+                    },
+                    .bin_op => |b| {
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, b.left)) {
+                            return true;
+                        }
+
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, b.right)) {
+                            return true;
+                        }
+
+                        return false;
+                    },
+                    .record => |r| {
+                        if (r.ext) |ext| {
+                            if (fmt.nodeWillBeMultiline(AST.Expr.Idx, ext)) {
+                                return true;
+                            }
+                        }
+
+                        if (fmt.nodesWillBeMultiline(AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(r.fields))) {
+                            return true;
+                        }
+
+                        return false;
+                    },
                     else => return false,
                 }
             },
             AST.Pattern.Idx => {
                 const pattern = fmt.ast.store.getPattern(item);
-                switch (pattern) {
-                    .malformed => return true,
-                    else => return false,
+                if (fmt.ast.regionIsMultiline(pattern.to_tokenized_region())) {
+                    return true;
                 }
+
+                return false;
             },
             AST.PatternRecordField.Idx => {
-                // const patternRecordField = fmt.ast.store.getPatternRecordField(item);
+                const patternRecordField = fmt.ast.store.getPatternRecordField(item);
+                if (fmt.ast.regionIsMultiline(patternRecordField.region)) {
+                    return true;
+                }
+
+                if (patternRecordField.value) |value| {
+                    return fmt.nodeWillBeMultiline(AST.Pattern.Idx, value);
+                }
+
                 return false;
             },
             AST.ExposedItem.Idx => {
                 const exposedItem = fmt.ast.store.getExposedItem(item);
-                switch (exposedItem) {
-                    .malformed => return true,
-                    else => return false,
+                if (fmt.ast.regionIsMultiline(exposedItem.to_tokenized_region())) {
+                    return true;
                 }
+
+                return false;
             },
             AST.RecordField.Idx => {
                 const recordField = fmt.ast.store.getRecordField(item);
-                if (recordField.value) |value| {
-                    return fmt.itemWillBeMultiline(AST.Expr.Idx, value);
+                if (fmt.ast.regionIsMultiline(recordField.region)) {
+                    return true;
                 }
+
+                if (recordField.value) |value| {
+                    return fmt.nodeWillBeMultiline(AST.Expr.Idx, value);
+                }
+
                 return false;
             },
             AST.TypeAnno.Idx => {
                 const typeAnno = fmt.ast.store.getTypeAnno(item);
-                switch (typeAnno) {
-                    .malformed => return true,
+                if (fmt.ast.regionIsMultiline(typeAnno.to_tokenized_region())) {
+                    return true;
+                }
+
+                return false;
+            },
+            AST.AnnoRecordField.Idx => {
+                const annoRecordField = fmt.ast.store.getAnnoRecordField(item) catch return false;
+                if (fmt.ast.regionIsMultiline(annoRecordField.region)) {
+                    return true;
+                }
+
+                if (fmt.nodeWillBeMultiline(AST.TypeAnno.Idx, annoRecordField.ty)) {
+                    return true;
+                }
+
+                return false;
+            },
+            AST.WhereClause.Idx => {
+                const whereClause = fmt.ast.store.getWhereClause(item);
+                if (fmt.ast.regionIsMultiline(whereClause.to_tokenized_region())) {
+                    return true;
+                }
+
+                return false;
+            },
+            AST.Statement.Idx => {
+                const statement = fmt.ast.store.getStatement(item);
+                if (fmt.ast.regionIsMultiline(statement.to_tokenized_region())) {
+                    return true;
+                }
+
+                switch (statement) {
+                    .expr => |e| {
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, e.expr)) {
+                            return true;
+                        }
+
+                        return false;
+                    },
                     else => return false,
                 }
             },
-            AST.AnnoRecordField.Idx => {
-                // const annoRecordField = fmt.ast.store.getAnnoRecordField(item);
+            AST.TypeHeader.Idx => {
+                const typeHeader = fmt.ast.store.getTypeHeader(item) catch return false;
+                if (fmt.ast.regionIsMultiline(typeHeader.region)) {
+                    return true;
+                }
+
+                if (fmt.nodesWillBeMultiline(AST.TypeAnno.Idx, fmt.ast.store.typeAnnoSlice(typeHeader.args))) {
+                    return true;
+                }
+
                 return false;
             },
-            else => unreachable,
-        }
+            AST.Header.Idx => {
+                const header = fmt.ast.store.getHeader(item);
+                if (fmt.ast.regionIsMultiline(header.to_tokenized_region())) {
+                    return true;
+                }
 
-        return true;
+                switch (header) {
+                    .package => |p| {
+                        if (fmt.collectionWillBeMultiline(AST.ExposedItem.Idx, p.exposes)) {
+                            return true;
+                        }
+
+                        if (fmt.collectionWillBeMultiline(AST.RecordField.Idx, p.packages)) {
+                            return true;
+                        }
+
+                        return false;
+                    },
+                    else => return false,
+                }
+            },
+            else => return false,
+        }
     }
 
-    fn collectionWillBeMultiline(fmt: *Formatter, comptime T: type, items: []T) bool {
+    fn nodesWillBeMultiline(fmt: *Formatter, comptime T: type, items: []T) bool {
         for (items) |item| {
-            if (fmt.itemWillBeMultiline(T, item)) {
+            if (fmt.nodeWillBeMultiline(T, item)) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    fn collectionWillBeMultiline(fmt: *Formatter, comptime T: type, idx: AST.Collection.Idx) bool {
+        const collection = fmt.ast.store.getCollection(idx);
+        if (fmt.ast.regionIsMultiline(collection.region)) {
+            return true;
+        }
+
+        switch (T) {
+            AST.RecordField.Idx => {
+                const record_field_slice = fmt.ast.store.recordFieldSlice(.{ .span = collection.span });
+                return fmt.nodesWillBeMultiline(AST.RecordField.Idx, record_field_slice);
+            },
+            else => return false,
+        }
     }
 };
 

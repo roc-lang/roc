@@ -885,7 +885,7 @@ pub const Statement = union(enum) {
                         try tree.endNode(args_begin, args_attrs);
                         try tree.endNode(header, attrs2);
                     } else {
-                        const ty_header = ast.store.getTypeHeader(a.header);
+                        const ty_header = ast.store.getTypeHeader(a.header) catch unreachable; // Malformed handled above
                         try ast.appendRegionInfoToSexprTree(env, tree, ty_header.region);
                         try tree.pushStringPair("name", ast.resolve(ty_header.name));
                         const attrs2 = tree.beginNode();
@@ -1006,6 +1006,24 @@ pub const Statement = union(enum) {
             },
         }
     }
+
+    /// Extract the region from any Statement variant
+    pub fn to_tokenized_region(self: @This()) TokenizedRegion {
+        return switch (self) {
+            .decl => |s| s.region,
+            .@"var" => |s| s.region,
+            .expr => |s| s.region,
+            .import => |s| s.region,
+            .type_decl => |s| s.region,
+            .crash => |s| s.region,
+            .dbg => |s| s.region,
+            .expect => |s| s.region,
+            .@"for" => |s| s.region,
+            .@"return" => |s| s.region,
+            .type_anno => |s| s.region,
+            .malformed => |m| m.region,
+        };
+    }
 };
 
 /// Represents a block of statements.
@@ -1100,6 +1118,7 @@ pub const Pattern = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
+    /// Extract the region from any Pattern variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
             .ident => |p| p.region,
@@ -1598,6 +1617,18 @@ pub const Header = union(enum) {
             },
         }
     }
+
+    /// Extract the region from any Header variant
+    pub fn to_tokenized_region(self: @This()) TokenizedRegion {
+        return switch (self) {
+            .app => |a| a.region,
+            .module => |m| m.region,
+            .package => |p| p.region,
+            .platform => |p| p.region,
+            .hosted => |h| h.region,
+            .malformed => |m| m.region,
+        };
+    }
 };
 
 /// TODO
@@ -1714,6 +1745,16 @@ pub const ExposedItem = union(enum) {
             },
         }
     }
+
+    /// Extract the region from any ExposedItem variant
+    pub fn to_tokenized_region(self: @This()) TokenizedRegion {
+        return switch (self) {
+            .lower_ident => |i| i.region,
+            .upper_ident => |i| i.region,
+            .upper_ident_star => |i| i.region,
+            .malformed => |m| m.region,
+        };
+    }
 };
 
 /// TODO
@@ -1782,8 +1823,8 @@ pub const TypeAnno = union(enum) {
     pub const TypeAnnoFnRhs = packed struct { effectful: u1, args_len: u31 };
 
     /// Extract the region from any TypeAnno variant
-    pub fn toRegion(self: *const @This()) TokenizedRegion {
-        switch (self.*) {
+    pub fn to_tokenized_region(self: @This()) TokenizedRegion {
+        switch (self) {
             .apply => |a| return a.region,
             .ty_var => |tv| return tv.region,
             .underscore_type_var => |utv| return utv.region,
@@ -2058,6 +2099,15 @@ pub const WhereClause = union(enum) {
         }
     }
 
+    /// Extract the region from any WhereClause variant
+    pub fn to_tokenized_region(self: @This()) TokenizedRegion {
+        switch (self) {
+            .mod_method => |m| return m.region,
+            .mod_alias => |a| return a.region,
+            .malformed => |m| return m.region,
+        }
+    }
+
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 };
@@ -2163,6 +2213,7 @@ pub const Expr = union(enum) {
         }
     }
 
+    /// Extract the region from any Expr variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
             .ident => |e| e.region,
