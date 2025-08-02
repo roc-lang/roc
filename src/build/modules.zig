@@ -68,6 +68,8 @@ pub const RocModules = struct {
 
         self.tracy.addImport("builtins", self.builtins);
 
+        self.builtins.addImport("builtins", self.builtins);
+
         self.can.addImport("base", self.base);
         self.can.addImport("parse", self.parse);
         self.can.addImport("collections", self.collections);

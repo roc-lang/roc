@@ -2,7 +2,6 @@ const std = @import("std");
 const testing = std.testing;
 
 const utils = @import("utils.zig");
-const roc_panic = @import("panic.zig").panic_help;
 
 const Ordering = utils.Ordering;
 const GT = Ordering.GT;

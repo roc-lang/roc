@@ -6,7 +6,6 @@ const utils = @import("utils.zig");
 const math = std.math;
 const RocStr = str.RocStr;
 const WithOverflow = utils.WithOverflow;
-const roc_panic = @import("panic.zig").panic_help;
 const U256 = num_.U256;
 const mul_u128 = num_.mul_u128;
 

@@ -5,21 +5,12 @@
 //! It defines the RocList structure and associated functions that are called
 //! from compiled Roc code to handle list operations efficiently.
 const std = @import("std");
-const utils = @import("utils.zig");
-const str = @import("str.zig");
-const sort = @import("sort.zig");
-const UpdateMode = utils.UpdateMode;
-const mem = std.mem;
-const math = std.math;
+const builtins = @import("builtins");
 
-const expect = std.testing.expect;
-const expectEqual = std.testing.expectEqual;
-
-const RocAlloc = utils.RocAlloc;
-const RocDealloc = utils.RocDealloc;
-const TestAllocator = utils.TestAllocator;
-const testing_roc_alloc = TestAllocator.roc_alloc;
-const testing_roc_dealloc = TestAllocator.roc_dealloc;
+const UpdateMode = builtins.utils.UpdateMode;
+const RocOps = builtins.host_abi.RocOps;
+const RocStr = builtins.str.RocStr;
+const increfDataPtrC = builtins.utils.increfDataPtrC;
 
 const Opaque = ?[*]u8;
 const EqFn = *const fn (Opaque, Opaque) callconv(.C) bool;
@@ -104,13 +95,13 @@ pub const RocList = extern struct {
         comptime T: type,
         slice: []const T,
         elements_refcounted: bool,
-        roc_alloc: RocAlloc,
+        roc_ops: *RocOps,
     ) RocList {
         if (slice.len == 0) {
             return RocList.empty();
         }
 
-        const list = list_allocate(@alignOf(T), slice.len, @sizeOf(T), elements_refcounted, roc_alloc);
+        const list = list_allocate(@alignOf(T), slice.len, @sizeOf(T), elements_refcounted, roc_ops);
 
         if (slice.len > 0) {
             const dest = list.bytes orelse unreachable;
@@ -171,7 +162,7 @@ pub const RocList = extern struct {
                 ptr[0] = self.length;
             }
         }
-        utils.increfDataPtrC(self.getAllocationDataPtr(), amount);
+        increfDataPtrC(self.getAllocationDataPtr(), amount);
     }
 
     pub fn decref(
@@ -180,7 +171,7 @@ pub const RocList = extern struct {
         element_width: usize,
         elements_refcounted: bool,
         dec: Dec,
-        roc_dealloc: RocDealloc,
+        roc_ops: *RocOps,
     ) void {
         // If unique, decref will free the list. Before that happens, all elements must be decremented.
         if (elements_refcounted and self.isUnique()) {
@@ -196,12 +187,12 @@ pub const RocList = extern struct {
         }
 
         // We use the raw capacity to ensure we always decrement the refcount of seamless slices.
-        utils.decref(
+        builtins.utils.decref(
             self.getAllocationDataPtr(),
             self.capacity_or_alloc_ptr,
             alignment,
             elements_refcounted,
-            roc_dealloc,
+            roc_ops,
         );
     }
 
@@ -210,7 +201,7 @@ pub const RocList = extern struct {
     }
 
     pub fn isUnique(self: RocList) bool {
-        return utils.rcUnique(@bitCast(self.refcount()));
+        return builtins.utils.rcUnique(@bitCast(self.refcount()));
     }
 
     fn refcount(self: RocList) usize {
@@ -230,8 +221,7 @@ pub const RocList = extern struct {
         elements_refcounted: bool,
         inc: Inc,
         dec: Dec,
-        roc_alloc: RocAlloc,
-        roc_dealloc: RocDealloc,
+        roc_ops: *RocOps,
     ) RocList {
         if (self.isUnique()) {
             return self;
@@ -240,12 +230,12 @@ pub const RocList = extern struct {
         if (self.isEmpty()) {
             // Empty is not necessarily unique on it's own.
             // The list could have capacity and be shared.
-            self.decref(alignment, element_width, elements_refcounted, dec, roc_dealloc);
+            self.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
             return RocList.empty();
         }
 
         // unfortunately, we have to clone
-        const new_list = RocList.list_allocate(alignment, self.length, element_width, elements_refcounted, roc_alloc);
+        const new_list = RocList.list_allocate(alignment, self.length, element_width, elements_refcounted, roc_ops);
 
         var old_bytes: [*]u8 = @as([*]u8, @ptrCast(self.bytes));
         var new_bytes: [*]u8 = @as([*]u8, @ptrCast(new_list.bytes));
@@ -261,7 +251,7 @@ pub const RocList = extern struct {
             }
         }
 
-        self.decref(alignment, element_width, elements_refcounted, dec, roc_dealloc);
+        self.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
 
         return new_list;
     }
@@ -271,20 +261,20 @@ pub const RocList = extern struct {
         length: usize,
         element_width: usize,
         elements_refcounted: bool,
-        roc_alloc: RocAlloc,
+        roc_ops: *RocOps,
     ) RocList {
         if (length == 0) {
             return empty();
         }
 
-        const capacity = utils.calculateCapacity(0, length, element_width);
+        const capacity = builtins.utils.calculateCapacity(0, length, element_width);
         const data_bytes = capacity * element_width;
         return RocList{
-            .bytes = utils.allocateWithRefcount(
+            .bytes = builtins.utils.allocateWithRefcount(
                 data_bytes,
                 alignment,
                 elements_refcounted,
-                roc_alloc,
+                roc_ops,
             ),
             .length = length,
             .capacity_or_alloc_ptr = capacity,
@@ -296,7 +286,7 @@ pub const RocList = extern struct {
         length: usize,
         element_width: usize,
         elements_refcounted: bool,
-        roc_alloc: RocAlloc,
+        roc_ops: *RocOps,
     ) RocList {
         if (length == 0) {
             return empty();
@@ -304,11 +294,11 @@ pub const RocList = extern struct {
 
         const data_bytes = length * element_width;
         return RocList{
-            .bytes = utils.allocateWithRefcount(
+            .bytes = builtins.utils.allocateWithRefcount(
                 data_bytes,
                 alignment,
                 elements_refcounted,
-                roc_alloc,
+                roc_ops,
             ),
             .length = length,
             .capacity_or_alloc_ptr = length,
@@ -322,8 +312,7 @@ pub const RocList = extern struct {
         element_width: usize,
         elements_refcounted: bool,
         inc: Inc,
-        roc_alloc: RocAlloc,
-        roc_dealloc: RocDealloc,
+        roc_ops: *RocOps,
     ) RocList {
         if (self.bytes) |source_ptr| {
             if (self.isUnique() and !self.isSeamlessSlice()) {
@@ -331,14 +320,14 @@ pub const RocList = extern struct {
                 if (capacity >= new_length) {
                     return RocList{ .bytes = self.bytes, .length = new_length, .capacity_or_alloc_ptr = capacity };
                 } else {
-                    const new_capacity = utils.calculateCapacity(capacity, new_length, element_width);
-                    const new_source = utils.unsafeReallocate(source_ptr, alignment, capacity, new_capacity, element_width, elements_refcounted);
+                    const new_capacity = builtins.utils.calculateCapacity(capacity, new_length, element_width);
+                    const new_source = builtins.utils.unsafeReallocate(source_ptr, alignment, capacity, new_capacity, element_width, elements_refcounted);
                     return RocList{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = new_capacity };
                 }
             }
-            return self.reallocateFresh(alignment, new_length, element_width, elements_refcounted, inc, roc_alloc, roc_dealloc);
+            return self.reallocateFresh(alignment, new_length, element_width, elements_refcounted, inc, roc_ops);
         }
-        return RocList.list_allocate(alignment, new_length, element_width, elements_refcounted, roc_alloc);
+        return RocList.list_allocate(alignment, new_length, element_width, elements_refcounted, roc_ops);
     }
 
     /// reallocate by explicitly making a new allocation and copying elements over
@@ -349,12 +338,11 @@ pub const RocList = extern struct {
         element_width: usize,
         elements_refcounted: bool,
         inc: Inc,
-        roc_alloc: RocAlloc,
-        roc_dealloc: RocDealloc,
+        roc_ops: *RocOps,
     ) RocList {
         const old_length = self.length;
 
-        const result = RocList.list_allocate(alignment, new_length, element_width, elements_refcounted, roc_alloc);
+        const result = RocList.list_allocate(alignment, new_length, element_width, elements_refcounted, roc_ops);
 
         if (self.bytes) |source_ptr| {
             // transfer the memory
@@ -373,7 +361,7 @@ pub const RocList = extern struct {
         }
 
         // Calls utils.decref directly to avoid decrementing the refcount of elements.
-        utils.decref(self.getAllocationDataPtr(), self.capacity_or_alloc_ptr, alignment, elements_refcounted, roc_dealloc);
+        builtins.utils.decref(self.getAllocationDataPtr(), self.capacity_or_alloc_ptr, alignment, elements_refcounted, roc_ops);
 
         return result;
     }
@@ -391,9 +379,15 @@ pub fn listDecref(
     element_width: usize,
     elements_refcounted: bool,
     dec: Dec,
-    roc_dealloc: RocDealloc,
+    roc_ops: *RocOps,
 ) callconv(.C) void {
-    list.decref(alignment, element_width, elements_refcounted, dec, roc_dealloc);
+    list.decref(
+        alignment,
+        element_width,
+        elements_refcounted,
+        dec,
+        roc_ops,
+    );
 }
 
 /// TODO: Document listWithCapacity.
@@ -403,8 +397,7 @@ pub fn listWithCapacity(
     element_width: usize,
     elements_refcounted: bool,
     inc: Inc,
-    roc_alloc: RocAlloc,
-    roc_dealloc: RocDealloc,
+    roc_ops: *RocOps,
 ) callconv(.C) RocList {
     return listReserve(
         RocList.empty(),
@@ -414,8 +407,8 @@ pub fn listWithCapacity(
         elements_refcounted,
         inc,
         .InPlace,
-        roc_alloc,
-        roc_dealloc,
+        roc_ops,
+        roc_ops,
     );
 }
 
@@ -428,8 +421,7 @@ pub fn listReserve(
     elements_refcounted: bool,
     inc: Inc,
     update_mode: UpdateMode,
-    roc_alloc: RocAlloc,
-    roc_dealloc: RocDealloc,
+    roc_ops: *RocOps,
 ) callconv(.C) RocList {
     const original_len = list.len();
     const cap = @as(u64, @intCast(list.getCapacity()));
@@ -447,8 +439,7 @@ pub fn listReserve(
             element_width,
             elements_refcounted,
             inc,
-            roc_alloc,
-            roc_dealloc,
+            roc_ops,
         );
         output.length = original_len;
         return output;
@@ -464,22 +455,21 @@ pub fn listReleaseExcessCapacity(
     inc: Inc,
     dec: Dec,
     update_mode: UpdateMode,
-    roc_alloc: RocAlloc,
-    roc_dealloc: RocDealloc,
+    roc_ops: *RocOps,
 ) callconv(.C) RocList {
     const old_length = list.len();
     // We use the direct list.capacity_or_alloc_ptr to make sure both that there is no extra capacity and that it isn't a seamless slice.
     if ((update_mode == .InPlace or list.isUnique()) and list.capacity_or_alloc_ptr == old_length) {
         return list;
     } else if (old_length == 0) {
-        list.decref(alignment, element_width, elements_refcounted, dec, roc_dealloc);
+        list.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
         return RocList.empty();
     } else {
         // TODO: This can be made more efficient, but has to work around the `decref`.
         // If the list is unique, we can avoid incrementing and decrementing the live items.
         // We can just decrement the dead elements and free the old list.
         // This pattern is also like true in other locations like listConcat and listDropAt.
-        const output = RocList.allocateExact(alignment, old_length, element_width, elements_refcounted, roc_alloc);
+        const output = RocList.allocateExact(alignment, old_length, element_width, elements_refcounted, roc_ops);
         if (list.bytes) |source_ptr| {
             const dest_ptr = output.bytes orelse unreachable;
 
@@ -492,7 +482,7 @@ pub fn listReleaseExcessCapacity(
                 }
             }
         }
-        list.decref(alignment, element_width, elements_refcounted, dec, roc_dealloc);
+        list.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
         return output;
     }
 }
@@ -527,8 +517,7 @@ fn listAppend(
     inc: Inc,
     update_mode: UpdateMode,
     copy: CopyFn,
-    roc_alloc: RocAlloc,
-    roc_dealloc: RocDealloc,
+    roc_ops: *RocOps,
 ) callconv(.C) RocList {
     const with_capacity = listReserve(
         list,
@@ -538,8 +527,8 @@ fn listAppend(
         elements_refcounted,
         inc,
         update_mode,
-        roc_alloc,
-        roc_dealloc,
+        roc_ops,
+        roc_ops,
     );
     return listAppendUnsafe(with_capacity, element, element_width, copy);
 }
@@ -553,8 +542,7 @@ pub fn listPrepend(
     elements_refcounted: bool,
     inc: Inc,
     copy: CopyFn,
-    roc_alloc: RocAlloc,
-    roc_dealloc: RocDealloc,
+    roc_ops: *RocOps,
 ) callconv(.C) RocList {
     const old_length = list.len();
     // TODO: properly wire in update mode.
@@ -566,8 +554,8 @@ pub fn listPrepend(
         elements_refcounted,
         inc,
         .Immutable,
-        roc_alloc,
-        roc_dealloc,
+        roc_ops,
+        roc_ops,
     );
     with_capacity.length += 1;
 
@@ -599,8 +587,7 @@ pub fn listSwap(
     dec: Dec,
     update_mode: UpdateMode,
     copy: CopyFn,
-    roc_alloc: RocAlloc,
-    roc_dealloc: RocDealloc,
+    roc_ops: *RocOps,
 ) callconv(.C) RocList {
     // Early exit to avoid swapping the same element.
     if (index_1 == index_2)
@@ -622,8 +609,8 @@ pub fn listSwap(
                 elements_refcounted,
                 inc,
                 dec,
-                roc_alloc,
-                roc_dealloc,
+                roc_ops,
+                roc_ops,
             );
         }
     };
@@ -647,7 +634,7 @@ pub fn listSublist(
     start_u64: u64,
     len_u64: u64,
     dec: Dec,
-    roc_dealloc: RocDealloc,
+    roc_ops: *RocOps,
 ) callconv(.C) RocList {
     const size = list.len();
     if (size == 0 or len_u64 == 0 or start_u64 >= @as(u64, @intCast(size))) {
@@ -667,7 +654,7 @@ pub fn listSublist(
             output.length = 0;
             return output;
         }
-        list.decref(alignment, element_width, elements_refcounted, dec, roc_dealloc);
+        list.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
         return RocList.empty();
     }
 
@@ -728,8 +715,7 @@ pub fn listDropAt(
     drop_index_u64: u64,
     inc: Inc,
     dec: Dec,
-    roc_alloc: RocAlloc,
-    roc_dealloc: RocDealloc,
+    roc_ops: *RocOps,
 ) callconv(.C) RocList {
     const size = list.len();
     const size_u64 = @as(u64, @intCast(size));
@@ -739,7 +725,7 @@ pub fn listDropAt(
     // because we rely on the pointer field being null if the list is empty
     // which also requires duplicating the utils.decref call to spend the RC token
     if (size <= 1) {
-        list.decref(alignment, element_width, elements_refcounted, dec, roc_dealloc);
+        list.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
         return RocList.empty();
     }
 
@@ -755,7 +741,7 @@ pub fn listDropAt(
             1,
             size -| 1,
             dec,
-            roc_dealloc,
+            roc_ops,
         );
     } else if (drop_index_u64 == size_u64 - 1) { // It's fine if (size - 1) wraps on size == 0 here,
         // because if size is 0 then it's always fine for this branch to be taken; no
@@ -768,7 +754,7 @@ pub fn listDropAt(
             0,
             size -| 1,
             dec,
-            roc_dealloc,
+            roc_ops,
         );
     }
 
@@ -798,7 +784,13 @@ pub fn listDropAt(
             return new_list;
         }
 
-        const output = RocList.list_allocate(alignment, size - 1, element_width, elements_refcounted, roc_alloc);
+        const output = RocList.list_allocate(
+            alignment,
+            size - 1,
+            element_width,
+            elements_refcounted,
+            roc_ops,
+        );
         const target_ptr = output.bytes orelse unreachable;
 
         const head_size = drop_index * element_width;
@@ -817,7 +809,7 @@ pub fn listDropAt(
             }
         }
 
-        list.decref(alignment, element_width, elements_refcounted, dec, roc_dealloc);
+        list.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
 
         return output;
     } else {
@@ -838,8 +830,7 @@ pub fn listSortWith(
     inc: Inc,
     dec: Dec,
     copy: CopyFn,
-    roc_alloc: RocAlloc,
-    roc_dealloc: RocDealloc,
+    roc_ops: *RocOps,
 ) callconv(.C) RocList {
     if (input.len() < 2) {
         return input;
@@ -850,12 +841,12 @@ pub fn listSortWith(
         elements_refcounted,
         inc,
         dec,
-        roc_alloc,
-        roc_dealloc,
+        roc_ops,
+        roc_ops,
     );
 
     if (list.bytes) |source_ptr| {
-        sort.fluxsort(
+        builtins.sort.fluxsort(
             source_ptr,
             list.len(),
             cmp,
@@ -865,8 +856,7 @@ pub fn listSortWith(
             element_width,
             alignment,
             copy,
-            roc_alloc,
-            roc_dealloc,
+            roc_ops,
         );
     }
 
@@ -938,18 +928,17 @@ pub fn listConcat(
     elements_refcounted: bool,
     inc: Inc,
     dec: Dec,
-    roc_alloc: RocAlloc,
-    roc_dealloc: RocDealloc,
+    roc_ops: *RocOps,
 ) callconv(.C) RocList {
     // NOTE we always use list_a! because it is owned, we must consume it, and it may have unused capacity
     if (list_b.isEmpty()) {
         if (list_a.getCapacity() == 0) {
             // a could be a seamless slice, so we still need to decref.
-            list_a.decref(alignment, element_width, elements_refcounted, dec, roc_dealloc);
+            list_a.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
             return list_b;
         } else {
             // we must consume this list. Even though it has no elements, it could still have capacity
-            list_b.decref(alignment, element_width, elements_refcounted, dec, roc_dealloc);
+            list_b.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
 
             return list_a;
         }
@@ -962,8 +951,7 @@ pub fn listConcat(
             element_width,
             elements_refcounted,
             inc,
-            roc_alloc,
-            roc_dealloc,
+            roc_ops,
         );
 
         // These must exist, otherwise, the lists would have been empty.
@@ -981,7 +969,7 @@ pub fn listConcat(
         }
 
         // decrement list b.
-        list_b.decref(alignment, element_width, elements_refcounted, dec, roc_dealloc);
+        list_b.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
 
         return resized_list_a;
     } else if (list_b.isUnique()) {
@@ -993,8 +981,7 @@ pub fn listConcat(
             element_width,
             elements_refcounted,
             inc,
-            roc_alloc,
-            roc_dealloc,
+            roc_ops,
         );
 
         // These must exist, otherwise, the lists would have been empty.
@@ -1006,7 +993,7 @@ pub fn listConcat(
         // This first call must use mem.copy because the slices might overlap.
         const byte_count_a = list_a.len() * element_width;
         const byte_count_b = list_b.len() * element_width;
-        mem.copyBackwards(u8, source_b[byte_count_a .. byte_count_a + byte_count_b], source_b[0..byte_count_b]);
+        std.mem.copyBackwards(u8, source_b[byte_count_a .. byte_count_a + byte_count_b], source_b[0..byte_count_b]);
         @memcpy(source_b[0..byte_count_a], source_a[0..byte_count_a]);
 
         // Increment refcount of all cloned elements.
@@ -1019,13 +1006,13 @@ pub fn listConcat(
         }
 
         // decrement list a.
-        list_a.decref(alignment, element_width, elements_refcounted, dec, roc_dealloc);
+        list_a.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
 
         return resized_list_b;
     }
     const total_length: usize = list_a.len() + list_b.len();
 
-    const output = RocList.list_allocate(alignment, total_length, element_width, elements_refcounted, roc_alloc);
+    const output = RocList.list_allocate(alignment, total_length, element_width, elements_refcounted, roc_ops);
 
     // These must exist, otherwise, the lists would have been empty.
     const target = output.bytes orelse unreachable;
@@ -1050,8 +1037,8 @@ pub fn listConcat(
     }
 
     // decrement list a and b.
-    list_a.decref(alignment, element_width, elements_refcounted, dec, roc_dealloc);
-    list_b.decref(alignment, element_width, elements_refcounted, dec, roc_dealloc);
+    list_a.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
+    list_b.decref(alignment, element_width, elements_refcounted, dec, roc_ops);
 
     return output;
 }
@@ -1087,8 +1074,7 @@ pub fn listReplace(
     dec: Dec,
     out_element: ?[*]u8,
     copy: CopyFn,
-    roc_alloc: RocAlloc,
-    roc_dealloc: RocDealloc,
+    roc_ops: *RocOps,
 ) callconv(.C) RocList {
     // INVARIANT: bounds checking happens on the roc side
     //
@@ -1099,7 +1085,7 @@ pub fn listReplace(
     // and it's always safe to cast index to usize.
     // because inserting into an empty list is always out of bounds
     return listReplaceInPlaceHelp(
-        list.makeUnique(alignment, element_width, elements_refcounted, inc, dec, roc_alloc, roc_dealloc),
+        list.makeUnique(alignment, element_width, elements_refcounted, inc, dec, roc_ops),
         @as(usize, @intCast(index)),
         element,
         element_width,
@@ -1143,10 +1129,9 @@ pub fn listClone(
     elements_refcounted: bool,
     inc: Inc,
     dec: Dec,
-    roc_alloc: RocAlloc,
-    roc_dealloc: RocDealloc,
+    roc_ops: *RocOps,
 ) callconv(.C) RocList {
-    return list.makeUnique(alignment, element_width, elements_refcounted, inc, dec, roc_alloc, roc_dealloc);
+    return list.makeUnique(alignment, element_width, elements_refcounted, inc, dec, roc_ops);
 }
 
 /// TODO: Document listCapacity.
@@ -1165,32 +1150,11 @@ pub fn listAllocationPtr(
 
 fn rcNone(_: ?[*]u8) callconv(.C) void {}
 
-test "listConcat: non-unique with unique overlapping" {
-    defer TestAllocator.deinit();
-
-    var nonUnique = RocList.fromSlice(u8, ([_]u8{1})[0..], false, testing_roc_alloc);
-    const bytes: [*]u8 = @as([*]u8, @ptrCast(nonUnique.bytes));
-    const ptr_width = @sizeOf(usize);
-    const refcount_ptr = @as([*]isize, @ptrCast(@as([*]align(ptr_width) u8, @alignCast(bytes)) - ptr_width));
-    utils.increfRcPtrC(&refcount_ptr[0], 1);
-    defer nonUnique.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, testing_roc_dealloc); // listConcat will dec the other refcount
-
-    var unique = RocList.fromSlice(u8, ([_]u8{ 2, 3, 4 })[0..], false, testing_roc_alloc);
-    defer unique.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, testing_roc_dealloc);
-
-    var concatted = listConcat(nonUnique, unique, 1, 1, false, rcNone, rcNone, testing_roc_alloc, testing_roc_dealloc);
-    var wanted = RocList.fromSlice(u8, ([_]u8{ 1, 2, 3, 4 })[0..], false, testing_roc_alloc);
-    defer wanted.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, testing_roc_dealloc);
-
-    try expect(concatted.eql(wanted));
-}
-
 /// TODO: Document listConcatUtf8.
 pub fn listConcatUtf8(
     list: RocList,
-    string: str.RocStr,
-    roc_alloc: RocAlloc,
-    roc_dealloc: RocDealloc,
+    string: RocStr,
+    roc_ops: *RocOps,
 ) callconv(.C) RocList {
     if (string.len() == 0) {
         return list;
@@ -1198,25 +1162,11 @@ pub fn listConcatUtf8(
         const combined_length = list.len() + string.len();
 
         // List U8 has alignment 1 and element_width 1
-        const result = list.reallocate(1, combined_length, 1, false, &rcNone, roc_alloc, roc_dealloc);
+        const result = list.reallocate(1, combined_length, 1, false, &rcNone, roc_ops);
         // We just allocated combined_length, which is > 0 because string.len() > 0
         var bytes = result.bytes orelse unreachable;
         @memcpy(bytes[list.len()..combined_length], string.asU8ptr()[0..string.len()]);
 
         return result;
     }
-}
-
-test "listConcatUtf8" {
-    defer TestAllocator.deinit();
-
-    const list = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4 }, false, testing_roc_alloc);
-    defer list.decref(1, 1, false, &rcNone, testing_roc_dealloc);
-    const string_bytes = "🐦";
-    const string = str.RocStr.init(string_bytes, string_bytes.len, testing_roc_alloc);
-    defer string.decref(testing_roc_dealloc);
-    const ret = listConcatUtf8(list, string, testing_roc_alloc, testing_roc_dealloc);
-    const expected = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4, 240, 159, 144, 166 }, false, testing_roc_alloc);
-    defer expected.decref(1, 1, false, &rcNone, testing_roc_dealloc);
-    try expect(ret.eql(expected));
 }

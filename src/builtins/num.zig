@@ -6,15 +6,15 @@
 //! and functions that are called from compiled Roc code to handle numeric
 //! operations efficiently and safely.
 const std = @import("std");
-const math = std.math;
-const utils = @import("utils.zig");
+const builtins = @import("builtins");
 
-const RocList = @import("list.zig").RocList;
-const RocStr = @import("str.zig").RocStr;
-const WithOverflow = utils.WithOverflow;
-const Ordering = utils.Ordering;
-const RocAlloc = utils.RocAlloc;
-const roc_panic = @import("panic.zig").panic_help;
+const WithOverflow = builtins.utils.WithOverflow;
+const RocCrashed = builtins.host_abi.RocCrashed;
+const Ordering = builtins.utils.Ordering;
+const RocList = builtins.list.RocList;
+const RocOps = builtins.utils.RocOps;
+const RocStr = builtins.str.RocStr;
+const math = std.math;
 
 /// Result type for numeric parsing, with value and error code.
 pub fn NumParseResult(comptime T: type) type {
@@ -134,7 +134,7 @@ pub fn exportPow(
         fn func(
             base: T,
             exp: T,
-            roc_alloc: RocAlloc,
+            roc_ops: *RocOps,
         ) callconv(.C) T {
             switch (@typeInfo(T)) {
                 // std.math.pow can handle ints via powi, but it turns any errors to unreachable
@@ -143,7 +143,14 @@ pub fn exportPow(
                     if (std.math.powi(T, base, exp)) |value| {
                         return value;
                     } else |err| switch (err) {
-                        error.Overflow => roc_panic("Integer raised to power overflowed!", 0, roc_alloc),
+                        error.Overflow => {
+                            const utf8_bytes = "Integer raised to power overflowed!";
+                            const roc_crashed_args = RocCrashed{
+                                .utf8_bytes = utf8_bytes,
+                                .len = utf8_bytes.len,
+                            };
+                            roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
+                        },
                         error.Underflow => return 0,
                     }
                 },
@@ -315,10 +322,15 @@ pub fn exportDivCeil(
         fn func(
             a: T,
             b: T,
-            roc_alloc: RocAlloc,
+            roc_ops: *RocOps,
         ) callconv(.C) T {
             return math.divCeil(T, a, b) catch {
-                roc_panic("Integer division by 0!", 0, roc_alloc);
+                const utf8_bytes = "Integer division by 0!";
+                const roc_crashed_args = RocCrashed{
+                    .utf8_bytes = utf8_bytes,
+                    .len = utf8_bytes.len,
+                };
+                roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
             };
         }
     }.func;
@@ -451,11 +463,16 @@ pub fn exportAddOrPanic(
         fn func(
             self: T,
             other: T,
-            roc_alloc: RocAlloc,
+            roc_ops: *RocOps,
         ) callconv(.C) T {
             const result = addWithOverflow(T, self, other);
             if (result.has_overflowed) {
-                roc_panic("Integer addition overflowed!", 0, roc_alloc);
+                const utf8_bytes = "Integer addition overflowed!";
+                const roc_crashed_args = RocCrashed{
+                    .utf8_bytes = utf8_bytes,
+                    .len = utf8_bytes.len,
+                };
+                roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
             } else {
                 return result.value;
             }
@@ -529,11 +546,16 @@ pub fn exportSubOrPanic(
         fn func(
             self: T,
             other: T,
-            roc_alloc: RocAlloc,
+            roc_ops: *RocOps,
         ) callconv(.C) T {
             const result = subWithOverflow(T, self, other);
             if (result.has_overflowed) {
-                roc_panic("Integer subtraction overflowed!", 0, roc_alloc);
+                const utf8_bytes = "Integer subtraction overflowed!";
+                const roc_crashed_args = RocCrashed{
+                    .utf8_bytes = utf8_bytes,
+                    .len = utf8_bytes.len,
+                };
+                roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
             } else {
                 return result.value;
             }
@@ -740,11 +762,16 @@ pub fn exportMulOrPanic(
         fn func(
             self: T,
             other: T,
-            roc_alloc: RocAlloc,
+            roc_ops: *RocOps,
         ) callconv(.C) T {
             const result = @call(.always_inline, mulWithOverflow, .{ T, W, self, other });
             if (result.has_overflowed) {
-                roc_panic("Integer multiplication overflowed!", 0, roc_alloc);
+                const utf8_bytes = "Integer multiplication overflowed!";
+                const roc_crashed_args = RocCrashed{
+                    .utf8_bytes = utf8_bytes,
+                    .len = utf8_bytes.len,
+                };
+                roc_ops.roc_crashed(&roc_crashed_args, roc_ops.env);
             } else {
                 return result.value;
             }
