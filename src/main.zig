@@ -39,7 +39,6 @@ const posix = if (!is_windows) struct {
     extern "c" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) c_int;
 } else struct {};
 
-// fcntl constants
 const F_GETFD = 1;
 const F_SETFD = 2;
 const FD_CLOEXEC = 1;
@@ -240,13 +239,17 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         cleanupSharedMemory();
     }
 
-    // Prepare environment variable with fd number
-    var fd_str_buf: [32]u8 = undefined;
-    var fd_str: []const u8 = "";
+    var handle_str_buf: [64]u8 = undefined;
+    var handle_str: []const u8 = "";
 
-    // Disable close-on-exec for the shared memory file descriptor
-    if (comptime !is_windows) {
-        // Get current flags
+    if (comptime is_windows) {
+        handle_str = std.fmt.bufPrint(&handle_str_buf, "{}", .{@intFromPtr(shm_handle.fd)}) catch {
+            std.log.err("Failed to format handle\n", .{});
+            cleanupSharedMemory();
+            std.process.exit(1);
+        };
+
+    } else {
         var flags = posix.fcntl(shm_handle.fd, F_GETFD, 0);
         if (flags < 0) {
             std.log.err("Failed to get fd flags: {}\n", .{std.c._errno().*});
@@ -254,57 +257,45 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
             std.process.exit(1);
         }
 
-        // Clear FD_CLOEXEC bit
         flags &= ~@as(c_int, FD_CLOEXEC);
 
-        // Set new flags
         if (posix.fcntl(shm_handle.fd, F_SETFD, flags) < 0) {
             std.log.err("Failed to set fd flags: {}\n", .{std.c._errno().*});
             cleanupSharedMemory();
             std.process.exit(1);
         }
 
-        // Format the fd number
-        fd_str = std.fmt.bufPrint(&fd_str_buf, "{}", .{shm_handle.fd}) catch {
+        handle_str = std.fmt.bufPrint(&handle_str_buf, "{}", .{shm_handle.fd}) catch {
             std.log.err("Failed to format fd number\n", .{});
             cleanupSharedMemory();
             std.process.exit(1);
         };
 
-        std.debug.print("Parent: Shared memory fd={}, passing via env var\n", .{shm_handle.fd});
     }
 
     // Run the interpreter as a child process
     var child = std.process.Child.init(&.{exe_path}, gpa);
 
-    // Set environment variable and spawn child process
-    if (comptime !is_windows) {
-        var env_map = std.process.getEnvMap(gpa) catch {
-            std.log.err("Failed to get environment map\n", .{});
-            cleanupSharedMemory();
-            std.process.exit(1);
-        };
-        defer env_map.deinit();
+    var env_map = std.process.getEnvMap(gpa) catch {
+        std.log.err("Failed to get environment map\n", .{});
+        cleanupSharedMemory();
+        std.process.exit(1);
+    };
+    defer env_map.deinit();
 
-        env_map.put("__ROC_INTERNAL_SHM_FD", fd_str) catch {
-            std.log.err("Failed to set environment variable\n", .{});
-            cleanupSharedMemory();
-            std.process.exit(1);
-        };
-        child.env_map = &env_map;
+    const env_var_name = if (comptime is_windows) "__ROC_INTERNAL_SHM_HANDLE" else "__ROC_INTERNAL_SHM_FD";
+    env_map.put(env_var_name, handle_str) catch {
+        std.log.err("Failed to set environment variable\n", .{});
+        cleanupSharedMemory();
+        std.process.exit(1);
+    };
+    child.env_map = &env_map;
 
-        child.spawn() catch |err| {
-            std.log.err("Failed to spawn {s}: {}\n", .{ exe_path, err });
-            cleanupSharedMemory();
-            std.process.exit(1);
-        };
-    } else {
-        child.spawn() catch |err| {
-            std.log.err("Failed to spawn {s}: {}\n", .{ exe_path, err });
-            cleanupSharedMemory();
-            std.process.exit(1);
-        };
-    }
+    child.spawn() catch |err| {
+        std.log.err("Failed to spawn {s}: {}\n", .{ exe_path, err });
+        cleanupSharedMemory();
+        std.process.exit(1);
+    };
 
     // Wait for child to complete
     _ = child.wait() catch |err| {

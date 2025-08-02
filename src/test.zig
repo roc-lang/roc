@@ -18,6 +18,9 @@ test {
     testing.refAllDecls(@import("types"));
     testing.refAllDecls(@import("types/test/rigid_instantiation.zig"));
 
+    // Test fd inheritance
+    testing.refAllDecls(@import("test_fd_inheritance.zig"));
+
     testing.refAllDeclsRecursive(@import("serialization"));
     testing.refAllDecls(@import("serialization/test/compact_writer_test.zig"));
 

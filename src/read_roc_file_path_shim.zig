@@ -91,14 +91,21 @@ export fn roc_entrypoint(roc_alloc: *const fn (size: usize, alignment: u32) call
 }
 
 fn readFromWindowsSharedMemory(roc_alloc: *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque) RocStr {
-    // Convert to wide string for Windows API
-    const shm_name_wide = std.unicode.utf8ToUtf16LeStringLiteral("ROC_FILE_TO_INTERPRET");
-
-    // Open the shared memory object
-    const shm_handle = windows.OpenFileMappingW(windows.FILE_MAP_READ, 0, shm_name_wide) orelse {
+    // Get the handle from environment variable
+    const handle_str = std.process.getEnvVarOwned(std.heap.page_allocator, "__ROC_INTERNAL_SHM_HANDLE") catch {
+        // SHIM: __ROC_INTERNAL_SHM_HANDLE not found in environment
         return RocStr.empty();
     };
-    defer _ = windows.CloseHandle(shm_handle);
+    defer std.heap.page_allocator.free(handle_str);
+
+    const handle_int = std.fmt.parseInt(usize, handle_str, 10) catch {
+        // SHIM: Failed to parse handle from env var
+        return RocStr.empty();
+    };
+
+    const shm_handle = @as(windows.HANDLE, @ptrFromInt(handle_int));
+    // SHIM: Got handle from environment
+    // Note: We don't close the handle here since we inherited it
 
     // Map the shared memory
     const mapped_ptr = windows.MapViewOfFile(shm_handle, windows.FILE_MAP_READ, 0, 0, 0) orelse {
@@ -119,17 +126,17 @@ fn readFromWindowsSharedMemory(roc_alloc: *const fn (size: usize, alignment: u32
 fn readFromPosixSharedMemory(roc_alloc: *const fn (size: usize, alignment: u32) callconv(.C) ?*anyopaque) RocStr {
     // Get the file descriptor from environment variable
     const fd_str = std.process.getEnvVarOwned(std.heap.page_allocator, "__ROC_INTERNAL_SHM_FD") catch {
-        std.debug.print("SHIM: __ROC_INTERNAL_SHM_FD not found in environment\n", .{});
+        // SHIM: __ROC_INTERNAL_SHM_FD not found in environment
         return RocStr.empty();
     };
     defer std.heap.page_allocator.free(fd_str);
 
     const shm_fd = std.fmt.parseInt(c_int, fd_str, 10) catch {
-        std.debug.print("SHIM: Failed to parse fd from env var: {s}\n", .{fd_str});
+        // SHIM: Failed to parse fd from env var
         return RocStr.empty();
     };
 
-    std.debug.print("SHIM: Got fd {} from environment\n", .{shm_fd});
+    // SHIM: Got fd from environment
     defer _ = posix.close(shm_fd);
 
     // Get shared memory size
