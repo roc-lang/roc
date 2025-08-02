@@ -216,19 +216,19 @@ const SmallIdx = packed struct(u31) {
         const S = struct {
             var buffer: [7]u8 = undefined;
         };
-        
+
         var len: usize = 0;
-        
+
         // Add underscore prefix if unused
         if (small_idx.is_unused) {
             S.buffer[len] = '_';
             len += 1;
         }
-        
+
         // Add main characters (char0 is always present since len > 0)
         S.buffer[len] = @as(u8, @intCast(small_idx.char0));
         len += 1;
-        
+
         if (small_idx.char1 != 0) {
             S.buffer[len] = small_idx.char1;
             len += 1;
@@ -241,19 +241,19 @@ const SmallIdx = packed struct(u31) {
             S.buffer[len] = small_idx.char3;
             len += 1;
         }
-        
+
         // Add exclamation if effectful
         if (small_idx.is_effectful) {
             S.buffer[len] = '!';
             len += 1;
         }
-        
+
         // Add underscore suffix if reused
         if (small_idx.is_reused) {
             S.buffer[len] = '_';
             len += 1;
         }
-        
+
         return S.buffer[0..len];
     }
 
@@ -265,19 +265,19 @@ const SmallIdx = packed struct(u31) {
         const S = struct {
             var buffer: [7]u8 = undefined;
         };
-        
+
         var len: usize = 0;
-        
+
         // Add underscore prefix if unused
         if (self.is_unused) {
             S.buffer[len] = '_';
             len += 1;
         }
-        
+
         // Add the core characters
         S.buffer[len] = @as(u8, @intCast(self.char0));
         len += 1;
-        
+
         if (self.char1 != 0) {
             S.buffer[len] = @as(u8, @intCast(self.char1));
             len += 1;
@@ -290,19 +290,19 @@ const SmallIdx = packed struct(u31) {
             S.buffer[len] = @as(u8, @intCast(self.char3));
             len += 1;
         }
-        
+
         // Add exclamation suffix if effectful
         if (self.is_effectful) {
             S.buffer[len] = '!';
             len += 1;
         }
-        
+
         // Add underscore suffix if reused
         if (self.is_reused) {
             S.buffer[len] = '_';
             len += 1;
         }
-        
+
         return S.buffer[0..len];
     }
 };
@@ -1059,5 +1059,3 @@ test "Ident.Store multiple stores CompactWriter roundtrip" {
     try testing.expectEqual(@as(usize, 0), deserialized2.interner.strings.count());
     try testing.expectEqual(@as(usize, 0), deserialized3.interner.strings.count());
 }
-
-

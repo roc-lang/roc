@@ -690,10 +690,9 @@ pub const Tag = struct {
     /// Compare two Tag values for equality
     pub fn eql(self: Self, other: Self) bool {
         // Use the custom eql method for Ident.Idx comparison
-        // Also need to compare the args ranges
-        return self.name.eql(other.name) and 
-               self.args.start == other.args.start and 
-               self.args.count == other.args.count;
+        return self.name.eql(other.name) and
+            self.args.start == other.args.start and
+            self.args.count == other.args.count;
     }
 
     /// A safe list of tags

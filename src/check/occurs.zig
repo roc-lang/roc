@@ -638,11 +638,11 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
         undefined,
         backing_var,
         &.{},
-        Ident.Idx{ 
+        Ident.Idx{
             .is_small = false,
             .data = .{
                 .big = .{
-                    .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, 
+                    .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
                     .idx = 0,
                 },
             },
@@ -711,11 +711,11 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
         undefined,
         type_b_backing,
         &.{},
-        Ident.Idx{ 
+        Ident.Idx{
             .is_small = false,
             .data = .{
                 .big = .{
-                    .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, 
+                    .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
                     .idx = 0,
                 },
             },
@@ -727,11 +727,11 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
         undefined,
         type_b_nominal,
         &.{},
-        Ident.Idx{ 
+        Ident.Idx{
             .is_small = false,
             .data = .{
                 .big = .{
-                    .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, 
+                    .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
                     .idx = 0,
                 },
             },

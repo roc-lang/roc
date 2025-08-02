@@ -15,7 +15,6 @@ const test_allocator = testing.allocator;
 const CIR = compile.CIR;
 const canonicalize = can;
 
-
 // NOTE: These tests are currently commented out because they depend on nominal type
 // value creation (e.g., `Person { name: "Alice" }` creating a nominal type value).
 // The static dispatch implementation is complete and ready to work once nominal
@@ -25,329 +24,329 @@ const canonicalize = can;
 // - Look up methods in that module's exports
 // - Import and unify the method types correctly
 
- test "static dispatch - method call on nominal type in same module" {
-     const source =
-         \\module [describe]
-         \\
-         \\Color : [Red, Green, Blue]
-         \\
-         \\describe : Color -> Str
-         \\describe = \color ->
-         \\    when color is
-         \\        Red -> "red"
-         \\        Green -> "green"
-         \\        Blue -> "blue"
-         \\
-         \\main =
-         \\    myColor = Red
-         \\    myColor.describe()
-     ;
+test "static dispatch - method call on nominal type in same module" {
+    const source =
+        \\module [describe]
+        \\
+        \\Color : [Red, Green, Blue]
+        \\
+        \\describe : Color -> Str
+        \\describe = \color ->
+        \\    when color is
+        \\        Red -> "red"
+        \\        Green -> "green"
+        \\        Blue -> "blue"
+        \\
+        \\main =
+        \\    myColor = Red
+        \\    myColor.describe()
+    ;
 
-     var module_env = try compile.ModuleEnv.init(test_allocator, source);
-     defer module_env.deinit();
+    var module_env = try compile.ModuleEnv.init(test_allocator, source);
+    defer module_env.deinit();
 
-     // Parse the source
-     var parse_ir = try parse.parse(&module_env);
-     defer parse_ir.deinit(test_allocator);
+    // Parse the source
+    var parse_ir = try parse.parse(&module_env);
+    defer parse_ir.deinit(test_allocator);
 
-     // Canonicalize
-     var can_instance = try canonicalize.init(&module_env, &parse_ir, null);
-     defer can_instance.deinit();
-     _ = try can_instance.canonicalizeFile();
+    // Canonicalize
+    var can_instance = try canonicalize.init(&module_env, &parse_ir, null);
+    defer can_instance.deinit();
+    _ = try can_instance.canonicalizeFile();
 
-     // Type check
-     var solver = try check.init(test_allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions);
-     defer solver.deinit();
-     try solver.checkDefs();
+    // Type check
+    var solver = try check.init(test_allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions);
+    defer solver.deinit();
+    try solver.checkDefs();
 
-     // Verify no type errors
-     try testing.expectEqual(@as(usize, 0), solver.problems.problems.items.len);
+    // Verify no type errors
+    try testing.expectEqual(@as(usize, 0), solver.problems.problems.items.len);
 
-     // The type of main should be Str (the result of greet)
-     // Find the main definition
-     const defs = module_env.store.sliceDefs(module_env.all_defs);
-     var main_expr_idx: ?CIR.Expr.Idx = null;
-     for (defs) |def_idx| {
-         const def = module_env.store.getDef(def_idx);
-         const pattern = module_env.store.getPattern(def.pattern);
-         if (pattern == .assign) {
-             const ident_idx = pattern.assign.ident;
-             const ident_text = module_env.idents.getText(ident_idx);
+    // The type of main should be Str (the result of greet)
+    // Find the main definition
+    const defs = module_env.store.sliceDefs(module_env.all_defs);
+    var main_expr_idx: ?CIR.Expr.Idx = null;
+    for (defs) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        const pattern = module_env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_idx = pattern.assign.ident;
+            const ident_text = module_env.idents.getText(ident_idx);
 
-             if (std.mem.eql(u8, ident_text, "main")) {
-                 main_expr_idx = def.expr;
-                 break;
-             }
-         }
-     }
+            if (std.mem.eql(u8, ident_text, "main")) {
+                main_expr_idx = def.expr;
+                break;
+            }
+        }
+    }
 
-     try testing.expect(main_expr_idx != null);
+    try testing.expect(main_expr_idx != null);
 
-     // Verify that the type of main is Str
-     const main_var = @as(types_mod.Var, @enumFromInt(@intFromEnum(main_expr_idx.?)));
-     const resolved_main = module_env.types.resolveVar(main_var);
+    // Verify that the type of main is Str
+    const main_var = @as(types_mod.Var, @enumFromInt(@intFromEnum(main_expr_idx.?)));
+    const resolved_main = module_env.types.resolveVar(main_var);
 
-     // The main expression should resolve to Str
-     switch (resolved_main.desc.content) {
-         .structure => |structure| switch (structure) {
-             .str => {
-                 // Success! The dot access properly resolved to describe which returns Str
-             },
-             else => {
-                 std.debug.print("Expected Str, got: {any}\n", .{structure});
-                 try testing.expect(false);
-             },
-         },
-         else => {
-             std.debug.print("Expected structure, got: {any}\n", .{resolved_main.desc.content});
-             try testing.expect(false);
-         },
-     }
- }
+    // The main expression should resolve to Str
+    switch (resolved_main.desc.content) {
+        .structure => |structure| switch (structure) {
+            .str => {
+                // Success! The dot access properly resolved to describe which returns Str
+            },
+            else => {
+                std.debug.print("Expected Str, got: {any}\n", .{structure});
+                try testing.expect(false);
+            },
+        },
+        else => {
+            std.debug.print("Expected structure, got: {any}\n", .{resolved_main.desc.content});
+            try testing.expect(false);
+        },
+    }
+}
 
- test "static dispatch - method call on imported nominal type" {
-     // Create module environments
-     var data_env = try compile.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
-     defer data_env.deinit();
+test "static dispatch - method call on imported nominal type" {
+    // Create module environments
+    var data_env = try compile.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
+    defer data_env.deinit();
 
-     var main_env = try compile.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
-     defer main_env.deinit();
+    var main_env = try compile.ModuleEnv.init(test_allocator, try test_allocator.dupe(u8, ""));
+    defer main_env.deinit();
 
-     // Create module envs map
-     var module_envs = std.StringHashMap(*compile.ModuleEnv).init(test_allocator);
-     defer module_envs.deinit();
-     try module_envs.put("Data", &data_env);
+    // Create module envs map
+    var module_envs = std.StringHashMap(*compile.ModuleEnv).init(test_allocator);
+    defer module_envs.deinit();
+    try module_envs.put("Data", &data_env);
 
-     // Parse Data module
-     const data_source =
-         \\module [Person, greet]
-         \\
-         \\Person := { name: Str, age: U32 }
-         \\
-         \\greet : Person -> Str
-         \\greet = \person -> "Hello from Data module!"
-     ;
+    // Parse Data module
+    const data_source =
+        \\module [Person, greet]
+        \\
+        \\Person := { name: Str, age: U32 }
+        \\
+        \\greet : Person -> Str
+        \\greet = \person -> "Hello from Data module!"
+    ;
 
-     data_env.source = data_source;
+    data_env.source = data_source;
     var data_parse_ir = try parse.parse(&data_env);
-     defer data_parse_ir.deinit(test_allocator);
+    defer data_parse_ir.deinit(test_allocator);
 
-     // Canonicalize Data module
-     var data_can_instance = try canonicalize.init(&data_env, &data_parse_ir, &module_envs);
-     defer data_can_instance.deinit();
-     _ = try data_can_instance.canonicalizeFile();
+    // Canonicalize Data module
+    var data_can_instance = try canonicalize.init(&data_env, &data_parse_ir, &module_envs);
+    defer data_can_instance.deinit();
+    _ = try data_can_instance.canonicalizeFile();
 
-     // Type check Data module
-     var data_solver = try check.init(test_allocator, &data_env.types, &data_env, &.{}, &data_env.store.regions);
-     defer data_solver.deinit();
-     try data_solver.checkDefs();
+    // Type check Data module
+    var data_solver = try check.init(test_allocator, &data_env.types, &data_env, &.{}, &data_env.store.regions);
+    defer data_solver.deinit();
+    try data_solver.checkDefs();
 
-     // Parse Main module
-     const main_source =
-         \\module []
-         \\
-         \\import Data exposing [Person, greet]
-         \\
-         \\main =
-         \\    bob = Person { name: "Bob", age: 25 }
-         \\    bob.greet()
-     ;
+    // Parse Main module
+    const main_source =
+        \\module []
+        \\
+        \\import Data exposing [Person, greet]
+        \\
+        \\main =
+        \\    bob = Person { name: "Bob", age: 25 }
+        \\    bob.greet()
+    ;
 
-     main_env.source = main_source;
-     var main_parse_ir = try parse.parse(&main_env);
-     defer main_parse_ir.deinit(test_allocator);
+    main_env.source = main_source;
+    var main_parse_ir = try parse.parse(&main_env);
+    defer main_parse_ir.deinit(test_allocator);
 
-     // Canonicalize Main module
-     var main_can_instance = try canonicalize.init(&main_env, &main_parse_ir, &module_envs);
-     defer main_can_instance.deinit();
-     _ = try main_can_instance.canonicalizeFile();
+    // Canonicalize Main module
+    var main_can_instance = try canonicalize.init(&main_env, &main_parse_ir, &module_envs);
+    defer main_can_instance.deinit();
+    _ = try main_can_instance.canonicalizeFile();
 
-     // Type check Main module with Data module available
-     const other_modules = [_]*compile.ModuleEnv{&data_env};
-     var main_solver = try check.init(test_allocator, &main_env.types, &main_env, &other_modules, &main_env.store.regions);
-     defer main_solver.deinit();
-     try main_solver.checkDefs();
+    // Type check Main module with Data module available
+    const other_modules = [_]*compile.ModuleEnv{&data_env};
+    var main_solver = try check.init(test_allocator, &main_env.types, &main_env, &other_modules, &main_env.store.regions);
+    defer main_solver.deinit();
+    try main_solver.checkDefs();
 
-     // Verify no type errors
-     try testing.expectEqual(@as(usize, 0), main_solver.problems.problems.items.len);
+    // Verify no type errors
+    try testing.expectEqual(@as(usize, 0), main_solver.problems.problems.items.len);
 
-     // Find the main expression and verify its type
-     const defs = main_env.store.sliceDefs(main_env.all_defs);
-     var main_expr_idx: ?CIR.Expr.Idx = null;
-     for (defs) |def_idx| {
-         const def = main_env.store.getDef(def_idx);
-         const pattern = main_env.store.getPattern(def.pattern);
-         if (pattern == .assign) {
-             const ident_idx = pattern.assign.ident;
-             const ident_text = main_env.idents.getText(ident_idx);
-             if (std.mem.eql(u8, ident_text, "main")) {
-                 main_expr_idx = def.expr;
-                 break;
-             }
-         }
-     }
+    // Find the main expression and verify its type
+    const defs = main_env.store.sliceDefs(main_env.all_defs);
+    var main_expr_idx: ?CIR.Expr.Idx = null;
+    for (defs) |def_idx| {
+        const def = main_env.store.getDef(def_idx);
+        const pattern = main_env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_idx = pattern.assign.ident;
+            const ident_text = main_env.idents.getText(ident_idx);
+            if (std.mem.eql(u8, ident_text, "main")) {
+                main_expr_idx = def.expr;
+                break;
+            }
+        }
+    }
 
-     try testing.expect(main_expr_idx != null);
+    try testing.expect(main_expr_idx != null);
 
-     // Verify that the type of main is Str
-     const main_var = @as(types_mod.Var, @enumFromInt(@intFromEnum(main_expr_idx.?)));
-     const resolved_main = main_env.types.resolveVar(main_var);
+    // Verify that the type of main is Str
+    const main_var = @as(types_mod.Var, @enumFromInt(@intFromEnum(main_expr_idx.?)));
+    const resolved_main = main_env.types.resolveVar(main_var);
 
-     switch (resolved_main.desc.content) {
-         .structure => |structure| switch (structure) {
-             .str => {
-                 // Success! The imported method was properly resolved
-             },
-             else => {
-                 std.debug.print("Expected Str, got: {any}\n", .{structure});
-                 try testing.expect(false);
-             },
-         },
-         else => {
-             std.debug.print("Expected structure, got: {any}\n", .{resolved_main.desc.content});
-             try testing.expect(false);
-         },
-     }
- }
+    switch (resolved_main.desc.content) {
+        .structure => |structure| switch (structure) {
+            .str => {
+                // Success! The imported method was properly resolved
+            },
+            else => {
+                std.debug.print("Expected Str, got: {any}\n", .{structure});
+                try testing.expect(false);
+            },
+        },
+        else => {
+            std.debug.print("Expected structure, got: {any}\n", .{resolved_main.desc.content});
+            try testing.expect(false);
+        },
+    }
+}
 
- test "static dispatch - method with multiple arguments" {
-     const source =
-         \\module [distance]
-         \\
-         \\Point := { x: F64, y: F64 }
-         \\
-         \\distance : Point, Point -> F64
-         \\distance = \p1, p2 ->
-         \\    dx = p1.x - p2.x
-         \\    dy = p1.y - p2.y
-         \\    Num.sqrt (dx * dx + dy * dy)
-         \\
-         \\main =
-         \\    origin = Point { x: 0.0, y: 0.0 }
-         \\    point = Point { x: 3.0, y: 4.0 }
-         \\    origin.distance(point)
-     ;
+test "static dispatch - method with multiple arguments" {
+    const source =
+        \\module [distance]
+        \\
+        \\Point := { x: F64, y: F64 }
+        \\
+        \\distance : Point, Point -> F64
+        \\distance = \p1, p2 ->
+        \\    dx = p1.x - p2.x
+        \\    dy = p1.y - p2.y
+        \\    Num.sqrt (dx * dx + dy * dy)
+        \\
+        \\main =
+        \\    origin = Point { x: 0.0, y: 0.0 }
+        \\    point = Point { x: 3.0, y: 4.0 }
+        \\    origin.distance(point)
+    ;
 
-     var module_env = try compile.ModuleEnv.init(test_allocator, source);
-     defer module_env.deinit();
+    var module_env = try compile.ModuleEnv.init(test_allocator, source);
+    defer module_env.deinit();
 
-     // Parse the source
-     var parse_ir = try parse.parse(&module_env);
-     defer parse_ir.deinit(test_allocator);
+    // Parse the source
+    var parse_ir = try parse.parse(&module_env);
+    defer parse_ir.deinit(test_allocator);
 
-     // Canonicalize
-     var can_instance = try canonicalize.init(&module_env, &parse_ir, null);
-     defer can_instance.deinit();
-     _ = try can_instance.canonicalizeFile();
+    // Canonicalize
+    var can_instance = try canonicalize.init(&module_env, &parse_ir, null);
+    defer can_instance.deinit();
+    _ = try can_instance.canonicalizeFile();
 
-     // Type check
-     var solver = try check.init(test_allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions);
-     defer solver.deinit();
-     try solver.checkDefs();
+    // Type check
+    var solver = try check.init(test_allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions);
+    defer solver.deinit();
+    try solver.checkDefs();
 
-     // Verify no type errors
-     try testing.expectEqual(@as(usize, 0), solver.problems.problems.items.len);
+    // Verify no type errors
+    try testing.expectEqual(@as(usize, 0), solver.problems.problems.items.len);
 
-     // Find the main expression
-     const defs = module_env.store.sliceDefs(module_env.all_defs);
-     var main_expr_idx: ?CIR.Expr.Idx = null;
-     for (defs) |def_idx| {
-         const def = module_env.store.getDef(def_idx);
-         const pattern = module_env.store.getPattern(def.pattern);
-         if (pattern == .assign) {
-             const ident_idx = pattern.assign.ident;
-             const ident_text = module_env.idents.getText(ident_idx);
-             if (std.mem.eql(u8, ident_text, "main")) {
-                 main_expr_idx = def.expr;
-                 break;
-             }
-         }
-     }
+    // Find the main expression
+    const defs = module_env.store.sliceDefs(module_env.all_defs);
+    var main_expr_idx: ?CIR.Expr.Idx = null;
+    for (defs) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        const pattern = module_env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_idx = pattern.assign.ident;
+            const ident_text = module_env.idents.getText(ident_idx);
+            if (std.mem.eql(u8, ident_text, "main")) {
+                main_expr_idx = def.expr;
+                break;
+            }
+        }
+    }
 
-     try testing.expect(main_expr_idx != null);
+    try testing.expect(main_expr_idx != null);
 
-     // Verify that the type of main is F64
-     const main_var = @as(types_mod.Var, @enumFromInt(@intFromEnum(main_expr_idx.?)));
-     const resolved_main = module_env.types.resolveVar(main_var);
+    // Verify that the type of main is F64
+    const main_var = @as(types_mod.Var, @enumFromInt(@intFromEnum(main_expr_idx.?)));
+    const resolved_main = module_env.types.resolveVar(main_var);
 
-     switch (resolved_main.desc.content) {
-         .structure => |structure| switch (structure) {
-             .num => |num| {
-                 switch (num) {
-                     .frac_precision => |prec| {
-                         try testing.expect(prec == .f64);
-                     },
-                     else => {
-                         std.debug.print("Expected frac_precision.f64, got: {any}\n", .{num});
-                         try testing.expect(false);
-                     },
-                 }
-             },
-             else => {
-                 std.debug.print("Expected Num.F64, got: {any}\n", .{structure});
-                 try testing.expect(false);
-             },
-         },
-         else => {
-             std.debug.print("Expected structure, got: {any}\n", .{resolved_main.desc.content});
-             try testing.expect(false);
-         },
-     }
- }
+    switch (resolved_main.desc.content) {
+        .structure => |structure| switch (structure) {
+            .num => |num| {
+                switch (num) {
+                    .frac_precision => |prec| {
+                        try testing.expect(prec == .f64);
+                    },
+                    else => {
+                        std.debug.print("Expected frac_precision.f64, got: {any}\n", .{num});
+                        try testing.expect(false);
+                    },
+                }
+            },
+            else => {
+                std.debug.print("Expected Num.F64, got: {any}\n", .{structure});
+                try testing.expect(false);
+            },
+        },
+        else => {
+            std.debug.print("Expected structure, got: {any}\n", .{resolved_main.desc.content});
+            try testing.expect(false);
+        },
+    }
+}
 
- test "static dispatch - error when method not found" {
-     const source =
-         \\module []
-         \\
-         \\Person := { name: Str, age: U32 }
-         \\
-         \\main =
-         \\    alice = Person { name: "Alice", age: 30 }
-         \\    alice.nonExistentMethod()
-     ;
+test "static dispatch - error when method not found" {
+    const source =
+        \\module []
+        \\
+        \\Person := { name: Str, age: U32 }
+        \\
+        \\main =
+        \\    alice = Person { name: "Alice", age: 30 }
+        \\    alice.nonExistentMethod()
+    ;
 
-     var module_env = try compile.ModuleEnv.init(test_allocator, source);
-     defer module_env.deinit();
+    var module_env = try compile.ModuleEnv.init(test_allocator, source);
+    defer module_env.deinit();
 
-     // Parse the source
-     var parse_ir = try parse.parse(&module_env);
-     defer parse_ir.deinit(test_allocator);
+    // Parse the source
+    var parse_ir = try parse.parse(&module_env);
+    defer parse_ir.deinit(test_allocator);
 
-     // Canonicalize
-     var can_instance = try canonicalize.init(&module_env, &parse_ir, null);
-     defer can_instance.deinit();
-     _ = try can_instance.canonicalizeFile();
+    // Canonicalize
+    var can_instance = try canonicalize.init(&module_env, &parse_ir, null);
+    defer can_instance.deinit();
+    _ = try can_instance.canonicalizeFile();
 
-     // Type check
-     var solver = try check.init(test_allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions);
-     defer solver.deinit();
-     try solver.checkDefs();
+    // Type check
+    var solver = try check.init(test_allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions);
+    defer solver.deinit();
+    try solver.checkDefs();
 
-     // We should have problems since the method doesn't exist
-     // For now, we just check that the expression was marked as an error
-     const defs = module_env.store.sliceDefs(module_env.all_defs);
-     var main_expr_idx: ?CIR.Expr.Idx = null;
-     for (defs) |def_idx| {
-         const def = module_env.store.getDef(def_idx);
-         const pattern = module_env.store.getPattern(def.pattern);
-         if (pattern == .assign) {
-             const ident_idx = pattern.assign.ident;
-             const ident_text = module_env.idents.getText(ident_idx);
-             if (std.mem.eql(u8, ident_text, "main")) {
-                 main_expr_idx = def.expr;
-                 break;
-             }
-         }
-     }
+    // We should have problems since the method doesn't exist
+    // For now, we just check that the expression was marked as an error
+    const defs = module_env.store.sliceDefs(module_env.all_defs);
+    var main_expr_idx: ?CIR.Expr.Idx = null;
+    for (defs) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        const pattern = module_env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_idx = pattern.assign.ident;
+            const ident_text = module_env.idents.getText(ident_idx);
+            if (std.mem.eql(u8, ident_text, "main")) {
+                main_expr_idx = def.expr;
+                break;
+            }
+        }
+    }
 
-     try testing.expect(main_expr_idx != null);
+    try testing.expect(main_expr_idx != null);
 
-     // The main expression should have an error type
-     const main_var = @as(types_mod.Var, @enumFromInt(@intFromEnum(main_expr_idx.?)));
-     const resolved_main = module_env.types.resolveVar(main_var);
+    // The main expression should have an error type
+    const main_var = @as(types_mod.Var, @enumFromInt(@intFromEnum(main_expr_idx.?)));
+    const resolved_main = module_env.types.resolveVar(main_var);
 
-     try testing.expect(resolved_main.desc.content == .err);
- }
+    try testing.expect(resolved_main.desc.content == .err);
+}
 
 // Placeholder test to ensure the file compiles
 test "static dispatch - placeholder for future implementation" {

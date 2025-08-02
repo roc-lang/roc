@@ -1123,7 +1123,7 @@ pub const DescStoreIdx = DescStore.Idx;
 fn expectEqualContent(expected: Content, actual: Content) !void {
     // First check that the tags match
     try std.testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
-    
+
     // Then compare based on the tag
     switch (expected) {
         .flex_var => |expected_name| {

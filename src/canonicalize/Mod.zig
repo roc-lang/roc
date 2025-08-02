@@ -5432,11 +5432,11 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
     if (node.tag == .malformed) {
         // Create a malformed type header with an invalid identifier
         return try self.env.addTypeHeaderAndTypeVar(.{
-            .name = base.Ident.Idx{ 
+            .name = base.Ident.Idx{
                 .is_small = false,
                 .data = .{
                     .big = .{
-                        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, 
+                        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
                         .idx = 0,
                     },
                 },
@@ -5452,11 +5452,11 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
     const name_ident = self.parse_ir.tokens.resolveIdentifier(ast_header.name) orelse {
         // If we can't resolve the identifier, create a malformed header with invalid identifier
         return try self.env.addTypeHeaderAndTypeVar(.{
-            .name = base.Ident.Idx{ 
+            .name = base.Ident.Idx{
                 .is_small = false,
                 .data = .{
                     .big = .{
-                        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, 
+                        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
                         .idx = 0,
                     },
                 },
@@ -8389,7 +8389,7 @@ test "pattern literal type transitions" {
 fn expectEqualContent(expected: types.Content, actual: types.Content) !void {
     // First check that the tags match
     try std.testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
-    
+
     // Then compare based on the tag
     switch (expected) {
         .flex_var => |expected_name| {
@@ -8423,7 +8423,7 @@ fn expectEqualContent(expected: types.Content, actual: types.Content) !void {
 /// Helper function to compare FlatType values for testing
 fn expectEqualFlatType(expected: types.FlatType, actual: types.FlatType) !void {
     try std.testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
-    
+
     switch (expected) {
         .str, .list_unbound, .empty_record, .empty_tag_union => {},
         .box => |expected_var| try std.testing.expectEqual(expected_var, actual.box),

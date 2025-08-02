@@ -17,14 +17,10 @@ const Token = parse.Token;
 fn expectEqualTokens(expected: Token, actual: Token) !void {
     try testing.expectEqual(expected.tag, actual.tag);
     try testing.expectEqual(expected.region, actual.region);
-    
+
     // Compare data based on tag
     switch (expected.tag) {
-        .UpperIdent, .LowerIdent, .DotLowerIdent, .DotUpperIdent, 
-        .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .NamedUnderscore, 
-        .OpaqueName, .MalformedUnicodeIdent, .MalformedDotUnicodeIdent,
-        .MalformedNoSpaceDotUnicodeIdent, .MalformedNamedUnderscoreUnicode,
-        .MalformedOpaqueNameUnicode => {
+        .UpperIdent, .LowerIdent, .DotLowerIdent, .DotUpperIdent, .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .NamedUnderscore, .OpaqueName, .MalformedUnicodeIdent, .MalformedDotUnicodeIdent, .MalformedNoSpaceDotUnicodeIdent, .MalformedNamedUnderscoreUnicode, .MalformedOpaqueNameUnicode => {
             // These have IdentWithFlags data
             const expected_ident = expected.data.ident_with_flags;
             const actual_ident = actual.data.ident_with_flags;
@@ -470,7 +466,7 @@ fn expectEqualTypeAnno(expected: AST.TypeAnno, actual: AST.TypeAnno) !void {
 
 fn expectEqualHeaders(expected: AST.Header, actual: AST.Header) !void {
     try testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
-    
+
     switch (expected) {
         .app => |expected_app| {
             const actual_app = actual.app;
@@ -513,7 +509,7 @@ fn expectEqualHeaders(expected: AST.Header, actual: AST.Header) !void {
 
 fn expectEqualStatements(expected: AST.Statement, actual: AST.Statement) !void {
     try testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
-    
+
     switch (expected) {
         .decl => |expected_decl| {
             try testing.expectEqual(expected_decl, actual.decl);

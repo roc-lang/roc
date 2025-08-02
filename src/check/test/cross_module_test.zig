@@ -506,7 +506,7 @@ test "cross-module type checking - preserves module A types" {
     // Both should be flex_var with the same name (if any)
     try testing.expect(original_content.flex_var == null and module_a_after.flex_var == null or
         (original_content.flex_var != null and module_a_after.flex_var != null and
-         original_content.flex_var.?.eql(module_a_after.flex_var.?)));
+            original_content.flex_var.?.eql(module_a_after.flex_var.?)));
 
     // Module B's imported type should be I32
     const module_b_resolved = module_b_env.types.resolveVar(external_var);

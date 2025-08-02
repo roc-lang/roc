@@ -1833,7 +1833,6 @@ test "ModuleEnv with source code CompactWriter roundtrip" {
     try testing.expectEqual(original.line_starts.items.items.len, deserialized.line_starts.items.items.len);
 }
 
-
 /// Append region information to an S-expression node for a given index.
 pub fn appendRegionInfoToSExprTree(self: *const Self, tree: *SExprTree, idx: anytype) std.mem.Allocator.Error!void {
     const region = self.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));

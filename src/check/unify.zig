@@ -2795,7 +2795,7 @@ fn expectEqualIdentSlices(expected: []const Ident.Idx, actual: []const Ident.Idx
 fn expectEqualContent(expected: Content, actual: Content) !void {
     // First check that the tags match
     try std.testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
-    
+
     // Then compare based on the tag
     switch (expected) {
         .flex_var => |expected_name| {
@@ -2840,7 +2840,7 @@ fn expectEqualTag(expected: Tag, actual: Tag) !void {
 /// Helper function to compare FlatType values for testing
 fn expectEqualFlatType(expected: FlatType, actual: FlatType) !void {
     try std.testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
-    
+
     switch (expected) {
         .str, .list_unbound, .empty_record, .empty_tag_union => {},
         .box => |expected_var| try std.testing.expectEqual(expected_var, actual.box),
@@ -3118,11 +3118,11 @@ const TestEnv = struct {
             try self.mkTypeIdent(name),
             backing_var,
             args,
-            Ident.Idx{ 
+            Ident.Idx{
                 .is_small = false,
                 .data = .{
                     .big = .{
-                        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, 
+                        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
                         .idx = 0,
                     },
                 },

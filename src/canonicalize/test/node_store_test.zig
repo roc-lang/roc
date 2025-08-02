@@ -21,7 +21,7 @@ var rand = std.Random.DefaultPrng.init(1234);
 fn expectEqualDiagnostics(expected: ModuleEnv.Diagnostic, actual: ModuleEnv.Diagnostic) !void {
     // First check that the tags match
     try testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
-    
+
     // Then compare the fields based on the tag
     switch (expected) {
         .not_implemented => |e| {
@@ -257,7 +257,7 @@ fn rand_idx(comptime T: type) T {
 fn expectEqualStatements(expected: ModuleEnv.Statement, actual: ModuleEnv.Statement) !void {
     // First check that the tags match
     try testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
-    
+
     // Then compare the fields based on the tag
     switch (expected) {
         .s_decl => |e| {
@@ -344,7 +344,7 @@ fn rand_idx_u16(comptime T: type) T {
 fn expectEqualExpressions(expected: ModuleEnv.Expr, actual: ModuleEnv.Expr) !void {
     // First check that the tags match
     try testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
-    
+
     // Then compare the fields based on the tag
     switch (expected) {
         .e_int => |e| {
@@ -369,7 +369,6 @@ fn expectEqualExpressions(expected: ModuleEnv.Expr, actual: ModuleEnv.Expr) !voi
             // Compare span lengths instead of direct comparison since segments may contain Ident.Idx
             try testing.expectEqual(e.span.span.len, a.span.span.len);
         },
-
 
         .e_tag => |e| {
             const a = actual.e_tag;
@@ -445,7 +444,6 @@ fn expectEqualExpressions(expected: ModuleEnv.Expr, actual: ModuleEnv.Expr) !voi
             const a = actual.e_crash;
             try testing.expectEqual(e.msg, a.msg);
         },
-
 
         .e_dot_access => |e| {
             const a = actual.e_dot_access;
