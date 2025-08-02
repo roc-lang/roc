@@ -2875,15 +2875,17 @@ pub fn canonicalizeExpr(
                             }
                         }
 
-                        // Collect bound vars from the statement
-                        // We need to look at the statement that was just added to the scratch buffer
-                        const last_added_stmt_idx = self.env.store.scratch_statements.items.items[self.env.store.scratch_statements.top() - 1];
-                        const cir_stmt = self.env.store.getStatement(last_added_stmt_idx);
+                        if (self.env.store.scratch_statements.top() > 0) {
+                            // Collect bound vars from the statement
+                            // We need to look at the statement that was just added to the scratch buffer
+                            const last_added_stmt_idx = self.env.store.scratch_statements.items.items[self.env.store.scratch_statements.top() - 1];
+                            const cir_stmt = self.env.store.getStatement(last_added_stmt_idx);
 
-                        switch (cir_stmt) {
-                            .s_decl => |decl| try self.collectBoundVars(decl.pattern, &bound_vars),
-                            .s_var => |var_stmt| try self.collectBoundVars(var_stmt.pattern_idx, &bound_vars),
-                            else => {},
+                            switch (cir_stmt) {
+                                .s_decl => |decl| try self.collectBoundVars(decl.pattern, &bound_vars),
+                                .s_var => |var_stmt| try self.collectBoundVars(var_stmt.pattern_idx, &bound_vars),
+                                else => {},
+                            }
                         }
                     }
                 }
@@ -5258,6 +5260,9 @@ fn canonicalizeTypeAnnoTagUnion(
                 .apply => |apply| {
                     const args_slice: []TypeVar = @ptrCast(self.env.store.sliceTypeAnnos(apply.args));
                     break :blk try self.env.types.mkTag(apply.symbol, args_slice);
+                },
+                .malformed => {
+                    continue;
                 },
                 else => unreachable,
             }

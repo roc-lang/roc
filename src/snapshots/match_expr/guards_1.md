@@ -18,25 +18,24 @@ PARSE ERROR - guards_1.md:2:19:2:20
 UNEXPECTED TOKEN IN PATTERN - guards_1.md:2:20:2:30
 PARSE ERROR - guards_1.md:2:30:2:30
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:2:30:2:32
-PARSE ERROR - guards_1.md:2:42:2:42
-UNEXPECTED TOKEN IN PATTERN - guards_1.md:2:43:2:44
+UNEXPECTED TOKEN IN PATTERN - guards_1.md:2:32:2:35
+PARSE ERROR - guards_1.md:2:43:2:43
+UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:2:43:2:44
+UNEXPECTED TOKEN IN PATTERN - guards_1.md:2:44:2:44
 PARSE ERROR - guards_1.md:2:44:2:44
-UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:2:44:2:44
-UNEXPECTED TOKEN IN PATTERN - guards_1.md:2:44:2:45
-PARSE ERROR - guards_1.md:3:5:3:5
-UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:7:3:9
-PARSE ERROR - guards_1.md:3:10:3:10
-UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:16:3:18
-PARSE ERROR - guards_1.md:3:19:3:19
+UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:2:44:2:45
+PARSE ERROR - guards_1.md:3:7:3:7
+UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:16:3:18
 PARSE ERROR - guards_1.md:3:19:3:20
-UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:43:3:44
+UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:20:3:30
+PARSE ERROR - guards_1.md:3:30:3:30
+UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:30:3:32
+UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:32:3:35
+PARSE ERROR - guards_1.md:3:43:3:43
+UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:43:3:44
+UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:44:3:44
 PARSE ERROR - guards_1.md:3:44:3:44
-UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:44:3:44
-UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:44:3:45
-PARSE ERROR - guards_1.md:4:5:4:5
-UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:4:5:4:6
-UNEXPECTED TOKEN IN PATTERN - guards_1.md:4:7:4:9
-PARSE ERROR - guards_1.md:4:10:4:10
+UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:44:3:45
 UNDEFINED VARIABLE - guards_1.md:1:7:1:12
 UNKNOWN OPERATOR - guards_1.md:2:19:2:20
 UNUSED VARIABLE - guards_1.md:2:5:2:6
@@ -113,21 +112,33 @@ Here is the problematic code:
                              ^^
 
 
+**UNEXPECTED TOKEN IN PATTERN**
+The token **Num** is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
+
+Here is the problematic code:
+**guards_1.md:2:32:2:35:**
+```roc
+    x if x > 0 => "positive: ${Num.toStr x}"
+```
+                               ^^^
+
+
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**guards_1.md:2:42:2:42:**
+**guards_1.md:2:43:2:43:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
 ```
-                                         
+                                          
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **}** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
 **guards_1.md:2:43:2:44:**
@@ -135,6 +146,18 @@ Here is the problematic code:
     x if x > 0 => "positive: ${Num.toStr x}"
 ```
                                           ^
+
+
+**UNEXPECTED TOKEN IN PATTERN**
+The token  is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
+
+Here is the problematic code:
+**guards_1.md:2:44:2:44:**
+```roc
+    x if x > 0 => "positive: ${Num.toStr x}"
+```
+                                           
 
 
 **PARSE ERROR**
@@ -150,20 +173,8 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**guards_1.md:2:44:2:44:**
-```roc
-    x if x > 0 => "positive: ${Num.toStr x}"
-```
-                                           
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **"** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
 **guards_1.md:2:44:2:45:**
@@ -178,40 +189,16 @@ A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**guards_1.md:3:5:3:5:**
+**guards_1.md:3:7:3:7:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
 ```
-    
+      
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **if** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**guards_1.md:3:7:3:9:**
-```roc
-    x if x < 0 => "negative: ${Num.toStr x}"
-```
-      ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**guards_1.md:3:10:3:10:**
-```roc
-    x if x < 0 => "negative: ${Num.toStr x}"
-```
-         
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **=>** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
 **guards_1.md:3:16:3:18:**
@@ -222,19 +209,7 @@ Here is the problematic code:
 
 
 **PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**guards_1.md:3:19:3:19:**
-```roc
-    x if x < 0 => "negative: ${Num.toStr x}"
-```
-                  
-
-
-**PARSE ERROR**
-A parsing error occurred: `string_expected_close_interpolation`
+A parsing error occurred: `no_else`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
@@ -246,8 +221,68 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN PATTERN**
-The token **}** is not expected in a pattern.
+The token **negative: ** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
+
+Here is the problematic code:
+**guards_1.md:3:20:3:30:**
+```roc
+    x if x < 0 => "negative: ${Num.toStr x}"
+```
+                   ^^^^^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**guards_1.md:3:30:3:30:**
+```roc
+    x if x < 0 => "negative: ${Num.toStr x}"
+```
+                             
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **${** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**guards_1.md:3:30:3:32:**
+```roc
+    x if x < 0 => "negative: ${Num.toStr x}"
+```
+                             ^^
+
+
+**UNEXPECTED TOKEN IN PATTERN**
+The token **Num** is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
+
+Here is the problematic code:
+**guards_1.md:3:32:3:35:**
+```roc
+    x if x < 0 => "negative: ${Num.toStr x}"
+```
+                               ^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `match_branch_missing_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**guards_1.md:3:43:3:43:**
+```roc
+    x if x < 0 => "negative: ${Num.toStr x}"
+```
+                                          
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
 **guards_1.md:3:43:3:44:**
@@ -257,6 +292,18 @@ Here is the problematic code:
                                           ^
 
 
+**UNEXPECTED TOKEN IN PATTERN**
+The token  is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
+
+Here is the problematic code:
+**guards_1.md:3:44:3:44:**
+```roc
+    x if x < 0 => "negative: ${Num.toStr x}"
+```
+                                           
+
+
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
@@ -270,20 +317,8 @@ Here is the problematic code:
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**guards_1.md:3:44:3:44:**
-```roc
-    x if x < 0 => "negative: ${Num.toStr x}"
-```
-                                           
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **"** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
 **guards_1.md:3:44:3:45:**
@@ -291,54 +326,6 @@ Here is the problematic code:
     x if x < 0 => "negative: ${Num.toStr x}"
 ```
                                            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**guards_1.md:4:5:4:5:**
-```roc
-    _ => "other"
-```
-    
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **_** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**guards_1.md:4:5:4:6:**
-```roc
-    _ => "other"
-```
-    ^
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **=>** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**guards_1.md:4:7:4:9:**
-```roc
-    _ => "other"
-```
-      ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**guards_1.md:4:10:4:10:**
-```roc
-    _ => "other"
-```
-         
 
 
 **UNDEFINED VARIABLE**
@@ -394,31 +381,26 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 		(branch @2.20-2.32
 			(p-malformed @2.20-2.30 (tag "pattern_unexpected_token"))
 			(e-malformed @2.30-2.32 (reason "expr_unexpected_token")))
-		(branch @2.32-2.43
-			(p-ident @2.32-2.41 (raw ".toStr"))
-			(e-ident @2.42-2.43 (raw "x")))
-		(branch @2.43-2.44
-			(p-malformed @2.43-2.44 (tag "pattern_unexpected_token"))
-			(e-malformed @2.44-2.44 (reason "expr_unexpected_token")))
-		(branch @2.44-3.6
-			(p-malformed @2.44-2.45 (tag "pattern_unexpected_token"))
-			(e-ident @3.5-3.6 (raw "x")))
-		(branch @3.7-3.15
-			(p-malformed @3.7-3.9 (tag "pattern_unexpected_token"))
-			(e-binop @3.10-3.15 (op "<")
-				(e-ident @3.10-3.11 (raw "x"))
-				(e-int @3.14-3.15 (raw "0"))))
-		(branch @3.16-3.43
-			(p-malformed @3.16-3.18 (tag "pattern_unexpected_token"))
-			(e-malformed @3.19-3.43 (reason "string_expected_close_interpolation")))
-		(branch @3.43-3.44
-			(p-malformed @3.43-3.44 (tag "pattern_unexpected_token"))
-			(e-malformed @3.44-3.44 (reason "expr_unexpected_token")))
-		(branch @3.44-4.6
-			(p-malformed @3.44-3.45 (tag "pattern_unexpected_token"))
-			(e-malformed @4.5-4.6 (reason "expr_unexpected_token")))
-		(branch @4.7-4.17
-			(p-malformed @4.7-4.9 (tag "pattern_unexpected_token"))
+		(branch @2.32-2.44
+			(p-malformed @2.32-2.43 (tag "pattern_unexpected_token"))
+			(e-malformed @2.43-2.44 (reason "expr_unexpected_token")))
+		(branch @2.44-2.45
+			(p-malformed @2.44-2.44 (tag "pattern_unexpected_token"))
+			(e-malformed @2.44-2.45 (reason "expr_unexpected_token")))
+		(branch @3.5-3.20
+			(p-ident @3.5-3.6 (raw "x"))
+			(e-malformed @3.19-3.20 (reason "no_else")))
+		(branch @3.20-3.32
+			(p-malformed @3.20-3.30 (tag "pattern_unexpected_token"))
+			(e-malformed @3.30-3.32 (reason "expr_unexpected_token")))
+		(branch @3.32-3.44
+			(p-malformed @3.32-3.43 (tag "pattern_unexpected_token"))
+			(e-malformed @3.43-3.44 (reason "expr_unexpected_token")))
+		(branch @3.44-3.45
+			(p-malformed @3.44-3.44 (tag "pattern_unexpected_token"))
+			(e-malformed @3.44-3.45 (reason "expr_unexpected_token")))
+		(branch @4.5-4.17
+			(p-underscore)
 			(e-string @4.10-4.17
 				(e-string-part @4.11-4.16 (raw "other"))))))
 ~~~
@@ -427,16 +409,13 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 match value {
 	x => 
 	 => 
-	toStr => x
-	 => 
-	 =>
-		x
-	 => x < 0
 	 => 
 	 => 
-	 =>
-		
-	 => "other"
+	x => 
+	 => 
+	 => 
+	 => 
+	_ => "other"
 }
 ~~~
 # CANONICALIZE
