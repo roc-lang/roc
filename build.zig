@@ -306,6 +306,7 @@ fn addMainExe(
         .strip = strip,
     });
     shim_lib.linkLibC();
+    shim_lib.root_module.addImport("builtins", builtins);
 
     // Install shim.a to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});
