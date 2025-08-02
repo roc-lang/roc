@@ -91,6 +91,8 @@ const WorkKind = enum {
     w_binop_sub,
     w_binop_mul,
     w_binop_div,
+    w_binop_div_trunc,
+    w_binop_rem,
     w_binop_eq,
     w_binop_ne,
     w_binop_gt,
@@ -108,6 +110,7 @@ const WorkKind = enum {
     w_eval_tuple_elements,
     w_let_bind,
     w_block_cleanup,
+    w_dot_access,
 };
 
 /// A unit of work to be processed during iterative evaluation.
@@ -275,7 +278,7 @@ pub const Interpreter = struct {
         while (self.take_work()) |work| {
             switch (work.kind) {
                 .w_eval_expr => try self.evalExpr(work.expr_idx),
-                .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
+                .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
                     try self.completeBinop(work.kind);
                 },
                 .w_unary_minus => {
@@ -300,6 +303,10 @@ pub const Interpreter = struct {
                 .w_eval_record_fields => try self.handleRecordFields(
                     work.expr_idx,
                     work.extra, // stores the current_field_idx
+                ),
+                .w_dot_access => try self.handleDotAccess(
+                    work.expr_idx,
+                    work.extra, // stores the field_name_idx
                 ),
                 .w_eval_tuple_elements => try self.handleTupleElements(
                     work.expr_idx,
@@ -546,6 +553,8 @@ pub const Interpreter = struct {
                     .sub => .w_binop_sub,
                     .mul => .w_binop_mul,
                     .div => .w_binop_div,
+                    .div_trunc => .w_binop_div_trunc,
+                    .rem => .w_binop_rem,
                     .eq => .w_binop_eq,
                     .ne => .w_binop_ne,
                     .gt => .w_binop_gt,
@@ -554,7 +563,7 @@ pub const Interpreter = struct {
                     .le => .w_binop_le,
                     .@"and" => .w_binop_and,
                     .@"or" => .w_binop_or,
-                    else => return error.Crash,
+                    .pow, .pipe_forward, .null_coalesce => return error.Crash, // Not implemented yet
                 };
 
                 self.schedule_work(WorkItem{ .kind = binop_kind, .expr_idx = expr_idx });
@@ -859,7 +868,22 @@ pub const Interpreter = struct {
                 );
             },
 
-            .e_str, .e_str_segment, .e_list, .e_dot_access, .e_lookup_external, .e_match, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
+            .e_dot_access => |dot_access| {
+                // Push work to complete field access after receiver is evaluated
+                try self.work_stack.append(.{
+                    .kind = .w_dot_access,
+                    .expr_idx = expr_idx,
+                    .extra = @bitCast(dot_access.field_name),
+                });
+
+                // Evaluate the receiver expression
+                try self.work_stack.append(.{
+                    .kind = .w_eval_expr,
+                    .expr_idx = dot_access.receiver,
+                });
+            },
+
+            .e_str, .e_str_segment, .e_list, .e_lookup_external, .e_match, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
                 return error.LayoutError;
             },
 
@@ -965,7 +989,7 @@ pub const Interpreter = struct {
 
         // Determine result layout
         const result_layout = switch (kind) {
-            .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div => lhs.layout, // Numeric result
+            .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem => lhs.layout, // Numeric result
             .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => blk: {
                 // Boolean result
                 const bool_layout = Layout{
@@ -1004,6 +1028,20 @@ pub const Interpreter = struct {
                     return error.DivisionByZero;
                 }
                 const result_val: i128 = @divTrunc(lhs_val, rhs_val);
+                self.writeIntToMemoryAndTrace(result_ptr, result_val, lhs_precision);
+            },
+            .w_binop_div_trunc => {
+                if (rhs_val == 0) {
+                    return error.DivisionByZero;
+                }
+                const result_val: i128 = @divTrunc(lhs_val, rhs_val);
+                self.writeIntToMemoryAndTrace(result_ptr, result_val, lhs_precision);
+            },
+            .w_binop_rem => {
+                if (rhs_val == 0) {
+                    return error.DivisionByZero;
+                }
+                const result_val: i128 = @rem(lhs_val, rhs_val);
                 self.writeIntToMemoryAndTrace(result_ptr, result_val, lhs_precision);
             },
             .w_binop_eq => {
@@ -1422,6 +1460,60 @@ pub const Interpreter = struct {
         } else {
             self.traceInfo("All tuple elements processed for tuple_expr_idx={}", .{tuple_expr_idx});
         }
+    }
+
+    fn handleDotAccess(self: *Interpreter, dot_access_expr_idx: ModuleEnv.Expr.Idx, field_name_idx: u32) EvalError!void {
+        self.traceEnter("handleDotAccess expr_idx={}, field_name_idx={}", .{ dot_access_expr_idx, field_name_idx });
+        defer self.traceExit("", .{});
+
+        // Pop the record value from the stack
+        const record_value = try self.popStackValue();
+
+        // Get the field name
+        const field_name_ident: base.Ident.Idx = @bitCast(field_name_idx);
+        const field_name = self.env.idents.getText(field_name_ident);
+
+        // The record must have a record layout
+        if (record_value.layout.tag != .record) {
+            return error.LayoutError;
+        }
+
+        // Get the record data
+        const record_data = self.layout_cache.getRecordData(record_value.layout.data.record.idx);
+        const record_fields = self.layout_cache.record_fields.sliceRange(record_data.getFields());
+
+        // Find the field in the record layout by name
+        var field_index: ?usize = null;
+        for (0..record_fields.len) |idx| {
+            const field = record_fields.get(idx);
+            if (std.mem.eql(u8, self.env.idents.getText(field.name), field_name)) {
+                field_index = idx;
+                break;
+            }
+        }
+
+        const index = field_index orelse return error.LayoutError;
+
+        // Get the field offset and layout
+        const field_offset = self.layout_cache.getRecordFieldOffset(record_value.layout.data.record.idx, @intCast(index));
+        const field_layout = self.layout_cache.getLayout(record_fields.get(index).layout);
+        const field_size = self.layout_cache.layoutSize(field_layout);
+
+        // Calculate the field pointer
+        const record_ptr = @as([*]const u8, @ptrCast(record_value.ptr.?));
+        const field_ptr = record_ptr + field_offset;
+
+        // Push the field value onto the stack
+        if (field_size > 0) {
+            const result_ptr = (try self.pushStackValue(field_layout)).?;
+            const dest = @as([*]u8, @ptrCast(result_ptr));
+            std.mem.copyForwards(u8, dest[0..field_size], field_ptr[0..field_size]);
+        } else {
+            // Zero-sized field
+            _ = try self.pushStackValue(field_layout);
+        }
+
+        self.traceInfo("Accessed field '{s}' at offset {}, size {}", .{ field_name, field_offset, field_size });
     }
 
     /// Start a debug trace session with a given name and writer

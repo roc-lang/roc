@@ -36,10 +36,10 @@ CloseCurly(4:1-4:2),CloseRound(4:2-4:3),NoSpaceOpenRound(4:3-4:4),Int(4:4-4:5),C
 							(args
 								(p-ident @2.13-2.14 (raw "x")))
 							(e-binop @2.16-2.28 (op "+")
-								(e-ident @2.16-2.20 (raw "base"))
-								(e-binop @2.23-2.28 (op "+")
-									(e-ident @2.23-2.24 (raw "x"))
-									(e-int @2.27-2.28 (raw "1"))))))
+								(e-binop @2.16-2.24 (op "+")
+									(e-ident @2.16-2.20 (raw "base"))
+									(e-ident @2.23-2.24 (raw "x")))
+								(e-int @2.27-2.28 (raw "1")))))
 					(e-apply @3.3-3.12
 						(e-ident @3.3-3.9 (raw "simple"))
 						(e-int @3.10-3.11 (raw "1")))))))
@@ -70,12 +70,12 @@ CloseCurly(4:1-4:2),CloseRound(4:2-4:3),NoSpaceOpenRound(4:3-4:4),Int(4:4-4:5),C
 						(args
 							(p-assign @2.13-2.14 (ident "x")))
 						(e-binop @2.16-2.28 (op "add")
-							(e-lookup-local @2.16-2.20
-								(p-assign @1.3-1.7 (ident "base")))
-							(e-binop @2.23-2.28 (op "add")
+							(e-binop @2.16-2.24 (op "add")
+								(e-lookup-local @2.16-2.20
+									(p-assign @1.3-1.7 (ident "base")))
 								(e-lookup-local @2.23-2.24
-									(p-assign @2.13-2.14 (ident "x")))
-								(e-int @2.27-2.28 (value "1")))))))
+									(p-assign @2.13-2.14 (ident "x"))))
+							(e-int @2.27-2.28 (value "1"))))))
 			(e-call @3.3-3.12
 				(e-lookup-local @3.3-3.9
 					(p-assign @2.3-2.9 (ident "simple")))
