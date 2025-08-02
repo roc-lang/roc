@@ -166,9 +166,25 @@ pub const Inc = fn (?[*]u8) callconv(.C) void;
 pub const IncN = fn (?[*]u8, u64) callconv(.C) void;
 /// Function type for decrementing reference count
 pub const Dec = fn (?[*]u8) callconv(.C) void;
-/// TODO
-pub const REFCOUNT_MAX_ISIZE: isize = 0;
-/// TODO
+/// Special refcount value that marks data with whole-program lifetime.
+/// When a refcount equals this value, it indicates static/constant data that should
+/// never be decremented or freed. This is used for string literals, constant data,
+/// and other values that live for the entire duration of the program.
+///
+/// The value 0 is chosen because:
+/// - It's clearly distinct from normal refcounts (which start at 1)
+/// - It makes the "constant" check very efficient
+/// - It's safe since normal refcounts should never reach 0 while still being referenced
+pub const REFCOUNT_STATIC_DATA: isize = 0;
+/// No-op reference count decrement function.
+/// Used as a callback when elements don't contain refcounted data or in testing scenarios
+/// where reference counting operations should be skipped. Matches the `Dec` function type
+/// signature but performs no operations.
+///
+/// This is commonly passed to `decref` methods when:
+/// - Testing with simple data types that don't need reference counting
+/// - Working with primitive types that don't contain pointers to refcounted data
+/// - As a placeholder when the decrement operation is handled elsewhere
 pub fn rcNone(_: ?[*]u8) callconv(.C) void {}
 
 /// Enum representing different integer widths and signedness for runtime type information
@@ -467,10 +483,10 @@ pub inline fn rcUnique(refcount: isize) bool {
 pub inline fn rcConstant(refcount: isize) bool {
     switch (RC_TYPE) {
         .normal => {
-            return refcount == REFCOUNT_MAX_ISIZE;
+            return refcount == REFCOUNT_STATIC_DATA;
         },
         .atomic => {
-            return refcount == REFCOUNT_MAX_ISIZE;
+            return refcount == REFCOUNT_STATIC_DATA;
         },
         .none => {
             return true;
@@ -574,7 +590,7 @@ pub fn allocateWithRefcount(
 
     const data_ptr = new_bytes + extra_bytes;
     const refcount_ptr = @as([*]usize, @ptrCast(@as([*]align(ptr_width) u8, @alignCast(data_ptr)) - ptr_width));
-    refcount_ptr[0] = if (RC_TYPE == .none) REFCOUNT_MAX_ISIZE else 1;
+    refcount_ptr[0] = if (RC_TYPE == .none) REFCOUNT_STATIC_DATA else 1;
 
     return data_ptr;
 }
