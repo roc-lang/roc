@@ -313,8 +313,13 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             var report = Report.init(allocator, "EXPOSED BUT NOT DEFINED", .runtime_error);
 
-            const ident_name = self.idents.getLowercase(data.ident);
-            const owned_ident = try report.addOwnedString(ident_name);
+            // For exposed identifiers, use uppercase to match how they appear in the source
+            const uppercase = try self.idents.getUppercase(data.ident);
+            var ident_buf = std.ArrayList(u8).init(allocator);
+            defer ident_buf.deinit();
+            try ident_buf.append(uppercase.first);
+            try ident_buf.appendSlice(uppercase.rest);
+            const owned_ident = try report.addOwnedString(ident_buf.items);
 
             try report.document.addReflowingText("The module header says that ");
             try report.document.addUnqualifiedSymbol(owned_ident);
@@ -942,12 +947,34 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             var report = Report.init(allocator, "MODULE NOT FOUND", .runtime_error);
 
-            // Module names should always start with uppercase
-            const uppercase = try self.idents.getUppercase(data.module_name);
+            // Get the module name and handle dot-separated parts correctly
+            const module_name_raw = self.idents.getLowercase(data.module_name);
             var name_buf = std.ArrayList(u8).init(allocator);
             defer name_buf.deinit();
-            try name_buf.append(uppercase.first);
-            try name_buf.appendSlice(uppercase.rest);
+
+            // Check if it contains a dot (e.g., "pf.stdout")
+            if (std.mem.indexOf(u8, module_name_raw, ".")) |dot_index| {
+                // Keep the package part lowercase, capitalize the module part
+                try name_buf.appendSlice(module_name_raw[0 .. dot_index + 1]); // "pf."
+
+                // Capitalize the part after the dot
+                const after_dot = module_name_raw[dot_index + 1 ..];
+                if (after_dot.len > 0) {
+                    // Capitalize first letter of the module name
+                    const first_char = after_dot[0];
+                    if (first_char >= 'a' and first_char <= 'z') {
+                        try name_buf.append(first_char - 32); // Convert to uppercase
+                    } else {
+                        try name_buf.append(first_char);
+                    }
+                    try name_buf.appendSlice(after_dot[1..]);
+                }
+            } else {
+                // No dot, just capitalize the first letter
+                const uppercase = try self.idents.getUppercase(data.module_name);
+                try name_buf.append(uppercase.first);
+                try name_buf.appendSlice(uppercase.rest);
+            }
             const module_name = try report.addOwnedString(name_buf.items);
 
             // Format the message to match origin/main
