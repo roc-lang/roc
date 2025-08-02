@@ -287,7 +287,6 @@ pub fn SafeList(comptime T: type) type {
         }
 
         /// Serialize this list into the provided buffer
-
         /// Deserialize from buffer, using provided allocator
         pub fn deserializeFrom(buffer: []align(@alignOf(T)) const u8, allocator: Allocator) !SafeList(T) {
             if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
@@ -576,7 +575,6 @@ pub fn SafeMultiList(comptime T: type) type {
             // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
             return std.mem.alignForward(usize, raw_size, SERIALIZATION_ALIGNMENT);
         }
-
 
         /// Deserialize from buffer, using provided allocator
         pub fn deserializeFrom(buffer: []align(@alignOf(T)) const u8, allocator: Allocator) !SafeMultiList(T) {
@@ -2797,9 +2795,6 @@ test "SafeMultiList CompactWriter empty with capacity" {
     // Capacity should be 0 after compaction
     try testing.expectEqual(@as(usize, 0), deserialized.items.capacity);
 }
-
-
-
 
 test "SafeMultiList.Serialized roundtrip" {
     const gpa = testing.allocator;

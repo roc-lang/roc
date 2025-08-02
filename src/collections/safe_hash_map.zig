@@ -84,7 +84,6 @@ pub fn SafeStringHashMap(comptime V: type) type {
             return size;
         }
 
-
         /// Deserialize a hash map from the provided buffer
         pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
             if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
@@ -287,6 +286,3 @@ test "SafeStringHashMap duplicate key handling" {
     try testing.expectEqual(@as(u32, 123), map.get("test_key").?);
     try testing.expectEqual(@as(u32, 456), map.get("other_key").?);
 }
-
-
-

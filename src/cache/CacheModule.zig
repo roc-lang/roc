@@ -28,12 +28,6 @@ const SafeStringHashMap = collections.SafeStringHashMap;
 const CACHE_MAGIC: u32 = 0x524F4343; // "ROCC" in ASCII
 const CACHE_VERSION: u32 = 1;
 
-/// Component metadata for locating data in the cache
-const ComponentInfo = struct {
-    offset: u32,
-    length: u32,
-};
-
 /// Cache header that gets written to disk before the cached data
 pub const Header = struct {
     /// Magic number for validation
@@ -45,36 +39,18 @@ pub const Header = struct {
     /// Total size of the data section (excluding this header)
     data_size: u32,
 
-    /// Checksum field (currently unused but kept for future compatibility)
-    checksum: u32,
-
-    /// Component locations in the data section
-    node_store: ComponentInfo,
-    string_store: ComponentInfo,
-    ident_ids_for_slicing: ComponentInfo,
-    ident_store: ComponentInfo,
-    line_starts: ComponentInfo,
-    types_store: ComponentInfo,
-    exposed_items: ComponentInfo,
-    external_decls: ComponentInfo,
-
-    /// Spans can be stored directly since they're small
-    all_defs: ModuleEnv.Def.Span,
-    all_statements: ModuleEnv.Statement.Span,
-
     /// Diagnostic counts for accurate reporting when loading from cache
     error_count: u32,
     warning_count: u32,
 
-    /// Fixed padding to ensure alignment
-    _padding: [24]u8 = [_]u8{0} ** 24,
+    /// Padding to ensure alignment
+    _padding: [12]u8 = [_]u8{0} ** 12,
 
     /// Error specific to initializing a Header from bytes
     pub const InitError = error{
         PartialRead,
         InvalidMagic,
         InvalidVersion,
-        ChecksumMismatch,
     };
 
     /// Verify that the given buffer begins with a valid Header
@@ -106,74 +82,60 @@ pub const CacheModule = struct {
     data: []align(SERIALIZATION_ALIGNMENT) const u8,
 
     /// Create a cache by serializing ModuleEnv and CIR data
+    /// @param allocator - Allocator for the returned cache data
+    /// @param arena_allocator - Arena allocator for temporary serialization data
     pub fn create(
         allocator: Allocator,
+        arena_allocator: Allocator,
         module_env: *const ModuleEnv,
         _: *const ModuleEnv, // ModuleEnv contains the canonical IR
         error_count: u32,
         warning_count: u32,
     ) ![]align(SERIALIZATION_ALIGNMENT) u8 {
         const CompactWriter = serialization.CompactWriter;
-        
-        // Create a temporary arena for serialization
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
-        const arena_alloc = arena.allocator();
-        
+
         // Create CompactWriter
         var writer = CompactWriter{
             .iovecs = .{},
             .total_bytes = 0,
         };
-        
+
         // Allocate space for ModuleEnv.Serialized
-        const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv);
+        const env_ptr = try writer.appendAlloc(arena_allocator, ModuleEnv);
         const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
-        
+
         // Serialize the ModuleEnv
-        try serialized_ptr.serialize(module_env, arena_alloc, &writer);
-        
+        try serialized_ptr.serialize(module_env, arena_allocator, &writer);
+
         // Get the total size
         const total_data_size = writer.total_bytes;
-        
+
         // Allocate cache_data for header + data
         const header_size = std.mem.alignForward(usize, @sizeOf(Header), SERIALIZATION_ALIGNMENT);
         const total_size = header_size + total_data_size;
         const cache_data = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, total_size);
         errdefer allocator.free(cache_data);
-        
-        // Initialize header with simple component info 
-        // We'll store the entire serialized ModuleEnv as one component
+
+        // Initialize header
         const header = @as(*Header, @ptrCast(cache_data.ptr));
         header.* = Header{
             .magic = CACHE_MAGIC,
             .version = CACHE_VERSION,
             .data_size = @intCast(total_data_size),
-            .checksum = 0, // Will be calculated after data is written
-            // Store the entire ModuleEnv in the node_store field for simplicity
-            .node_store = .{ .offset = 0, .length = @intCast(total_data_size) },
-            // Zero out other components since we're storing everything in one blob
-            .string_store = .{ .offset = 0, .length = 0 },
-            .ident_ids_for_slicing = .{ .offset = 0, .length = 0 },
-            .ident_store = .{ .offset = 0, .length = 0 },
-            .line_starts = .{ .offset = 0, .length = 0 },
-            .types_store = .{ .offset = 0, .length = 0 },
-            .exposed_items = .{ .offset = 0, .length = 0 },
-            .external_decls = .{ .offset = 0, .length = 0 },
-            .all_defs = module_env.all_defs,
-            .all_statements = module_env.all_statements,
             .error_count = error_count,
             .warning_count = warning_count,
+            ._padding = [_]u8{0} ** 12,
         };
-        
-        // Copy the serialized data after the header
+
+        // Consolidate the scattered iovecs into the cache data buffer
         const data_section = cache_data[header_size..];
-        var write_offset: usize = 0;
+        var offset: usize = 0;
         for (writer.iovecs.items) |iovec| {
-            @memcpy(data_section[write_offset..][0..iovec.iov_len], iovec.iov_base[0..iovec.iov_len]);
-            write_offset += iovec.iov_len;
+            const end = offset + iovec.iov_len;
+            @memcpy(data_section[offset..end], iovec.iov_base[0..iovec.iov_len]);
+            offset = end;
         }
-        
+
         return cache_data;
     }
 
@@ -203,45 +165,28 @@ pub const CacheModule = struct {
         };
     }
 
-
     /// Restore ModuleEnv from the cached data
     /// IMPORTANT: This expects source to remain valid for the lifetime of the restored ModuleEnv.
     pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8, source: []const u8) !*ModuleEnv {
-        // Since we stored the entire ModuleEnv as one blob in node_store,
-        // we need to deserialize it from there
-        const serialized_data = self.getComponentData(.node_store);
-        
+        // The entire data section contains the serialized ModuleEnv
+        const serialized_data = self.data;
+
         // The ModuleEnv.Serialized should be at the beginning of the data
         if (serialized_data.len < @sizeOf(ModuleEnv)) {
             return error.BufferTooSmall;
         }
-        
+
         // Get pointer to the serialized ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(@constCast(serialized_data.ptr))));
-        
+
         // Calculate the offset from the beginning of the serialized data
         const buffer_start = @intFromPtr(serialized_data.ptr);
         const offset = @as(i64, @intCast(buffer_start));
-        
+
         // Deserialize the ModuleEnv
         const module_env_ptr: *ModuleEnv = deserialized_ptr.deserialize(offset, allocator, source, module_name);
-        
-        return module_env_ptr;
-    }
 
-    /// Get the raw data for a specific component
-    pub fn getComponentData(self: *const CacheModule, comptime component: ComponentType) []const u8 {
-        const info = switch (component) {
-            .node_store => self.header.node_store,
-            .string_store => self.header.string_store,
-            .ident_ids_for_slicing => self.header.ident_ids_for_slicing,
-            .ident_store => self.header.ident_store,
-            .line_starts => self.header.line_starts,
-            .types_store => self.header.types_store,
-            .exposed_items => self.header.exposed_items,
-            .external_decls => self.header.external_decls,
-        };
-        return self.data[info.offset .. info.offset + info.length];
+        return module_env_ptr;
     }
 
     /// Get diagnostic information about the cache
@@ -250,39 +195,14 @@ pub const CacheModule = struct {
             .total_size = @sizeOf(Header) + self.header.data_size,
             .header_size = @sizeOf(Header),
             .data_size = self.header.data_size,
-            .checksum = self.header.checksum,
-            .component_sizes = .{
-                .node_store = self.header.node_store.length,
-                .string_store = self.header.string_store.length,
-                .ident_ids_for_slicing = self.header.ident_ids_for_slicing.length,
-                .ident_store = self.header.ident_store.length,
-                .line_starts = self.header.line_starts.length,
-                .types_store = self.header.types_store.length,
-                .exposed_items = self.header.exposed_items.length,
-                .external_decls = self.header.external_decls.length,
-            },
         };
     }
 
     /// Validate the cache structure and integrity
     pub fn validate(self: *const CacheModule) !void {
-        // Validate component offsets are within bounds
-        inline for (std.meta.fields(ComponentType)) |field| {
-            const component = @field(ComponentType, field.name);
-            const info = switch (component) {
-                .node_store => self.header.node_store,
-                .string_store => self.header.string_store,
-                .ident_ids_for_slicing => self.header.ident_ids_for_slicing,
-                .ident_store => self.header.ident_store,
-                .line_starts => self.header.line_starts,
-                .types_store => self.header.types_store,
-                .exposed_items => self.header.exposed_items,
-                .external_decls => self.header.external_decls,
-            };
-
-            if (info.offset + info.length > self.header.data_size) {
-                return error.ComponentOutOfBounds;
-            }
+        // Just validate that we have data
+        if (self.data.len != self.header.data_size) {
+            return error.DataSizeMismatch;
         }
     }
 
@@ -435,34 +355,11 @@ pub const CacheModule = struct {
     }
 };
 
-/// Enum for component types
-const ComponentType = enum {
-    node_store,
-    string_store,
-    ident_ids_for_slicing,
-    ident_store,
-    line_starts,
-    types_store,
-    exposed_items,
-    external_decls,
-};
-
 /// Diagnostic information about a cache
 pub const Diagnostics = struct {
     total_size: u32,
     header_size: u32,
     data_size: u32,
-    checksum: u32,
-    component_sizes: struct {
-        node_store: u32,
-        string_store: u32,
-        ident_ids_for_slicing: u32,
-        ident_store: u32,
-        line_starts: u32,
-        types_store: u32,
-        exposed_items: u32,
-        external_decls: u32,
-    },
 };
 
 test "Header alignment" {
@@ -516,8 +413,12 @@ test "create and restore cache" {
     defer original_sexpr.deinit();
     try original_tree.toStringPretty(original_sexpr.writer().any());
 
+    // Create arena for serialization
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
     // Create cache from real data
-    const cache_data = try CacheModule.create(gpa, &module_env, cir, 0, 0);
+    const cache_data = try CacheModule.create(gpa, arena.allocator(), &module_env, cir, 0, 0);
     defer gpa.free(cache_data);
 
     // Load cache
@@ -588,8 +489,12 @@ test "cache filesystem roundtrip with in-memory storage" {
     defer original_sexpr.deinit();
     try original_tree.toStringPretty(original_sexpr.writer().any());
 
+    // Create arena for serialization
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
     // Create cache from real data
-    const cache_data = try CacheModule.create(gpa, &module_env, cir, 0, 0);
+    const cache_data = try CacheModule.create(gpa, arena.allocator(), &module_env, cir, 0, 0);
     defer gpa.free(cache_data);
 
     // In-memory file storage for comprehensive mock filesystem
@@ -686,8 +591,7 @@ test "cache filesystem roundtrip with in-memory storage" {
     // Get diagnostics to ensure they're preserved
     const diagnostics = roundtrip_cache.getDiagnostics();
     try std.testing.expect(diagnostics.total_size > 0);
-    
+
     // Free the cache data after we're done with the ModuleEnv
     gpa.free(read_cache_data);
 }
-

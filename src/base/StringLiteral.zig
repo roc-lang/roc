@@ -95,7 +95,6 @@ pub const Store = struct {
         return std.mem.alignForward(usize, raw_size, serialization.SERIALIZATION_ALIGNMENT);
     }
 
-
     /// Deserialize a StringLiteral.Store from the provided buffer
     pub fn deserializeFrom(buffer: []const u8, gpa: std.mem.Allocator) !Store {
         if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;

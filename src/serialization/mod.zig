@@ -45,7 +45,6 @@ pub fn Serializable(comptime T: type) type {
             @compileError("serializedSize must be implemented for " ++ @typeName(T));
         }
 
-
         /// Deserialize a value from the provided buffer
         pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) DeserializationError!T {
             _ = buffer;
@@ -63,7 +62,6 @@ pub fn SerializableWithAllocator(comptime T: type) type {
             _ = self;
             @compileError("serializedSize must be implemented for " ++ @typeName(T));
         }
-
 
         /// Deserialize a value from the provided buffer
         pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) DeserializationError!T {
@@ -140,7 +138,6 @@ test "serialization interface detection" {
             _ = self;
             return @sizeOf(u32);
         }
-
 
         pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) DeserializationError!@This() {
             _ = allocator;

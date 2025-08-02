@@ -3007,7 +3007,6 @@ pub fn serializedSize(self: *const NodeStore) usize {
     return std.mem.alignForward(usize, raw_size, SERIALIZATION_ALIGNMENT);
 }
 
-
 /// Deserialize a NodeStore from the provided buffer
 pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.mem.Allocator) !NodeStore {
     var offset: usize = 0;

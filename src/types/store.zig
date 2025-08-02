@@ -46,7 +46,6 @@ pub const Slot = union(enum) {
         return @sizeOf(u8) + @sizeOf(u32); // tag + data
     }
 
-
     /// Deserialize a Slot from the provided buffer
     pub fn deserializeFrom(buffer: []const u8) !Slot {
         if (buffer.len < @sizeOf(u8) + @sizeOf(u32)) return error.BufferTooSmall;
@@ -765,7 +764,6 @@ pub const Store = struct {
         return std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
     }
 
-
     /// Deserialize a Store from the provided buffer
     pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
         if (buffer.len < @sizeOf(u32) * 5) return error.BufferTooSmall;
@@ -913,7 +911,6 @@ const SlotStore = struct {
         return self.backing.serializedSize();
     }
 
-
     /// Deserialize a SlotStore from the provided buffer
     fn deserializeFrom(buffer: []align(@alignOf(Slot)) const u8, allocator: Allocator) !Self {
         return .{
@@ -1012,7 +1009,6 @@ const DescStore = struct {
         return self.backing.serializedSize();
     }
 
-
     /// Deserialize a DescStore from the provided buffer
     pub fn deserializeFrom(buffer: []align(@alignOf(Desc)) const u8, allocator: Allocator) !Self {
         const backing = try DescSafeMultiList.deserializeFrom(buffer, allocator);
@@ -1089,8 +1085,6 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
 }
-
-
 
 test "Store empty CompactWriter roundtrip" {
     const gpa = std.testing.allocator;

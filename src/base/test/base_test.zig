@@ -1331,7 +1331,6 @@ test "insert" {
     try std.testing.expectEqualStrings("defg", interner.get(idx_2));
 }
 
-
 test "StringLiteral.Store empty CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
 

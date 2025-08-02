@@ -160,7 +160,6 @@ pub const ExposedItems = struct {
         return std.mem.alignForward(usize, size, SERIALIZATION_ALIGNMENT);
     }
 
-
     /// Deserialize ExposedItems from the provided buffer
     pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
         if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;

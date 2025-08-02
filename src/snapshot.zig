@@ -1105,8 +1105,12 @@ fn processSnapshotContent(
         defer original_sexpr.deinit();
         try original_tree.toStringPretty(original_sexpr.writer().any());
 
+        // Create arena for serialization
+        var cache_arena = std.heap.ArenaAllocator.init(allocator);
+        defer cache_arena.deinit();
+
         // Create and serialize MmapCache
-        const cache_data = try cache.CacheModule.create(allocator, &module_env, can_ir, 0, 0);
+        const cache_data = try cache.CacheModule.create(allocator, cache_arena.allocator(), &module_env, can_ir, 0, 0);
         defer allocator.free(cache_data);
 
         // Deserialize back
