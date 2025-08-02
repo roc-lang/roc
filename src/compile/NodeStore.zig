@@ -60,18 +60,18 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .extra_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 2),
         .scratch_statements = try base.Scratch(ModuleEnv.Statement.Idx).init(gpa),
         .scratch_exprs = try base.Scratch(ModuleEnv.Expr.Idx).init(gpa),
-        .scratch_patterns = try base.Scratch(ModuleEnv.Pattern.Idx).init(gpa),
         .scratch_record_fields = try base.Scratch(ModuleEnv.RecordField.Idx).init(gpa),
-        .scratch_pattern_record_fields = try base.Scratch(ModuleEnv.PatternRecordField.Idx).init(gpa),
-        .scratch_record_destructs = try base.Scratch(ModuleEnv.Pattern.RecordDestruct.Idx).init(gpa),
         .scratch_match_branches = try base.Scratch(ModuleEnv.Expr.Match.Branch.Idx).init(gpa),
         .scratch_match_branch_patterns = try base.Scratch(ModuleEnv.Expr.Match.BranchPattern.Idx).init(gpa),
         .scratch_if_branches = try base.Scratch(ModuleEnv.Expr.IfBranch.Idx).init(gpa),
+        .scratch_where_clauses = try base.Scratch(ModuleEnv.WhereClause.Idx).init(gpa),
+        .scratch_patterns = try base.Scratch(ModuleEnv.Pattern.Idx).init(gpa),
+        .scratch_pattern_record_fields = try base.Scratch(ModuleEnv.PatternRecordField.Idx).init(gpa),
+        .scratch_record_destructs = try base.Scratch(ModuleEnv.Pattern.RecordDestruct.Idx).init(gpa),
         .scratch_type_annos = try base.Scratch(ModuleEnv.TypeAnno.Idx).init(gpa),
         .scratch_anno_record_fields = try base.Scratch(ModuleEnv.TypeAnno.RecordField.Idx).init(gpa),
         .scratch_exposed_items = try base.Scratch(ModuleEnv.ExposedItem.Idx).init(gpa),
         .scratch_defs = try base.Scratch(ModuleEnv.Def.Idx).init(gpa),
-        .scratch_where_clauses = try base.Scratch(ModuleEnv.WhereClause.Idx).init(gpa),
         .scratch_diagnostics = try base.Scratch(ModuleEnv.Diagnostic.Idx).init(gpa),
         .scratch_captures = try base.Scratch(ModuleEnv.Expr.Capture.Idx).init(gpa),
     };
@@ -82,22 +82,22 @@ pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
     store.regions.deinit(store.gpa);
     store.extra_data.deinit(store.gpa);
-    store.scratch_statements.items.deinit(store.gpa);
-    store.scratch_exprs.items.deinit(store.gpa);
-    store.scratch_captures.items.deinit(store.gpa);
-    store.scratch_patterns.items.deinit(store.gpa);
-    store.scratch_record_fields.items.deinit(store.gpa);
-    store.scratch_pattern_record_fields.items.deinit(store.gpa);
-    store.scratch_record_destructs.items.deinit(store.gpa);
-    store.scratch_match_branches.items.deinit(store.gpa);
-    store.scratch_match_branch_patterns.items.deinit(store.gpa);
-    store.scratch_if_branches.items.deinit(store.gpa);
-    store.scratch_type_annos.items.deinit(store.gpa);
-    store.scratch_anno_record_fields.items.deinit(store.gpa);
-    store.scratch_exposed_items.items.deinit(store.gpa);
-    store.scratch_defs.items.deinit(store.gpa);
-    store.scratch_where_clauses.items.deinit(store.gpa);
-    store.scratch_diagnostics.items.deinit(store.gpa);
+    store.scratch_statements.deinit(store.gpa);
+    store.scratch_exprs.deinit(store.gpa);
+    store.scratch_record_fields.deinit(store.gpa);
+    store.scratch_match_branches.deinit(store.gpa);
+    store.scratch_match_branch_patterns.deinit(store.gpa);
+    store.scratch_if_branches.deinit(store.gpa);
+    store.scratch_where_clauses.deinit(store.gpa);
+    store.scratch_patterns.deinit(store.gpa);
+    store.scratch_pattern_record_fields.deinit(store.gpa);
+    store.scratch_record_destructs.deinit(store.gpa);
+    store.scratch_type_annos.deinit(store.gpa);
+    store.scratch_anno_record_fields.deinit(store.gpa);
+    store.scratch_exposed_items.deinit(store.gpa);
+    store.scratch_defs.deinit(store.gpa);
+    store.scratch_diagnostics.deinit(store.gpa);
+    store.scratch_captures.deinit(store.gpa);
 }
 
 /// Compile-time constants for union variant counts to ensure we don't miss cases
@@ -106,13 +106,13 @@ pub fn deinit(store: *NodeStore) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 45;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 31;
+pub const MODULEENV_EXPR_NODE_COUNT = 33;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 13;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
-pub const MODULEENV_PATTERN_NODE_COUNT = 14;
+pub const MODULEENV_PATTERN_NODE_COUNT = 16;
 
 comptime {
     // Check the number of ModuleEnv.Diagnostic nodes
@@ -345,18 +345,11 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
                 },
             };
         },
+        .expr_frac_f32 => return ModuleEnv.Expr{ .e_frac_f32 = .{ .value = @bitCast(node.data_1) } },
         .expr_frac_f64 => {
-            // Get value from extra_data
-            const extra_data_idx = node.data_1;
-            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..2];
-            const value_as_u64: u64 = @bitCast(value_as_u32s.*);
-            const value: f64 = @bitCast(value_as_u64);
+            const raw: [2]u32 = .{ node.data_1, node.data_2 };
 
-            return ModuleEnv.Expr{
-                .e_frac_f64 = .{
-                    .value = value,
-                },
-            };
+            return ModuleEnv.Expr{ .e_frac_f64 = .{ .value = @bitCast(raw) } };
         },
         .expr_frac_dec => {
             // Get value from extra_data
@@ -552,6 +545,11 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
         },
         .expr_unary_minus => {
             return ModuleEnv.Expr{ .e_unary_minus = .{
+                .expr = @enumFromInt(node.data_1),
+            } };
+        },
+        .expr_unary_not => {
+            return ModuleEnv.Expr{ .e_unary_not = .{
                 .expr = @enumFromInt(node.data_1),
             } };
         },
@@ -872,6 +870,18 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
                 .int_literal = .{
                     .value = .{ .bytes = @bitCast(value_as_i128), .kind = .i128 },
                 },
+            };
+        },
+        .pattern_f32_literal => return ModuleEnv.Pattern{
+            .frac_f32_literal = .{ .value = @bitCast(node.data_1) },
+        },
+        .pattern_f64_literal => {
+            const lower: u32 = node.data_1;
+            const upper: u32 = node.data_2;
+            const raw: u64 = (@as(u64, upper) << 32) | @as(u64, lower);
+
+            return ModuleEnv.Pattern{
+                .frac_f64_literal = .{ .value = @bitCast(raw) },
             };
         },
         .pattern_dec_literal => {
@@ -1225,19 +1235,15 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
             node.data_1 = e.elems.span.start;
             node.data_2 = e.elems.span.len;
         },
+        .e_frac_f32 => |e| {
+            node.tag = Node.Tag.expr_frac_f32;
+            node.data_1 = @bitCast(e.value);
+        },
         .e_frac_f64 => |e| {
             node.tag = .expr_frac_f64;
-
-            // Store the f64 value in extra_data
-            const extra_data_start = store.extra_data.len();
-            const value_as_u64: u64 = @bitCast(e.value);
-            const value_as_u32s: [2]u32 = @bitCast(value_as_u64);
-            for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
-            }
-
-            // Store the extra_data index in data_1
-            node.data_1 = @intCast(extra_data_start);
+            const raw: [2]u32 = @bitCast(e.value);
+            node.data_1 = raw[0];
+            node.data_2 = raw[1];
         },
         .e_frac_dec => |e| {
             node.tag = .expr_frac_dec;
@@ -1425,6 +1431,10 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
         },
         .e_unary_minus => |e| {
             node.tag = .expr_unary_minus;
+            node.data_1 = @intFromEnum(e.expr);
+        },
+        .e_unary_not => |e| {
+            node.tag = .expr_unary_not;
             node.data_1 = @intFromEnum(e.expr);
         },
         .e_block => |e| {
@@ -1723,7 +1733,18 @@ pub fn addPattern(store: *NodeStore, pattern: ModuleEnv.Pattern, region: base.Re
             node.tag = .pattern_str_literal;
             node.data_1 = @intFromEnum(p.literal);
         },
-
+        .frac_f32_literal => |p| {
+            node.tag = Node.Tag.pattern_f32_literal;
+            node.data_1 = @bitCast(p.value);
+        },
+        .frac_f64_literal => |p| {
+            node.tag = Node.Tag.pattern_f64_literal;
+            const raw: u64 = @bitCast(p.value);
+            const lower: u32 = @intCast(raw & 0xFFFFFFFF);
+            const upper: u32 = @intCast(raw >> 32);
+            node.data_1 = lower;
+            node.data_2 = upper;
+        },
         .underscore => {
             node.tag = .pattern_underscore;
         },
@@ -3113,6 +3134,26 @@ pub const Serialized = struct {
     nodes: Node.List.Serialized,
     regions: Region.List.Serialized,
     extra_data: collections.SafeList(u32).Serialized,
+    // Scratch arrays - not serialized, just placeholders to match NodeStore size
+    // TODO move these out of NodeStore so that we don't need to serialize and
+    // deserialize a bunch of zeros for these; it's a waste of space.
+    scratch_statements: std.ArrayListUnmanaged(ModuleEnv.Statement.Idx) = .{},
+    scratch_exprs: std.ArrayListUnmanaged(ModuleEnv.Expr.Idx) = .{},
+    scratch_record_fields: std.ArrayListUnmanaged(ModuleEnv.RecordField.Idx) = .{},
+    scratch_match_branches: std.ArrayListUnmanaged(ModuleEnv.Expr.Match.Branch.Idx) = .{},
+    scratch_match_branch_patterns: std.ArrayListUnmanaged(ModuleEnv.Expr.Match.BranchPattern.Idx) = .{},
+    scratch_if_branches: std.ArrayListUnmanaged(ModuleEnv.Expr.IfBranch.Idx) = .{},
+    scratch_where_clauses: std.ArrayListUnmanaged(ModuleEnv.WhereClause.Idx) = .{},
+    scratch_patterns: std.ArrayListUnmanaged(ModuleEnv.Pattern.Idx) = .{},
+    scratch_pattern_record_fields: std.ArrayListUnmanaged(ModuleEnv.PatternRecordField.Idx) = .{},
+    scratch_record_destructs: std.ArrayListUnmanaged(ModuleEnv.Pattern.RecordDestruct.Idx) = .{},
+    scratch_type_annos: std.ArrayListUnmanaged(ModuleEnv.TypeAnno.Idx) = .{},
+    scratch_anno_record_fields: std.ArrayListUnmanaged(ModuleEnv.TypeAnno.RecordField.Idx) = .{},
+    scratch_exposed_items: std.ArrayListUnmanaged(ModuleEnv.ExposedItem.Idx) = .{},
+    scratch_defs: std.ArrayListUnmanaged(ModuleEnv.Def.Idx) = .{},
+    scratch_diagnostics: std.ArrayListUnmanaged(Diagnostic.Idx) = .{},
+    scratch_captures: std.ArrayListUnmanaged(ModuleEnv.Expr.Capture.Idx) = .{},
+    gpa: std.mem.Allocator = undefined,
 
     /// Serialize a NodeStore into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -3130,38 +3171,36 @@ pub const Serialized = struct {
     }
 
     /// Deserialize this Serialized struct into a NodeStore
-    pub fn deserialize(self: *Serialized, offset: i64) *NodeStore {
+    pub fn deserialize(self: *Serialized, offset: i64, gpa: std.mem.Allocator) *NodeStore {
         // NodeStore.Serialized should be at least as big as NodeStore
         std.debug.assert(@sizeOf(Serialized) >= @sizeOf(NodeStore));
 
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
 
-        // Deserialize the lists
-        store.nodes = self.nodes.deserialize(offset).*;
-        store.regions = self.regions.deserialize(offset).*;
-        store.extra_data = self.extra_data.deserialize(offset).*;
-
-        // Initialize scratch arrays as empty
-        store.scratch_statements = .{ .items = .{} };
-        store.scratch_exprs = .{ .items = .{} };
-        store.scratch_captures = .{ .items = .{} };
-        store.scratch_patterns = .{ .items = .{} };
-        store.scratch_record_fields = .{ .items = .{} };
-        store.scratch_pattern_record_fields = .{ .items = .{} };
-        store.scratch_record_destructs = .{ .items = .{} };
-        store.scratch_match_branches = .{ .items = .{} };
-        store.scratch_match_branch_patterns = .{ .items = .{} };
-        store.scratch_if_branches = .{ .items = .{} };
-        store.scratch_type_annos = .{ .items = .{} };
-        store.scratch_anno_record_fields = .{ .items = .{} };
-        store.scratch_exposed_items = .{ .items = .{} };
-        store.scratch_defs = .{ .items = .{} };
-        store.scratch_where_clauses = .{ .items = .{} };
-        store.scratch_diagnostics = .{ .items = .{} };
-
-        // gpa will be set by the caller
-        store.gpa = undefined;
+        store.* = NodeStore{
+            .gpa = gpa,
+            .nodes = self.nodes.deserialize(offset).*,
+            .regions = self.regions.deserialize(offset).*,
+            .extra_data = self.extra_data.deserialize(offset).*,
+            // Initialize scratch arrays as proper Scratch instances
+            .scratch_statements = base.Scratch(ModuleEnv.Statement.Idx){ .items = .{} },
+            .scratch_exprs = base.Scratch(ModuleEnv.Expr.Idx){ .items = .{} },
+            .scratch_captures = base.Scratch(ModuleEnv.Expr.Capture.Idx){ .items = .{} },
+            .scratch_patterns = base.Scratch(ModuleEnv.Pattern.Idx){ .items = .{} },
+            .scratch_record_fields = base.Scratch(ModuleEnv.RecordField.Idx){ .items = .{} },
+            .scratch_pattern_record_fields = base.Scratch(ModuleEnv.PatternRecordField.Idx){ .items = .{} },
+            .scratch_record_destructs = base.Scratch(ModuleEnv.Pattern.RecordDestruct.Idx){ .items = .{} },
+            .scratch_match_branches = base.Scratch(ModuleEnv.Expr.Match.Branch.Idx){ .items = .{} },
+            .scratch_match_branch_patterns = base.Scratch(ModuleEnv.Expr.Match.BranchPattern.Idx){ .items = .{} },
+            .scratch_if_branches = base.Scratch(ModuleEnv.Expr.IfBranch.Idx){ .items = .{} },
+            .scratch_type_annos = base.Scratch(ModuleEnv.TypeAnno.Idx){ .items = .{} },
+            .scratch_anno_record_fields = base.Scratch(ModuleEnv.TypeAnno.RecordField.Idx){ .items = .{} },
+            .scratch_exposed_items = base.Scratch(ModuleEnv.ExposedItem.Idx){ .items = .{} },
+            .scratch_defs = base.Scratch(ModuleEnv.Def.Idx){ .items = .{} },
+            .scratch_where_clauses = base.Scratch(ModuleEnv.WhereClause.Idx){ .items = .{} },
+            .scratch_diagnostics = base.Scratch(Diagnostic.Idx){ .items = .{} },
+        };
 
         return store;
     }

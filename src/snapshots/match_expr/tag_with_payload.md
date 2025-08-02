@@ -42,10 +42,10 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 			(p-tag @2.5-2.19 (raw "Circle")
 				(p-ident @2.12-2.18 (raw "radius")))
 			(e-binop @2.23-2.45 (op "*")
-				(e-frac @2.23-2.27 (raw "3.14"))
-				(e-binop @2.30-2.45 (op "*")
-					(e-ident @2.30-2.36 (raw "radius"))
-					(e-ident @2.39-2.45 (raw "radius")))))
+				(e-binop @2.23-2.36 (op "*")
+					(e-frac @2.23-2.27 (raw "3.14"))
+					(e-ident @2.30-2.36 (raw "radius")))
+				(e-ident @2.39-2.45 (raw "radius"))))
 		(branch @3.5-3.47
 			(p-tag @3.5-3.29 (raw "Rectangle")
 				(p-ident @3.15-3.20 (raw "width"))
@@ -58,10 +58,10 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 				(p-ident @4.14-4.18 (raw "base"))
 				(p-ident @4.20-4.26 (raw "height")))
 			(e-binop @4.31-4.50 (op "*")
-				(e-frac @4.31-4.34 (raw "0.5"))
-				(e-binop @4.37-4.50 (op "*")
-					(e-ident @4.37-4.41 (raw "base"))
-					(e-ident @4.44-4.50 (raw "height")))))))
+				(e-binop @4.31-4.41 (op "*")
+					(e-frac @4.31-4.34 (raw "0.5"))
+					(e-ident @4.37-4.41 (raw "base")))
+				(e-ident @4.44-4.50 (raw "height"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -84,12 +84,12 @@ match shape {
 						(p-applied-tag @2.5-2.19)))
 				(value
 					(e-binop @2.23-2.45 (op "mul")
-						(e-dec-small @2.23-2.27 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
-						(e-binop @2.30-2.45 (op "mul")
+						(e-binop @2.23-2.36 (op "mul")
+							(e-dec-small @2.23-2.27 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
 							(e-lookup-local @2.30-2.36
-								(p-assign @2.12-2.18 (ident "radius")))
-							(e-lookup-local @2.39-2.45
-								(p-assign @2.12-2.18 (ident "radius")))))))
+								(p-assign @2.12-2.18 (ident "radius"))))
+						(e-lookup-local @2.39-2.45
+							(p-assign @2.12-2.18 (ident "radius"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -106,12 +106,12 @@ match shape {
 						(p-applied-tag @4.5-4.27)))
 				(value
 					(e-binop @4.31-4.50 (op "mul")
-						(e-dec-small @4.31-4.34 (numerator "5") (denominator-power-of-ten "1") (value "0.5"))
-						(e-binop @4.37-4.50 (op "mul")
+						(e-binop @4.31-4.41 (op "mul")
+							(e-dec-small @4.31-4.34 (numerator "5") (denominator-power-of-ten "1") (value "0.5"))
 							(e-lookup-local @4.37-4.41
-								(p-assign @4.14-4.18 (ident "base")))
-							(e-lookup-local @4.44-4.50
-								(p-assign @4.20-4.26 (ident "height"))))))))))
+								(p-assign @4.14-4.18 (ident "base"))))
+						(e-lookup-local @4.44-4.50
+							(p-assign @4.20-4.26 (ident "height")))))))))
 ~~~
 # TYPES
 ~~~clojure

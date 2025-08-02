@@ -820,7 +820,17 @@ fn collectBoundVars(self: *Self, pattern_idx: Pattern.Idx, bound_vars: *std.Auto
                 }
             }
         },
-        .int_literal, .small_dec_literal, .dec_literal, .str_literal, .underscore, .nominal, .nominal_external, .runtime_error => {},
+        .int_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        .underscore,
+        .nominal,
+        .nominal_external,
+        .runtime_error,
+        => {},
     }
 }
 
@@ -1591,6 +1601,19 @@ fn canonicalizeRecordField(
     return try self.env.addRecordFieldAndTypeVar(cir_field, Content{ .flex_var = null }, self.parse_ir.tokenizedRegionToRegion(field.region));
 }
 
+fn parseIntWithUnderscores(comptime T: type, text: []const u8, int_base: u8) !T {
+    var buf: [128]u8 = undefined;
+    var len: usize = 0;
+    for (text) |char| {
+        if (char != '_') {
+            if (len >= buf.len) return error.Overflow;
+            buf[len] = char;
+            len += 1;
+        }
+    }
+    return std.fmt.parseInt(T, buf[0..len], int_base);
+}
+
 /// Canonicalize an expression.
 pub fn canonicalizeExpr(
     self: *Self,
@@ -1785,26 +1808,19 @@ pub fn canonicalizeExpr(
         },
         .int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-
-            // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
+            const parsed = types.Num.parseNumLiteralWithSuffix(token_text);
 
             // Parse the integer value
-            const is_negated = token_text[0] == '-'; // Drop the negation for now, so all valid literals fit in u128
+            const is_negated = parsed.num_text[0] == '-';
             const after_minus_sign = @as(usize, @intFromBool(is_negated));
 
-            // The index the first *actual* digit (after minus sign, "0x" prefix, etc.) in the token
             var first_digit: usize = undefined;
-
-            const DEFAULT_BASE: u8 = 10; // default to base-10, naturally
+            const DEFAULT_BASE = 10;
             var int_base: u8 = undefined;
 
-            // If this begins with "0x" or "0b" or "Oo" then it's not base-10.
-            // We don't bother storing this info anywhere else besides token text,
-            // because we already have to look at the whole token to parse the digits
-            // into a number, so it will be in cache. It's also trivial to parse.
-            if (token_text[after_minus_sign] == '0' and token_text.len > after_minus_sign + 2) {
-                switch (token_text[after_minus_sign + 1]) {
+            if (parsed.num_text[after_minus_sign] == '0' and parsed.num_text.len > after_minus_sign + 2) {
+                switch (parsed.num_text[after_minus_sign + 1]) {
                     'x', 'X' => {
                         int_base = 16;
                         first_digit = after_minus_sign + 2;
@@ -1827,27 +1843,19 @@ pub fn canonicalizeExpr(
                 first_digit = after_minus_sign;
             }
 
-            const u128_val: u128 = std.fmt.parseInt(u128, token_text[first_digit..], int_base) catch {
+            const digit_part = parsed.num_text[first_digit..];
+
+            const u128_val = parseIntWithUnderscores(u128, digit_part, int_base) catch {
                 // Any number literal that is too large for u128 is invalid, regardless of whether it had a minus sign!
-                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{
-                    .region = region,
-                } });
-                return CanonicalizedExpr{
-                    .idx = expr_idx,
-                    .free_vars = null,
-                };
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
             };
 
             // If this had a minus sign, but negating it would result in a negative number
             // that would be too low to fit in i128, then this int literal is also invalid.
             if (is_negated and u128_val > min_i128_negated) {
-                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{
-                    .region = region,
-                } });
-                return CanonicalizedExpr{
-                    .idx = expr_idx,
-                    .free_vars = null,
-                };
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
             }
 
             // Now we've confirmed that our int literal is one of these:
@@ -1862,14 +1870,64 @@ pub fn canonicalizeExpr(
             // if the u128 portion was bigger than the lowest i128 without a minus sign.
             // Special case: exactly i128 min already has the correct bit pattern when bitcast from u128,
             // so if we try to negate it we'll get an overflow. We specifically *don't* negate that one.
-            const sign: i128 = (@as(i128, @intFromBool(!is_negated or u128_val == min_i128_negated)) << 1) - 1;
-            const i128_val: i128 = sign * @as(i128, @bitCast(u128_val));
+            const i128_val: i128 = if (is_negated) blk: {
+                if (u128_val == min_i128_negated) {
+                    break :blk @as(i128, @bitCast(u128_val));
+                } else {
+                    break :blk -@as(i128, @bitCast(u128_val));
+                }
+            } else @as(i128, @bitCast(u128_val));
 
             // Calculate requirements based on the value
             // Special handling for minimum signed values (-128, -32768, etc.)
             // These are special because they have a power-of-2 magnitude that fits exactly
             // in their signed type. We report them as needing one less bit to make the
             // standard "signed types have n-1 usable bits" logic work correctly.
+            if (parsed.suffix) |suffix| {
+                const type_content = blk: {
+                    if (std.mem.eql(u8, suffix, "u8")) {
+                        if (u128_val > std.math.maxInt(u8)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_u8 } };
+                    } else if (std.mem.eql(u8, suffix, "u16")) {
+                        if (u128_val > std.math.maxInt(u16)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_u16 } };
+                    } else if (std.mem.eql(u8, suffix, "u32")) {
+                        if (u128_val > std.math.maxInt(u32)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_u32 } };
+                    } else if (std.mem.eql(u8, suffix, "u64")) {
+                        if (u128_val > std.math.maxInt(u64)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_u64 } };
+                    } else if (std.mem.eql(u8, suffix, "u128")) {
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_u128 } };
+                    } else if (std.mem.eql(u8, suffix, "i8")) {
+                        if (i128_val < std.math.minInt(i8) or i128_val > std.math.maxInt(i8)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_i8 } };
+                    } else if (std.mem.eql(u8, suffix, "i16")) {
+                        if (i128_val < std.math.minInt(i16) or i128_val > std.math.maxInt(i16)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_i16 } };
+                    } else if (std.mem.eql(u8, suffix, "i32")) {
+                        if (i128_val < std.math.minInt(i32) or i128_val > std.math.maxInt(i32)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_i32 } };
+                    } else if (std.mem.eql(u8, suffix, "i64")) {
+                        if (i128_val < std.math.minInt(i64) or i128_val > std.math.maxInt(i64)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_i64 } };
+                    } else if (std.mem.eql(u8, suffix, "i128")) {
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_i128 } };
+                    } else {
+                        break :blk null;
+                    }
+                };
+
+                if (type_content) |content| {
+                    const expr_idx = try self.env.addExprAndTypeVar(
+                        .{ .e_int = .{ .value = .{ .bytes = @bitCast(i128_val), .kind = .i128 } } },
+                        content,
+                        region,
+                    );
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                }
+            }
+
             const is_negative_u1 = @as(u1, @intFromBool(is_negated));
             const is_power_of_2 = @as(u1, @intFromBool(u128_val != 0 and (u128_val & (u128_val - 1)) == 0));
             const is_minimum_signed = is_negative_u1 & is_power_of_2;
@@ -1895,13 +1953,14 @@ pub fn canonicalizeExpr(
             else
                 Content{ .structure = .{ .num = .{ .num_unbound = int_requirements } } };
 
-            // Add the expression and type variable atomically
-            const expr_idx = try self.env.addExprAndTypeVar(ModuleEnv.Expr{
-                .e_int = .{
-                    .value = .{ .bytes = @bitCast(i128_val), .kind = .i128 },
-                },
-            }, type_content, region);
-
+            const expr_idx = try self.env.addExprAndTypeVar(
+                ModuleEnv.Expr{ .e_int = .{ .value = ModuleEnv.IntValue{
+                    .bytes = @bitCast(i128_val),
+                    .kind = .i128,
+                } } },
+                type_content,
+                region,
+            );
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
         },
         .frac => |e| {
@@ -1909,6 +1968,49 @@ pub fn canonicalizeExpr(
 
             // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
+            const parsed_num = types.Num.parseNumLiteralWithSuffix(token_text);
+
+            if (parsed_num.suffix) |suffix| {
+                const f64_val = std.fmt.parseFloat(f64, parsed_num.num_text) catch {
+                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                };
+
+                if (std.mem.eql(u8, suffix, "f32")) {
+                    if (!fitsInF32(f64_val)) {
+                        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                    }
+                    const expr_idx = try self.env.addExprAndTypeVar(
+                        .{ .e_frac_f32 = .{ .value = @floatCast(f64_val) } },
+                        .{ .structure = FlatType{ .num = .{ .frac_precision = .f32 } } },
+                        region,
+                    );
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                } else if (std.mem.eql(u8, suffix, "f64")) {
+                    const expr_idx = try self.env.addExprAndTypeVar(
+                        .{ .e_frac_f64 = .{ .value = f64_val } },
+                        .{ .structure = FlatType{ .num = .{ .frac_precision = .f64 } } },
+                        region,
+                    );
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                } else if (std.mem.eql(u8, suffix, "dec")) {
+                    if (!fitsInDec(f64_val)) {
+                        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                    }
+                    const dec_val = RocDec.fromF64(f64_val) orelse {
+                        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                    };
+                    const expr_idx = try self.env.addExprAndTypeVar(
+                        .{ .e_frac_dec = .{ .value = dec_val } },
+                        .{ .structure = FlatType{ .num = .{ .frac_precision = .dec } } },
+                        region,
+                    );
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                }
+            }
 
             const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
                 error.InvalidNumLiteral => {
@@ -2449,6 +2551,17 @@ pub fn canonicalizeExpr(
                     // Create unary minus CIR expression
                     const expr_idx = try self.env.addExprAndTypeVar(Expr{
                         .e_unary_minus = Expr.UnaryMinus.init(can_operand.idx),
+                    }, Content{ .flex_var = null }, region);
+
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = can_operand.free_vars };
+                },
+                .OpBang => {
+                    // Canonicalize the operand expression
+                    const can_operand = (try self.canonicalizeExpr(unary.expr)) orelse return null;
+
+                    // Create unary not CIR expression
+                    const expr_idx = try self.env.addExprAndTypeVar(Expr{
+                        .e_unary_not = Expr.UnaryNot.init(can_operand.idx),
                     }, Content{ .flex_var = null }, region);
 
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = can_operand.free_vars };
@@ -3123,38 +3236,131 @@ fn canonicalizePattern(
         },
         .int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-
-            // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.number_tok);
+            const parsed = types.Num.parseNumLiteralWithSuffix(token_text);
 
-            // Parse as integer
-            const value = std.fmt.parseInt(i128, token_text, 10) catch {
-                // Invalid integer literal
-                const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{
-                    .region = region,
-                } });
+            // Parse the integer value
+            const is_negated = parsed.num_text[0] == '-';
+            const after_minus_sign = @as(usize, @intFromBool(is_negated));
+
+            var first_digit: usize = undefined;
+            const DEFAULT_BASE = 10;
+            var int_base: u8 = undefined;
+
+            if (parsed.num_text[after_minus_sign] == '0' and parsed.num_text.len > after_minus_sign + 2) {
+                switch (parsed.num_text[after_minus_sign + 1]) {
+                    'x', 'X' => {
+                        int_base = 16;
+                        first_digit = after_minus_sign + 2;
+                    },
+                    'o', 'O' => {
+                        int_base = 8;
+                        first_digit = after_minus_sign + 2;
+                    },
+                    'b', 'B' => {
+                        int_base = 2;
+                        first_digit = after_minus_sign + 2;
+                    },
+                    else => {
+                        int_base = DEFAULT_BASE;
+                        first_digit = after_minus_sign;
+                    },
+                }
+            } else {
+                int_base = DEFAULT_BASE;
+                first_digit = after_minus_sign;
+            }
+
+            const u128_val = parseIntWithUnderscores(u128, parsed.num_text[first_digit..], int_base) catch {
+                // Any number literal that is too large for u128 is invalid, regardless of whether it had a minus sign!
+                const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                 return malformed_idx;
             };
 
-            // Calculate requirements based on the value
-            const u128_val: u128 = if (value < 0) @as(u128, @intCast(-(value + 1))) + 1 else @as(u128, @intCast(value));
+            // If this had a minus sign, but negating it would result in a negative number
+            // that would be too low to fit in i128, then this int literal is also invalid.
+            if (is_negated and u128_val > min_i128_negated) {
+                const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                return malformed_idx;
+            }
 
+            // Now we've confirmed that our int literal is one of these:
+            // * A signed integer that fits in i128
+            // * An unsigned integer that fits in u128
+            //
+            // We'll happily bitcast a u128 to i128 for storage (and bitcast it back later
+            // using its type information), but for negative numbers, we do need to actually
+            // negate them (branchlessly) if we skipped its minus sign earlier.
+            //
+            // This operation should never overflow i128, because we already would have errored out
+            // if the u128 portion was bigger than the lowest i128 without a minus sign.
+            // Special case: exactly i128 min already has the correct bit pattern when bitcast from u128,
+            // so if we try to negate it we'll get an overflow. We specifically *don't* negate that one.
+            const i128_val: i128 = if (is_negated) blk: {
+                if (u128_val == min_i128_negated) {
+                    break :blk @as(i128, @bitCast(u128_val));
+                } else {
+                    break :blk -@as(i128, @bitCast(u128_val));
+                }
+            } else @as(i128, @bitCast(u128_val));
+
+            // Calculate requirements based on the value
             // Special handling for minimum signed values (-128, -32768, etc.)
             // These are special because they have a power-of-2 magnitude that fits exactly
             // in their signed type. We report them as needing one less bit to make the
             // standard "signed types have n-1 usable bits" logic work correctly.
-            // This is done branchlessly by checking if the value is negative and its
-            // magnitude is a power of 2.
-            const is_negative = @as(u1, @intFromBool(value < 0));
-            const is_power_of_2 = @as(u1, @intFromBool(u128_val != 0 and (u128_val & (u128_val - 1)) == 0));
-            const is_minimum_signed = is_negative & is_power_of_2;
+            if (parsed.suffix) |suffix| {
+                const type_content = blk: {
+                    if (std.mem.eql(u8, suffix, "u8")) {
+                        if (u128_val > std.math.maxInt(u8)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_u8 } };
+                    } else if (std.mem.eql(u8, suffix, "u16")) {
+                        if (u128_val > std.math.maxInt(u16)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_u16 } };
+                    } else if (std.mem.eql(u8, suffix, "u32")) {
+                        if (u128_val > std.math.maxInt(u32)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_u32 } };
+                    } else if (std.mem.eql(u8, suffix, "u64")) {
+                        if (u128_val > std.math.maxInt(u64)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_u64 } };
+                    } else if (std.mem.eql(u8, suffix, "u128")) {
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_u128 } };
+                    } else if (std.mem.eql(u8, suffix, "i8")) {
+                        if (i128_val < std.math.minInt(i8) or i128_val > std.math.maxInt(i8)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_i8 } };
+                    } else if (std.mem.eql(u8, suffix, "i16")) {
+                        if (i128_val < std.math.minInt(i16) or i128_val > std.math.maxInt(i16)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_i16 } };
+                    } else if (std.mem.eql(u8, suffix, "i32")) {
+                        if (i128_val < std.math.minInt(i32) or i128_val > std.math.maxInt(i32)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_i32 } };
+                    } else if (std.mem.eql(u8, suffix, "i64")) {
+                        if (i128_val < std.math.minInt(i64) or i128_val > std.math.maxInt(i64)) break :blk null;
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_i64 } };
+                    } else if (std.mem.eql(u8, suffix, "i128")) {
+                        break :blk Content{ .structure = FlatType{ .num = Num.int_i128 } };
+                    } else {
+                        break :blk null;
+                    }
+                };
 
-            // If it's a minimum signed value, we subtract 1 from the magnitude before
-            // calculating bits needed. This makes -128 report as needing 7 bits instead of 8.
+                if (type_content) |content| {
+                    const pattern_idx = try self.env.addPatternAndTypeVar(
+                        .{ .int_literal = .{ .value = .{ .bytes = @bitCast(i128_val), .kind = .i128 } } },
+                        content,
+                        region,
+                    );
+                    return pattern_idx;
+                }
+            }
+
+            const is_negative_u1 = @as(u1, @intFromBool(is_negated));
+            const is_power_of_2 = @as(u1, @intFromBool(u128_val != 0 and (u128_val & (u128_val - 1)) == 0));
+            const is_minimum_signed = is_negative_u1 & is_power_of_2;
             const adjusted_val = u128_val - is_minimum_signed;
 
             const requirements = types.Num.Int.Requirements{
-                .sign_needed = value < 0,
+                .sign_needed = is_negated,
                 .bits_needed = types.Num.Int.BitsNeeded.fromValue(adjusted_val),
             };
 
@@ -3162,15 +3368,25 @@ fn canonicalizePattern(
                 .sign_needed = requirements.sign_needed,
                 .bits_needed = @intCast(@intFromEnum(requirements.bits_needed)),
             };
-            const int_pattern = Pattern{
-                .int_literal = .{
-                    .value = .{ .bytes = @bitCast(value), .kind = .i128 },
-                },
-            };
-            const pattern_idx = try self.env.addPatternAndTypeVar(int_pattern, Content{
-                .structure = .{ .num = .{ .num_unbound = int_requirements } },
-            }, region);
 
+            // For non-decimal integers (hex, binary, octal), use int_poly directly
+            // For decimal integers, use num_poly so they can be either Int or Frac
+            const is_non_decimal = int_base != DEFAULT_BASE;
+
+            // Insert concrete type variable
+            const type_content = if (is_non_decimal)
+                Content{ .structure = .{ .num = .{ .int_unbound = int_requirements } } }
+            else
+                Content{ .structure = .{ .num = .{ .num_unbound = int_requirements } } };
+
+            const pattern_idx = try self.env.addPatternAndTypeVar(
+                Pattern{ .int_literal = .{ .value = ModuleEnv.IntValue{
+                    .bytes = @bitCast(i128_val),
+                    .kind = .i128,
+                } } },
+                type_content,
+                region,
+            );
             return pattern_idx;
         },
         .frac => |e| {
@@ -3178,6 +3394,49 @@ fn canonicalizePattern(
 
             // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.number_tok);
+            const parsed_num = types.Num.parseNumLiteralWithSuffix(token_text);
+
+            if (parsed_num.suffix) |suffix| {
+                const f64_val = std.fmt.parseFloat(f64, parsed_num.num_text) catch {
+                    const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                    return malformed_idx;
+                };
+
+                if (std.mem.eql(u8, suffix, "f32")) {
+                    if (!fitsInF32(f64_val)) {
+                        const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                        return malformed_idx;
+                    }
+                    const pattern_idx = try self.env.addPatternAndTypeVar(
+                        .{ .frac_f32_literal = .{ .value = @floatCast(f64_val) } },
+                        .{ .structure = FlatType{ .num = .{ .frac_precision = .f32 } } },
+                        region,
+                    );
+                    return pattern_idx;
+                } else if (std.mem.eql(u8, suffix, "f64")) {
+                    const pattern_idx = try self.env.addPatternAndTypeVar(
+                        .{ .frac_f64_literal = .{ .value = f64_val } },
+                        .{ .structure = FlatType{ .num = .{ .frac_precision = .f64 } } },
+                        region,
+                    );
+                    return pattern_idx;
+                } else if (std.mem.eql(u8, suffix, "dec")) {
+                    if (!fitsInDec(f64_val)) {
+                        const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                        return malformed_idx;
+                    }
+                    const dec_val = RocDec.fromF64(f64_val) orelse {
+                        const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                        return malformed_idx;
+                    };
+                    const pattern_idx = try self.env.addPatternAndTypeVar(
+                        .{ .dec_literal = .{ .value = dec_val } },
+                        .{ .structure = FlatType{ .num = .{ .frac_precision = .dec } } },
+                        region,
+                    );
+                    return pattern_idx;
+                }
+            }
 
             const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
                 error.InvalidNumLiteral => {
@@ -8224,5 +8483,194 @@ test "pattern type inference with numeric literals" {
             },
             else => {},
         }
+    }
+}
+
+test "parseIntWithUnderscores function" {
+    // Test the parseIntWithUnderscores helper function directly
+    const test_cases = [_]struct {
+        text: []const u8,
+        base: u8,
+        expected: u128,
+    }{
+        // Hex cases from the failing snapshot
+        .{ .text = "E", .base = 16, .expected = 14 },
+        .{ .text = "f", .base = 16, .expected = 15 },
+        .{ .text = "20", .base = 16, .expected = 32 },
+
+        // Binary cases that work
+        .{ .text = "10001", .base = 2, .expected = 17 },
+        .{ .text = "1_0010", .base = 2, .expected = 18 },
+
+        // Decimal cases
+        .{ .text = "123", .base = 10, .expected = 123 },
+        .{ .text = "1_000", .base = 10, .expected = 1000 },
+
+        // More hex cases - mixed case
+        .{ .text = "FF", .base = 16, .expected = 255 },
+        .{ .text = "ff", .base = 16, .expected = 255 },
+        .{ .text = "Ff", .base = 16, .expected = 255 },
+        .{ .text = "1A", .base = 16, .expected = 26 },
+        .{ .text = "1a", .base = 16, .expected = 26 },
+        .{ .text = "AB_CD", .base = 16, .expected = 0xABCD },
+        .{ .text = "ab_cd", .base = 16, .expected = 0xABCD },
+
+        // More binary cases
+        .{ .text = "1111", .base = 2, .expected = 15 },
+        .{ .text = "1010_1010", .base = 2, .expected = 0b10101010 },
+
+        // Octal cases
+        .{ .text = "777", .base = 8, .expected = 0o777 },
+        .{ .text = "123", .base = 8, .expected = 0o123 },
+        .{ .text = "7_7_7", .base = 8, .expected = 0o777 },
+
+        // Edge cases
+        .{ .text = "0", .base = 10, .expected = 0 },
+        .{ .text = "0", .base = 16, .expected = 0 },
+        .{ .text = "0", .base = 2, .expected = 0 },
+        .{ .text = "1", .base = 10, .expected = 1 },
+        .{ .text = "A", .base = 16, .expected = 10 },
+        .{ .text = "a", .base = 16, .expected = 10 },
+    };
+
+    for (test_cases) |tc| {
+        const result = parseIntWithUnderscores(u128, tc.text, tc.base) catch |err| {
+            std.debug.print("ERROR parsing '{s}' base {}: {}\n", .{ tc.text, tc.base, err });
+            try std.testing.expect(false);
+            continue;
+        };
+
+        if (result != tc.expected) {
+            std.debug.print("MISMATCH: parseIntWithUnderscores('{s}', {}) = {} (expected {})\n", .{ tc.text, tc.base, result, tc.expected });
+        }
+
+        try std.testing.expectEqual(tc.expected, result);
+    }
+}
+
+test "parseNumLiteralWithSuffix function" {
+    // Test the parseNumLiteralWithSuffix function to ensure correct parsing of prefixes and suffixes
+    const test_cases = [_]struct {
+        input: []const u8,
+        expected_num_text: []const u8,
+        expected_suffix: ?[]const u8,
+    }{
+        // Hex literals - these were the originally failing cases
+        .{ .input = "0xE", .expected_num_text = "0xE", .expected_suffix = null },
+        .{ .input = "0xf", .expected_num_text = "0xf", .expected_suffix = null },
+        .{ .input = "0x20", .expected_num_text = "0x20", .expected_suffix = null },
+        .{ .input = "0xFF", .expected_num_text = "0xFF", .expected_suffix = null },
+        .{ .input = "0Xff", .expected_num_text = "0Xff", .expected_suffix = null },
+        .{ .input = "0XFF", .expected_num_text = "0XFF", .expected_suffix = null },
+
+        // Binary literals that work correctly
+        .{ .input = "0b10001", .expected_num_text = "0b10001", .expected_suffix = null },
+        .{ .input = "0b1_0010", .expected_num_text = "0b1_0010", .expected_suffix = null },
+        .{ .input = "0B1111", .expected_num_text = "0B1111", .expected_suffix = null },
+        .{ .input = "0b0", .expected_num_text = "0b0", .expected_suffix = null },
+
+        // Octal literals
+        .{ .input = "0o777", .expected_num_text = "0o777", .expected_suffix = null },
+        .{ .input = "0O123", .expected_num_text = "0O123", .expected_suffix = null },
+
+        // Suffixed literals
+        .{ .input = "1u8", .expected_num_text = "1", .expected_suffix = "u8" },
+        .{ .input = "0xFFu32", .expected_num_text = "0xFF", .expected_suffix = "u32" },
+        .{ .input = "0b1010i16", .expected_num_text = "0b1010", .expected_suffix = "i16" },
+        .{ .input = "11.0f32", .expected_num_text = "11.0", .expected_suffix = "f32" },
+        .{ .input = "3.14f64", .expected_num_text = "3.14", .expected_suffix = "f64" },
+
+        // Regular decimal literals
+        .{ .input = "123", .expected_num_text = "123", .expected_suffix = null },
+        .{ .input = "1_000", .expected_num_text = "1_000", .expected_suffix = null },
+        .{ .input = "42", .expected_num_text = "42", .expected_suffix = null },
+    };
+
+    for (test_cases) |tc| {
+        const result = types.Num.parseNumLiteralWithSuffix(tc.input);
+
+        if (!std.mem.eql(u8, result.num_text, tc.expected_num_text)) {
+            std.debug.print("MISMATCH num_text: parseNumLiteralWithSuffix('{}').num_text = '{}' (expected '{}')\n", .{ tc.input, result.num_text, tc.expected_num_text });
+        }
+        try std.testing.expectEqualSlices(u8, tc.expected_num_text, result.num_text);
+
+        if (tc.expected_suffix) |expected_suffix| {
+            try std.testing.expect(result.suffix != null);
+            try std.testing.expectEqualSlices(u8, expected_suffix, result.suffix.?);
+        } else {
+            try std.testing.expect(result.suffix == null);
+        }
+    }
+}
+
+test "hex literal parsing logic integration" {
+    // Test the complete hex literal parsing logic used in canonicalizeExpr
+    const test_cases = [_]struct {
+        literal: []const u8,
+        expected_value: u128,
+    }{
+        // These are the exact literals from the failing snapshot
+        .{ .literal = "0xE", .expected_value = 14 },
+        .{ .literal = "0xf", .expected_value = 15 },
+        .{ .literal = "0x20", .expected_value = 32 },
+
+        // Binary literals that work correctly
+        .{ .literal = "0b10001", .expected_value = 17 },
+        .{ .literal = "0b1_0010", .expected_value = 18 },
+    };
+
+    for (test_cases) |tc| {
+        // Mimic the exact parsing logic from canonicalizeExpr
+        const parsed = types.Num.parseNumLiteralWithSuffix(tc.literal);
+
+        const is_negated = parsed.num_text[0] == '-';
+        const after_minus_sign = @as(usize, @intFromBool(is_negated));
+
+        var first_digit: usize = undefined;
+        const DEFAULT_BASE = 10;
+        var int_base: u8 = undefined;
+
+        if (parsed.num_text[after_minus_sign] == '0' and parsed.num_text.len > after_minus_sign + 2) {
+            switch (parsed.num_text[after_minus_sign + 1]) {
+                'x', 'X' => {
+                    int_base = 16;
+                    first_digit = after_minus_sign + 2;
+                },
+                'o', 'O' => {
+                    int_base = 8;
+                    first_digit = after_minus_sign + 2;
+                },
+                'b', 'B' => {
+                    int_base = 2;
+                    first_digit = after_minus_sign + 2;
+                },
+                else => {
+                    int_base = DEFAULT_BASE;
+                    first_digit = after_minus_sign;
+                },
+            }
+        } else {
+            int_base = DEFAULT_BASE;
+            first_digit = after_minus_sign;
+        }
+
+        const digit_part = parsed.num_text[first_digit..];
+
+        // Debug print to see what's happening
+        if (tc.literal[0] == '0' and (tc.literal[1] == 'x' or tc.literal[1] == 'b')) {
+            std.debug.print("Parsing '{}': num_text='{}', digit_part='{}', base={}, expected={}\n", .{ tc.literal, parsed.num_text, digit_part, int_base, tc.expected_value });
+        }
+
+        const u128_val = parseIntWithUnderscores(u128, digit_part, int_base) catch |err| {
+            std.debug.print("ERROR parsing digit_part '{}' with base {}: {}\n", .{ digit_part, int_base, err });
+            try std.testing.expect(false);
+            continue;
+        };
+
+        if (u128_val != tc.expected_value) {
+            std.debug.print("MISMATCH for '{}': got {}, expected {}\n", .{ tc.literal, u128_val, tc.expected_value });
+        }
+
+        try std.testing.expectEqual(tc.expected_value, u128_val);
     }
 }

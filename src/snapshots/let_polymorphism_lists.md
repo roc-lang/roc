@@ -299,10 +299,10 @@ CloseCurly(29:1-29:2),EndOfFile(29:2-29:2),
 								(e-ident @27.12-27.20 (raw "List.len"))
 								(e-ident @27.21-27.35 (raw "all_float_list"))))
 						(e-binop @28.5-28.23 (op "+")
-							(e-ident @28.5-28.9 (raw "len1"))
-							(e-binop @28.12-28.23 (op "+")
-								(e-ident @28.12-28.16 (raw "len2"))
-								(e-ident @28.19-28.23 (raw "len3"))))))))))
+							(e-binop @28.5-28.16 (op "+")
+								(e-ident @28.5-28.9 (raw "len1"))
+								(e-ident @28.12-28.16 (raw "len2")))
+							(e-ident @28.19-28.23 (raw "len3")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -425,13 +425,13 @@ main = |_| {
 							(e-lookup-local @27.21-27.35
 								(p-assign @14.1-14.15 (ident "all_float_list")))))
 					(e-binop @28.5-28.23 (op "add")
-						(e-lookup-local @28.5-28.9
-							(p-assign @25.5-25.9 (ident "len1")))
-						(e-binop @28.12-28.23 (op "add")
+						(e-binop @28.5-28.16 (op "add")
+							(e-lookup-local @28.5-28.9
+								(p-assign @25.5-25.9 (ident "len1")))
 							(e-lookup-local @28.12-28.16
-								(p-assign @26.5-26.9 (ident "len2")))
-							(e-lookup-local @28.19-28.23
-								(p-assign @27.5-27.9 (ident "len3"))))))))))
+								(p-assign @26.5-26.9 (ident "len2"))))
+						(e-lookup-local @28.19-28.23
+							(p-assign @27.5-27.9 (ident "len3")))))))))
 ~~~
 # TYPES
 ~~~clojure

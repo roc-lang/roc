@@ -8,30 +8,26 @@ type=expr
 [1u8, 2u8, 300]
 ~~~
 # EXPECTED
-INVALID NUMBER - can_list_number_doesnt_fit.md:1:2:1:5
-INVALID NUMBER - can_list_number_doesnt_fit.md:1:7:1:10
+INCOMPATIBLE LIST ELEMENTS - can_list_number_doesnt_fit.md:1:7:1:7
 # PROBLEMS
-**INVALID NUMBER**
-This number literal is not valid: `1u8`
-
-**can_list_number_doesnt_fit.md:1:2:1:5:**
+**INCOMPATIBLE LIST ELEMENTS**
+The second and third elements in this list have incompatible types:
+**can_list_number_doesnt_fit.md:1:7:**
 ```roc
 [1u8, 2u8, 300]
 ```
- ^^^
+      ^^^  ^^^
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
+The second element has this type:
+    _U8_
 
-**INVALID NUMBER**
-This number literal is not valid: `2u8`
+However, the third element has this type:
+    _Num(_size)_
 
-**can_list_number_doesnt_fit.md:1:7:1:10:**
-```roc
-[1u8, 2u8, 300]
-```
-      ^^^
+All elements in a list must have compatible types.
 
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -52,8 +48,8 @@ NO CHANGE
 ~~~clojure
 (e-list @1.1-1.16
 	(elems
-		(e-runtime-error (tag "invalid_num_literal"))
-		(e-runtime-error (tag "invalid_num_literal"))
+		(e-int @1.2-1.5 (value "1"))
+		(e-int @1.7-1.10 (value "2"))
 		(e-int @1.12-1.15 (value "300"))))
 ~~~
 # TYPES

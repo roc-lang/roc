@@ -29,12 +29,12 @@ OpenRound(1:1-1:2),OpBar(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),LowerIdent(
 					(args
 						(p-ident @1.13-1.14 (raw "x")))
 					(e-binop @1.16-1.29 (op "+")
-						(e-ident @1.16-1.17 (raw "a"))
-						(e-binop @1.20-1.29 (op "+")
-							(e-ident @1.20-1.21 (raw "b"))
-							(e-binop @1.24-1.29 (op "+")
-								(e-ident @1.24-1.25 (raw "c"))
-								(e-ident @1.28-1.29 (raw "x"))))))))
+						(e-binop @1.16-1.25 (op "+")
+							(e-binop @1.16-1.21 (op "+")
+								(e-ident @1.16-1.17 (raw "a"))
+								(e-ident @1.20-1.21 (raw "b")))
+							(e-ident @1.24-1.25 (raw "c")))
+						(e-ident @1.28-1.29 (raw "x"))))))
 		(e-int @1.31-1.33 (raw "10"))
 		(e-int @1.35-1.37 (raw "20"))
 		(e-int @1.39-1.40 (raw "5")))
@@ -62,16 +62,16 @@ NO CHANGE
 					(args
 						(p-assign @1.13-1.14 (ident "x")))
 					(e-binop @1.16-1.29 (op "add")
-						(e-lookup-local @1.16-1.17
-							(p-assign @1.3-1.4 (ident "a")))
-						(e-binop @1.20-1.29 (op "add")
-							(e-lookup-local @1.20-1.21
-								(p-assign @1.6-1.7 (ident "b")))
-							(e-binop @1.24-1.29 (op "add")
-								(e-lookup-local @1.24-1.25
-									(p-assign @1.9-1.10 (ident "c")))
-								(e-lookup-local @1.28-1.29
-									(p-assign @1.13-1.14 (ident "x")))))))))
+						(e-binop @1.16-1.25 (op "add")
+							(e-binop @1.16-1.21 (op "add")
+								(e-lookup-local @1.16-1.17
+									(p-assign @1.3-1.4 (ident "a")))
+								(e-lookup-local @1.20-1.21
+									(p-assign @1.6-1.7 (ident "b"))))
+							(e-lookup-local @1.24-1.25
+								(p-assign @1.9-1.10 (ident "c"))))
+						(e-lookup-local @1.28-1.29
+							(p-assign @1.13-1.14 (ident "x")))))))
 		(e-int @1.31-1.33 (value "10"))
 		(e-int @1.35-1.37 (value "20"))
 		(e-int @1.39-1.40 (value "5")))

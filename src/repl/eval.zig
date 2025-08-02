@@ -12,13 +12,15 @@ const layout_store = @import("../layout/store.zig");
 const layout = @import("../layout/layout.zig");
 const eval = @import("../eval/interpreter.zig");
 const stack = @import("../eval/stack.zig");
+const builtins = @import("builtins");
 
+const AST = parse.AST;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = compile.ModuleEnv;
-const AST = parse.AST;
-const target = base.target;
-const writers = types.writers;
+const RocDec = builtins.dec.RocDec;
 const types_store = types.store;
+const writers = types.writers;
+const target = base.target;
 
 /// Type of definition stored in the REPL history
 const DefKind = union(enum) {
@@ -301,6 +303,9 @@ pub const Repl = struct {
         };
         defer layout_cache.deinit();
 
+        // Clear eval stack to prevent memory corruption from previous evaluations
+        self.eval_stack.used = 0;
+
         // Create interpreter
         var interpreter = eval.Interpreter.init(self.allocator, cir, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
@@ -312,7 +317,7 @@ pub const Repl = struct {
             return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err});
         };
 
-        // Format the result
+        // Format the result immediately while memory is still valid
         if (result.layout.tag == .scalar) {
             switch (result.layout.data.scalar.tag) {
                 .bool => {
@@ -323,6 +328,27 @@ pub const Repl = struct {
                 .int => {
                     const value: i128 = eval.readIntFromMemory(@ptrCast(result.ptr.?), result.layout.data.scalar.data.int);
                     return try std.fmt.allocPrint(self.allocator, "{d}", .{value});
+                },
+                .frac => {
+                    const precision = result.layout.data.scalar.data.frac;
+                    switch (precision) {
+                        .f32 => {
+                            const float_ptr: *f32 = @ptrCast(@alignCast(result.ptr.?));
+                            return try std.fmt.allocPrint(self.allocator, "{}", .{float_ptr.*});
+                        },
+                        .f64 => {
+                            const float_ptr: *f64 = @ptrCast(@alignCast(result.ptr.?));
+                            return try std.fmt.allocPrint(self.allocator, "{}", .{float_ptr.*});
+                        },
+                        .dec => {
+                            const dec_ptr: *RocDec = @ptrCast(@alignCast(result.ptr.?));
+                            // Simple conversion to f64 for now to avoid allocator issues
+                            const raw_value = dec_ptr.num;
+                            const scale_factor = std.math.pow(f64, 10, RocDec.decimal_places);
+                            const decimal_value = @as(f64, @floatFromInt(raw_value)) / scale_factor;
+                            return try std.fmt.allocPrint(self.allocator, "{}", .{decimal_value});
+                        },
+                    }
                 },
                 else => {},
             }

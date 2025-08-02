@@ -2035,6 +2035,17 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
                 .region = .{ .start = start, .end = self.pos },
             } });
         },
+        .OpBang => {
+            const operator_token = start;
+            self.advance(); // consume the bang token
+            // Parse the operand with high precedence (unary operators bind tightly)
+            const operand = try self.parseExprWithBp(100);
+            expr = try self.store.addExpr(.{ .unary_op = .{
+                .operator = operator_token,
+                .expr = operand,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+        },
         else => {
             return try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, start);
         },
@@ -2828,22 +2839,22 @@ const BinOpBp = struct { left: u8, right: u8 };
 /// Get the binding power for a Token if it's a operator token, else return null.
 fn getTokenBP(tok: Token.Tag) ?BinOpBp {
     return switch (tok) {
-        .OpStar => .{ .left = 31, .right = 30 }, // 31 LEFT
-        .OpSlash => .{ .left = 29, .right = 28 }, // 29 LEFT
-        .OpDoubleSlash => .{ .left = 27, .right = 26 }, // 27 LEFT
-        .OpPercent => .{ .left = 25, .right = 24 }, // 25 LEFT
-        .OpPlus => .{ .left = 23, .right = 22 }, // 23 LEFT
-        .OpBinaryMinus => .{ .left = 21, .right = 20 }, // 21 LEFT
-        .OpDoubleQuestion => .{ .left = 19, .right = 18 }, // 19 LEFT
-        .OpQuestion => .{ .left = 17, .right = 16 }, // 17 LEFT
+        .OpStar => .{ .left = 30, .right = 31 }, // 31 LEFT
+        .OpSlash => .{ .left = 28, .right = 29 }, // 29 LEFT
+        .OpDoubleSlash => .{ .left = 26, .right = 27 }, // 27 LEFT
+        .OpPercent => .{ .left = 24, .right = 25 }, // 25 LEFT
+        .OpPlus => .{ .left = 22, .right = 23 }, // 23 LEFT
+        .OpBinaryMinus => .{ .left = 20, .right = 21 }, // 21 LEFT
+        .OpDoubleQuestion => .{ .left = 18, .right = 19 }, // 19 LEFT
+        .OpQuestion => .{ .left = 16, .right = 17 }, // 17 LEFT
         .OpEquals => .{ .left = 15, .right = 15 }, // 15 NOASSOC
         .OpNotEquals => .{ .left = 13, .right = 13 }, // 13 NOASSOC
         .OpLessThan => .{ .left = 11, .right = 11 }, // 11 NOASSOC
         .OpGreaterThan => .{ .left = 9, .right = 9 }, // 9 NOASSOC
         .OpLessThanOrEq => .{ .left = 7, .right = 7 }, // 7 NOASSOC
         .OpGreaterThanOrEq => .{ .left = 5, .right = 5 }, // 5 NOASSOC
-        .OpAnd => .{ .left = 3, .right = 4 }, // 3 RIGHT
-        .OpOr => .{ .left = 1, .right = 2 }, // 1 RIGHT
+        .OpAnd => .{ .left = 4, .right = 3 }, // 3 RIGHT
+        .OpOr => .{ .left = 2, .right = 1 }, // 1 RIGHT
         else => null,
     };
 }

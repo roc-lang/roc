@@ -59,16 +59,17 @@ pub const ProcessResult = struct {
         }
         gpa.free(self.reports);
 
-        // Clean up the heap-allocated ModuleEnv (only when loaded from cache)
-        if (self.was_cached) {
+        // If not cached deallocate the ModuleEnv allocations.
+        if (!self.was_cached) {
             self.cir.deinit();
-            gpa.destroy(self.cir);
         }
+        // Always free the ModuleEnv heap allocation.
+        gpa.destroy(self.cir);
+
         if (self.own_source) {
             // If we own the source, we need to free it
             gpa.free(self.source);
         }
-        gpa.destroy(self.cir);
     }
 };
 
@@ -209,8 +210,10 @@ fn processSourceInternal(
 
     // Initialize the ModuleEnv (heap-allocated for ownership transfer)
     var module_env = try gpa.create(ModuleEnv);
+    errdefer gpa.destroy(module_env);
 
     module_env.* = try ModuleEnv.init(gpa, source);
+    errdefer module_env.deinit();
 
     // Calculate line starts for region info
     try module_env.*.calcLineStarts();

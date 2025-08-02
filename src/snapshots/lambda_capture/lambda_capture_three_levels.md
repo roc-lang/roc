@@ -31,10 +31,10 @@ OpenRound(1:1-1:2),OpBar(1:2-1:3),LowerIdent(1:3-1:8),OpBar(1:8-1:9),OpBar(1:10-
 							(args
 								(p-ident @1.20-1.25 (raw "inner")))
 							(e-binop @1.27-1.49 (op "+")
-								(e-ident @1.27-1.32 (raw "outer"))
-								(e-binop @1.35-1.49 (op "+")
-									(e-ident @1.35-1.41 (raw "middle"))
-									(e-ident @1.44-1.49 (raw "inner"))))))))
+								(e-binop @1.27-1.41 (op "+")
+									(e-ident @1.27-1.32 (raw "outer"))
+									(e-ident @1.35-1.41 (raw "middle")))
+								(e-ident @1.44-1.49 (raw "inner")))))))
 			(e-int @1.51-1.52 (raw "1")))
 		(e-int @1.54-1.55 (raw "2")))
 	(e-int @1.57-1.58 (raw "3")))
@@ -65,13 +65,13 @@ NO CHANGE
 								(args
 									(p-assign @1.20-1.25 (ident "inner")))
 								(e-binop @1.27-1.49 (op "add")
-									(e-lookup-local @1.27-1.32
-										(p-assign @1.3-1.8 (ident "outer")))
-									(e-binop @1.35-1.49 (op "add")
+									(e-binop @1.27-1.41 (op "add")
+										(e-lookup-local @1.27-1.32
+											(p-assign @1.3-1.8 (ident "outer")))
 										(e-lookup-local @1.35-1.41
-											(p-assign @1.11-1.17 (ident "middle")))
-										(e-lookup-local @1.44-1.49
-											(p-assign @1.20-1.25 (ident "inner"))))))))))
+											(p-assign @1.11-1.17 (ident "middle"))))
+									(e-lookup-local @1.44-1.49
+										(p-assign @1.20-1.25 (ident "inner")))))))))
 			(e-int @1.51-1.52 (value "1")))
 		(e-int @1.54-1.55 (value "2")))
 	(e-int @1.57-1.58 (value "3")))
