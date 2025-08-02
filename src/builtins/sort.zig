@@ -60,12 +60,12 @@ pub fn fluxsort(
     // Also, for numeric types, inlining the compare function can be a 2x perf gain.
     if (len < 132) {
         // Just quadsort it.
-        quadsort(array, len, cmp, cmp_data, data_is_owned_runtime, inc_n_data, element_width, alignment, copy, roc_ops, roc_ops);
+        quadsort(array, len, cmp, cmp_data, data_is_owned_runtime, inc_n_data, element_width, alignment, copy, roc_ops);
     } else if (element_width <= MAX_ELEMENT_BUFFER_SIZE) {
         if (data_is_owned_runtime) {
-            fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_data, false, roc_ops, roc_ops);
+            fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_data, false, roc_ops);
         } else {
-            fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data, false, roc_ops, roc_ops);
+            fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data, false, roc_ops);
         }
     } else {
         if (roc_ops(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
@@ -78,9 +78,9 @@ pub fn fluxsort(
 
             // Sort.
             if (data_is_owned_runtime) {
-                fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_data, true, roc_ops, roc_ops);
+                fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_data, true, roc_ops);
             } else {
-                fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_data, true, roc_ops, roc_ops);
+                fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_data, true, roc_ops);
             }
 
             if (roc_ops(len * element_width, alignment)) |collect_ptr| {
@@ -913,9 +913,9 @@ pub fn quadsort(
     // Also, for numeric types, inlining the compare function can be a 2x perf gain.
     if (element_width <= MAX_ELEMENT_BUFFER_SIZE) {
         if (data_is_owned_runtime) {
-            quadsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_data, false, roc_ops, roc_ops);
+            quadsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_data, false, roc_ops);
         } else {
-            quadsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data, false, roc_ops, roc_ops);
+            quadsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data, false, roc_ops);
         }
     } else {
         if (roc_ops(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
@@ -928,9 +928,9 @@ pub fn quadsort(
 
             // Sort.
             if (data_is_owned_runtime) {
-                quadsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_data, true, roc_ops, roc_ops);
+                quadsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_data, true, roc_ops);
             } else {
-                quadsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_data, true, roc_ops, roc_ops);
+                quadsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_data, true, roc_ops);
             }
 
             if (roc_ops(len * element_width, alignment)) |collect_ptr| {

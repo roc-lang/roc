@@ -22,7 +22,7 @@ const IncN = *const fn (?[*]u8, usize) callconv(.C) void;
 const Dec = *const fn (?[*]u8) callconv(.C) void;
 const HasTagId = *const fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, data: ?[*]u8 };
 
-const SEAMLESS_SLICE_BIT: usize =
+pub const SEAMLESS_SLICE_BIT: usize =
     @as(usize, @bitCast(@as(isize, std.math.minInt(isize))));
 
 /// TODO: Document the RocList struct.
@@ -530,7 +530,6 @@ fn listAppend(
         inc,
         update_mode,
         roc_ops,
-        roc_ops,
     );
     return listAppendUnsafe(with_capacity, element, element_width, copy);
 }
@@ -556,7 +555,6 @@ pub fn listPrepend(
         elements_refcounted,
         inc,
         .Immutable,
-        roc_ops,
         roc_ops,
     );
     with_capacity.length += 1;
@@ -842,7 +840,6 @@ pub fn listSortWith(
         elements_refcounted,
         inc,
         dec,
-        roc_ops,
         roc_ops,
     );
 
