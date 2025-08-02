@@ -20,6 +20,7 @@ const IncN = *const fn (?[*]u8, usize) callconv(.C) void;
 const Dec = *const fn (?[*]u8) callconv(.C) void;
 const HasTagId = *const fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, data: ?[*]u8 };
 
+/// TODO
 pub const SEAMLESS_SLICE_BIT: usize =
     @as(usize, @bitCast(@as(isize, std.math.minInt(isize))));
 
