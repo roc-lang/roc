@@ -160,35 +160,6 @@ pub const ExposedItems = struct {
         return std.mem.alignForward(usize, size, SERIALIZATION_ALIGNMENT);
     }
 
-    /// Serialize this ExposedItems into the provided buffer
-    pub fn serializeInto(self: *const Self, buffer: []u8) ![]u8 {
-        const size = self.serializedSize();
-        if (buffer.len < size) return error.BufferTooSmall;
-
-        var offset: usize = 0;
-
-        // Write count
-        std.mem.writeInt(u32, buffer[offset..][0..4], @intCast(self.items.entries.items.len), .little);
-        offset += @sizeOf(u32);
-
-        // Write entries
-        for (self.items.entries.items) |entry| {
-            // Write key (interned ID)
-            std.mem.writeInt(u32, buffer[offset..][0..4], entry.key, .little);
-            offset += @sizeOf(u32);
-
-            // Write value
-            std.mem.writeInt(u16, buffer[offset..][0..2], entry.value, .little);
-            offset += @sizeOf(u16);
-        }
-
-        // Zero padding
-        if (offset < size) {
-            @memset(buffer[offset..size], 0);
-        }
-
-        return buffer[0..size];
-    }
 
     /// Deserialize ExposedItems from the provided buffer
     pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {

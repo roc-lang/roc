@@ -1105,35 +1105,36 @@ fn processSnapshotContent(
         defer original_sexpr.deinit();
         try original_tree.toStringPretty(original_sexpr.writer().any());
 
-        // Create and serialize MmapCache
-        const cache_data = try cache.CacheModule.create(allocator, &module_env, can_ir, 0, 0);
-        defer allocator.free(cache_data);
+        // TODO: Cache serialization has been deprecated and removed
+        // // Create and serialize MmapCache
+        // const cache_data = try cache.CacheModule.create(allocator, &module_env, can_ir, 0, 0);
+        // defer allocator.free(cache_data);
 
-        // Deserialize back
-        var loaded_cache = try cache.CacheModule.fromMappedMemory(cache_data);
+        // // Deserialize back
+        // var loaded_cache = try cache.CacheModule.fromMappedMemory(cache_data);
 
-        // Restore ModuleEnv
-        var restored = try loaded_cache.restore(allocator, module_name, content.source);
-        defer restored.module_env.deinit();
+        // // Restore ModuleEnv
+        // var restored = try loaded_cache.restore(allocator, module_name, content.source);
+        // defer restored.module_env.deinit();
 
-        // Generate S-expression from restored CIR
-        var restored_tree = SExprTree.init(allocator);
-        defer restored_tree.deinit();
-        try ModuleEnv.pushToSExprTree(&restored.module_env, null, &restored_tree);
+        // // Generate S-expression from restored CIR
+        // var restored_tree = SExprTree.init(allocator);
+        // defer restored_tree.deinit();
+        // try ModuleEnv.pushToSExprTree(&restored.module_env, null, &restored_tree);
 
-        var restored_sexpr = std.ArrayList(u8).init(allocator);
-        defer restored_sexpr.deinit();
-        try restored_tree.toStringPretty(restored_sexpr.writer().any());
+        // var restored_sexpr = std.ArrayList(u8).init(allocator);
+        // defer restored_sexpr.deinit();
+        // try restored_tree.toStringPretty(restored_sexpr.writer().any());
 
-        // Compare S-expressions - crash if they don't match
-        if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
-            std.log.err("Cache round-trip validation failed for snapshot: {s}", .{output_path});
-            std.log.err("Original and restored CIR S-expressions don't match!", .{});
-            std.log.err("This indicates a bug in MmapCache serialization/deserialization.", .{});
-            std.log.err("Original S-expression:\n{s}", .{original_sexpr.items});
-            std.log.err("Restored S-expression:\n{s}", .{restored_sexpr.items});
-            return error.CacheRoundTripValidationFailed;
-        }
+        // // Compare S-expressions - crash if they don't match
+        // if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
+        //     std.log.err("Cache round-trip validation failed for snapshot: {s}", .{output_path});
+        //     std.log.err("Original and restored CIR S-expressions don't match!", .{});
+        //     std.log.err("This indicates a bug in MmapCache serialization/deserialization.", .{});
+        //     std.log.err("Original S-expression:\n{s}", .{original_sexpr.items});
+        //     std.log.err("Restored S-expression:\n{s}", .{restored_sexpr.items});
+        //     return error.CacheRoundTripValidationFailed;
+        // }
     }
 
     // Buffer all output in memory before writing files

@@ -1331,35 +1331,6 @@ test "insert" {
     try std.testing.expectEqualStrings("defg", interner.get(idx_2));
 }
 
-test "StringLiteral.Store serialization comprehensive" {
-    const gpa = std.testing.allocator;
-
-    var store = StringLiteral.Store{};
-    defer store.deinit(gpa);
-
-    // Add various test strings including edge cases
-    _ = try store.insert(gpa, "hello");
-    _ = try store.insert(gpa, "world");
-    _ = try store.insert(gpa, "test string with 🦎 unicode");
-    _ = try store.insert(gpa, ""); // empty string
-    _ = try store.insert(gpa, "\x00\x01\x02"); // binary data
-    _ = try store.insert(gpa, "🦎🚀✨"); // emoji
-    _ = try store.insert(gpa, "日本語"); // non-latin script
-    _ = try store.insert(gpa, "test\n\r\t"); // control characters
-    _ = try store.insert(gpa, "very very very very very very long string that exceeds normal buffer sizes and might cause issues with memory management");
-
-    // Test serialization
-    try serialization.testing.testSerialization(StringLiteral.Store, &store, gpa);
-}
-
-test "StringLiteral.Store empty store serialization" {
-    const gpa = std.testing.allocator;
-
-    var empty_store = StringLiteral.Store{};
-    defer empty_store.deinit(gpa);
-
-    try serialization.testing.testSerialization(StringLiteral.Store, &empty_store, gpa);
-}
 
 test "StringLiteral.Store empty CompactWriter roundtrip" {
     const gpa = std.testing.allocator;

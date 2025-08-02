@@ -45,13 +45,6 @@ pub fn Serializable(comptime T: type) type {
             @compileError("serializedSize must be implemented for " ++ @typeName(T));
         }
 
-        /// Serialize this value into the provided buffer
-        /// Returns the slice of buffer that was written to
-        pub fn serializeInto(self: *const T, buffer: []u8) SerializationError![]const u8 {
-            _ = self;
-            _ = buffer;
-            @compileError("serializeInto must be implemented for " ++ @typeName(T));
-        }
 
         /// Deserialize a value from the provided buffer
         pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) DeserializationError!T {
@@ -71,14 +64,6 @@ pub fn SerializableWithAllocator(comptime T: type) type {
             @compileError("serializedSize must be implemented for " ++ @typeName(T));
         }
 
-        /// Serialize this value into the provided buffer
-        /// Returns the slice of buffer that was written to
-        pub fn serializeInto(self: *const T, buffer: []u8, allocator: Allocator) SerializationError![]const u8 {
-            _ = self;
-            _ = buffer;
-            _ = allocator;
-            @compileError("serializeInto must be implemented for " ++ @typeName(T));
-        }
 
         /// Deserialize a value from the provided buffer
         pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) DeserializationError!T {
@@ -156,11 +141,6 @@ test "serialization interface detection" {
             return @sizeOf(u32);
         }
 
-        pub fn serializeInto(self: *const @This(), buffer: []u8) SerializationError![]const u8 {
-            try validateBuffer(@sizeOf(u32), buffer);
-            writeInt(u32, buffer, self.value);
-            return buffer[0..@sizeOf(u32)];
-        }
 
         pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) DeserializationError!@This() {
             _ = allocator;

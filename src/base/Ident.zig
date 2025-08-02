@@ -245,36 +245,6 @@ pub const Store = struct {
         return std.mem.alignForward(usize, size, serialization.SERIALIZATION_ALIGNMENT);
     }
 
-    /// Serialize this Ident.Store into the provided buffer
-    pub fn serializeInto(self: *const Store, buffer: []u8, gpa: std.mem.Allocator) ![]u8 {
-        const size = self.serializedSize();
-        if (buffer.len < size) return error.BufferTooSmall;
-
-        var offset: usize = 0;
-
-        // Serialize interner bytes
-        const bytes_len = @as(u32, @intCast(self.interner.bytes.len()));
-        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = bytes_len;
-        offset += @sizeOf(u32);
-        if (bytes_len > 0) {
-            @memcpy(buffer[offset .. offset + bytes_len], self.interner.bytes.items.items);
-            offset += bytes_len;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Serialize next_unique_name
-        @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset))).* = self.next_unique_name;
-        offset += @sizeOf(u32);
-
-        _ = gpa; // suppress unused parameter warning
-
-        // Zero out any padding bytes
-        if (offset < size) {
-            @memset(buffer[offset..size], 0);
-        }
-
-        return buffer[0..size];
-    }
 
     /// Deserialize an Ident.Store from the provided buffer
     pub fn deserializeFrom(buffer: []const u8, gpa: std.mem.Allocator) !Store {

@@ -120,28 +120,3 @@ fn deinitValue(comptime T: type, value: *const T, allocator: Allocator) void {
     }
 }
 
-test "simple serialization framework" {
-    const TestType = struct {
-        value: u32,
-
-        pub fn serializedSize(self: *const @This()) usize {
-            _ = self;
-            return @sizeOf(u32);
-        }
-
-        pub fn serializeInto(self: *const @This(), buffer: []u8) ![]const u8 {
-            try mod.validateBuffer(@sizeOf(u32), buffer);
-            mod.writeInt(u32, buffer, self.value);
-            return buffer[0..@sizeOf(u32)];
-        }
-
-        pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !@This() {
-            _ = allocator;
-            try mod.validateDeserializationBuffer(@sizeOf(u32), buffer);
-            return @This(){ .value = mod.readInt(u32, buffer) };
-        }
-    };
-
-    const test_value = TestType{ .value = 42 };
-    try testSerialization(TestType, &test_value, testing.allocator);
-}

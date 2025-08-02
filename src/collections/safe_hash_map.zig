@@ -84,38 +84,6 @@ pub fn SafeStringHashMap(comptime V: type) type {
             return size;
         }
 
-        /// Serialize this hash map into the provided buffer
-        pub fn serializeInto(self: *const Self, buffer: []u8) ![]u8 {
-            const size = self.serializedSize();
-            if (buffer.len < size) return error.BufferTooSmall;
-
-            var offset: usize = 0;
-
-            // Write count
-            std.mem.writeInt(u32, buffer[offset..][0..4], @intCast(self.map.count()), .little);
-            offset += @sizeOf(u32);
-
-            // Write entries
-            var iter = self.map.iterator();
-            while (iter.next()) |entry| {
-                // Write key length
-                const key_len: u32 = @intCast(entry.key_ptr.len);
-                std.mem.writeInt(u32, buffer[offset..][0..4], key_len, .little);
-                offset += @sizeOf(u32);
-
-                // Write key bytes
-                @memcpy(buffer[offset .. offset + entry.key_ptr.len], entry.key_ptr.*);
-                offset += entry.key_ptr.len;
-
-                // Write value bytes (if not void)
-                if (V != void) {
-                    @memcpy(buffer[offset .. offset + @sizeOf(V)], std.mem.asBytes(entry.value_ptr));
-                    offset += @sizeOf(V);
-                }
-            }
-
-            return buffer[0..offset];
-        }
 
         /// Deserialize a hash map from the provided buffer
         pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
@@ -320,44 +288,5 @@ test "SafeStringHashMap duplicate key handling" {
     try testing.expectEqual(@as(u32, 456), map.get("other_key").?);
 }
 
-test "SafeStringHashMap comprehensive serialization framework test" {
-    const gpa = testing.allocator;
 
-    var map = SafeStringHashMap(u32).init();
-    defer map.deinit(gpa);
 
-    // Add various test data including edge cases
-    try map.put(gpa, "key1", 0); // minimum value
-    try map.put(gpa, "key2", 42);
-    try map.put(gpa, "longer_key_name_test", 123);
-    try map.put(gpa, "k", 0xFFFFFFFF); // maximum value, short key
-    try map.put(gpa, "", 999); // empty key
-    try map.put(gpa, "🦎🚀", 777); // unicode key
-
-    // Test serialization using the testing framework
-    try serialization.testing.testSerialization(SafeStringHashMap(u32), &map, gpa);
-}
-
-test "SafeStringHashMap empty map serialization framework test" {
-    const gpa = testing.allocator;
-
-    var empty_map = SafeStringHashMap(u16).init();
-    defer empty_map.deinit(gpa);
-
-    try serialization.testing.testSerialization(SafeStringHashMap(u16), &empty_map, gpa);
-}
-
-test "SafeStringHashMap void value serialization framework test" {
-    const gpa = testing.allocator;
-
-    var map = SafeStringHashMap(void).init();
-    defer map.deinit(gpa);
-
-    // Add various keys (values are void)
-    try map.put(gpa, "first", {});
-    try map.put(gpa, "second", {});
-    try map.put(gpa, "third", {});
-
-    // Test serialization using the testing framework
-    try serialization.testing.testSerialization(SafeStringHashMap(void), &map, gpa);
-}
