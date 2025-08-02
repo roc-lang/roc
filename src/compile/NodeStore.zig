@@ -3007,34 +3007,6 @@ pub fn serializedSize(self: *const NodeStore) usize {
     return std.mem.alignForward(usize, raw_size, SERIALIZATION_ALIGNMENT);
 }
 
-/// Serialize this NodeStore into the provided buffer
-/// Buffer must be at least serializedSize() bytes and properly aligned
-pub fn serializeInto(self: *const NodeStore, buffer: []align(SERIALIZATION_ALIGNMENT) u8) ![]u8 {
-    const size = self.serializedSize();
-    if (buffer.len < size) return error.BufferTooSmall;
-
-    var offset: usize = 0;
-
-    // Serialize nodes - cast to proper alignment for Node type
-    const nodes_slice = try self.nodes.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset..])));
-    offset += nodes_slice.len;
-
-    // Serialize regions
-    const regions_slice = try self.regions.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset..])));
-    offset += regions_slice.len;
-
-    // Serialize extra_data items
-    const extra_data_slice = try self.extra_data.serializeInto(@as([]align(SERIALIZATION_ALIGNMENT) u8, @alignCast(buffer[offset..])));
-    offset += extra_data_slice.len;
-
-    // Zero out any padding bytes
-    if (offset < size) {
-        @memset(buffer[offset..size], 0);
-    }
-
-    return buffer[0..size];
-}
-
 /// Deserialize a NodeStore from the provided buffer
 pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.mem.Allocator) !NodeStore {
     var offset: usize = 0;

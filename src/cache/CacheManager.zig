@@ -9,7 +9,6 @@ const Cache = cache_mod.CacheModule;
 const CacheConfig = cache_mod.CacheConfig;
 const CacheStats = cache_mod.CacheStats;
 const CacheReporting = @import("CacheReporting.zig");
-const SERIALIZATION_ALIGNMENT = 16;
 const coordinate_simple = @import("../coordinate_simple.zig");
 
 const Allocator = std.mem.Allocator;
@@ -115,7 +114,7 @@ pub const CacheManager = struct {
     ///
     /// Serializes the ProcessResult and stores it in the cache using BLAKE3-based
     /// filenames with subdirectory splitting.
-    pub fn store(self: *Self, cache_key: [32]u8, process_result: *const coordinate_simple.ProcessResult) !void {
+    pub fn store(self: *Self, cache_key: [32]u8, process_result: *const coordinate_simple.ProcessResult, arena_allocator: Allocator) !void {
         if (!self.config.enabled) {
             return;
         }
@@ -129,7 +128,7 @@ pub const CacheManager = struct {
             return;
         };
 
-        const cache_data = Cache.create(self.allocator, process_result.cir, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
+        const cache_data = Cache.create(self.allocator, arena_allocator, process_result.cir, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to serialize cache data: {}", .{err});
             }
@@ -245,7 +244,7 @@ pub const CacheManager = struct {
     /// The caller must not free it after calling this function.
     fn restoreFromCache(
         self: *Self,
-        cache_data: []align(SERIALIZATION_ALIGNMENT) const u8,
+        cache_data: []align(@alignOf(ModuleEnv)) const u8,
         source: []const u8,
     ) !struct {
         result: coordinate_simple.ProcessResult,
@@ -263,15 +262,11 @@ pub const CacheManager = struct {
         // since we don't have access to the original source path
         const module_name = "cached_module";
         // Transfer ownership of source to the restored ModuleEnv
-        const restored = cache.restore(self.allocator, module_name, source) catch return error.RestoreError;
+        const module_env = cache.restore(self.allocator, module_name, source) catch return error.RestoreError;
 
         // Reports are not cached - they need to be recomputed if needed
         // Users can use --no-cache to see diagnostic reports
         const reports = try self.allocator.alloc(reporting.Report, 0);
-
-        // Allocate and copy ModuleEnv to heap for ownership
-        const module_env = try self.allocator.create(ModuleEnv);
-        module_env.* = restored.module_env;
 
         // CIR is now just an alias for ModuleEnv
         const cir = module_env;

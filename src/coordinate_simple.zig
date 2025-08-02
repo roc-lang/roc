@@ -120,7 +120,9 @@ pub fn processFile(
                 process_result.was_cached = false;
 
                 // Store in cache (don't fail compilation if cache store fails)
-                cache.store(returned.key, &process_result) catch |err| {
+                var cache_arena = std.heap.ArenaAllocator.init(gpa);
+                defer cache_arena.deinit();
+                cache.store(returned.key, &process_result, cache_arena.allocator()) catch |err| {
                     std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
                 };
 
