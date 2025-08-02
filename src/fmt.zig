@@ -735,7 +735,7 @@ const Formatter = struct {
     };
 
     fn formatCollection(fmt: *Formatter, region: AST.TokenizedRegion, braces: Braces, comptime T: type, items: []T, formatter: fn (*Formatter, T) anyerror!AST.TokenizedRegion) !void {
-        const multiline = fmt.collectionWillBeMultiline(region, T, items);
+        const multiline = fmt.ast.regionIsMultiline(region) or fmt.collectionWillBeMultiline(T, items);
         const curr_indent = fmt.curr_indent;
         defer {
             fmt.curr_indent = curr_indent;
@@ -1496,8 +1496,17 @@ const Formatter = struct {
                 );
             },
             .package => |p| {
+                const exposes = fmt.ast.store.getCollection(p.exposes);
+                const exposesItems = fmt.ast.store.exposedItemSlice(.{ .span = exposes.span });
+
+                const packages = fmt.ast.store.getCollection(p.packages);
+                const packagesItems = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
+
+                const multiline = fmt.ast.regionIsMultiline(p.region) or
+                    fmt.collectionWillBeMultiline(AST.ExposedItem.Idx, exposesItems) or
+                    fmt.collectionWillBeMultiline(AST.RecordField.Idx, packagesItems);
+
                 try fmt.pushAll("package");
-                const multiline = fmt.ast.regionIsMultiline(p.region);
                 if (multiline) {
                     _ = try fmt.flushCommentsAfter(p.region.start);
                     try fmt.ensureNewline();
@@ -1506,13 +1515,12 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                const exposes = fmt.ast.store.getCollection(p.exposes);
                 // TODO: This needs to be extended to the next CloseSquare
                 try fmt.formatCollection(
                     exposes.region,
                     .square,
                     AST.ExposedItem.Idx,
-                    fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }),
+                    exposesItems,
                     Formatter.formatExposedItem,
                 );
                 if (multiline) {
@@ -1521,12 +1529,11 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                const packages = fmt.ast.store.getCollection(p.packages);
                 try fmt.formatCollection(
                     packages.region,
                     .curly,
                     AST.RecordField.Idx,
-                    fmt.ast.store.recordFieldSlice(.{ .span = packages.span }),
+                    packagesItems,
                     Formatter.formatRecordField,
                 );
             },
@@ -2080,11 +2087,7 @@ const Formatter = struct {
         return true;
     }
 
-    fn collectionWillBeMultiline(fmt: *Formatter, region: AST.TokenizedRegion, comptime T: type, items: []T) bool {
-        if (fmt.ast.regionIsMultiline(region)) {
-            return true;
-        }
-
+    fn collectionWillBeMultiline(fmt: *Formatter, comptime T: type, items: []T) bool {
         for (items) |item| {
             if (fmt.itemWillBeMultiline(T, item)) {
                 return true;
