@@ -17,6 +17,7 @@ test {
     std.testing.refAllDecls(@import("builtins/test/sort_test.zig"));
     std.testing.refAllDecls(@import("builtins/test/str_test.zig"));
     std.testing.refAllDecls(@import("builtins/test/utils.test.zig"));
+    std.testing.refAllDecls(@import("builtins/test/num_test.zig"));
 
     std.testing.refAllDeclsRecursive(@import("collections"));
 

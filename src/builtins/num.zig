@@ -81,35 +81,40 @@ pub fn mul_u128(a: u128, b: u128) U256 {
     return .{ .hi = hi, .lo = lo };
 }
 
-/// Exports a function to parse an integer from a string.
+/// Parses an integer from a RocStr
+pub fn parseIntFromStr(comptime T: type, buf: RocStr) NumParseResult(T) {
+    const radix = 0;
+    if (std.fmt.parseInt(T, buf.asSlice(), radix)) |success| {
+        return .{ .errorcode = 0, .value = success };
+    } else |_| {
+        return .{ .errorcode = 1, .value = 0 };
+    }
+}
+
+/// Exports a function to parse integers from strings.
 pub fn exportParseInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(buf: RocStr) callconv(.C) NumParseResult(T) {
-            // a radix of 0 will make zig determine the radix from the frefix:
-            //  * A prefix of "0b" implies radix=2,
-            //  * A prefix of "0o" implies radix=8,
-            //  * A prefix of "0x" implies radix=16,
-            //  * Otherwise radix=10 is assumed.
-            const radix = 0;
-            if (std.fmt.parseInt(T, buf.asSlice(), radix)) |success| {
-                return .{ .errorcode = 0, .value = success };
-            } else |_| {
-                return .{ .errorcode = 1, .value = 0 };
-            }
+            return @call(.always_inline, parseIntFromStr, .{ T, buf });
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// Parse a float from a string.
+/// Parses a floating-point number from a RocStr.
+pub fn parseFloatFromStr(comptime T: type, buf: RocStr) NumParseResult(T) {
+    if (std.fmt.parseFloat(T, buf.asSlice())) |success| {
+        return .{ .errorcode = 0, .value = success };
+    } else |_| {
+        return .{ .errorcode = 1, .value = 0 };
+    }
+}
+
+/// Exports a function to parse floating-point numbers from strings.
 pub fn exportParseFloat(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(buf: RocStr) callconv(.C) NumParseResult(T) {
-            if (std.fmt.parseFloat(T, buf.asSlice())) |success| {
-                return .{ .errorcode = 0, .value = success };
-            } else |_| {
-                return .{ .errorcode = 1, .value = 0 };
-            }
+            return @call(.always_inline, parseFloatFromStr, .{ T, buf });
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
@@ -374,14 +379,14 @@ pub fn exportToIntCheckingMaxAndMin(comptime From: type, comptime To: type, comp
 }
 
 /// Returns true if lhs is a multiple of rhs.
-fn isMultipleOf(comptime T: type, lhs: T, rhs: T) bool {
+pub fn isMultipleOf(comptime T: type, lhs: T, rhs: T) bool {
     if (rhs == 0 or rhs == -1) {
         // lhs is a multiple of rhs iff
         //
         // - rhs == -1
-        // - both rhs and lhs are 0
+        // - rhs == 0 and lhs == 0
         //
-        // the -1 case is important for overflow reasons `isize::MIN % -1` crashes in rust
+        // Note: lhs % 0 is a runtime panic, so we can't use @mod.
         return (rhs == -1) or (lhs == 0);
     } else {
         const rem = @mod(lhs, rhs);
@@ -392,15 +397,15 @@ fn isMultipleOf(comptime T: type, lhs: T, rhs: T) bool {
 /// Exports a function to check if a value is a multiple of another.
 pub fn exportIsMultipleOf(comptime T: type, comptime name: []const u8) void {
     const f = struct {
-        fn func(self: T, other: T) callconv(.C) bool {
-            return @call(.always_inline, isMultipleOf, .{ T, self, other });
+        fn func(lhs: T, rhs: T) callconv(.C) bool {
+            return @call(.always_inline, isMultipleOf, .{ T, lhs, rhs });
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
 /// Adds two numbers, returning result and overflow flag.
-fn addWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
+pub fn addWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
     switch (@typeInfo(T)) {
         .int => {
             const answer = @addWithOverflow(self, other);
@@ -482,7 +487,7 @@ pub fn exportAddOrPanic(
 }
 
 /// Subtracts two numbers, returning result and overflow flag.
-fn subWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
+pub fn subWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
     switch (@typeInfo(T)) {
         .int => {
             const answer = @subWithOverflow(self, other);
@@ -565,7 +570,7 @@ pub fn exportSubOrPanic(
 }
 
 /// Multiplies two numbers, returning result and overflow flag.
-fn mulWithOverflow(comptime T: type, comptime W: type, self: T, other: T) WithOverflow(T) {
+pub fn mulWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
     switch (@typeInfo(T)) {
         .int => {
             if (T == i128) {
@@ -617,20 +622,8 @@ fn mulWithOverflow(comptime T: type, comptime W: type, self: T, other: T) WithOv
                     }
                 }
             } else {
-                const self_wide: W = self;
-                const other_wide: W = other;
-                const answer: W = self_wide * other_wide;
-
-                const max: W = std.math.maxInt(T);
-                const min: W = std.math.minInt(T);
-
-                if (answer > max) {
-                    return .{ .value = max, .has_overflowed = true };
-                } else if (answer < min) {
-                    return .{ .value = min, .has_overflowed = true };
-                } else {
-                    return .{ .value = @as(T, @intCast(answer)), .has_overflowed = false };
-                }
+                const answer = @mulWithOverflow(self, other);
+                return .{ .value = answer[0], .has_overflowed = answer[1] == 1 };
             }
         },
         else => {
@@ -642,20 +635,20 @@ fn mulWithOverflow(comptime T: type, comptime W: type, self: T, other: T) WithOv
 }
 
 /// Exports a function to multiply two numbers, returning overflow info.
-pub fn exportMulWithOverflow(comptime T: type, comptime W: type, comptime name: []const u8) void {
+pub fn exportMulWithOverflow(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.C) WithOverflow(T) {
-            return @call(.always_inline, mulWithOverflow, .{ T, W, self, other });
+            return @call(.always_inline, mulWithOverflow, .{ T, self, other });
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
 /// Exports a function to multiply two integers, saturating on overflow.
-pub fn exportMulSaturatedInt(comptime T: type, comptime W: type, comptime name: []const u8) void {
+pub fn exportMulSaturatedInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.C) T {
-            const result = @call(.always_inline, mulWithOverflow, .{ T, W, self, other });
+            const result = @call(.always_inline, mulWithOverflow, .{ T, self, other });
             return result.value;
         }
     }.func;
@@ -755,7 +748,6 @@ pub fn greaterThanOrEqualU128(self: u128, other: u128) callconv(.C) bool {
 /// Exports a function to multiply two numbers, panicking on overflow.
 pub fn exportMulOrPanic(
     comptime T: type,
-    comptime W: type,
     comptime name: []const u8,
 ) void {
     const f = struct {
@@ -764,7 +756,7 @@ pub fn exportMulOrPanic(
             other: T,
             roc_ops: *RocOps,
         ) callconv(.C) T {
-            const result = @call(.always_inline, mulWithOverflow, .{ T, W, self, other });
+            const result = @call(.always_inline, mulWithOverflow, .{ T, self, other });
             if (result.has_overflowed) {
                 const utf8_bytes = "Integer multiplication overflowed!";
                 const roc_crashed_args = RocCrashed{
