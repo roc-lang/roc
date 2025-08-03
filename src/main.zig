@@ -349,21 +349,10 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
     if (!exe_exists) {
 
-        // Production platform loading: attempt to resolve platform from app header,
-        // but fall back to the simple platform for compatibility
-        const host_path = resolvePlatformHost(gpa, args.path) catch |err| switch (err) {
-            error.NoPlatformFound, error.PlatformNotSupported => blk: {
-                // Fall back to the built-in simple platform
-                std.log.warn("Using fallback simple platform (production should use real platform)\n", .{});
-                break :blk std.fs.cwd().realpathAlloc(gpa, "zig-out/lib/libplatform_host_str_simple.a") catch |fallback_err| {
-                    std.log.err("Failed to get absolute path for fallback host library: {}\n", .{fallback_err});
-                    std.process.exit(1);
-                };
-            },
-            else => {
-                std.log.err("Failed to resolve platform: {}\n", .{err});
-                std.process.exit(1);
-            },
+        // Production platform loading: resolve platform from app header
+        const host_path = resolvePlatformHost(gpa, args.path) catch |err| {
+            std.log.err("Failed to resolve platform: {}\n", .{err});
+            std.process.exit(1);
         };
         defer gpa.free(host_path);
 
@@ -486,17 +475,86 @@ const SharedMemoryHandle = struct {
 /// Returns error.NoPlatformFound if no platform is specified
 /// Returns error.PlatformNotSupported if the platform is not available locally
 fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (std.mem.Allocator.Error || error{ NoPlatformFound, PlatformNotSupported })![]u8 {
-    _ = gpa;
-    _ = roc_file_path;
+    // Read the Roc file to parse the app header
+    const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return error.NoPlatformFound,
+        else => return err,
+    };
+    defer roc_file.close();
 
-    // For now, this is a placeholder that always fails to trigger fallback
-    // In production, this would:
-    // 1. Read and parse the Roc file header
-    // 2. Extract platform specification (e.g., platform "cli" or platform URL)
-    // 3. Resolve platform to local host library
-    // 4. Return path to the platform's host.a library
+    const file_size = try roc_file.getEndPos();
+    const source = try gpa.alloc(u8, file_size);
+    defer gpa.free(source);
+    _ = try roc_file.read(source);
+
+    // Parse the source to find the app header
+    // Look for "app" followed by platform specification
+    var lines = std.mem.split(u8, source, "\n");
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+
+        // Check if this is an app header line
+        if (std.mem.startsWith(u8, trimmed, "app")) {
+            // Look for platform specification after "platform"
+            if (std.mem.indexOf(u8, trimmed, "platform")) |platform_start| {
+                const after_platform = trimmed[platform_start + "platform".len ..];
+
+                // Find the platform name/URL in quotes
+                if (std.mem.indexOf(u8, after_platform, "\"")) |quote_start| {
+                    const after_quote = after_platform[quote_start + 1 ..];
+                    if (std.mem.indexOf(u8, after_quote, "\"")) |quote_end| {
+                        const platform_spec = after_quote[0..quote_end];
+
+                        // Try to resolve platform to a local host library
+                        return resolvePlatformSpecToHostLib(gpa, platform_spec);
+                    }
+                }
+            }
+        }
+    }
 
     return error.NoPlatformFound;
+}
+
+/// Resolve a platform specification to a local host library path
+fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8) ![]u8 {
+    // Check for common platform names and map them to host libraries
+    if (std.mem.eql(u8, platform_spec, "cli")) {
+        // Try to find CLI platform host library
+        const cli_paths = [_][]const u8{
+            "zig-out/lib/libplatform_host_cli.a",
+            "platform/cli/host.a",
+            "platforms/cli/host.a",
+        };
+
+        for (cli_paths) |path| {
+            std.fs.cwd().access(path, .{}) catch continue;
+            return try gpa.dupe(u8, path);
+        }
+    } else if (std.mem.eql(u8, platform_spec, "basic-cli")) {
+        // Try to find basic-cli platform host library
+        const basic_cli_paths = [_][]const u8{
+            "zig-out/lib/libplatform_host_basic_cli.a",
+            "platform/basic-cli/host.a",
+            "platforms/basic-cli/host.a",
+        };
+
+        for (basic_cli_paths) |path| {
+            std.fs.cwd().access(path, .{}) catch continue;
+            return try gpa.dupe(u8, path);
+        }
+    } else if (std.mem.startsWith(u8, platform_spec, "http")) {
+        // This is a URL - for production, would download and resolve
+        // For now, return not supported
+        return error.PlatformNotSupported;
+    }
+
+    // Try to interpret as a direct file path
+    std.fs.cwd().access(platform_spec, .{}) catch {
+        return error.PlatformNotSupported;
+    };
+
+    return try gpa.dupe(u8, platform_spec);
 }
 
 fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
