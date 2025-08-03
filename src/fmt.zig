@@ -2031,6 +2031,13 @@ const Formatter = struct {
 
                         return false;
                     },
+                    .suffix_single_question => |s| {
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, s.expr)) {
+                            return true;
+                        }
+
+                        return false;
+                    },
                     else => return false,
                 }
             },
@@ -2049,7 +2056,9 @@ const Formatter = struct {
                 }
 
                 if (patternRecordField.value) |value| {
-                    return fmt.nodeWillBeMultiline(AST.Pattern.Idx, value);
+                    if (fmt.nodeWillBeMultiline(AST.Pattern.Idx, value)) {
+                        return true;
+                    }
                 }
 
                 return false;
@@ -2069,7 +2078,9 @@ const Formatter = struct {
                 }
 
                 if (recordField.value) |value| {
-                    return fmt.nodeWillBeMultiline(AST.Expr.Idx, value);
+                    if (fmt.nodeWillBeMultiline(AST.Expr.Idx, value)) {
+                        return true;
+                    }
                 }
 
                 return false;
