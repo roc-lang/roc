@@ -38,8 +38,8 @@ PARSE ERROR - guards_2.md:3:62:3:62
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:62:3:63
 UNDEFINED VARIABLE - guards_2.md:1:7:1:12
 UNKNOWN OPERATOR - guards_2.md:2:50:2:51
-UNUSED VARIABLE - guards_2.md:1:1:1:1
 UNUSED VARIABLE - guards_2.md:2:6:2:11
+UNUSED VARIABLE - guards_2.md:1:1:1:1
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -352,18 +352,6 @@ This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
 **UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**guards_2.md:1:1:1:1:**
-```roc
-match value {
-```
-
-
-
-**UNUSED VARIABLE**
 Variable `first` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
@@ -373,6 +361,18 @@ The unused variable is declared here:
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
 ```
      ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `rest` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**guards_2.md:1:1:1:1:**
+```roc
+match value {
+```
+
 
 
 # TOKENS
