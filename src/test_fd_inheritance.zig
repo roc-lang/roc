@@ -88,9 +88,9 @@ test "fd inheritance works on multiple runs" {
 
         const term = try child.wait();
 
-            try testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, term);
+        try testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, term);
 
-            const expected_output = "/path/to/main.roc (from shared memory)\n";
+        const expected_output = "/path/to/main.roc (from shared memory)\n";
         try testing.expectEqualStrings(expected_output, stdout);
 
         var stderr_lines = std.mem.tokenizeScalar(u8, stderr, '\n');

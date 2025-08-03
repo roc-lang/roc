@@ -17,6 +17,38 @@ const llvm_externs = if (llvm_available) struct {
     extern fn ZigLLDLinkWasm(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
 } else struct {};
 
+/// Gets a reasonable minimum deployment target for macOS based on the current system
+fn getMinimumDeploymentTarget(allocator: Allocator) ![]u8 {
+    // Try to get the current macOS version
+    var child = std.process.Child.init(&.{ "sw_vers", "-productVersion" }, allocator);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+
+    try child.spawn();
+    const stdout = try child.stdout.?.reader().readAllAlloc(allocator, 1024);
+    defer allocator.free(stdout);
+    _ = try child.wait();
+
+    // Parse the version string (e.g., "15.5.1" -> [15, 5, 1])
+    const version_str = std.mem.trim(u8, stdout, " \n\r\t");
+    var version_parts = std.mem.splitScalar(u8, version_str, '.');
+
+    if (version_parts.next()) |major_str| {
+        const major = std.fmt.parseInt(u8, major_str, 10) catch {
+            // If we can't parse, fall back to a conservative default
+            return allocator.dupe(u8, "13.0");
+        };
+
+        // Use the current major version as the deployment target
+        // This matches the SDK version and avoids warnings
+        const deployment_major: u8 = major;
+        return std.fmt.allocPrint(allocator, "{d}.0", .{deployment_major});
+    }
+
+    // Fallback if version parsing fails
+    return allocator.dupe(u8, "13.0");
+}
+
 /// Supported target formats for linking
 pub const TargetFormat = enum {
     elf,
@@ -98,8 +130,10 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             // Add platform version
             try args.append("-platform_version");
             try args.append("macos");
-            try args.append("14.0");
-            try args.append("14.0");
+            const deployment_target = getMinimumDeploymentTarget(allocator) catch "15.0";
+            defer if (!std.mem.eql(u8, deployment_target, "15.0")) allocator.free(deployment_target);
+            try args.append(deployment_target);
+            try args.append(deployment_target);
 
             // Add SDK path
             try args.append("-syslibroot");

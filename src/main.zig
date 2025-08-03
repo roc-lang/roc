@@ -248,7 +248,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
             cleanupSharedMemory();
             std.process.exit(1);
         };
-
     } else {
         var flags = posix.fcntl(shm_handle.fd, F_GETFD, 0);
         if (flags < 0) {
@@ -270,7 +269,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
             cleanupSharedMemory();
             std.process.exit(1);
         };
-
     }
 
     // Run the interpreter as a child process
