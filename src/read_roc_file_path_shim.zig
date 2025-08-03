@@ -9,13 +9,12 @@ const RocStr = builtins.str.RocStr;
 // Platform-specific shared memory implementation
 const is_windows = builtin.target.os.tag == .windows;
 
-// POSIX shared memory functions
+// POSIX memory mapping functions to access shared memory - via inherited fd only, NOT `shm_open`,
+// which always errors on macOS (by design, for security reasons) when the child process is
+// an executable that the parent process created.
 const posix = if (!is_windows) struct {
-    extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
-    extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
     extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: std.c.off_t) ?*anyopaque;
     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
-    extern "c" fn fstat(fd: c_int, buf: *std.c.Stat) c_int;
     extern "c" fn close(fd: c_int) c_int;
 } else struct {};
 
@@ -37,8 +36,14 @@ const windows = if (is_windows) struct {
     const FILE_MAP_READ = 0x0004;
 } else struct {};
 
-/// Read the fd/handle from the filesystem-based communication mechanism
-fn readFdFromFile() ![]u8 {
+/// Info read from the coordination file
+const FdInfo = struct {
+    fd_str: []u8,
+    size: usize,
+};
+
+/// Read the fd/handle and size from the filesystem-based communication mechanism
+fn readFdInfo() !FdInfo {
     // Get our own executable path
     const exe_path = try std.fs.selfExePathAlloc(std.heap.page_allocator);
     defer std.heap.page_allocator.free(exe_path);
@@ -62,22 +67,31 @@ fn readFdFromFile() ![]u8 {
     const fd_file_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}.txt", .{dir_path});
     defer std.heap.page_allocator.free(fd_file_path);
 
-    // Read the fd from the file
+    // Read the fd and size from the file
     const fd_file = std.fs.cwd().openFile(fd_file_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return error.FdFileNotFound,
         else => return err,
     };
     defer fd_file.close();
 
-    const fd_content = try fd_file.readToEndAlloc(std.heap.page_allocator, 64);
+    const content = try fd_file.readToEndAlloc(std.heap.page_allocator, 128);
+    defer std.heap.page_allocator.free(content);
 
     // Clean up the fd file since we no longer need it
     std.fs.cwd().deleteFile(fd_file_path) catch {};
 
-    const trimmed = std.mem.trim(u8, fd_content, " \n\r\t");
-    const result = try std.heap.page_allocator.dupe(u8, trimmed);
-    std.heap.page_allocator.free(fd_content);
-    return result;
+    // Parse the content: first line is fd, second line is size
+    var lines = std.mem.tokenizeScalar(u8, content, '\n');
+    const fd_line = lines.next() orelse return error.InvalidFileFormat;
+    const size_line = lines.next() orelse return error.InvalidFileFormat;
+
+    const fd_str = try std.heap.page_allocator.dupe(u8, std.mem.trim(u8, fd_line, " \r\t"));
+    const size = try std.fmt.parseInt(usize, std.mem.trim(u8, size_line, " \r\t"), 10);
+
+    return FdInfo{
+        .fd_str = fd_str,
+        .size = size,
+    };
 }
 
 /// Exported symbol that reads a string from shared memory ROC_FILE_TO_INTERPRET
@@ -94,19 +108,19 @@ export fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque) ca
 }
 
 fn readFromWindowsSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
-    const handle_str = readFdFromFile() catch {
+    const fd_info = readFdInfo() catch {
         return RocStr.empty();
     };
-    defer std.heap.page_allocator.free(handle_str);
+    defer std.heap.page_allocator.free(fd_info.fd_str);
 
-    const handle_int = std.fmt.parseInt(usize, handle_str, 10) catch {
+    const handle_int = std.fmt.parseInt(usize, fd_info.fd_str, 10) catch {
         return RocStr.empty();
     };
 
     const shm_handle = @as(windows.HANDLE, @ptrFromInt(handle_int));
 
-    // Map the shared memory
-    const mapped_ptr = windows.MapViewOfFile(shm_handle, windows.FILE_MAP_READ, 0, 0, 0) orelse {
+    // Map the shared memory with the exact size
+    const mapped_ptr = windows.MapViewOfFile(shm_handle, windows.FILE_MAP_READ, 0, 0, fd_info.size) orelse {
         return RocStr.empty();
     };
     defer _ = windows.UnmapViewOfFile(mapped_ptr);
@@ -122,31 +136,21 @@ fn readFromWindowsSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
 }
 
 fn readFromPosixSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
-    const fd_str = readFdFromFile() catch {
+    const fd_info = readFdInfo() catch {
         return RocStr.empty();
     };
-    defer std.heap.page_allocator.free(fd_str);
+    defer std.heap.page_allocator.free(fd_info.fd_str);
 
-    const shm_fd = std.fmt.parseInt(c_int, fd_str, 10) catch {
+    const shm_fd = std.fmt.parseInt(c_int, fd_info.fd_str, 10) catch {
         return RocStr.empty();
     };
 
     defer _ = posix.close(shm_fd);
 
-    // Get shared memory size
-    var stat_buf: std.c.Stat = undefined;
-    if (posix.fstat(shm_fd, &stat_buf) != 0) {
-        return RocStr.empty();
-    }
-
-    if (stat_buf.size < @sizeOf(usize)) {
-        return RocStr.empty();
-    }
-
-    // Map the shared memory
+    // Map the shared memory with the exact size from the file
     const mapped_ptr = posix.mmap(
         null,
-        @intCast(stat_buf.size),
+        fd_info.size,
         0x01, // PROT_READ
         0x0001, // MAP_SHARED
         shm_fd,
@@ -154,15 +158,15 @@ fn readFromPosixSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
     ) orelse {
         return RocStr.empty();
     };
-    const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..@intCast(stat_buf.size)];
-    defer _ = posix.munmap(mapped_ptr, @intCast(stat_buf.size));
+    const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..fd_info.size];
+    defer _ = posix.munmap(mapped_ptr, fd_info.size);
 
     // Read the length from the beginning of shared memory
     const length_ptr: *align(1) const usize = @ptrCast(mapped_memory.ptr);
     const string_length = length_ptr.*;
 
     // Check if we have enough data
-    if (stat_buf.size < @sizeOf(usize) + string_length) {
+    if (fd_info.size < @sizeOf(usize) + string_length) {
         return RocStr.empty();
     }
 

@@ -685,10 +685,6 @@ const c = struct {
     // POSIX shared memory functions
     extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
     extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
-    extern "c" fn ftruncate(fd: c_int, length: off_t) c_int;
-
-    // off_t is typically i64 on most platforms
-    const off_t = i64;
 };
 
 test "shared memory allocator basic operations" {
