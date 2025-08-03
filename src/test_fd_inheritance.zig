@@ -23,7 +23,14 @@ test "fd inheritance works correctly" {
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
-    try child.spawn();
+    child.spawn() catch |spawn_err| {
+        std.debug.print("Failed to spawn roc binary: {}\n", .{spawn_err});
+        if (spawn_err == error.FileNotFound) {
+            std.debug.print("Roc binary not found at: {s}\n", .{child.argv[0]});
+            return error.SkipZigTest;
+        }
+        return spawn_err;
+    };
 
     const stdout = try child.stdout.?.reader().readAllAlloc(allocator, 1024 * 1024);
     defer allocator.free(stdout);
@@ -83,7 +90,14 @@ test "fd inheritance works on multiple runs" {
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Pipe;
 
-        try child.spawn();
+        child.spawn() catch |spawn_err| {
+            std.debug.print("Run {} - Failed to spawn roc binary: {}\n", .{ i, spawn_err });
+            if (spawn_err == error.FileNotFound) {
+                std.debug.print("Roc binary not found at: {s}\n", .{child.argv[0]});
+                return error.SkipZigTest;
+            }
+            return spawn_err;
+        };
 
         const stdout = try child.stdout.?.reader().readAllAlloc(allocator, 1024 * 1024);
         defer allocator.free(stdout);

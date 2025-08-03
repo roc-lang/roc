@@ -83,9 +83,17 @@ fn createHardlink(allocator: Allocator, source: []const u8, dest: []const u8) !v
         const dest_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, dest);
         defer allocator.free(dest_w);
 
-        const kernel32 = std.os.windows.kernel32;
+        // Declare CreateHardLinkW since it's not in all versions of std
+        const kernel32 = struct {
+            extern "kernel32" fn CreateHardLinkW(
+                lpFileName: [*:0]const u16,
+                lpExistingFileName: [*:0]const u16,
+                lpSecurityAttributes: ?*anyopaque,
+            ) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+        };
+
         if (kernel32.CreateHardLinkW(dest_w, source_w, null) == 0) {
-            const err = kernel32.GetLastError();
+            const err = std.os.windows.kernel32.GetLastError();
             switch (err) {
                 .ALREADY_EXISTS => return error.PathAlreadyExists,
                 else => return error.Unexpected,
