@@ -1544,7 +1544,7 @@ pub const Interpreter = struct {
         // Step 1: Copy the value of the *previous* field (if any) into the record structure.
         if (current_field_idx > 0) {
             const prev_field_index_in_sorted = current_field_idx - 1;
-            const prev_field_layout_info = sorted_fields.get(prev_field_index_in_sorted);
+            const prev_field_layout_info = sorted_fields.get(@intCast(prev_field_index_in_sorted));
             const prev_field_layout = self.layout_cache.getLayout(prev_field_layout_info.layout);
             const prev_field_size = self.layout_cache.layoutSize(prev_field_layout);
 
@@ -1628,7 +1628,7 @@ pub const Interpreter = struct {
         // Step 1: Copy the value of the *previous* element (if any) into the tuple structure.
         if (current_element_idx > 0) {
             const prev_element_index = current_element_idx - 1;
-            const prev_element_layout_info = element_layouts.get(prev_element_index);
+            const prev_element_layout_info = element_layouts.get(@intCast(prev_element_index));
             const prev_element_layout = self.layout_cache.getLayout(prev_element_layout_info.layout);
             const prev_element_size = self.layout_cache.layoutSize(prev_element_layout);
 
