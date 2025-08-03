@@ -670,7 +670,7 @@ h = |
 	(defs
 		(patt @18.1-18.2 (type "[Z1((field, field2)), Z2(a, b), Z3(c), Z4(List(elem))]others, [Z1((field3, field4)), Z2(d, e), Z3(f), Z4(List(elem2))]others2 -> _ret")))
 	(type_decls
-		(alias @8.1-8.77 (type "A(U)")
+		(alias @8.1-8.77 (type "A(a)")
 			(ty-header @8.1-8.5 (name "A")
 				(ty-args
 					(ty-var @8.3-8.4 (name "a")))))

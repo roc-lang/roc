@@ -191,5 +191,5 @@ is_ok = |result| match result {
 					(ty-var @3.14-3.17 (name "err"))))))
 	(expressions
 		(expr @6.6-6.24 (type "ok -> MyResult(ok, err)"))
-		(expr @9.9-12.2 (type "MyResult(ok, err) -> Bool"))))
+		(expr @9.9-12.2 (type "MyResult(ok, For) -> Bool"))))
 ~~~

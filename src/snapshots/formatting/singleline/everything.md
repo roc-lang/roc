@@ -238,7 +238,7 @@ CloseCurly(31:1-31:2),EndOfFile(31:2-31:2),
 	(statements
 		(s-import @4.1-4.30 (raw "I1")
 			(exposing
-				(exposed-upper-ident @4.21-4.24 (text "Dec"))
+				(exposed-upper-ident @4.21-4.24 (text "I11"))
 				(exposed-upper-ident @4.26-4.29 (text "I12"))))
 		(s-import @5.1-5.46 (raw "I2")
 			(exposing
@@ -556,7 +556,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.2 (type "[Z1((field, field2)), Z2(a, b), Z3(c), Z4(List(elem))]others, [Z1((field3, field4)), Z2(d, e), id(f), Z4(List(elem2))]others2 -> _ret")))
+		(patt @18.1-18.2 (type "[Z1((field, field2)), Z2(a, b), Z3(c), Z4(List(elem))]others, [Z1((field3, field4)), Z2(d, e), Z3(f), Z4(List(elem2))]others2 -> _ret")))
 	(type_decls
 		(alias @8.1-8.74 (type "A(a)")
 			(ty-header @8.1-8.5 (name "A")
