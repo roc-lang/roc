@@ -30,16 +30,53 @@ const CacheConfig = cache_mod.CacheConfig;
 const tokenize = parse.tokenize;
 
 const read_roc_file_path_shim_lib = if (builtin.is_test) &[_]u8{} else @embedFile("libread_roc_file_path_shim.a");
-const c = std.c;
+
+// Workaround for Zig standard library compilation issue on macOS ARM64.
+//
+// The Problem:
+// When importing std.c directly, Zig attempts to compile ALL C function declarations,
+// including mremap which has this signature in std/c.zig:9562:
+//   pub extern "c" fn mremap(addr: ?*align(page_size) const anyopaque, old_len: usize,
+//                            new_len: usize, flags: MREMAP, ...) *anyopaque;
+//
+// The variadic arguments (...) at the end trigger this compiler error on macOS ARM64:
+//   "parameter of type 'void' not allowed in function with calling convention 'aarch64_aapcs_darwin'"
+//
+// This is because:
+// 1. mremap is a Linux-specific syscall that doesn't exist on macOS
+// 2. The variadic declaration is incompatible with ARM64 macOS calling conventions
+// 3. Even though we never call mremap, just importing std.c triggers its compilation
+//
+// Related issues:
+// - https://github.com/ziglang/zig/issues/6321 - Discussion about mremap platform support
+// - mremap is only available on Linux/FreeBSD, not macOS/Darwin
+//
+// Solution:
+// Instead of importing all of std.c, we create a minimal wrapper that only exposes
+// the specific types and functions we actually need. This avoids triggering the
+// compilation of the broken mremap declaration.
+//
+// TODO: This workaround can be removed once the upstream Zig issue is fixed.
+/// Minimal wrapper around std.c types and functions to avoid mremap compilation issues.
+/// Contains only the C types and functions we actually need.
+pub const c = struct {
+    pub const mode_t = std.c.mode_t;
+    pub const off_t = std.c.off_t;
+
+    pub const close = std.c.close;
+    pub const link = std.c.link;
+    pub const ftruncate = std.c.ftruncate;
+    pub const _errno = std.c._errno;
+};
 
 // Platform-specific shared memory implementation
 const is_windows = builtin.target.os.tag == .windows;
 
 // POSIX shared memory functions
 const posix = if (!is_windows) struct {
-    extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: c.mode_t) c_int;
+    extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
     extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
-    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: c.off_t) ?*anyopaque;
+    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: std.c.off_t) ?*anyopaque;
     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
     extern "c" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) c_int;
 
@@ -111,9 +148,9 @@ fn createHardlink(allocator: Allocator, source: []const u8, dest: []const u8) !v
         const dest_c = try allocator.dupeZ(u8, dest);
         defer allocator.free(dest_c);
 
-        const result = std.c.link(source_c, dest_c);
+        const result = c.link(source_c, dest_c);
         if (result != 0) {
-            const errno = std.c._errno().*;
+            const errno = c._errno().*;
             switch (errno) {
                 17 => return error.PathAlreadyExists, // EEXIST
                 else => return error.Unexpected,
@@ -141,16 +178,20 @@ fn generateRandomSuffix(allocator: Allocator) ![]u8 {
     return suffix;
 }
 
-/// Create the temporary directory structure for fd communication
-/// Returns the path to the executable in the temp directory (caller must free)
-fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, fd: anytype) ![]const u8 {
-    // Get system temp directory
-    const temp_dir = if (comptime is_windows)
+/// Create the temporary directory structure for fd communication.
+/// Returns the path to the executable in the temp directory (caller must free).
+/// If a cache directory is provided, it will be used for temporary files; otherwise
+/// falls back to the system temp directory.
+pub fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, shm_handle: SharedMemoryHandle, cache_dir: ?[]const u8) ![]const u8 {
+    // Use provided cache dir or fall back to system temp directory
+    const temp_dir = if (cache_dir) |dir|
+        try allocator.dupe(u8, dir)
+    else if (comptime is_windows)
         std.process.getEnvVarOwned(allocator, "TEMP") catch
-            std.process.getEnvVarOwned(allocator, "TMP") catch "C:\\Windows\\Temp"
+            std.process.getEnvVarOwned(allocator, "TMP") catch try allocator.dupe(u8, "C:\\Windows\\Temp")
     else
-        std.process.getEnvVarOwned(allocator, "TMPDIR") catch "/tmp";
-    defer if (!std.mem.eql(u8, temp_dir, "/tmp") and !std.mem.eql(u8, temp_dir, "C:\\Windows\\Temp")) allocator.free(temp_dir);
+        std.process.getEnvVarOwned(allocator, "TMPDIR") catch try allocator.dupe(u8, "/tmp");
+    defer allocator.free(temp_dir);
 
     // Try up to 10 times to create a unique directory
     var attempt: u8 = 0;
@@ -201,11 +242,12 @@ fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, fd: anytyp
         };
         defer fd_file.close();
 
-        // Write fd to file
+        // Write fd and size to file (format: fd\nsize)
+        // This allows the child to know exactly how many bytes to mmap
         const fd_str = if (comptime is_windows)
-            try std.fmt.allocPrint(allocator, "{}", .{@intFromPtr(fd)})
+            try std.fmt.allocPrint(allocator, "{}\n{}", .{ @intFromPtr(shm_handle.fd), shm_handle.size })
         else
-            try std.fmt.allocPrint(allocator, "{}", .{fd});
+            try std.fmt.allocPrint(allocator, "{}\n{}", .{ shm_handle.fd, shm_handle.size });
         defer allocator.free(fd_str);
 
         try fd_file.writeAll(fd_str);
@@ -407,8 +449,26 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         cleanupSharedMemory();
     }
 
+    // Get cache directory for temporary files
+    const temp_cache_dir = cache_manager.config.getTempDir(gpa) catch |err| {
+        std.log.err("Failed to get temp cache directory: {}\n", .{err});
+        cleanupSharedMemory();
+        std.process.exit(1);
+    };
+    defer gpa.free(temp_cache_dir);
+
+    // Ensure temp cache directory exists
+    std.fs.cwd().makePath(temp_cache_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => {
+            std.log.err("Failed to create temp cache directory: {}\n", .{err});
+            cleanupSharedMemory();
+            std.process.exit(1);
+        },
+    };
+
     // Create temporary directory structure for fd communication
-    const temp_exe_path = createTempDirStructure(gpa, exe_path, shm_handle.fd) catch |err| {
+    const temp_exe_path = createTempDirStructure(gpa, exe_path, shm_handle, temp_cache_dir) catch |err| {
         std.log.err("Failed to create temp dir structure: {}\n", .{err});
         cleanupSharedMemory();
         std.process.exit(1);
@@ -419,7 +479,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     if (comptime !is_windows) {
         var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
         if (flags < 0) {
-            std.log.err("Failed to get fd flags: {}\n", .{std.c._errno().*});
+            std.log.err("Failed to get fd flags: {}\n", .{c._errno().*});
             cleanupSharedMemory();
             std.process.exit(1);
         }
@@ -427,7 +487,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         flags &= ~@as(c_int, posix.FD_CLOEXEC);
 
         if (posix.fcntl(shm_handle.fd, posix.F_SETFD, flags) < 0) {
-            std.log.err("Failed to set fd flags: {}\n", .{std.c._errno().*});
+            std.log.err("Failed to set fd flags: {}\n", .{c._errno().*});
             cleanupSharedMemory();
             std.process.exit(1);
         }
@@ -464,97 +524,69 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     // std.debug.print("[DEBUG] Child process exited with status: {}\n", .{term});
 }
 
-const SharedMemoryHandle = struct {
+/// Handle for cross-platform shared memory operations.
+/// Contains the file descriptor/handle, memory pointer, and size.
+pub const SharedMemoryHandle = struct {
     fd: if (is_windows) *anyopaque else c_int,
     ptr: *anyopaque,
     size: usize,
 };
 
-/// Resolve the platform host library from a Roc file
-/// This function attempts to parse the app header and resolve the platform
-/// Returns error.NoPlatformFound if no platform is specified
-/// Returns error.PlatformNotSupported if the platform is not available locally
-pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (std.mem.Allocator.Error || error{ NoPlatformFound, PlatformNotSupported })![]u8 {
-    // Read the Roc file to parse the app header
-    const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return error.NoPlatformFound,
-        else => return error.NoPlatformFound, // Treat all file errors as no platform found
-    };
-    defer roc_file.close();
+/// Write data to shared memory for inter-process communication.
+/// Creates a shared memory region and writes the data with a length prefix.
+/// Returns a handle that can be used to access the shared memory.
+pub fn writeToSharedMemory(data: []const u8) !SharedMemoryHandle {
+    // Calculate total size needed: length + data
+    const total_size = @sizeOf(usize) + data.len;
 
-    const file_size = roc_file.getEndPos() catch return error.NoPlatformFound;
-    const source = gpa.alloc(u8, file_size) catch return error.OutOfMemory;
-    defer gpa.free(source);
-    _ = roc_file.read(source) catch return error.NoPlatformFound;
-
-    // Parse the source to find the app header
-    // Look for "app" followed by platform specification
-    var lines = std.mem.splitScalar(u8, source, '\n');
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-
-        // Check if this is an app header line
-        if (std.mem.startsWith(u8, trimmed, "app")) {
-            // Look for platform specification after "platform"
-            if (std.mem.indexOf(u8, trimmed, "platform")) |platform_start| {
-                const after_platform = trimmed[platform_start + "platform".len ..];
-
-                // Find the platform name/URL in quotes
-                if (std.mem.indexOf(u8, after_platform, "\"")) |quote_start| {
-                    const after_quote = after_platform[quote_start + 1 ..];
-                    if (std.mem.indexOf(u8, after_quote, "\"")) |quote_end| {
-                        const platform_spec = after_quote[0..quote_end];
-
-                        // Try to resolve platform to a local host library
-                        return resolvePlatformSpecToHostLib(gpa, platform_spec);
-                    }
-                }
-            }
-        }
+    if (comptime is_windows) {
+        return writeToWindowsSharedMemory(data, total_size);
+    } else {
+        return writeToPosixSharedMemory(data, total_size);
     }
-
-    return error.NoPlatformFound;
 }
 
-/// Resolve a platform specification to a local host library path
-fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})![]u8 {
-    // Check for common platform names and map them to host libraries
-    if (std.mem.eql(u8, platform_spec, "cli")) {
-        // Try to find CLI platform host library
-        const cli_paths = [_][]const u8{
-            "zig-out/lib/libplatform_host_cli.a",
-            "platform/cli/host.a",
-            "platforms/cli/host.a",
-        };
+fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHandle {
+    const shm_name_wide = std.unicode.utf8ToUtf16LeStringLiteral("ROC_FILE_TO_INTERPRET");
 
-        for (cli_paths) |path| {
-            std.fs.cwd().access(path, .{}) catch continue;
-            return try gpa.dupe(u8, path);
-        }
-    } else if (std.mem.eql(u8, platform_spec, "basic-cli")) {
-        // Try to find basic-cli platform host library
-        const basic_cli_paths = [_][]const u8{
-            "zig-out/lib/libplatform_host_basic_cli.a",
-            "platform/basic-cli/host.a",
-            "platforms/basic-cli/host.a",
-        };
-
-        for (basic_cli_paths) |path| {
-            std.fs.cwd().access(path, .{}) catch continue;
-            return try gpa.dupe(u8, path);
-        }
-    } else if (std.mem.startsWith(u8, platform_spec, "http")) {
-        // This is a URL - for production, would download and resolve
-        // For now, return not supported
-        return error.PlatformNotSupported;
-    }
-
-    // Try to interpret as a direct file path
-    std.fs.cwd().access(platform_spec, .{}) catch {
-        return error.PlatformNotSupported;
+    // Create shared memory object
+    const shm_handle = windows.CreateFileMappingW(
+        windows.INVALID_HANDLE_VALUE,
+        null,
+        windows.PAGE_READWRITE,
+        0,
+        @intCast(total_size),
+        shm_name_wide,
+    ) orelse {
+        std.debug.print("Failed to create shared memory mapping\n", .{});
+        return error.SharedMemoryCreateFailed;
     };
 
-    return try gpa.dupe(u8, platform_spec);
+    // Map the shared memory
+    const mapped_ptr = windows.MapViewOfFile(
+        shm_handle,
+        windows.FILE_MAP_ALL_ACCESS,
+        0,
+        0,
+        0,
+    ) orelse {
+        _ = windows.CloseHandle(shm_handle);
+        std.debug.print("Failed to map shared memory\n", .{});
+        return error.SharedMemoryMapFailed;
+    };
+
+    // Write length and data
+    const length_ptr: *usize = @ptrCast(@alignCast(mapped_ptr));
+    length_ptr.* = data.len;
+
+    const data_ptr = @as([*]u8, @ptrCast(mapped_ptr)) + @sizeOf(usize);
+    @memcpy(data_ptr[0..data.len], data);
+
+    return SharedMemoryHandle{
+        .fd = shm_handle,
+        .ptr = mapped_ptr,
+        .size = total_size,
+    };
 }
 
 /// Set up shared memory with a compiled ModuleEnv from a Roc file
@@ -653,8 +685,143 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     };
 }
 
-/// Clean up shared memory resources
-/// This function unlinks the shared memory object to free system resources
+fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHandle {
+    const shm_name = "/ROC_FILE_TO_INTERPRET";
+
+    // Unlink any existing shared memory object first
+    _ = posix.shm_unlink(shm_name);
+
+    // Create shared memory object
+    const shm_fd = posix.shm_open(shm_name, 0x0002 | 0x0200, 0o666); // O_RDWR | O_CREAT
+    if (shm_fd < 0) {
+        const errno = c._errno().*;
+        std.debug.print("Failed to create shared memory: {s}, fd = {}, errno = {}\n", .{ shm_name, shm_fd, errno });
+        return error.SharedMemoryCreateFailed;
+    }
+
+    // Set the size of the shared memory object
+    if (c.ftruncate(shm_fd, @intCast(total_size)) != 0) {
+        _ = c.close(shm_fd);
+        std.debug.print("Failed to set shared memory size\n", .{});
+        return error.SharedMemoryTruncateFailed;
+    }
+
+    // Map the shared memory
+    const mapped_ptr = posix.mmap(
+        null,
+        total_size,
+        0x01 | 0x02, // PROT_READ | PROT_WRITE
+        0x0001, // MAP_SHARED
+        shm_fd,
+        0,
+    ) orelse {
+        _ = c.close(shm_fd);
+        std.debug.print("Failed to map shared memory\n", .{});
+        return error.SharedMemoryMapFailed;
+    };
+    const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..total_size];
+
+    // Write length at the beginning
+    const length_ptr: *align(1) usize = @ptrCast(mapped_memory.ptr);
+    length_ptr.* = data.len;
+
+    // Write data after the length
+    const data_ptr = mapped_memory.ptr + @sizeOf(usize);
+    @memcpy(data_ptr[0..data.len], data);
+
+    return SharedMemoryHandle{
+        .fd = shm_fd,
+        .ptr = mapped_ptr,
+        .size = total_size,
+    };
+}
+
+/// Resolve platform specification from a Roc file to find the host library
+pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (std.mem.Allocator.Error || error{ NoPlatformFound, PlatformNotSupported })![]u8 {
+    // Read the Roc file to parse the app header
+    const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return error.NoPlatformFound,
+        else => return error.NoPlatformFound, // Treat all file errors as no platform found
+    };
+    defer roc_file.close();
+
+    const file_size = roc_file.getEndPos() catch return error.NoPlatformFound;
+    const source = gpa.alloc(u8, file_size) catch return error.OutOfMemory;
+    defer gpa.free(source);
+    _ = roc_file.read(source) catch return error.NoPlatformFound;
+
+    // Parse the source to find the app header
+    // Look for "app" followed by platform specification
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+
+        // Check if this is an app header line
+        if (std.mem.startsWith(u8, trimmed, "app")) {
+            // Look for platform specification after "platform"
+            if (std.mem.indexOf(u8, trimmed, "platform")) |platform_start| {
+                const after_platform = trimmed[platform_start + "platform".len ..];
+
+                // Find the platform name/URL in quotes
+                if (std.mem.indexOf(u8, after_platform, "\"")) |quote_start| {
+                    const after_quote = after_platform[quote_start + 1 ..];
+                    if (std.mem.indexOf(u8, after_quote, "\"")) |quote_end| {
+                        const platform_spec = after_quote[0..quote_end];
+
+                        // Try to resolve platform to a local host library
+                        return resolvePlatformSpecToHostLib(gpa, platform_spec);
+                    }
+                }
+            }
+        }
+    }
+
+    return error.NoPlatformFound;
+}
+
+/// Resolve a platform specification to a local host library path
+fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})![]u8 {
+    // Check for common platform names and map them to host libraries
+    if (std.mem.eql(u8, platform_spec, "cli")) {
+        // Try to find CLI platform host library
+        const cli_paths = [_][]const u8{
+            "zig-out/lib/libplatform_host_cli.a",
+            "platform/cli/host.a",
+            "platforms/cli/host.a",
+        };
+
+        for (cli_paths) |path| {
+            std.fs.cwd().access(path, .{}) catch continue;
+            return try gpa.dupe(u8, path);
+        }
+    } else if (std.mem.eql(u8, platform_spec, "basic-cli")) {
+        // Try to find basic-cli platform host library
+        const basic_cli_paths = [_][]const u8{
+            "zig-out/lib/libplatform_host_basic_cli.a",
+            "platform/basic-cli/host.a",
+            "platforms/basic-cli/host.a",
+        };
+
+        for (basic_cli_paths) |path| {
+            std.fs.cwd().access(path, .{}) catch continue;
+            return try gpa.dupe(u8, path);
+        }
+    } else if (std.mem.startsWith(u8, platform_spec, "http")) {
+        // This is a URL - for production, would download and resolve
+        // For now, return not supported
+        return error.PlatformNotSupported;
+    }
+
+    // Try to interpret as a direct file path
+    std.fs.cwd().access(platform_spec, .{}) catch {
+        return error.PlatformNotSupported;
+    };
+
+    return try gpa.dupe(u8, platform_spec);
+}
+
+/// Clean up shared memory resources.
+/// On POSIX systems, unlinks the shared memory object. On Windows, cleanup is automatic.
 pub fn cleanupSharedMemory() void {
     if (comptime is_windows) {
         // On Windows, shared memory is automatically cleaned up when all handles are closed
