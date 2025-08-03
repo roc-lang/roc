@@ -36,6 +36,12 @@ const posix = if (!is_windows) struct {
     extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
     extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: c.off_t) ?*anyopaque;
     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
+    extern "c" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) c_int;
+
+    // fcntl constants
+    const F_GETFD = 1;
+    const F_SETFD = 2;
+    const FD_CLOEXEC = 1;
 } else struct {};
 
 // Windows shared memory functions
@@ -67,6 +73,162 @@ const legalDetailsFileContent = @embedFile("legal_details");
 
 /// Default size for shared memory allocator (1GB)
 const SHARED_MEMORY_SIZE = 1 * 1024 * 1024 * 1024;
+
+/// Cross-platform hardlink creation
+fn createHardlink(allocator: Allocator, source: []const u8, dest: []const u8) !void {
+    if (comptime builtin.target.os.tag == .windows) {
+        // On Windows, use CreateHardLinkW
+        const source_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, source);
+        defer allocator.free(source_w);
+        const dest_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, dest);
+        defer allocator.free(dest_w);
+
+        // Declare CreateHardLinkW since it's not in all versions of std
+        const kernel32 = struct {
+            extern "kernel32" fn CreateHardLinkW(
+                lpFileName: [*:0]const u16,
+                lpExistingFileName: [*:0]const u16,
+                lpSecurityAttributes: ?*anyopaque,
+            ) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+        };
+
+        if (kernel32.CreateHardLinkW(dest_w, source_w, null) == 0) {
+            const err = std.os.windows.kernel32.GetLastError();
+            switch (err) {
+                .ALREADY_EXISTS => return error.PathAlreadyExists,
+                else => return error.Unexpected,
+            }
+        }
+    } else {
+        // On POSIX systems, use the link system call
+        const source_c = try allocator.dupeZ(u8, source);
+        defer allocator.free(source_c);
+        const dest_c = try allocator.dupeZ(u8, dest);
+        defer allocator.free(dest_c);
+
+        const result = std.c.link(source_c, dest_c);
+        if (result != 0) {
+            const errno = std.c._errno().*;
+            switch (errno) {
+                17 => return error.PathAlreadyExists, // EEXIST
+                else => return error.Unexpected,
+            }
+        }
+    }
+}
+
+/// Generate a cryptographically secure random ASCII string for directory names
+fn generateRandomSuffix(allocator: Allocator) ![]u8 {
+    // TODO: Consider switching to a library like https://github.com/abhinav/temp.zig
+    // for more robust temporary file/directory handling
+    const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+    const suffix = try allocator.alloc(u8, 32);
+
+    // Fill with cryptographically secure random bytes
+    std.crypto.random.bytes(suffix);
+
+    // Convert to ASCII characters from our charset
+    for (suffix) |*byte| {
+        byte.* = charset[byte.* % charset.len];
+    }
+
+    return suffix;
+}
+
+/// Create the temporary directory structure for fd communication
+/// Returns the path to the executable in the temp directory (caller must free)
+fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, fd: anytype) ![]const u8 {
+    // Get system temp directory
+    const temp_dir = if (comptime is_windows)
+        std.process.getEnvVarOwned(allocator, "TEMP") catch
+            std.process.getEnvVarOwned(allocator, "TMP") catch "C:\\Windows\\Temp"
+    else
+        std.process.getEnvVarOwned(allocator, "TMPDIR") catch "/tmp";
+    defer if (!std.mem.eql(u8, temp_dir, "/tmp") and !std.mem.eql(u8, temp_dir, "C:\\Windows\\Temp")) allocator.free(temp_dir);
+
+    // Try up to 10 times to create a unique directory
+    var attempt: u8 = 0;
+    while (attempt < 10) : (attempt += 1) {
+        const random_suffix = try generateRandomSuffix(allocator);
+        errdefer allocator.free(random_suffix);
+
+        // Create the full path with .txt suffix first
+        const dir_name_with_txt = try std.fmt.allocPrint(allocator, "{s}/roc-tmp-{s}.txt", .{ temp_dir, random_suffix });
+        errdefer allocator.free(dir_name_with_txt);
+
+        // Get the directory path by slicing off the .txt suffix
+        const dir_path_len = dir_name_with_txt.len - 4; // Remove ".txt"
+        const temp_dir_path = dir_name_with_txt[0..dir_path_len];
+
+        // Try to create the directory
+        std.fs.cwd().makeDir(temp_dir_path) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                // Directory already exists, try again with a new random suffix
+                allocator.free(random_suffix);
+                allocator.free(dir_name_with_txt);
+                continue;
+            },
+            else => {
+                allocator.free(random_suffix);
+                allocator.free(dir_name_with_txt);
+                return err;
+            },
+        };
+
+        // Try to create the fd file
+        const fd_file = std.fs.cwd().createFile(dir_name_with_txt, .{ .exclusive = true }) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                // File already exists, remove the directory and try again
+                std.fs.cwd().deleteDir(temp_dir_path) catch {};
+                allocator.free(random_suffix);
+                allocator.free(dir_name_with_txt);
+                continue;
+            },
+            else => {
+                // Clean up directory on other errors
+                std.fs.cwd().deleteDir(temp_dir_path) catch {};
+                allocator.free(random_suffix);
+                allocator.free(dir_name_with_txt);
+                return err;
+            },
+        };
+        defer fd_file.close();
+
+        // Write fd to file
+        const fd_str = if (comptime is_windows)
+            try std.fmt.allocPrint(allocator, "{}", .{@intFromPtr(fd)})
+        else
+            try std.fmt.allocPrint(allocator, "{}", .{fd});
+        defer allocator.free(fd_str);
+
+        try fd_file.writeAll(fd_str);
+
+        // Create hardlink to executable in temp directory
+        const exe_basename = std.fs.path.basename(exe_path);
+        const temp_exe_path = try std.fs.path.join(allocator, &.{ temp_dir_path, exe_basename });
+        defer allocator.free(temp_exe_path);
+
+        // Try to create a hardlink first (more efficient than copying)
+        createHardlink(allocator, exe_path, temp_exe_path) catch {
+            // If hardlinking fails for any reason, fall back to copying
+            // Common reasons: cross-device link, permissions, file already exists
+            try std.fs.cwd().copyFile(exe_path, std.fs.cwd(), temp_exe_path, .{});
+        };
+
+        // Allocate and return just the executable path
+        const final_exe_path = try allocator.dupe(u8, temp_exe_path);
+
+        // Free all temporary allocations
+        allocator.free(dir_name_with_txt);
+        allocator.free(random_suffix);
+
+        return final_exe_path;
+    }
+
+    // Failed after 10 attempts
+    return error.FailedToCreateUniqueTempDir;
+}
 
 /// The CLI entrypoint for the Roc compiler.
 pub fn main() !void {
@@ -234,8 +396,41 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         cleanupSharedMemory();
     }
 
-    // Run the interpreter as a child process
-    var child = std.process.Child.init(&.{exe_path}, gpa);
+    // Create temporary directory structure for fd communication
+    const temp_exe_path = createTempDirStructure(gpa, exe_path, shm_handle.fd) catch |err| {
+        std.log.err("Failed to create temp dir structure: {}\n", .{err});
+        cleanupSharedMemory();
+        std.process.exit(1);
+    };
+    defer gpa.free(temp_exe_path);
+
+    // Configure handle/fd inheritance for all platforms
+    if (comptime !is_windows) {
+        var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
+        if (flags < 0) {
+            std.log.err("Failed to get fd flags: {}\n", .{std.c._errno().*});
+            cleanupSharedMemory();
+            std.process.exit(1);
+        }
+
+        flags &= ~@as(c_int, posix.FD_CLOEXEC);
+
+        if (posix.fcntl(shm_handle.fd, posix.F_SETFD, flags) < 0) {
+            std.log.err("Failed to set fd flags: {}\n", .{std.c._errno().*});
+            cleanupSharedMemory();
+            std.process.exit(1);
+        }
+    }
+
+    // Run the interpreter as a child process from the temp directory
+    var child = std.process.Child.init(&.{temp_exe_path}, gpa);
+    child.cwd = std.fs.cwd().realpathAlloc(gpa, ".") catch |err| {
+        std.log.err("Failed to get current directory: {}\n", .{err});
+        cleanupSharedMemory();
+        std.process.exit(1);
+    };
+    defer gpa.free(child.cwd.?);
+
     child.spawn() catch |err| {
         std.log.err("Failed to spawn {s}: {}\n", .{ exe_path, err });
         cleanupSharedMemory();
