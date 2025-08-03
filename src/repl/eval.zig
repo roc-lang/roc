@@ -14,13 +14,13 @@ const eval = @import("../eval/interpreter.zig");
 const stack = @import("../eval/stack.zig");
 const builtins = @import("builtins");
 
+const AST = parse.AST;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = compile.ModuleEnv;
-const AST = parse.AST;
-const target = base.target;
-const writers = types.writers;
+const RocDec = builtins.dec.RocDec;
 const types_store = types.store;
-const RocDec = builtins.RocDec;
+const writers = types.writers;
+const target = base.target;
 
 /// Type of definition stored in the REPL history
 const DefKind = union(enum) {

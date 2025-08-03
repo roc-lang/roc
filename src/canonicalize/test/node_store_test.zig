@@ -5,15 +5,16 @@ const testing = std.testing;
 const base = @import("base");
 const types = @import("types");
 const compile = @import("compile");
-const RocDec = @import("builtins").RocDec;
+const builtins = @import("builtins");
 
-const from_raw_offsets = base.Region.from_raw_offsets;
+const StringLiteral = base.StringLiteral;
 const ModuleEnv = compile.ModuleEnv;
 const NodeStore = compile.NodeStore;
-const StringLiteral = base.StringLiteral;
-const Ident = base.Ident;
+const RocDec = builtins.dec.RocDec;
 const CalledVia = base.CalledVia;
 const TypeVar = types.Var;
+const Ident = base.Ident;
+const from_raw_offsets = base.Region.from_raw_offsets;
 
 var rand = std.Random.DefaultPrng.init(1234);
 

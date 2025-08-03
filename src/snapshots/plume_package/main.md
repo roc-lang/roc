@@ -10,7 +10,7 @@ package [
 ] {}
 ~~~
 # EXPECTED
-NIL
+EXPOSED BUT NOT DEFINED - main.md:2:5:2:10
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
 The module header says that `Color` is exposed, but it is not defined anywhere in this module.

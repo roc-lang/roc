@@ -7,9 +7,6 @@
 const std = @import("std");
 const sort = @import("sort.zig");
 
-extern fn malloc(size: usize) callconv(.C) ?*anyopaque;
-extern fn free(c_ptr: *anyopaque) callconv(.C) void;
-
 fn cMain() callconv(.C) i32 {
     fuzz_main() catch unreachable;
     return 0;

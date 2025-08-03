@@ -239,7 +239,7 @@ CloseCurly(31:1-31:2),EndOfFile(31:2-31:2),
 		(s-import @4.1-4.31 (raw "I1")
 			(exposing
 				(exposed-upper-ident @4.21-4.24 (text "I11"))
-				(exposed-upper-ident @4.26-4.29 (text "I12"))))
+				(exposed-upper-ident @4.26-4.29 (text "RGB"))))
 		(s-import @5.1-5.47 (raw "I2")
 			(exposing
 				(exposed-upper-ident @5.21-5.32 (text "I21") (as "Ias1"))
@@ -532,7 +532,7 @@ h = |
 								(field (name "h12")
 									(e-lookup-local @19.22-19.23
 										(p-assign @18.6-18.7 (ident "x"))))
-								(field (name "Z33")
+								(field (name "h13")
 									(e-record @19.30-19.51
 										(fields
 											(field (name "h131")
