@@ -474,22 +474,22 @@ const SharedMemoryHandle = struct {
 /// This function attempts to parse the app header and resolve the platform
 /// Returns error.NoPlatformFound if no platform is specified
 /// Returns error.PlatformNotSupported if the platform is not available locally
-fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (std.mem.Allocator.Error || error{ NoPlatformFound, PlatformNotSupported })![]u8 {
+pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (std.mem.Allocator.Error || error{ NoPlatformFound, PlatformNotSupported })![]u8 {
     // Read the Roc file to parse the app header
     const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return error.NoPlatformFound,
-        else => return err,
+        else => return error.NoPlatformFound, // Treat all file errors as no platform found
     };
     defer roc_file.close();
 
-    const file_size = try roc_file.getEndPos();
-    const source = try gpa.alloc(u8, file_size);
+    const file_size = roc_file.getEndPos() catch return error.NoPlatformFound;
+    const source = gpa.alloc(u8, file_size) catch return error.OutOfMemory;
     defer gpa.free(source);
-    _ = try roc_file.read(source);
+    _ = roc_file.read(source) catch return error.NoPlatformFound;
 
     // Parse the source to find the app header
     // Look for "app" followed by platform specification
-    var lines = std.mem.split(u8, source, "\n");
+    var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
         const trimmed = std.mem.trim(u8, line, " \t\r");
 
@@ -517,7 +517,7 @@ fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (std.m
 }
 
 /// Resolve a platform specification to a local host library path
-fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8) ![]u8 {
+fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8) (std.mem.Allocator.Error || error{ PlatformNotSupported })![]u8 {
     // Check for common platform names and map them to host libraries
     if (std.mem.eql(u8, platform_spec, "cli")) {
         // Try to find CLI platform host library
@@ -557,7 +557,7 @@ fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u
     return try gpa.dupe(u8, platform_spec);
 }
 
-fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
+pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     // Use 2TB on Linux, 256MB on macOS (macOS has lower shm limits)
@@ -651,7 +651,7 @@ fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const
     };
 }
 
-fn cleanupSharedMemory() void {
+pub fn cleanupSharedMemory() void {
     if (comptime is_windows) {
         // On Windows, shared memory is automatically cleaned up when all handles are closed
         return;
@@ -661,7 +661,7 @@ fn cleanupSharedMemory() void {
     }
 }
 
-fn extractReadRocFilePathShimLibrary(gpa: Allocator, output_path: []const u8) !void {
+pub fn extractReadRocFilePathShimLibrary(gpa: Allocator, output_path: []const u8) !void {
     _ = gpa; // unused but kept for consistency
 
     if (builtin.is_test) {

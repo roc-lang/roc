@@ -84,7 +84,7 @@ fn evalBinaryOperation(op: compile.BinOp, left: EvalResult, right: EvalResult) E
 }
 
 /// Helper functions for binary operations
-fn performAdd(left: EvalResult, right: EvalResult) EvalResult {
+pub fn performAdd(left: EvalResult, right: EvalResult) EvalResult {
     switch (left) {
         .int => |l_val| switch (right) {
             .int => |r_val| return EvalResult{ .int = l_val + r_val },
@@ -108,7 +108,7 @@ fn performAdd(left: EvalResult, right: EvalResult) EvalResult {
     }
 }
 
-fn performSub(left: EvalResult, right: EvalResult) EvalResult {
+pub fn performSub(left: EvalResult, right: EvalResult) EvalResult {
     switch (left) {
         .int => |l_val| switch (right) {
             .int => |r_val| return EvalResult{ .int = l_val - r_val },
@@ -132,7 +132,7 @@ fn performSub(left: EvalResult, right: EvalResult) EvalResult {
     }
 }
 
-fn performMul(left: EvalResult, right: EvalResult) EvalResult {
+pub fn performMul(left: EvalResult, right: EvalResult) EvalResult {
     switch (left) {
         .int => |l_val| switch (right) {
             .int => |r_val| return EvalResult{ .int = l_val * r_val },
@@ -156,7 +156,7 @@ fn performMul(left: EvalResult, right: EvalResult) EvalResult {
     }
 }
 
-fn performDiv(left: EvalResult, right: EvalResult) EvalResult {
+pub fn performDiv(left: EvalResult, right: EvalResult) EvalResult {
     switch (left) {
         .int => |l_val| switch (right) {
             .int => |r_val| {
@@ -207,7 +207,7 @@ fn performDiv(left: EvalResult, right: EvalResult) EvalResult {
     }
 }
 
-fn performRem(left: EvalResult, right: EvalResult) EvalResult {
+pub fn performRem(left: EvalResult, right: EvalResult) EvalResult {
     switch (left) {
         .int => |l_val| switch (right) {
             .int => |r_val| {
@@ -220,7 +220,7 @@ fn performRem(left: EvalResult, right: EvalResult) EvalResult {
     }
 }
 
-fn performEq(left: EvalResult, right: EvalResult) EvalResult {
+pub fn performEq(left: EvalResult, right: EvalResult) EvalResult {
     const equal = switch (left) {
         .int => |l_val| switch (right) {
             .int => |r_val| l_val == r_val,
@@ -253,12 +253,12 @@ fn performEq(left: EvalResult, right: EvalResult) EvalResult {
     return EvalResult{ .boolean = equal };
 }
 
-fn performNeq(left: EvalResult, right: EvalResult) EvalResult {
+pub fn performNeq(left: EvalResult, right: EvalResult) EvalResult {
     const eq_result = performEq(left, right);
     return EvalResult{ .boolean = !eq_result.boolean };
 }
 
-fn performLt(left: EvalResult, right: EvalResult) EvalResult {
+pub fn performLt(left: EvalResult, right: EvalResult) EvalResult {
     const less_than = switch (left) {
         .int => |l_val| switch (right) {
             .int => |r_val| l_val < r_val,
@@ -287,7 +287,7 @@ fn performLt(left: EvalResult, right: EvalResult) EvalResult {
     return EvalResult{ .boolean = less_than };
 }
 
-fn performLte(left: EvalResult, right: EvalResult) EvalResult {
+pub fn performLte(left: EvalResult, right: EvalResult) EvalResult {
     const less_than_or_equal = switch (left) {
         .int => |l_val| switch (right) {
             .int => |r_val| l_val <= r_val,
@@ -316,7 +316,7 @@ fn performLte(left: EvalResult, right: EvalResult) EvalResult {
     return EvalResult{ .boolean = less_than_or_equal };
 }
 
-fn performGt(left: EvalResult, right: EvalResult) EvalResult {
+pub fn performGt(left: EvalResult, right: EvalResult) EvalResult {
     const greater_than = switch (left) {
         .int => |l_val| switch (right) {
             .int => |r_val| l_val > r_val,
@@ -345,7 +345,7 @@ fn performGt(left: EvalResult, right: EvalResult) EvalResult {
     return EvalResult{ .boolean = greater_than };
 }
 
-fn performGte(left: EvalResult, right: EvalResult) EvalResult {
+pub fn performGte(left: EvalResult, right: EvalResult) EvalResult {
     const greater_than_or_equal = switch (left) {
         .int => |l_val| switch (right) {
             .int => |r_val| l_val >= r_val,
@@ -374,7 +374,7 @@ fn performGte(left: EvalResult, right: EvalResult) EvalResult {
     return EvalResult{ .boolean = greater_than_or_equal };
 }
 
-fn performAnd(left: EvalResult, right: EvalResult) EvalResult {
+pub fn performAnd(left: EvalResult, right: EvalResult) EvalResult {
     switch (left) {
         .boolean => |l_val| switch (right) {
             .boolean => |r_val| return EvalResult{ .boolean = l_val and r_val },
@@ -384,7 +384,7 @@ fn performAnd(left: EvalResult, right: EvalResult) EvalResult {
     }
 }
 
-fn performOr(left: EvalResult, right: EvalResult) EvalResult {
+pub fn performOr(left: EvalResult, right: EvalResult) EvalResult {
     switch (left) {
         .boolean => |l_val| switch (right) {
             .boolean => |r_val| return EvalResult{ .boolean = l_val or r_val },
