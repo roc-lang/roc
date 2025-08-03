@@ -9,7 +9,9 @@ const RocStr = builtins.str.RocStr;
 // Platform-specific shared memory implementation
 const is_windows = builtin.target.os.tag == .windows;
 
-// POSIX shared memory functions - only what we actually use
+// POSIX memory mapping functions to access shared memory - via inherited fd only, NOT `shm_open`,
+// which always errors on macOS (by design, for security reasons) when the child process is
+// an executable that the parent process created.
 const posix = if (!is_windows) struct {
     extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: std.c.off_t) ?*anyopaque;
     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
@@ -85,7 +87,6 @@ fn readFdInfo() !FdInfo {
 
     const fd_str = try std.heap.page_allocator.dupe(u8, std.mem.trim(u8, fd_line, " \r\t"));
     const size = try std.fmt.parseInt(usize, std.mem.trim(u8, size_line, " \r\t"), 10);
-
 
     return FdInfo{
         .fd_str = fd_str,

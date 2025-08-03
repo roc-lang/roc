@@ -682,10 +682,9 @@ pub fn shrinkToFit(self: *SharedMemoryAllocator) !usize {
 
 // Platform-specific C declarations
 const c = struct {
-    // POSIX shared memory functions (these are actually used by SharedMemoryAllocator)
+    // POSIX shared memory functions
     extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
     extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
-    // Note: ftruncate is handled by std.posix.ftruncate, not declared here
 };
 
 test "shared memory allocator basic operations" {

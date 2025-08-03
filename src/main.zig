@@ -30,7 +30,7 @@ const read_roc_file_path_shim_lib = if (builtin.is_test) &[_]u8{} else @embedFil
 pub const c = struct {
     pub const mode_t = std.c.mode_t;
     pub const off_t = std.c.off_t;
-    
+
     pub const close = std.c.close;
     pub const link = std.c.link;
     pub const ftruncate = std.c.ftruncate;
@@ -417,7 +417,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         std.process.exit(1);
     };
     defer gpa.free(temp_cache_dir);
-    
+
     // Ensure temp cache directory exists
     std.fs.cwd().makePath(temp_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -427,7 +427,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
             std.process.exit(1);
         },
     };
-    
+
     // Create temporary directory structure for fd communication
     const temp_exe_path = createTempDirStructure(gpa, exe_path, shm_handle, temp_cache_dir) catch |err| {
         std.log.err("Failed to create temp dir structure: {}\n", .{err});
