@@ -117,6 +117,6 @@ NO CHANGE
 		(alias @10.1-10.25 (type "Error")
 			(ty-header @10.1-10.4 (name "Bar")))
 		(alias @13.1-13.10 (type "Baz")
-			(ty-header @13.1-13.4 (name "err"))))
+			(ty-header @13.1-13.4 (name "Baz"))))
 	(expressions))
 ~~~

@@ -284,11 +284,11 @@ test "Ident.Store basic CompactWriter roundtrip" {
 
     // Check the bytes length for validation
     const bytes_len = deserialized.interner.bytes.len();
-    
+
     // Get the interner index if it exists (skip validation for small indices)
     if (idx1.getInternerIdx()) |interner_idx| {
         const idx1_value = @intFromEnum(@as(SmallStringInterner.Idx, @enumFromInt(interner_idx)));
-        
+
         // Verify the index is valid
         if (bytes_len <= idx1_value) {
             return error.InvalidIndex;
@@ -461,7 +461,7 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     // Don't check specific indices as they depend on implementation details
     // Just verify that identifiers round-trip correctly
     const test_idents = [_][]const u8{
-        "hello",  // 5 chars, goes to interner
+        "hello", // 5 chars, goes to interner
         "world!", // has !, goes to interner
         "_ignored", // starts with _, goes to interner
         "a", // single character - may be inlined

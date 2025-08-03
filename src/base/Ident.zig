@@ -66,6 +66,12 @@ pub fn from_bytes(bytes: []const u8) Error!Ident {
     };
 }
 
+/// A unique identifier index that can represent either small inlined identifiers
+/// or references to identifiers stored in the string interner.
+///
+/// Small identifiers (up to 4 ASCII characters starting with a letter) are stored
+/// inline using packed bit fields. Larger identifiers are stored in the interner
+/// and referenced by index.
 pub const Idx = enum(u32) {
     _,
 

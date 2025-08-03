@@ -239,7 +239,7 @@ CloseCurly(31:1-31:2),EndOfFile(31:2-31:2),
 		(s-import @4.1-4.31 (raw "I1")
 			(exposing
 				(exposed-upper-ident @4.21-4.24 (text "I11"))
-				(exposed-upper-ident @4.26-4.29 (text "RGB"))))
+				(exposed-upper-ident @4.26-4.29 (text "I12"))))
 		(s-import @5.1-5.47 (raw "I2")
 			(exposing
 				(exposed-upper-ident @5.21-5.32 (text "I21") (as "Ias1"))
@@ -670,7 +670,7 @@ h = |
 	(defs
 		(patt @18.1-18.2 (type "[Z1((field, field2)), Z2(a, b), Z3(c), Z4(List(elem))]others, [Z1((field3, field4)), Z2(d, e), Z3(f), Z4(List(elem2))]others2 -> _ret")))
 	(type_decls
-		(alias @8.1-8.77 (type "A(a)")
+		(alias @8.1-8.77 (type "A(U)")
 			(ty-header @8.1-8.5 (name "A")
 				(ty-args
 					(ty-var @8.3-8.4 (name "a")))))

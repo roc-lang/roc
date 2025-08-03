@@ -43,8 +43,7 @@ NO CHANGE
 ~~~clojure
 (e-tuple @1.1-1.84
 	(elems
-		(e-nominal @1.2-1.6 (nominal "Bool")
-			(e-tag @1.2-1.6 (name "True")))
+		(e-tag @1.2-1.6 (name "True"))
 		(e-nominal @1.8-1.13 (nominal "Bool")
 			(e-tag @1.8-1.13 (name "False")))
 		(e-nominal @1.15-1.24 (nominal "Bool")
@@ -72,5 +71,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.84 (type "(Bool, Bool, Bool, Bool, Bool, Bool, _field, _field2)"))
+(expr @1.1-1.84 (type "([True]_others, Bool, Bool, Bool, Bool, Bool, _field, _field2)"))
 ~~~
