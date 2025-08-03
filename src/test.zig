@@ -9,7 +9,7 @@ const testing = std.testing;
 
 test {
     testing.refAllDecls(@import("base"));
-    testing.refAllDecls(@import("base/test/base_test.zig"));
+    // base_test.zig was removed
 
     testing.refAllDeclsRecursive(@import("builtins"));
 

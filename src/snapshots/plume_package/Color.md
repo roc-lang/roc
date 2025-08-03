@@ -78,11 +78,7 @@ is_named_color = |str|{
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - Color.md:30:5:30:25
-UNDEFINED VARIABLE - Color.md:68:14:68:27
-TYPE MISMATCH - Color.md:20:20:20:22
-TYPE MISMATCH - Color.md:26:7:26:46
-TYPE MISMATCH - Color.md:60:9:60:12
+NIL
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `is_char_in_hex_range` is not used anywhere in your code.

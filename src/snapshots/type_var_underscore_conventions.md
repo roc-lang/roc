@@ -36,9 +36,9 @@ UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
 # PROBLEMS
 **UNUSED VARIABLE**
-Variable `Z` is not used anywhere in your code.
+Variable `x` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_Z` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
 The unused variable is declared here:
 **type_var_underscore_conventions.md:5:15:5:16:**
 ```roc

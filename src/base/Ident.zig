@@ -83,7 +83,8 @@ pub const Idx = enum(u32) {
     }
 
     pub fn try_inline(string: []const u8) ?@This() {
-        return Idx.fromInner(InnerIdx.try_inline(string) orelse return null);
+        const inner = InnerIdx.try_inline(string) orelse return null;
+        return Idx.fromInner(inner);
     }
 
     pub fn toU32(self: Idx) u32 {
@@ -103,14 +104,13 @@ pub const Idx = enum(u32) {
 
     pub fn toInner(self: Idx) InnerIdx {
         const enum_val = @intFromEnum(self);
-        const result = @as(InnerIdx, @bitCast(enum_val));
-        return result;
+        const inner = @as(InnerIdx, @bitCast(enum_val));
+        return inner;
     }
 
     fn fromInner(inner: InnerIdx) Idx {
-        const bitcast_val = @as(u32, @bitCast(inner));
-        const result = @as(Idx, @enumFromInt(bitcast_val));
-        return result;
+        const bits = @as(u32, @bitCast(inner));
+        return @as(Idx, @enumFromInt(bits));
     }
 
     /// Get the underlying interner index for big identifiers (for testing purposes)

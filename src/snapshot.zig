@@ -917,12 +917,13 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
     const snapshot_type = getMultiFileSnapshotType(dir_path);
 
     while (try iterator.next()) |entry| {
-        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
+        const roc_extension = ".roc";
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, roc_extension)) {
             const roc_file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name });
             defer allocator.free(roc_file_path);
 
             // Generate snapshot file name (replace .roc with .md)
-            const base_name = entry.name[0 .. entry.name.len - 4]; // remove .roc
+            const base_name = entry.name[0 .. entry.name.len - roc_extension.len];
             const snapshot_file_name = try std.fmt.allocPrint(allocator, "{s}.md", .{base_name});
             defer allocator.free(snapshot_file_name);
             const snapshot_file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, snapshot_file_name });

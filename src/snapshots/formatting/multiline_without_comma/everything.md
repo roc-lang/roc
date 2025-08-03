@@ -827,7 +827,7 @@ h = |x, y| {
 			(exposed (name "I12") (wildcard false))))
 	(s-import @8.1-11.2 (module "I2")
 		(exposes
-			(exposed (name "R21") (alias "Ias1") (wildcard false))
+			(exposed (name "I21") (alias "Ias1") (wildcard false))
 			(exposed (name "I22") (alias "Ias2") (wildcard false))))
 	(s-type-anno @58.1-58.42 (name "g")
 		(ty-fn @58.5-58.11 (effectful false)
