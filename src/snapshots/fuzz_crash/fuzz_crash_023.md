@@ -264,9 +264,17 @@ UNDEFINED VARIABLE - fuzz_crash_023.md:188:22:188:25
 NOT IMPLEMENTED - :0:0:0:0
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_023.md:193:4:193:13
+<<<<<<< HEAD
 UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
 UNUSED VARIABLE - fuzz_crash_023.md:166:2:166:6
+||||||| eb72820840
+UNUSED VARIABLE - fuzz_crash_023.md:166:2:166:6
+UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
+=======
+UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
+>>>>>>> origin/main
 UNUSED VARIABLE - fuzz_crash_023.md:165:2:165:14
+UNUSED VARIABLE - fuzz_crash_023.md:166:2:166:6
 UNUSED VARIABLE - fuzz_crash_023.md:178:2:178:8
 UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
 UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
@@ -786,18 +794,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_023.md:166:2:166:6:**
-```roc
-	list = [
-```
- ^^^^
-
-
-**UNUSED VARIABLE**
 Variable `interpolated` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_interpolated` to suppress this warning.
@@ -807,6 +803,18 @@ The unused variable is declared here:
 	interpolated = "Hello, ${world}"
 ```
  ^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `list` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:166:2:166:6:**
+```roc
+	list = [
+```
+ ^^^^
 
 
 **UNUSED VARIABLE**

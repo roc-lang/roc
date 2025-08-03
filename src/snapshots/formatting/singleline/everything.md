@@ -47,10 +47,23 @@ UNUSED VARIABLE - everything.md:27:9:27:10
 UNUSED VARIABLE - everything.md:28:11:28:12
 UNUSED VARIABLE - everything.md:29:10:29:11
 UNUSED VARIABLE - everything.md:19:2:19:4
+<<<<<<< HEAD
+||||||| eb72820840
+UNUSED VARIABLE - everything.md:20:2:20:4
+UNUSED VARIABLE - everything.md:22:2:22:4
+=======
+UNUSED VARIABLE - everything.md:20:2:20:4
+>>>>>>> origin/main
 UNUSED VARIABLE - everything.md:21:2:21:4
+<<<<<<< HEAD
 UNUSED VARIABLE - everything.md:20:2:20:4
 UNUSED VARIABLE - everything.md:23:2:23:4
 UNUSED VARIABLE - everything.md:22:2:22:4
+||||||| eb72820840
+=======
+UNUSED VARIABLE - everything.md:22:2:22:4
+UNUSED VARIABLE - everything.md:23:2:23:4
+>>>>>>> origin/main
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
@@ -157,18 +170,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `h3` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_h3` to suppress this warning.
-The unused variable is declared here:
-**everything.md:21:2:21:4:**
-```roc
-	h3 = A(x, y)
-```
- ^^
-
-
-**UNUSED VARIABLE**
 Variable `h2` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
@@ -181,13 +182,13 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `h5` is not used anywhere in your code.
+Variable `h3` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_h3` to suppress this warning.
 The unused variable is declared here:
-**everything.md:23:2:23:4:**
+**everything.md:21:2:21:4:**
 ```roc
-	h5 = (x, y)
+	h3 = A(x, y)
 ```
  ^^
 
@@ -200,6 +201,18 @@ The unused variable is declared here:
 **everything.md:22:2:22:4:**
 ```roc
 	h4 = [x, y]
+```
+ ^^
+
+
+**UNUSED VARIABLE**
+Variable `h5` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
+The unused variable is declared here:
+**everything.md:23:2:23:4:**
+```roc
+	h5 = (x, y)
 ```
  ^^
 

@@ -16,13 +16,25 @@ BAD LIST REST PATTERN SYNTAX - list_rest_invalid.md:2:13:2:19
 BAD LIST REST PATTERN SYNTAX - list_rest_invalid.md:3:6:3:12
 BAD LIST REST PATTERN SYNTAX - list_rest_invalid.md:4:9:4:15
 UNDEFINED VARIABLE - list_rest_invalid.md:1:7:1:12
-UNUSED VARIABLE - list_rest_invalid.md:2:15:2:15
 UNUSED VARIABLE - list_rest_invalid.md:2:6:2:11
+UNUSED VARIABLE - list_rest_invalid.md:2:15:2:15
 UNUSED VARIABLE - list_rest_invalid.md:3:8:3:8
 UNUSED VARIABLE - list_rest_invalid.md:3:14:3:18
+<<<<<<< HEAD
 UNUSED VARIABLE - list_rest_invalid.md:4:11:4:11
 UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
+||||||| eb72820840
+UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
+=======
+>>>>>>> origin/main
 UNUSED VARIABLE - list_rest_invalid.md:4:6:4:7
+<<<<<<< HEAD
+||||||| eb72820840
+UNUSED VARIABLE - list_rest_invalid.md:4:11:4:11
+=======
+UNUSED VARIABLE - list_rest_invalid.md:4:11:4:11
+UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
+>>>>>>> origin/main
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.
@@ -72,18 +84,6 @@ match items {
 
 
 **UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**list_rest_invalid.md:2:15:2:15:**
-```roc
-    [first, ..rest] => 0 # invalid rest pattern should error
-```
-              
-
-
-**UNUSED VARIABLE**
 Variable `first` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
@@ -93,6 +93,18 @@ The unused variable is declared here:
     [first, ..rest] => 0 # invalid rest pattern should error
 ```
      ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `rest` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**list_rest_invalid.md:2:15:2:15:**
+```roc
+    [first, ..rest] => 0 # invalid rest pattern should error
+```
+              
 
 
 **UNUSED VARIABLE**
@@ -120,6 +132,18 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
+Variable `x` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+**list_rest_invalid.md:4:6:4:7:**
+```roc
+    [x, ..rest, y] => 2 # invalid rest pattern should error
+```
+     ^
+
+
+**UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
@@ -141,18 +165,6 @@ The unused variable is declared here:
     [x, ..rest, y] => 2 # invalid rest pattern should error
 ```
                 ^
-
-
-**UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**list_rest_invalid.md:4:6:4:7:**
-```roc
-    [x, ..rest, y] => 2 # invalid rest pattern should error
-```
-     ^
 
 
 # TOKENS

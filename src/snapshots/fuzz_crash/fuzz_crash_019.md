@@ -179,6 +179,7 @@ NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_019.md:108:4:108:5
 UNDEFINED VARIABLE - fuzz_crash_019.md:108:6:108:8
 UNUSED VARIABLE - fuzz_crash_019.md:76:2:76:3
+UNUSED VARIABLE - fuzz_crash_019.md:87:2:87:3
 UNUSED VARIABLE - fuzz_crash_019.md:96:2:96:4
 UNUSED VARIABLE - fuzz_crash_019.md:87:2:87:3
 UNDECLARED TYPE - fuzz_crash_019.md:116:5:116:6
@@ -764,18 +765,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `rd` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rd` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:96:2:96:4:**
-```roc
-	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
-```
- ^^
-
-
-**UNUSED VARIABLE**
 Variable `i` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_i` to suppress this warning.
@@ -785,6 +774,18 @@ The unused variable is declared here:
 	i= "H, ${d}"
 ```
  ^
+
+
+**UNUSED VARIABLE**
+Variable `rd` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rd` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_019.md:96:2:96:4:**
+```roc
+	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
+```
+ ^^
 
 
 **UNDECLARED TYPE**

@@ -87,7 +87,7 @@ NO CHANGE
 						(e-literal @3.19-3.24 (string "Alice"))))
 				(field (name "age")
 					(e-int @3.32-3.34 (value "30")))
-				(field (name "city")
+				(field (name "None")
 					(e-string @3.42-3.50
 						(e-literal @3.43-3.49 (string "Boston")))))))
 	(d-let

@@ -16,7 +16,20 @@ foo = |a| {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**expect_stmt_block_assertion.md:3:15:3:19:**
+```roc
+foo : Bool -> Bool
+```
+              ^^^^
+
+It is of type:
+    _Bool_
+
+But you are trying to use it as:
+    _Bool_
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
@@ -88,7 +101,7 @@ foo = |a| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "Bool -> Bool")))
+		(patt @4.1-4.4 (type "Bool -> Error")))
 	(expressions
-		(expr @4.7-7.2 (type "Bool -> Bool"))))
+		(expr @4.7-7.2 (type "Bool -> Error"))))
 ~~~

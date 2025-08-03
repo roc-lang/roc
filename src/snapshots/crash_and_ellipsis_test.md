@@ -31,20 +31,32 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
+<<<<<<< HEAD
+||||||| eb72820840
+UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
+=======
+UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
+UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
+>>>>>>> origin/main
 UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
+<<<<<<< HEAD
 UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
+||||||| eb72820840
+UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
+=======
+>>>>>>> origin/main
 TYPE MISMATCH - crash_and_ellipsis_test.md:8:20:8:23
 TYPE MISMATCH - crash_and_ellipsis_test.md:14:26:14:29
 # PROBLEMS
 **UNUSED VARIABLE**
-Variable `result3` is not used anywhere in your code.
+Variable `result1` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_result1` to suppress this warning.
 The unused variable is declared here:
-**crash_and_ellipsis_test.md:22:5:22:12:**
+**crash_and_ellipsis_test.md:20:5:20:12:**
 ```roc
-    result3 = testCrashSimple(42)
+    result1 = testEllipsis(42)
 ```
     ^^^^^^^
 
@@ -62,13 +74,13 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable `result1` is not used anywhere in your code.
+Variable `result3` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_result1` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
 The unused variable is declared here:
-**crash_and_ellipsis_test.md:20:5:20:12:**
+**crash_and_ellipsis_test.md:22:5:22:12:**
 ```roc
-    result1 = testEllipsis(42)
+    result3 = testCrashSimple(42)
 ```
     ^^^^^^^
 
