@@ -113,8 +113,8 @@ const ColorPalette = reporting.ColorPalette;
 
 const legalDetailsFileContent = @embedFile("legal_details");
 
-/// Default size for shared memory allocator (1GB)
-const SHARED_MEMORY_SIZE = 1 * 1024 * 1024 * 1024;
+/// Size for shared memory allocator - 8TB virtual address space
+const SHARED_MEMORY_SIZE: usize = 8 * 1024 * 1024 * 1024 * 1024; // 8TB
 
 /// Cross-platform hardlink creation
 fn createHardlink(allocator: Allocator, source: []const u8, dest: []const u8) !void {
@@ -590,12 +590,7 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    // Use 2TB on Linux, 256MB on macOS (macOS has lower shm limits)
-    const shm_size = if (builtin.os.tag == .macos)
-        256 * 1024 * 1024 // 256MB on macOS for now (can be increased via sysctl)
-    else
-        2 * 1024 * 1024 * 1024 * 1024; // 2TB on Linux
-    var shm = try SharedMemoryAllocator.create(gpa, "ROC_FILE_TO_INTERPRET", shm_size, page_size);
+    var shm = try SharedMemoryAllocator.create(gpa, "ROC_FILE_TO_INTERPRET", SHARED_MEMORY_SIZE, page_size);
     // Don't defer deinit here - we need to keep the shared memory alive
 
     const shm_allocator = shm.allocator();
