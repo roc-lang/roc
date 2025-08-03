@@ -27,16 +27,16 @@ const tokenize = parse.tokenize;
 const read_roc_file_path_shim_lib = if (builtin.is_test) &[_]u8{} else @embedFile("libread_roc_file_path_shim.a");
 
 // Workaround for Zig standard library compilation issue on macOS ARM64.
-// 
+//
 // The Problem:
 // When importing std.c directly, Zig attempts to compile ALL C function declarations,
 // including mremap which has this signature in std/c.zig:9562:
-//   pub extern "c" fn mremap(addr: ?*align(page_size) const anyopaque, old_len: usize, 
+//   pub extern "c" fn mremap(addr: ?*align(page_size) const anyopaque, old_len: usize,
 //                            new_len: usize, flags: MREMAP, ...) *anyopaque;
-// 
+//
 // The variadic arguments (...) at the end trigger this compiler error on macOS ARM64:
 //   "parameter of type 'void' not allowed in function with calling convention 'aarch64_aapcs_darwin'"
-// 
+//
 // This is because:
 // 1. mremap is a Linux-specific syscall that doesn't exist on macOS
 // 2. The variadic declaration is incompatible with ARM64 macOS calling conventions
@@ -52,6 +52,8 @@ const read_roc_file_path_shim_lib = if (builtin.is_test) &[_]u8{} else @embedFil
 // compilation of the broken mremap declaration.
 //
 // TODO: This workaround can be removed once the upstream Zig issue is fixed.
+/// Minimal wrapper around std.c types and functions to avoid mremap compilation issues.
+/// Contains only the C types and functions we actually need.
 pub const c = struct {
     pub const mode_t = std.c.mode_t;
     pub const off_t = std.c.off_t;
@@ -502,12 +504,17 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     };
 }
 
+/// Handle for cross-platform shared memory operations.
+/// Contains the file descriptor/handle, memory pointer, and size.
 pub const SharedMemoryHandle = struct {
     fd: if (is_windows) *anyopaque else c_int,
     ptr: *anyopaque,
     size: usize,
 };
 
+/// Write data to shared memory for inter-process communication.
+/// Creates a shared memory region and writes the data with a length prefix.
+/// Returns a handle that can be used to access the shared memory.
 pub fn writeToSharedMemory(data: []const u8) !SharedMemoryHandle {
     // Calculate total size needed: length + data
     const total_size = @sizeOf(usize) + data.len;
@@ -613,6 +620,8 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
     };
 }
 
+/// Clean up shared memory resources.
+/// On POSIX systems, unlinks the shared memory object. On Windows, cleanup is automatic.
 pub fn cleanupSharedMemory() void {
     if (comptime is_windows) {
         // On Windows, shared memory is automatically cleaned up when all handles are closed
