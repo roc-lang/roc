@@ -73,7 +73,6 @@ test "platform resolution - file not found" {
     try testing.expectError(error.NoPlatformFound, result);
 }
 
-
 test "platform resolution - URL platform not supported" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -99,8 +98,6 @@ test "platform resolution - URL platform not supported" {
     const result = main.resolvePlatformHost(allocator, roc_path);
     try testing.expectError(error.PlatformNotSupported, result);
 }
-
-
 
 // Integration tests that test the full shared memory pipeline
 

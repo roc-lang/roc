@@ -398,17 +398,20 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         };
         defer gpa.free(host_path);
 
-        // Extract embedded shim library to cache
-        // TODO check for a cached copy first...
+        // Check for cached shim library, extract if not present
         const shim_path = std.fs.path.join(gpa, &.{ exe_cache_dir, "libread_roc_file_path_shim.a" }) catch |err| {
             std.log.err("Failed to create shim library path: {}\n", .{err});
             std.process.exit(1);
         };
         defer gpa.free(shim_path);
 
-        extractReadRocFilePathShimLibrary(gpa, shim_path) catch |err| {
-            std.log.err("Failed to extract read roc file path shim library: {}\n", .{err});
-            std.process.exit(1);
+        // Only extract if the shim doesn't already exist in cache
+        std.fs.cwd().access(shim_path, .{}) catch {
+            // Shim not found in cache, extract it
+            extractReadRocFilePathShimLibrary(gpa, shim_path) catch |err| {
+                std.log.err("Failed to extract read roc file path shim library: {}\n", .{err});
+                std.process.exit(1);
+            };
         };
 
         // Link the host.a with our shim to create the interpreter executable using clang

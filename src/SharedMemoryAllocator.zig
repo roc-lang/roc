@@ -523,7 +523,6 @@ pub fn deinit(self: *SharedMemoryAllocator, gpa: std.mem.Allocator) void {
         },
         else => @compileError("Unsupported platform"),
     }
-
 }
 
 /// Returns a std.mem.Allocator interface for this shared memory allocator
