@@ -517,7 +517,7 @@ pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (s
 }
 
 /// Resolve a platform specification to a local host library path
-fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8) (std.mem.Allocator.Error || error{ PlatformNotSupported })![]u8 {
+fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})![]u8 {
     // Check for common platform names and map them to host libraries
     if (std.mem.eql(u8, platform_spec, "cli")) {
         // Try to find CLI platform host library
@@ -557,6 +557,8 @@ fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u
     return try gpa.dupe(u8, platform_spec);
 }
 
+/// Set up shared memory with a compiled ModuleEnv from a Roc file
+/// This function parses, canonicalizes, and type-checks the Roc file, then stores the resulting ModuleEnv in shared memory
 pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
@@ -651,6 +653,8 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     };
 }
 
+/// Clean up shared memory resources
+/// This function unlinks the shared memory object to free system resources
 pub fn cleanupSharedMemory() void {
     if (comptime is_windows) {
         // On Windows, shared memory is automatically cleaned up when all handles are closed
@@ -661,6 +665,8 @@ pub fn cleanupSharedMemory() void {
     }
 }
 
+/// Extract the embedded read_roc_file_path_shim library to the specified path
+/// This library contains the shim code that runs in child processes to read ModuleEnv from shared memory
 pub fn extractReadRocFilePathShimLibrary(gpa: Allocator, output_path: []const u8) !void {
     _ = gpa; // unused but kept for consistency
 

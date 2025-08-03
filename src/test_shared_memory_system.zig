@@ -90,7 +90,7 @@ test "platform resolution - basic cli platform" {
     var temp_dir = testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    const roc_content = 
+    const roc_content =
         \\app "test" 
         \\    packages { pf: platform "cli" }
         \\    imports [pf.Task]
@@ -120,7 +120,7 @@ test "platform resolution - no platform in file" {
     var temp_dir = testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    const roc_content = 
+    const roc_content =
         \\# Just a simple expression
         \\42 + 58
     ;
@@ -147,19 +147,19 @@ test "platform resolution - file not found" {
 
 test "shared memory system - error handling edge cases" {
     // Test error conditions in evaluator
-    
+
     // Test unsupported binary operation combination
     const string_add_int = eval_shim.performAdd(.{ .string = "hello" }, .{ .int = 5 });
     try testing.expect(string_add_int.isError());
-    
+
     // Test remainder with non-integer
     const float_rem = eval_shim.performRem(.{ .float32 = 5.5 }, .{ .int = 2 });
     try testing.expect(float_rem.isError());
-    
+
     // Test comparison between incompatible types for ordering
     const string_vs_int = eval_shim.performLt(.{ .string = "hello" }, .{ .int = 5 });
     try testing.expect(string_vs_int.isError());
-    
+
     // Test boolean operations with wrong types
     const int_and_bool = eval_shim.performAnd(.{ .int = 1 }, .{ .boolean = true });
     try testing.expect(int_and_bool.isError());
@@ -174,7 +174,7 @@ test "platform resolution - URL platform not supported" {
     var temp_dir = testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    const roc_content = 
+    const roc_content =
         \\app "test" packages { pf: platform "https://example.com/platform.tar.gz" } imports [pf.Task] provides [main] to pf
         \\
         \\main = "Hello, World!"
@@ -193,17 +193,17 @@ test "platform resolution - URL platform not supported" {
 
 test "evaluator - type coercion hierarchy" {
     // Test that mixed operations follow proper type promotion hierarchy
-    
+
     // int + float32 -> float32
     const int_float32 = eval_shim.performAdd(.{ .int = 10 }, .{ .float32 = 3.5 });
     try testing.expect(!int_float32.isError());
     try testing.expectEqual(@as(f32, 13.5), int_float32.float32);
-    
-    // float32 + float64 -> float64  
+
+    // float32 + float64 -> float64
     const float32_float64 = eval_shim.performMul(.{ .float32 = 2.0 }, .{ .float64 = 3.14159 });
     try testing.expect(!float32_float64.isError());
     try testing.expectApproxEqAbs(@as(f64, 6.28318), float32_float64.float64, 0.00001);
-    
+
     // int + float64 -> float64
     const int_float64 = eval_shim.performSub(.{ .int = 100 }, .{ .float64 = 0.5 });
     try testing.expect(!int_float64.isError());
@@ -215,20 +215,20 @@ test "evaluator - edge cases" {
     const zero_rem = eval_shim.performRem(.{ .int = 0 }, .{ .int = 5 });
     try testing.expect(!zero_rem.isError());
     try testing.expectEqual(@as(i128, 0), zero_rem.int);
-    
+
     // Test negative number operations
     const neg_add = eval_shim.performAdd(.{ .int = -5 }, .{ .int = 3 });
     try testing.expect(!neg_add.isError());
     try testing.expectEqual(@as(i128, -2), neg_add.int);
-    
+
     // Test string ordering with different lengths
     const short_long = eval_shim.performLt(.{ .string = "a" }, .{ .string = "abc" });
     try testing.expect(!short_long.isError());
     try testing.expectEqual(true, short_long.boolean);
-    
+
     // Test empty string comparisons
     const empty_strings = eval_shim.performEq(.{ .string = "" }, .{ .string = "" });
-    try testing.expect(!empty_strings.isError());  
+    try testing.expect(!empty_strings.isError());
     try testing.expectEqual(true, empty_strings.boolean);
 }
 
@@ -239,7 +239,7 @@ test "integration - shared memory setup and parsing" {
         // Skip on Windows for now since shared memory implementation differs
         return;
     }
-    
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -271,7 +271,7 @@ test "integration - shared memory setup and parsing" {
     // Verify that shared memory was set up correctly
     try testing.expect(shm_handle.size > 0);
     try testing.expect(@intFromPtr(shm_handle.ptr) != 0);
-    
+
     std.log.info("Integration test: Successfully set up shared memory with size: {} bytes\n", .{shm_handle.size});
 }
 
@@ -279,14 +279,14 @@ test "integration - compilation pipeline for different expressions" {
     if (builtin.os.tag == .windows) {
         return;
     }
-    
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     const test_cases = [_][]const u8{
         "100 - 58",
-        "7 * 6", 
+        "7 * 6",
         "15 / 3",
         "42 + 0",
     };
@@ -314,7 +314,7 @@ test "integration - compilation pipeline for different expressions" {
 
         // Verify shared memory was set up successfully
         try testing.expect(shm_handle.size > 0);
-        std.log.info("Successfully compiled expression: '{s}' (shared memory size: {} bytes)\n", .{roc_content, shm_handle.size});
+        std.log.info("Successfully compiled expression: '{s}' (shared memory size: {} bytes)\n", .{ roc_content, shm_handle.size });
     }
 }
 
@@ -322,7 +322,7 @@ test "integration - error handling in compilation" {
     if (builtin.os.tag == .windows) {
         return;
     }
-    
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -342,7 +342,7 @@ test "integration - error handling in compilation" {
 
     // This should fail during parsing/compilation
     const result = main.setupSharedMemoryWithModuleEnv(allocator, roc_path);
-    
+
     // We expect this to either fail or succeed (depending on parser error handling)
     // The important thing is that it doesn't crash
     if (result) |shm_handle| {
@@ -352,4 +352,3 @@ test "integration - error handling in compilation" {
         std.log.info("Compilation failed as expected with error: {}\n", .{err});
     }
 }
-
