@@ -219,71 +219,75 @@ fn rocAlloc(alloc_args: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.
 
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
 
-    const result = interp.allocator.rawAlloc(alloc_args.length, align_enum, @returnAddress());
+    // Calculate additional bytes needed to store the size
+    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
+    const total_size = alloc_args.length + size_storage_bytes;
 
-    alloc_args.answer = result orelse {
-        std.debug.panic("Out of memory during string allocation", .{});
+    // Allocate memory including space for size metadata
+    const result = interp.allocator.rawAlloc(total_size, align_enum, @returnAddress());
+
+    const base_ptr = result orelse {
+        std.debug.panic("Out of memory during rocAlloc", .{});
     };
 
-    // Track the allocation
-    const ptr_addr = @intFromPtr(alloc_args.answer);
-    interp.allocations.put(ptr_addr, alloc_args.length) catch {
-        // TODO we can't track the allocation, log it for debugging
-    };
+    // Store the total size (including metadata) right before the user data
+    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
+    size_ptr.* = total_size;
+
+    // Return pointer to the user data (after the size metadata)
+    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 }
 
 fn rocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.C) void {
     const interp: *Interpreter = @ptrCast(@alignCast(env));
 
-    const ptr_addr = @intFromPtr(dealloc_args.ptr);
+    // Calculate where the size metadata is stored
+    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
+    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
 
-    // Look up the allocation size
-    if (interp.allocations.get(ptr_addr)) |size| {
-        // Remove from tracking
-        _ = interp.allocations.remove(ptr_addr);
+    // Read the total size from metadata
+    const total_size = size_ptr.*;
 
-        // Calculate alignment
-        const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
-        const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
+    // Calculate the base pointer (start of actual allocation)
+    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
 
-        // Free the memory
-        const slice = @as([*]u8, @ptrCast(dealloc_args.ptr))[0..size];
-        interp.allocator.rawFree(slice, align_enum, @returnAddress());
-    } else {
-        // This shouldn't happen in normal operation, but we'll handle it gracefully
-        // In debug builds, we might want to assert or log this
-        std.debug.print("Warning: Attempted to free untracked allocation at {*}\n", .{dealloc_args.ptr});
-    }
+    // Calculate alignment
+    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
+    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
+
+    // Free the memory (including the size metadata)
+    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
+    interp.allocator.rawFree(slice, align_enum, @returnAddress());
 }
 
 fn rocRealloc(realloc_args: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.C) void {
     const interp: *Interpreter = @ptrCast(@alignCast(env));
 
-    const old_ptr_addr = @intFromPtr(realloc_args.answer);
+    // Calculate where the size metadata is stored for the old allocation
+    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
+    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
 
-    // Look up the old allocation size
-    if (interp.allocations.get(old_ptr_addr)) |old_size| {
-        // Remove the old allocation from tracking
-        _ = interp.allocations.remove(old_ptr_addr);
+    // Read the old total size from metadata
+    const old_total_size = old_size_ptr.*;
 
-        // Perform reallocation
-        const old_slice = @as([*]u8, @ptrCast(realloc_args.answer))[0..old_size];
-        const new_slice = interp.allocator.realloc(old_slice, realloc_args.new_length) catch {
-            std.debug.panic("Out of memory during string reallocation", .{});
-        };
+    // Calculate the old base pointer (start of actual allocation)
+    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
 
-        realloc_args.answer = new_slice.ptr;
+    // Calculate new total size needed
+    const new_total_size = realloc_args.new_length + size_storage_bytes;
 
-        // Track the new allocation
-        const new_ptr_addr = @intFromPtr(realloc_args.answer);
-        interp.allocations.put(new_ptr_addr, realloc_args.new_length) catch {
-            // If we can't track the allocation, that's not critical for functionality
-        };
-    } else {
-        // This shouldn't happen in normal operation
-        std.debug.print("Warning: Attempted to realloc untracked allocation at {*}\n", .{realloc_args.answer});
-        std.debug.panic("Cannot realloc untracked allocation", .{});
-    }
+    // Perform reallocation
+    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
+    const new_slice = interp.allocator.realloc(old_slice, new_total_size) catch {
+        std.debug.panic("Out of memory during rocRealloc", .{});
+    };
+
+    // Store the new total size in the metadata
+    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
+    new_size_ptr.* = new_total_size;
+
+    // Return pointer to the user data (after the size metadata)
+    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
 fn rocDbg(dbg_args: *const builtins.host_abi.RocDbg, env: *anyopaque) callconv(.C) void {
@@ -336,8 +340,6 @@ pub const Interpreter = struct {
 
     /// RocOps for string allocation and other host operations
     roc_ops: builtins.host_abi.RocOps,
-    /// Tracks allocations made through RocOps for proper deallocation
-    allocations: std.HashMap(usize, usize, std.hash_map.AutoContext(usize), std.hash_map.default_max_load_percentage),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -359,7 +361,6 @@ pub const Interpreter = struct {
             .trace_indent = 0,
             .trace_writer = null,
             .roc_ops = undefined, // Will be initialized below
-            .allocations = std.HashMap(usize, usize, std.hash_map.AutoContext(usize), std.hash_map.default_max_load_percentage).init(allocator),
         };
 
         // Initialize RocOps with interpreter bridge
@@ -396,16 +397,6 @@ pub const Interpreter = struct {
                 }
             }
         }
-
-        // Clean up any remaining tracked allocations (this shouldn't normally happen)
-        var allocation_iter = self.allocations.iterator();
-        while (allocation_iter.next()) |entry| {
-            const ptr_addr = entry.key_ptr.*;
-            const size = entry.value_ptr.*;
-            std.debug.print("Warning: Leaked allocation at {}, size {}\n", .{ ptr_addr, size });
-            // Note: We won't free these as we don't know the alignment and it's an error condition
-        }
-        self.allocations.deinit();
 
         self.work_stack.deinit();
         self.value_stack.deinit();
