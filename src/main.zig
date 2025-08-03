@@ -251,7 +251,6 @@ pub fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, shm_ha
         defer allocator.free(fd_str);
 
         try fd_file.writeAll(fd_str);
-        // std.debug.print("[DEBUG] Created fd file: {s} with fd: {s}\n", .{dir_name_with_txt, fd_str});
 
         // Create hardlink to executable in temp directory
         const exe_basename = std.fs.path.basename(exe_path);
@@ -356,8 +355,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         std.process.exit(1);
     };
     defer gpa.free(exe_cache_dir);
-
-    // std.debug.print("[DEBUG] Cache directory: {s}\n", .{exe_cache_dir});
 
     std.fs.cwd().makePath(exe_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -497,7 +494,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     }
 
     // Run the interpreter as a child process from the temp directory
-    // std.debug.print("[DEBUG] About to spawn: {s}\n", .{temp_exe_path});
     var child = std.process.Child.init(&.{temp_exe_path}, gpa);
     child.cwd = std.fs.cwd().realpathAlloc(gpa, ".") catch |err| {
         std.log.err("Failed to get current directory: {}\n", .{err});
@@ -516,15 +512,12 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         std.process.exit(1);
     };
 
-    // std.debug.print("[DEBUG] Child process spawned, waiting for completion...\n", .{});
-
     // Wait for child to complete
     _ = child.wait() catch |err| {
         std.log.err("Failed waiting for child process: {}\n", .{err});
         std.process.exit(1);
     };
 
-    // std.debug.print("[DEBUG] Child process exited with status: {}\n", .{term});
 }
 
 /// Handle for cross-platform shared memory operations.

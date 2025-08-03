@@ -32,9 +32,7 @@ test "fd inheritance placeholder" {
 //     child.stderr_behavior = .Pipe;
 //
 //     child.spawn() catch |spawn_err| {
-//         std.debug.print("Failed to spawn roc binary: {}\n", .{spawn_err});
 //         if (spawn_err == error.FileNotFound) {
-//             std.debug.print("Roc binary not found at: {s}\n", .{child.argv[0]});
 //             return error.SkipZigTest;
 //         }
 //         return spawn_err;
@@ -56,8 +54,6 @@ test "fd inheritance placeholder" {
 //             // Skip test if linking fails due to environment issues
 //             return error.SkipZigTest;
 //         }
-//         std.debug.print("Child process failed with term: {}\n", .{term});
-//         std.debug.print("stderr: {s}\n", .{stderr});
 //     }
 //     try testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, term);
 //
@@ -70,7 +66,6 @@ test "fd inheritance placeholder" {
 //             std.mem.indexOf(u8, line, "Error:") != null or
 //             std.mem.indexOf(u8, line, "Failed") != null)
 //         {
-//             std.debug.print("Unexpected error in stderr:\n{s}\n", .{line});
 //             try testing.expect(false);
 //         }
 //     }
@@ -99,9 +94,7 @@ test "fd inheritance placeholder" {
 //         child.stderr_behavior = .Pipe;
 //
 //         child.spawn() catch |spawn_err| {
-//             std.debug.print("Run {} - Failed to spawn roc binary: {}\n", .{ i, spawn_err });
 //             if (spawn_err == error.FileNotFound) {
-//                 std.debug.print("Roc binary not found at: {s}\n", .{child.argv[0]});
 //                 return error.SkipZigTest;
 //             }
 //             return spawn_err;
@@ -123,8 +116,6 @@ test "fd inheritance placeholder" {
 //                 // Skip test if linking fails due to environment issues
 //                 return error.SkipZigTest;
 //             }
-//             std.debug.print("Run {} - Child process failed with term: {}\n", .{ i, term });
-//             std.debug.print("stderr: {s}\n", .{stderr});
 //         }
 //         try testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, term);
 //
@@ -137,7 +128,6 @@ test "fd inheritance placeholder" {
 //                 std.mem.indexOf(u8, line, "Error:") != null or
 //                 std.mem.indexOf(u8, line, "Failed") != null)
 //             {
-//                 std.debug.print("Unexpected error in stderr:\n{s}\n", .{line});
 //                 try testing.expect(false);
 //             }
 //         }

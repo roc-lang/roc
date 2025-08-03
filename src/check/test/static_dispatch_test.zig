@@ -92,12 +92,10 @@ const test_allocator = testing.allocator;
 //                 // Success! The dot access properly resolved to describe which returns Str
 //             },
 //             else => {
-//                 std.debug.print("Expected Str, got: {any}\n", .{structure});
 //                 try testing.expect(false);
 //             },
 //         },
 //         else => {
-//             std.debug.print("Expected structure, got: {any}\n", .{resolved_main.desc.content});
 //             try testing.expect(false);
 //         },
 //     }
@@ -205,12 +203,10 @@ const test_allocator = testing.allocator;
 //                 // Success! The imported method was properly resolved
 //             },
 //             else => {
-//                 std.debug.print("Expected Str, got: {any}\n", .{structure});
 //                 try testing.expect(false);
 //             },
 //         },
 //         else => {
-//             std.debug.print("Expected structure, got: {any}\n", .{resolved_main.desc.content});
 //             try testing.expect(false);
 //         },
 //     }
@@ -289,18 +285,15 @@ const test_allocator = testing.allocator;
 //                         try testing.expect(prec == .f64);
 //                     },
 //                     else => {
-//                         std.debug.print("Expected frac_precision.f64, got: {any}\n", .{num});
 //                         try testing.expect(false);
 //                     },
 //                 }
 //             },
 //             else => {
-//                 std.debug.print("Expected Num.F64, got: {any}\n", .{structure});
 //                 try testing.expect(false);
 //             },
 //         },
 //         else => {
-//             std.debug.print("Expected structure, got: {any}\n", .{resolved_main.desc.content});
 //             try testing.expect(false);
 //         },
 //     }
