@@ -1579,7 +1579,7 @@ pub const Interpreter = struct {
 
             // Now, find the expression for the *current* field and schedule its evaluation.
             // We need to map the layout-sorted field name back to the original CIR expression.
-            const current_field_info = sorted_fields.get(current_field_idx);
+            const current_field_info = sorted_fields.get(@intCast(current_field_idx));
             const current_field_name = current_field_info.name;
 
             const record_expr = self.env.store.getExpr(record_expr_idx);
@@ -1661,7 +1661,7 @@ pub const Interpreter = struct {
                 else => unreachable,
             };
 
-            const current_element_expr_idx = cir_elements[current_element_idx];
+            const current_element_expr_idx = cir_elements[@intCast(current_element_idx)];
 
             self.schedule_work(WorkItem{
                 .kind = .w_eval_expr,
