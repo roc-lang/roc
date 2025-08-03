@@ -1121,7 +1121,7 @@ is_named_color = |str| {
 		(nominal @10.1-15.2 (type "Color")
 			(ty-header @10.1-10.6 (name "Color"))))
 	(expressions
-		(expr @18.7-18.35 (type "U8, U8, U8 -> Color"))
+		(expr @18.7-18.35 (type "U8, U8, a8 -> Color"))
 		(expr @21.8-24.2 (type "U8, U8, U8, Error -> Color"))
 		(expr @27.7-46.2 (type "Error"))
 		(expr @49.10-54.2 (type "Color -> Str"))

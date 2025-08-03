@@ -106,9 +106,9 @@ This type annotation is malformed or contains invalid syntax.
 
 
 **UNUSED VARIABLE**
-Variable `dool` is not used anywhere in your code.
+Variable `data` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_dool` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
 The unused variable is declared here:
 **type_shadowing_across_scopes.md:6:16:6:20:**
 ```roc
