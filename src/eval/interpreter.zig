@@ -217,8 +217,7 @@ pub const Value = struct {
 fn rocAlloc(alloc_args: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.C) void {
     const interp: *Interpreter = @ptrCast(@alignCast(env));
 
-    const log2_align = std.math.log2_int(u32, @intCast(alloc_args.alignment));
-    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
 
     const result = interp.allocator.rawAlloc(alloc_args.length, align_enum, @returnAddress());
 
