@@ -62,7 +62,7 @@ LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:
 	(app @1.1-1.53
 		(provides @1.5-1.12
 			(exposed-lower-ident @1.6-1.11
-				(text "main!")))
+				(text "Pair!")))
 		(record-field @1.15-1.51 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
@@ -237,7 +237,7 @@ main! = |_| {}
 								(pattern (degenerate false)
 									(p-applied-tag @14.5-14.10)))
 							(value
-								(e-nominal @14.14-14.23 (nominal "Bool")
+								(e-nominal @14.14-14.23 (nominal "bool")
 									(e-tag @14.14-14.23 (name "True")))))
 						(branch
 							(patterns
