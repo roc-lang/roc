@@ -1554,9 +1554,13 @@ pub fn getBranch(store: *const NodeStore, branch_idx: AST.MatchBranch.Idx) AST.M
 }
 
 /// Retrieves type header data from a stored type header node.
-pub fn getTypeHeader(store: *const NodeStore, header_idx: AST.TypeHeader.Idx) AST.TypeHeader {
+pub fn getTypeHeader(store: *const NodeStore, header_idx: AST.TypeHeader.Idx) !AST.TypeHeader {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
-    std.debug.assert(node.tag == .ty_header);
+
+    if (node.tag != .ty_header) {
+        return error.MalformedNode;
+    }
+
     return .{
         .region = node.region,
         .name = node.main_token,

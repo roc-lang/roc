@@ -5376,7 +5376,7 @@ fn canonicalizeTypeAnnoTag(
         },
         else => {
             return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{
-                .malformed_type_annotation = .{ .region = self.parse_ir.tokenizedRegionToRegion(ast_anno.toRegion()) },
+                .malformed_type_annotation = .{ .region = self.parse_ir.tokenizedRegionToRegion(ast_anno.to_tokenized_region()) },
             });
         },
     }
@@ -5442,7 +5442,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
         }, Content{ .flex_var = null }, node_region);
     }
 
-    const ast_header = self.parse_ir.store.getTypeHeader(header_idx);
+    const ast_header = self.parse_ir.store.getTypeHeader(header_idx) catch unreachable; // Malformed handled above
     const region = self.parse_ir.tokenizedRegionToRegion(ast_header.region);
 
     // Get the type name identifier

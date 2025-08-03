@@ -1725,6 +1725,8 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
 
     const start = self.pos;
 
+    var dot_suffix_allowed = true;
+
     var expr: ?AST.Expr.Idx = null;
     const token = self.peek();
     switch (token) {
@@ -1779,6 +1781,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
                 .token = start,
                 .region = .{ .start = start, .end = self.pos },
             } });
+            dot_suffix_allowed = false;
         },
         .Float => {
             self.advance();
@@ -2049,7 +2052,8 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
     }
     if (expr) |e| {
         var expression = try self.parseExprSuffix(start, e);
-        while (self.peek() == .NoSpaceDotInt or self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent or self.peek() == .OpArrow) {
+
+        while ((dot_suffix_allowed and (self.peek() == .NoSpaceDotInt or self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent)) or self.peek() == .OpArrow) {
             const tok = self.peek();
             if (tok == .NoSpaceDotInt) {
                 return try self.pushMalformed(AST.Expr.Idx, .expr_no_space_dot_int, self.pos);
