@@ -23,8 +23,6 @@ test {
 
     std.testing.refAllDecls(@import("types"));
     std.testing.refAllDecls(@import("types/test/rigid_instantiation.zig"));
-
-    // Test fd inheritance
     std.testing.refAllDecls(@import("test_fd_inheritance.zig"));
 
     std.testing.refAllDeclsRecursive(@import("serialization"));

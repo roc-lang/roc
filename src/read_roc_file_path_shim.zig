@@ -37,6 +37,49 @@ const windows = if (is_windows) struct {
     const FILE_MAP_READ = 0x0004;
 } else struct {};
 
+/// Read the fd/handle from the filesystem-based communication mechanism
+fn readFdFromFile() ![]u8 {
+    // Get our own executable path
+    const exe_path = try std.fs.selfExePathAlloc(std.heap.page_allocator);
+    defer std.heap.page_allocator.free(exe_path);
+
+    // Get the directory containing our executable (should be "roc-tmp-<random>")
+    const exe_dir = std.fs.path.dirname(exe_path) orelse return error.InvalidExePath;
+    const dir_basename = std.fs.path.basename(exe_dir);
+
+    // Verify it has the expected prefix
+    if (!std.mem.startsWith(u8, dir_basename, "roc-tmp-")) {
+        return error.UnexpectedDirName;
+    }
+
+    // Construct the fd file path by appending .txt to the directory path
+    // First, remove any trailing slashes from exe_dir
+    var dir_path = exe_dir;
+    while (dir_path.len > 0 and (dir_path[dir_path.len - 1] == '/' or dir_path[dir_path.len - 1] == '\\')) {
+        dir_path = dir_path[0 .. dir_path.len - 1];
+    }
+
+    const fd_file_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}.txt", .{dir_path});
+    defer std.heap.page_allocator.free(fd_file_path);
+
+    // Read the fd from the file
+    const fd_file = std.fs.cwd().openFile(fd_file_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return error.FdFileNotFound,
+        else => return err,
+    };
+    defer fd_file.close();
+
+    const fd_content = try fd_file.readToEndAlloc(std.heap.page_allocator, 64);
+
+    // Clean up the fd file since we no longer need it
+    std.fs.cwd().deleteFile(fd_file_path) catch {};
+
+    const trimmed = std.mem.trim(u8, fd_content, " \n\r\t");
+    const result = try std.heap.page_allocator.dupe(u8, trimmed);
+    std.heap.page_allocator.free(fd_content);
+    return result;
+}
+
 /// Exported symbol that reads a string from shared memory ROC_FILE_TO_INTERPRET
 /// Returns a RocStr to the caller
 /// Expected format in shared memory: [usize length][u8... data]
@@ -51,7 +94,7 @@ export fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque) ca
 }
 
 fn readFromWindowsSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
-    const handle_str = std.process.getEnvVarOwned(std.heap.page_allocator, "__ROC_INTERNAL_SHM_HANDLE") catch {
+    const handle_str = readFdFromFile() catch {
         return RocStr.empty();
     };
     defer std.heap.page_allocator.free(handle_str);
@@ -79,7 +122,7 @@ fn readFromWindowsSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
 }
 
 fn readFromPosixSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
-    const fd_str = std.process.getEnvVarOwned(std.heap.page_allocator, "__ROC_INTERNAL_SHM_FD") catch {
+    const fd_str = readFdFromFile() catch {
         return RocStr.empty();
     };
     defer std.heap.page_allocator.free(fd_str);
