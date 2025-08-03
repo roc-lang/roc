@@ -113,7 +113,10 @@ const ColorPalette = reporting.ColorPalette;
 
 const legalDetailsFileContent = @embedFile("legal_details");
 
-/// Size for shared memory allocator - 8TB virtual address space
+/// Size for shared memory allocator (just virtual address space to reserve)
+///
+/// We pick a large number because we can't resize this without messing up the
+/// child process. It's just virtual address space though, not physical memory.
 const SHARED_MEMORY_SIZE: usize = 8 * 1024 * 1024 * 1024 * 1024; // 8TB
 
 /// Cross-platform hardlink creation
@@ -517,7 +520,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         std.log.err("Failed waiting for child process: {}\n", .{err});
         std.process.exit(1);
     };
-
 }
 
 /// Handle for cross-platform shared memory operations.
