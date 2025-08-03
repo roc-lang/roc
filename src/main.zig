@@ -395,7 +395,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     }
 
     // Set up shared memory with ModuleEnv
-    const shm_handle = setupSharedMemoryWithModuleEnv(gpa) catch |err| {
+    const shm_handle = setupSharedMemoryWithModuleEnv(gpa, args.path) catch |err| {
         std.log.err("Failed to set up shared memory with ModuleEnv: {}\n", .{err});
         std.process.exit(1);
     };
@@ -475,10 +475,14 @@ const SharedMemoryHandle = struct {
     size: usize,
 };
 
-fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator) !SharedMemoryHandle {
+fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    const shm_size = 64 * 1024 * 1024; // 64MB for testing
+    // Use 2TB on Linux, 256MB on macOS (macOS has lower shm limits)
+    const shm_size = if (builtin.os.tag == .macos) 
+        256 * 1024 * 1024 // 256MB on macOS for now (can be increased via sysctl)
+    else
+        2 * 1024 * 1024 * 1024 * 1024; // 2TB on Linux
     var shm = try SharedMemoryAllocator.create(gpa, "ROC_FILE_TO_INTERPRET", shm_size, page_size);
     // Don't defer deinit here - we need to keep the shared memory alive
     
@@ -499,19 +503,28 @@ fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator) !SharedMemoryHandle {
     const env_ptr = try shm_allocator.create(ModuleEnv);
     std.debug.print("[PARENT] ModuleEnv ptr allocated at 0x{x}\n", .{@intFromPtr(env_ptr)});
     
-    // Create a ModuleEnv for testing with a simple expression
-    // IMPORTANT: We must create the ModuleEnv directly with the shared memory allocator
-    // so all its internal allocations are in shared memory
-    const source_literal = "100 - 58";
-    const source = try shm_allocator.dupe(u8, source_literal);
-    const module_name = try shm_allocator.dupe(u8, "TestModule");
+    // Read the actual Roc file
+    const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| {
+        std.log.err("Failed to open Roc file '{s}': {}\n", .{roc_file_path, err});
+        return error.FileNotFound;
+    };
+    defer roc_file.close();
+    
+    // Read the entire file into shared memory
+    const file_size = try roc_file.getEndPos();
+    const source = try shm_allocator.alloc(u8, file_size);
+    _ = try roc_file.read(source);
+    
+    // Extract module name from the file path
+    const basename = std.fs.path.basename(roc_file_path);
+    const module_name = try shm_allocator.dupe(u8, basename);
     
     var env = try ModuleEnv.init(shm_allocator, source);
     env.source = source;
     env.module_name = module_name;
     try env.calcLineStarts();
     
-    // Parse the source code
+    // Parse the source code as an expression for simplicity
     var parse_ast = try parse.parseExpr(&env);
     
     // Empty scratch space (required before canonicalization)
@@ -523,9 +536,10 @@ fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator) !SharedMemoryHandle {
     // Create canonicalizer
     var canonicalizer = try can.init(&env, &parse_ast, null);
     
-    // Canonicalize the expression
-    const parse_expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonicalized_expr_idx = try canonicalizer.canonicalizeExpr(parse_expr_idx) orelse {
+    // For parseExpr, the root_node_idx points directly to the expression
+    const main_expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+    
+    const canonicalized_expr_idx = try canonicalizer.canonicalizeExpr(main_expr_idx) orelse {
         return error.CanonicalizeFailure;
     };
     

@@ -213,14 +213,30 @@ pub fn create(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: 
             else
                 @as(u32, @bitCast(std.posix.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true }));
 
-            const fd = c.shm_open(
+            var fd = c.shm_open(
                 shm_name.ptr,
                 oflags,
                 0o600,
             );
 
             if (fd < 0) {
-                return error.ShmOpenFailed;
+                const errno = std.c._errno().*;
+                // If it exists, unlink it and try again
+                if (errno == 17) { // EEXIST
+                    _ = c.shm_unlink(shm_name.ptr);
+                    fd = c.shm_open(
+                        shm_name.ptr,
+                        oflags,
+                        0o600,
+                    );
+                    if (fd < 0) {
+                        std.debug.print("SharedMemoryAllocator: shm_open retry failed with errno={} for name={s} size={}\n", .{std.c._errno().*, shm_name, aligned_size});
+                        return error.ShmOpenFailed;
+                    }
+                } else {
+                    std.debug.print("SharedMemoryAllocator: shm_open failed with errno={} for name={s} size={}\n", .{errno, shm_name, aligned_size});
+                    return error.ShmOpenFailed;
+                }
             }
 
             // Set the size of the shared memory
