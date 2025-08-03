@@ -346,7 +346,7 @@ test "lambdas nested closures" {
         \\        |c| b_loc + c
         \\    }
         \\})(100))(20))(3)
-    , 223, .trace);
+    , 223, .no_trace);
 }
 
 // Helper function to test that evaluation succeeds without checking specific values
@@ -386,7 +386,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
 test "integer type evaluation" {
     // Test integer types to verify basic evaluation works
     // This should help us debug why 255u8 shows as 42 in REPL
-    try runExpectInt("255u8", 255, .trace);
+    try runExpectInt("255u8", 255, .no_trace);
     try runExpectInt("42i32", 42, .no_trace);
     try runExpectInt("123i64", 123, .no_trace);
 }
@@ -450,6 +450,22 @@ test "scientific notation literals" {
     try runExpectSuccess("2.5e10", .no_trace);
     try runExpectSuccess("1.5e-5", .no_trace);
     try runExpectSuccess("-1.5e-5", .no_trace);
+}
+
+test "string literals and interpolation" {
+    // Test basic string literals
+    try runExpectSuccess("\"Hello, World!\"", .no_trace);
+    try runExpectSuccess("\"\"", .no_trace);
+    try runExpectSuccess("\"Roc\"", .no_trace);
+
+    // Test string interpolation
+    try runExpectSuccess(
+        \\{
+        \\    hello = "Hello";
+        \\    world = "World";
+        \\    "${hello} ${world}"
+        \\}
+    , .no_trace);
 }
 
 test "ModuleEnv serialization and interpreter evaluation" {

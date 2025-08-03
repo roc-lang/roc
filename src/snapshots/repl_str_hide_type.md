@@ -10,10 +10,10 @@ type=repl
 » "Hello, World!"
 ~~~
 # OUTPUT
-Evaluation error: error.LayoutError
+<scalar>
 ---
-Evaluation error: error.LayoutError
+<scalar>
 ---
-Evaluation error: error.LayoutError
+<scalar>
 # PROBLEMS
 NIL
