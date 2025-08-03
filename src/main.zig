@@ -25,8 +25,33 @@ const CacheConfig = cache_mod.CacheConfig;
 const tokenize = parse.tokenize;
 
 const read_roc_file_path_shim_lib = if (builtin.is_test) &[_]u8{} else @embedFile("libread_roc_file_path_shim.a");
-// Wrapper around std.c to avoid the mremap bug on macOS
-// We only expose the functions we actually use
+
+// Workaround for Zig standard library compilation issue on macOS ARM64.
+// 
+// The Problem:
+// When importing std.c directly, Zig attempts to compile ALL C function declarations,
+// including mremap which has this signature in std/c.zig:9562:
+//   pub extern "c" fn mremap(addr: ?*align(page_size) const anyopaque, old_len: usize, 
+//                            new_len: usize, flags: MREMAP, ...) *anyopaque;
+// 
+// The variadic arguments (...) at the end trigger this compiler error on macOS ARM64:
+//   "parameter of type 'void' not allowed in function with calling convention 'aarch64_aapcs_darwin'"
+// 
+// This is because:
+// 1. mremap is a Linux-specific syscall that doesn't exist on macOS
+// 2. The variadic declaration is incompatible with ARM64 macOS calling conventions
+// 3. Even though we never call mremap, just importing std.c triggers its compilation
+//
+// Related issues:
+// - https://github.com/ziglang/zig/issues/6321 - Discussion about mremap platform support
+// - mremap is only available on Linux/FreeBSD, not macOS/Darwin
+//
+// Solution:
+// Instead of importing all of std.c, we create a minimal wrapper that only exposes
+// the specific types and functions we actually need. This avoids triggering the
+// compilation of the broken mremap declaration.
+//
+// TODO: This workaround can be removed once the upstream Zig issue is fixed.
 pub const c = struct {
     pub const mode_t = std.c.mode_t;
     pub const off_t = std.c.off_t;
@@ -146,9 +171,10 @@ fn generateRandomSuffix(allocator: Allocator) ![]u8 {
     return suffix;
 }
 
-/// Create the temporary directory structure for fd communication
-/// Returns the path to the executable in the temp directory (caller must free)
-/// @param cache_dir - The cache directory to use for temporary files (optional, uses system temp if null)
+/// Create the temporary directory structure for fd communication.
+/// Returns the path to the executable in the temp directory (caller must free).
+/// If a cache directory is provided, it will be used for temporary files; otherwise
+/// falls back to the system temp directory.
 pub fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, shm_handle: SharedMemoryHandle, cache_dir: ?[]const u8) ![]const u8 {
     // Use provided cache dir or fall back to system temp directory
     const temp_dir = if (cache_dir) |dir|
