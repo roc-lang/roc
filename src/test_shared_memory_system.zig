@@ -5,10 +5,6 @@ const builtin = @import("builtin");
 const testing = std.testing;
 const main = @import("main.zig");
 
-// Note: Tests for the evaluator have been removed since we now use
-// the real interpreter from src/eval/interpreter.zig
-// The real interpreter has its own comprehensive test suite in src/eval/test/
-
 test "platform resolution - basic cli platform" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -19,7 +15,7 @@ test "platform resolution - basic cli platform" {
     defer temp_dir.cleanup();
 
     const roc_content =
-        \\app "test" 
+        \\app "test"
         \\    packages { pf: platform "cli" }
         \\    imports [pf.Task]
         \\    provides [main] to pf

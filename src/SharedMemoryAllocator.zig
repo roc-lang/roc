@@ -608,10 +608,9 @@ pub fn getUsedSize(self: *const SharedMemoryAllocator) usize {
 /// Get the recommended size for a child process to map.
 /// This is the used size aligned to page boundaries.
 ///
-/// IMPORTANT: On platforms where shrinkToFit doesn't work (like macOS), the parent
-/// process MUST communicate this size to the child process (e.g., via command line
-/// arguments or environment variables). The child should then use this size when
-/// calling open() to map only what's needed, not the full 1GB.
+/// IMPORTANT: The parent process MUST communicate this size to the child process
+/// (e.g., via command line arguments or environment variables). The child should
+/// then use this size when calling open() to map only what's needed.
 ///
 /// Example:
 /// ```zig
@@ -637,49 +636,6 @@ pub fn getAvailableSize(self: *const SharedMemoryAllocator) usize {
 /// Reset the allocator to allow reuse (only safe if no allocations are still in use!)
 pub fn reset(self: *SharedMemoryAllocator) void {
     self.offset.store(0, .monotonic);
-}
-
-/// Shrink the shared memory region to only the used size.
-/// This reduces the memory footprint before handing off to a child process.
-/// Returns the new size after shrinking.
-///
-/// NOTE: On macOS, ftruncate() is not supported for POSIX shared memory objects.
-/// This is a known limitation where macOS treats shared memory differently than regular files.
-/// The child process should map only the required size instead.
-pub fn shrinkToFit(self: *SharedMemoryAllocator) !usize {
-    const used = self.getUsedSize();
-    if (used == 0 or used >= self.total_size) {
-        return self.total_size;
-    }
-
-    // Align to page boundary
-    const new_size = std.mem.alignForward(usize, used, self.page_size);
-    if (new_size >= self.total_size) {
-        return self.total_size;
-    }
-
-    switch (builtin.os.tag) {
-        .windows => {
-            // On Windows, we can't easily shrink a mapped view
-            // The child process can map only the used portion
-            // So we just return the current size
-            return self.total_size;
-        },
-        .linux, .macos, .freebsd, .openbsd, .netbsd => {
-            // Use C ftruncate directly to avoid Zig's unreachable assertion for EINVAL
-            const result = c.ftruncate(self.handle, @intCast(new_size));
-            if (result != 0) {
-                // ftruncate is not supported on shared memory for some platforms (notably macOS)
-                // The child process should map only the required portion instead
-                return self.total_size;
-            }
-
-            // Update our total size
-            self.total_size = new_size;
-            return new_size;
-        },
-        else => @compileError("Unsupported platform"),
-    }
 }
 
 // Platform-specific C declarations
@@ -751,75 +707,6 @@ test "shared memory allocator cross-process" {
         for (data, 0..) |*item, i| {
             item.* = @intCast(i * 2);
         }
-    }
-}
-
-// NOTE: Test removed because it tries to simulate cross-process shared memory behavior
-// within a single process, which doesn't work on macOS. On macOS, you cannot open
-// the same shared memory object twice with shm_open() in the same process.
-// The production code works correctly because it uses separate processes and passes
-// the file descriptor through the filesystem, not through shm_open().
-
-test "shared memory allocator shrinkToFit" {
-    const testing = std.testing;
-
-    const name = try std.fmt.allocPrint(
-        testing.allocator,
-        "zig_test_shm_shrink_{}",
-        .{std.Thread.getCurrentId()},
-    );
-    defer testing.allocator.free(name);
-
-    const page_size = try getSystemPageSize();
-    var shm = try SharedMemoryAllocator.create(testing.allocator, name, 1024 * 1024, page_size); // 1MB
-    defer shm.deinit(testing.allocator);
-
-    const shm_allocator = shm.allocator();
-
-    // Allocate some data
-    const data1 = try shm_allocator.alloc(u32, 100);
-    try testing.expect(data1.len == 100);
-
-    const data2 = try shm_allocator.alloc(u8, 1000);
-    try testing.expect(data2.len == 1000);
-
-    // Check initial size
-    const initial_size = shm.total_size;
-    try testing.expectEqual(@as(usize, 1024 * 1024), initial_size);
-
-    // Get used size before shrinking
-    const used_before = shm.getUsedSize();
-    try testing.expect(used_before >= 100 * @sizeOf(u32) + 1000);
-    try testing.expect(used_before < initial_size);
-
-    // Shrink to fit (may fail on some platforms)
-    const new_size = shm.shrinkToFit() catch shm.total_size;
-
-    // On Windows and macOS, shrinking might not be supported
-    if (builtin.os.tag == .windows or builtin.os.tag == .macos) {
-        // If shrinking failed, size should remain the same
-        if (new_size == initial_size) {
-            try testing.expectEqual(initial_size, new_size);
-        } else {
-            // If it succeeded, verify the constraints
-            try testing.expect(new_size < initial_size);
-            try testing.expect(new_size >= used_before);
-            try testing.expectEqual(@as(usize, 0), new_size % page_size);
-        }
-    } else {
-        // On Linux and other POSIX systems, should shrink to page-aligned size
-        try testing.expect(new_size < initial_size);
-        try testing.expect(new_size >= used_before);
-        // Should be page-aligned
-        try testing.expectEqual(@as(usize, 0), new_size % page_size);
-    }
-
-    // Verify we can still use the allocated memory
-    for (data1, 0..) |*item, i| {
-        item.* = @intCast(i);
-    }
-    for (data1, 0..) |item, i| {
-        try testing.expectEqual(@as(u32, @intCast(i)), item);
     }
 }
 
