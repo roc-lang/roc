@@ -74,6 +74,42 @@ const legalDetailsFileContent = @embedFile("legal_details");
 /// Default size for shared memory allocator (1GB)
 const SHARED_MEMORY_SIZE = 1 * 1024 * 1024 * 1024;
 
+/// Cross-platform hardlink creation
+fn createHardlink(allocator: Allocator, source: []const u8, dest: []const u8) !void {
+    if (comptime builtin.target.os.tag == .windows) {
+        // On Windows, use CreateHardLinkW
+        const source_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, source);
+        defer allocator.free(source_w);
+        const dest_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, dest);
+        defer allocator.free(dest_w);
+
+        const kernel32 = std.os.windows.kernel32;
+        if (kernel32.CreateHardLinkW(dest_w, source_w, null) == 0) {
+            const err = kernel32.GetLastError();
+            switch (err) {
+                .ALREADY_EXISTS => return error.PathAlreadyExists,
+                else => return error.Unexpected,
+            }
+        }
+    } else {
+        // On POSIX systems, use the link system call
+        const source_c = try allocator.dupeZ(u8, source);
+        defer allocator.free(source_c);
+        const dest_c = try allocator.dupeZ(u8, dest);
+        defer allocator.free(dest_c);
+
+        const result = std.c.link(source_c, dest_c);
+        if (result != 0) {
+            const errno = std.c._errno().*;
+            switch (errno) {
+                17 => return error.PathAlreadyExists, // EEXIST
+                18 => return error.NotSameFileSystem, // EXDEV
+                else => return error.Unexpected,
+            }
+        }
+    }
+}
+
 /// Generate a cryptographically secure random ASCII string for directory names
 fn generateRandomSuffix(allocator: Allocator) ![]u8 {
     // TODO: Consider switching to a library like https://github.com/abhinav/temp.zig
@@ -161,12 +197,22 @@ fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, fd: anytyp
 
         try fd_file.writeAll(fd_str);
 
-        // Copy executable to temp directory
+        // Create hardlink to executable in temp directory
         const exe_basename = std.fs.path.basename(exe_path);
         const temp_exe_path = try std.fs.path.join(allocator, &.{ temp_dir_path, exe_basename });
         defer allocator.free(temp_exe_path);
 
-        try std.fs.cwd().copyFile(exe_path, std.fs.cwd(), temp_exe_path, .{});
+        // Try to create a hardlink first (more efficient than copying)
+        createHardlink(allocator, exe_path, temp_exe_path) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                // If hardlink already exists, that's fine
+            },
+            error.NotSameFileSystem, error.Unexpected => {
+                // If hardlinking fails (e.g., cross-device, permissions), fall back to copying
+                try std.fs.cwd().copyFile(exe_path, std.fs.cwd(), temp_exe_path, .{});
+            },
+            else => return err,
+        };
 
         // Allocate and return just the executable path
         const final_exe_path = try allocator.dupe(u8, temp_exe_path);
