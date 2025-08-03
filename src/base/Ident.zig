@@ -135,6 +135,11 @@ const InnerIdx = packed struct(u32) {
     is_small: bool,
     data: packed union { small: SmallIdx, big: BigIdx },
 
+    comptime {
+        std.debug.assert(@sizeOf(InnerIdx) == 4);
+        std.debug.assert(@bitSizeOf(InnerIdx) == 32);
+    }
+
     pub fn attributes(self: *const @This()) Attributes {
         switch (self.toVariant()) {
             .small => |small| return small.attributes(),

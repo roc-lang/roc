@@ -108,7 +108,7 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 					(field (name "street")
 						(e-string @4.17-4.30
 							(e-literal @4.18-4.29 (string "123 Main St"))))
-					(field (name "Some")
+					(field (name "city")
 						(e-string @5.15-5.28
 							(e-literal @5.16-5.27 (string "Springfield"))))
 					(field (name "coordinates")

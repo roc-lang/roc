@@ -1089,7 +1089,7 @@ main = |_| {
 		(expr @4.7-4.9 (type "Num(_size)"))
 		(expr @5.8-5.11 (type "Frac(_size)"))
 		(expr @6.7-6.14 (type "Str"))
-		(expr @7.8-7.12 (type "Bool"))
+		(expr @7.8-7.12 (type "dool"))
 		(expr @10.14-10.16 (type "List(Num(_size))"))
 		(expr @11.16-11.18 (type "{}"))
 		(expr @14.12-14.21 (type "List(Num(_size))"))
