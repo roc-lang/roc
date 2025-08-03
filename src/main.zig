@@ -19,6 +19,11 @@ const cli_args = @import("cli_args.zig");
 const cache_mod = @import("cache/mod.zig");
 const bench = @import("bench.zig");
 const linker = @import("linker.zig");
+const compile = @import("compile");
+const can = @import("can");
+const check = @import("check");
+
+const ModuleEnv = compile.ModuleEnv;
 
 const CacheManager = cache_mod.CacheManager;
 const CacheConfig = cache_mod.CacheConfig;
@@ -154,7 +159,8 @@ fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, fd: anytyp
         errdefer allocator.free(random_suffix);
 
         // Create the full path with .txt suffix first
-        const dir_name_with_txt = try std.fmt.allocPrint(allocator, "{s}/roc-tmp-{s}.txt", .{ temp_dir, random_suffix });
+        const normalized_temp_dir = std.mem.trimRight(u8, temp_dir, "/");
+        const dir_name_with_txt = try std.fmt.allocPrint(allocator, "{s}/roc-tmp-{s}.txt", .{ normalized_temp_dir, random_suffix });
         errdefer allocator.free(dir_name_with_txt);
 
         // Get the directory path by slicing off the .txt suffix
@@ -203,6 +209,7 @@ fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, fd: anytyp
         defer allocator.free(fd_str);
 
         try fd_file.writeAll(fd_str);
+        // std.debug.print("[DEBUG] Created fd file: {s} with fd: {s}\n", .{dir_name_with_txt, fd_str});
 
         // Create hardlink to executable in temp directory
         const exe_basename = std.fs.path.basename(exe_path);
@@ -307,6 +314,8 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         std.process.exit(1);
     };
     defer gpa.free(exe_cache_dir);
+    
+    // std.debug.print("[DEBUG] Cache directory: {s}\n", .{exe_cache_dir});
 
     std.fs.cwd().makePath(exe_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -335,6 +344,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         std.fs.accessAbsolute(exe_path, .{}) catch {
             break :blk false;
         };
+        std.debug.print("[DEBUG] Using cached executable at: {s}\n", .{exe_path});
         break :blk true;
     };
 
@@ -364,23 +374,29 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
             std.process.exit(1);
         };
 
-        // Link the host.a with our shim to create the interpreter executable
-        const link_config = linker.LinkConfig{
-            .output_path = exe_path,
-            .object_files = &.{ example_host_path, shim_path },
-        };
-
-        linker.link(gpa, link_config) catch |err| {
+        // Link the host.a with our shim to create the interpreter executable using clang
+        const link_result = std.process.Child.run(.{
+            .allocator = gpa,
+            .argv = &.{ "clang", "-o", exe_path, example_host_path, shim_path },
+        }) catch |err| {
             std.log.err("Failed to link executable: {}\n", .{err});
             std.process.exit(1);
         };
+        defer gpa.free(link_result.stdout);
+        defer gpa.free(link_result.stderr);
+        
+        if (link_result.term.Exited != 0) {
+            std.log.err("Linker failed with exit code: {}\n", .{link_result.term.Exited});
+            if (link_result.stderr.len > 0) {
+                std.log.err("Linker stderr: {s}\n", .{link_result.stderr});
+            }
+            std.process.exit(1);
+        }
     }
 
-    // Set up shared memory, and insert the location of the `/path/to/app.roc`
-    // for now we use a hardcoded path to illustrate the concept
-    const test_string = "/path/to/main.roc (from shared memory)";
-    const shm_handle = writeToSharedMemory(test_string) catch |err| {
-        std.log.err("Failed to write to shared memory: {}\n", .{err});
+    // Set up shared memory with ModuleEnv
+    const shm_handle = setupSharedMemoryWithModuleEnv(gpa) catch |err| {
+        std.log.err("Failed to set up shared memory with ModuleEnv: {}\n", .{err});
         std.process.exit(1);
     };
 
@@ -423,6 +439,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     }
 
     // Run the interpreter as a child process from the temp directory
+    // std.debug.print("[DEBUG] About to spawn: {s}\n", .{temp_exe_path});
     var child = std.process.Child.init(&.{temp_exe_path}, gpa);
     child.cwd = std.fs.cwd().realpathAlloc(gpa, ".") catch |err| {
         std.log.err("Failed to get current directory: {}\n", .{err});
@@ -430,6 +447,10 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         std.process.exit(1);
     };
     defer gpa.free(child.cwd.?);
+    
+    // Forward stdout and stderr
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
 
     child.spawn() catch |err| {
         std.log.err("Failed to spawn {s}: {}\n", .{ exe_path, err });
@@ -437,11 +458,15 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         std.process.exit(1);
     };
 
+    // std.debug.print("[DEBUG] Child process spawned, waiting for completion...\n", .{});
+    
     // Wait for child to complete
     _ = child.wait() catch |err| {
         std.log.err("Failed waiting for child process: {}\n", .{err});
         std.process.exit(1);
     };
+    
+    // std.debug.print("[DEBUG] Child process exited with status: {}\n", .{term});
 }
 
 const SharedMemoryHandle = struct {
@@ -450,108 +475,86 @@ const SharedMemoryHandle = struct {
     size: usize,
 };
 
-fn writeToSharedMemory(data: []const u8) !SharedMemoryHandle {
-    // Calculate total size needed: length + data
-    const total_size = @sizeOf(usize) + data.len;
-
-    if (comptime is_windows) {
-        return writeToWindowsSharedMemory(data, total_size);
-    } else {
-        return writeToPosixSharedMemory(data, total_size);
-    }
-}
-
-fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHandle {
-    const shm_name_wide = std.unicode.utf8ToUtf16LeStringLiteral("ROC_FILE_TO_INTERPRET");
-
-    // Create shared memory object
-    const shm_handle = windows.CreateFileMappingW(
-        windows.INVALID_HANDLE_VALUE,
-        null,
-        windows.PAGE_READWRITE,
-        0,
-        @intCast(total_size),
-        shm_name_wide,
-    ) orelse {
-        std.debug.print("Failed to create shared memory mapping\n", .{});
-        return error.SharedMemoryCreateFailed;
+fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator) !SharedMemoryHandle {
+    // Create shared memory with SharedMemoryAllocator
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    const shm_size = 64 * 1024 * 1024; // 64MB for testing
+    var shm = try SharedMemoryAllocator.create(gpa, "ROC_FILE_TO_INTERPRET", shm_size, page_size);
+    // Don't defer deinit here - we need to keep the shared memory alive
+    
+    const shm_allocator = shm.allocator();
+    
+    // Allocate space for the offset value at the beginning
+    const offset_ptr = try shm_allocator.alloc(u64, 1);
+    // Also store the canonicalized expression index for the child to evaluate
+    const expr_idx_ptr = try shm_allocator.alloc(u32, 1);
+    
+    // Store the parent's address where the first allocation is
+    // The first allocation starts at offset 504 (0x1f8) from base
+    const first_alloc_addr = @intFromPtr(shm.base_ptr) + 504;
+    offset_ptr[0] = first_alloc_addr;
+    std.debug.print("[PARENT] Stored first alloc address: 0x{x} at location 0x{x}\n", .{offset_ptr[0], @intFromPtr(offset_ptr.ptr)});
+    
+    // Allocate and store a pointer to the ModuleEnv
+    const env_ptr = try shm_allocator.create(ModuleEnv);
+    std.debug.print("[PARENT] ModuleEnv ptr allocated at 0x{x}\n", .{@intFromPtr(env_ptr)});
+    
+    // Create a ModuleEnv for testing with a simple expression
+    // IMPORTANT: We must create the ModuleEnv directly with the shared memory allocator
+    // so all its internal allocations are in shared memory
+    const source_literal = "100 - 58";
+    const source = try shm_allocator.dupe(u8, source_literal);
+    const module_name = try shm_allocator.dupe(u8, "TestModule");
+    
+    var env = try ModuleEnv.init(shm_allocator, source);
+    env.source = source;
+    env.module_name = module_name;
+    try env.calcLineStarts();
+    
+    // Parse the source code
+    var parse_ast = try parse.parseExpr(&env);
+    
+    // Empty scratch space (required before canonicalization)
+    parse_ast.store.emptyScratch();
+    
+    // Initialize CIR fields in ModuleEnv
+    try env.initCIRFields(shm_allocator, "test");
+    
+    // Create canonicalizer
+    var canonicalizer = try can.init(&env, &parse_ast, null);
+    
+    // Canonicalize the expression
+    const parse_expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+    const canonicalized_expr_idx = try canonicalizer.canonicalizeExpr(parse_expr_idx) orelse {
+        return error.CanonicalizeFailure;
     };
-
-    // Map the shared memory
-    const mapped_ptr = windows.MapViewOfFile(
-        shm_handle,
-        windows.FILE_MAP_ALL_ACCESS,
-        0,
-        0,
-        0,
-    ) orelse {
-        _ = windows.CloseHandle(shm_handle);
-        std.debug.print("Failed to map shared memory\n", .{});
-        return error.SharedMemoryMapFailed;
-    };
-
-    // Write length and data
-    const length_ptr: *usize = @ptrCast(@alignCast(mapped_ptr));
-    length_ptr.* = data.len;
-
-    const data_ptr = @as([*]u8, @ptrCast(mapped_ptr)) + @sizeOf(usize);
-    @memcpy(data_ptr[0..data.len], data);
-
+    
+    // Store the canonicalized expression index for the child
+    expr_idx_ptr[0] = @intFromEnum(canonicalized_expr_idx.idx);
+    
+    // Type check the expression
+    var checker = try check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions);
+    _ = try checker.checkExpr(canonicalized_expr_idx.idx);
+    
+    // Copy the ModuleEnv to the allocated space
+    env_ptr.* = env;
+    std.debug.print("[PARENT] ModuleEnv copied. env.source.ptr = 0x{x}\n", .{@intFromPtr(env.source.ptr)});
+    
+    // Clean up the canonicalizer (but keep parse_ast data since it's in shared memory)
+    canonicalizer.deinit();
+    
+    // Don't deinit parse_ast since its data is in shared memory
+    // Don't deinit checker since its data is in shared memory
+    
+    // Update the header with used size
+    shm.updateHeader();
+    
+    // Return the shared memory handle
+    // The caller is responsible for cleanup
     return SharedMemoryHandle{
-        .fd = shm_handle,
-        .ptr = mapped_ptr,
-        .size = total_size,
-    };
-}
-
-fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHandle {
-    const shm_name = "/ROC_FILE_TO_INTERPRET";
-
-    // Unlink any existing shared memory object first
-    _ = posix.shm_unlink(shm_name);
-
-    // Create shared memory object
-    const shm_fd = posix.shm_open(shm_name, 0x0002 | 0x0200, 0o666); // O_RDWR | O_CREAT
-    if (shm_fd < 0) {
-        const errno = std.c._errno().*;
-        std.debug.print("Failed to create shared memory: {s}, fd = {}, errno = {}\n", .{ shm_name, shm_fd, errno });
-        return error.SharedMemoryCreateFailed;
-    }
-
-    // Set the size of the shared memory object
-    if (c.ftruncate(shm_fd, @intCast(total_size)) != 0) {
-        _ = c.close(shm_fd);
-        std.debug.print("Failed to set shared memory size\n", .{});
-        return error.SharedMemoryTruncateFailed;
-    }
-
-    // Map the shared memory
-    const mapped_ptr = posix.mmap(
-        null,
-        total_size,
-        0x01 | 0x02, // PROT_READ | PROT_WRITE
-        0x0001, // MAP_SHARED
-        shm_fd,
-        0,
-    ) orelse {
-        _ = c.close(shm_fd);
-        std.debug.print("Failed to map shared memory\n", .{});
-        return error.SharedMemoryMapFailed;
-    };
-    const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..total_size];
-
-    // Write length at the beginning
-    const length_ptr: *align(1) usize = @ptrCast(mapped_memory.ptr);
-    length_ptr.* = data.len;
-
-    // Write data after the length
-    const data_ptr = mapped_memory.ptr + @sizeOf(usize);
-    @memcpy(data_ptr[0..data.len], data);
-
-    return SharedMemoryHandle{
-        .fd = shm_fd,
-        .ptr = mapped_ptr,
-        .size = total_size,
+        .fd = shm.handle,
+        .ptr = shm.base_ptr,
+        .size = shm.getUsedSize(),
     };
 }
 

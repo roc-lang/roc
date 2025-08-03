@@ -289,9 +289,7 @@ fn addMainExe(
         .strip = strip,
     });
     host_lib.linkLibC();
-    const builtins = b.addModule("builtins", .{ .root_source_file = b.path("src/builtins/mod.zig") });
-    builtins.addImport("builtins", builtins);
-    host_lib.root_module.addImport("builtins", builtins);
+    host_lib.root_module.addImport("builtins", roc_modules.builtins);
 
     // Install host.a to the output directory
     const install_host = b.addInstallArtifact(host_lib, .{});
@@ -306,7 +304,22 @@ fn addMainExe(
         .strip = strip,
     });
     shim_lib.linkLibC();
-    shim_lib.root_module.addImport("builtins", builtins);
+    // Use the same builtins from roc_modules to avoid duplication
+    shim_lib.root_module.addImport("builtins", roc_modules.builtins);
+    // Add all the necessary modules from roc_modules
+    shim_lib.root_module.addImport("compile", roc_modules.compile);
+    shim_lib.root_module.addImport("base", roc_modules.base);
+    shim_lib.root_module.addImport("collections", roc_modules.collections);
+    shim_lib.root_module.addImport("types", roc_modules.types);
+    shim_lib.root_module.addImport("serialization", roc_modules.serialization);
+    // Add the simplified evaluator for the shim
+    shim_lib.root_module.addImport("eval_shim", b.addModule("eval_shim", .{
+        .root_source_file = b.path("src/eval_shim.zig"),
+        .imports = &.{
+            .{ .name = "compile", .module = roc_modules.compile },
+            .{ .name = "base", .module = roc_modules.base },
+        },
+    }));
 
     // Install shim.a to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});
