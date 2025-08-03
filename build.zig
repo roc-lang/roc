@@ -304,22 +304,8 @@ fn addMainExe(
         .strip = strip,
     });
     shim_lib.linkLibC();
-    // Use the same builtins from roc_modules to avoid duplication
-    shim_lib.root_module.addImport("builtins", roc_modules.builtins);
-    // Add all the necessary modules from roc_modules
-    shim_lib.root_module.addImport("compile", roc_modules.compile);
-    shim_lib.root_module.addImport("base", roc_modules.base);
-    shim_lib.root_module.addImport("collections", roc_modules.collections);
-    shim_lib.root_module.addImport("types", roc_modules.types);
-    shim_lib.root_module.addImport("serialization", roc_modules.serialization);
-    // Add the simplified evaluator for the shim
-    shim_lib.root_module.addImport("eval_shim", b.addModule("eval_shim", .{
-        .root_source_file = b.path("src/eval_shim.zig"),
-        .imports = &.{
-            .{ .name = "compile", .module = roc_modules.compile },
-            .{ .name = "base", .module = roc_modules.base },
-        },
-    }));
+    // Add all modules from roc_modules that the shim needs
+    roc_modules.addAll(shim_lib);
 
     // Install shim.a to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});

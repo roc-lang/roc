@@ -103,8 +103,6 @@ base_ptr: [*]align(1) u8,
 total_size: usize,
 /// Current offset for bump allocation (atomic for thread-safe allocation)
 offset: std.atomic.Value(usize),
-/// Name of the shared memory region (for child process to find it)
-name: []const u8,
 /// Whether this allocator owns the shared memory (should clean up)
 is_owner: bool,
 /// Page size for this system
@@ -189,7 +187,6 @@ pub fn create(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: 
                 .base_ptr = @ptrCast(@alignCast(base_ptr)),
                 .total_size = aligned_size,
                 .offset = std.atomic.Value(usize).init(@sizeOf(Header)), // Start after header
-                .name = try gpa.dupe(u8, name),
                 .is_owner = true,
                 .page_size = page_size,
             };
@@ -265,7 +262,6 @@ pub fn create(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: 
                 .base_ptr = @ptrCast(@alignCast(base_ptr.ptr)),
                 .total_size = aligned_size,
                 .offset = std.atomic.Value(usize).init(@sizeOf(Header)), // Start after header
-                .name = try gpa.dupe(u8, name),
                 .is_owner = true,
                 .page_size = page_size,
             };
@@ -343,7 +339,6 @@ pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8, page_size: usize
                 .base_ptr = @ptrCast(@alignCast(base_ptr)),
                 .total_size = @as(usize, @intCast(header.used_size)),
                 .offset = std.atomic.Value(usize).init(@as(usize, @intCast(header.data_offset))),
-                .name = try gpa.dupe(u8, name),
                 .is_owner = false,
                 .page_size = page_size,
             };
@@ -404,7 +399,6 @@ pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8, page_size: usize
                 .base_ptr = @ptrCast(@alignCast(base_ptr.ptr)),
                 .total_size = actual_size,
                 .offset = std.atomic.Value(usize).init(@as(usize, @intCast(header.data_offset))),
-                .name = try gpa.dupe(u8, name),
                 .is_owner = false,
                 .page_size = page_size,
             };
@@ -455,7 +449,6 @@ pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: us
                 .base_ptr = @ptrCast(@alignCast(base_ptr)),
                 .total_size = aligned_size,
                 .offset = std.atomic.Value(usize).init(0),
-                .name = try gpa.dupe(u8, name),
                 .is_owner = false,
                 .page_size = page_size,
             };
@@ -494,7 +487,6 @@ pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: us
                 .base_ptr = @ptrCast(@alignCast(base_ptr.ptr)),
                 .total_size = aligned_size,
                 .offset = std.atomic.Value(usize).init(0),
-                .name = try gpa.dupe(u8, name),
                 .is_owner = false,
                 .page_size = page_size,
             };
@@ -512,6 +504,7 @@ pub fn updateHeader(self: *SharedMemoryAllocator) void {
 
 /// Deinitializes the shared memory allocator
 pub fn deinit(self: *SharedMemoryAllocator, gpa: std.mem.Allocator) void {
+    _ = gpa; // No longer needed since we don't store the name
     // Update header before closing
     if (self.is_owner) {
         self.updateHeader();
@@ -525,18 +518,12 @@ pub fn deinit(self: *SharedMemoryAllocator, gpa: std.mem.Allocator) void {
             std.posix.munmap(@alignCast(self.base_ptr[0..self.total_size]));
             _ = std.posix.close(self.handle);
 
-            // If we're the owner and on POSIX, try to unlink
-            // (though child process should have already done this)
-            if (self.is_owner) {
-                const shm_name = std.fmt.allocPrintZ(gpa, "/{s}", .{self.name}) catch return;
-                defer gpa.free(shm_name);
-                _ = c.shm_unlink(shm_name.ptr);
-            }
+            // Shared memory will be automatically cleaned up when all references are closed
+            // since we're using fd passing instead of named shared memory
         },
         else => @compileError("Unsupported platform"),
     }
 
-    gpa.free(self.name);
 }
 
 /// Returns a std.mem.Allocator interface for this shared memory allocator

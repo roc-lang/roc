@@ -4,7 +4,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const compile = @import("compile");
-const eval_shim = @import("eval_shim");
+const types = @import("types");
+const eval = @import("eval/interpreter.zig");
+const stack = @import("eval/stack.zig");
+const layout_store = @import("layout/store.zig");
 
 const RocStr = builtins.str.RocStr;
 const ModuleEnv = compile.ModuleEnv;
@@ -147,19 +150,75 @@ fn evaluateFromWindowsSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
     // Relocate the ModuleEnv
     env_ptr.relocate(offset);
 
-    // Now actually evaluate the expression!
-    const eval_result = eval_shim.evalExpr(env_ptr, expr_idx) catch |err| {
+    // Set up the real interpreter infrastructure
+    var eval_stack = stack.Stack.initCapacity(std.heap.page_allocator, 64 * 1024) catch |err| {
         var buf: [256]u8 = undefined;
-        const err_str = std.fmt.bufPrint(&buf, "Evaluation error: {s}", .{@errorName(err)}) catch "Error formatting";
+        const err_str = std.fmt.bufPrint(&buf, "Stack init error: {s}", .{@errorName(err)}) catch "Error";
+        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+    };
+    defer eval_stack.deinit();
+
+    var layout_cache = layout_store.Store.init(env_ptr, &env_ptr.types) catch |err| {
+        var buf: [256]u8 = undefined;
+        const err_str = std.fmt.bufPrint(&buf, "Layout cache error: {s}", .{@errorName(err)}) catch "Error";
+        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+    };
+    defer layout_cache.deinit();
+
+    var interpreter = eval.Interpreter.init(
+        std.heap.page_allocator,
+        env_ptr,
+        &eval_stack,
+        &layout_cache,
+        &env_ptr.types,
+    ) catch |err| {
+        var buf: [256]u8 = undefined;
+        const err_str = std.fmt.bufPrint(&buf, "Interpreter init error: {s}", .{@errorName(err)}) catch "Error";
+        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+    };
+    defer interpreter.deinit();
+
+    // Evaluate using the REAL interpreter
+    const expr_idx_enum: ModuleEnv.Expr.Idx = @enumFromInt(expr_idx);
+    const stack_result = interpreter.eval(expr_idx_enum) catch |err| {
+        var buf: [256]u8 = undefined;
+        const err_str = std.fmt.bufPrint(&buf, "Evaluation error: {s}", .{@errorName(err)}) catch "Error";
         return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
     };
 
-    // Format the result
-    var buf: [256]u8 = undefined;
-    const result_str = if (eval_result.isError())
-        std.fmt.bufPrint(&buf, "Evaluation failed", .{}) catch "Error"
-    else blk: {
-        break :blk std.fmt.bufPrint(&buf, "Expression '{s}' evaluated to: {}", .{ env_ptr.source, eval_result }) catch "Error formatting";
+    // Format the result based on its layout
+    var buf: [1024]u8 = undefined;
+    const result_str = blk: {
+        if (stack_result.layout.tag == .scalar) {
+            if (stack_result.layout.data.scalar.tag == .int) {
+                const precision = stack_result.layout.data.scalar.data.int;
+                const int_val = eval.readIntFromMemory(@ptrCast(stack_result.ptr.?), precision);
+                break :blk std.fmt.bufPrint(&buf, "{}", .{int_val}) catch "Error formatting";
+            } else if (stack_result.layout.data.scalar.tag == .bool) {
+                const bool_val = @as(*const bool, @ptrCast(@alignCast(stack_result.ptr.?))).*;
+                break :blk std.fmt.bufPrint(&buf, "{}", .{bool_val}) catch "Error formatting";
+            } else if (stack_result.layout.data.scalar.tag == .frac) {
+                const float_precision = stack_result.layout.data.scalar.data.frac;
+                switch (float_precision) {
+                    .f32 => {
+                        const float_val = @as(*const f32, @ptrCast(@alignCast(stack_result.ptr.?))).*;
+                        break :blk std.fmt.bufPrint(&buf, "{d}", .{float_val}) catch "Error formatting";
+                    },
+                    .f64 => {
+                        const float_val = @as(*const f64, @ptrCast(@alignCast(stack_result.ptr.?))).*;
+                        break :blk std.fmt.bufPrint(&buf, "{d}", .{float_val}) catch "Error formatting";
+                    },
+                    .dec => {
+                        // Decimal is a 128-bit fixed-point number - for now just show that we have a decimal
+                        break :blk std.fmt.bufPrint(&buf, "<decimal>", .{}) catch "Error formatting";
+                    },
+                }
+            } else {
+                break :blk std.fmt.bufPrint(&buf, "Unsupported scalar type", .{}) catch "Error";
+            }
+        } else {
+            break :blk std.fmt.bufPrint(&buf, "Complex type result (layout: {})", .{stack_result.layout.tag}) catch "Error";
+        }
     };
 
     return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), result_str.len);
@@ -235,19 +294,75 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
         env_ptr.module_name.ptr = @ptrFromInt(@as(usize, @intCast(new_module_ptr)));
     }
 
-    // Now actually evaluate the expression!
-    const eval_result = eval_shim.evalExpr(env_ptr, expr_idx) catch |err| {
+    // Set up the real interpreter infrastructure
+    var eval_stack = stack.Stack.initCapacity(std.heap.page_allocator, 64 * 1024) catch |err| {
         var buf: [256]u8 = undefined;
-        const err_str = std.fmt.bufPrint(&buf, "Evaluation error: {s}", .{@errorName(err)}) catch "Error formatting";
+        const err_str = std.fmt.bufPrint(&buf, "Stack init error: {s}", .{@errorName(err)}) catch "Error";
+        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+    };
+    defer eval_stack.deinit();
+
+    var layout_cache = layout_store.Store.init(env_ptr, &env_ptr.types) catch |err| {
+        var buf: [256]u8 = undefined;
+        const err_str = std.fmt.bufPrint(&buf, "Layout cache error: {s}", .{@errorName(err)}) catch "Error";
+        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+    };
+    defer layout_cache.deinit();
+
+    var interpreter = eval.Interpreter.init(
+        std.heap.page_allocator,
+        env_ptr,
+        &eval_stack,
+        &layout_cache,
+        &env_ptr.types,
+    ) catch |err| {
+        var buf: [256]u8 = undefined;
+        const err_str = std.fmt.bufPrint(&buf, "Interpreter init error: {s}", .{@errorName(err)}) catch "Error";
+        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+    };
+    defer interpreter.deinit();
+
+    // Evaluate using the REAL interpreter
+    const expr_idx_enum: ModuleEnv.Expr.Idx = @enumFromInt(expr_idx);
+    const stack_result = interpreter.eval(expr_idx_enum) catch |err| {
+        var buf: [256]u8 = undefined;
+        const err_str = std.fmt.bufPrint(&buf, "Evaluation error: {s}", .{@errorName(err)}) catch "Error";
         return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
     };
 
-    // Format the result
-    var buf: [256]u8 = undefined;
-    const result_str = if (eval_result.isError())
-        std.fmt.bufPrint(&buf, "Evaluation failed", .{}) catch "Error"
-    else blk: {
-        break :blk std.fmt.bufPrint(&buf, "Expression '{s}' evaluated to: {}", .{ env_ptr.source, eval_result }) catch "Error formatting";
+    // Format the result based on its layout
+    var buf: [1024]u8 = undefined;
+    const result_str = blk: {
+        if (stack_result.layout.tag == .scalar) {
+            if (stack_result.layout.data.scalar.tag == .int) {
+                const precision = stack_result.layout.data.scalar.data.int;
+                const int_val = eval.readIntFromMemory(@ptrCast(stack_result.ptr.?), precision);
+                break :blk std.fmt.bufPrint(&buf, "{}", .{int_val}) catch "Error formatting";
+            } else if (stack_result.layout.data.scalar.tag == .bool) {
+                const bool_val = @as(*const bool, @ptrCast(@alignCast(stack_result.ptr.?))).*;
+                break :blk std.fmt.bufPrint(&buf, "{}", .{bool_val}) catch "Error formatting";
+            } else if (stack_result.layout.data.scalar.tag == .frac) {
+                const float_precision = stack_result.layout.data.scalar.data.frac;
+                switch (float_precision) {
+                    .f32 => {
+                        const float_val = @as(*const f32, @ptrCast(@alignCast(stack_result.ptr.?))).*;
+                        break :blk std.fmt.bufPrint(&buf, "{d}", .{float_val}) catch "Error formatting";
+                    },
+                    .f64 => {
+                        const float_val = @as(*const f64, @ptrCast(@alignCast(stack_result.ptr.?))).*;
+                        break :blk std.fmt.bufPrint(&buf, "{d}", .{float_val}) catch "Error formatting";
+                    },
+                    .dec => {
+                        // Decimal is a 128-bit fixed-point number - for now just show that we have a decimal
+                        break :blk std.fmt.bufPrint(&buf, "<decimal>", .{}) catch "Error formatting";
+                    },
+                }
+            } else {
+                break :blk std.fmt.bufPrint(&buf, "Unsupported scalar type", .{}) catch "Error";
+            }
+        } else {
+            break :blk std.fmt.bufPrint(&buf, "Complex type result (layout: {})", .{stack_result.layout.tag}) catch "Error";
+        }
     };
 
     return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), result_str.len);
