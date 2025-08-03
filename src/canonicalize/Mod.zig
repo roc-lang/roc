@@ -6228,6 +6228,13 @@ fn checkUsedUnderscoreVariable(
 }
 
 fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Allocator.Error!void {
+    // Define the type for unused variables
+    const UnusedVar = struct { ident: base.Ident.Idx, region: Region };
+
+    // Collect all unused variables first so we can sort them
+    var unused_vars = std.ArrayList(UnusedVar).init(self.env.gpa);
+    defer unused_vars.deinit();
+
     // Iterate through all identifiers in this scope
     var iterator = scope.idents.iterator();
     while (iterator.next()) |entry| {
@@ -6247,10 +6254,26 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
         // Get the region for this pattern to provide good error location
         const region = self.env.store.getPatternRegion(pattern_idx);
 
-        // Report unused variable
-        try self.env.pushDiagnostic(Diagnostic{ .unused_variable = .{
+        // Collect unused variable for sorting
+        try unused_vars.append(.{
             .ident = ident_idx,
             .region = region,
+        });
+    }
+
+    // Sort unused variables by region (earlier in file first)
+    std.mem.sort(UnusedVar, unused_vars.items, {}, struct {
+        fn lessThan(_: void, a: UnusedVar, b: UnusedVar) bool {
+            // Compare by start offset (position in file)
+            return a.region.start.offset < b.region.start.offset;
+        }
+    }.lessThan);
+
+    // Report unused variables in sorted order
+    for (unused_vars.items) |unused| {
+        try self.env.pushDiagnostic(Diagnostic{ .unused_variable = .{
+            .ident = unused.ident,
+            .region = unused.region,
         } });
     }
 }
@@ -8677,5 +8700,81 @@ test "hex literal parsing logic integration" {
         }
 
         try std.testing.expectEqual(tc.expected_value, u128_val);
+    }
+}
+
+test "unused variables are sorted by region" {
+    const gpa = std.testing.allocator;
+
+    // Create a test program with unused variables in non-alphabetical order
+    const source =
+        \\app [main!] { pf: platform "../basic-cli/main.roc" }
+        \\
+        \\func = |_| {
+        \\    zebra = 5    # Line 3 - should be reported first
+        \\    apple = 10   # Line 4 - should be reported second  
+        \\    monkey = 15  # Line 5 - should be reported third
+        \\    used = 20    # Line 6 - this one is used
+        \\    used
+        \\}
+        \\
+        \\main! = |_| func({})
+    ;
+
+    var ctx = try ScopeTestContext.init(gpa);
+    defer ctx.deinit();
+
+    // Parse the source
+    const ast = try parse.AST.parseFromStr(gpa, source, "test.roc", &ctx.module_env.string_interner);
+    defer ast.deinit();
+
+    // Canonicalize the AST
+    const parsed_module = ast.parsed_module;
+    var self = try Self.initFromAST(parsed_module, &ctx.module_env, source);
+    try self.canonicalizeModule();
+    defer self.deinit();
+
+    // Check that we have unused variable diagnostics
+    var unused_var_diagnostics = std.ArrayList(struct {
+        ident: base.Ident.Idx,
+        region: Region,
+    }).init(gpa);
+    defer unused_var_diagnostics.deinit();
+
+    // Collect all unused variable diagnostics
+    for (ctx.module_env.diagnostics.items) |diagnostic| {
+        switch (diagnostic) {
+            .unused_variable => |data| {
+                try unused_var_diagnostics.append(.{
+                    .ident = data.ident,
+                    .region = data.region,
+                });
+            },
+            else => continue,
+        }
+    }
+
+    // We should have exactly 3 unused variables (zebra, apple, monkey)
+    try std.testing.expectEqual(@as(usize, 3), unused_var_diagnostics.items.len);
+
+    // Check that they are sorted by region (line number)
+    // The source positions should be in increasing order
+    var prev_offset: u32 = 0;
+    for (unused_var_diagnostics.items) |diagnostic| {
+        const current_offset = diagnostic.region.start.offset;
+
+        // Each unused variable should appear after the previous one in the source
+        try std.testing.expect(current_offset > prev_offset);
+        prev_offset = current_offset;
+
+        // Also verify the names are in the expected order (zebra, apple, monkey)
+        const ident_text = ctx.module_env.idents.getText(diagnostic.ident);
+        if (unused_var_diagnostics.items[0].ident.idx == diagnostic.ident.idx) {
+            try std.testing.expectEqualStrings("zebra", ident_text);
+        } else if (unused_var_diagnostics.items[1].ident.idx == diagnostic.ident.idx) {
+            try std.testing.expectEqualStrings("apple", ident_text);
+        } else if (unused_var_diagnostics.items[2].ident.idx == diagnostic.ident.idx) {
+            try std.testing.expectEqualStrings("monkey", ident_text);
+        }
     }
 }
