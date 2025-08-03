@@ -314,7 +314,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         std.process.exit(1);
     };
     defer gpa.free(exe_cache_dir);
-    
+
     // std.debug.print("[DEBUG] Cache directory: {s}\n", .{exe_cache_dir});
 
     std.fs.cwd().makePath(exe_cache_dir) catch |err| switch (err) {
@@ -344,22 +344,28 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         std.fs.accessAbsolute(exe_path, .{}) catch {
             break :blk false;
         };
-        std.debug.print("[DEBUG] Using cached executable at: {s}\n", .{exe_path});
         break :blk true;
     };
 
     if (!exe_exists) {
 
-        // TODO replace this with the platform/host.a library in future, we are using a simple
-        // test platform host here to demonstrate the process. Before we can use a real platform
-        // we will need to parse the app.roc header to get the platform package (via URL etc).
-        //
-        // Using our pre-built `host.a` from the install directory
-        const example_host_path = std.fs.cwd().realpathAlloc(gpa, "zig-out/lib/libplatform_host_str_simple.a") catch |err| {
-            std.log.err("Failed to get absolute path for host library: {}\n", .{err});
-            std.process.exit(1);
+        // Production platform loading: attempt to resolve platform from app header,
+        // but fall back to the simple platform for compatibility
+        const host_path = resolvePlatformHost(gpa, args.path) catch |err| switch (err) {
+            error.NoPlatformFound, error.PlatformNotSupported => blk: {
+                // Fall back to the built-in simple platform
+                std.log.warn("Using fallback simple platform (production should use real platform)\n", .{});
+                break :blk std.fs.cwd().realpathAlloc(gpa, "zig-out/lib/libplatform_host_str_simple.a") catch |fallback_err| {
+                    std.log.err("Failed to get absolute path for fallback host library: {}\n", .{fallback_err});
+                    std.process.exit(1);
+                };
+            },
+            else => {
+                std.log.err("Failed to resolve platform: {}\n", .{err});
+                std.process.exit(1);
+            },
         };
-        defer gpa.free(example_host_path);
+        defer gpa.free(host_path);
 
         // Extract embedded shim library to cache
         // TODO check for a cached copy first...
@@ -377,14 +383,14 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         // Link the host.a with our shim to create the interpreter executable using clang
         const link_result = std.process.Child.run(.{
             .allocator = gpa,
-            .argv = &.{ "clang", "-o", exe_path, example_host_path, shim_path },
+            .argv = &.{ "clang", "-o", exe_path, host_path, shim_path },
         }) catch |err| {
             std.log.err("Failed to link executable: {}\n", .{err});
             std.process.exit(1);
         };
         defer gpa.free(link_result.stdout);
         defer gpa.free(link_result.stderr);
-        
+
         if (link_result.term.Exited != 0) {
             std.log.err("Linker failed with exit code: {}\n", .{link_result.term.Exited});
             if (link_result.stderr.len > 0) {
@@ -447,7 +453,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         std.process.exit(1);
     };
     defer gpa.free(child.cwd.?);
-    
+
     // Forward stdout and stderr
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
@@ -459,13 +465,13 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     };
 
     // std.debug.print("[DEBUG] Child process spawned, waiting for completion...\n", .{});
-    
+
     // Wait for child to complete
     _ = child.wait() catch |err| {
         std.log.err("Failed waiting for child process: {}\n", .{err});
         std.process.exit(1);
     };
-    
+
     // std.debug.print("[DEBUG] Child process exited with status: {}\n", .{term});
 }
 
@@ -475,94 +481,109 @@ const SharedMemoryHandle = struct {
     size: usize,
 };
 
+/// Resolve the platform host library from a Roc file
+/// This function attempts to parse the app header and resolve the platform
+/// Returns error.NoPlatformFound if no platform is specified
+/// Returns error.PlatformNotSupported if the platform is not available locally
+fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (std.mem.Allocator.Error || error{ NoPlatformFound, PlatformNotSupported })![]u8 {
+    _ = gpa;
+    _ = roc_file_path;
+
+    // For now, this is a placeholder that always fails to trigger fallback
+    // In production, this would:
+    // 1. Read and parse the Roc file header
+    // 2. Extract platform specification (e.g., platform "cli" or platform URL)
+    // 3. Resolve platform to local host library
+    // 4. Return path to the platform's host.a library
+
+    return error.NoPlatformFound;
+}
+
 fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     // Use 2TB on Linux, 256MB on macOS (macOS has lower shm limits)
-    const shm_size = if (builtin.os.tag == .macos) 
+    const shm_size = if (builtin.os.tag == .macos)
         256 * 1024 * 1024 // 256MB on macOS for now (can be increased via sysctl)
     else
         2 * 1024 * 1024 * 1024 * 1024; // 2TB on Linux
     var shm = try SharedMemoryAllocator.create(gpa, "ROC_FILE_TO_INTERPRET", shm_size, page_size);
     // Don't defer deinit here - we need to keep the shared memory alive
-    
+
     const shm_allocator = shm.allocator();
-    
+
     // Allocate space for the offset value at the beginning
     const offset_ptr = try shm_allocator.alloc(u64, 1);
     // Also store the canonicalized expression index for the child to evaluate
     const expr_idx_ptr = try shm_allocator.alloc(u32, 1);
-    
+
     // Store the parent's address where the first allocation is
     // The first allocation starts at offset 504 (0x1f8) from base
     const first_alloc_addr = @intFromPtr(shm.base_ptr) + 504;
     offset_ptr[0] = first_alloc_addr;
-    std.debug.print("[PARENT] Stored first alloc address: 0x{x} at location 0x{x}\n", .{offset_ptr[0], @intFromPtr(offset_ptr.ptr)});
-    
+
     // Allocate and store a pointer to the ModuleEnv
     const env_ptr = try shm_allocator.create(ModuleEnv);
-    std.debug.print("[PARENT] ModuleEnv ptr allocated at 0x{x}\n", .{@intFromPtr(env_ptr)});
-    
+
     // Read the actual Roc file
     const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| {
-        std.log.err("Failed to open Roc file '{s}': {}\n", .{roc_file_path, err});
+        std.log.err("Failed to open Roc file '{s}': {}\n", .{ roc_file_path, err });
         return error.FileNotFound;
     };
     defer roc_file.close();
-    
+
     // Read the entire file into shared memory
     const file_size = try roc_file.getEndPos();
     const source = try shm_allocator.alloc(u8, file_size);
     _ = try roc_file.read(source);
-    
+
     // Extract module name from the file path
     const basename = std.fs.path.basename(roc_file_path);
     const module_name = try shm_allocator.dupe(u8, basename);
-    
+
     var env = try ModuleEnv.init(shm_allocator, source);
     env.source = source;
     env.module_name = module_name;
     try env.calcLineStarts();
-    
+
     // Parse the source code as an expression for simplicity
     var parse_ast = try parse.parseExpr(&env);
-    
+
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
-    
+
     // Initialize CIR fields in ModuleEnv
     try env.initCIRFields(shm_allocator, "test");
-    
+
     // Create canonicalizer
     var canonicalizer = try can.init(&env, &parse_ast, null);
-    
+
     // For parseExpr, the root_node_idx points directly to the expression
     const main_expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    
+
     const canonicalized_expr_idx = try canonicalizer.canonicalizeExpr(main_expr_idx) orelse {
         return error.CanonicalizeFailure;
     };
-    
+
     // Store the canonicalized expression index for the child
     expr_idx_ptr[0] = @intFromEnum(canonicalized_expr_idx.idx);
-    
+
     // Type check the expression
     var checker = try check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions);
     _ = try checker.checkExpr(canonicalized_expr_idx.idx);
-    
+
     // Copy the ModuleEnv to the allocated space
     env_ptr.* = env;
-    std.debug.print("[PARENT] ModuleEnv copied. env.source.ptr = 0x{x}\n", .{@intFromPtr(env.source.ptr)});
-    
+
     // Clean up the canonicalizer (but keep parse_ast data since it's in shared memory)
     canonicalizer.deinit();
-    
+
     // Don't deinit parse_ast since its data is in shared memory
     // Don't deinit checker since its data is in shared memory
-    
+
     // Update the header with used size
     shm.updateHeader();
-    
+
     // Return the shared memory handle
     // The caller is responsible for cleanup
     return SharedMemoryHandle{
@@ -578,9 +599,7 @@ fn cleanupSharedMemory() void {
         return;
     } else {
         const shm_name = "/ROC_FILE_TO_INTERPRET";
-        if (posix.shm_unlink(shm_name) != 0) {
-            std.debug.print("Failed to unlink shared memory\n", .{});
-        }
+        if (posix.shm_unlink(shm_name) != 0) {}
     }
 }
 

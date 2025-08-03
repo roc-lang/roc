@@ -43,8 +43,6 @@ fn readFdFromFile() ![]u8 {
     // Get our own executable path
     const exe_path = try std.fs.selfExePathAlloc(std.heap.page_allocator);
     defer std.heap.page_allocator.free(exe_path);
-    
-    std.debug.print("[SHIM] Executable path: {s}\n", .{exe_path});
 
     // Get the directory containing our executable (should be "roc-tmp-<random>")
     const exe_dir = std.fs.path.dirname(exe_path) orelse return error.InvalidExePath;
@@ -64,31 +62,23 @@ fn readFdFromFile() ![]u8 {
 
     const fd_file_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}.txt", .{dir_path});
     defer std.heap.page_allocator.free(fd_file_path);
-    
-    std.debug.print("[SHIM] Looking for fd file: {s}\n", .{fd_file_path});
-    
+
     // Check if file exists
     std.fs.cwd().access(fd_file_path, .{}) catch |err| {
-        std.debug.print("[SHIM] File doesn't exist at {s}: {}\n", .{fd_file_path, err});
         // Try without /private prefix
         if (std.mem.startsWith(u8, fd_file_path, "/private")) {
             const alt_path = fd_file_path[8..];
-            std.debug.print("[SHIM] Checking alternate path: {s}\n", .{alt_path});
-            std.fs.cwd().access(alt_path, .{}) catch |err2| {
-                std.debug.print("[SHIM] File doesn't exist at alternate path either: {}\n", .{err2});
-            };
+            std.fs.cwd().access(alt_path, .{}) catch |err2| {};
         }
     };
 
     // Read the fd from the file - try with and without /private prefix
     const fd_file = std.fs.cwd().openFile(fd_file_path, .{}) catch |err| {
-        std.debug.print("[SHIM] Failed to open {s}: {}\n", .{fd_file_path, err});
         switch (err) {
             error.FileNotFound => {
                 // Try without /private prefix if it starts with it
                 if (std.mem.startsWith(u8, fd_file_path, "/private")) {
                     const alt_path = fd_file_path[8..]; // Skip "/private"
-                    std.debug.print("[SHIM] Trying alternate path: {s}\n", .{alt_path});
                     const alt_file = std.fs.cwd().openFile(alt_path, .{}) catch return error.FdFileNotFound;
                     defer alt_file.close();
                     const alt_content = try alt_file.readToEndAlloc(std.heap.page_allocator, 64);
@@ -124,7 +114,7 @@ export fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque) ca
         evaluateFromWindowsSharedMemory(ops)
     else
         evaluateFromPosixSharedMemory(ops);
-    
+
     const roc_str_ptr: *RocStr = @ptrCast(@alignCast(ret_ptr));
     roc_str_ptr.* = result;
 }
@@ -150,40 +140,36 @@ fn evaluateFromWindowsSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
     // Read the parent address from the beginning
     const parent_addr_ptr: *align(1) const u64 = @ptrCast(mapped_ptr);
     const parent_addr = parent_addr_ptr.*;
-    
+
     // Read the expression index (after the u64)
     const expr_idx_ptr: *align(1) const u32 = @ptrCast(@as([*]u8, @ptrCast(mapped_ptr)) + @sizeOf(u64));
     const expr_idx = expr_idx_ptr.*;
-    
+
     // Calculate relocation offset
     const child_addr = @intFromPtr(mapped_ptr);
     const offset = @as(isize, @intCast(child_addr)) - @as(isize, @intCast(parent_addr));
-    
+
     // Get pointer to ModuleEnv (after the u64 and u32)
     const env_ptr = @as(*ModuleEnv, @ptrCast(@alignCast(@as([*]u8, @ptrCast(mapped_ptr)) + @sizeOf(u64) + @sizeOf(u32))));
-    
+
     // Relocate the ModuleEnv
     env_ptr.relocate(offset);
-    
-    std.debug.print("[SHIM] ModuleEnv relocated. Expr idx: {}\n", .{expr_idx});
-    
+
     // Now actually evaluate the expression!
     const eval_result = eval_shim.evalExpr(env_ptr, expr_idx) catch |err| {
         var buf: [256]u8 = undefined;
         const err_str = std.fmt.bufPrint(&buf, "Evaluation error: {s}", .{@errorName(err)}) catch "Error formatting";
         return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
     };
-    
+
     // Format the result
     var buf: [256]u8 = undefined;
     const result_str = if (eval_result.is_error)
         std.fmt.bufPrint(&buf, "Evaluation failed", .{}) catch "Error"
     else blk: {
-        std.debug.print("[SHIM] Evaluation succeeded! Result: {}\n", .{eval_result.value});
-        break :blk std.fmt.bufPrint(&buf, "Expression '{s}' evaluated to: {}", .{env_ptr.source, eval_result.value}) catch "Error formatting";
+        break :blk std.fmt.bufPrint(&buf, "Expression '{s}' evaluated to: {}", .{ env_ptr.source, eval_result.value }) catch "Error formatting";
     };
-    
-    std.debug.print("[SHIM] Returning string: {s}\n", .{result_str});
+
     return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), result_str.len);
 }
 
@@ -204,14 +190,10 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
     var stat_buf: std.c.Stat = undefined;
     if (posix.fstat(shm_fd, &stat_buf) != 0) {
         const errno = std.c._errno().*;
-        std.debug.print("[SHIM] fstat failed for fd {}: errno={}\n", .{shm_fd, errno});
         return RocStr.empty();
     }
-    
-    std.debug.print("[SHIM v2] Shared memory size: {}\n", .{stat_buf.size});
 
     if (stat_buf.size < @sizeOf(usize)) {
-        std.debug.print("[SHIM] Shared memory too small: {} < {}\n", .{stat_buf.size, @sizeOf(usize)});
         return RocStr.empty();
     }
 
@@ -233,89 +215,65 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
     // This is 8 bytes before the end of the 512-byte header, likely for alignment
     const first_alloc_offset = 504;
     const data_ptr = mapped_memory.ptr + first_alloc_offset;
-    
+
     // Read the parent address from the first allocation
     const parent_addr_ptr: *align(1) const u64 = @ptrCast(data_ptr);
     const parent_addr = parent_addr_ptr.*;
-    
+
     // Read the expression index (after the u64)
     const expr_idx_ptr: *align(1) const u32 = @ptrCast(data_ptr + @sizeOf(u64));
     const expr_idx = expr_idx_ptr.*;
-    
+
     // Calculate relocation offset (both addresses should be for the data area, not the full mapping)
     const child_addr = @intFromPtr(data_ptr);
     const offset = @as(isize, @intCast(child_addr)) - @as(isize, @intCast(parent_addr));
-    
-    std.debug.print("[SHIM] Parent addr: 0x{x}, Child addr: 0x{x}, Offset: {}\n", .{parent_addr, child_addr, offset});
-    
-    std.debug.print("[SHIM] About to calculate ModuleEnv location...\n", .{});
-    
+
     // The parent stored the ModuleEnv at offset 0x10 from the first allocation
     // (after the u64 parent address and u32 expr index)
     const module_env_offset = 0x10; // 8 bytes for u64, 4 bytes for u32, 4 bytes padding
     const env_addr = @intFromPtr(data_ptr) + module_env_offset;
-    std.debug.print("[SHIM] ModuleEnv should be at 0x{x} (data_ptr=0x{x} + offset=0x{x})\n", .{env_addr, @intFromPtr(data_ptr), module_env_offset});
-    
+
     const env_ptr = @as(*ModuleEnv, @ptrFromInt(env_addr));
-    
+
     // Let's verify what's at the ModuleEnv location before relocating
-    std.debug.print("[SHIM] About to relocate ModuleEnv at 0x{x} with offset {}\n", .{env_addr, offset});
-    
-    // Debug: print the first few bytes to see what's there
-    const env_bytes = @as([*]const u8, @ptrCast(env_ptr));
-    std.debug.print("[SHIM] First 64 bytes at ModuleEnv location:\n", .{});
-    for (0..4) |row| {
-        std.debug.print("[SHIM]   ", .{});
-        for (0..16) |col| {
-            const idx = row * 16 + col;
-            std.debug.print("{x:0>2} ", .{env_bytes[idx]});
-        }
-        std.debug.print("\n", .{});
-    }
-    
+
     // IMPORTANT: Before relocating, we need to set the gpa field to a valid allocator
     // The relocate function expects gpa to be valid and won't relocate it
     env_ptr.gpa = std.heap.page_allocator;
-    
+
     // Relocate the ModuleEnv - this will adjust all the internal pointers
-    std.debug.print("[SHIM] Calling relocate...\n", .{});
     env_ptr.relocate(offset);
-    
+
     // Also relocate the source and module_name strings manually
     if (env_ptr.source.len > 0) {
         const old_source_ptr = @intFromPtr(env_ptr.source.ptr);
         const new_source_ptr = @as(isize, @intCast(old_source_ptr)) + offset;
         env_ptr.source.ptr = @ptrFromInt(@as(usize, @intCast(new_source_ptr)));
     }
-    
+
     if (env_ptr.module_name.len > 0) {
         const old_module_ptr = @intFromPtr(env_ptr.module_name.ptr);
         const new_module_ptr = @as(isize, @intCast(old_module_ptr)) + offset;
         env_ptr.module_name.ptr = @ptrFromInt(@as(usize, @intCast(new_module_ptr)));
     }
-    
-    std.debug.print("[SHIM] ModuleEnv relocated. Expr idx: {}\n", .{expr_idx});
-    
+
     // Now actually evaluate the expression!
     const eval_result = eval_shim.evalExpr(env_ptr, expr_idx) catch |err| {
         var buf: [256]u8 = undefined;
         const err_str = std.fmt.bufPrint(&buf, "Evaluation error: {s}", .{@errorName(err)}) catch "Error formatting";
         return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
     };
-    
+
     // Format the result
     var buf: [256]u8 = undefined;
     const result_str = if (eval_result.is_error)
         std.fmt.bufPrint(&buf, "Evaluation failed", .{}) catch "Error"
     else blk: {
-        std.debug.print("[SHIM] Evaluation succeeded! Result: {}\n", .{eval_result.value});
-        break :blk std.fmt.bufPrint(&buf, "Expression '{s}' evaluated to: {}", .{env_ptr.source, eval_result.value}) catch "Error formatting";
+        break :blk std.fmt.bufPrint(&buf, "Expression '{s}' evaluated to: {}", .{ env_ptr.source, eval_result.value }) catch "Error formatting";
     };
-    
-    std.debug.print("[SHIM] Returning string: {s}\n", .{result_str});
+
     return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), result_str.len);
 }
-
 
 fn createRocStrFromData(ops: *builtins.host_abi.RocOps, string_data: [*]u8, string_length: usize) RocStr {
     // For small strings, we can create them directly

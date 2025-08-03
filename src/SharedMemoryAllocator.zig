@@ -230,11 +230,11 @@ pub fn create(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: 
                         0o600,
                     );
                     if (fd < 0) {
-                        std.debug.print("SharedMemoryAllocator: shm_open retry failed with errno={} for name={s} size={}\n", .{std.c._errno().*, shm_name, aligned_size});
+                        std.debug.print("SharedMemoryAllocator: shm_open retry failed with errno={} for name={s} size={}\n", .{ std.c._errno().*, shm_name, aligned_size });
                         return error.ShmOpenFailed;
                     }
                 } else {
-                    std.debug.print("SharedMemoryAllocator: shm_open failed with errno={} for name={s} size={}\n", .{errno, shm_name, aligned_size});
+                    std.debug.print("SharedMemoryAllocator: shm_open failed with errno={} for name={s} size={}\n", .{ errno, shm_name, aligned_size });
                     return error.ShmOpenFailed;
                 }
             }
