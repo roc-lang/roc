@@ -25,16 +25,26 @@ const CacheConfig = cache_mod.CacheConfig;
 const tokenize = parse.tokenize;
 
 const read_roc_file_path_shim_lib = if (builtin.is_test) &[_]u8{} else @embedFile("libread_roc_file_path_shim.a");
-const c = std.c;
+// Wrapper around std.c to avoid the mremap bug on macOS
+// We only expose the functions we actually use
+pub const c = struct {
+    pub const mode_t = std.c.mode_t;
+    pub const off_t = std.c.off_t;
+    
+    pub const close = std.c.close;
+    pub const link = std.c.link;
+    pub const ftruncate = std.c.ftruncate;
+    pub const _errno = std.c._errno;
+};
 
 // Platform-specific shared memory implementation
 const is_windows = builtin.target.os.tag == .windows;
 
 // POSIX shared memory functions
 const posix = if (!is_windows) struct {
-    extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: c.mode_t) c_int;
+    extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
     extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
-    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: c.off_t) ?*anyopaque;
+    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: std.c.off_t) ?*anyopaque;
     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
     extern "c" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) c_int;
 
@@ -106,9 +116,9 @@ fn createHardlink(allocator: Allocator, source: []const u8, dest: []const u8) !v
         const dest_c = try allocator.dupeZ(u8, dest);
         defer allocator.free(dest_c);
 
-        const result = std.c.link(source_c, dest_c);
+        const result = c.link(source_c, dest_c);
         if (result != 0) {
-            const errno = std.c._errno().*;
+            const errno = c._errno().*;
             switch (errno) {
                 17 => return error.PathAlreadyExists, // EEXIST
                 else => return error.Unexpected,
@@ -138,14 +148,17 @@ fn generateRandomSuffix(allocator: Allocator) ![]u8 {
 
 /// Create the temporary directory structure for fd communication
 /// Returns the path to the executable in the temp directory (caller must free)
-fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, shm_handle: SharedMemoryHandle) ![]const u8 {
-    // Get system temp directory
-    const temp_dir = if (comptime is_windows)
+/// @param cache_dir - The cache directory to use for temporary files (optional, uses system temp if null)
+pub fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, shm_handle: SharedMemoryHandle, cache_dir: ?[]const u8) ![]const u8 {
+    // Use provided cache dir or fall back to system temp directory
+    const temp_dir = if (cache_dir) |dir|
+        try allocator.dupe(u8, dir)
+    else if (comptime is_windows)
         std.process.getEnvVarOwned(allocator, "TEMP") catch
-            std.process.getEnvVarOwned(allocator, "TMP") catch "C:\\Windows\\Temp"
+            std.process.getEnvVarOwned(allocator, "TMP") catch try allocator.dupe(u8, "C:\\Windows\\Temp")
     else
-        std.process.getEnvVarOwned(allocator, "TMPDIR") catch "/tmp";
-    defer if (!std.mem.eql(u8, temp_dir, "/tmp") and !std.mem.eql(u8, temp_dir, "C:\\Windows\\Temp")) allocator.free(temp_dir);
+        std.process.getEnvVarOwned(allocator, "TMPDIR") catch try allocator.dupe(u8, "/tmp");
+    defer allocator.free(temp_dir);
 
     // Try up to 10 times to create a unique directory
     var attempt: u8 = 0;
@@ -397,8 +410,26 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         cleanupSharedMemory();
     }
 
+    // Get cache directory for temporary files
+    const temp_cache_dir = cache_manager.config.getTempDir(gpa) catch |err| {
+        std.log.err("Failed to get temp cache directory: {}\n", .{err});
+        cleanupSharedMemory();
+        std.process.exit(1);
+    };
+    defer gpa.free(temp_cache_dir);
+    
+    // Ensure temp cache directory exists
+    std.fs.cwd().makePath(temp_cache_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => {
+            std.log.err("Failed to create temp cache directory: {}\n", .{err});
+            cleanupSharedMemory();
+            std.process.exit(1);
+        },
+    };
+    
     // Create temporary directory structure for fd communication
-    const temp_exe_path = createTempDirStructure(gpa, exe_path, shm_handle) catch |err| {
+    const temp_exe_path = createTempDirStructure(gpa, exe_path, shm_handle, temp_cache_dir) catch |err| {
         std.log.err("Failed to create temp dir structure: {}\n", .{err});
         cleanupSharedMemory();
         std.process.exit(1);
@@ -409,7 +440,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     if (comptime !is_windows) {
         var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
         if (flags < 0) {
-            std.log.err("Failed to get fd flags: {}\n", .{std.c._errno().*});
+            std.log.err("Failed to get fd flags: {}\n", .{c._errno().*});
             cleanupSharedMemory();
             std.process.exit(1);
         }
@@ -417,7 +448,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         flags &= ~@as(c_int, posix.FD_CLOEXEC);
 
         if (posix.fcntl(shm_handle.fd, posix.F_SETFD, flags) < 0) {
-            std.log.err("Failed to set fd flags: {}\n", .{std.c._errno().*});
+            std.log.err("Failed to set fd flags: {}\n", .{c._errno().*});
             cleanupSharedMemory();
             std.process.exit(1);
         }
@@ -445,13 +476,13 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     };
 }
 
-const SharedMemoryHandle = struct {
+pub const SharedMemoryHandle = struct {
     fd: if (is_windows) *anyopaque else c_int,
     ptr: *anyopaque,
     size: usize,
 };
 
-fn writeToSharedMemory(data: []const u8) !SharedMemoryHandle {
+pub fn writeToSharedMemory(data: []const u8) !SharedMemoryHandle {
     // Calculate total size needed: length + data
     const total_size = @sizeOf(usize) + data.len;
 
@@ -514,7 +545,7 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
     // Create shared memory object
     const shm_fd = posix.shm_open(shm_name, 0x0002 | 0x0200, 0o666); // O_RDWR | O_CREAT
     if (shm_fd < 0) {
-        const errno = std.c._errno().*;
+        const errno = c._errno().*;
         std.debug.print("Failed to create shared memory: {s}, fd = {}, errno = {}\n", .{ shm_name, shm_fd, errno });
         return error.SharedMemoryCreateFailed;
     }
@@ -556,7 +587,7 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
     };
 }
 
-fn cleanupSharedMemory() void {
+pub fn cleanupSharedMemory() void {
     if (comptime is_windows) {
         // On Windows, shared memory is automatically cleaned up when all handles are closed
         return;

@@ -9,13 +9,10 @@ const RocStr = builtins.str.RocStr;
 // Platform-specific shared memory implementation
 const is_windows = builtin.target.os.tag == .windows;
 
-// POSIX shared memory functions
+// POSIX shared memory functions - only what we actually use
 const posix = if (!is_windows) struct {
-    extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
-    extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
     extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: std.c.off_t) ?*anyopaque;
     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
-    extern "c" fn fstat(fd: c_int, buf: *std.c.Stat) c_int;
     extern "c" fn close(fd: c_int) c_int;
 } else struct {};
 
