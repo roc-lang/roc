@@ -41,9 +41,30 @@ pub fn evalExpr(env: *ModuleEnv, expr_idx: u32) !EvalResult {
         .e_frac_f64 => |float_lit| {
             return EvalResult{ .float64 = float_lit.value };
         },
-        .e_str => |str_lit| {
-            // For string literals, return the string value
-            return EvalResult{ .string = str_lit.bytes };
+        .e_str => |str| {
+            // String expressions contain a span of segments
+            // For simplicity, we'll handle single-segment strings
+            if (str.span.span.len == 1) {
+                const segment_idx: Expr.Idx = @enumFromInt(str.span.span.start);
+                const segment_expr = env.store.getExpr(segment_idx);
+
+                switch (segment_expr) {
+                    .e_str_segment => |segment| {
+                        // Get the actual string from the string literal store
+                        const str_bytes = env.strings.get(segment.literal);
+                        return EvalResult{ .string = str_bytes };
+                    },
+                    else => return error.UnsupportedExpression,
+                }
+            } else {
+                // Multi-segment strings (interpolated) not supported yet
+                return error.UnsupportedExpression;
+            }
+        },
+        .e_str_segment => |segment| {
+            // Direct string segment (shouldn't normally be evaluated alone)
+            const str_bytes = env.strings.get(segment.literal);
+            return EvalResult{ .string = str_bytes };
         },
         .e_binop => |binop| {
             // Recursively evaluate left and right operands
@@ -65,7 +86,7 @@ pub fn evalExpr(env: *ModuleEnv, expr_idx: u32) !EvalResult {
 }
 
 /// Evaluate binary operations between two results
-fn evalBinaryOperation(op: compile.BinOp, left: EvalResult, right: EvalResult) EvalResult {
+fn evalBinaryOperation(op: Expr.Binop.Op, left: EvalResult, right: EvalResult) EvalResult {
     switch (op) {
         .add => return performAdd(left, right),
         .sub => return performSub(left, right),
@@ -73,13 +94,13 @@ fn evalBinaryOperation(op: compile.BinOp, left: EvalResult, right: EvalResult) E
         .div => return performDiv(left, right),
         .rem => return performRem(left, right),
         .eq => return performEq(left, right),
-        .neq => return performNeq(left, right),
+        .ne => return performNeq(left, right),
         .lt => return performLt(left, right),
-        .lte => return performLte(left, right),
+        .le => return performLte(left, right),
         .gt => return performGt(left, right),
-        .gte => return performGte(left, right),
-        .and_op => return performAnd(left, right),
-        .or_op => return performOr(left, right),
+        .ge => return performGte(left, right),
+        .@"and" => return performAnd(left, right),
+        .@"or" => return performOr(left, right),
         else => return EvalResult.error_result,
     }
 }

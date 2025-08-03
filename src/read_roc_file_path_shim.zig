@@ -156,10 +156,10 @@ fn evaluateFromWindowsSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
 
     // Format the result
     var buf: [256]u8 = undefined;
-    const result_str = if (eval_result.is_error)
+    const result_str = if (eval_result.isError())
         std.fmt.bufPrint(&buf, "Evaluation failed", .{}) catch "Error"
     else blk: {
-        break :blk std.fmt.bufPrint(&buf, "Expression '{s}' evaluated to: {}", .{ env_ptr.source, eval_result.value }) catch "Error formatting";
+        break :blk std.fmt.bufPrint(&buf, "Expression '{s}' evaluated to: {}", .{ env_ptr.source, eval_result }) catch "Error formatting";
     };
 
     return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), result_str.len);
@@ -244,10 +244,10 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
 
     // Format the result
     var buf: [256]u8 = undefined;
-    const result_str = if (eval_result.is_error)
+    const result_str = if (eval_result.isError())
         std.fmt.bufPrint(&buf, "Evaluation failed", .{}) catch "Error"
     else blk: {
-        break :blk std.fmt.bufPrint(&buf, "Expression '{s}' evaluated to: {}", .{ env_ptr.source, eval_result.value }) catch "Error formatting";
+        break :blk std.fmt.bufPrint(&buf, "Expression '{s}' evaluated to: {}", .{ env_ptr.source, eval_result }) catch "Error formatting";
     };
 
     return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), result_str.len);
