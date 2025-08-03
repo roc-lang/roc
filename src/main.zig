@@ -138,7 +138,7 @@ fn generateRandomSuffix(allocator: Allocator) ![]u8 {
 
 /// Create the temporary directory structure for fd communication
 /// Returns the path to the executable in the temp directory (caller must free)
-fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, fd: anytype) ![]const u8 {
+fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, shm_handle: SharedMemoryHandle) ![]const u8 {
     // Get system temp directory
     const temp_dir = if (comptime is_windows)
         std.process.getEnvVarOwned(allocator, "TEMP") catch
@@ -195,11 +195,12 @@ fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, fd: anytyp
         };
         defer fd_file.close();
 
-        // Write fd to file
+        // Write fd and size to file (format: fd\nsize)
+        // This allows the child to know exactly how many bytes to mmap
         const fd_str = if (comptime is_windows)
-            try std.fmt.allocPrint(allocator, "{}", .{@intFromPtr(fd)})
+            try std.fmt.allocPrint(allocator, "{}\n{}", .{ @intFromPtr(shm_handle.fd), shm_handle.size })
         else
-            try std.fmt.allocPrint(allocator, "{}", .{fd});
+            try std.fmt.allocPrint(allocator, "{}\n{}", .{ shm_handle.fd, shm_handle.size });
         defer allocator.free(fd_str);
 
         try fd_file.writeAll(fd_str);
@@ -397,7 +398,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     }
 
     // Create temporary directory structure for fd communication
-    const temp_exe_path = createTempDirStructure(gpa, exe_path, shm_handle.fd) catch |err| {
+    const temp_exe_path = createTempDirStructure(gpa, exe_path, shm_handle) catch |err| {
         std.log.err("Failed to create temp dir structure: {}\n", .{err});
         cleanupSharedMemory();
         std.process.exit(1);
