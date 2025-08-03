@@ -46,6 +46,7 @@ const RocDec = builtins.dec.RocDec;
 const SExprTree = base.SExprTree;
 const Closure = layout_.Closure;
 const Layout = layout.Layout;
+const Ident = base.Ident;
 const target_usize = base.target.Target.native.target_usize;
 const types_store = types.store;
 const target = base.target;
@@ -144,7 +145,15 @@ pub const WorkItem = struct {
     /// The expression index this work item operates on
     expr_idx: ModuleEnv.Expr.Idx,
     /// Optional extra data for e.g. if-expressions and lambda call
-    extra: u64 = 0,
+    extra: union {
+        nothing: void,
+        arg_count: u32,
+        current_field_idx: usize,
+        bindings_stack_len: usize,
+        decl_pattern_idx: ModuleEnv.Pattern.Idx,
+        dot_access_field_name: Ident.Idx,
+        current_element_idx: usize,
+    },
 };
 
 /// Data for conditional branch evaluation in if-expressions.
@@ -423,6 +432,7 @@ pub const Interpreter = struct {
         self.schedule_work(WorkItem{
             .kind = .w_eval_expr,
             .expr_idx = expr_idx,
+            .extra = .{ .nothing = {} },
         });
 
         // Main evaluation loop
@@ -448,31 +458,33 @@ pub const Interpreter = struct {
                 },
                 .w_lambda_call => try self.handleLambdaCall(
                     work.expr_idx,
-                    @intCast(work.extra), // stores the arg count
+                    work.extra.arg_count,
                 ),
                 .w_lambda_return => try self.handleLambdaReturn(),
                 .w_eval_record_fields => try self.handleRecordFields(
                     work.expr_idx,
-                    work.extra, // stores the current_field_idx
+                    work.extra.current_field_idx,
                 ),
                 .w_dot_access => try self.handleDotAccess(
-                    work.expr_idx,
-                    work.extra, // stores the field_name_idx
+                    work.extra.dot_access_field_name,
                 ),
                 .w_eval_tuple_elements => try self.handleTupleElements(
                     work.expr_idx,
-                    work.extra, // stores the current_element_idx
+                    work.extra.current_element_idx,
                 ),
                 .w_let_bind => {
-                    const pattern_idx: ModuleEnv.Pattern.Idx = @enumFromInt(work.extra);
+                    const pattern_idx: ModuleEnv.Pattern.Idx = work.extra.decl_pattern_idx;
                     const value = try self.peekStackValue(1); // Don't pop!
 
                     try self.bindPattern(pattern_idx, value); // Value stays on stack for the block's lifetime
                 },
                 .w_block_cleanup => {
-                    const bindings_to_keep: u32 = @intCast(work.extra);
+                    const bindings_to_keep = work.extra.bindings_stack_len;
                     const values_to_keep: u32 = @intFromEnum(work.expr_idx);
-                    self.traceInfo("Block cleanup: resetting bindings from {} to {}, values from {} to {}", .{ self.bindings_stack.items.len, bindings_to_keep, self.value_stack.items.len, values_to_keep });
+                    self.traceInfo(
+                        "Block cleanup: resetting bindings from {} to {}, values from {} to {}",
+                        .{ self.bindings_stack.items.len, bindings_to_keep, self.value_stack.items.len, values_to_keep },
+                    );
 
                     // The block's result is on top of the stack. We need to preserve it.
                     const result_val = try self.popStackValue();
@@ -736,12 +748,24 @@ pub const Interpreter = struct {
                     .pow, .pipe_forward, .null_coalesce => return error.Crash, // Not implemented yet
                 };
 
-                self.schedule_work(WorkItem{ .kind = binop_kind, .expr_idx = expr_idx });
+                self.schedule_work(WorkItem{
+                    .kind = binop_kind,
+                    .expr_idx = expr_idx,
+                    .extra = .{ .nothing = {} },
+                });
 
                 // Push operands in order - note that this results in the results being pushed to the stack in reverse order
                 // We do this so that `dbg` statements are printed in the expected order
-                self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = binop.rhs });
-                self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = binop.lhs });
+                self.schedule_work(WorkItem{
+                    .kind = .w_eval_expr,
+                    .expr_idx = binop.rhs,
+                    .extra = .{ .nothing = {} },
+                });
+                self.schedule_work(WorkItem{
+                    .kind = .w_eval_expr,
+                    .expr_idx = binop.lhs,
+                    .extra = .{ .nothing = {} },
+                });
             },
 
             // If expressions
@@ -749,16 +773,28 @@ pub const Interpreter = struct {
                 if (if_expr.branches.span.len > 0) {
 
                     // Check if condition is true
-                    self.schedule_work(WorkItem{ .kind = .w_if_check_condition, .expr_idx = expr_idx });
+                    self.schedule_work(WorkItem{
+                        .kind = .w_if_check_condition,
+                        .expr_idx = expr_idx,
+                        .extra = .{ .nothing = {} },
+                    });
 
                     // Push work to evaluate the first condition
                     const branches = self.env.store.sliceIfBranches(if_expr.branches);
                     const branch = self.env.store.getIfBranch(branches[0]);
 
-                    self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = branch.cond });
+                    self.schedule_work(WorkItem{
+                        .kind = .w_eval_expr,
+                        .expr_idx = branch.cond,
+                        .extra = .{ .nothing = {} },
+                    });
                 } else {
                     // No branches, evaluate final_else directly
-                    self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = if_expr.final_else });
+                    self.schedule_work(WorkItem{
+                        .kind = .w_eval_expr,
+                        .expr_idx = if_expr.final_else,
+                        .extra = .{ .nothing = {} },
+                    });
                 }
             },
 
@@ -853,6 +889,7 @@ pub const Interpreter = struct {
                         try self.work_stack.append(.{
                             .kind = .w_eval_expr,
                             .expr_idx = def.expr,
+                            .extra = .{ .nothing = {} },
                         });
                         return;
                     }
@@ -868,6 +905,7 @@ pub const Interpreter = struct {
                 try self.work_stack.append(.{
                     .kind = .w_eval_expr,
                     .expr_idx = nominal.backing_expr,
+                    .extra = .{ .nothing = {} },
                 });
             },
             .e_nominal_external => |_| {
@@ -916,13 +954,14 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_lambda_call,
                     .expr_idx = expr_idx,
-                    .extra = arg_count,
+                    .extra = .{ .arg_count = arg_count },
                 });
 
                 // 2. Function (executed second, pushes closure to stack)
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_expr,
                     .expr_idx = function_expr,
+                    .extra = .{ .nothing = {} },
                 });
 
                 // 1. Arguments (executed FIRST, pushed to stack in order)
@@ -932,6 +971,7 @@ pub const Interpreter = struct {
                     self.schedule_work(WorkItem{
                         .kind = .w_eval_expr,
                         .expr_idx = arg_exprs[i],
+                        .extra = .{ .nothing = {} },
                     });
                 }
             },
@@ -939,45 +979,50 @@ pub const Interpreter = struct {
             // Unary minus operation
             .e_unary_minus => |unary| {
                 // Push work to complete unary minus after operand is evaluated
-                try self.work_stack.append(.{
+                try self.work_stack.append(WorkItem{
                     .kind = .w_unary_minus,
                     .expr_idx = expr_idx,
+                    .extra = .{ .nothing = {} },
                 });
 
                 // Evaluate the operand expression
-                try self.work_stack.append(.{
+                try self.work_stack.append(WorkItem{
                     .kind = .w_eval_expr,
                     .expr_idx = unary.expr,
+                    .extra = .{ .nothing = {} },
                 });
             },
 
             // Unary not operation
             .e_unary_not => |unary| {
                 // Push work to complete unary not after operand is evaluated
-                try self.work_stack.append(.{
+                try self.work_stack.append(WorkItem{
                     .kind = .w_unary_not,
                     .expr_idx = expr_idx,
+                    .extra = .{ .nothing = {} },
                 });
 
                 // Evaluate the operand expression
-                try self.work_stack.append(.{
+                try self.work_stack.append(WorkItem{
                     .kind = .w_eval_expr,
                     .expr_idx = unary.expr,
+                    .extra = .{ .nothing = {} },
                 });
             },
 
             .e_block => |block| {
                 // Schedule cleanup work to run after the block is done.
-                self.schedule_work(.{
+                self.schedule_work(WorkItem{
                     .kind = .w_block_cleanup,
                     .expr_idx = @enumFromInt(self.value_stack.items.len), // Pass value stack length
-                    .extra = @intCast(self.bindings_stack.items.len),
+                    .extra = .{ .bindings_stack_len = self.bindings_stack.items.len },
                 });
 
                 // Schedule evaluation of the final expression.
-                self.schedule_work(.{
+                self.schedule_work(WorkItem{
                     .kind = .w_eval_expr,
                     .expr_idx = block.final_expr,
+                    .extra = .{ .nothing = {} },
                 });
 
                 // Schedule evaluation of statements in reverse order.
@@ -990,13 +1035,17 @@ pub const Interpreter = struct {
                     switch (stmt) {
                         .s_decl => |decl| {
                             // Schedule binding after expression is evaluated.
-                            self.schedule_work(.{
+                            self.schedule_work(WorkItem{
                                 .kind = .w_let_bind,
                                 .expr_idx = expr_idx, // e_block's index for tracing
-                                .extra = @intFromEnum(decl.pattern),
+                                .extra = .{ .decl_pattern_idx = decl.pattern },
                             });
                             // Schedule evaluation of the expression.
-                            self.schedule_work(.{ .kind = .w_eval_expr, .expr_idx = decl.expr });
+                            self.schedule_work(WorkItem{
+                                .kind = .w_eval_expr,
+                                .expr_idx = decl.expr,
+                                .extra = .{ .nothing = {} },
+                            });
                         },
                         else => {
                             // Other statement types are not expected inside a lambda body in this context
@@ -1044,16 +1093,17 @@ pub const Interpreter = struct {
 
             .e_dot_access => |dot_access| {
                 // Push work to complete field access after receiver is evaluated
-                try self.work_stack.append(.{
+                try self.work_stack.append(WorkItem{
                     .kind = .w_dot_access,
                     .expr_idx = expr_idx,
-                    .extra = @as(u64, @as(u32, @bitCast(dot_access.field_name))),
+                    .extra = .{ .dot_access_field_name = dot_access.field_name },
                 });
 
                 // Evaluate the receiver expression
-                try self.work_stack.append(.{
+                try self.work_stack.append(WorkItem{
                     .kind = .w_eval_expr,
                     .expr_idx = dot_access.receiver,
+                    .extra = .{ .nothing = {} },
                 });
             },
 
@@ -1114,7 +1164,8 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_record_fields,
                     .expr_idx = expr_idx,
-                    .extra = 0, // Start with current_field_idx = 0
+                    // Start with current_field_idx = 0
+                    .extra = .{ .current_field_idx = 0 },
                 });
             },
 
@@ -1161,7 +1212,8 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_tuple_elements,
                     .expr_idx = expr_idx,
-                    .extra = 0, // Start with current_element_idx = 0
+                    // Start with current_element_idx = 0
+                    .extra = .{ .current_element_idx = 0 },
                 });
             },
         }
@@ -1378,7 +1430,11 @@ pub const Interpreter = struct {
 
         if (cond_val == 1) {
             // Condition is true, evaluate this branch's body
-            self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = branch.body });
+            self.schedule_work(WorkItem{
+                .kind = .w_eval_expr,
+                .expr_idx = branch.body,
+                .extra = .{ .nothing = {} },
+            });
         } else {
             // Condition is false, check if there's another branch
             if (branch_index + 1 < branches.len) {
@@ -1390,13 +1446,25 @@ pub const Interpreter = struct {
                 const encoded_idx: ModuleEnv.Expr.Idx = @enumFromInt(@intFromEnum(expr_idx) | (@as(u32, next_branch_idx) << 16));
 
                 // Push work to check next condition after it's evaluated
-                self.schedule_work(WorkItem{ .kind = .w_if_check_condition, .expr_idx = encoded_idx });
+                self.schedule_work(WorkItem{
+                    .kind = .w_if_check_condition,
+                    .expr_idx = encoded_idx,
+                    .extra = .{ .nothing = {} },
+                });
 
                 // Push work to evaluate the next condition
-                self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = next_branch.cond });
+                self.schedule_work(WorkItem{
+                    .kind = .w_eval_expr,
+                    .expr_idx = next_branch.cond,
+                    .extra = .{ .nothing = {} },
+                });
             } else {
                 // No more branches, evaluate final_else
-                self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = if_expr.final_else });
+                self.schedule_work(WorkItem{
+                    .kind = .w_eval_expr,
+                    .expr_idx = if_expr.final_else,
+                    .extra = .{ .nothing = {} },
+                });
             }
         }
     }
@@ -1465,12 +1533,14 @@ pub const Interpreter = struct {
         self.schedule_work(WorkItem{
             .kind = .w_lambda_return,
             .expr_idx = closure.body_idx,
+            .extra = .{ .nothing = {} },
         });
 
         // 5. Schedule body evaluation.
         self.schedule_work(WorkItem{
             .kind = .w_eval_expr,
             .expr_idx = closure.body_idx,
+            .extra = .{ .nothing = {} },
         });
     }
 
@@ -1527,8 +1597,11 @@ pub const Interpreter = struct {
         self.traceInfo("Lambda return: stack cleaned and return value pushed", .{});
     }
 
-    fn handleRecordFields(self: *Interpreter, record_expr_idx: ModuleEnv.Expr.Idx, current_field_idx: u64) EvalError!void {
-        self.traceEnter("handleRecordFields record_expr_idx={}, current_field_idx={}", .{ record_expr_idx, current_field_idx });
+    fn handleRecordFields(self: *Interpreter, record_expr_idx: ModuleEnv.Expr.Idx, current_field_idx: usize) EvalError!void {
+        self.traceEnter(
+            "handleRecordFields record_expr_idx={}, current_field_idx={}",
+            .{ record_expr_idx, current_field_idx },
+        );
         defer self.traceExit("", .{});
 
         // This function is called iteratively. On each call, it processes one field.
@@ -1574,12 +1647,12 @@ pub const Interpreter = struct {
             self.schedule_work(WorkItem{
                 .kind = .w_eval_record_fields,
                 .expr_idx = record_expr_idx,
-                .extra = current_field_idx + 1,
+                .extra = .{ .current_field_idx = current_field_idx + 1 },
             });
 
             // Now, find the expression for the *current* field and schedule its evaluation.
             // We need to map the layout-sorted field name back to the original CIR expression.
-            const current_field_info = sorted_fields.get(@intCast(current_field_idx));
+            const current_field_info = sorted_fields.get(current_field_idx);
             const current_field_name = current_field_info.name;
 
             const record_expr = self.env.store.getExpr(record_expr_idx);
@@ -1609,6 +1682,7 @@ pub const Interpreter = struct {
             self.schedule_work(WorkItem{
                 .kind = .w_eval_expr,
                 .expr_idx = current_field_value_expr_idx,
+                .extra = .{ .nothing = {} },
             });
         } else {
             // All fields have been processed. The record is fully constructed on the stack.
@@ -1652,7 +1726,7 @@ pub const Interpreter = struct {
             self.schedule_work(WorkItem{
                 .kind = .w_eval_tuple_elements,
                 .expr_idx = tuple_expr_idx,
-                .extra = current_element_idx + 1,
+                .extra = .{ .current_element_idx = current_element_idx + 1 },
             });
 
             const tuple_expr = self.env.store.getExpr(tuple_expr_idx);
@@ -1666,22 +1740,22 @@ pub const Interpreter = struct {
             self.schedule_work(WorkItem{
                 .kind = .w_eval_expr,
                 .expr_idx = current_element_expr_idx,
+                .extra = .{ .nothing = {} },
             });
         } else {
             self.traceInfo("All tuple elements processed for tuple_expr_idx={}", .{tuple_expr_idx});
         }
     }
 
-    fn handleDotAccess(self: *Interpreter, dot_access_expr_idx: ModuleEnv.Expr.Idx, field_name_idx: u64) EvalError!void {
-        self.traceEnter("handleDotAccess expr_idx={}, field_name_idx={}", .{ dot_access_expr_idx, field_name_idx });
+    fn handleDotAccess(self: *Interpreter, field_name_idx: Ident.Idx) EvalError!void {
+        self.traceEnter("handleDotAccess field_name_idx={}", .{field_name_idx});
         defer self.traceExit("", .{});
 
         // Pop the record value from the stack
         const record_value = try self.popStackValue();
 
         // Get the field name
-        const field_name_ident: base.Ident.Idx = @bitCast(@as(u32, @intCast(field_name_idx)));
-        const field_name = self.env.idents.getText(field_name_ident);
+        const field_name = self.env.idents.getText(field_name_idx);
 
         // The record must have a record layout
         if (record_value.layout.tag != .record) {
