@@ -76,7 +76,9 @@ pub const CacheModule = struct {
     header: *const Header,
     data: []align(@alignOf(ModuleEnv)) const u8,
 
-    /// Create a cache by serializing ModuleEnv and CIR data
+    /// Create a cache by serializing ModuleEnv and CIR data.
+    /// The provided allocator is used for the returned cache data, while
+    /// the arena allocator is used for temporary serialization data.
     pub fn create(
         allocator: Allocator,
         arena_allocator: Allocator,
