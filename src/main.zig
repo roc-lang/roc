@@ -111,7 +111,6 @@ fn createHardlink(allocator: Allocator, source: []const u8, dest: []const u8) !v
             const errno = std.c._errno().*;
             switch (errno) {
                 17 => return error.PathAlreadyExists, // EEXIST
-                18 => return error.NotSameFileSystem, // EXDEV
                 else => return error.Unexpected,
             }
         }
@@ -211,15 +210,10 @@ fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, fd: anytyp
         defer allocator.free(temp_exe_path);
 
         // Try to create a hardlink first (more efficient than copying)
-        createHardlink(allocator, exe_path, temp_exe_path) catch |err| switch (err) {
-            error.PathAlreadyExists => {
-                // If hardlink already exists, that's fine
-            },
-            error.NotSameFileSystem, error.Unexpected => {
-                // If hardlinking fails (e.g., cross-device, permissions), fall back to copying
-                try std.fs.cwd().copyFile(exe_path, std.fs.cwd(), temp_exe_path, .{});
-            },
-            else => return err,
+        createHardlink(allocator, exe_path, temp_exe_path) catch {
+            // If hardlinking fails for any reason, fall back to copying
+            // Common reasons: cross-device link, permissions, file already exists
+            try std.fs.cwd().copyFile(exe_path, std.fs.cwd(), temp_exe_path, .{});
         };
 
         // Allocate and return just the executable path
