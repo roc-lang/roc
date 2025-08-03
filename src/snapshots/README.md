@@ -10,4 +10,5 @@ Each snapshot file contains the expected output and helps us to detect regressio
 
 - **Generate all snapshots**: `zig build snapshot`
 - **Update specific snapshot**: `zig build snapshot -- <file_path>`
-- **Update expected from problems**: `zig build update-expected -- <file_path>`
+- **Update expected from problems**: `zig build snapshot -- --update-expected`
+- **Update expected for specific file**: `zig build snapshot -- --update-expected <file_path>`

@@ -87,7 +87,7 @@ NO CHANGE
 						(e-literal @3.19-3.24 (string "Alice"))))
 				(field (name "age")
 					(e-int @3.32-3.34 (value "30")))
-				(field (name "None")
+				(field (name "city")
 					(e-string @3.42-3.50
 						(e-literal @3.43-3.49 (string "Boston")))))))
 	(d-let
@@ -131,7 +131,7 @@ NO CHANGE
 		(patt @5.1-5.9 (type "{ city: Str }"))
 		(patt @6.1-6.6 (type "{ name: Str, age: Num(_size) }")))
 	(expressions
-		(expr @3.10-3.52 (type "{ name: Str, age: Num(_size), city: Str }"))
+		(expr @3.10-3.52 (type "{ name: Str, age: Num(_size), aity: Str }"))
 		(expr @4.15-4.36 (type "{ age: Num(_size) }"))
 		(expr @5.12-5.47 (type "{ city: Str }"))
 		(expr @6.9-6.53 (type "{ name: Str, age: Num(_size) }"))))

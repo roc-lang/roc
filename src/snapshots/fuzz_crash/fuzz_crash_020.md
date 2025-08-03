@@ -179,19 +179,9 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:105:2:105:3
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_020.md:108:4:108:5
 UNDEFINED VARIABLE - fuzz_crash_020.md:108:6:108:8
-<<<<<<< HEAD
-UNUSED VARIABLE - fuzz_crash_020.md:76:2:76:3
-UNUSED VARIABLE - fuzz_crash_020.md:96:2:96:4
-UNUSED VARIABLE - fuzz_crash_020.md:87:2:87:3
-||||||| eb72820840
-UNUSED VARIABLE - fuzz_crash_020.md:87:2:87:3
-UNUSED VARIABLE - fuzz_crash_020.md:96:2:96:4
-UNUSED VARIABLE - fuzz_crash_020.md:76:2:76:3
-=======
 UNUSED VARIABLE - fuzz_crash_020.md:76:2:76:3
 UNUSED VARIABLE - fuzz_crash_020.md:87:2:87:3
 UNUSED VARIABLE - fuzz_crash_020.md:96:2:96:4
->>>>>>> origin/main
 UNDECLARED TYPE - fuzz_crash_020.md:116:5:116:6
 UNDEFINED VARIABLE - fuzz_crash_020.md:119:2:119:5
 UNDEFINED VARIABLE - fuzz_crash_020.md:120:1:120:2

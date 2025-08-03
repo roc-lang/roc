@@ -216,33 +216,13 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
 UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_027.md:145:4:145:13
-<<<<<<< HEAD
-||||||| eb72820840
-UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
-UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
-UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
-UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
-=======
-UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
-UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
->>>>>>> origin/main
 UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
-<<<<<<< HEAD
-UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
-UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
-UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
-UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
-UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
-UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
-||||||| eb72820840
-=======
 UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
 UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
 UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
 UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
->>>>>>> origin/main
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TYPE MISMATCH - fuzz_crash_027.md:47:11:47:14
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2

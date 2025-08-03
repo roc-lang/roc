@@ -27,22 +27,11 @@ type=expr
 ~~~
 # EXPECTED
 EMPTY TUPLE NOT ALLOWED - tuple_comprehensive.md:9:10:9:12
-<<<<<<< HEAD
-||||||| eb72820840
-UNUSED VARIABLE - tuple_comprehensive.md:11:2:11:6
-=======
 UNUSED VARIABLE - tuple_comprehensive.md:10:2:10:8
 UNUSED VARIABLE - tuple_comprehensive.md:11:2:11:6
->>>>>>> origin/main
 UNUSED VARIABLE - tuple_comprehensive.md:12:2:12:8
 UNUSED VARIABLE - tuple_comprehensive.md:13:2:13:8
-<<<<<<< HEAD
 UNUSED VARIABLE - tuple_comprehensive.md:14:2:14:7
-UNUSED VARIABLE - tuple_comprehensive.md:11:2:11:6
-||||||| eb72820840
-=======
-UNUSED VARIABLE - tuple_comprehensive.md:14:2:14:7
->>>>>>> origin/main
 UNUSED VARIABLE - tuple_comprehensive.md:15:2:15:11
 UNUSED VARIABLE - tuple_comprehensive.md:16:2:16:13
 # PROBLEMS
@@ -294,8 +283,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 				(e-int @12.12-12.13 (value "1"))
 				(e-string @12.15-12.22
 					(e-literal @12.16-12.21 (string "hello")))
-				(e-nominal @12.24-12.28 (nominal "Bool")
-					(e-tag @12.24-12.28 (name "True"))))))
+				(e-tag @12.24-12.28 (name "True")))))
 	(s-let @13.2-13.27
 		(p-assign @13.2-13.8 (ident "nested"))
 		(e-tuple @13.11-13.27

@@ -20,21 +20,9 @@ UNUSED VARIABLE - list_rest_invalid.md:2:6:2:11
 UNUSED VARIABLE - list_rest_invalid.md:2:15:2:15
 UNUSED VARIABLE - list_rest_invalid.md:3:8:3:8
 UNUSED VARIABLE - list_rest_invalid.md:3:14:3:18
-<<<<<<< HEAD
-UNUSED VARIABLE - list_rest_invalid.md:4:11:4:11
-UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
-||||||| eb72820840
-UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
-=======
->>>>>>> origin/main
 UNUSED VARIABLE - list_rest_invalid.md:4:6:4:7
-<<<<<<< HEAD
-||||||| eb72820840
-UNUSED VARIABLE - list_rest_invalid.md:4:11:4:11
-=======
 UNUSED VARIABLE - list_rest_invalid.md:4:11:4:11
 UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
->>>>>>> origin/main
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.

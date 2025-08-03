@@ -10,8 +10,8 @@ match (1, 2) {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - pattern_as_basic.md:2:9:2:10
 UNUSED VARIABLE - pattern_as_basic.md:2:6:2:7
+UNUSED VARIABLE - pattern_as_basic.md:2:9:2:10
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.

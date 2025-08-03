@@ -91,7 +91,7 @@ CloseSquare(21:2-21:3),EndOfFile(21:3-21:3),
 					(ty @7.8-7.10 (name "R1"))
 					(ty @7.14-7.16 (name "R2")))))
 		(exposes @9.10-12.3
-			(exposed-upper-ident @10.3-10.5 (text "e1"))
+			(exposed-upper-ident @10.3-10.5 (text "E1"))
 			(exposed-upper-ident @11.3-11.5 (text "E2")))
 		(packages @13.11-16.3
 			(record-field @14.3-14.13 (name "pa1")

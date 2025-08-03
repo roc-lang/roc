@@ -31,21 +31,9 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-<<<<<<< HEAD
-||||||| eb72820840
-UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
-=======
 UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
->>>>>>> origin/main
 UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
-<<<<<<< HEAD
-UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
-UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
-||||||| eb72820840
-UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
-=======
->>>>>>> origin/main
 TYPE MISMATCH - crash_and_ellipsis_test.md:8:20:8:23
 TYPE MISMATCH - crash_and_ellipsis_test.md:14:26:14:29
 # PROBLEMS

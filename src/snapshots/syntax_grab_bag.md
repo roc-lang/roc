@@ -259,23 +259,6 @@ UNDEFINED VARIABLE - syntax_grab_bag.md:188:22:188:25
 NOT IMPLEMENTED - :0:0:0:0
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - syntax_grab_bag.md:193:4:193:13
-<<<<<<< HEAD
-UNUSED VARIABLE - syntax_grab_bag.md:164:2:164:18
-UNUSED VARIABLE - syntax_grab_bag.md:166:2:166:6
-UNUSED VARIABLE - syntax_grab_bag.md:165:2:165:14
-UNUSED VARIABLE - syntax_grab_bag.md:178:2:178:8
-UNUSED VARIABLE - syntax_grab_bag.md:180:2:180:17
-UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
-UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
-||||||| eb72820840
-UNUSED VARIABLE - syntax_grab_bag.md:166:2:166:6
-UNUSED VARIABLE - syntax_grab_bag.md:180:2:180:17
-UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
-UNUSED VARIABLE - syntax_grab_bag.md:165:2:165:14
-UNUSED VARIABLE - syntax_grab_bag.md:178:2:178:8
-UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
-UNUSED VARIABLE - syntax_grab_bag.md:164:2:164:18
-=======
 UNUSED VARIABLE - syntax_grab_bag.md:164:2:164:18
 UNUSED VARIABLE - syntax_grab_bag.md:165:2:165:14
 UNUSED VARIABLE - syntax_grab_bag.md:166:2:166:6
@@ -283,7 +266,6 @@ UNUSED VARIABLE - syntax_grab_bag.md:178:2:178:8
 UNUSED VARIABLE - syntax_grab_bag.md:180:2:180:17
 UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
 UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
->>>>>>> origin/main
 UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
 TYPE MISMATCH - syntax_grab_bag.md:67:11:67:14
 INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2

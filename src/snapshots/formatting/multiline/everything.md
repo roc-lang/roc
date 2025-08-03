@@ -126,23 +126,10 @@ UNUSED VARIABLE - everything.md:95:4:95:5
 UNUSED VARIABLE - everything.md:100:5:100:6
 UNUSED VARIABLE - everything.md:106:5:106:6
 UNUSED VARIABLE - everything.md:61:2:61:4
-<<<<<<< HEAD
-||||||| eb72820840
 UNUSED VARIABLE - everything.md:69:2:69:4
-UNUSED VARIABLE - everything.md:77:2:77:4
-=======
-UNUSED VARIABLE - everything.md:69:2:69:4
->>>>>>> origin/main
 UNUSED VARIABLE - everything.md:73:2:73:4
-<<<<<<< HEAD
-UNUSED VARIABLE - everything.md:69:2:69:4
-UNUSED VARIABLE - everything.md:81:2:81:4
-UNUSED VARIABLE - everything.md:77:2:77:4
-||||||| eb72820840
-=======
 UNUSED VARIABLE - everything.md:77:2:77:4
 UNUSED VARIABLE - everything.md:81:2:81:4
->>>>>>> origin/main
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
