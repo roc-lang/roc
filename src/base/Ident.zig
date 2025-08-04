@@ -110,69 +110,44 @@ pub const Idx = enum(u32) {
 
     pub fn toInner(self: Idx) InnerIdx {
         const enum_val = @intFromEnum(self);
-        return .{ .bits = enum_val };
+        const inner = @as(InnerIdx, @bitCast(enum_val));
+        return inner;
     }
 
     fn fromInner(inner: InnerIdx) Idx {
-        return @as(Idx, @enumFromInt(inner.bits));
+        const bits = @as(u32, @bitCast(inner));
+        return @as(Idx, @enumFromInt(bits));
     }
 
     /// Get the underlying interner index for big identifiers (for testing purposes)
     /// Returns null for small/inline identifiers
     pub fn getInternerIdx(self: Idx) ?u32 {
         const inner = self.toInner();
-        if (inner.isSmall()) {
+        if (inner.is_small) {
             return null;
         } else {
-            return @as(u32, inner.getBigIdx().idx);
+            return @as(u32, inner.data.big.idx);
         }
     }
 };
 
-const InnerIdx = struct {
-    // Store the entire 32-bit value
-    bits: u32,
-
-    pub fn isSmall(self: *const @This()) bool {
-        // The least significant bit indicates if it's small
-        return (self.bits & 1) != 0;
-    }
-
-    pub fn getSmallIdx(self: *const @This()) SmallIdx {
-        // Small idx is stored in the upper 31 bits
-        return .{ .bits = @as(u31, @intCast(self.bits >> 1)) };
-    }
-
-    pub fn getBigIdx(self: *const @This()) BigIdx {
-        // Big idx is stored in the upper 31 bits
-        return @as(BigIdx, @bitCast(@as(u31, @intCast(self.bits >> 1))));
-    }
-
-    pub fn fromSmall(small: SmallIdx) @This() {
-        // Store small idx in upper 31 bits, set LSB to 1
-        return .{ .bits = (@as(u32, small.bits) << 1) | 1 };
-    }
-
-    pub fn fromBig(big: BigIdx) @This() {
-        // Store big idx in upper 31 bits, set LSB to 0
-        const big_bits = @as(u31, @bitCast(big));
-        return .{ .bits = (@as(u32, big_bits) << 1) | 0 };
-    }
+const InnerIdx = packed struct(u32) {
+    is_small: bool,
+    data: packed union { small: SmallIdx, big: BigIdx },
 
     pub fn attributes(self: *const @This()) Attributes {
-        if (self.isSmall()) {
-            return self.getSmallIdx().attributes();
-        } else {
-            return self.getBigIdx().attributes;
+        switch (self.toVariant()) {
+            .small => |small| return small.attributes(),
+            .big => |big| return big.attributes,
         }
     }
 
     pub fn getIdx(self: *const @This()) u28 {
-        if (self.isSmall()) {
+        if (self.is_small) {
             // Small identifiers don't have a real index in the store
             return 0;
         } else {
-            return self.getBigIdx().idx;
+            return self.data.big.idx;
         }
     }
 
@@ -186,12 +161,28 @@ const InnerIdx = struct {
         _ = fmt;
         _ = options;
 
-        if (self.isSmall()) {
-            // Small identifiers don't have a real index in the store
-            try writer.print("Ident.Idx({s})", .{self.getSmallIdx().asString()});
+        switch (self.toVariant()) {
+            .small => |small| {
+                // Small identifiers don't have a real index in the store
+                try writer.print("Ident.Idx({s})", .{small.asString()});
+            },
+            .big => |big| {
+                // Format as the underlying u32 value for debugging
+                try writer.print("Ident.Idx({d})", .{big.idx});
+            },
+        }
+    }
+
+    const Variant = union(enum) {
+        small: SmallIdx,
+        big: BigIdx,
+    };
+
+    fn toVariant(self: InnerIdx) Variant {
+        if (self.is_small) {
+            return .{ .small = self.data.small };
         } else {
-            // Format as the underlying u32 value for debugging
-            try writer.print("Ident.Idx({d})", .{self.getBigIdx().idx});
+            return .{ .big = self.data.big };
         }
     }
 
@@ -262,7 +253,12 @@ const InnerIdx = struct {
 
         const small_idx = SmallIdx.create(@as(u7, @intCast(char0)), @as(u7, @intCast(char1)), @as(u7, @intCast(char2)), @as(u7, @intCast(char3)), unused, reused, fx);
 
-        return InnerIdx.fromSmall(small_idx);
+        return .{
+            .is_small = true,
+            .data = .{
+                .small = small_idx,
+            },
+        };
     }
 };
 
@@ -633,7 +629,10 @@ pub const Store = struct {
             .attributes = ident.attributes,
             .idx = @as(u28, @intCast(@intFromEnum(idx))),
         };
-        return Idx.fromInner(InnerIdx.fromBig(big_idx));
+        return Idx.fromInner(.{
+            .is_small = false,
+            .data = .{ .big = big_idx },
+        });
     }
 
     /// Generate a new identifier that is unique within this module.
@@ -682,18 +681,21 @@ pub const Store = struct {
             .attributes = attributes,
             .idx = @as(u28, @intCast(@intFromEnum(idx))),
         };
-        return Idx.fromInner(InnerIdx.fromBig(big_idx));
+        return Idx.fromInner(.{
+            .is_small = false,
+            .data = .{ .big = big_idx },
+        });
     }
 
     /// Get the text for an identifier.
     pub fn getText(self: *const Store, idx: Idx) []u8 {
         const inner = idx.toInner();
-        if (inner.isSmall()) {
+        if (inner.is_small) {
             // For small identifiers, reconstruct the text from packed characters
-            return SmallIdx.getTextFromValue(inner.getSmallIdx());
+            return SmallIdx.getTextFromValue(inner.data.small);
         } else {
             // For big identifiers, look up in the interner
-            const big = inner.getBigIdx();
+            const big = inner.data.big;
             return self.interner.getText(@enumFromInt(@as(u32, big.idx)));
         }
     }
@@ -703,12 +705,14 @@ pub const Store = struct {
     /// Buffer must be at least 256 bytes for big identifiers, or 7 bytes for small identifiers.
     pub fn writeTextToBuffer(self: *const Store, idx: Idx, buffer: []u8) []u8 {
         const inner = idx.toInner();
-        if (inner.isSmall()) {
+        if (inner.is_small) {
             // For small identifiers, write directly to buffer
-            return inner.getSmallIdx().writeTextToBuffer(buffer);
+            // Create a copy to avoid alignment issues with packed struct
+            const small_copy = inner.data.small;
+            return small_copy.writeTextToBuffer(buffer);
         } else {
             // For big identifiers, copy from the interner
-            const big = inner.getBigIdx();
+            const big = inner.data.big;
             const text = self.interner.getText(@enumFromInt(@as(u32, big.idx)));
             std.debug.assert(buffer.len >= text.len);
             @memcpy(buffer[0..text.len], text);
@@ -720,12 +724,12 @@ pub const Store = struct {
     /// This is safer than getText when multiple identifiers are being processed concurrently.
     pub fn getTextAlloc(self: *const Store, idx: Idx, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         const inner = idx.toInner();
-        if (inner.isSmall()) {
+        if (inner.is_small) {
             // For small identifiers, allocate and reconstruct the text from packed characters
-            return try SmallIdx.getTextFromValueAlloc(inner.getSmallIdx(), allocator);
+            return try SmallIdx.getTextFromValueAlloc(inner.data.small, allocator);
         } else {
             // For big identifiers, clone the text from the interner
-            const big = inner.getBigIdx();
+            const big = inner.data.big;
             const text = self.interner.getText(@enumFromInt(@as(u32, big.idx)));
             return try allocator.dupe(u8, text);
         }
@@ -757,7 +761,10 @@ pub const Store = struct {
             .attributes = Attributes.fromString(text),
             .idx = @as(u28, @intCast(@intFromEnum(interner_idx))),
         };
-        return Idx.fromInner(InnerIdx.fromBig(big_idx));
+        return Idx.fromInner(.{
+            .is_small = false,
+            .data = .{ .big = big_idx },
+        });
     }
 
     /// Freeze the identifier store, preventing any new entries from being added.

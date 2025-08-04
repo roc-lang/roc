@@ -243,7 +243,7 @@ CloseCurly(31:1-31:2),EndOfFile(31:2-31:2),
 		(s-import @5.1-5.47 (raw "I2")
 			(exposing
 				(exposed-upper-ident @5.21-5.32 (text "I21") (as "Ias1"))
-				(exposed-upper-ident @5.34-5.45 (text "I22") (as "Ias2"))))
+				(exposed-upper-ident @5.34-5.45 (text "I22") (as "Ias1"))))
 		(s-type-decl @8.1-8.77
 			(header @8.1-8.5 (name "A")
 				(args

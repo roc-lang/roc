@@ -1702,3 +1702,7 @@ test "TargetUsize conversion to usize" {
     try std.testing.expectEqual(TargetUsize.u32.size(), 4);
     try std.testing.expectEqual(TargetUsize.u64.size(), 8);
 }
+
+test {
+    _ = @import("ident_corruption_test.zig");
+}

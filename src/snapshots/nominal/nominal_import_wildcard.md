@@ -110,7 +110,7 @@ LowerIdent(12:1-12:6),OpAssign(12:7-12:8),UpperIdent(12:9-12:14),EndOfFile(12:14
 	(module @1.1-1.26
 		(exposes @1.8-1.26
 			(exposed-lower-ident @1.9-1.12
-				(text "aed"))
+				(text "red"))
 			(exposed-lower-ident @1.14-1.19
 				(text "green"))
 			(exposed-lower-ident @1.21-1.25
