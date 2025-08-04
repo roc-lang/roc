@@ -268,7 +268,7 @@ test "error test - divide by zero" {
 test "error test - crash statement" {
     // Test simple crash statement
     try runExpectError("crash \"test\"", EvalError.Crash, .no_trace);
-    
+
     // Test crash in block with final expression
     try runExpectError(
         \\{
@@ -281,7 +281,7 @@ test "error test - crash statement" {
 test "crash message storage and retrieval - direct API test" {
     // Test the getCrashMsg() API directly by simulating what happens during a crash
     const test_message = "Direct API test message";
-    
+
     const resources = try helpers.parseAndCanonicalizeExpr(testing.allocator, "42");
     defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
 
@@ -309,7 +309,7 @@ test "crash message storage and retrieval - direct API test" {
         .utf8_bytes = @constCast(test_message.ptr),
         .len = test_message.len,
     };
-    
+
     // Call the crash function directly (this is what roc_ops.crash() does internally)
     interpreter.roc_ops.roc_crashed(&crash_args, interpreter.roc_ops.env);
 
