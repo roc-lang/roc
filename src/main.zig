@@ -203,7 +203,10 @@ pub fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, shm_ha
         errdefer allocator.free(random_suffix);
 
         // Create the full path with .txt suffix first
-        const normalized_temp_dir = std.mem.trimRight(u8, temp_dir, "/");
+        const normalized_temp_dir = if (comptime is_windows)
+            std.mem.trimRight(u8, temp_dir, "/\\")
+        else
+            std.mem.trimRight(u8, temp_dir, "/");
         const dir_name_with_txt = try std.fmt.allocPrint(allocator, "{s}/roc-tmp-{s}.txt", .{ normalized_temp_dir, random_suffix });
         errdefer allocator.free(dir_name_with_txt);
 
@@ -391,7 +394,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
     if (!exe_exists) {
 
-        // Production platform loading: resolve platform from app header
+        // Resolve platform from app header
         const host_path = resolvePlatformHost(gpa, args.path) catch |err| {
             std.log.err("Failed to resolve platform: {}\n", .{err});
             std.process.exit(1);
@@ -587,8 +590,9 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
     };
 }
 
-/// Set up shared memory with a compiled ModuleEnv from a Roc file
-/// This function parses, canonicalizes, and type-checks the Roc file, then stores the resulting ModuleEnv in shared memory
+/// Set up shared memory with a compiled ModuleEnv from a Roc file.
+/// This parses, canonicalizes, and type-checks the Roc file, with the resulting ModuleEnv
+/// ending up in shared memory because all allocations were done into shared memory.
 pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
