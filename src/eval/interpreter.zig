@@ -1691,7 +1691,7 @@ pub const Interpreter = struct {
             if (prev_field_size > 0) {
                 const dest_ptr = record_base_ptr + prev_field_offset;
                 const src_ptr = @as([*]const u8, @ptrCast(prev_field_value.ptr.?));
-                
+
                 // Special handling for string fields - copy as proper RocStr struct instead of bytes
                 if (prev_field_layout.tag == .scalar and prev_field_layout.data.scalar.tag == .str) {
                     const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(src_ptr));
@@ -1755,7 +1755,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn handleTupleElements(self: *Interpreter, tuple_expr_idx: ModuleEnv.Expr.Idx, current_element_idx: u64) EvalError!void {
+    fn handleTupleElements(self: *Interpreter, tuple_expr_idx: ModuleEnv.Expr.Idx, current_element_idx: usize) EvalError!void {
         self.traceEnter("handleTupleElements tuple_expr_idx={}, current_element_idx={}", .{ tuple_expr_idx, current_element_idx });
         defer self.traceExit("", .{});
 
@@ -2287,7 +2287,7 @@ pub const Interpreter = struct {
         if (segments.len == 1) {
             // Evaluate the single segment
             try self.evalExpr(segments[0]);
-            
+
             // Check if it's already a string - if so, we can just use it directly
             const segment_value = try self.popStackValue();
             if (segment_value.layout.tag == .scalar and segment_value.layout.data.scalar.tag == .str) {
@@ -2297,7 +2297,7 @@ pub const Interpreter = struct {
                 const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_ptr));
                 const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(segment_value.ptr.?));
                 dest_str.* = src_str.*; // Move the string (no reference count change needed)
-                
+
                 const result_value = StackValue{ .layout = str_layout, .ptr = result_ptr };
                 try self.traceValue("final_interpolated_string", result_value);
                 return;
