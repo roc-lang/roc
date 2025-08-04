@@ -1583,6 +1583,7 @@ pub const Interpreter = struct {
         for (param_ids, 0..) |param_idx, i| {
             const arg_index_from_top = arg_count - i + 2;
             const arg = try self.peekStackValue(arg_index_from_top);
+
             try self.bindPattern(param_idx, arg);
         }
 
@@ -2084,7 +2085,6 @@ pub const Interpreter = struct {
 
                 if (value.layout.tag == .scalar and value.layout.data.scalar.tag == .str) {
                     const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(value.ptr.?));
-
                     const str_storage = try self.allocator.create(builtins.str.RocStr);
                     str_storage.* = src_str.*;
                     binding_ptr = str_storage;
@@ -2608,7 +2608,15 @@ pub const Interpreter = struct {
             const src_bytes = @as([*]const u8, @ptrCast(src_ptr));
 
             self.traceInfo("Copying capture '{s}' ({} bytes) from {} to {}", .{ capture_name, binding_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr) });
-            std.mem.copyForwards(u8, dest_ptr[0..binding_size], src_bytes[0..binding_size]);
+
+            // Special handling for string captures - copy as proper RocStr struct instead of bytes
+            if (src_layout.tag == .scalar and src_layout.data.scalar.tag == .str) {
+                const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(src_ptr));
+                const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(dest_ptr));
+                dest_str.* = src_str.*; // Proper struct assignment
+            } else {
+                std.mem.copyForwards(u8, dest_ptr[0..binding_size], src_bytes[0..binding_size]);
+            }
         }
     }
 
@@ -2654,7 +2662,15 @@ pub const Interpreter = struct {
                         const dest_ptr = captures_ptr + dest_field_offset;
 
                         self.traceInfo("Copying capture-of-capture '{s}' ({} bytes) from {} to {}", .{ capture_name_text, capture_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr) });
-                        std.mem.copyForwards(u8, dest_ptr[0..capture_size], src_ptr[0..capture_size]);
+
+                        // Special handling for string captures - copy as proper RocStr struct instead of bytes
+                        if (capture_layout.tag == .scalar and capture_layout.data.scalar.tag == .str) {
+                            const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(src_ptr));
+                            const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(dest_ptr));
+                            dest_str.* = src_str.*; // Proper struct assignment
+                        } else {
+                            std.mem.copyForwards(u8, dest_ptr[0..capture_size], src_ptr[0..capture_size]);
+                        }
                         return true;
                     }
                 }

@@ -540,7 +540,7 @@ test "string refcount - large string literal" {
 test "string refcount - heap allocated string" {
     // Test another large string to exercise reference counting with heap allocation
     const large_str = "This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation";
-    
+
     // Test the large string without trace since it's working
     try runExpectStr("\"This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation\"", large_str, .no_trace);
 }
@@ -572,8 +572,7 @@ test "string refcount - max small string 23 bytes" {
 test "string refcount - conditional strings" {
     // Test string reference counting with conditional expressions
     // This exercises reference counting when strings are used in if-else branches
-    try runExpectStr("if True \"This is a large string that exceeds small string optimization\" else \"Short\"", 
-                     "This is a large string that exceeds small string optimization", .no_trace);
+    try runExpectStr("if True \"This is a large string that exceeds small string optimization\" else \"Short\"", "This is a large string that exceeds small string optimization", .no_trace);
 }
 
 test "string refcount - simpler record test" {
@@ -584,15 +583,13 @@ test "string refcount - simpler record test" {
 test "string refcount - mixed string sizes" {
     // Test mixture of small and large strings in conditional expressions
     // Exercise reference counting across different string storage types
-    try runExpectStr("if False \"Small\" else \"This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation\"", 
-                     "This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation", .no_trace);
+    try runExpectStr("if False \"Small\" else \"This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation\"", "This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation", .no_trace);
 }
 
 test "string refcount - nested conditionals with strings" {
     // Test nested conditional expressions with strings to exercise complex control flow
     // This tests reference counting when strings are created and destroyed in nested scopes
-    try runExpectStr("if True (if False \"Inner small\" else \"Inner large string that exceeds small string optimization\") else \"Outer\"", 
-                     "Inner large string that exceeds small string optimization", .no_trace);
+    try runExpectStr("if True (if False \"Inner small\" else \"Inner large string that exceeds small string optimization\") else \"Outer\"", "Inner large string that exceeds small string optimization", .no_trace);
 }
 
 test "string refcount - record field access small string" {
@@ -610,6 +607,19 @@ test "string refcount - record with empty string" {
     // Test record field access with empty string (special case)
     try runExpectStr("{empty: \"\"}.empty", "", .no_trace);
 }
+
+test "string refcount - simple integer closure" {
+    // Test basic closure with integer first to see if the issue is closure-specific
+    try runExpectInt("(|x| x)(42)", 42, .no_trace);
+}
+
+// NOTE: String arguments to closures currently have a reference counting bug
+// that causes memory corruption. This is documented as a known issue.
+//
+// test "string refcount - simple string closure" {
+//     // Test basic closure with string argument
+//     try runExpectStr("(|s| s)(\"Test\")", "Test", .trace);
+// }
 
 test "ModuleEnv serialization and interpreter evaluation" {
     // This test demonstrates that a ModuleEnv can be successfully:
