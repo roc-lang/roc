@@ -90,6 +90,10 @@ pub const EvalError = error{
     StringInterpolationFailed,
     StringSegmentEvaluationFailed,
     StringConversionFailed,
+    UnsupportedWorkItem,
+    UnexpectedWorkItem,
+    RuntimeCrash,
+    InvalidBindingsState,
 };
 
 /// Maximum number of capture fields allowed in a closure
@@ -2203,14 +2207,99 @@ pub const Interpreter = struct {
         ptr: ?*anyopaque,
     };
 
-    /// Helper to push a value onto the stacks.
-    ///
-    /// Allocates memory on `stack_memory`, pushes the layout to `value_stack`,
-    /// and returns a pointer to the newly allocated memory.
-    ///
-    /// The caller is responsible for writing the actual value to the returned pointer.
-    ///
-    /// Returns null for zero-sized types.
+    /// Public method to call a closure with arguments already on the stack
+    /// This method assumes the arguments are already pushed onto the stack in the correct order
+    /// and schedules the necessary work items to evaluate the closure and call it
+    pub fn callClosureWithStackArgs(self: *Interpreter, closure_expr_idx: ModuleEnv.Expr.Idx, arg_count: u32) EvalError!StackValue {
+        // Schedule work items in reverse order (they execute LIFO)
+
+        // 3. Lambda call (executed LAST after closure and args are on stack)
+        self.schedule_work(WorkItem{
+            .kind = .w_lambda_call,
+            .expr_idx = closure_expr_idx,
+            .extra = .{ .arg_count = arg_count },
+        });
+
+        // 2. Closure evaluation (executed second, pushes closure to stack)
+        self.schedule_work(WorkItem{
+            .kind = .w_eval_expr,
+            .expr_idx = closure_expr_idx,
+            .extra = .{ .nothing = {} },
+        });
+
+        // Arguments are already on the stack (pushed by caller)
+
+        // Run the work loop
+        while (self.take_work()) |work| {
+            switch (work.kind) {
+                .w_eval_expr => try self.evalExpr(work.expr_idx),
+                .w_lambda_call => try self.handleLambdaCall(
+                    work.expr_idx,
+                    work.extra.arg_count,
+                ),
+                else => {
+                    // Handle other work types that might be generated
+                    try self.processWorkItem(work);
+                },
+            }
+        }
+
+        // Return the result from the top of the stack
+        return self.popStackValue();
+    }
+
+    /// Helper to process other work item types that might be generated during closure evaluation
+    fn processWorkItem(self: *Interpreter, work: WorkItem) EvalError!void {
+        self.tracePrint("processWorkItem: {s}", .{@tagName(work.kind)});
+
+        switch (work.kind) {
+            // Binary operations
+            .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
+                try self.completeBinop(work.kind);
+            },
+
+            // Unary operations
+            .w_unary_minus => try self.completeUnaryMinus(),
+            .w_unary_not => try self.completeUnaryNot(),
+
+            // Control flow
+            .w_lambda_return => try self.handleLambdaReturn(),
+            .w_if_check_condition => {
+                // Extract branch index from extra data - this is a simplified handler
+                // The actual implementation would need more context about branches
+                std.log.warn("if_check_condition work item not fully implemented in processWorkItem", .{});
+                return error.UnsupportedWorkItem;
+            },
+
+            // Record/tuple evaluation
+            .w_eval_record_fields => try self.handleRecordFields(work.expr_idx, work.extra.current_field_idx),
+            .w_eval_tuple_elements => try self.handleTupleElements(work.expr_idx, work.extra.current_element_idx),
+
+            // Let bindings and other complex work items
+            .w_let_bind, .w_block_cleanup => {
+                // These require more complex state management that's handled in the main eval loop
+                std.log.warn("Complex work item {s} not supported in processWorkItem", .{@tagName(work.kind)});
+                return error.UnsupportedWorkItem;
+            },
+
+            // Field access
+            .w_dot_access => try self.handleDotAccess(work.extra.dot_access_field_name),
+
+            // Runtime errors
+            .w_crash => {
+                const msg = self.env.strings.get(work.extra.crash_msg);
+                std.log.err("Runtime crash: {s}", .{msg});
+                return error.RuntimeCrash;
+            },
+
+            // These should be handled by the caller
+            .w_eval_expr, .w_lambda_call => {
+                std.log.err("Unexpected work item in processWorkItem: {s}", .{@tagName(work.kind)});
+                return error.UnexpectedWorkItem;
+            },
+        }
+    }
+
     pub fn pushStackValue(self: *Interpreter, value_layout: Layout) !?*anyopaque {
         self.tracePrint("pushStackValue {s}", .{@tagName(value_layout.tag)});
         self.traceStackState();

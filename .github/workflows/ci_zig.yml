@@ -73,7 +73,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-13, macos-15, ubuntu-22.04, ubuntu-24.04-arm, windows-2022, windows-2025, windows-11-arm] # macos-13 uses x64, macos-15 uses arm64
+        os: [
+            macos-13,
+            macos-15,
+            ubuntu-22.04,
+            ubuntu-24.04-arm,
+            windows-2022,
+            windows-2025,
+            windows-11-arm,
+          ] # macos-13 uses x64, macos-15 uses arm64
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
@@ -92,6 +100,20 @@ jobs:
       - name: build roc
         run: |
           zig build -Dllvm -Dfuzz -Dsystem-afl=false
+
+      - name: Run Test Platform Tests (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          ./zig-out/bin/roc --no-cache test/platform/str/app.roc
+          ./zig-out/bin/roc --no-cache test/platform/int/app.roc
+
+      - name: Run Test Platform Tests (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # TODO: Windows platform tests disabled until linking issues are resolved
+          # zig-out\bin\roc.exe --no-cache test/platform/str/app.roc
+          # zig-out\bin\roc.exe --no-cache test/platform/int/app.roc
+          echo "Windows platform tests temporarily disabled"
 
       - name: roc executable minimal check (Unix)
         if: runner.os != 'Windows'
