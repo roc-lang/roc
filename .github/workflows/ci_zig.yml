@@ -67,6 +67,12 @@ jobs:
         run: |
           zig build playground-test -Doptimize=ReleaseSmall -- --verbose
 
+      - name: Run Test Platform Tests
+        run: |
+          zig build -Dllvm
+          ./zig-out/bin/roc --no-cache test/platform/str/app.roc
+          ./zig-out/bin/roc --no-cache test/platform/int/app.roc
+
   zig-tests:
     needs: check-once
     runs-on: ${{ matrix.os }}

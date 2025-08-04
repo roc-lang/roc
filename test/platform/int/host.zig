@@ -117,5 +117,6 @@ pub fn main() !void {
         try stdout.print("✓ Results match!\n", .{});
     } else {
         try stdout.print("✗ Results differ!\n", .{});
+        std.process.exit(1);
     }
 }

@@ -106,5 +106,12 @@ pub fn main() !void {
     defer roc_str.decref(&roc_ops);
 
     // Get the string as a slice and print it
-    try stdout.print("{s}\n", .{roc_str.asSlice()});
+    const result_slice = roc_str.asSlice();
+    try stdout.print("{s}", .{result_slice});
+    
+    // Verify the result contains the expected input
+    const expected_substring = "Got the following from the host: string from host";
+    if (std.mem.indexOf(u8, result_slice, expected_substring) == null) {
+        std.process.exit(1);
+    }
 }
