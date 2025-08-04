@@ -2018,6 +2018,9 @@ const Formatter = struct {
                     .suffix_single_question => |s| {
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, s.expr);
                     },
+                    .unary_op => |u| {
+                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, u.expr);
+                    },
                     else => return false,
                 }
             },
