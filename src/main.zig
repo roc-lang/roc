@@ -19,6 +19,11 @@ const cli_args = @import("cli_args.zig");
 const cache_mod = @import("cache/mod.zig");
 const bench = @import("bench.zig");
 const linker = @import("linker.zig");
+const compile = @import("compile");
+const can = @import("can");
+const check = @import("check");
+
+const ModuleEnv = compile.ModuleEnv;
 
 const CacheManager = cache_mod.CacheManager;
 const CacheConfig = cache_mod.CacheConfig;
@@ -108,8 +113,15 @@ const ColorPalette = reporting.ColorPalette;
 
 const legalDetailsFileContent = @embedFile("legal_details");
 
-/// Default size for shared memory allocator (1GB)
-const SHARED_MEMORY_SIZE = 1 * 1024 * 1024 * 1024;
+/// Size for shared memory allocator (just virtual address space to reserve)
+///
+/// We pick a large number because we can't resize this without messing up the
+/// child process. It's just virtual address space though, not physical memory.
+/// On 32-bit targets, we use 512MB since 2TB won't fit in the address space.
+const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) >= 8)
+    2 * 1024 * 1024 * 1024 * 1024 // 2TB for 64-bit targets
+else
+    512 * 1024 * 1024; // 512MB for 32-bit targets
 
 /// Cross-platform hardlink creation
 fn createHardlink(allocator: Allocator, source: []const u8, dest: []const u8) !void {
@@ -195,7 +207,11 @@ pub fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, shm_ha
         errdefer allocator.free(random_suffix);
 
         // Create the full path with .txt suffix first
-        const dir_name_with_txt = try std.fmt.allocPrint(allocator, "{s}/roc-tmp-{s}.txt", .{ temp_dir, random_suffix });
+        const normalized_temp_dir = if (comptime is_windows)
+            std.mem.trimRight(u8, temp_dir, "/\\")
+        else
+            std.mem.trimRight(u8, temp_dir, "/");
+        const dir_name_with_txt = try std.fmt.allocPrint(allocator, "{s}/roc-tmp-{s}.txt", .{ normalized_temp_dir, random_suffix });
         errdefer allocator.free(dir_name_with_txt);
 
         // Get the directory path by slicing off the .txt suffix
@@ -382,47 +398,52 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
     if (!exe_exists) {
 
-        // TODO replace this with the platform/host.a library in future, we are using a simple
-        // test platform host here to demonstrate the process. Before we can use a real platform
-        // we will need to parse the app.roc header to get the platform package (via URL etc).
-        //
-        // Using our pre-built `host.a` from the install directory
-        const example_host_path = std.fs.cwd().realpathAlloc(gpa, "zig-out/lib/libplatform_host_str_simple.a") catch |err| {
-            std.log.err("Failed to get absolute path for host library: {}\n", .{err});
+        // Resolve platform from app header
+        const host_path = resolvePlatformHost(gpa, args.path) catch |err| {
+            std.log.err("Failed to resolve platform: {}\n", .{err});
             std.process.exit(1);
         };
-        defer gpa.free(example_host_path);
+        defer gpa.free(host_path);
 
-        // Extract embedded shim library to cache
-        // TODO check for a cached copy first...
+        // Check for cached shim library, extract if not present
         const shim_path = std.fs.path.join(gpa, &.{ exe_cache_dir, "libread_roc_file_path_shim.a" }) catch |err| {
             std.log.err("Failed to create shim library path: {}\n", .{err});
             std.process.exit(1);
         };
         defer gpa.free(shim_path);
 
-        extractReadRocFilePathShimLibrary(gpa, shim_path) catch |err| {
-            std.log.err("Failed to extract read roc file path shim library: {}\n", .{err});
-            std.process.exit(1);
+        // Only extract if the shim doesn't already exist in cache
+        std.fs.cwd().access(shim_path, .{}) catch {
+            // Shim not found in cache, extract it
+            extractReadRocFilePathShimLibrary(gpa, shim_path) catch |err| {
+                std.log.err("Failed to extract read roc file path shim library: {}\n", .{err});
+                std.process.exit(1);
+            };
         };
 
-        // Link the host.a with our shim to create the interpreter executable
-        const link_config = linker.LinkConfig{
-            .output_path = exe_path,
-            .object_files = &.{ example_host_path, shim_path },
-        };
-
-        linker.link(gpa, link_config) catch |err| {
+        // Link the host.a with our shim to create the interpreter executable using clang
+        const link_result = std.process.Child.run(.{
+            .allocator = gpa,
+            .argv = &.{ "clang", "-o", exe_path, host_path, shim_path },
+        }) catch |err| {
             std.log.err("Failed to link executable: {}\n", .{err});
             std.process.exit(1);
         };
+        defer gpa.free(link_result.stdout);
+        defer gpa.free(link_result.stderr);
+
+        if (link_result.term.Exited != 0) {
+            std.log.err("Linker failed with exit code: {}\n", .{link_result.term.Exited});
+            if (link_result.stderr.len > 0) {
+                std.log.err("Linker stderr: {s}\n", .{link_result.stderr});
+            }
+            std.process.exit(1);
+        }
     }
 
-    // Set up shared memory, and insert the location of the `/path/to/app.roc`
-    // for now we use a hardcoded path to illustrate the concept
-    const test_string = "/path/to/main.roc (from shared memory)";
-    const shm_handle = writeToSharedMemory(test_string) catch |err| {
-        std.log.err("Failed to write to shared memory: {}\n", .{err});
+    // Set up shared memory with ModuleEnv
+    const shm_handle = setupSharedMemoryWithModuleEnv(gpa, args.path) catch |err| {
+        std.log.err("Failed to set up shared memory with ModuleEnv: {}\n", .{err});
         std.process.exit(1);
     };
 
@@ -435,13 +456,11 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
             _ = posix.munmap(shm_handle.ptr, shm_handle.size);
             _ = c.close(shm_handle.fd);
         }
-        cleanupSharedMemory();
     }
 
     // Get cache directory for temporary files
     const temp_cache_dir = cache_manager.config.getTempDir(gpa) catch |err| {
         std.log.err("Failed to get temp cache directory: {}\n", .{err});
-        cleanupSharedMemory();
         std.process.exit(1);
     };
     defer gpa.free(temp_cache_dir);
@@ -451,7 +470,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         error.PathAlreadyExists => {},
         else => {
             std.log.err("Failed to create temp cache directory: {}\n", .{err});
-            cleanupSharedMemory();
             std.process.exit(1);
         },
     };
@@ -459,7 +477,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     // Create temporary directory structure for fd communication
     const temp_exe_path = createTempDirStructure(gpa, exe_path, shm_handle, temp_cache_dir) catch |err| {
         std.log.err("Failed to create temp dir structure: {}\n", .{err});
-        cleanupSharedMemory();
         std.process.exit(1);
     };
     defer gpa.free(temp_exe_path);
@@ -469,7 +486,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
         if (flags < 0) {
             std.log.err("Failed to get fd flags: {}\n", .{c._errno().*});
-            cleanupSharedMemory();
             std.process.exit(1);
         }
 
@@ -477,7 +493,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
         if (posix.fcntl(shm_handle.fd, posix.F_SETFD, flags) < 0) {
             std.log.err("Failed to set fd flags: {}\n", .{c._errno().*});
-            cleanupSharedMemory();
             std.process.exit(1);
         }
     }
@@ -486,14 +501,16 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     var child = std.process.Child.init(&.{temp_exe_path}, gpa);
     child.cwd = std.fs.cwd().realpathAlloc(gpa, ".") catch |err| {
         std.log.err("Failed to get current directory: {}\n", .{err});
-        cleanupSharedMemory();
         std.process.exit(1);
     };
     defer gpa.free(child.cwd.?);
 
+    // Forward stdout and stderr
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+
     child.spawn() catch |err| {
         std.log.err("Failed to spawn {s}: {}\n", .{ exe_path, err });
-        cleanupSharedMemory();
         std.process.exit(1);
     };
 
@@ -569,6 +586,114 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
     };
 }
 
+/// Set up shared memory with a compiled ModuleEnv from a Roc file.
+/// This parses, canonicalizes, and type-checks the Roc file, with the resulting ModuleEnv
+/// ending up in shared memory because all allocations were done into shared memory.
+pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
+    // Create shared memory with SharedMemoryAllocator
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(gpa, "", SHARED_MEMORY_SIZE, page_size);
+    // Don't defer deinit here - we need to keep the shared memory alive
+
+    const shm_allocator = shm.allocator();
+
+    // Allocate space for the offset value at the beginning
+    const offset_ptr = try shm_allocator.alloc(u64, 1);
+    // Also store the canonicalized expression index for the child to evaluate
+    const expr_idx_ptr = try shm_allocator.alloc(u32, 1);
+
+    // Store the parent's address where the first allocation is
+    // The first allocation starts at offset 504 (0x1f8) from base
+    const first_alloc_addr = @intFromPtr(shm.base_ptr) + 504;
+    offset_ptr[0] = first_alloc_addr;
+
+    // Allocate and store a pointer to the ModuleEnv
+    const env_ptr = try shm_allocator.create(ModuleEnv);
+
+    // Read the actual Roc file
+    const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| {
+        std.log.err("Failed to open Roc file '{s}': {}\n", .{ roc_file_path, err });
+        return error.FileNotFound;
+    };
+    defer roc_file.close();
+
+    // Read the entire file into shared memory
+    const file_size = try roc_file.getEndPos();
+    const source = try shm_allocator.alloc(u8, @intCast(file_size));
+    _ = try roc_file.read(source);
+
+    // Extract module name from the file path
+    const basename = std.fs.path.basename(roc_file_path);
+    const module_name = try shm_allocator.dupe(u8, basename);
+
+    var env = try ModuleEnv.init(shm_allocator, source);
+    env.source = source;
+    env.module_name = module_name;
+    try env.calcLineStarts();
+
+    // Parse the source code as a full module
+    var parse_ast = try parse.parse(&env);
+
+    // Empty scratch space (required before canonicalization)
+    parse_ast.store.emptyScratch();
+
+    // Initialize CIR fields in ModuleEnv
+    try env.initCIRFields(shm_allocator, module_name);
+
+    // Create canonicalizer
+    var canonicalizer = try can.init(&env, &parse_ast, null);
+
+    // Canonicalize the entire module
+    try canonicalizer.canonicalizeFile();
+
+    // Find the "main" definition in the module
+    // Look through all definitions to find one named "main"
+    var main_expr_idx: ?u32 = null;
+    const defs = env.store.sliceDefs(env.all_defs);
+    for (defs) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_idx = pattern.assign.ident;
+            const ident_text = env.idents.getText(ident_idx);
+            if (std.mem.eql(u8, ident_text, "main")) {
+                main_expr_idx = @intFromEnum(def.expr);
+                break;
+            }
+        }
+    }
+
+    // Store the main expression index for the child
+    expr_idx_ptr[0] = main_expr_idx orelse {
+        std.log.err("No 'main' definition found in module\n", .{});
+        return error.NoMainFunction;
+    };
+
+    // Type check the module
+    var checker = try check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions);
+    try checker.checkDefs();
+
+    // Copy the ModuleEnv to the allocated space
+    env_ptr.* = env;
+
+    // Clean up the canonicalizer (but keep parse_ast data since it's in shared memory)
+    canonicalizer.deinit();
+
+    // Don't deinit parse_ast since its data is in shared memory
+    // Don't deinit checker since its data is in shared memory
+
+    // Update the header with used size
+    shm.updateHeader();
+
+    // Return the shared memory handle
+    // The caller is responsible for cleanup
+    return SharedMemoryHandle{
+        .fd = shm.handle,
+        .ptr = shm.base_ptr,
+        .size = shm.getUsedSize(),
+    };
+}
+
 fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHandle {
     const shm_name = "/ROC_FILE_TO_INTERPRET";
 
@@ -620,21 +745,98 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
     };
 }
 
-/// Clean up shared memory resources.
-/// On POSIX systems, unlinks the shared memory object. On Windows, cleanup is automatic.
-pub fn cleanupSharedMemory() void {
-    if (comptime is_windows) {
-        // On Windows, shared memory is automatically cleaned up when all handles are closed
-        return;
-    } else {
-        const shm_name = "/ROC_FILE_TO_INTERPRET";
-        if (posix.shm_unlink(shm_name) != 0) {
-            std.debug.print("Failed to unlink shared memory\n", .{});
+/// Resolve platform specification from a Roc file to find the host library
+pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (std.mem.Allocator.Error || error{ NoPlatformFound, PlatformNotSupported })![]u8 {
+    // Read the Roc file to parse the app header
+    const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return error.NoPlatformFound,
+        else => return error.NoPlatformFound, // Treat all file errors as no platform found
+    };
+    defer roc_file.close();
+
+    const file_size = roc_file.getEndPos() catch return error.NoPlatformFound;
+    const source = gpa.alloc(u8, @intCast(file_size)) catch return error.OutOfMemory;
+    defer gpa.free(source);
+    _ = roc_file.read(source) catch return error.NoPlatformFound;
+
+    // Parse the source to find the app header
+    // Look for "app" followed by platform specification
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+
+        // Check if this is an app header line
+        if (std.mem.startsWith(u8, trimmed, "app")) {
+            // Look for platform specification after "platform"
+            if (std.mem.indexOf(u8, trimmed, "platform")) |platform_start| {
+                const after_platform = trimmed[platform_start + "platform".len ..];
+
+                // Find the platform name/URL in quotes
+                if (std.mem.indexOf(u8, after_platform, "\"")) |quote_start| {
+                    const after_quote = after_platform[quote_start + 1 ..];
+                    if (std.mem.indexOf(u8, after_quote, "\"")) |quote_end| {
+                        const platform_spec = after_quote[0..quote_end];
+
+                        // Try to resolve platform to a local host library
+                        return resolvePlatformSpecToHostLib(gpa, platform_spec);
+                    }
+                }
+            }
         }
     }
+
+    return error.NoPlatformFound;
 }
 
-fn extractReadRocFilePathShimLibrary(gpa: Allocator, output_path: []const u8) !void {
+/// Resolve a platform specification to a local host library path
+fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})![]u8 {
+    // TEMPORARY: For testing the interpreter, use our test host library
+    if (std.mem.eql(u8, platform_spec, "test")) {
+        return gpa.dupe(u8, "libtest_host.a");
+    }
+
+    // Check for common platform names and map them to host libraries
+    if (std.mem.eql(u8, platform_spec, "cli")) {
+        // Try to find CLI platform host library
+        const cli_paths = [_][]const u8{
+            "zig-out/lib/libplatform_host_cli.a",
+            "platform/cli/host.a",
+            "platforms/cli/host.a",
+        };
+
+        for (cli_paths) |path| {
+            std.fs.cwd().access(path, .{}) catch continue;
+            return try gpa.dupe(u8, path);
+        }
+    } else if (std.mem.eql(u8, platform_spec, "basic-cli")) {
+        // Try to find basic-cli platform host library
+        const basic_cli_paths = [_][]const u8{
+            "zig-out/lib/libplatform_host_basic_cli.a",
+            "platform/basic-cli/host.a",
+            "platforms/basic-cli/host.a",
+        };
+
+        for (basic_cli_paths) |path| {
+            std.fs.cwd().access(path, .{}) catch continue;
+            return try gpa.dupe(u8, path);
+        }
+    } else if (std.mem.startsWith(u8, platform_spec, "http")) {
+        // This is a URL - for production, would download and resolve
+        // For now, return not supported
+        return error.PlatformNotSupported;
+    }
+
+    // Try to interpret as a direct file path
+    std.fs.cwd().access(platform_spec, .{}) catch {
+        return error.PlatformNotSupported;
+    };
+
+    return try gpa.dupe(u8, platform_spec);
+}
+
+/// Extract the embedded read_roc_file_path_shim library to the specified path
+/// This library contains the shim code that runs in child processes to read ModuleEnv from shared memory
+pub fn extractReadRocFilePathShimLibrary(gpa: Allocator, output_path: []const u8) !void {
     _ = gpa; // unused but kept for consistency
 
     if (builtin.is_test) {

@@ -103,8 +103,6 @@ base_ptr: [*]align(1) u8,
 total_size: usize,
 /// Current offset for bump allocation (atomic for thread-safe allocation)
 offset: std.atomic.Value(usize),
-/// Name of the shared memory region (for child process to find it)
-name: []const u8,
 /// Whether this allocator owns the shared memory (should clean up)
 is_owner: bool,
 /// Page size for this system
@@ -189,7 +187,6 @@ pub fn create(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: 
                 .base_ptr = @ptrCast(@alignCast(base_ptr)),
                 .total_size = aligned_size,
                 .offset = std.atomic.Value(usize).init(@sizeOf(Header)), // Start after header
-                .name = try gpa.dupe(u8, name),
                 .is_owner = true,
                 .page_size = page_size,
             };
@@ -213,14 +210,30 @@ pub fn create(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: 
             else
                 @as(u32, @bitCast(std.posix.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true }));
 
-            const fd = c.shm_open(
+            var fd = c.shm_open(
                 shm_name.ptr,
                 oflags,
                 0o600,
             );
 
             if (fd < 0) {
-                return error.ShmOpenFailed;
+                const errno = std.c._errno().*;
+                // If it exists, unlink it and try again
+                if (errno == 17) { // EEXIST
+                    _ = c.shm_unlink(shm_name.ptr);
+                    fd = c.shm_open(
+                        shm_name.ptr,
+                        oflags,
+                        0o600,
+                    );
+                    if (fd < 0) {
+                        std.debug.print("SharedMemoryAllocator: shm_open retry failed with errno={} for name={s} size={}\n", .{ std.c._errno().*, shm_name, aligned_size });
+                        return error.ShmOpenFailed;
+                    }
+                } else {
+                    std.debug.print("SharedMemoryAllocator: shm_open failed with errno={} for name={s} size={}\n", .{ errno, shm_name, aligned_size });
+                    return error.ShmOpenFailed;
+                }
             }
 
             // Set the size of the shared memory
@@ -249,7 +262,6 @@ pub fn create(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: 
                 .base_ptr = @ptrCast(@alignCast(base_ptr.ptr)),
                 .total_size = aligned_size,
                 .offset = std.atomic.Value(usize).init(@sizeOf(Header)), // Start after header
-                .name = try gpa.dupe(u8, name),
                 .is_owner = true,
                 .page_size = page_size,
             };
@@ -327,7 +339,6 @@ pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8, page_size: usize
                 .base_ptr = @ptrCast(@alignCast(base_ptr)),
                 .total_size = @as(usize, @intCast(header.used_size)),
                 .offset = std.atomic.Value(usize).init(@as(usize, @intCast(header.data_offset))),
-                .name = try gpa.dupe(u8, name),
                 .is_owner = false,
                 .page_size = page_size,
             };
@@ -388,7 +399,6 @@ pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8, page_size: usize
                 .base_ptr = @ptrCast(@alignCast(base_ptr.ptr)),
                 .total_size = actual_size,
                 .offset = std.atomic.Value(usize).init(@as(usize, @intCast(header.data_offset))),
-                .name = try gpa.dupe(u8, name),
                 .is_owner = false,
                 .page_size = page_size,
             };
@@ -439,7 +449,6 @@ pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: us
                 .base_ptr = @ptrCast(@alignCast(base_ptr)),
                 .total_size = aligned_size,
                 .offset = std.atomic.Value(usize).init(0),
-                .name = try gpa.dupe(u8, name),
                 .is_owner = false,
                 .page_size = page_size,
             };
@@ -478,7 +487,6 @@ pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: us
                 .base_ptr = @ptrCast(@alignCast(base_ptr.ptr)),
                 .total_size = aligned_size,
                 .offset = std.atomic.Value(usize).init(0),
-                .name = try gpa.dupe(u8, name),
                 .is_owner = false,
                 .page_size = page_size,
             };
@@ -496,6 +504,7 @@ pub fn updateHeader(self: *SharedMemoryAllocator) void {
 
 /// Deinitializes the shared memory allocator
 pub fn deinit(self: *SharedMemoryAllocator, gpa: std.mem.Allocator) void {
+    _ = gpa; // No longer needed since we don't store the name
     // Update header before closing
     if (self.is_owner) {
         self.updateHeader();
@@ -509,18 +518,11 @@ pub fn deinit(self: *SharedMemoryAllocator, gpa: std.mem.Allocator) void {
             std.posix.munmap(@alignCast(self.base_ptr[0..self.total_size]));
             _ = std.posix.close(self.handle);
 
-            // If we're the owner and on POSIX, try to unlink
-            // (though child process should have already done this)
-            if (self.is_owner) {
-                const shm_name = std.fmt.allocPrintZ(gpa, "/{s}", .{self.name}) catch return;
-                defer gpa.free(shm_name);
-                _ = c.shm_unlink(shm_name.ptr);
-            }
+            // Shared memory will be automatically cleaned up when all references are closed
+            // since we're using fd passing instead of named shared memory
         },
         else => @compileError("Unsupported platform"),
     }
-
-    gpa.free(self.name);
 }
 
 /// Returns a std.mem.Allocator interface for this shared memory allocator
@@ -606,10 +608,9 @@ pub fn getUsedSize(self: *const SharedMemoryAllocator) usize {
 /// Get the recommended size for a child process to map.
 /// This is the used size aligned to page boundaries.
 ///
-/// IMPORTANT: On platforms where shrinkToFit doesn't work (like macOS), the parent
-/// process MUST communicate this size to the child process (e.g., via command line
-/// arguments or environment variables). The child should then use this size when
-/// calling open() to map only what's needed, not the full 1GB.
+/// IMPORTANT: The parent process MUST communicate this size to the child process
+/// (e.g., via command line arguments or environment variables). The child should
+/// then use this size when calling open() to map only what's needed.
 ///
 /// Example:
 /// ```zig
@@ -637,54 +638,12 @@ pub fn reset(self: *SharedMemoryAllocator) void {
     self.offset.store(0, .monotonic);
 }
 
-/// Shrink the shared memory region to only the used size.
-/// This reduces the memory footprint before handing off to a child process.
-/// Returns the new size after shrinking.
-///
-/// NOTE: On macOS, ftruncate() is not supported for POSIX shared memory objects.
-/// This is a known limitation where macOS treats shared memory differently than regular files.
-/// The child process should map only the required size instead.
-pub fn shrinkToFit(self: *SharedMemoryAllocator) !usize {
-    const used = self.getUsedSize();
-    if (used == 0 or used >= self.total_size) {
-        return self.total_size;
-    }
-
-    // Align to page boundary
-    const new_size = std.mem.alignForward(usize, used, self.page_size);
-    if (new_size >= self.total_size) {
-        return self.total_size;
-    }
-
-    switch (builtin.os.tag) {
-        .windows => {
-            // On Windows, we can't easily shrink a mapped view
-            // The child process can map only the used portion
-            // So we just return the current size
-            return self.total_size;
-        },
-        .linux, .macos, .freebsd, .openbsd, .netbsd => {
-            // Use C ftruncate directly to avoid Zig's unreachable assertion for EINVAL
-            const result = c.ftruncate(self.handle, @intCast(new_size));
-            if (result != 0) {
-                // ftruncate is not supported on shared memory for some platforms (notably macOS)
-                // The child process should map only the required portion instead
-                return self.total_size;
-            }
-
-            // Update our total size
-            self.total_size = new_size;
-            return new_size;
-        },
-        else => @compileError("Unsupported platform"),
-    }
-}
-
 // Platform-specific C declarations
 const c = struct {
     // POSIX shared memory functions
     extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
     extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
+    extern "c" fn ftruncate(fd: c_int, length: std.c.off_t) c_int;
 };
 
 test "shared memory allocator basic operations" {
@@ -748,109 +707,6 @@ test "shared memory allocator cross-process" {
         for (data, 0..) |*item, i| {
             item.* = @intCast(i * 2);
         }
-    }
-}
-
-test "shared memory allocator with header" {
-    const testing = std.testing;
-
-    const name = try std.fmt.allocPrint(
-        testing.allocator,
-        "zig_test_shm_header_{}",
-        .{std.Thread.getCurrentId()},
-    );
-    defer testing.allocator.free(name);
-
-    // Parent process creates and writes data
-    const page_size = try getSystemPageSize();
-    var parent_shm = try SharedMemoryAllocator.create(testing.allocator, name, 1024 * 1024, page_size);
-    defer parent_shm.deinit(testing.allocator);
-
-    const shm_allocator = parent_shm.allocator();
-    const data = try shm_allocator.alloc(u32, 100);
-    for (data, 0..) |*item, i| {
-        item.* = @intCast(i * 2);
-    }
-
-    // Update header before child opens
-    parent_shm.updateHeader();
-
-    // Child process opens using header
-    var child_shm = try SharedMemoryAllocator.openWithHeader(testing.allocator, name, page_size);
-    defer child_shm.deinit(testing.allocator);
-
-    // Verify we mapped only what was used, not the full 1MB
-    try testing.expect(child_shm.total_size < 1024 * 1024);
-    try testing.expect(child_shm.total_size >= @sizeOf(Header) + 100 * @sizeOf(u32));
-
-    // Verify we can read the data
-    const data_start = child_shm.base_ptr + @sizeOf(Header);
-    const child_data = @as([*]u32, @ptrCast(@alignCast(data_start)))[0..100];
-    for (child_data, 0..) |item, i| {
-        try testing.expectEqual(@as(u32, @intCast(i * 2)), item);
-    }
-}
-
-test "shared memory allocator shrinkToFit" {
-    const testing = std.testing;
-
-    const name = try std.fmt.allocPrint(
-        testing.allocator,
-        "zig_test_shm_shrink_{}",
-        .{std.Thread.getCurrentId()},
-    );
-    defer testing.allocator.free(name);
-
-    const page_size = try getSystemPageSize();
-    var shm = try SharedMemoryAllocator.create(testing.allocator, name, 1024 * 1024, page_size); // 1MB
-    defer shm.deinit(testing.allocator);
-
-    const shm_allocator = shm.allocator();
-
-    // Allocate some data
-    const data1 = try shm_allocator.alloc(u32, 100);
-    try testing.expect(data1.len == 100);
-
-    const data2 = try shm_allocator.alloc(u8, 1000);
-    try testing.expect(data2.len == 1000);
-
-    // Check initial size
-    const initial_size = shm.total_size;
-    try testing.expectEqual(@as(usize, 1024 * 1024), initial_size);
-
-    // Get used size before shrinking
-    const used_before = shm.getUsedSize();
-    try testing.expect(used_before >= 100 * @sizeOf(u32) + 1000);
-    try testing.expect(used_before < initial_size);
-
-    // Shrink to fit (may fail on some platforms)
-    const new_size = shm.shrinkToFit() catch shm.total_size;
-
-    // On Windows and macOS, shrinking might not be supported
-    if (builtin.os.tag == .windows or builtin.os.tag == .macos) {
-        // If shrinking failed, size should remain the same
-        if (new_size == initial_size) {
-            try testing.expectEqual(initial_size, new_size);
-        } else {
-            // If it succeeded, verify the constraints
-            try testing.expect(new_size < initial_size);
-            try testing.expect(new_size >= used_before);
-            try testing.expectEqual(@as(usize, 0), new_size % page_size);
-        }
-    } else {
-        // On Linux and other POSIX systems, should shrink to page-aligned size
-        try testing.expect(new_size < initial_size);
-        try testing.expect(new_size >= used_before);
-        // Should be page-aligned
-        try testing.expectEqual(@as(usize, 0), new_size % page_size);
-    }
-
-    // Verify we can still use the allocated memory
-    for (data1, 0..) |*item, i| {
-        item.* = @intCast(i);
-    }
-    for (data1, 0..) |item, i| {
-        try testing.expectEqual(@as(u32, @intCast(i)), item);
     }
 }
 

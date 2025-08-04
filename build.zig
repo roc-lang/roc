@@ -289,9 +289,7 @@ fn addMainExe(
         .strip = strip,
     });
     host_lib.linkLibC();
-    const builtins = b.addModule("builtins", .{ .root_source_file = b.path("src/builtins/mod.zig") });
-    builtins.addImport("builtins", builtins);
-    host_lib.root_module.addImport("builtins", builtins);
+    host_lib.root_module.addImport("builtins", roc_modules.builtins);
 
     // Install host.a to the output directory
     const install_host = b.addInstallArtifact(host_lib, .{});
@@ -306,7 +304,8 @@ fn addMainExe(
         .strip = strip,
     });
     shim_lib.linkLibC();
-    shim_lib.root_module.addImport("builtins", builtins);
+    // Add all modules from roc_modules that the shim needs
+    roc_modules.addAll(shim_lib);
 
     // Install shim.a to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});
