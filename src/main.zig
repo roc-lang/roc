@@ -447,7 +447,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
         linker.link(gpa, link_config) catch |err| switch (err) {
             linker.LinkError.LLVMNotAvailable => {
-                // Fallback to clang when LLVM is not available
+                // Fallback to clang when LLVM is not available  
                 const link_result = std.process.Child.run(.{
                     .allocator = gpa,
                     .argv = &.{ "clang", "-o", exe_path, host_path, shim_path },
@@ -461,6 +461,9 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
                     std.log.err("Linker failed with exit code: {}\n", .{link_result.term.Exited});
                     if (link_result.stderr.len > 0) {
                         std.log.err("Linker stderr: {s}\n", .{link_result.stderr});
+                    }
+                    if (link_result.stdout.len > 0) {
+                        std.log.err("Linker stdout: {s}\n", .{link_result.stdout});
                     }
                     std.process.exit(1);
                 }
