@@ -137,9 +137,6 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             try args.append("-syslibroot");
             try args.append("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk");
 
-            // Link against system libraries
-            try args.append("-lc");
-
             // Allow undefined symbols for now - compiler-rt builtins will be resolved by system
             try args.append("-undefined");
             try args.append("dynamic_lookup");
@@ -148,9 +145,6 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             // Add dynamic linker
             try args.append("-dynamic-linker");
             try args.append("/lib64/ld-linux-x86-64.so.2");
-
-            // Link against C library
-            try args.append("-lc");
         },
         .windows => {
             // Add subsystem for console applications
@@ -160,10 +154,7 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             try args.append("kernel32.lib");
             try args.append("msvcrt.lib");
         },
-        else => {
-            // Default: just link against C library
-            try args.append("-lc");
-        },
+        else => {},
     }
 
     // Add object files
