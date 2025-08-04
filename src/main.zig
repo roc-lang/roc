@@ -818,7 +818,7 @@ fn resolveNamedPlatform(gpa: std.mem.Allocator, platform_name: []const u8) ?[]u8
         };
         return findFirstExistingPath(gpa, &cli_paths);
     }
-    
+
     if (std.mem.eql(u8, platform_name, "basic-cli")) {
         const basic_cli_paths = [_][]const u8{
             "zig-out/lib/libplatform_host_basic_cli.a",

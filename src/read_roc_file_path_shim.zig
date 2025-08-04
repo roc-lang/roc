@@ -50,7 +50,7 @@ fn safeSlice(ptr: ?*anyopaque, offset: usize, length: usize, total_size: usize) 
         return error.BufferOverflow;
     }
     const base_ptr = @as([*]u8, @ptrCast(ptr.?));
-    return base_ptr[offset..offset + length];
+    return base_ptr[offset .. offset + length];
 }
 
 /// Validate parameter count is within reasonable bounds
@@ -66,12 +66,12 @@ fn safeCopyArgument(arg_ptr: ?*anyopaque, dest_ptr: ?*anyopaque, elem_offset: us
     if (arg_ptr == null or dest_ptr == null) {
         return error.NullPointer;
     }
-    
+
     if (elem_offset + elem_size > max_arg_size) {
         std.log.err("Argument copy would overflow: offset={}, size={}, max={}", .{ elem_offset, elem_size, max_arg_size });
         return error.BufferOverflow;
     }
-    
+
     if (elem_size > 0) {
         const src_slice = try safeSlice(arg_ptr, elem_offset, elem_size, max_arg_size);
         const dst_slice = (@as([*]u8, @ptrCast(dest_ptr.?)))[0..elem_size];
@@ -150,7 +150,7 @@ fn evaluateExpression(env_ptr: *ModuleEnv, expr_idx: u32, arg_ptr: ?*anyopaque, 
 /// Common closure evaluation logic
 fn evaluateClosure(env_ptr: *ModuleEnv, interpreter: *eval.Interpreter, layout_cache: *layout_store.Store, expr_idx_enum: ModuleEnv.Expr.Idx, arg_ptr: ?*anyopaque, ops: *builtins.host_abi.RocOps) !RocStr {
     var buf: [RESULT_BUFFER_SIZE]u8 = undefined;
-    
+
     const closure_expr = env_ptr.store.getExpr(expr_idx_enum);
     const lambda_expr = switch (closure_expr) {
         .e_closure => |closure_data| env_ptr.store.getExpr(closure_data.lambda_idx),
@@ -190,7 +190,7 @@ fn evaluateClosure(env_ptr: *ModuleEnv, interpreter: *eval.Interpreter, layout_c
 /// Push closure arguments onto the interpreter stack
 fn pushClosureArguments(interpreter: *eval.Interpreter, layout_cache: *layout_store.Store, param_patterns: []const ModuleEnv.Pattern.Idx, arg_ptr: ?*anyopaque, buf: *[RESULT_BUFFER_SIZE]u8, ops: *builtins.host_abi.RocOps) !void {
     const param_count = param_patterns.len;
-    
+
     if (param_count == 1) {
         // Single parameter case
         const p0 = param_patterns[0];
@@ -207,7 +207,7 @@ fn pushClosureArguments(interpreter: *eval.Interpreter, layout_cache: *layout_st
             const err_str = std.fmt.bufPrint(buf, "Push failed: {s}", .{@errorName(err)}) catch "Push failed";
             return createRocStrFromData(ops, @as([*]u8, @ptrCast(buf)), err_str.len);
         };
-        
+
         // Use safe copy with bounds checking for single parameter
         safeCopyArgument(arg_ptr, dest_ptr, 0, size_bytes, size_bytes) catch |err| {
             const err_str = std.fmt.bufPrint(buf, "Single argument copy error: {s}", .{@errorName(err)}) catch "Single argument copy error";
@@ -270,7 +270,7 @@ fn pushMultipleArguments(interpreter: *eval.Interpreter, layout_cache: *layout_s
             const err_str = std.fmt.bufPrint(buf, "Push failed: {s}", .{@errorName(err)}) catch "Push failed";
             return createRocStrFromData(ops, @as([*]u8, @ptrCast(buf)), err_str.len);
         };
-        
+
         // Use safe copy with bounds checking
         safeCopyArgument(arg_ptr, dest_ptr, elem_offset, elem_size, total_tuple_size) catch |err| {
             const err_str = std.fmt.bufPrint(buf, "Argument copy error: {s}", .{@errorName(err)}) catch "Argument copy error";
@@ -747,7 +747,7 @@ fn evaluateFromPosixSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: 
         };
 
         const param_count = param_patterns.len;
-        
+
         // Validate parameter count in direct evaluation too
         validateParameterCount(param_count) catch {
             std.debug.print("Invalid parameter count in direct evaluation\n", .{});
@@ -827,7 +827,7 @@ fn evaluateFromPosixSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: 
                     };
                     // Calculate total tuple size for bounds checking
                     const total_tuple_size = if (i_copy == 0) running_offset else running_offset;
-                    
+
                     // Use safe copy with bounds checking in direct evaluation
                     safeCopyArgument(arg_ptr, dest_ptr, elem_offset, elem_size, total_tuple_size) catch {
                         std.debug.print("Argument copy failed in direct evaluation\n", .{});
