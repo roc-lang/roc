@@ -136,10 +136,6 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             // Add SDK path
             try args.append("-syslibroot");
             try args.append("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk");
-
-            // Allow undefined symbols for now - compiler-rt builtins will be resolved by system
-            try args.append("-undefined");
-            try args.append("dynamic_lookup");
         },
         .linux => {
             // Use static linking to avoid dynamic linker dependency issues
