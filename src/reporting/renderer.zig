@@ -15,11 +15,10 @@ const ColorPalette = reporting.ColorPalette;
 const ColorUtils = reporting.ColorUtils;
 pub const ReportingConfig = reporting.ReportingConfig;
 
-/// TODO find a better solution this is temporary to make CI happy
-///
 /// Makes a file path relative for error reporting.
-/// For snapshot files, returns just the filename.
+/// For snapshot files, returns just the filename to avoid absolute path differences in CI.
 /// For other files, returns the original path.
+/// TODO: Consider a more comprehensive path normalization approach for all file types.
 fn sanitisePathForSnapshots(path: []const u8) []const u8 {
 
     // Check if this is a snapshot file (contains /snapshots/ or \snapshots\)

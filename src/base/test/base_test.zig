@@ -233,12 +233,12 @@ test "Ident.Store basic CompactWriter roundtrip" {
     const idx3 = try original.insert(gpa, ident3);
 
     // Verify the attributes in the indices
-    try std.testing.expect(!idx1.attributes.effectful);
-    try std.testing.expect(!idx1.attributes.ignored);
-    try std.testing.expect(idx2.attributes.effectful);
-    try std.testing.expect(!idx2.attributes.ignored);
-    try std.testing.expect(!idx3.attributes.effectful);
-    try std.testing.expect(idx3.attributes.ignored);
+    try std.testing.expect(!idx1.attributes().effectful);
+    try std.testing.expect(!idx1.attributes().ignored);
+    try std.testing.expect(idx2.attributes().effectful);
+    try std.testing.expect(!idx2.attributes().ignored);
+    try std.testing.expect(!idx3.attributes().effectful);
+    try std.testing.expect(idx3.attributes().ignored);
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -284,11 +284,15 @@ test "Ident.Store basic CompactWriter roundtrip" {
 
     // Check the bytes length for validation
     const bytes_len = deserialized.interner.bytes.len();
-    const idx1_value = @intFromEnum(@as(SmallStringInterner.Idx, @enumFromInt(@as(u32, idx1.idx))));
 
-    // Verify the index is valid
-    if (bytes_len <= idx1_value) {
-        return error.InvalidIndex;
+    // Get the interner index if it exists (skip validation for small indices)
+    if (idx1.getInternerIdx()) |interner_idx| {
+        const idx1_value = @intFromEnum(@as(SmallStringInterner.Idx, @enumFromInt(interner_idx)));
+
+        // Verify the index is valid
+        if (bytes_len <= idx1_value) {
+            return error.InvalidIndex;
+        }
     }
 
     // Verify the identifiers are accessible
@@ -454,30 +458,32 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     defer original.deinit(gpa);
 
     // Test various identifier types and edge cases
-    // Note: SmallStringInterner starts with a 0 byte at index 0, so strings start at index 1
-    const test_idents = [_]struct { text: []const u8, expected_idx: u32 }{
-        .{ .text = "hello", .expected_idx = 1 },
-        .{ .text = "world!", .expected_idx = 7 },
-        .{ .text = "_ignored", .expected_idx = 14 },
-        .{ .text = "a", .expected_idx = 23 }, // single character
-        .{ .text = "very_long_identifier_name_that_might_cause_issues", .expected_idx = 25 },
-        .{ .text = "effectful!", .expected_idx = 75 },
-        .{ .text = "_", .expected_idx = 86 }, // Just underscore
-        .{ .text = "CamelCase", .expected_idx = 88 },
-        .{ .text = "snake_case", .expected_idx = 98 },
-        .{ .text = "SCREAMING_CASE", .expected_idx = 109 },
-        .{ .text = "hello", .expected_idx = 1 }, // duplicate, should reuse
+    // Don't check specific indices as they depend on implementation details
+    // Just verify that identifiers round-trip correctly
+    const test_idents = [_][]const u8{
+        "hello", // 5 chars, goes to interner
+        "world!", // has !, goes to interner
+        "_ignored", // starts with _, goes to interner
+        "a", // single character - may be inlined
+        "very_long_identifier_name_that_might_cause_issues",
+        "effectful!",
+        "_", // Just underscore
+        "CamelCase",
+        "snake_case",
+        "SCREAMING_CASE",
+        "hello", // duplicate, should reuse
     };
 
     var indices = std.ArrayList(Ident.Idx).init(gpa);
     defer indices.deinit();
 
-    for (test_idents) |test_ident| {
-        const ident = Ident.for_text(test_ident.text);
+    for (test_idents) |text| {
+        const ident = Ident.for_text(text);
         const idx = try original.insert(gpa, ident);
         try indices.append(idx);
-        // Verify the index matches expectation
-        try std.testing.expectEqual(test_ident.expected_idx, idx.idx);
+        // Just verify we can retrieve the text correctly
+        const retrieved = original.getText(idx);
+        try std.testing.expectEqualStrings(text, retrieved);
     }
 
     // Add some unique names
@@ -530,10 +536,10 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify all identifiers (skip duplicate at end)
-    for (test_idents[0..10], 0..) |test_ident, i| {
+    for (test_idents[0..10], 0..) |expected_text, i| {
         const idx = indices.items[i];
         const text = deserialized.getText(idx);
-        try std.testing.expectEqualStrings(test_ident.text, text);
+        try std.testing.expectEqualStrings(expected_text, text);
     }
 
     // Verify unique names
@@ -542,7 +548,8 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
 
     // Verify the interner's entry count is preserved
     // We inserted 10 unique strings + 2 generated unique names = 12 total
-    try std.testing.expectEqual(@as(u32, 12), deserialized.interner.entry_count);
+    // With SmallIdx, "a" is inlined so we have one less entry in the interner
+    try std.testing.expectEqual(@as(u32, 11), deserialized.interner.entry_count);
 
     // Verify next_unique_name
     try std.testing.expectEqual(@as(u32, 2), deserialized.next_unique_name);
@@ -1694,4 +1701,8 @@ test "StringLiteral.Store edge case indices CompactWriter roundtrip" {
 test "TargetUsize conversion to usize" {
     try std.testing.expectEqual(TargetUsize.u32.size(), 4);
     try std.testing.expectEqual(TargetUsize.u64.size(), 8);
+}
+
+test {
+    _ = @import("ident_corruption_test.zig");
 }

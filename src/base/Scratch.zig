@@ -2,7 +2,7 @@
 //! when working with recursive operations
 
 const std = @import("std");
-const base = @import("../base.zig");
+const base = @import("mod.zig");
 
 /// A stack for easily adding and removing index types when doing recursive operations
 pub fn Scratch(comptime T: type) type {

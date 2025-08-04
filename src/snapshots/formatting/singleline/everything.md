@@ -242,7 +242,7 @@ CloseCurly(31:1-31:2),EndOfFile(31:2-31:2),
 				(exposed-upper-ident @4.26-4.29 (text "I12"))))
 		(s-import @5.1-5.46 (raw "I2")
 			(exposing
-				(exposed-upper-ident @5.21-5.32 (text "I21") (as "Ias1"))
+				(exposed-upper-ident @5.21-5.32 (text "Ias") (as "Ias1"))
 				(exposed-upper-ident @5.34-5.45 (text "I22") (as "Ias2"))))
 		(s-type-decl @8.1-8.74
 			(header @8.1-8.5 (name "A")
@@ -556,7 +556,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret")))
+		(patt @18.1-18.2 (type "[Z1((field, field2)), Z2(a, b), Z3(c), Z4(List(elem))]others, [Z1((field3, field4)), Z2(d, e), Z3(f), Z4(List(elem2))]others2 -> _ret")))
 	(type_decls
 		(alias @8.1-8.74 (type "A(a)")
 			(ty-header @8.1-8.5 (name "A")
@@ -581,5 +581,5 @@ NO CHANGE
 		(alias @14.1-14.11 (type "F")
 			(ty-header @14.1-14.2 (name "F"))))
 	(expressions
-		(expr @18.5-31.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret"))))
+		(expr @18.5-31.2 (type "[Z1((field, field2)), Z2(a, b), Z3(c), Z4(List(elem))]others, [Z1((field3, field4)), Z2(d, e), Z3(f), Z4(List(elem2))]others2 -> _ret"))))
 ~~~

@@ -29,8 +29,8 @@ test "ModuleEnv.Serialized roundtrip" {
     const str_idx = try original.strings.insert(gpa, "test string");
     _ = str_idx;
 
-    try original.exposed_items.addExposedById(gpa, @as(u32, @bitCast(hello_idx)));
-    try original.exposed_items.setNodeIndexById(gpa, @as(u32, @bitCast(hello_idx)), 42);
+    try original.exposed_items.addExposedById(gpa, hello_idx.toU32());
+    try original.exposed_items.setNodeIndexById(gpa, hello_idx.toU32(), 42);
     original.exposed_items.ensureSorted(gpa);
 
     _ = try original.line_starts.append(gpa, 0);
@@ -82,7 +82,7 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqualStrings("world", env.idents.getText(world_idx));
 
     try testing.expectEqual(@as(usize, 1), env.exposed_items.count());
-    try testing.expectEqual(@as(?u16, 42), env.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
+    try testing.expectEqual(@as(?u16, 42), env.exposed_items.getNodeIndexById(gpa, hello_idx.toU32()));
 
     try testing.expectEqual(@as(usize, 3), env.line_starts.len());
     try testing.expectEqual(@as(u32, 0), env.line_starts.items.items[0]);

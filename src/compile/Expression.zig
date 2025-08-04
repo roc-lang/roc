@@ -847,8 +847,12 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-zero-argument-tag");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("closure", ir.getIdentText(zero_arg_tag_expr.closure_name));
-                try tree.pushStringPair("name", ir.getIdentText(zero_arg_tag_expr.name));
+                const closure_name = try ir.getIdentTextAlloc(zero_arg_tag_expr.closure_name, tree.allocator);
+                defer tree.allocator.free(closure_name);
+                const name_text = try ir.getIdentTextAlloc(zero_arg_tag_expr.name, tree.allocator);
+                defer tree.allocator.free(name_text);
+                try tree.pushStringPair("closure", closure_name);
+                try tree.pushStringPair("name", name_text);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -872,7 +876,9 @@ pub const Expr = union(enum) {
                         const capture_region = ir.store.getPatternRegion(captured_var.pattern_idx);
                         try ir.appendRegionInfoToSExprTreeFromRegion(tree, capture_region);
 
-                        try tree.pushStringPair("ident", ir.getIdentText(captured_var.name));
+                        const ident_text = try ir.getIdentTextAlloc(captured_var.name, tree.allocator);
+                        defer tree.allocator.free(ident_text);
+                        try tree.pushStringPair("ident", ident_text);
                         const capture_attrs = tree.beginNode();
                         try tree.endNode(capture_begin, capture_attrs);
                     }
@@ -942,7 +948,9 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-dot-access");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("field", ir.getIdentText(e.field_name));
+                const field_name = try ir.getIdentTextAlloc(e.field_name, tree.allocator);
+                defer tree.allocator.free(field_name);
+                try tree.pushStringPair("field", field_name);
                 const attrs = tree.beginNode();
 
                 const receiver_begin = tree.beginNode();

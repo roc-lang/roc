@@ -292,8 +292,10 @@ pub const Pattern = union(enum) {
             try tree.pushStaticAtom("record-destruct");
             try ir.appendRegionInfoToSExprTree(tree, destruct_idx);
 
-            const label_text = ir.idents.getText(self.label);
-            const ident_text = ir.idents.getText(self.ident);
+            const label_text = try ir.getIdentTextAlloc(self.label, tree.allocator);
+            defer tree.allocator.free(label_text);
+            const ident_text = try ir.getIdentTextAlloc(self.ident, tree.allocator);
+            defer tree.allocator.free(ident_text);
             try tree.pushStringPair("label", label_text);
             try tree.pushStringPair("ident", ident_text);
 
@@ -310,7 +312,8 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-assign");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
-                const ident = ir.getIdentText(p.ident);
+                const ident = try ir.getIdentTextAlloc(p.ident, tree.allocator);
+                defer tree.allocator.free(ident);
                 try tree.pushStringPair("ident", ident);
 
                 const attrs = tree.beginNode();
@@ -320,7 +323,8 @@ pub const Pattern = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-as");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
-                const ident = ir.getIdentText(p.ident);
+                const ident = try ir.getIdentTextAlloc(p.ident, tree.allocator);
+                defer tree.allocator.free(ident);
                 try tree.pushStringPair("as", ident);
 
                 const attrs = tree.beginNode();

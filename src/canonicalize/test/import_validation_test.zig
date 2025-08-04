@@ -61,13 +61,13 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     // Add exposed items to Json module
     const Ident = base.Ident;
     const decode_idx = try json_env.idents.insert(allocator, Ident.for_text("decode"));
-    try json_env.exposed_items.addExposedById(allocator, @bitCast(decode_idx));
+    try json_env.exposed_items.addExposedById(allocator, decode_idx.toU32());
     const encode_idx = try json_env.idents.insert(allocator, Ident.for_text("encode"));
-    try json_env.exposed_items.addExposedById(allocator, @bitCast(encode_idx));
+    try json_env.exposed_items.addExposedById(allocator, encode_idx.toU32());
     const json_error_idx = try json_env.idents.insert(allocator, Ident.for_text("JsonError"));
-    try json_env.exposed_items.addExposedById(allocator, @bitCast(json_error_idx));
+    try json_env.exposed_items.addExposedById(allocator, json_error_idx.toU32());
     const decode_problem_idx = try json_env.idents.insert(allocator, Ident.for_text("DecodeProblem"));
-    try json_env.exposed_items.addExposedById(allocator, @bitCast(decode_problem_idx));
+    try json_env.exposed_items.addExposedById(allocator, decode_problem_idx.toU32());
 
     try module_envs.put("Json", json_env);
 
@@ -81,11 +81,11 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
 
     // Add exposed items to Utils module
     const map_idx = try utils_env.idents.insert(allocator, Ident.for_text("map"));
-    try utils_env.exposed_items.addExposedById(allocator, @bitCast(map_idx));
+    try utils_env.exposed_items.addExposedById(allocator, map_idx.toU32());
     const filter_idx = try utils_env.idents.insert(allocator, Ident.for_text("filter"));
-    try utils_env.exposed_items.addExposedById(allocator, @bitCast(filter_idx));
+    try utils_env.exposed_items.addExposedById(allocator, filter_idx.toU32());
     const result_idx = try utils_env.idents.insert(allocator, Ident.for_text("Result"));
-    try utils_env.exposed_items.addExposedById(allocator, @bitCast(result_idx));
+    try utils_env.exposed_items.addExposedById(allocator, result_idx.toU32());
 
     try module_envs.put("Utils", utils_env);
 
@@ -534,17 +534,17 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     // Add exposed items and set their node indices
     const Ident = base.Ident;
     const add_idx = try math_env.idents.insert(allocator, Ident.for_text("add"));
-    try math_env.exposed_items.addExposedById(allocator, @bitCast(add_idx));
+    try math_env.exposed_items.addExposedById(allocator, add_idx.toU32());
     const multiply_idx = try math_env.idents.insert(allocator, Ident.for_text("multiply"));
-    try math_env.exposed_items.addExposedById(allocator, @bitCast(multiply_idx));
+    try math_env.exposed_items.addExposedById(allocator, multiply_idx.toU32());
     const pi_idx = try math_env.idents.insert(allocator, Ident.for_text("PI"));
-    try math_env.exposed_items.addExposedById(allocator, @bitCast(pi_idx));
+    try math_env.exposed_items.addExposedById(allocator, pi_idx.toU32());
 
     // Simulate having CIR node indices for these exposed items
     // In real usage, these would be set during canonicalization of MathUtils
-    try math_env.exposed_items.setNodeIndexById(allocator, @bitCast(add_idx), 100);
-    try math_env.exposed_items.setNodeIndexById(allocator, @bitCast(multiply_idx), 200);
-    try math_env.exposed_items.setNodeIndexById(allocator, @bitCast(pi_idx), 300);
+    try math_env.exposed_items.setNodeIndexById(allocator, add_idx.toU32(), 100);
+    try math_env.exposed_items.setNodeIndexById(allocator, multiply_idx.toU32(), 200);
+    try math_env.exposed_items.setNodeIndexById(allocator, pi_idx.toU32(), 300);
 
     try module_envs.put("MathUtils", math_env);
 
@@ -611,7 +611,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
         allocator.destroy(empty_env);
     }
     const undefined_idx = try empty_env.idents.insert(allocator, Ident.for_text("undefined"));
-    try empty_env.exposed_items.addExposedById(allocator, @bitCast(undefined_idx));
+    try empty_env.exposed_items.addExposedById(allocator, undefined_idx.toU32());
     // Don't set node index - should default to 0
     try module_envs.put("EmptyModule", empty_env);
 

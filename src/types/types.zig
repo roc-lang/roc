@@ -627,8 +627,19 @@ pub const RecordField = struct {
 
     /// Get the ordering of how a compares to b
     pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.name);
-        const b_text = store.getText(b.name);
+        // First check if the indices are equal to avoid any work
+        if (a.name.toU32() == b.name.toU32()) {
+            return .eq;
+        }
+
+        // Use stack buffers to avoid allocation
+        // 256 bytes should be enough for any identifier name
+        var a_buffer: [256]u8 = undefined;
+        var b_buffer: [256]u8 = undefined;
+
+        const a_text = store.writeTextToBuffer(a.name, &a_buffer);
+        const b_text = store.writeTextToBuffer(b.name, &b_buffer);
+
         return std.mem.order(u8, a_text, b_text);
     }
 
@@ -676,8 +687,19 @@ pub const Tag = struct {
 
     /// Get the ordering of how a compares to b
     pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.name);
-        const b_text = store.getText(b.name);
+        // First check if the indices are equal to avoid any work
+        if (a.name.toU32() == b.name.toU32()) {
+            return .eq;
+        }
+
+        // Use stack buffers to avoid allocation
+        // 256 bytes should be enough for any identifier name
+        var a_buffer: [256]u8 = undefined;
+        var b_buffer: [256]u8 = undefined;
+
+        const a_text = store.writeTextToBuffer(a.name, &a_buffer);
+        const b_text = store.writeTextToBuffer(b.name, &b_buffer);
+
         return std.mem.order(u8, a_text, b_text);
     }
 

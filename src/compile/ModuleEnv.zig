@@ -1601,6 +1601,13 @@ pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.idents.getText(idx);
 }
 
+/// Retrieves the text of an identifier by its index, allocating a new string.
+/// This is safer than getIdentText when multiple identifiers are being processed concurrently.
+/// The caller is responsible for freeing the returned string.
+pub fn getIdentTextAlloc(self: *const Self, idx: Ident.Idx, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+    return try self.idents.getTextAlloc(idx, allocator);
+}
+
 /// Helper to format pattern index for s-expr output
 fn formatPatternIdxNode(gpa: std.mem.Allocator, pattern_idx: Pattern.Idx) SExpr {
     var node = SExpr.init(gpa, "pid");

@@ -693,7 +693,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                     const field_names = record_fields.items(.name);
                     const field_vars = record_fields.items(.var_);
                     for (field_names, field_vars) |type_field_name, type_field_var| {
-                        if (type_field_name.idx == field.name.idx) {
+                        if (type_field_name == field.name) {
                             // Extract the type variable from the field value expression
                             // Different expression types store their type variables in different places
                             const field_expr_type_var = @as(Var, @enumFromInt(@intFromEnum(field.value)));
@@ -896,7 +896,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
 
                                 // Search through the module's exposed items
                                 const node_idx_opt = if (module.idents.findByString(method_name_str)) |target_ident|
-                                    module.exposed_items.getNodeIndexById(self.gpa, @bitCast(target_ident))
+                                    module.exposed_items.getNodeIndexById(self.gpa, target_ident.toU32())
                                 else
                                     null;
 

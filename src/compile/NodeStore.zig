@@ -227,12 +227,12 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
             const exposes_start = extra_data[3];
             const exposes_len = extra_data[4];
 
-            const alias_tok = if (flags & 1 != 0) @as(?Ident.Idx, @bitCast(alias_data)) else null;
-            const qualifier_tok = if (flags & 2 != 0) @as(?Ident.Idx, @bitCast(qualifier_data)) else null;
+            const alias_tok = if (flags & 1 != 0) Ident.Idx.fromU32(alias_data) else null;
+            const qualifier_tok = if (flags & 2 != 0) Ident.Idx.fromU32(qualifier_data) else null;
 
             return ModuleEnv.Statement{
                 .s_import = .{
-                    .module_name_tok = @bitCast(node.data_1),
+                    .module_name_tok = Ident.Idx.fromU32(node.data_1),
                     .qualifier_tok = qualifier_tok,
                     .alias_tok = alias_tok,
                     .exposes = DataSpan.init(exposes_start, exposes_len).as(ModuleEnv.ExposedItem.Span),
@@ -260,7 +260,7 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
             const extra_data = store.extra_data.items.items[extra_start..];
 
             const anno: ModuleEnv.TypeAnno.Idx = @enumFromInt(extra_data[0]);
-            const name: Ident.Idx = @bitCast(extra_data[1]);
+            const name = Ident.Idx.fromU32(extra_data[1]);
             const where_flag = extra_data[2];
 
             const where_clause = if (where_flag == 1) blk: {
@@ -384,7 +384,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             DataSpan.init(node.data_1, node.data_2).as(ModuleEnv.Expr.Span),
         ),
         .expr_tag => {
-            const name = @as(Ident.Idx, @bitCast(node.data_1));
+            const name = Ident.Idx.fromU32(node.data_1);
             const args_start = node.data_2;
             const args_len = node.data_3;
 
@@ -519,10 +519,10 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
             const extra_start = node.data_1;
             const extra_data = store.extra_data.items.items[extra_start..];
 
-            const closure_name = @as(Ident.Idx, @bitCast(extra_data[0]));
+            const closure_name = Ident.Idx.fromU32(extra_data[0]);
             const variant_var = @as(types.Var, @enumFromInt(extra_data[1]));
             const ext_var = @as(types.Var, @enumFromInt(extra_data[2]));
-            const name = @as(Ident.Idx, @bitCast(extra_data[3]));
+            const name = Ident.Idx.fromU32(extra_data[3]);
 
             return ModuleEnv.Expr{
                 .e_zero_argument_tag = .{
@@ -599,7 +599,7 @@ pub fn getExpr(store: *const NodeStore, expr: ModuleEnv.Expr.Idx) ModuleEnv.Expr
 
             return ModuleEnv.Expr{ .e_dot_access = .{
                 .receiver = @enumFromInt(node.data_1),
-                .field_name = @bitCast(node.data_2),
+                .field_name = Ident.Idx.fromU32(node.data_2),
                 .args = args_span,
             } };
         },
@@ -694,8 +694,8 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: ModuleEnv.WhereClaus
 
     switch (discriminant) {
         0 => { // mod_method
-            const var_name = @as(Ident.Idx, @bitCast(extra_data[1]));
-            const method_name = @as(Ident.Idx, @bitCast(extra_data[2]));
+            const var_name = Ident.Idx.fromU32(extra_data[1]);
+            const method_name = Ident.Idx.fromU32(extra_data[2]);
             const args_start = extra_data[3];
             const args_len = extra_data[4];
             const ret_anno = @as(ModuleEnv.TypeAnno.Idx, @enumFromInt(extra_data[5]));
@@ -712,8 +712,8 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: ModuleEnv.WhereClaus
             };
         },
         1 => { // mod_alias
-            const var_name = @as(Ident.Idx, @bitCast(extra_data[1]));
-            const alias_name = @as(Ident.Idx, @bitCast(extra_data[2]));
+            const var_name = Ident.Idx.fromU32(extra_data[1]);
+            const alias_name = Ident.Idx.fromU32(extra_data[2]);
             const external_decl = @as(ModuleEnv.ExternalDecl.Idx, @enumFromInt(extra_data[3]));
 
             return ModuleEnv.WhereClause{
@@ -745,19 +745,19 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: ModuleEnv.Pattern.Idx) M
     switch (node.tag) {
         .pattern_identifier => return ModuleEnv.Pattern{
             .assign = .{
-                .ident = @bitCast(node.data_1),
+                .ident = Ident.Idx.fromU32(node.data_1),
             },
         },
         .pattern_as => return ModuleEnv.Pattern{
             .as = .{
-                .ident = @bitCast(node.data_1),
+                .ident = Ident.Idx.fromU32(node.data_1),
                 .pattern = @enumFromInt(node.data_2),
             },
         },
         .pattern_applied_tag => {
             const arguments_start = node.data_1;
             const arguments_len = node.data_2;
-            const tag_name = @as(Ident.Idx, @bitCast(node.data_3));
+            const tag_name = Ident.Idx.fromU32(node.data_3);
             return ModuleEnv.Pattern{
                 .applied_tag = .{
                     .args = DataSpan.init(arguments_start, arguments_len).as(ModuleEnv.Pattern.Span),
@@ -940,7 +940,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: ModuleEnv.TypeAnno.Idx) Mo
 
     switch (node.tag) {
         .ty_apply => return ModuleEnv.TypeAnno{ .apply = .{
-            .symbol = @bitCast(node.data_1),
+            .symbol = Ident.Idx.fromU32(node.data_1),
             .args = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
         } },
         .ty_apply_external => {
@@ -954,11 +954,11 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: ModuleEnv.TypeAnno.Idx) Mo
             } };
         },
         .ty_var => return ModuleEnv.TypeAnno{ .ty_var = .{
-            .name = @bitCast(node.data_1),
+            .name = Ident.Idx.fromU32(node.data_1),
         } },
         .ty_underscore => return ModuleEnv.TypeAnno{ .underscore = {} },
         .ty_ident => return ModuleEnv.TypeAnno{ .ty = .{
-            .symbol = @bitCast(node.data_1),
+            .symbol = Ident.Idx.fromU32(node.data_1),
         } },
         .ty_tag_union => return ModuleEnv.TypeAnno{ .tag_union = .{
             .tags = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
@@ -1009,7 +1009,7 @@ pub fn getTypeHeader(store: *const NodeStore, typeHeader: ModuleEnv.TypeHeader.I
     std.debug.assert(node.tag == .type_header);
 
     return ModuleEnv.TypeHeader{
-        .name = @bitCast(node.data_1),
+        .name = Ident.Idx.fromU32(node.data_1),
         .args = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
     };
 }
@@ -1019,7 +1019,7 @@ pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: ModuleEnv.Ty
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(annoRecordField));
     const node = store.nodes.get(node_idx);
     return .{
-        .name = @bitCast(node.data_1),
+        .name = Ident.Idx.fromU32(node.data_1),
         .ty = @enumFromInt(node.data_2),
     };
 }
@@ -1045,8 +1045,8 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: ModuleEnv.ExposedIte
     switch (node.tag) {
         .exposed_item => {
             return ModuleEnv.ExposedItem{
-                .name = @bitCast(node.data_1),
-                .alias = if (node.data_2 == 0) null else @bitCast(node.data_2),
+                .name = Ident.Idx.fromU32(node.data_1),
+                .alias = if (node.data_2 == 0) null else Ident.Idx.fromU32(node.data_2),
                 .is_wildcard = node.data_3 != 0,
             };
         },
@@ -1110,17 +1110,17 @@ pub fn addStatement(store: *NodeStore, statement: ModuleEnv.Statement, region: b
         },
         .s_import => |s| {
             node.tag = .statement_import;
-            node.data_1 = @bitCast(s.module_name_tok);
+            node.data_1 = s.module_name_tok.toU32();
 
             // Store optional fields in extra_data
             const extra_start = store.extra_data.len();
 
             // Store alias_tok (nullable)
-            const alias_data = if (s.alias_tok) |alias| @as(u32, @bitCast(alias)) else 0;
+            const alias_data = if (s.alias_tok) |alias| alias.toU32() else 0;
             _ = try store.extra_data.append(store.gpa, alias_data);
 
             // Store qualifier_tok (nullable)
-            const qualifier_data = if (s.qualifier_tok) |qualifier| @as(u32, @bitCast(qualifier)) else 0;
+            const qualifier_data = if (s.qualifier_tok) |qualifier| qualifier.toU32() else 0;
             _ = try store.extra_data.append(store.gpa, qualifier_data);
 
             // Store flags indicating which fields are present
@@ -1158,7 +1158,7 @@ pub fn addStatement(store: *NodeStore, statement: ModuleEnv.Statement, region: b
             // Store anno idx
             _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
             // Store name
-            _ = try store.extra_data.append(store.gpa, @bitCast(s.name));
+            _ = try store.extra_data.append(store.gpa, s.name.toU32());
             // Store where clause information
             if (s.where) |where_clause| {
                 // Store flag indicating where clause is present
@@ -1279,7 +1279,7 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
         },
         .e_tag => |e| {
             node.tag = .expr_tag;
-            node.data_1 = @bitCast(e.name);
+            node.data_1 = e.name.toU32();
             node.data_2 = e.args.span.start;
             node.data_3 = e.args.span.len;
         },
@@ -1300,7 +1300,7 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
         .e_dot_access => |e| {
             node.tag = .expr_dot_access;
             node.data_1 = @intFromEnum(e.receiver);
-            node.data_2 = @bitCast(e.field_name);
+            node.data_2 = e.field_name.toU32();
             if (e.args) |args| {
                 // Use PackedDataSpan for efficient storage - FunctionArgs config is good for method call args
                 std.debug.assert(FunctionArgs.canFit(args.span));
@@ -1391,10 +1391,10 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
 
             // Store zero argument tag data in extra_data
             const extra_data_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, @bitCast(e.closure_name));
+            _ = try store.extra_data.append(store.gpa, e.closure_name.toU32());
             _ = try store.extra_data.append(store.gpa, @intFromEnum(e.variant_var));
             _ = try store.extra_data.append(store.gpa, @intFromEnum(e.ext_var));
-            _ = try store.extra_data.append(store.gpa, @bitCast(e.name));
+            _ = try store.extra_data.append(store.gpa, e.name.toU32());
             node.data_1 = extra_data_start;
         },
         .e_closure => |e| {
@@ -1465,7 +1465,7 @@ pub fn addExpr(store: *NodeStore, expr: ModuleEnv.Expr, region: base.Region) std
 /// corresponding function in `ModuleEnv`.
 pub fn addRecordField(store: *NodeStore, recordField: ModuleEnv.RecordField, region: base.Region) std.mem.Allocator.Error!ModuleEnv.RecordField.Idx {
     const node = Node{
-        .data_1 = @bitCast(recordField.name),
+        .data_1 = recordField.name.toU32(),
         .data_2 = @intFromEnum(recordField.value),
         .data_3 = 0,
         .tag = .record_field,
@@ -1483,8 +1483,8 @@ pub fn addRecordField(store: *NodeStore, recordField: ModuleEnv.RecordField, reg
 pub fn addRecordDestruct(store: *NodeStore, record_destruct: ModuleEnv.Pattern.RecordDestruct, region: base.Region) std.mem.Allocator.Error!ModuleEnv.Pattern.RecordDestruct.Idx {
     const extra_data_start = @as(u32, @intCast(store.extra_data.len()));
     const node = Node{
-        .data_1 = @bitCast(record_destruct.label),
-        .data_2 = @bitCast(record_destruct.ident),
+        .data_1 = record_destruct.label.toU32(),
+        .data_2 = record_destruct.ident.toU32(),
         .data_3 = extra_data_start,
         .tag = .record_destruct,
     };
@@ -1517,7 +1517,7 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: ModuleEnv.Pattern.R
 pub fn addCapture(store: *NodeStore, capture: ModuleEnv.Expr.Capture, region: base.Region) std.mem.Allocator.Error!ModuleEnv.Expr.Capture.Idx {
     const node = Node{
         .tag = .lambda_capture,
-        .data_1 = @bitCast(capture.name),
+        .data_1 = capture.name.toU32(),
         .data_2 = capture.scope_depth,
         .data_3 = @intFromEnum(capture.pattern_idx),
     };
@@ -1589,8 +1589,8 @@ pub fn addWhereClause(store: *NodeStore, whereClause: ModuleEnv.WhereClause, reg
         .mod_method => |mod_method| {
             // Store discriminant (0 for mod_method)
             _ = try store.extra_data.append(store.gpa, 0);
-            _ = try store.extra_data.append(store.gpa, @bitCast(mod_method.var_name));
-            _ = try store.extra_data.append(store.gpa, @bitCast(mod_method.method_name));
+            _ = try store.extra_data.append(store.gpa, mod_method.var_name.toU32());
+            _ = try store.extra_data.append(store.gpa, mod_method.method_name.toU32());
             _ = try store.extra_data.append(store.gpa, mod_method.args.span.start);
             _ = try store.extra_data.append(store.gpa, mod_method.args.span.len);
             _ = try store.extra_data.append(store.gpa, @intFromEnum(mod_method.ret_anno));
@@ -1599,8 +1599,8 @@ pub fn addWhereClause(store: *NodeStore, whereClause: ModuleEnv.WhereClause, reg
         .mod_alias => |mod_alias| {
             // Store discriminant (1 for mod_alias)
             _ = try store.extra_data.append(store.gpa, 1);
-            _ = try store.extra_data.append(store.gpa, @bitCast(mod_alias.var_name));
-            _ = try store.extra_data.append(store.gpa, @bitCast(mod_alias.alias_name));
+            _ = try store.extra_data.append(store.gpa, mod_alias.var_name.toU32());
+            _ = try store.extra_data.append(store.gpa, mod_alias.alias_name.toU32());
             _ = try store.extra_data.append(store.gpa, @intFromEnum(mod_alias.external_decl));
         },
         .malformed => |malformed| {
@@ -1631,19 +1631,19 @@ pub fn addPattern(store: *NodeStore, pattern: ModuleEnv.Pattern, region: base.Re
 
     switch (pattern) {
         .assign => |p| {
-            node.data_1 = @bitCast(p.ident);
+            node.data_1 = p.ident.toU32();
             node.tag = .pattern_identifier;
         },
         .as => |p| {
             node.tag = .pattern_as;
-            node.data_1 = @bitCast(p.ident);
+            node.data_1 = p.ident.toU32();
             node.data_2 = @intFromEnum(p.pattern);
         },
         .applied_tag => |p| {
             node.tag = .pattern_applied_tag;
             node.data_1 = p.args.span.start;
             node.data_2 = p.args.span.len;
-            node.data_3 = @bitCast(p.name);
+            node.data_3 = p.name.toU32();
         },
         .nominal => |n| {
             node.tag = .pattern_nominal;
@@ -1781,7 +1781,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: ModuleEnv.TypeAnno, region: base
 
     switch (typeAnno) {
         .apply => |a| {
-            node.data_1 = @bitCast(a.symbol);
+            node.data_1 = a.symbol.toU32();
             node.data_2 = a.args.span.start;
             node.data_3 = a.args.span.len;
             node.tag = .ty_apply;
@@ -1796,14 +1796,14 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: ModuleEnv.TypeAnno, region: base
             node.tag = .ty_apply_external;
         },
         .ty_var => |tv| {
-            node.data_1 = @bitCast(tv.name);
+            node.data_1 = tv.name.toU32();
             node.tag = .ty_var;
         },
         .underscore => |_| {
             node.tag = .ty_underscore;
         },
         .ty => |t| {
-            node.data_1 = @bitCast(t.symbol);
+            node.data_1 = t.symbol.toU32();
             node.tag = .ty_ident;
         },
         .tag_union => |tu| {
@@ -1857,7 +1857,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: ModuleEnv.TypeAnno, region: base
 /// corresponding function in `ModuleEnv`.
 pub fn addTypeHeader(store: *NodeStore, typeHeader: ModuleEnv.TypeHeader, region: base.Region) std.mem.Allocator.Error!ModuleEnv.TypeHeader.Idx {
     const node = Node{
-        .data_1 = @bitCast(typeHeader.name),
+        .data_1 = typeHeader.name.toU32(),
         .data_2 = typeHeader.args.span.start,
         .data_3 = typeHeader.args.span.len,
         .tag = .type_header,
@@ -1874,7 +1874,7 @@ pub fn addTypeHeader(store: *NodeStore, typeHeader: ModuleEnv.TypeHeader, region
 /// corresponding function in `ModuleEnv`.
 pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: ModuleEnv.TypeAnno.RecordField, region: base.Region) std.mem.Allocator.Error!ModuleEnv.TypeAnno.RecordField.Idx {
     const node = Node{
-        .data_1 = @bitCast(annoRecordField.name),
+        .data_1 = annoRecordField.name.toU32(),
         .data_2 = @intFromEnum(annoRecordField.ty),
         .data_3 = 0,
         .tag = .ty_record_field,
@@ -1908,8 +1908,8 @@ pub fn addAnnotation(store: *NodeStore, annotation: ModuleEnv.Annotation, region
 /// corresponding function in `ModuleEnv`.
 pub fn addExposedItem(store: *NodeStore, exposedItem: ModuleEnv.ExposedItem, region: base.Region) std.mem.Allocator.Error!ModuleEnv.ExposedItem.Idx {
     const node = Node{
-        .data_1 = @bitCast(exposedItem.name),
-        .data_2 = if (exposedItem.alias) |alias| @bitCast(alias) else 0,
+        .data_1 = exposedItem.name.toU32(),
+        .data_2 = if (exposedItem.alias) |alias| alias.toU32() else 0,
         .data_3 = @intFromBool(exposedItem.is_wildcard),
         .tag = .exposed_item,
     };
@@ -1988,7 +1988,7 @@ pub fn getCapture(store: *const NodeStore, capture_idx: ModuleEnv.Expr.Capture.I
     std.debug.assert(node.tag == .lambda_capture);
 
     return ModuleEnv.Expr.Capture{
-        .name = @bitCast(node.data_1),
+        .name = Ident.Idx.fromU32(node.data_1),
         .scope_depth = node.data_2,
         .pattern_idx = @enumFromInt(node.data_3),
     };
@@ -1998,7 +1998,7 @@ pub fn getCapture(store: *const NodeStore, capture_idx: ModuleEnv.Expr.Capture.I
 pub fn getRecordField(store: *const NodeStore, idx: ModuleEnv.RecordField.Idx) ModuleEnv.RecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
     return ModuleEnv.RecordField{
-        .name = @bitCast(node.data_1),
+        .name = Ident.Idx.fromU32(node.data_1),
         .value = @enumFromInt(node.data_2),
     };
 }
@@ -2024,8 +2024,8 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: ModuleEnv.Pattern.RecordD
     };
 
     return ModuleEnv.Pattern.RecordDestruct{
-        .label = @bitCast(node.data_1),
-        .ident = @bitCast(node.data_2),
+        .label = Ident.Idx.fromU32(node.data_1),
+        .ident = Ident.Idx.fromU32(node.data_2),
         .kind = kind,
     };
 }
@@ -2432,17 +2432,17 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
         .ident_already_in_scope => |r| {
             node.tag = .diag_ident_already_in_scope;
             region = r.region;
-            node.data_1 = @bitCast(r.ident);
+            node.data_1 = r.ident.toU32();
         },
         .exposed_but_not_implemented => |r| {
             node.tag = .diagnostic_exposed_but_not_implemented;
             region = r.region;
-            node.data_1 = @bitCast(r.ident);
+            node.data_1 = r.ident.toU32();
         },
         .redundant_exposed => |r| {
             node.tag = .diag_redundant_exposed;
             region = r.region;
-            node.data_1 = @bitCast(r.ident);
+            node.data_1 = r.ident.toU32();
 
             // Store original region in extra_data
             const extra_start = store.extra_data.len();
@@ -2453,7 +2453,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
         .ident_not_in_scope => |r| {
             node.tag = .diag_ident_not_in_scope;
             region = r.region;
-            node.data_1 = @bitCast(r.ident);
+            node.data_1 = r.ident.toU32();
         },
         .invalid_top_level_statement => |r| {
             node.tag = .diag_invalid_top_level_statement;
@@ -2515,31 +2515,31 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
         .shadowing_warning => |r| {
             node.tag = .diag_shadowing_warning;
             region = r.region;
-            node.data_1 = @bitCast(r.ident);
+            node.data_1 = r.ident.toU32();
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
         .type_redeclared => |r| {
             node.tag = .diag_type_redeclared;
             region = r.redeclared_region;
-            node.data_1 = @bitCast(r.name);
+            node.data_1 = r.name.toU32();
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
         .undeclared_type => |r| {
             node.tag = .diag_undeclared_type;
             region = r.region;
-            node.data_1 = @bitCast(r.name);
+            node.data_1 = r.name.toU32();
         },
         .undeclared_type_var => |r| {
             node.tag = .diag_undeclared_type_var;
             region = r.region;
-            node.data_1 = @bitCast(r.name);
+            node.data_1 = r.name.toU32();
         },
         .type_alias_redeclared => |r| {
             node.tag = .diag_type_alias_redeclared;
             region = r.redeclared_region;
-            node.data_1 = @bitCast(r.name);
+            node.data_1 = r.name.toU32();
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
@@ -2550,24 +2550,24 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
         .module_not_found => |r| {
             node.tag = .diag_module_not_found;
             region = r.region;
-            node.data_1 = @as(u32, @bitCast(r.module_name));
+            node.data_1 = r.module_name.toU32();
         },
         .value_not_exposed => |r| {
             node.tag = .diag_value_not_exposed;
             region = r.region;
-            node.data_1 = @as(u32, @bitCast(r.module_name));
-            node.data_2 = @as(u32, @bitCast(r.value_name));
+            node.data_1 = r.module_name.toU32();
+            node.data_2 = r.value_name.toU32();
         },
         .type_not_exposed => |r| {
             node.tag = .diag_type_not_exposed;
             region = r.region;
-            node.data_1 = @as(u32, @bitCast(r.module_name));
-            node.data_2 = @as(u32, @bitCast(r.type_name));
+            node.data_1 = r.module_name.toU32();
+            node.data_2 = r.type_name.toU32();
         },
         .module_not_imported => |r| {
             node.tag = .diag_module_not_imported;
             region = r.region;
-            node.data_1 = @as(u32, @bitCast(r.module_name));
+            node.data_1 = r.module_name.toU32();
         },
         .too_many_exports => |r| {
             node.tag = .diag_too_many_exports;
@@ -2577,14 +2577,14 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
         .nominal_type_redeclared => |r| {
             node.tag = .diag_nominal_type_redeclared;
             region = r.redeclared_region;
-            node.data_1 = @bitCast(r.name);
+            node.data_1 = r.name.toU32();
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
         .type_shadowed_warning => |r| {
             node.tag = .diag_type_shadowed_warning;
             region = r.region;
-            node.data_1 = @bitCast(r.name);
+            node.data_1 = r.name.toU32();
             node.data_2 = @intFromBool(r.cross_scope);
 
             // Store original region in extra_data
@@ -2596,8 +2596,8 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
         .type_parameter_conflict => |r| {
             node.tag = .diag_type_parameter_conflict;
             region = r.region;
-            node.data_1 = @bitCast(r.name);
-            node.data_2 = @bitCast(r.parameter_name);
+            node.data_1 = r.name.toU32();
+            node.data_2 = r.parameter_name.toU32();
             const extra_start = store.extra_data.len();
             _ = try store.extra_data.append(store.gpa, r.original_region.start.offset);
             _ = try store.extra_data.append(store.gpa, r.original_region.end.offset);
@@ -2606,17 +2606,17 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
         .unused_variable => |r| {
             node.tag = .diag_unused_variable;
             region = r.region;
-            node.data_1 = @bitCast(r.ident);
+            node.data_1 = r.ident.toU32();
         },
         .used_underscore_variable => |r| {
             node.tag = .diag_used_underscore_variable;
             region = r.region;
-            node.data_1 = @bitCast(r.ident);
+            node.data_1 = r.ident.toU32();
         },
         .duplicate_record_field => |r| {
             node.tag = .diag_duplicate_record_field;
             region = r.duplicate_region;
-            node.data_1 = @bitCast(r.field_name);
+            node.data_1 = r.field_name.toU32();
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
@@ -2631,20 +2631,20 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
         .unused_type_var_name => |r| {
             node.tag = .diag_unused_type_var_name;
             region = r.region;
-            node.data_1 = @bitCast(r.name);
-            node.data_2 = @bitCast(r.suggested_name);
+            node.data_1 = r.name.toU32();
+            node.data_2 = r.suggested_name.toU32();
         },
         .type_var_marked_unused => |r| {
             node.tag = .diag_type_var_marked_unused;
             region = r.region;
-            node.data_1 = @bitCast(r.name);
-            node.data_2 = @bitCast(r.suggested_name);
+            node.data_1 = r.name.toU32();
+            node.data_2 = r.suggested_name.toU32();
         },
         .type_var_ending_in_underscore => |r| {
             node.tag = .diag_type_var_ending_in_underscore;
             region = r.region;
-            node.data_1 = @bitCast(r.name);
-            node.data_2 = @bitCast(r.suggested_name);
+            node.data_1 = r.name.toU32();
+            node.data_2 = r.suggested_name.toU32();
         },
         .underscore_in_type_declaration => |r| {
             node.tag = .diag_underscore_in_type_declaration;
@@ -2713,11 +2713,11 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             .region = store.getRegionAt(node_idx),
         } },
         .diag_ident_already_in_scope => return ModuleEnv.Diagnostic{ .ident_already_in_scope = .{
-            .ident = @bitCast(node.data_1),
+            .ident = Ident.Idx.fromU32(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diagnostic_exposed_but_not_implemented => return ModuleEnv.Diagnostic{ .exposed_but_not_implemented = .{
-            .ident = @bitCast(node.data_1),
+            .ident = Ident.Idx.fromU32(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_redundant_exposed => {
@@ -2725,7 +2725,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             const original_start = extra_data[0];
             const original_end = extra_data[1];
             return ModuleEnv.Diagnostic{ .redundant_exposed = .{
-                .ident = @bitCast(node.data_1),
+                .ident = Ident.Idx.fromU32(node.data_1),
                 .region = store.getRegionAt(node_idx),
                 .original_region = Region{
                     .start = .{ .offset = original_start },
@@ -2734,7 +2734,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             } };
         },
         .diag_ident_not_in_scope => return ModuleEnv.Diagnostic{ .ident_not_in_scope = .{
-            .ident = @bitCast(node.data_1),
+            .ident = Ident.Idx.fromU32(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_top_level_statement => return ModuleEnv.Diagnostic{ .invalid_top_level_statement = .{
@@ -2772,7 +2772,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             .region = store.getRegionAt(node_idx),
         } },
         .diag_shadowing_warning => return ModuleEnv.Diagnostic{ .shadowing_warning = .{
-            .ident = @bitCast(node.data_1),
+            .ident = Ident.Idx.fromU32(node.data_1),
             .region = store.getRegionAt(node_idx),
             .original_region = .{
                 .start = .{ .offset = node.data_2 },
@@ -2780,7 +2780,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             },
         } },
         .diag_type_redeclared => return ModuleEnv.Diagnostic{ .type_redeclared = .{
-            .name = @bitCast(node.data_1),
+            .name = Ident.Idx.fromU32(node.data_1),
             .redeclared_region = store.getRegionAt(node_idx),
             .original_region = .{
                 .start = .{ .offset = node.data_2 },
@@ -2788,28 +2788,28 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             },
         } },
         .diag_undeclared_type => return ModuleEnv.Diagnostic{ .undeclared_type = .{
-            .name = @bitCast(node.data_1),
+            .name = Ident.Idx.fromU32(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_tuple_elem_not_canonicalized => return ModuleEnv.Diagnostic{ .tuple_elem_not_canonicalized = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_module_not_found => return ModuleEnv.Diagnostic{ .module_not_found = .{
-            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
+            .module_name = base.Ident.Idx.fromU32(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_value_not_exposed => return ModuleEnv.Diagnostic{ .value_not_exposed = .{
-            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
-            .value_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
+            .module_name = base.Ident.Idx.fromU32(node.data_1),
+            .value_name = base.Ident.Idx.fromU32(node.data_2),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_not_exposed => return ModuleEnv.Diagnostic{ .type_not_exposed = .{
-            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
-            .type_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
+            .module_name = base.Ident.Idx.fromU32(node.data_1),
+            .type_name = base.Ident.Idx.fromU32(node.data_2),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_module_not_imported => return ModuleEnv.Diagnostic{ .module_not_imported = .{
-            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
+            .module_name = base.Ident.Idx.fromU32(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_too_many_exports => return ModuleEnv.Diagnostic{ .too_many_exports = .{
@@ -2817,7 +2817,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             .region = store.getRegionAt(node_idx),
         } },
         .diag_undeclared_type_var => return ModuleEnv.Diagnostic{ .undeclared_type_var = .{
-            .name = @bitCast(node.data_1),
+            .name = Ident.Idx.fromU32(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_malformed_type_annotation => return ModuleEnv.Diagnostic{ .malformed_type_annotation = .{
@@ -2830,7 +2830,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_alias_redeclared => return ModuleEnv.Diagnostic{ .type_alias_redeclared = .{
-            .name = @bitCast(node.data_1),
+            .name = Ident.Idx.fromU32(node.data_1),
             .redeclared_region = store.getRegionAt(node_idx),
             .original_region = .{
                 .start = .{ .offset = @intCast(node.data_2) },
@@ -2838,7 +2838,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             },
         } },
         .diag_nominal_type_redeclared => return ModuleEnv.Diagnostic{ .nominal_type_redeclared = .{
-            .name = @bitCast(node.data_1),
+            .name = Ident.Idx.fromU32(node.data_1),
             .redeclared_region = store.getRegionAt(node_idx),
             .original_region = .{
                 .start = .{ .offset = @intCast(node.data_2) },
@@ -2850,7 +2850,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             const original_start = extra_data[0];
             const original_end = extra_data[1];
             return ModuleEnv.Diagnostic{ .type_shadowed_warning = .{
-                .name = @bitCast(node.data_1),
+                .name = Ident.Idx.fromU32(node.data_1),
                 .region = store.getRegionAt(node_idx),
                 .cross_scope = node.data_2 != 0,
                 .original_region = .{
@@ -2864,8 +2864,8 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             const original_start = extra_data[0];
             const original_end = extra_data[1];
             return ModuleEnv.Diagnostic{ .type_parameter_conflict = .{
-                .name = @bitCast(node.data_1),
-                .parameter_name = @bitCast(node.data_2),
+                .name = Ident.Idx.fromU32(node.data_1),
+                .parameter_name = Ident.Idx.fromU32(node.data_2),
                 .region = store.getRegionAt(node_idx),
                 .original_region = .{
                     .start = .{ .offset = original_start },
@@ -2874,15 +2874,15 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             } };
         },
         .diag_unused_variable => return ModuleEnv.Diagnostic{ .unused_variable = .{
-            .ident = @bitCast(node.data_1),
+            .ident = Ident.Idx.fromU32(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_used_underscore_variable => return ModuleEnv.Diagnostic{ .used_underscore_variable = .{
-            .ident = @bitCast(node.data_1),
+            .ident = Ident.Idx.fromU32(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_duplicate_record_field => return ModuleEnv.Diagnostic{ .duplicate_record_field = .{
-            .field_name = @bitCast(node.data_1),
+            .field_name = Ident.Idx.fromU32(node.data_1),
             .duplicate_region = store.getRegionAt(node_idx),
             .original_region = .{
                 .start = .{ .offset = @intCast(node.data_2) },
@@ -2896,18 +2896,18 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             .region = store.getRegionAt(node_idx),
         } },
         .diag_unused_type_var_name => return ModuleEnv.Diagnostic{ .unused_type_var_name = .{
-            .name = @bitCast(node.data_1),
-            .suggested_name = @bitCast(node.data_2),
+            .name = Ident.Idx.fromU32(node.data_1),
+            .suggested_name = Ident.Idx.fromU32(node.data_2),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_var_marked_unused => return ModuleEnv.Diagnostic{ .type_var_marked_unused = .{
-            .name = @bitCast(node.data_1),
-            .suggested_name = @bitCast(node.data_2),
+            .name = Ident.Idx.fromU32(node.data_1),
+            .suggested_name = Ident.Idx.fromU32(node.data_2),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_var_ending_in_underscore => return ModuleEnv.Diagnostic{ .type_var_ending_in_underscore = .{
-            .name = @bitCast(node.data_1),
-            .suggested_name = @bitCast(node.data_2),
+            .name = Ident.Idx.fromU32(node.data_1),
+            .suggested_name = Ident.Idx.fromU32(node.data_2),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_underscore_in_type_declaration => return ModuleEnv.Diagnostic{ .underscore_in_type_declaration = .{

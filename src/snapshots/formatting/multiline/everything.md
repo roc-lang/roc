@@ -734,7 +734,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @60.1-60.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret")))
+		(patt @60.1-60.2 (type "[Z1((field, field2)), Z2(a, b), Z3(c), Z4(List(elem))]others, [Z1((field3, field4)), Z2(d, e), Z3(f), Z4(List(elem2))]others2 -> _ret")))
 	(type_decls
 		(alias @14.1-23.11 (type "A(a)")
 			(ty-header @14.1-14.5 (name "A")
@@ -759,5 +759,5 @@ NO CHANGE
 		(alias @53.1-56.2 (type "F")
 			(ty-header @53.1-53.2 (name "F"))))
 	(expressions
-		(expr @60.5-110.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret"))))
+		(expr @60.5-110.2 (type "[Z1((field, field2)), Z2(a, b), Z3(c), Z4(List(elem))]others, [Z1((field3, field4)), Z2(d, e), Z3(f), Z4(List(elem2))]others2 -> _ret"))))
 ~~~

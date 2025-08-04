@@ -157,48 +157,29 @@ pub const TypeWriter = struct {
             },
         };
 
-        // Try to generate a name with increasing counters until we find one that doesn't collide
-        var counter = self.name_counters.get(context) orelse 0;
-        var found = false;
+        // Get the current counter for this context
+        const current_counter = self.name_counters.get(context) orelse 0;
 
-        // We need at most as many attempts as there are existing identifiers
-        const max_attempts = self.idents.interner.entry_count;
-        var attempts: usize = 0;
-        while (!found and attempts < max_attempts) : (attempts += 1) {
-            var buf: [32]u8 = undefined;
-            const candidate_name = if (counter == 0)
-                base_name
-            else blk: {
-                const name = std.fmt.bufPrint(&buf, "{s}{}", .{ base_name, counter + 1 }) catch {
-                    // Buffer too small, fall back to generic name
-                    try self.generateNextName();
-                    return;
-                };
-                break :blk name;
+        // Generate name with counter (start numbering from 2 for the second occurrence)
+        var buf: [32]u8 = undefined;
+        const candidate_name = if (current_counter == 0)
+            base_name
+        else blk: {
+            const name = std.fmt.bufPrint(&buf, "{s}{}", .{ base_name, current_counter + 1 }) catch {
+                // Buffer too small, fall back to generic name
+                try self.generateNextName();
+                return;
             };
+            break :blk name;
+        };
 
-            // Check if this name already exists in the identifier store
-            const exists = self.idents.interner.contains(candidate_name);
-
-            if (!exists) {
-                // This name is available, write it to the buffer
-                for (candidate_name) |c| {
-                    try self.buf.append(c);
-                }
-                found = true;
-            } else {
-                // Try next counter
-                counter += 1;
-            }
+        // Write the name
+        for (candidate_name) |c| {
+            try self.buf.append(c);
         }
 
-        // If we couldn't find a unique contextual name, fall back to generic names
-        if (!found) {
-            try self.generateNextName();
-            return;
-        }
-
-        self.name_counters.put(context, counter + 1);
+        // Increment counter for next time
+        self.name_counters.put(context, current_counter + 1);
     }
 
     fn writeNameCheckingCollisions(self: *Self, candidate_name: []const u8) std.mem.Allocator.Error!void {
