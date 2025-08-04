@@ -111,7 +111,7 @@ test "integration - shared memory setup and parsing" {
     var temp_dir = testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    const roc_content = "42 + 58";
+    const roc_content = "app [main] { pf: platform \"test\" }\n\nmain = 42 + 58";
 
     var roc_file = temp_dir.dir.createFile("test.roc", .{}) catch unreachable;
     defer roc_file.close();
@@ -153,7 +153,10 @@ test "integration - compilation pipeline for different expressions" {
         "42 + 0",
     };
 
-    for (test_cases) |roc_content| {
+    for (test_cases) |expression| {
+        // Prepend boilerplate to make a complete Roc app
+        const roc_content = try std.fmt.allocPrint(allocator, "app [main] {{ pf: platform \"test\" }}\n\nmain = {s}", .{expression});
+        defer allocator.free(roc_content);
         var temp_dir = testing.tmpDir(.{});
         defer temp_dir.cleanup();
 
@@ -192,7 +195,7 @@ test "integration - error handling in compilation" {
     defer temp_dir.cleanup();
 
     // Test with invalid syntax
-    const invalid_roc_content = "42 + + 58"; // Invalid syntax
+    const invalid_roc_content = "app [main] { pf: platform \"test\" }\n\nmain = 42 + + 58"; // Invalid syntax
 
     var roc_file = temp_dir.dir.createFile("test.roc", .{}) catch unreachable;
     defer roc_file.close();
