@@ -341,6 +341,8 @@ fn addMainExe(
     });
     // Add the builtins module so it can import "builtins"
     builtins_lib.root_module.addImport("builtins", roc_modules.builtins);
+    // Force bundle compiler-rt to resolve math symbols
+    builtins_lib.bundle_compiler_rt = true;
 
     // Create shim static library at build time
     const shim_lib = b.addStaticLibrary(.{
@@ -356,6 +358,8 @@ fn addMainExe(
     roc_modules.addAll(shim_lib);
     // Link against the pre-built builtins library
     shim_lib.linkLibrary(builtins_lib);
+    // Force bundle compiler-rt to resolve math symbols
+    shim_lib.bundle_compiler_rt = true;
 
     // Install shim.a to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});

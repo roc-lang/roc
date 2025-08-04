@@ -440,7 +440,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         // Try LLD first, fallback to clang if LLVM is not available
         var extra_args = std.ArrayList([]const u8).init(gpa);
         defer extra_args.deinit();
-        
+
         // Add system libraries for macOS
         if (builtin.target.os.tag == .macos) {
             extra_args.append("-lSystem") catch {
@@ -448,7 +448,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
                 std.process.exit(1);
             };
         }
-        
+
         const link_config = linker.LinkConfig{
             .output_path = exe_path,
             .object_files = &.{ host_path, shim_path },
