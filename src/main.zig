@@ -619,7 +619,7 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
 
     // Read the entire file into shared memory
     const file_size = try roc_file.getEndPos();
-    const source = try shm_allocator.alloc(u8, file_size);
+    const source = try shm_allocator.alloc(u8, @intCast(file_size));
     _ = try roc_file.read(source);
 
     // Extract module name from the file path
@@ -755,7 +755,7 @@ pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (s
     defer roc_file.close();
 
     const file_size = roc_file.getEndPos() catch return error.NoPlatformFound;
-    const source = gpa.alloc(u8, file_size) catch return error.OutOfMemory;
+    const source = gpa.alloc(u8, @intCast(file_size)) catch return error.OutOfMemory;
     defer gpa.free(source);
     _ = roc_file.read(source) catch return error.NoPlatformFound;
 
