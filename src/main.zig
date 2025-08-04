@@ -627,7 +627,13 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.create(gpa, "", SHARED_MEMORY_SIZE, page_size);
+    // Generate a unique name for shared memory
+    const shm_name = try std.fmt.allocPrint(gpa, "roc_{}", .{std.Thread.getCurrentId()});
+    defer gpa.free(shm_name);
+    
+    // Use a more reasonable size (256MB instead of 2TB) to avoid CI issues
+    const reasonable_size = 256 * 1024 * 1024; // 256MB
+    var shm = try SharedMemoryAllocator.create(gpa, shm_name, reasonable_size, page_size);
     // Don't defer deinit here - we need to keep the shared memory alive
 
     const shm_allocator = shm.allocator();
