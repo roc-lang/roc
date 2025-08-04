@@ -142,17 +142,13 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             try args.append("dynamic_lookup");
         },
         .linux => {
-            // Add dynamic linker
-            try args.append("-dynamic-linker");
-            try args.append("/lib64/ld-linux-x86-64.so.2");
+            // Use static linking to avoid dynamic linker dependency issues
+            try args.append("-static");
         },
         .windows => {
-            // Add subsystem for console applications
-            try args.append("/subsystem:console");
-
-            // Link against common Windows libraries
-            try args.append("kernel32.lib");
-            try args.append("msvcrt.lib");
+            // Windows linking is more complex and needs significant work
+            // For now, return an error to fall back to clang
+            return LinkError.LLVMNotAvailable;
         },
         else => {},
     }
