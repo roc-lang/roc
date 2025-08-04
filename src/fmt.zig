@@ -1990,33 +1990,21 @@ const Formatter = struct {
                 switch (expr) {
                     .block => return true,
                     .tuple => |t| {
-                        if (fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(t.items))) {
-                            return true;
-                        }
-
-                        return false;
+                        return fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(t.items));
                     },
                     .apply => |a| {
                         if (fmt.nodeWillBeMultiline(AST.Expr.Idx, a.@"fn")) {
                             return true;
                         }
 
-                        if (fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(a.args))) {
-                            return true;
-                        }
-
-                        return false;
+                        return fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(a.args));
                     },
                     .bin_op => |b| {
                         if (fmt.nodeWillBeMultiline(AST.Expr.Idx, b.left)) {
                             return true;
                         }
 
-                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, b.right)) {
-                            return true;
-                        }
-
-                        return false;
+                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, b.right);
                     },
                     .record => |r| {
                         if (r.ext) |ext| {
@@ -2025,22 +2013,17 @@ const Formatter = struct {
                             }
                         }
 
-                        if (fmt.nodesWillBeMultiline(AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(r.fields))) {
-                            return true;
-                        }
-
-                        return false;
+                        return fmt.nodesWillBeMultiline(AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(r.fields));
+                    },
+                    .suffix_single_question => |s| {
+                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, s.expr);
                     },
                     else => return false,
                 }
             },
             AST.Pattern.Idx => {
                 const pattern = fmt.ast.store.getPattern(item);
-                if (fmt.ast.regionIsMultiline(pattern.to_tokenized_region())) {
-                    return true;
-                }
-
-                return false;
+                return fmt.ast.regionIsMultiline(pattern.to_tokenized_region());
             },
             AST.PatternRecordField.Idx => {
                 const patternRecordField = fmt.ast.store.getPatternRecordField(item);
@@ -2049,18 +2032,16 @@ const Formatter = struct {
                 }
 
                 if (patternRecordField.value) |value| {
-                    return fmt.nodeWillBeMultiline(AST.Pattern.Idx, value);
+                    if (fmt.nodeWillBeMultiline(AST.Pattern.Idx, value)) {
+                        return true;
+                    }
                 }
 
                 return false;
             },
             AST.ExposedItem.Idx => {
                 const exposedItem = fmt.ast.store.getExposedItem(item);
-                if (fmt.ast.regionIsMultiline(exposedItem.to_tokenized_region())) {
-                    return true;
-                }
-
-                return false;
+                return fmt.ast.regionIsMultiline(exposedItem.to_tokenized_region());
             },
             AST.RecordField.Idx => {
                 const recordField = fmt.ast.store.getRecordField(item);
@@ -2069,18 +2050,16 @@ const Formatter = struct {
                 }
 
                 if (recordField.value) |value| {
-                    return fmt.nodeWillBeMultiline(AST.Expr.Idx, value);
+                    if (fmt.nodeWillBeMultiline(AST.Expr.Idx, value)) {
+                        return true;
+                    }
                 }
 
                 return false;
             },
             AST.TypeAnno.Idx => {
                 const typeAnno = fmt.ast.store.getTypeAnno(item);
-                if (fmt.ast.regionIsMultiline(typeAnno.to_tokenized_region())) {
-                    return true;
-                }
-
-                return false;
+                return fmt.ast.regionIsMultiline(typeAnno.to_tokenized_region());
             },
             AST.AnnoRecordField.Idx => {
                 const annoRecordField = fmt.ast.store.getAnnoRecordField(item) catch return false;
@@ -2088,19 +2067,11 @@ const Formatter = struct {
                     return true;
                 }
 
-                if (fmt.nodeWillBeMultiline(AST.TypeAnno.Idx, annoRecordField.ty)) {
-                    return true;
-                }
-
-                return false;
+                return fmt.nodeWillBeMultiline(AST.TypeAnno.Idx, annoRecordField.ty);
             },
             AST.WhereClause.Idx => {
                 const whereClause = fmt.ast.store.getWhereClause(item);
-                if (fmt.ast.regionIsMultiline(whereClause.to_tokenized_region())) {
-                    return true;
-                }
-
-                return false;
+                return fmt.ast.regionIsMultiline(whereClause.to_tokenized_region());
             },
             AST.Statement.Idx => {
                 const statement = fmt.ast.store.getStatement(item);
@@ -2110,11 +2081,7 @@ const Formatter = struct {
 
                 switch (statement) {
                     .expr => |e| {
-                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, e.expr)) {
-                            return true;
-                        }
-
-                        return false;
+                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, e.expr);
                     },
                     else => return false,
                 }
@@ -2125,11 +2092,7 @@ const Formatter = struct {
                     return true;
                 }
 
-                if (fmt.nodesWillBeMultiline(AST.TypeAnno.Idx, fmt.ast.store.typeAnnoSlice(typeHeader.args))) {
-                    return true;
-                }
-
-                return false;
+                return fmt.nodesWillBeMultiline(AST.TypeAnno.Idx, fmt.ast.store.typeAnnoSlice(typeHeader.args));
             },
             AST.Header.Idx => {
                 const header = fmt.ast.store.getHeader(item);
@@ -2143,11 +2106,7 @@ const Formatter = struct {
                             return true;
                         }
 
-                        if (fmt.collectionWillBeMultiline(AST.RecordField.Idx, p.packages)) {
-                            return true;
-                        }
-
-                        return false;
+                        return fmt.collectionWillBeMultiline(AST.RecordField.Idx, p.packages);
                     },
                     else => return false,
                 }
