@@ -133,9 +133,9 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     // Read the string result
     const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
     const str_slice = roc_str.asSlice();
-    
+
     try testing.expectEqualStrings(expected_str, str_slice);
-    
+
     // Clean up reference counting for big strings
     if (!roc_str.isSmallStr()) {
         // We need to decref because the result is no longer needed

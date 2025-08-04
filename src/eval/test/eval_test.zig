@@ -613,13 +613,9 @@ test "string refcount - simple integer closure" {
     try runExpectInt("(|x| x)(42)", 42, .no_trace);
 }
 
-// NOTE: String arguments to closures currently have a reference counting bug
-// that causes memory corruption. This is documented as a known issue.
-//
-// test "string refcount - simple string closure" {
-//     // Test basic closure with string argument
-//     try runExpectStr("(|s| s)(\"Test\")", "Test", .trace);
-// }
+test "string refcount - simple string closure" {
+    try runExpectStr("(|s| s)(\"Test\")", "Test", .trace);
+}
 
 test "ModuleEnv serialization and interpreter evaluation" {
     // This test demonstrates that a ModuleEnv can be successfully:

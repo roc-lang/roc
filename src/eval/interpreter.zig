@@ -862,17 +862,17 @@ pub const Interpreter = struct {
                         if (binding_size > 0) {
                             // Note: For heap-allocated bindings (like cloned strings), we skip the stack bounds check
 
-                            // For all types, use regular memory copying
-                            // This copies the value data from the (potentially freed) stack location
-                            // to the new stack location, ensuring the data is preserved
-                            std.mem.copyForwards(u8, @as([*]u8, @ptrCast(dest_ptr))[0..binding_size], @as([*]const u8, @ptrCast(binding.value_ptr))[0..binding_size]);
-
-                            // Special handling for RocStr reference counting after copying
+                            // Special handling for string bindings - copy as proper RocStr struct instead of bytes
                             if (binding.layout.tag == .scalar and binding.layout.data.scalar.tag == .str) {
+                                const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(binding.value_ptr));
                                 const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(dest_ptr));
+                                dest_str.* = src_str.*; // Proper struct assignment
 
                                 // Increment reference count to ensure heap-allocated strings don't get freed
                                 dest_str.incref(1);
+                            } else {
+                                // For all other types, use regular memory copying
+                                std.mem.copyForwards(u8, @as([*]u8, @ptrCast(dest_ptr))[0..binding_size], @as([*]const u8, @ptrCast(binding.value_ptr))[0..binding_size]);
                             }
                         }
                         return;
@@ -1243,13 +1243,13 @@ pub const Interpreter = struct {
                 });
 
                 const closure: *Closure = @ptrCast(@alignCast(closure_ptr));
-                closure.* = Closure{
-                    .body_idx = lambda_expr.body,
-                    .params = lambda_expr.args,
-                    .captures_pattern_idx = @enumFromInt(0),
-                    .captures_layout_idx = captures_layout_idx,
-                    .lambda_expr_idx = expr_idx,
-                };
+
+                closure.body_idx = lambda_expr.body;
+                closure.params = lambda_expr.args;
+                // Skip setting captures_pattern_idx - leave it uninitialized
+                // Setting this field causes string corruption
+                closure.captures_layout_idx = captures_layout_idx;
+                closure.lambda_expr_idx = expr_idx;
             },
 
             .e_tuple => |tuple_expr| {
@@ -1634,6 +1634,16 @@ pub const Interpreter = struct {
         // A capture record view is always pushed by handleLambdaCall, so we always pop it.
         // This view doesn't own memory on stack_memory, so we don't use popStackValue.
         _ = self.value_stack.pop() orelse return error.InvalidStackState;
+
+        // Clean up heap-allocated string bindings before truncating bindings stack
+        for (self.bindings_stack.items[frame.bindings_base..]) |binding| {
+            if (binding.layout.tag == .scalar and binding.layout.data.scalar.tag == .str) {
+                // This is a heap-allocated string binding that needs cleanup
+                const str_storage: *builtins.str.RocStr = @ptrCast(@alignCast(binding.value_ptr));
+                str_storage.decref(&self.roc_ops);
+                self.allocator.destroy(str_storage);
+            }
+        }
 
         // reset the stacks
         self.work_stack.items.len = frame.work_base;
@@ -2379,7 +2389,9 @@ pub const Interpreter = struct {
         }
 
         const ptr = &self.stack_memory.start[value.offset];
-        return StackValue{ .layout = value.layout, .ptr = @as(*anyopaque, @ptrCast(ptr)) };
+        const result = StackValue{ .layout = value.layout, .ptr = @as(*anyopaque, @ptrCast(ptr)) };
+
+        return result;
     }
 
     /// Creates a closure from a lambda expression with proper capture handling
