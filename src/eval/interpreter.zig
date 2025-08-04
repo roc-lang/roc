@@ -92,6 +92,8 @@ pub const EvalError = error{
     StringConversionFailed,
     UnsupportedWorkItem,
     UnexpectedWorkItem,
+    RuntimeCrash,
+    InvalidBindingsState,
 };
 
 /// Maximum number of capture fields allowed in a closure
@@ -2246,30 +2248,57 @@ pub const Interpreter = struct {
         return self.popStackValue();
     }
 
-    /// Helper to process other work item types
-    /// For now, we'll handle the most common ones and return an error for complex cases
+    /// Helper to process other work item types that might be generated during closure evaluation
     fn processWorkItem(self: *Interpreter, work: WorkItem) EvalError!void {
+        self.tracePrint("processWorkItem: {s}", .{@tagName(work.kind)});
+        
         switch (work.kind) {
-            .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
+            // Binary operations
+            .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, 
+            .w_binop_div_trunc, .w_binop_rem, .w_binop_eq, .w_binop_ne, 
+            .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, 
+            .w_binop_and, .w_binop_or => {
                 try self.completeBinop(work.kind);
             },
-            .w_unary_minus => {
-                try self.completeUnaryMinus();
-            },
-            .w_unary_not => {
-                try self.completeUnaryNot();
-            },
-            .w_lambda_return => {
-                try self.handleLambdaReturn();
-            },
-            .w_eval_expr, .w_lambda_call => {
-                // These are handled in callClosureWithStackArgs
-                return error.UnexpectedWorkItem;
-            },
-            else => {
-                // For complex work items that require inline handling,
-                // we'll return an error for now
+            
+            // Unary operations
+            .w_unary_minus => try self.completeUnaryMinus(),
+            .w_unary_not => try self.completeUnaryNot(),
+            
+            // Control flow
+            .w_lambda_return => try self.handleLambdaReturn(),
+            .w_if_check_condition => {
+                // Extract branch index from extra data - this is a simplified handler
+                // The actual implementation would need more context about branches
+                std.log.warn("if_check_condition work item not fully implemented in processWorkItem", .{});
                 return error.UnsupportedWorkItem;
+            },
+            
+            // Record/tuple evaluation
+            .w_eval_record_fields => try self.handleRecordFields(work.expr_idx, work.extra.current_field_idx),
+            .w_eval_tuple_elements => try self.handleTupleElements(work.expr_idx, work.extra.current_element_idx),
+            
+            // Let bindings and other complex work items
+            .w_let_bind, .w_block_cleanup => {
+                // These require more complex state management that's handled in the main eval loop
+                std.log.warn("Complex work item {s} not supported in processWorkItem", .{@tagName(work.kind)});
+                return error.UnsupportedWorkItem;
+            },
+            
+            // Field access
+            .w_dot_access => try self.handleDotAccess(work.extra.dot_access_field_name),
+            
+            // Runtime errors
+            .w_crash => {
+                const msg = self.env.strings.get(work.extra.crash_msg);
+                std.log.err("Runtime crash: {s}", .{msg});
+                return error.RuntimeCrash;
+            },
+            
+            // These should be handled by the caller
+            .w_eval_expr, .w_lambda_call => {
+                std.log.err("Unexpected work item in processWorkItem: {s}", .{@tagName(work.kind)});
+                return error.UnexpectedWorkItem;
             },
         }
     }

@@ -803,84 +803,107 @@ pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (s
     return error.NoPlatformFound;
 }
 
-/// Resolve a platform specification to a local host library path
-fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8, roc_file_path: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})![]u8 {
+/// Try to resolve a named platform (like "cli", "basic-cli") to a host library
+fn resolveNamedPlatform(gpa: std.mem.Allocator, platform_name: []const u8) ?[]u8 {
     // TEMPORARY: For testing the interpreter, use our test host library
-    if (std.mem.eql(u8, platform_spec, "test")) {
-        return gpa.dupe(u8, "libtest_host.a");
+    if (std.mem.eql(u8, platform_name, "test")) {
+        return gpa.dupe(u8, "libtest_host.a") catch null;
     }
 
-    // Check for common platform names and map them to host libraries
-    if (std.mem.eql(u8, platform_spec, "cli")) {
-        // Try to find CLI platform host library
+    if (std.mem.eql(u8, platform_name, "cli")) {
         const cli_paths = [_][]const u8{
             "zig-out/lib/libplatform_host_cli.a",
             "platform/cli/host.a",
             "platforms/cli/host.a",
         };
-
-        for (cli_paths) |path| {
-            std.fs.cwd().access(path, .{}) catch continue;
-            return try gpa.dupe(u8, path);
-        }
-    } else if (std.mem.eql(u8, platform_spec, "basic-cli")) {
-        // Try to find basic-cli platform host library
+        return findFirstExistingPath(gpa, &cli_paths);
+    }
+    
+    if (std.mem.eql(u8, platform_name, "basic-cli")) {
         const basic_cli_paths = [_][]const u8{
             "zig-out/lib/libplatform_host_basic_cli.a",
             "platform/basic-cli/host.a",
             "platforms/basic-cli/host.a",
         };
+        return findFirstExistingPath(gpa, &basic_cli_paths);
+    }
 
-        for (basic_cli_paths) |path| {
-            std.fs.cwd().access(path, .{}) catch continue;
-            return try gpa.dupe(u8, path);
-        }
-    } else if (std.mem.startsWith(u8, platform_spec, "http")) {
-        // This is a URL - for production, would download and resolve
-        // For now, return not supported
+    return null;
+}
+
+/// Find the first existing path from a list of candidates
+fn findFirstExistingPath(gpa: std.mem.Allocator, paths: []const []const u8) ?[]u8 {
+    for (paths) |path| {
+        std.fs.cwd().access(path, .{}) catch continue;
+        return gpa.dupe(u8, path) catch null;
+    }
+    return null;
+}
+
+/// Resolve a platform main.roc file path to its corresponding libhost.a
+fn resolvePlatformMainRoc(gpa: std.mem.Allocator, platform_spec: []const u8, roc_file_path: []const u8) ![]u8 {
+    // Get the directory containing the app file
+    const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
+
+    // Resolve the platform path relative to the app file's directory
+    const resolved_platform_path = if (std.fs.path.isAbsolute(platform_spec))
+        try gpa.dupe(u8, platform_spec)
+    else
+        try std.fs.path.join(gpa, &.{ app_dir, platform_spec });
+    defer gpa.free(resolved_platform_path);
+
+    // Get the directory containing main.roc
+    const dir_path = std.fs.path.dirname(resolved_platform_path) orelse return error.PlatformNotSupported;
+
+    // Look for libhost.a in the same directory
+    const host_path = try std.fs.path.join(gpa, &.{ dir_path, "libhost.a" });
+    errdefer gpa.free(host_path);
+
+    std.fs.cwd().access(host_path, .{}) catch {
         return error.PlatformNotSupported;
-    }
+    };
 
-    // Check if it's a path to a platform main.roc file
-    if (std.mem.endsWith(u8, platform_spec, "/main.roc") or std.mem.endsWith(u8, platform_spec, "\\main.roc")) {
-        // Get the directory containing the app file
-        const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
+    return host_path;
+}
 
-        // Resolve the platform path relative to the app file's directory
-        const resolved_platform_path = if (std.fs.path.isAbsolute(platform_spec))
-            try gpa.dupe(u8, platform_spec)
-        else
-            try std.fs.path.join(gpa, &.{ app_dir, platform_spec });
-        defer gpa.free(resolved_platform_path);
-
-        // Get the directory containing main.roc
-        const dir_path = std.fs.path.dirname(resolved_platform_path) orelse return error.PlatformNotSupported;
-
-        // Look for libhost.a in the same directory
-        const host_path = try std.fs.path.join(gpa, &.{ dir_path, "libhost.a" });
-        defer gpa.free(host_path);
-
-        std.fs.cwd().access(host_path, .{}) catch {
-            return error.PlatformNotSupported;
-        };
-
-        return try gpa.dupe(u8, host_path);
-    }
-
-    // Try to interpret as a direct file path (resolve relative to app file)
+/// Resolve a direct file path (absolute or relative to the app file)
+fn resolveDirectPath(gpa: std.mem.Allocator, platform_spec: []const u8, roc_file_path: []const u8) ![]u8 {
     const resolved_path = if (std.fs.path.isAbsolute(platform_spec))
         try gpa.dupe(u8, platform_spec)
     else blk: {
         const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
         break :blk try std.fs.path.join(gpa, &.{ app_dir, platform_spec });
     };
-    defer gpa.free(resolved_path);
+    errdefer gpa.free(resolved_path);
 
     std.fs.cwd().access(resolved_path, .{}) catch {
         return error.PlatformNotSupported;
     };
 
-    return try gpa.dupe(u8, resolved_path);
+    return resolved_path;
+}
+
+/// Resolve a platform specification to a local host library path
+fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8, roc_file_path: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})![]u8 {
+    // Try URL detection first
+    if (std.mem.startsWith(u8, platform_spec, "http")) {
+        // This is a URL - for production, would download and resolve
+        // For now, return not supported
+        return error.PlatformNotSupported;
+    }
+
+    // Try named platforms
+    if (resolveNamedPlatform(gpa, platform_spec)) |path| {
+        return path;
+    }
+
+    // Check if it's a path to a platform main.roc file
+    if (std.mem.endsWith(u8, platform_spec, "/main.roc") or std.mem.endsWith(u8, platform_spec, "\\main.roc")) {
+        return resolvePlatformMainRoc(gpa, platform_spec, roc_file_path);
+    }
+
+    // Try to interpret as a direct file path
+    return resolveDirectPath(gpa, platform_spec, roc_file_path);
 }
 
 /// Extract the embedded read_roc_file_path_shim library to the specified path
