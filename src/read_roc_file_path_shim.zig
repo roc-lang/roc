@@ -8,6 +8,7 @@ const types = @import("types");
 const eval = @import("eval/interpreter.zig");
 const stack = @import("eval/stack.zig");
 const layout_store = @import("layout/store.zig");
+const layout = @import("layout/layout.zig");
 
 const RocStr = builtins.str.RocStr;
 const ModuleEnv = compile.ModuleEnv;
@@ -103,18 +104,19 @@ fn readFdInfo() !FdInfo {
 /// Exported symbol that reads ModuleEnv from shared memory and evaluates it
 /// Returns a RocStr to the caller
 /// Expected format in shared memory: [u64 parent_address][ModuleEnv data]
-export fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque) callconv(.C) void {
+export fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void {
     // Use the appropriate evaluation function based on platform
     const result = if (is_windows)
-        evaluateFromWindowsSharedMemory(ops)
+        evaluateFromWindowsSharedMemory(ops, arg_ptr)
     else
-        evaluateFromPosixSharedMemory(ops);
+        evaluateFromPosixSharedMemory(ops, arg_ptr);
 
     const roc_str_ptr: *RocStr = @ptrCast(@alignCast(ret_ptr));
     roc_str_ptr.* = result;
 }
 
-fn evaluateFromWindowsSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
+fn evaluateFromWindowsSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyopaque) RocStr {
+    _ = arg_ptr; // Unused for now, Windows support to be added later
     const fd_info = readFdInfo() catch {
         return RocStr.empty();
     };
@@ -270,7 +272,7 @@ fn evaluateFromWindowsSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
     return createRocStrFromData(ops, @constCast(result_str.ptr), result_str.len);
 }
 
-fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
+fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyopaque) RocStr {
     const fd_info = readFdInfo() catch |err| {
         var buf: [256]u8 = undefined;
         const err_str = std.fmt.bufPrint(&buf, "readFdInfo error: {}", .{err}) catch "Error";
@@ -368,10 +370,20 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
         const err_str = std.fmt.bufPrint(&buf, "Interpreter init error: {s}", .{@errorName(err)}) catch "Error";
         return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
     };
+    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
 
-    // Evaluate using the REAL interpreter
+    // Enable tracing to stderr
+    interpreter.startTrace(std.io.getStdErr().writer().any());
+
     const expr_idx_enum: ModuleEnv.Expr.Idx = @enumFromInt(expr_idx);
+    
+    // TODO: Check if the expression is a closure and handle arguments properly
+    // For now, just proceed with evaluation - proper closure calling support
+    // needs to be implemented at a higher level in the compilation process
+    _ = arg_ptr; // Unused for now
+    
+    // Evaluate using the REAL interpreter
     const stack_result = interpreter.eval(expr_idx_enum) catch |err| {
         var buf: [256]u8 = undefined;
         const err_str = std.fmt.bufPrint(&buf, "Evaluation error: {s}", .{@errorName(err)}) catch "Error";
