@@ -1,4 +1,4 @@
-app [main] { pf: platform "./test/platform/str/main.roc" }
+app [main] { pf: platform "./main.roc" }
 
 main : Str -> Str
 main = |input|

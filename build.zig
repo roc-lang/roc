@@ -295,9 +295,9 @@ fn addMainExe(
     const install_host = b.addInstallArtifact(host_lib, .{});
     b.getInstallStep().dependOn(&install_host.step);
 
-    // Create test platform host static library
+    // Create test platform host static library (str)
     const test_platform_host_lib = b.addStaticLibrary(.{
-        .name = "host",
+        .name = "test_platform_str_host",
         .root_source_file = b.path("test/platform/str/host.zig"),
         .target = target,
         .optimize = optimize,
@@ -310,6 +310,22 @@ fn addMainExe(
     const copy_test_host = b.addUpdateSourceFiles();
     copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), "test/platform/str/libhost.a");
     b.getInstallStep().dependOn(&copy_test_host.step);
+
+    // Create test platform host static library (int)
+    const test_platform_int_host_lib = b.addStaticLibrary(.{
+        .name = "test_platform_int_host",
+        .root_source_file = b.path("test/platform/int/host.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = strip,
+    });
+    test_platform_int_host_lib.linkLibC();
+    test_platform_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
+
+    // Copy the int test platform host library to the source directory
+    const copy_test_int_host = b.addUpdateSourceFiles();
+    copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), "test/platform/int/libhost.a");
+    b.getInstallStep().dependOn(&copy_test_int_host.step);
 
     // Create shim static library at build time
     const shim_lib = b.addStaticLibrary(.{
