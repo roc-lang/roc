@@ -129,7 +129,6 @@ test "integration - shared memory setup and parsing" {
         },
         else => return err,
     };
-    defer main.cleanupSharedMemory();
 
     // Verify that shared memory was set up correctly
     try testing.expect(shm_handle.size > 0);
@@ -173,7 +172,6 @@ test "integration - compilation pipeline for different expressions" {
             },
             else => return err,
         };
-        defer main.cleanupSharedMemory();
 
         // Verify shared memory was set up successfully
         try testing.expect(shm_handle.size > 0);
@@ -209,7 +207,6 @@ test "integration - error handling in compilation" {
     // We expect this to either fail or succeed (depending on parser error handling)
     // The important thing is that it doesn't crash
     if (result) |shm_handle| {
-        defer main.cleanupSharedMemory();
         std.log.info("Compilation succeeded even with invalid syntax (size: {} bytes)\n", .{shm_handle.size});
     } else |err| {
         std.log.info("Compilation failed as expected with error: {}\n", .{err});

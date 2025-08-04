@@ -452,13 +452,11 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
             _ = posix.munmap(shm_handle.ptr, shm_handle.size);
             _ = c.close(shm_handle.fd);
         }
-        cleanupSharedMemory();
     }
 
     // Get cache directory for temporary files
     const temp_cache_dir = cache_manager.config.getTempDir(gpa) catch |err| {
         std.log.err("Failed to get temp cache directory: {}\n", .{err});
-        cleanupSharedMemory();
         std.process.exit(1);
     };
     defer gpa.free(temp_cache_dir);
@@ -468,7 +466,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         error.PathAlreadyExists => {},
         else => {
             std.log.err("Failed to create temp cache directory: {}\n", .{err});
-            cleanupSharedMemory();
             std.process.exit(1);
         },
     };
@@ -476,7 +473,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     // Create temporary directory structure for fd communication
     const temp_exe_path = createTempDirStructure(gpa, exe_path, shm_handle, temp_cache_dir) catch |err| {
         std.log.err("Failed to create temp dir structure: {}\n", .{err});
-        cleanupSharedMemory();
         std.process.exit(1);
     };
     defer gpa.free(temp_exe_path);
@@ -486,7 +482,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
         if (flags < 0) {
             std.log.err("Failed to get fd flags: {}\n", .{c._errno().*});
-            cleanupSharedMemory();
             std.process.exit(1);
         }
 
@@ -494,7 +489,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
         if (posix.fcntl(shm_handle.fd, posix.F_SETFD, flags) < 0) {
             std.log.err("Failed to set fd flags: {}\n", .{c._errno().*});
-            cleanupSharedMemory();
             std.process.exit(1);
         }
     }
@@ -503,7 +497,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     var child = std.process.Child.init(&.{temp_exe_path}, gpa);
     child.cwd = std.fs.cwd().realpathAlloc(gpa, ".") catch |err| {
         std.log.err("Failed to get current directory: {}\n", .{err});
-        cleanupSharedMemory();
         std.process.exit(1);
     };
     defer gpa.free(child.cwd.?);
@@ -514,7 +507,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
     child.spawn() catch |err| {
         std.log.err("Failed to spawn {s}: {}\n", .{ exe_path, err });
-        cleanupSharedMemory();
         std.process.exit(1);
     };
 
@@ -596,7 +588,7 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.create(gpa, "ROC_FILE_TO_INTERPRET", SHARED_MEMORY_SIZE, page_size);
+    var shm = try SharedMemoryAllocator.create(gpa, "", SHARED_MEMORY_SIZE, page_size);
     // Don't defer deinit here - we need to keep the shared memory alive
 
     const shm_allocator = shm.allocator();
@@ -836,18 +828,6 @@ fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u
     };
 
     return try gpa.dupe(u8, platform_spec);
-}
-
-/// Clean up shared memory resources.
-/// On POSIX systems, unlinks the shared memory object. On Windows, cleanup is automatic.
-pub fn cleanupSharedMemory() void {
-    if (comptime is_windows) {
-        // On Windows, shared memory is automatically cleaned up when all handles are closed
-        return;
-    } else {
-        const shm_name = "/ROC_FILE_TO_INTERPRET";
-        if (posix.shm_unlink(shm_name) != 0) {}
-    }
 }
 
 /// Extract the embedded read_roc_file_path_shim library to the specified path
