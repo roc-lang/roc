@@ -436,24 +436,44 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
             };
         }
 
-        // Link the host.a with our shim to create the interpreter executable using clang
-        const link_result = std.process.Child.run(.{
-            .allocator = gpa,
-            .argv = &.{ "clang", "-o", exe_path, host_path, shim_path },
-        }) catch |err| {
-            std.log.err("Failed to link executable: {}\n", .{err});
-            std.process.exit(1);
+        // Link the host.a with our shim to create the interpreter executable using our linker
+        // Try LLD first, fallback to clang if LLVM is not available
+        const link_config = linker.LinkConfig{
+            .output_path = exe_path,
+            .object_files = &.{ host_path, shim_path },
+            .can_exit_early = false,
+            .disable_output = false,
         };
-        defer gpa.free(link_result.stdout);
-        defer gpa.free(link_result.stderr);
-
-        if (link_result.term.Exited != 0) {
-            std.log.err("Linker failed with exit code: {}\n", .{link_result.term.Exited});
-            if (link_result.stderr.len > 0) {
-                std.log.err("Linker stderr: {s}\n", .{link_result.stderr});
-            }
-            std.process.exit(1);
-        }
+        
+        linker.link(gpa, link_config) catch |err| switch (err) {
+            linker.LinkError.LLVMNotAvailable => {
+                // Fallback to clang when LLVM is not available
+                const link_result = std.process.Child.run(.{
+                    .allocator = gpa,
+                    .argv = &.{ "clang", "-o", exe_path, host_path, shim_path },
+                }) catch |clang_err| {
+                    std.log.err("Failed to link executable with both LLD and clang: LLD unavailable, clang error: {}\n", .{clang_err});
+                    std.process.exit(1);
+                };
+                defer gpa.free(link_result.stdout);
+                defer gpa.free(link_result.stderr);
+                if (link_result.term.Exited != 0) {
+                    std.log.err("Linker failed with exit code: {}\n", .{link_result.term.Exited});
+                    if (link_result.stderr.len > 0) {
+                        std.log.err("Linker stderr: {s}\n", .{link_result.stderr});
+                    }
+                    std.process.exit(1);
+                }
+            },
+            linker.LinkError.LinkFailed => {
+                std.log.err("LLD linker failed to create executable\n", .{});
+                std.process.exit(1);
+            },
+            else => {
+                std.log.err("Failed to link executable: {}\n", .{err});
+                std.process.exit(1);
+            },
+        };
     }
 
     // Set up shared memory with ModuleEnv

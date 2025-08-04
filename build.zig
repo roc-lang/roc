@@ -287,6 +287,7 @@ fn addMainExe(
         .target = target,
         .optimize = optimize,
         .strip = strip,
+        .pic = true, // Enable Position Independent Code for PIE compatibility
     });
     host_lib.linkLibC();
     host_lib.root_module.addImport("builtins", roc_modules.builtins);
@@ -302,6 +303,7 @@ fn addMainExe(
         .target = target,
         .optimize = optimize,
         .strip = strip,
+        .pic = true, // Enable Position Independent Code for PIE compatibility
     });
     test_platform_host_lib.linkLibC();
     test_platform_host_lib.root_module.addImport("builtins", roc_modules.builtins);
@@ -318,6 +320,7 @@ fn addMainExe(
         .target = target,
         .optimize = optimize,
         .strip = strip,
+        .pic = true, // Enable Position Independent Code for PIE compatibility
     });
     test_platform_int_host_lib.linkLibC();
     test_platform_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
@@ -327,6 +330,19 @@ fn addMainExe(
     copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), "test/platform/int/libhost.a");
     b.getInstallStep().dependOn(&copy_test_int_host.step);
 
+    // Create builtins static library at build time with minimal dependencies
+    const builtins_lib = b.addStaticLibrary(.{
+        .name = "roc_builtins",
+        .root_source_file = b.path("src/builtins/static_lib.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = strip,
+        .pic = true, // Enable Position Independent Code for PIE compatibility
+    });
+    builtins_lib.linkLibC();
+    // Add the builtins module so it can import "builtins"
+    builtins_lib.root_module.addImport("builtins", roc_modules.builtins);
+    
     // Create shim static library at build time
     const shim_lib = b.addStaticLibrary(.{
         .name = "read_roc_file_path_shim",
@@ -334,10 +350,13 @@ fn addMainExe(
         .target = target,
         .optimize = optimize,
         .strip = strip,
+        .pic = true, // Enable Position Independent Code for PIE compatibility
     });
     shim_lib.linkLibC();
     // Add all modules from roc_modules that the shim needs
     roc_modules.addAll(shim_lib);
+    // Link against the pre-built builtins library
+    shim_lib.linkLibrary(builtins_lib);
 
     // Install shim.a to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});

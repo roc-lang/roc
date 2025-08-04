@@ -127,13 +127,11 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
                 else => try args.append("arm64"), // default to arm64
             }
 
-            // Add platform version
+            // Add platform version - use a conservative minimum that works across macOS versions
             try args.append("-platform_version");
             try args.append("macos");
-            const deployment_target = getMinimumDeploymentTarget(allocator) catch "15.0";
-            defer if (!std.mem.eql(u8, deployment_target, "15.0")) allocator.free(deployment_target);
-            try args.append(deployment_target);
-            try args.append(deployment_target);
+            try args.append("13.0");  // minimum deployment target
+            try args.append("13.0");  // SDK version
 
             // Add SDK path
             try args.append("-syslibroot");
@@ -141,6 +139,10 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
 
             // Link against system libraries
             try args.append("-lc");
+            
+            // Allow undefined symbols for now - compiler-rt builtins will be resolved by system
+            try args.append("-undefined");
+            try args.append("dynamic_lookup");
         },
         .linux => {
             // Add dynamic linker
