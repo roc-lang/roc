@@ -442,7 +442,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     }
 
     // Set up shared memory with ModuleEnv
-    const shm_handle = setupSharedMemoryWithModuleEnv(gpa, args.path) catch |err| {
+    const shm_handle = setupSharedMemoryWithModuleEnv(args.path) catch |err| {
         std.log.err("Failed to set up shared memory with ModuleEnv: {}\n", .{err});
         std.process.exit(1);
     };
@@ -589,10 +589,10 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 /// Set up shared memory with a compiled ModuleEnv from a Roc file.
 /// This parses, canonicalizes, and type-checks the Roc file, with the resulting ModuleEnv
 /// ending up in shared memory because all allocations were done into shared memory.
-pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
+pub fn setupSharedMemoryWithModuleEnv(roc_file_path: []const u8) !SharedMemoryHandle {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.create(gpa, "", SHARED_MEMORY_SIZE, page_size);
+    var shm = try SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size);
     // Don't defer deinit here - we need to keep the shared memory alive
 
     const shm_allocator = shm.allocator();
