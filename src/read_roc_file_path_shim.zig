@@ -310,26 +310,47 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyo
     };
     const expr_layout = layout_cache.getLayout(layout_idx);
 
+    // Debug output
+    std.log.warn("Expression layout tag: {s}", .{@tagName(expr_layout.tag)});
+    std.log.warn("arg_ptr is null: {}", .{arg_ptr == null});
+    
     // If it's a closure and we have arguments, handle the closure call properly
     if (expr_layout.tag == .closure and arg_ptr != null) {
-        // For now, we'll implement a simple heuristic:
-        // If arg_ptr points to a struct with two i64s, assume it's our int platform
-        // Otherwise, assume it's a string platform
+        // Get the closure expression to access parameter information
+        const closure_expr = env_ptr.store.getExpr(expr_idx_enum);
+        const param_ids = switch (closure_expr) {
+            .e_closure => |closure_data| blk: {
+                const lambda_expr = env_ptr.store.getExpr(closure_data.lambda_idx);
+                switch (lambda_expr) {
+                    .e_lambda => |lambda_data| break :blk env_ptr.store.slicePatterns(lambda_data.args),
+                    else => {
+                        var buf: [256]u8 = undefined;
+                        const err_str = std.fmt.bufPrint(&buf, "Expected lambda in closure, got {s}", .{@tagName(lambda_expr)}) catch "Error";
+                        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+                    },
+                }
+            },
+            .e_lambda => |lambda_data| env_ptr.store.slicePatterns(lambda_data.args),
+            else => {
+                var buf: [256]u8 = undefined;
+                const err_str = std.fmt.bufPrint(&buf, "Expected closure or lambda, got {s}", .{@tagName(closure_expr)}) catch "Error";
+                return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+            },
+        };
+        const param_count = param_ids.len;
+        
+        // Debug: Print parameter count
+        std.log.warn("Closure has {} parameters", .{param_count});
 
-        // Try to detect if this is our int platform by checking the size
-        // A struct with two i64s should be 16 bytes
-        const potential_int_args = @as(*const struct { a: i64, b: i64 }, @ptrCast(@alignCast(arg_ptr.?)));
-
-        // For simplicity, let's assume if we have arguments and it's not a string function,
-        // then it must be our int function. We can make this more robust later.
-
-        // Check if this looks like our int function by testing if both values are reasonable
-        // (not extremely large, which might indicate we're misinterpreting memory)
-        const reasonable_range = 1_000_000_000_000; // 1 trillion
-        if (@abs(potential_int_args.a) < reasonable_range and @abs(potential_int_args.b) < reasonable_range) {
-            // Handle two-parameter int function (I64, I64 -> I64)
-            const args_ptr = potential_int_args;
-
+        std.log.warn("About to handle param_count: {}", .{param_count});
+        
+        // For now, handle the known case of two i64 parameters specifically
+        if (param_count == 2) {
+            // Assume this is our int platform: struct { a: i64, b: i64 }
+            const args_struct = @as(*const struct { a: i64, b: i64 }, @ptrCast(@alignCast(arg_ptr.?)));
+            
+            std.log.warn("Unpacking args: a = {}, b = {}", .{ args_struct.a, args_struct.b });
+            
             // Create layout for i64
             const i64_layout = layout.Layout{
                 .tag = .scalar,
@@ -346,7 +367,7 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyo
                 return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
             }).?;
             const stack_i64_ptr1: *i64 = @ptrCast(@alignCast(arg1_stack_ptr));
-            stack_i64_ptr1.* = args_ptr.a;
+            stack_i64_ptr1.* = args_struct.a;
 
             // Push second argument
             const arg2_stack_ptr = (interpreter.pushStackValue(i64_layout) catch |err| {
@@ -355,39 +376,31 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyo
                 return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
             }).?;
             const stack_i64_ptr2: *i64 = @ptrCast(@alignCast(arg2_stack_ptr));
-            stack_i64_ptr2.* = args_ptr.b;
-
-            // Call the closure with both arguments
-            const closure_result = interpreter.callClosureWithStackArgs(expr_idx_enum, 2) catch |err| {
+            stack_i64_ptr2.* = args_struct.b;
+        } else if (param_count == 1) {
+            // Assume this is our str platform: struct { str: RocStr }  
+            const args_struct = @as(*const struct { str: RocStr }, @ptrCast(@alignCast(arg_ptr.?)));
+            
+            // Push the argument onto the stack so the closure can access it
+            const str_layout_idx = layout.Idx.str;
+            const str_layout = layout_cache.getLayout(str_layout_idx);
+            const arg_stack_ptr = (interpreter.pushStackValue(str_layout) catch |err| {
                 var buf: [256]u8 = undefined;
-                const err_str = std.fmt.bufPrint(&buf, "Closure call error: {s}", .{@errorName(err)}) catch "Error";
+                const err_str = std.fmt.bufPrint(&buf, "Stack push error: {s}", .{@errorName(err)}) catch "Error";
                 return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
-            };
+            }).?;
 
-            // Format and return the result
-            var buf: [1024]u8 = undefined;
-            const result_str = formatStackResult(closure_result, &layout_cache, &buf, ops);
-            return createRocStrFromData(ops, @constCast(result_str.ptr), result_str.len);
-        }
-
-        // Single argument case (existing RocStr handling) or fallback
-        const arg_str_ptr = @as(*const RocStr, @ptrCast(@alignCast(arg_ptr.?)));
-
-        // Push the argument onto the stack so the closure can access it
-        const str_layout_idx = layout.Idx.str;
-        const str_layout = layout_cache.getLayout(str_layout_idx);
-        const arg_stack_ptr = (interpreter.pushStackValue(str_layout) catch |err| {
+            // Copy the RocStr to the stack
+            const stack_str_ptr: *RocStr = @ptrCast(@alignCast(arg_stack_ptr));
+            stack_str_ptr.* = args_struct.str;
+        } else {
             var buf: [256]u8 = undefined;
-            const err_str = std.fmt.bufPrint(&buf, "Stack push error: {s}", .{@errorName(err)}) catch "Error";
+            const err_str = std.fmt.bufPrint(&buf, "Unsupported parameter count: {}", .{param_count}) catch "Error";
             return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
-        }).?;
-
-        // Copy the RocStr to the stack
-        const stack_str_ptr: *RocStr = @ptrCast(@alignCast(arg_stack_ptr));
-        stack_str_ptr.* = arg_str_ptr.*;
-
-        // Now call the closure with the argument using our new helper method
-        const closure_result = interpreter.callClosureWithStackArgs(expr_idx_enum, 1) catch |err| {
+        }
+        
+        // Call with correct parameter count using the standard method
+        const closure_result = interpreter.callClosureWithStackArgs(expr_idx_enum, @intCast(param_count)) catch |err| {
             var buf: [256]u8 = undefined;
             const err_str = std.fmt.bufPrint(&buf, "Closure call error: {s}", .{@errorName(err)}) catch "Error";
             return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);

@@ -91,9 +91,18 @@ pub fn main() !void {
     var input_roc_str = RocStr.fromSlice(input_string, &roc_ops);
     defer input_roc_str.decref(&roc_ops);
 
+    // Arguments struct for single string parameter - consistent with struct-based approach
+    const Args = struct {
+        str: RocStr,
+    };
+    
+    var args = Args{
+        .str = input_roc_str,
+    };
+
     // Call the Roc entrypoint - pass argument pointer for functions, null for values
     var roc_str: RocStr = undefined;
-    roc_entrypoint(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)), @as(*anyopaque, @ptrCast(&input_roc_str)));
+    roc_entrypoint(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)), @as(*anyopaque, @ptrCast(&args)));
     defer roc_str.decref(&roc_ops);
 
     // Get the string as a slice and print it
