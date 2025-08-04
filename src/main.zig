@@ -397,6 +397,10 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     };
 
     if (!exe_exists) {
+        // If --no-cache, delete existing executable to ensure we get a fresh one
+        if (args.no_cache) {
+            std.fs.cwd().deleteFile(exe_path) catch {}; // Ignore errors if file doesn't exist
+        }
 
         // Resolve platform from app header
         const host_path = resolvePlatformHost(gpa, args.path) catch |err| {
@@ -412,14 +416,25 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         };
         defer gpa.free(shim_path);
 
-        // Only extract if the shim doesn't already exist in cache
-        std.fs.cwd().access(shim_path, .{}) catch {
-            // Shim not found in cache, extract it
+        // Extract shim library if not cached, or if --no-cache is specified
+        const should_extract_shim = if (args.no_cache) true else blk: {
+            std.fs.cwd().access(shim_path, .{}) catch {
+                break :blk true; // Shim not found, need to extract
+            };
+            break :blk false; // Shim exists and caching is enabled
+        };
+        
+        if (should_extract_shim) {
+            // If --no-cache, delete existing shim to ensure we get a fresh one
+            if (args.no_cache) {
+                std.fs.cwd().deleteFile(shim_path) catch {}; // Ignore errors if file doesn't exist
+            }
+            
             extractReadRocFilePathShimLibrary(gpa, shim_path) catch |err| {
                 std.log.err("Failed to extract read roc file path shim library: {}\n", .{err});
                 std.process.exit(1);
             };
-        };
+        }
 
         // Link the host.a with our shim to create the interpreter executable using clang
         const link_result = std.process.Child.run(.{
@@ -824,6 +839,22 @@ fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u
         // This is a URL - for production, would download and resolve
         // For now, return not supported
         return error.PlatformNotSupported;
+    }
+
+    // Check if it's a path to a platform main.roc file
+    if (std.mem.endsWith(u8, platform_spec, "/main.roc") or std.mem.endsWith(u8, platform_spec, "\\main.roc")) {
+        // Get the directory containing main.roc
+        const dir_path = std.fs.path.dirname(platform_spec) orelse return error.PlatformNotSupported;
+        
+        // Look for libhost.a in the same directory
+        const host_path = try std.fs.path.join(gpa, &.{ dir_path, "libhost.a" });
+        defer gpa.free(host_path);
+        
+        std.fs.cwd().access(host_path, .{}) catch {
+            return error.PlatformNotSupported;
+        };
+        
+        return try gpa.dupe(u8, host_path);
     }
 
     // Try to interpret as a direct file path

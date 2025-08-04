@@ -295,6 +295,22 @@ fn addMainExe(
     const install_host = b.addInstallArtifact(host_lib, .{});
     b.getInstallStep().dependOn(&install_host.step);
 
+    // Create test platform host static library
+    const test_platform_host_lib = b.addStaticLibrary(.{
+        .name = "host",
+        .root_source_file = b.path("test/platform/str/host.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = strip,
+    });
+    test_platform_host_lib.linkLibC();
+    test_platform_host_lib.root_module.addImport("builtins", roc_modules.builtins);
+
+    // Copy the test platform host library to the source directory
+    const copy_test_host = b.addUpdateSourceFiles();
+    copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), "test/platform/str/libhost.a");
+    b.getInstallStep().dependOn(&copy_test_host.step);
+
     // Create shim static library at build time
     const shim_lib = b.addStaticLibrary(.{
         .name = "read_roc_file_path_shim",
