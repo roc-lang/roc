@@ -130,8 +130,8 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             // Add platform version - use a conservative minimum that works across macOS versions
             try args.append("-platform_version");
             try args.append("macos");
-            try args.append("13.0");  // minimum deployment target
-            try args.append("13.0");  // SDK version
+            try args.append("13.0"); // minimum deployment target
+            try args.append("13.0"); // SDK version
 
             // Add SDK path
             try args.append("-syslibroot");
@@ -139,7 +139,7 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
 
             // Link against system libraries
             try args.append("-lc");
-            
+
             // Allow undefined symbols for now - compiler-rt builtins will be resolved by system
             try args.append("-undefined");
             try args.append("dynamic_lookup");

@@ -342,7 +342,7 @@ fn addMainExe(
     builtins_lib.linkLibC();
     // Add the builtins module so it can import "builtins"
     builtins_lib.root_module.addImport("builtins", roc_modules.builtins);
-    
+
     // Create shim static library at build time
     const shim_lib = b.addStaticLibrary(.{
         .name = "read_roc_file_path_shim",

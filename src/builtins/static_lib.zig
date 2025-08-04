@@ -11,7 +11,7 @@ comptime {
     builtins.num.exportMulWithOverflow(i32, "roc__num_mul_with_overflow_");
     builtins.num.exportMulWithOverflow(i16, "roc__num_mul_with_overflow_");
     builtins.num.exportMulWithOverflow(i8, "roc__num_mul_with_overflow_");
-    
+
     // Export other core functions that might be needed
     builtins.num.exportAddWithOverflow(i128, "roc__num_add_with_overflow_");
     builtins.num.exportSubWithOverflow(i128, "roc__num_sub_with_overflow_");

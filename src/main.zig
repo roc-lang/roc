@@ -444,7 +444,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
             .can_exit_early = false,
             .disable_output = false,
         };
-        
+
         linker.link(gpa, link_config) catch |err| switch (err) {
             linker.LinkError.LLVMNotAvailable => {
                 // Fallback to clang when LLVM is not available
