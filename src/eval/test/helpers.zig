@@ -11,6 +11,7 @@ const eval = @import("../interpreter.zig");
 const stack = @import("../stack.zig");
 const layout_store = @import("../../layout/store.zig");
 const layout = @import("../../layout/layout.zig");
+const builtins = @import("builtins");
 
 const ModuleEnv = compile.ModuleEnv;
 const Layout = layout.Layout;
@@ -36,6 +37,7 @@ pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_tr
         &layout_cache,
         &resources.module_env.types,
     );
+    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
 
     if (should_trace == .trace) {
@@ -69,6 +71,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
         &layout_cache,
         &resources.module_env.types,
     );
+    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
 
     if (should_trace == .trace) {
@@ -90,6 +93,56 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     const int_val = eval.readIntFromMemory(@ptrCast(result.ptr.?), precision);
 
     try testing.expectEqual(expected_int, int_val);
+}
+
+/// Helpers to setup and run an interpreter expecting a string result.
+pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enum { trace, no_trace }) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+    defer eval_stack.deinit();
+
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+    defer layout_cache.deinit();
+
+    var interpreter = try eval.Interpreter.init(
+        test_allocator,
+        resources.module_env,
+        &eval_stack,
+        &layout_cache,
+        &resources.module_env.types,
+    );
+    interpreter.initRocOpsEnv(); // Set the env pointer correctly
+    defer interpreter.deinit();
+
+    if (should_trace == .trace) {
+        interpreter.startTrace(std.io.getStdErr().writer().any());
+    }
+
+    const result = try interpreter.eval(resources.expr_idx);
+
+    if (should_trace == .trace) {
+        interpreter.endTrace();
+    }
+
+    // Verify we got a scalar string layout
+    try testing.expect(result.layout.tag == .scalar);
+    try testing.expect(result.layout.data.scalar.tag == .str);
+
+    // Read the string result
+    const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
+    const str_slice = roc_str.asSlice();
+
+    try testing.expectEqualStrings(expected_str, str_slice);
+
+    // Clean up reference counting for big strings
+    if (!roc_str.isSmallStr()) {
+        // We need to decref because the result is no longer needed
+        // Cast away const to call decref (safe since we're done with it)
+        const mutable_roc_str: *builtins.str.RocStr = @constCast(roc_str);
+        mutable_roc_str.decref(&interpreter.roc_ops);
+    }
 }
 
 /// A record field we expect to see in our unit test results
@@ -122,6 +175,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
         &layout_cache,
         &resources.module_env.types,
     );
+    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
 
     if (should_trace == .trace) {
@@ -172,6 +226,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
         &layout_cache,
         &resources.module_env.types,
     );
+    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
 
     if (should_trace == .trace) {

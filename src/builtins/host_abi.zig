@@ -49,21 +49,20 @@ pub const RocOps = struct {
     /// Called when the Roc program has run an `expect` which failed.
     roc_expect_failed: *const fn (*const RocExpectFailed, *anyopaque) callconv(.C) void,
     /// Called when the Roc program crashes, e.g. due to integer overflow.
-    /// This function must not return, because the Roc program assumes it will
-    /// not continue to be executed after this function is called.
-    roc_crashed: *const fn (*const RocCrashed, *anyopaque) callconv(.C) noreturn,
+    /// The host should handle this gracefully and stop execution of the Roc program.
+    roc_crashed: *const fn (*const RocCrashed, *anyopaque) callconv(.C) void,
     /// At the end of this struct, the host must include all the functions
     /// it wants to provide to the Roc program for the Roc program to call
     /// (e.g. I/O operations and such).
     host_fns: *anyopaque,
 
     /// Helper function to crash the Roc program, returns control to the host.
-    pub fn crash(self: *RocOps, msg: []const u8) noreturn {
+    pub fn crash(self: *RocOps, msg: []const u8) void {
         const roc_crashed_args = RocCrashed{
             .utf8_bytes = @constCast(msg.ptr),
             .len = msg.len,
         };
-        self.roc_crashed(&roc_crashed_args, self);
+        self.roc_crashed(&roc_crashed_args, self.env);
     }
 };
 

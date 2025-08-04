@@ -127,41 +127,30 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
                 else => try args.append("arm64"), // default to arm64
             }
 
-            // Add platform version
+            // Add platform version - use a conservative minimum that works across macOS versions
             try args.append("-platform_version");
             try args.append("macos");
-            const deployment_target = getMinimumDeploymentTarget(allocator) catch "15.0";
-            defer if (!std.mem.eql(u8, deployment_target, "15.0")) allocator.free(deployment_target);
-            try args.append(deployment_target);
-            try args.append(deployment_target);
+            try args.append("13.0"); // minimum deployment target
+            try args.append("13.0"); // SDK version
 
             // Add SDK path
             try args.append("-syslibroot");
             try args.append("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk");
 
-            // Link against system libraries
-            try args.append("-lc");
+            // Allow undefined symbols for now - compiler-rt builtins will be resolved by system
+            try args.append("-undefined");
+            try args.append("dynamic_lookup");
         },
         .linux => {
-            // Add dynamic linker
-            try args.append("-dynamic-linker");
-            try args.append("/lib64/ld-linux-x86-64.so.2");
-
-            // Link against C library
-            try args.append("-lc");
+            // Use static linking to avoid dynamic linker dependency issues
+            try args.append("-static");
         },
         .windows => {
-            // Add subsystem for console applications
-            try args.append("/subsystem:console");
-
-            // Link against common Windows libraries
-            try args.append("kernel32.lib");
-            try args.append("msvcrt.lib");
+            // Windows linking is more complex and needs significant work
+            // For now, return an error to fall back to clang
+            return LinkError.LLVMNotAvailable;
         },
-        else => {
-            // Default: just link against C library
-            try args.append("-lc");
-        },
+        else => {},
     }
 
     // Add object files

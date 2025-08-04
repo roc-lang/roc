@@ -244,7 +244,7 @@ pub fn create(size: usize, page_size: usize) !SharedMemoryAllocator {
             };
 
             // Set the size of the shared memory
-            std.posix.ftruncate(fd, @intCast(aligned_size)) catch {
+            std.posix.ftruncate(fd, aligned_size) catch {
                 _ = std.posix.close(fd);
                 return error.FtruncateFailed;
             };

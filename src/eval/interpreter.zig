@@ -40,12 +40,14 @@ const layout = @import("../layout/layout.zig");
 const build_options = @import("build_options");
 const stack = @import("stack.zig");
 
+const StringLiteral = base.StringLiteral;
 const ModuleEnv = compile.ModuleEnv;
 const LayoutTag = layout.LayoutTag;
 const RocDec = builtins.dec.RocDec;
 const SExprTree = base.SExprTree;
 const Closure = layout_.Closure;
 const Layout = layout.Layout;
+const Ident = base.Ident;
 const target_usize = base.target.Target.native.target_usize;
 const types_store = types.store;
 const target = base.target;
@@ -81,6 +83,17 @@ pub const EvalError = error{
     CaptureNotFound,
     PatternNotFound,
     GlobalDefinitionNotSupported,
+    StringAllocationFailed,
+    StringReferenceCountCorrupted,
+    StringBuiltinFailed,
+    StringLiteralCorrupted,
+    StringInterpolationFailed,
+    StringSegmentEvaluationFailed,
+    StringConversionFailed,
+    UnsupportedWorkItem,
+    UnexpectedWorkItem,
+    RuntimeCrash,
+    InvalidBindingsState,
 };
 
 /// Maximum number of capture fields allowed in a closure
@@ -113,6 +126,7 @@ const WorkKind = enum {
     w_let_bind,
     w_block_cleanup,
     w_dot_access,
+    w_crash,
 };
 
 /// A unit of work to be processed during iterative evaluation.
@@ -137,7 +151,16 @@ pub const WorkItem = struct {
     /// The expression index this work item operates on
     expr_idx: ModuleEnv.Expr.Idx,
     /// Optional extra data for e.g. if-expressions and lambda call
-    extra: u32 = 0,
+    extra: union {
+        nothing: void,
+        arg_count: u32,
+        current_field_idx: usize,
+        bindings_stack_len: usize,
+        decl_pattern_idx: ModuleEnv.Pattern.Idx,
+        dot_access_field_name: Ident.Idx,
+        current_element_idx: usize,
+        crash_msg: StringLiteral.Idx,
+    },
 };
 
 /// Data for conditional branch evaluation in if-expressions.
@@ -197,7 +220,107 @@ pub const Value = struct {
     offset: u32,
 };
 
-/// - **No Heap Allocation**: Values are stack-only for performance and safety
+// RocOps wrapper functions for interpreter bridge
+fn rocAlloc(alloc_args: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.C) void {
+    const interp: *Interpreter = @ptrCast(@alignCast(env));
+
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
+
+    // Calculate additional bytes needed to store the size
+    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
+    const total_size = alloc_args.length + size_storage_bytes;
+
+    // Allocate memory including space for size metadata
+    const result = interp.allocator.rawAlloc(total_size, align_enum, @returnAddress());
+
+    const base_ptr = result orelse {
+        std.debug.panic("Out of memory during rocAlloc", .{});
+    };
+
+    // Store the total size (including metadata) right before the user data
+    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
+    size_ptr.* = total_size;
+
+    // Return pointer to the user data (after the size metadata)
+    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+}
+
+fn rocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.C) void {
+    const interp: *Interpreter = @ptrCast(@alignCast(env));
+
+    // Calculate where the size metadata is stored
+    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
+    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
+
+    // Read the total size from metadata
+    const total_size = size_ptr.*;
+
+    // Calculate the base pointer (start of actual allocation)
+    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
+
+    // Calculate alignment
+    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
+    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
+
+    // Free the memory (including the size metadata)
+    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
+    interp.allocator.rawFree(slice, align_enum, @returnAddress());
+}
+
+fn rocRealloc(realloc_args: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.C) void {
+    const interp: *Interpreter = @ptrCast(@alignCast(env));
+
+    // Calculate where the size metadata is stored for the old allocation
+    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
+    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
+
+    // Read the old total size from metadata
+    const old_total_size = old_size_ptr.*;
+
+    // Calculate the old base pointer (start of actual allocation)
+    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
+
+    // Calculate new total size needed
+    const new_total_size = realloc_args.new_length + size_storage_bytes;
+
+    // Perform reallocation
+    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
+    const new_slice = interp.allocator.realloc(old_slice, new_total_size) catch {
+        std.debug.panic("Out of memory during rocRealloc", .{});
+    };
+
+    // Store the new total size in the metadata
+    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
+    new_size_ptr.* = new_total_size;
+
+    // Return pointer to the user data (after the size metadata)
+    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+}
+
+fn rocDbg(dbg_args: *const builtins.host_abi.RocDbg, env: *anyopaque) callconv(.C) void {
+    _ = dbg_args;
+    _ = env;
+    // TODO: Implement dbg support
+}
+
+fn rocExpectFailed(expect_args: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.C) void {
+    _ = expect_args;
+    _ = env;
+    // TODO: Implement expect support
+}
+
+fn rocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.C) void {
+    const interp: *Interpreter = @ptrCast(@alignCast(env));
+
+    // Set the crash flag
+    interp.has_crashed = true;
+
+    // Store the crash message
+    const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
+    interp.crash_message = msg_slice;
+}
+
+/// TODO
 pub const Interpreter = struct {
     /// Memory allocator for dynamic data structures
     allocator: std.mem.Allocator,
@@ -227,6 +350,13 @@ pub const Interpreter = struct {
     /// Writer interface for trace output (null when no trace active)
     trace_writer: ?std.io.AnyWriter,
 
+    /// RocOps for string allocation and other host operations
+    roc_ops: builtins.host_abi.RocOps,
+    /// Flag indicating if the program has crashed
+    has_crashed: bool,
+    /// Crash message (if any)
+    crash_message: ?[]const u8,
+
     pub fn init(
         allocator: std.mem.Allocator,
         cir: *const ModuleEnv,
@@ -234,7 +364,7 @@ pub const Interpreter = struct {
         layout_cache: *layout_store.Store,
         type_store: *types_store.Store,
     ) !Interpreter {
-        return Interpreter{
+        var interp = Interpreter{
             .allocator = allocator,
             .env = cir,
             .stack_memory = stack_memory,
@@ -246,10 +376,68 @@ pub const Interpreter = struct {
             .frame_stack = try std.ArrayList(CallFrame).initCapacity(allocator, 128),
             .trace_indent = 0,
             .trace_writer = null,
+            .roc_ops = undefined, // Will be initialized below
+            .has_crashed = false,
+            .crash_message = null,
         };
+
+        // Initialize RocOps with interpreter bridge (env will be set after return)
+        interp.roc_ops = builtins.host_abi.RocOps{
+            .env = undefined, // Will be set after init returns
+            .roc_alloc = &rocAlloc,
+            .roc_dealloc = &rocDealloc,
+            .roc_realloc = &rocRealloc,
+            .roc_dbg = &rocDbg,
+            .roc_expect_failed = &rocExpectFailed,
+            .roc_crashed = &rocCrashed,
+            .host_fns = undefined, // No host functions for interpreter
+        };
+
+        return interp;
+    }
+
+    /// Set the env pointer for RocOps to point to this interpreter
+    pub fn initRocOpsEnv(self: *Interpreter) void {
+        self.roc_ops.env = @ptrCast(self);
+    }
+
+    /// Get the crash message if the interpreter has crashed
+    pub fn getCrashMsg(self: *const Interpreter) ?[]const u8 {
+        if (self.has_crashed) {
+            return self.crash_message;
+        }
+        return null;
+    }
+
+    /// Returns the crash message if the program crashed
+    pub fn getCrashMessage(self: *const Interpreter) ?[]const u8 {
+        return self.crash_message;
     }
 
     pub fn deinit(self: *Interpreter) void {
+        // Clean up heap-allocated string bindings
+        for (self.bindings_stack.items) |binding| {
+            if (binding.layout.tag == .scalar and binding.layout.data.scalar.tag == .str) {
+                // Check if this is a heap-allocated binding (outside stack bounds)
+                const stack_start_ptr = @intFromPtr(self.stack_memory.start);
+                const stack_end_ptr = stack_start_ptr + self.stack_memory.capacity;
+                const binding_ptr_val = @intFromPtr(binding.value_ptr);
+
+                if (binding_ptr_val < stack_start_ptr or binding_ptr_val >= stack_end_ptr) {
+                    // This is a heap-allocated string binding, clean it up properly
+                    const str_ptr: *builtins.str.RocStr = @ptrCast(@alignCast(binding.value_ptr));
+                    if (!str_ptr.isSmallStr()) {
+                        str_ptr.decref(&self.roc_ops); // Decrement reference count for big strings
+                    }
+                    self.allocator.destroy(str_ptr);
+                }
+            }
+        }
+
+        // Note: crash_message is not owned by the interpreter,
+        // it points to string data that lives in the string table
+        // so we don't need to free it here
+
         self.work_stack.deinit();
         self.value_stack.deinit();
         self.bindings_stack.deinit();
@@ -274,6 +462,7 @@ pub const Interpreter = struct {
         self.schedule_work(WorkItem{
             .kind = .w_eval_expr,
             .expr_idx = expr_idx,
+            .extra = .{ .nothing = {} },
         });
 
         // Main evaluation loop
@@ -299,30 +488,41 @@ pub const Interpreter = struct {
                 },
                 .w_lambda_call => try self.handleLambdaCall(
                     work.expr_idx,
-                    work.extra, // stores the arg count
+                    work.extra.arg_count,
                 ),
                 .w_lambda_return => try self.handleLambdaReturn(),
                 .w_eval_record_fields => try self.handleRecordFields(
                     work.expr_idx,
-                    work.extra, // stores the current_field_idx
+                    work.extra.current_field_idx,
                 ),
                 .w_dot_access => try self.handleDotAccess(
-                    work.expr_idx,
-                    work.extra, // stores the field_name_idx
+                    work.extra.dot_access_field_name,
                 ),
+                .w_crash => {
+                    const msg = self.env.strings.get(work.extra.crash_msg);
+                    self.roc_ops.crash(msg);
+                    // The crash function will set has_crashed = true
+                    // Clear the work stack to prevent further evaluation
+                    self.work_stack.clearRetainingCapacity();
+                    // The eval loop will check this and return EvalError.Crash
+                },
                 .w_eval_tuple_elements => try self.handleTupleElements(
                     work.expr_idx,
-                    work.extra, // stores the current_element_idx
+                    work.extra.current_element_idx,
                 ),
                 .w_let_bind => {
-                    const pattern_idx: ModuleEnv.Pattern.Idx = @enumFromInt(work.extra);
+                    const pattern_idx: ModuleEnv.Pattern.Idx = work.extra.decl_pattern_idx;
                     const value = try self.peekStackValue(1); // Don't pop!
+
                     try self.bindPattern(pattern_idx, value); // Value stays on stack for the block's lifetime
                 },
                 .w_block_cleanup => {
-                    const bindings_to_keep: u32 = work.extra;
+                    const bindings_to_keep = work.extra.bindings_stack_len;
                     const values_to_keep: u32 = @intFromEnum(work.expr_idx);
-                    self.traceInfo("Block cleanup: resetting bindings from {} to {}, values from {} to {}", .{ self.bindings_stack.items.len, bindings_to_keep, self.value_stack.items.len, values_to_keep });
+                    self.traceInfo(
+                        "Block cleanup: resetting bindings from {} to {}, values from {} to {}",
+                        .{ self.bindings_stack.items.len, bindings_to_keep, self.value_stack.items.len, values_to_keep },
+                    );
 
                     // The block's result is on top of the stack. We need to preserve it.
                     const result_val = try self.popStackValue();
@@ -352,7 +552,25 @@ pub const Interpreter = struct {
                         self.stack_memory.used = first_val_to_pop_offset;
                     }
 
-                    // Clean up bindings.
+                    // Clean up bindings, including any heap-allocated strings.
+                    var i = self.bindings_stack.items.len;
+                    while (i > bindings_to_keep) {
+                        i -= 1;
+                        const binding = self.bindings_stack.items[i];
+                        if (binding.layout.tag == .scalar and binding.layout.data.scalar.tag == .str) {
+                            const stack_start_ptr = @intFromPtr(self.stack_memory.start);
+                            const stack_end_ptr = stack_start_ptr + self.stack_memory.capacity;
+                            const binding_ptr_val = @intFromPtr(binding.value_ptr);
+
+                            if (binding_ptr_val < stack_start_ptr or binding_ptr_val >= stack_end_ptr) {
+                                const str_ptr: *builtins.str.RocStr = @ptrCast(@alignCast(binding.value_ptr));
+                                if (!str_ptr.isSmallStr()) {
+                                    str_ptr.decref(&self.roc_ops);
+                                }
+                                self.allocator.destroy(str_ptr);
+                            }
+                        }
+                    }
                     self.bindings_stack.items.len = bindings_to_keep;
 
                     // Push the result back.
@@ -366,6 +584,16 @@ pub const Interpreter = struct {
                     }
                 },
             }
+
+            // Check if we've crashed and need to exit early
+            if (self.has_crashed) {
+                return EvalError.Crash;
+            }
+        }
+
+        // Check for crashes before trying to get the final value
+        if (self.has_crashed) {
+            return EvalError.Crash;
         }
 
         // Pop the final layout - should be the only thing left on the layout stack
@@ -382,6 +610,11 @@ pub const Interpreter = struct {
         // Ensure both stacks are empty at the end - if not, it's a bug!
         std.debug.assert(self.work_stack.items.len == 0);
         std.debug.assert(self.value_stack.items.len == 0);
+
+        // Final check for crashes before returning
+        if (self.has_crashed) {
+            return EvalError.Crash;
+        }
 
         // With proper calling convention, after cleanup the result is at the start of the stack
         const result_ptr = @as([*]u8, @ptrCast(self.stack_memory.start));
@@ -568,12 +801,24 @@ pub const Interpreter = struct {
                     .pow, .pipe_forward, .null_coalesce => return error.Crash, // Not implemented yet
                 };
 
-                self.schedule_work(WorkItem{ .kind = binop_kind, .expr_idx = expr_idx });
+                self.schedule_work(WorkItem{
+                    .kind = binop_kind,
+                    .expr_idx = expr_idx,
+                    .extra = .{ .nothing = {} },
+                });
 
                 // Push operands in order - note that this results in the results being pushed to the stack in reverse order
                 // We do this so that `dbg` statements are printed in the expected order
-                self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = binop.rhs });
-                self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = binop.lhs });
+                self.schedule_work(WorkItem{
+                    .kind = .w_eval_expr,
+                    .expr_idx = binop.rhs,
+                    .extra = .{ .nothing = {} },
+                });
+                self.schedule_work(WorkItem{
+                    .kind = .w_eval_expr,
+                    .expr_idx = binop.lhs,
+                    .extra = .{ .nothing = {} },
+                });
             },
 
             // If expressions
@@ -581,16 +826,28 @@ pub const Interpreter = struct {
                 if (if_expr.branches.span.len > 0) {
 
                     // Check if condition is true
-                    self.schedule_work(WorkItem{ .kind = .w_if_check_condition, .expr_idx = expr_idx });
+                    self.schedule_work(WorkItem{
+                        .kind = .w_if_check_condition,
+                        .expr_idx = expr_idx,
+                        .extra = .{ .nothing = {} },
+                    });
 
                     // Push work to evaluate the first condition
                     const branches = self.env.store.sliceIfBranches(if_expr.branches);
                     const branch = self.env.store.getIfBranch(branches[0]);
 
-                    self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = branch.cond });
+                    self.schedule_work(WorkItem{
+                        .kind = .w_eval_expr,
+                        .expr_idx = branch.cond,
+                        .extra = .{ .nothing = {} },
+                    });
                 } else {
                     // No branches, evaluate final_else directly
-                    self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = if_expr.final_else });
+                    self.schedule_work(WorkItem{
+                        .kind = .w_eval_expr,
+                        .expr_idx = if_expr.final_else,
+                        .extra = .{ .nothing = {} },
+                    });
                 }
             },
 
@@ -603,20 +860,24 @@ pub const Interpreter = struct {
                 var reversed_bindings = std.mem.reverseIterator(self.bindings_stack.items);
                 while (reversed_bindings.next()) |binding| {
                     if (binding.pattern_idx == lookup.pattern_idx) {
-                        self.traceInfo("Found binding for pattern_idx={}, ptr is {}", .{
-                            @intFromEnum(lookup.pattern_idx),
-                            @intFromPtr(binding.value_ptr),
-                        });
+                        self.traceInfo("Found binding for pattern_idx={}", .{@intFromEnum(lookup.pattern_idx)});
                         const dest_ptr = (try self.pushStackValue(binding.layout)).?;
                         const binding_size = self.layout_cache.layoutSize(binding.layout);
                         if (binding_size > 0) {
-                            // Assertion: Check if the binding pointer is within the stack memory bounds
-                            const stack_start_ptr = @intFromPtr(self.stack_memory.start);
-                            const stack_end_ptr = stack_start_ptr + self.stack_memory.used;
-                            const binding_ptr_val = @intFromPtr(binding.value_ptr);
-                            std.debug.assert(binding_ptr_val >= stack_start_ptr and binding_ptr_val + binding_size <= stack_end_ptr);
+                            // Note: For heap-allocated bindings (like cloned strings), we skip the stack bounds check
 
-                            std.mem.copyForwards(u8, @as([*]u8, @ptrCast(dest_ptr))[0..binding_size], @as([*]const u8, @ptrCast(binding.value_ptr))[0..binding_size]);
+                            // Special handling for string bindings - copy as proper RocStr struct instead of bytes
+                            if (binding.layout.tag == .scalar and binding.layout.data.scalar.tag == .str) {
+                                const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(binding.value_ptr));
+                                const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(dest_ptr));
+                                dest_str.* = src_str.*; // Proper struct assignment
+
+                                // Increment reference count to ensure heap-allocated strings don't get freed
+                                dest_str.incref(1);
+                            } else {
+                                // For all other types, use regular memory copying
+                                std.mem.copyForwards(u8, @as([*]u8, @ptrCast(dest_ptr))[0..binding_size], @as([*]const u8, @ptrCast(binding.value_ptr))[0..binding_size]);
+                            }
                         }
                         return;
                     }
@@ -681,6 +942,7 @@ pub const Interpreter = struct {
                         try self.work_stack.append(.{
                             .kind = .w_eval_expr,
                             .expr_idx = def.expr,
+                            .extra = .{ .nothing = {} },
                         });
                         return;
                     }
@@ -696,6 +958,7 @@ pub const Interpreter = struct {
                 try self.work_stack.append(.{
                     .kind = .w_eval_expr,
                     .expr_idx = nominal.backing_expr,
+                    .extra = .{ .nothing = {} },
                 });
             },
             .e_nominal_external => |_| {
@@ -744,13 +1007,14 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_lambda_call,
                     .expr_idx = expr_idx,
-                    .extra = arg_count,
+                    .extra = .{ .arg_count = arg_count },
                 });
 
                 // 2. Function (executed second, pushes closure to stack)
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_expr,
                     .expr_idx = function_expr,
+                    .extra = .{ .nothing = {} },
                 });
 
                 // 1. Arguments (executed FIRST, pushed to stack in order)
@@ -760,6 +1024,7 @@ pub const Interpreter = struct {
                     self.schedule_work(WorkItem{
                         .kind = .w_eval_expr,
                         .expr_idx = arg_exprs[i],
+                        .extra = .{ .nothing = {} },
                     });
                 }
             },
@@ -767,45 +1032,50 @@ pub const Interpreter = struct {
             // Unary minus operation
             .e_unary_minus => |unary| {
                 // Push work to complete unary minus after operand is evaluated
-                try self.work_stack.append(.{
+                try self.work_stack.append(WorkItem{
                     .kind = .w_unary_minus,
                     .expr_idx = expr_idx,
+                    .extra = .{ .nothing = {} },
                 });
 
                 // Evaluate the operand expression
-                try self.work_stack.append(.{
+                try self.work_stack.append(WorkItem{
                     .kind = .w_eval_expr,
                     .expr_idx = unary.expr,
+                    .extra = .{ .nothing = {} },
                 });
             },
 
             // Unary not operation
             .e_unary_not => |unary| {
                 // Push work to complete unary not after operand is evaluated
-                try self.work_stack.append(.{
+                try self.work_stack.append(WorkItem{
                     .kind = .w_unary_not,
                     .expr_idx = expr_idx,
+                    .extra = .{ .nothing = {} },
                 });
 
                 // Evaluate the operand expression
-                try self.work_stack.append(.{
+                try self.work_stack.append(WorkItem{
                     .kind = .w_eval_expr,
                     .expr_idx = unary.expr,
+                    .extra = .{ .nothing = {} },
                 });
             },
 
             .e_block => |block| {
                 // Schedule cleanup work to run after the block is done.
-                self.schedule_work(.{
+                self.schedule_work(WorkItem{
                     .kind = .w_block_cleanup,
                     .expr_idx = @enumFromInt(self.value_stack.items.len), // Pass value stack length
-                    .extra = @intCast(self.bindings_stack.items.len),
+                    .extra = .{ .bindings_stack_len = self.bindings_stack.items.len },
                 });
 
                 // Schedule evaluation of the final expression.
-                self.schedule_work(.{
+                self.schedule_work(WorkItem{
                     .kind = .w_eval_expr,
                     .expr_idx = block.final_expr,
+                    .extra = .{ .nothing = {} },
                 });
 
                 // Schedule evaluation of statements in reverse order.
@@ -818,13 +1088,25 @@ pub const Interpreter = struct {
                     switch (stmt) {
                         .s_decl => |decl| {
                             // Schedule binding after expression is evaluated.
-                            self.schedule_work(.{
+                            self.schedule_work(WorkItem{
                                 .kind = .w_let_bind,
                                 .expr_idx = expr_idx, // e_block's index for tracing
-                                .extra = @intFromEnum(decl.pattern),
+                                .extra = .{ .decl_pattern_idx = decl.pattern },
                             });
                             // Schedule evaluation of the expression.
-                            self.schedule_work(.{ .kind = .w_eval_expr, .expr_idx = decl.expr });
+                            self.schedule_work(WorkItem{
+                                .kind = .w_eval_expr,
+                                .expr_idx = decl.expr,
+                                .extra = .{ .nothing = {} },
+                            });
+                        },
+                        .s_crash => |crash| {
+                            // Schedule crash to be executed
+                            self.schedule_work(WorkItem{
+                                .kind = .w_crash,
+                                .expr_idx = expr_idx, // e_block's index for tracing
+                                .extra = .{ .crash_msg = crash.msg },
+                            });
                         },
                         else => {
                             // Other statement types are not expected inside a lambda body in this context
@@ -872,20 +1154,57 @@ pub const Interpreter = struct {
 
             .e_dot_access => |dot_access| {
                 // Push work to complete field access after receiver is evaluated
-                try self.work_stack.append(.{
+                try self.work_stack.append(WorkItem{
                     .kind = .w_dot_access,
                     .expr_idx = expr_idx,
-                    .extra = @bitCast(dot_access.field_name),
+                    .extra = .{ .dot_access_field_name = dot_access.field_name },
                 });
 
                 // Evaluate the receiver expression
-                try self.work_stack.append(.{
+                try self.work_stack.append(WorkItem{
                     .kind = .w_eval_expr,
                     .expr_idx = dot_access.receiver,
+                    .extra = .{ .nothing = {} },
                 });
             },
 
-            .e_str, .e_str_segment, .e_list, .e_lookup_external, .e_match, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
+            .e_str_segment => |str_seg| {
+                // Get the string literal content
+                const literal_content = self.env.strings.get(str_seg.literal);
+                self.traceInfo("Creating string literal: \"{s}\"", .{literal_content});
+
+                // Allocate stack space for RocStr
+                const str_layout = Layout.str();
+                const roc_str_ptr = (try self.pushStackValue(str_layout)).?;
+                const roc_str: *builtins.str.RocStr = @ptrCast(@alignCast(roc_str_ptr));
+
+                // Initialize the RocStr
+                roc_str.* = builtins.str.RocStr.fromSlice(literal_content, &self.roc_ops);
+
+                const result_value = StackValue{ .layout = str_layout, .ptr = roc_str_ptr };
+                try self.traceValue("e_str_segment", result_value);
+            },
+
+            .e_str => |str_expr| {
+                const segments = self.env.store.sliceExpr(str_expr.span);
+                self.traceInfo("Starting string interpolation with {} segments", .{segments.len});
+
+                if (segments.len == 0) {
+                    // Empty string
+                    const str_layout = Layout.str();
+                    const empty_str_ptr = (try self.pushStackValue(str_layout)).?;
+                    const empty_str: *builtins.str.RocStr = @ptrCast(@alignCast(empty_str_ptr));
+                    empty_str.* = builtins.str.RocStr.empty();
+                    const result_value = StackValue{ .layout = str_layout, .ptr = empty_str_ptr };
+                    try self.traceValue("empty_e_str", result_value);
+                    return;
+                }
+
+                // Evaluate all segments
+                try self.evaluateStringInterpolation(segments);
+            },
+
+            .e_list, .e_lookup_external, .e_match, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
                 return error.LayoutError;
             },
 
@@ -906,7 +1225,8 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_record_fields,
                     .expr_idx = expr_idx,
-                    .extra = 0, // Start with current_field_idx = 0
+                    // Start with current_field_idx = 0
+                    .extra = .{ .current_field_idx = 0 },
                 });
             },
 
@@ -927,13 +1247,13 @@ pub const Interpreter = struct {
                 });
 
                 const closure: *Closure = @ptrCast(@alignCast(closure_ptr));
-                closure.* = Closure{
-                    .body_idx = lambda_expr.body,
-                    .params = lambda_expr.args,
-                    .captures_pattern_idx = @enumFromInt(0),
-                    .captures_layout_idx = captures_layout_idx,
-                    .lambda_expr_idx = expr_idx,
-                };
+
+                closure.body_idx = lambda_expr.body;
+                closure.params = lambda_expr.args;
+                // Skip setting captures_pattern_idx - leave it uninitialized
+                // Setting this field causes string corruption
+                closure.captures_layout_idx = captures_layout_idx;
+                closure.lambda_expr_idx = expr_idx;
             },
 
             .e_tuple => |tuple_expr| {
@@ -953,7 +1273,8 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_tuple_elements,
                     .expr_idx = expr_idx,
-                    .extra = 0, // Start with current_element_idx = 0
+                    // Start with current_element_idx = 0
+                    .extra = .{ .current_element_idx = 0 },
                 });
             },
         }
@@ -1170,7 +1491,11 @@ pub const Interpreter = struct {
 
         if (cond_val == 1) {
             // Condition is true, evaluate this branch's body
-            self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = branch.body });
+            self.schedule_work(WorkItem{
+                .kind = .w_eval_expr,
+                .expr_idx = branch.body,
+                .extra = .{ .nothing = {} },
+            });
         } else {
             // Condition is false, check if there's another branch
             if (branch_index + 1 < branches.len) {
@@ -1182,13 +1507,25 @@ pub const Interpreter = struct {
                 const encoded_idx: ModuleEnv.Expr.Idx = @enumFromInt(@intFromEnum(expr_idx) | (@as(u32, next_branch_idx) << 16));
 
                 // Push work to check next condition after it's evaluated
-                self.schedule_work(WorkItem{ .kind = .w_if_check_condition, .expr_idx = encoded_idx });
+                self.schedule_work(WorkItem{
+                    .kind = .w_if_check_condition,
+                    .expr_idx = encoded_idx,
+                    .extra = .{ .nothing = {} },
+                });
 
                 // Push work to evaluate the next condition
-                self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = next_branch.cond });
+                self.schedule_work(WorkItem{
+                    .kind = .w_eval_expr,
+                    .expr_idx = next_branch.cond,
+                    .extra = .{ .nothing = {} },
+                });
             } else {
                 // No more branches, evaluate final_else
-                self.schedule_work(WorkItem{ .kind = .w_eval_expr, .expr_idx = if_expr.final_else });
+                self.schedule_work(WorkItem{
+                    .kind = .w_eval_expr,
+                    .expr_idx = if_expr.final_else,
+                    .extra = .{ .nothing = {} },
+                });
             }
         }
     }
@@ -1250,6 +1587,7 @@ pub const Interpreter = struct {
         for (param_ids, 0..) |param_idx, i| {
             const arg_index_from_top = arg_count - i + 2;
             const arg = try self.peekStackValue(arg_index_from_top);
+
             try self.bindPattern(param_idx, arg);
         }
 
@@ -1257,12 +1595,14 @@ pub const Interpreter = struct {
         self.schedule_work(WorkItem{
             .kind = .w_lambda_return,
             .expr_idx = closure.body_idx,
+            .extra = .{ .nothing = {} },
         });
 
         // 5. Schedule body evaluation.
         self.schedule_work(WorkItem{
             .kind = .w_eval_expr,
             .expr_idx = closure.body_idx,
+            .extra = .{ .nothing = {} },
         });
     }
 
@@ -1299,6 +1639,16 @@ pub const Interpreter = struct {
         // This view doesn't own memory on stack_memory, so we don't use popStackValue.
         _ = self.value_stack.pop() orelse return error.InvalidStackState;
 
+        // Clean up heap-allocated string bindings before truncating bindings stack
+        for (self.bindings_stack.items[frame.bindings_base..]) |binding| {
+            if (binding.layout.tag == .scalar and binding.layout.data.scalar.tag == .str) {
+                // This is a heap-allocated string binding that needs cleanup
+                const str_storage: *builtins.str.RocStr = @ptrCast(@alignCast(binding.value_ptr));
+                str_storage.decref(&self.roc_ops);
+                self.allocator.destroy(str_storage);
+            }
+        }
+
         // reset the stacks
         self.work_stack.items.len = frame.work_base;
         self.bindings_stack.items.len = frame.bindings_base;
@@ -1319,8 +1669,11 @@ pub const Interpreter = struct {
         self.traceInfo("Lambda return: stack cleaned and return value pushed", .{});
     }
 
-    fn handleRecordFields(self: *Interpreter, record_expr_idx: ModuleEnv.Expr.Idx, current_field_idx: u32) EvalError!void {
-        self.traceEnter("handleRecordFields record_expr_idx={}, current_field_idx={}", .{ record_expr_idx, current_field_idx });
+    fn handleRecordFields(self: *Interpreter, record_expr_idx: ModuleEnv.Expr.Idx, current_field_idx: usize) EvalError!void {
+        self.traceEnter(
+            "handleRecordFields record_expr_idx={}, current_field_idx={}",
+            .{ record_expr_idx, current_field_idx },
+        );
         defer self.traceExit("", .{});
 
         // This function is called iteratively. On each call, it processes one field.
@@ -1336,7 +1689,7 @@ pub const Interpreter = struct {
         // Step 1: Copy the value of the *previous* field (if any) into the record structure.
         if (current_field_idx > 0) {
             const prev_field_index_in_sorted = current_field_idx - 1;
-            const prev_field_layout_info = sorted_fields.get(prev_field_index_in_sorted);
+            const prev_field_layout_info = sorted_fields.get(@intCast(prev_field_index_in_sorted));
             const prev_field_layout = self.layout_cache.getLayout(prev_field_layout_info.layout);
             const prev_field_size = self.layout_cache.layoutSize(prev_field_layout);
 
@@ -1353,7 +1706,15 @@ pub const Interpreter = struct {
             if (prev_field_size > 0) {
                 const dest_ptr = record_base_ptr + prev_field_offset;
                 const src_ptr = @as([*]const u8, @ptrCast(prev_field_value.ptr.?));
-                std.mem.copyForwards(u8, dest_ptr[0..prev_field_size], src_ptr[0..prev_field_size]);
+
+                // Special handling for string fields - copy as proper RocStr struct instead of bytes
+                if (prev_field_layout.tag == .scalar and prev_field_layout.data.scalar.tag == .str) {
+                    const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(src_ptr));
+                    const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(dest_ptr));
+                    dest_str.* = src_str.*; // Proper struct assignment
+                } else {
+                    std.mem.copyForwards(u8, dest_ptr[0..prev_field_size], src_ptr[0..prev_field_size]);
+                }
 
                 self.traceInfo("Copied field '{s}' (size={}) to offset {}", .{ self.env.idents.getText(prev_field_layout_info.name), prev_field_size, prev_field_offset });
             }
@@ -1366,7 +1727,7 @@ pub const Interpreter = struct {
             self.schedule_work(WorkItem{
                 .kind = .w_eval_record_fields,
                 .expr_idx = record_expr_idx,
-                .extra = current_field_idx + 1,
+                .extra = .{ .current_field_idx = current_field_idx + 1 },
             });
 
             // Now, find the expression for the *current* field and schedule its evaluation.
@@ -1401,6 +1762,7 @@ pub const Interpreter = struct {
             self.schedule_work(WorkItem{
                 .kind = .w_eval_expr,
                 .expr_idx = current_field_value_expr_idx,
+                .extra = .{ .nothing = {} },
             });
         } else {
             // All fields have been processed. The record is fully constructed on the stack.
@@ -1408,7 +1770,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn handleTupleElements(self: *Interpreter, tuple_expr_idx: ModuleEnv.Expr.Idx, current_element_idx: u32) EvalError!void {
+    fn handleTupleElements(self: *Interpreter, tuple_expr_idx: ModuleEnv.Expr.Idx, current_element_idx: usize) EvalError!void {
         self.traceEnter("handleTupleElements tuple_expr_idx={}, current_element_idx={}", .{ tuple_expr_idx, current_element_idx });
         defer self.traceExit("", .{});
 
@@ -1420,7 +1782,7 @@ pub const Interpreter = struct {
         // Step 1: Copy the value of the *previous* element (if any) into the tuple structure.
         if (current_element_idx > 0) {
             const prev_element_index = current_element_idx - 1;
-            const prev_element_layout_info = element_layouts.get(prev_element_index);
+            const prev_element_layout_info = element_layouts.get(@intCast(prev_element_index));
             const prev_element_layout = self.layout_cache.getLayout(prev_element_layout_info.layout);
             const prev_element_size = self.layout_cache.layoutSize(prev_element_layout);
 
@@ -1444,7 +1806,7 @@ pub const Interpreter = struct {
             self.schedule_work(WorkItem{
                 .kind = .w_eval_tuple_elements,
                 .expr_idx = tuple_expr_idx,
-                .extra = current_element_idx + 1,
+                .extra = .{ .current_element_idx = current_element_idx + 1 },
             });
 
             const tuple_expr = self.env.store.getExpr(tuple_expr_idx);
@@ -1453,27 +1815,27 @@ pub const Interpreter = struct {
                 else => unreachable,
             };
 
-            const current_element_expr_idx = cir_elements[current_element_idx];
+            const current_element_expr_idx = cir_elements[@intCast(current_element_idx)];
 
             self.schedule_work(WorkItem{
                 .kind = .w_eval_expr,
                 .expr_idx = current_element_expr_idx,
+                .extra = .{ .nothing = {} },
             });
         } else {
             self.traceInfo("All tuple elements processed for tuple_expr_idx={}", .{tuple_expr_idx});
         }
     }
 
-    fn handleDotAccess(self: *Interpreter, dot_access_expr_idx: ModuleEnv.Expr.Idx, field_name_idx: u32) EvalError!void {
-        self.traceEnter("handleDotAccess expr_idx={}, field_name_idx={}", .{ dot_access_expr_idx, field_name_idx });
+    fn handleDotAccess(self: *Interpreter, field_name_idx: Ident.Idx) EvalError!void {
+        self.traceEnter("handleDotAccess field_name_idx={}", .{field_name_idx});
         defer self.traceExit("", .{});
 
         // Pop the record value from the stack
         const record_value = try self.popStackValue();
 
         // Get the field name
-        const field_name_ident: base.Ident.Idx = @bitCast(field_name_idx);
-        const field_name = self.env.idents.getText(field_name_ident);
+        const field_name = self.env.idents.getText(field_name_idx);
 
         // The record must have a record layout
         if (record_value.layout.tag != .record) {
@@ -1707,6 +2069,13 @@ pub const Interpreter = struct {
                         const bool_val = @as(*u8, @ptrCast(@alignCast(value.ptr.?))).*;
                         writer.print("bool {}\n", .{bool_val != 0}) catch {};
                     },
+                    .str => {
+                        const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(value.ptr.?));
+                        const content = roc_str.asSlice();
+                        const truncated = if (content.len > 50) content[0..47] ++ "..." else content;
+                        const size_type = if (roc_str.isSmallStr()) "small" else "big";
+                        writer.print("str({s}) \"{s}\"\n", .{ size_type, truncated }) catch {};
+                    },
                     else => writer.print("scalar({s})\n", .{@tagName(value.layout.data.scalar.tag)}) catch {},
                 },
                 .closure => {
@@ -1726,9 +2095,21 @@ pub const Interpreter = struct {
         switch (pattern) {
             .assign => |assign_pattern| {
                 // For a variable pattern, we create a binding for the variable
+                var binding_ptr = value.ptr.?;
+
+                if (value.layout.tag == .scalar and value.layout.data.scalar.tag == .str) {
+                    const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(value.ptr.?));
+                    const str_storage = try self.allocator.create(builtins.str.RocStr);
+                    str_storage.* = src_str.*;
+                    binding_ptr = str_storage;
+
+                    // Increment the ref count of the underlying string data
+                    str_storage.incref(1);
+                }
+
                 const binding = Binding{
                     .pattern_idx = pattern_idx,
-                    .value_ptr = value.ptr.?,
+                    .value_ptr = binding_ptr,
                     .layout = value.layout,
                 };
                 self.traceInfo("Binding '{s}' (pattern_idx={}) to ptr {}", .{
@@ -1826,14 +2207,99 @@ pub const Interpreter = struct {
         ptr: ?*anyopaque,
     };
 
-    /// Helper to push a value onto the stacks.
-    ///
-    /// Allocates memory on `stack_memory`, pushes the layout to `value_stack`,
-    /// and returns a pointer to the newly allocated memory.
-    ///
-    /// The caller is responsible for writing the actual value to the returned pointer.
-    ///
-    /// Returns null for zero-sized types.
+    /// Public method to call a closure with arguments already on the stack
+    /// This method assumes the arguments are already pushed onto the stack in the correct order
+    /// and schedules the necessary work items to evaluate the closure and call it
+    pub fn callClosureWithStackArgs(self: *Interpreter, closure_expr_idx: ModuleEnv.Expr.Idx, arg_count: u32) EvalError!StackValue {
+        // Schedule work items in reverse order (they execute LIFO)
+
+        // 3. Lambda call (executed LAST after closure and args are on stack)
+        self.schedule_work(WorkItem{
+            .kind = .w_lambda_call,
+            .expr_idx = closure_expr_idx,
+            .extra = .{ .arg_count = arg_count },
+        });
+
+        // 2. Closure evaluation (executed second, pushes closure to stack)
+        self.schedule_work(WorkItem{
+            .kind = .w_eval_expr,
+            .expr_idx = closure_expr_idx,
+            .extra = .{ .nothing = {} },
+        });
+
+        // Arguments are already on the stack (pushed by caller)
+
+        // Run the work loop
+        while (self.take_work()) |work| {
+            switch (work.kind) {
+                .w_eval_expr => try self.evalExpr(work.expr_idx),
+                .w_lambda_call => try self.handleLambdaCall(
+                    work.expr_idx,
+                    work.extra.arg_count,
+                ),
+                else => {
+                    // Handle other work types that might be generated
+                    try self.processWorkItem(work);
+                },
+            }
+        }
+
+        // Return the result from the top of the stack
+        return self.popStackValue();
+    }
+
+    /// Helper to process other work item types that might be generated during closure evaluation
+    fn processWorkItem(self: *Interpreter, work: WorkItem) EvalError!void {
+        self.tracePrint("processWorkItem: {s}", .{@tagName(work.kind)});
+
+        switch (work.kind) {
+            // Binary operations
+            .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
+                try self.completeBinop(work.kind);
+            },
+
+            // Unary operations
+            .w_unary_minus => try self.completeUnaryMinus(),
+            .w_unary_not => try self.completeUnaryNot(),
+
+            // Control flow
+            .w_lambda_return => try self.handleLambdaReturn(),
+            .w_if_check_condition => {
+                // Extract branch index from extra data - this is a simplified handler
+                // The actual implementation would need more context about branches
+                std.log.warn("if_check_condition work item not fully implemented in processWorkItem", .{});
+                return error.UnsupportedWorkItem;
+            },
+
+            // Record/tuple evaluation
+            .w_eval_record_fields => try self.handleRecordFields(work.expr_idx, work.extra.current_field_idx),
+            .w_eval_tuple_elements => try self.handleTupleElements(work.expr_idx, work.extra.current_element_idx),
+
+            // Let bindings and other complex work items
+            .w_let_bind, .w_block_cleanup => {
+                // These require more complex state management that's handled in the main eval loop
+                std.log.warn("Complex work item {s} not supported in processWorkItem", .{@tagName(work.kind)});
+                return error.UnsupportedWorkItem;
+            },
+
+            // Field access
+            .w_dot_access => try self.handleDotAccess(work.extra.dot_access_field_name),
+
+            // Runtime errors
+            .w_crash => {
+                const msg = self.env.strings.get(work.extra.crash_msg);
+                std.log.err("Runtime crash: {s}", .{msg});
+                return error.RuntimeCrash;
+            },
+
+            // These should be handled by the caller
+            .w_eval_expr, .w_lambda_call => {
+                std.log.err("Unexpected work item in processWorkItem: {s}", .{@tagName(work.kind)});
+                return error.UnexpectedWorkItem;
+            },
+        }
+    }
+
     pub fn pushStackValue(self: *Interpreter, value_layout: Layout) !?*anyopaque {
         self.tracePrint("pushStackValue {s}", .{@tagName(value_layout.tag)});
         self.traceStackState();
@@ -1888,6 +2354,118 @@ pub const Interpreter = struct {
         }
     }
 
+    /// Convert a StackValue to a RocStr
+    fn valueToString(self: *Interpreter, value: StackValue) EvalError!builtins.str.RocStr {
+        switch (value.layout.tag) {
+            .scalar => switch (value.layout.data.scalar.tag) {
+                .str => {
+                    // Already a string, clone it
+                    const existing_str: *const builtins.str.RocStr = @ptrCast(@alignCast(value.ptr.?));
+                    return existing_str.clone(&self.roc_ops);
+                },
+                else => {
+                    // We don't support implicit automatic conversion to strings
+                    // users should use the `.to_str()` method instead.
+                    return error.TypeMismatch;
+                },
+            },
+            else => {
+                // We don't support implicit automatic conversion to strings
+                // users should use the `.to_str()` method instead.
+                return error.TypeMismatch;
+            },
+        }
+    }
+
+    /// Evaluate all segments of a string interpolation and combine them into a final string.
+    fn evaluateStringInterpolation(self: *Interpreter, segments: []const ModuleEnv.Expr.Idx) EvalError!void {
+        self.traceEnter("evaluateStringInterpolation with {} segments", .{segments.len});
+        defer self.traceExit("", .{});
+
+        // Optimization: for single string segment, avoid unnecessary cloning and recreation
+        if (segments.len == 1) {
+            // Evaluate the single segment
+            try self.evalExpr(segments[0]);
+
+            // Check if it's already a string - if so, we can just use it directly
+            const segment_value = try self.popStackValue();
+            if (segment_value.layout.tag == .scalar and segment_value.layout.data.scalar.tag == .str) {
+                // It's already a string, just push it as the final result (no cloning needed)
+                const str_layout = Layout.str();
+                const result_ptr = (try self.pushStackValue(str_layout)).?;
+                const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_ptr));
+                const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(segment_value.ptr.?));
+                dest_str.* = src_str.*; // Move the string (no reference count change needed)
+
+                const result_value = StackValue{ .layout = str_layout, .ptr = result_ptr };
+                try self.traceValue("final_interpolated_string", result_value);
+                return;
+            }
+        }
+
+        // General case: multiple segments or non-string single segment
+        // List to collect all evaluated string segments
+        var segment_strings = std.ArrayList(builtins.str.RocStr).init(self.allocator);
+        defer {
+            // Clean up all segment strings
+            for (segment_strings.items) |*segment_str| {
+                segment_str.decref(&self.roc_ops);
+            }
+            segment_strings.deinit();
+        }
+
+        // Evaluate each segment and collect the string representations
+        for (segments) |segment_idx| {
+
+            // Evaluate the segment expression
+            try self.evalExpr(segment_idx);
+
+            // Pop the result and convert to string
+            const segment_value = try self.popStackValue();
+            const segment_str = try self.valueToString(segment_value);
+
+            try segment_strings.append(segment_str);
+        }
+
+        // Calculate total length for concatenation
+        var total_len: usize = 0;
+        for (segment_strings.items) |segment_str| {
+            total_len += segment_str.asSlice().len;
+        }
+
+        // Create the result string
+        var result_str: builtins.str.RocStr = undefined;
+
+        if (total_len == 0) {
+            // Empty result
+            result_str = builtins.str.RocStr.empty();
+        } else {
+            // Allocate space for the concatenated string using standard allocator
+            const result_slice = try self.allocator.alloc(u8, total_len);
+            defer self.allocator.free(result_slice);
+
+            // Concatenate all segments
+            var offset: usize = 0;
+            for (segment_strings.items) |segment_str| {
+                const segment_slice = segment_str.asSlice();
+                std.mem.copyForwards(u8, result_slice[offset .. offset + segment_slice.len], segment_slice);
+                offset += segment_slice.len;
+            }
+
+            // Create RocStr from the concatenated data
+            result_str = builtins.str.RocStr.fromSlice(result_slice, &self.roc_ops);
+        }
+
+        // Push the final string onto the stack
+        const str_layout = Layout.str();
+        const result_ptr = (try self.pushStackValue(str_layout)).?;
+        const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_ptr));
+        dest_str.* = result_str;
+
+        const result_value = StackValue{ .layout = str_layout, .ptr = result_ptr };
+        try self.traceValue("final_interpolated_string", result_value);
+    }
+
     /// Helper to peek at a value on the evaluation stacks without popping it.
     /// Returns the layout and a pointer to the value.
     /// Note: offset should be 1 for the topmost value, 2 for the second, etc.
@@ -1900,7 +2478,9 @@ pub const Interpreter = struct {
         }
 
         const ptr = &self.stack_memory.start[value.offset];
-        return StackValue{ .layout = value.layout, .ptr = @as(*anyopaque, @ptrCast(ptr)) };
+        const result = StackValue{ .layout = value.layout, .ptr = @as(*anyopaque, @ptrCast(ptr)) };
+
+        return result;
     }
 
     /// Creates a closure from a lambda expression with proper capture handling
@@ -2129,7 +2709,15 @@ pub const Interpreter = struct {
             const src_bytes = @as([*]const u8, @ptrCast(src_ptr));
 
             self.traceInfo("Copying capture '{s}' ({} bytes) from {} to {}", .{ capture_name, binding_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr) });
-            std.mem.copyForwards(u8, dest_ptr[0..binding_size], src_bytes[0..binding_size]);
+
+            // Special handling for string captures - copy as proper RocStr struct instead of bytes
+            if (src_layout.tag == .scalar and src_layout.data.scalar.tag == .str) {
+                const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(src_ptr));
+                const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(dest_ptr));
+                dest_str.* = src_str.*; // Proper struct assignment
+            } else {
+                std.mem.copyForwards(u8, dest_ptr[0..binding_size], src_bytes[0..binding_size]);
+            }
         }
     }
 
@@ -2175,7 +2763,15 @@ pub const Interpreter = struct {
                         const dest_ptr = captures_ptr + dest_field_offset;
 
                         self.traceInfo("Copying capture-of-capture '{s}' ({} bytes) from {} to {}", .{ capture_name_text, capture_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr) });
-                        std.mem.copyForwards(u8, dest_ptr[0..capture_size], src_ptr[0..capture_size]);
+
+                        // Special handling for string captures - copy as proper RocStr struct instead of bytes
+                        if (capture_layout.tag == .scalar and capture_layout.data.scalar.tag == .str) {
+                            const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(src_ptr));
+                            const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(dest_ptr));
+                            dest_str.* = src_str.*; // Proper struct assignment
+                        } else {
+                            std.mem.copyForwards(u8, dest_ptr[0..capture_size], src_ptr[0..capture_size]);
+                        }
                         return true;
                     }
                 }

@@ -12,6 +12,7 @@ const stack = @import("../stack.zig");
 const layout_store = @import("../../layout/store.zig");
 const collections = @import("collections");
 const serialization = @import("serialization");
+const builtins = @import("builtins");
 
 const ModuleEnv = compile.ModuleEnv;
 const CompactWriter = serialization.CompactWriter;
@@ -21,6 +22,7 @@ const test_allocator = testing.allocator;
 const EvalError = eval.EvalError;
 const runExpectInt = helpers.runExpectInt;
 const runExpectError = helpers.runExpectError;
+const runExpectStr = helpers.runExpectStr;
 
 test "eval simple number" {
     try runExpectInt("1", 1, .no_trace);
@@ -264,6 +266,60 @@ test "error test - divide by zero" {
     try runExpectError("10 % 0", EvalError.DivisionByZero, .no_trace);
 }
 
+test "error test - crash statement" {
+    // Test simple crash statement
+    try runExpectError("crash \"test\"", EvalError.Crash, .no_trace);
+
+    // Test crash in block with final expression
+    try runExpectError(
+        \\{
+        \\    crash "This is a crash statement"
+        \\    42
+        \\}
+    , EvalError.Crash, .no_trace);
+}
+
+test "crash message storage and retrieval - direct API test" {
+    // Test the getCrashMsg() API directly by simulating what happens during a crash
+    const test_message = "Direct API test message";
+
+    const resources = try helpers.parseAndCanonicalizeExpr(testing.allocator, "42");
+    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
+
+    var eval_stack = try stack.Stack.initCapacity(testing.allocator, 1024);
+    defer eval_stack.deinit();
+
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+    defer layout_cache.deinit();
+
+    var interpreter = try eval.Interpreter.init(
+        testing.allocator,
+        resources.module_env,
+        &eval_stack,
+        &layout_cache,
+        &resources.module_env.types,
+    );
+    interpreter.initRocOpsEnv();
+    defer interpreter.deinit();
+
+    // Before crash, getCrashMsg should return null
+    try testing.expect(interpreter.getCrashMsg() == null);
+
+    // Simulate what happens when roc_ops.crash() is called
+    const crash_args = builtins.host_abi.RocCrashed{
+        .utf8_bytes = @constCast(test_message.ptr),
+        .len = test_message.len,
+    };
+
+    // Call the crash function directly (this is what roc_ops.crash() does internally)
+    interpreter.roc_ops.roc_crashed(&crash_args, interpreter.roc_ops.env);
+
+    // After crash, getCrashMsg should return the crash message
+    const crash_msg = interpreter.getCrashMsg();
+    try testing.expect(crash_msg != null);
+    try testing.expectEqualStrings(test_message, crash_msg.?);
+}
+
 test "tuples" {
     // 2-tuple
     const expected_elements1 = &[_]helpers.ExpectedElement{
@@ -346,7 +402,7 @@ test "lambdas nested closures" {
         \\        |c| b_loc + c
         \\    }
         \\})(100))(20))(3)
-    , 223, .trace);
+    , 223, .no_trace);
 }
 
 // Helper function to test that evaluation succeeds without checking specific values
@@ -367,6 +423,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
         &layout_cache,
         &resources.module_env.types,
     );
+    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
 
     if (should_trace == .trace) {
@@ -386,7 +443,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
 test "integer type evaluation" {
     // Test integer types to verify basic evaluation works
     // This should help us debug why 255u8 shows as 42 in REPL
-    try runExpectInt("255u8", 255, .trace);
+    try runExpectInt("255u8", 255, .no_trace);
     try runExpectInt("42i32", 42, .no_trace);
     try runExpectInt("123i64", 123, .no_trace);
 }
@@ -452,6 +509,114 @@ test "scientific notation literals" {
     try runExpectSuccess("-1.5e-5", .no_trace);
 }
 
+test "string literals and interpolation" {
+    // Test basic string literals
+    try runExpectSuccess("\"Hello, World!\"", .no_trace);
+    try runExpectSuccess("\"\"", .no_trace);
+    try runExpectSuccess("\"Roc\"", .no_trace);
+
+    // Test string interpolation
+    try runExpectSuccess(
+        \\{
+        \\    hello = "Hello";
+        \\    world = "World";
+        \\    "${hello} ${world}"
+        \\}
+    , .no_trace);
+}
+
+test "string refcount - basic literal" {
+    // Test basic string literal creation and cleanup
+    try runExpectStr("\"Hello, World!\"", "Hello, World!", .no_trace);
+}
+
+test "string refcount - large string literal" {
+    // Test large string that requires heap allocation and reference counting
+    // This string is longer than SMALL_STR_MAX_LENGTH to trigger heap allocation
+    const large_str = "This is a very long string that definitely exceeds the small string optimization limit in RocStr and will require heap allocation with reference counting";
+    try runExpectStr("\"This is a very long string that definitely exceeds the small string optimization limit in RocStr and will require heap allocation with reference counting\"", large_str, .no_trace);
+}
+
+test "string refcount - heap allocated string" {
+    // Test another large string to exercise reference counting with heap allocation
+    const large_str = "This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation";
+
+    // Test the large string without trace since it's working
+    try runExpectStr("\"This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation\"", large_str, .no_trace);
+}
+
+test "string refcount - small string optimization" {
+    // Test small string (≤23 bytes) that uses inline storage instead of heap allocation
+    // This should show different behavior in the trace (no heap allocation)
+    try runExpectStr("\"Small string test\"", "Small string test", .no_trace);
+}
+
+test "string refcount - empty string" {
+    // Test empty string as a special case for reference counting
+    // Empty strings are typically optimized differently
+    try runExpectStr("\"\"", "", .no_trace);
+}
+
+test "string refcount - boundary case 25 bytes" {
+    // Test string that's 25 bytes - should trigger heap allocation (>23 bytes)
+    const boundary_str = "1234567890123456789012345"; // 25 bytes - should be big
+    try runExpectStr("\"1234567890123456789012345\"", boundary_str, .no_trace);
+}
+
+test "string refcount - max small string 23 bytes" {
+    // Test string that's exactly 23 bytes - should still use small string optimization
+    const max_small_str = "12345678901234567890123"; // 23 bytes - should be small
+    try runExpectStr("\"12345678901234567890123\"", max_small_str, .no_trace);
+}
+
+test "string refcount - conditional strings" {
+    // Test string reference counting with conditional expressions
+    // This exercises reference counting when strings are used in if-else branches
+    try runExpectStr("if True \"This is a large string that exceeds small string optimization\" else \"Short\"", "This is a large string that exceeds small string optimization", .no_trace);
+}
+
+test "string refcount - simpler record test" {
+    // Test record containing integers first to see if the issue is record-specific or string-specific
+    try runExpectInt("{foo: 42}.foo", 42, .no_trace);
+}
+
+test "string refcount - mixed string sizes" {
+    // Test mixture of small and large strings in conditional expressions
+    // Exercise reference counting across different string storage types
+    try runExpectStr("if False \"Small\" else \"This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation\"", "This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation", .no_trace);
+}
+
+test "string refcount - nested conditionals with strings" {
+    // Test nested conditional expressions with strings to exercise complex control flow
+    // This tests reference counting when strings are created and destroyed in nested scopes
+    try runExpectStr("if True (if False \"Inner small\" else \"Inner large string that exceeds small string optimization\") else \"Outer\"", "Inner large string that exceeds small string optimization", .no_trace);
+}
+
+test "string refcount - record field access small string" {
+    // Test record field access with small strings (uses inline storage)
+    try runExpectStr("{foo: \"Hello\"}.foo", "Hello", .no_trace);
+}
+
+test "string refcount - record field access large string" {
+    // Test record field access with large strings (uses heap allocation)
+    const large_str = "This is a very long string that definitely exceeds the small string optimization limit";
+    try runExpectStr("{foo: \"This is a very long string that definitely exceeds the small string optimization limit\"}.foo", large_str, .no_trace);
+}
+
+test "string refcount - record with empty string" {
+    // Test record field access with empty string (special case)
+    try runExpectStr("{empty: \"\"}.empty", "", .no_trace);
+}
+
+test "string refcount - simple integer closure" {
+    // Test basic closure with integer first to see if the issue is closure-specific
+    try runExpectInt("(|x| x)(42)", 42, .no_trace);
+}
+
+test "string refcount - simple string closure" {
+    try runExpectStr("(|s| s)(\"Test\")", "Test", .trace);
+}
+
 test "ModuleEnv serialization and interpreter evaluation" {
     // This test demonstrates that a ModuleEnv can be successfully:
     // 1. Created and used with the Interpreter to evaluate expressions
@@ -515,6 +680,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
             &layout_cache,
             &original_env.types,
         );
+        interpreter.initRocOpsEnv(); // Set the env pointer correctly
         defer interpreter.deinit();
 
         const result = try interpreter.eval(canonicalized_expr_idx.get_idx());
@@ -594,6 +760,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
                 &layout_cache,
                 &deserialized_env.types,
             );
+            interpreter.initRocOpsEnv(); // Set the env pointer correctly
             defer interpreter.deinit();
 
             const result = try interpreter.eval(canonicalized_expr_idx.get_idx());
