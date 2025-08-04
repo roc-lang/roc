@@ -3,6 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
+const base = @import("base");
 const compile = @import("compile");
 const types = @import("types");
 const eval = @import("eval/interpreter.zig");
@@ -313,93 +314,123 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyo
     // Debug output
     std.log.warn("Expression layout tag: {s}", .{@tagName(expr_layout.tag)});
     std.log.warn("arg_ptr is null: {}", .{arg_ptr == null});
-    
+
     // If it's a closure and we have arguments, handle the closure call properly
     if (expr_layout.tag == .closure and arg_ptr != null) {
-        // Get the closure expression to access parameter information
         const closure_expr = env_ptr.store.getExpr(expr_idx_enum);
-        const param_ids = switch (closure_expr) {
-            .e_closure => |closure_data| blk: {
-                const lambda_expr = env_ptr.store.getExpr(closure_data.lambda_idx);
-                switch (lambda_expr) {
-                    .e_lambda => |lambda_data| break :blk env_ptr.store.slicePatterns(lambda_data.args),
-                    else => {
-                        var buf: [256]u8 = undefined;
-                        const err_str = std.fmt.bufPrint(&buf, "Expected lambda in closure, got {s}", .{@tagName(lambda_expr)}) catch "Error";
-                        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
-                    },
-                }
-            },
-            .e_lambda => |lambda_data| env_ptr.store.slicePatterns(lambda_data.args),
-            else => {
-                var buf: [256]u8 = undefined;
-                const err_str = std.fmt.bufPrint(&buf, "Expected closure or lambda, got {s}", .{@tagName(closure_expr)}) catch "Error";
-                return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
-            },
+        const lambda_expr = switch (closure_expr) {
+            .e_closure => |closure_data| env_ptr.store.getExpr(closure_data.lambda_idx),
+            .e_lambda => closure_expr,
+            else => @panic("Expected closure or lambda"),
         };
-        const param_count = param_ids.len;
-        
-        // Debug: Print parameter count
+
+        const param_patterns = switch (lambda_expr) {
+            .e_lambda => |lambda_data| env_ptr.store.slicePatterns(lambda_data.args),
+            else => @panic("Expected lambda"),
+        };
+
+        // Determine the argument layout from the first parameter's type variable.
+        // Note: We rely on the Roc-generated type info; we do NOT assume any host struct layout.
+        const param_count = param_patterns.len;
         std.log.warn("Closure has {} parameters", .{param_count});
 
-        std.log.warn("About to handle param_count: {}", .{param_count});
-        
-        // For now, handle the known case of two i64 parameters specifically
-        if (param_count == 2) {
-            // Assume this is our int platform: struct { a: i64, b: i64 }
-            const args_struct = @as(*const struct { a: i64, b: i64 }, @ptrCast(@alignCast(arg_ptr.?)));
-            
-            std.log.warn("Unpacking args: a = {}, b = {}", .{ args_struct.a, args_struct.b });
-            
-            // Create layout for i64
-            const i64_layout = layout.Layout{
-                .tag = .scalar,
-                .data = .{ .scalar = .{
-                    .tag = .int,
-                    .data = .{ .int = .i64 },
-                } },
-            };
+        if (param_count > 0) {
+            // For calling the closure, we must push the function argument values first,
+            // then the closure is evaluated and pushed by callClosureWithStackArgs, and
+            // handleLambdaCall will append an implicit captures view after the closure.
+            // That results in stack order (from bottom to top) expected by handleLambdaCall:
+            //   arg1, arg2, ..., argN, closure, captures_view
+            //
+            // So here we only push the explicit function arguments in source order.
 
-            // Push first argument
-            const arg1_stack_ptr = (interpreter.pushStackValue(i64_layout) catch |err| {
-                var buf: [256]u8 = undefined;
-                const err_str = std.fmt.bufPrint(&buf, "Stack push error (arg1): {s}", .{@errorName(err)}) catch "Error";
-                return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
-            }).?;
-            const stack_i64_ptr1: *i64 = @ptrCast(@alignCast(arg1_stack_ptr));
-            stack_i64_ptr1.* = args_struct.a;
+            // Build the argument tuple type (if multiple parameters) from parameter pattern vars,
+            // then read each element from arg_ptr based on computed offsets.
+            if (param_count == 1) {
+                // Single parameter case: derive its type var and layout directly
+                const p0 = param_patterns[0];
+                const arg0_var: types.Var = @enumFromInt(@intFromEnum(p0));
+                const arg0_layout = blk: {
+                    const added = layout_cache.addTypeVar(arg0_var) catch |err| {
+                        var ebuf: [256]u8 = undefined;
+                        const err_str = std.fmt.bufPrint(&ebuf, "Layout addTypeVar error (single arg): {s}", .{@errorName(err)}) catch "Error";
+                        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&ebuf)), err_str.len);
+                    };
+                    break :blk layout_cache.getLayout(added);
+                };
+                const size_bytes = layout_cache.layoutSize(arg0_layout);
+                const dest_ptr = interpreter.pushStackValue(arg0_layout) catch @panic("push failed");
+                if (size_bytes > 0) {
+                    const src = (@as([*]u8, @ptrCast(arg_ptr.?)))[0..size_bytes];
+                    const dst = (@as([*]u8, @ptrCast(dest_ptr.?)))[0..size_bytes];
+                    @memcpy(dst, src);
+                }
+            } else {
+                // Multiple parameters: the host passes a single pointer to a struct/tuple
+                // containing all parameters. Compute the layout of the parameter tuple
+                // (p0, p1, ..., pN) and copy each element by its layout offset.
+                // The order must match the Roc function parameter order.
+                var param_vars_buf: [8]types.Var = undefined; // supports up to 8 params; extend if needed
+                std.debug.assert(param_count <= param_vars_buf.len);
+                var idx: usize = 0;
+                while (idx < param_count) : (idx += 1) {
+                    const pat_idx = param_patterns[idx];
+                    param_vars_buf[idx] = @enumFromInt(@intFromEnum(pat_idx));
+                }
 
-            // Push second argument
-            const arg2_stack_ptr = (interpreter.pushStackValue(i64_layout) catch |err| {
-                var buf: [256]u8 = undefined;
-                const err_str = std.fmt.bufPrint(&buf, "Stack push error (arg2): {s}", .{@errorName(err)}) catch "Error";
-                return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
-            }).?;
-            const stack_i64_ptr2: *i64 = @ptrCast(@alignCast(arg2_stack_ptr));
-            stack_i64_ptr2.* = args_struct.b;
-        } else if (param_count == 1) {
-            // Assume this is our str platform: struct { str: RocStr }  
-            const args_struct = @as(*const struct { str: RocStr }, @ptrCast(@alignCast(arg_ptr.?)));
-            
-            // Push the argument onto the stack so the closure can access it
-            const str_layout_idx = layout.Idx.str;
-            const str_layout = layout_cache.getLayout(str_layout_idx);
-            const arg_stack_ptr = (interpreter.pushStackValue(str_layout) catch |err| {
-                var buf: [256]u8 = undefined;
-                const err_str = std.fmt.bufPrint(&buf, "Stack push error: {s}", .{@errorName(err)}) catch "Error";
-                return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
-            }).?;
+                // Compute tuple layout by individually asking for each param's layout,
+                // then use a simple running offset with alignment to compute element positions.
+                // This avoids relying on unexposed tuple construction helpers in Store.
+                var elem_layouts: [8]layout.Layout = undefined;
+                var i_build: usize = 0;
+                while (i_build < param_count) : (i_build += 1) {
+                    const v = param_vars_buf[i_build];
+                    const idx_v = layout_cache.addTypeVar(v) catch |err| {
+                        var ebuf: [256]u8 = undefined;
+                        const err_str = std.fmt.bufPrint(&ebuf, "addTypeVar error (tuple param {}): {s}", .{ i_build, @errorName(err) }) catch "Error";
+                        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&ebuf)), err_str.len);
+                    };
+                    elem_layouts[i_build] = layout_cache.getLayout(idx_v);
+                }
 
-            // Copy the RocStr to the stack
-            const stack_str_ptr: *RocStr = @ptrCast(@alignCast(arg_stack_ptr));
-            stack_str_ptr.* = args_struct.str;
-        } else {
-            var buf: [256]u8 = undefined;
-            const err_str = std.fmt.bufPrint(&buf, "Unsupported parameter count: {}", .{param_count}) catch "Error";
-            return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+                // Manually compute offsets using native target alignment rules
+                var running_offset: usize = 0;
+                var offsets: [8]usize = undefined;
+
+                i_build = 0;
+                while (i_build < param_count) : (i_build += 1) {
+                    const el = elem_layouts[i_build];
+                    // Use native target pointer size for alignment decisions
+                    const el_align = el.alignment(base.target.Target.native.target_usize);
+                    // Align the running offset up to el_align
+                    const mask = el_align.toByteUnits() - 1;
+                    if ((running_offset & mask) != 0) {
+                        running_offset = (running_offset + mask) & ~mask;
+                    }
+                    offsets[i_build] = running_offset;
+                    running_offset += layout_cache.layoutSize(el);
+                }
+
+                // Copy each element from arg_ptr + computed offset to the interpreter stack
+                var i_copy: usize = 0;
+                while (i_copy < param_count) : (i_copy += 1) {
+                    const elem_layout = elem_layouts[i_copy];
+                    const elem_size = layout_cache.layoutSize(elem_layout);
+                    const elem_offset = offsets[i_copy];
+
+                    const dest_ptr = interpreter.pushStackValue(elem_layout) catch @panic("push failed");
+                    if (elem_size > 0) {
+                        const src = (@as([*]u8, @ptrCast(arg_ptr.?)) + elem_offset)[0..elem_size];
+                        const dst = (@as([*]u8, @ptrCast(dest_ptr.?)))[0..elem_size];
+                        @memcpy(dst, src);
+                    }
+                }
+            }
         }
-        
-        // Call with correct parameter count using the standard method
+
+        // Now schedule the closure call; handleLambdaCall will:
+        // - Push an implicit captures view
+        // - Bind args to params
+        // - Execute the body and unwind the frame safely
         const closure_result = interpreter.callClosureWithStackArgs(expr_idx_enum, @intCast(param_count)) catch |err| {
             var buf: [256]u8 = undefined;
             const err_str = std.fmt.bufPrint(&buf, "Closure call error: {s}", .{@errorName(err)}) catch "Error";

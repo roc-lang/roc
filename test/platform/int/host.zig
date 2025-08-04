@@ -92,8 +92,8 @@ pub fn main() !void {
 
     // Generate random integers using current timestamp as seed
     var rand = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
-    const a = rand.random().int(i64);
-    const b = rand.random().int(i64);
+    const a = rand.random().intRangeAtMost(i64, 0, 100);
+    const b = rand.random().intRangeAtMost(i64, 0, 100);
 
     // Create arguments struct - Roc expects arguments as a tuple
     var args = Args{
@@ -112,7 +112,7 @@ pub fn main() !void {
     try stdout.print("Generated numbers: a = {}, b = {}\n", .{ a, b });
     try stdout.print("Expected result: {}\n", .{expected});
     try stdout.print("Roc computed: {}\n", .{result});
-    
+
     if (result == expected) {
         try stdout.print("✓ Results match!\n", .{});
     } else {
