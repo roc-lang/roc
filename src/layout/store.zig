@@ -368,7 +368,7 @@ pub const Store = struct {
                 .opaque_ptr => target_usize.size(), // opaque_ptr is pointer-sized
             },
             .box, .box_of_zst => target_usize.size(), // a Box is just a pointer to refcounted memory
-            .list => @sizeOf(builtins.list.RocList), // RocList is a 24-byte struct  
+            .list => @sizeOf(builtins.list.RocList), // RocList is a 24-byte struct
             .list_of_zst => target_usize.size(), // Zero-sized lists might be different
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,

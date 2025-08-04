@@ -423,13 +423,13 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
             };
             break :blk false; // Shim exists and caching is enabled
         };
-        
+
         if (should_extract_shim) {
             // If --no-cache, delete existing shim to ensure we get a fresh one
             if (args.no_cache) {
                 std.fs.cwd().deleteFile(shim_path) catch {}; // Ignore errors if file doesn't exist
             }
-            
+
             extractReadRocFilePathShimLibrary(gpa, shim_path) catch |err| {
                 std.log.err("Failed to extract read roc file path shim library: {}\n", .{err});
                 std.process.exit(1);
@@ -845,25 +845,25 @@ fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u
     if (std.mem.endsWith(u8, platform_spec, "/main.roc") or std.mem.endsWith(u8, platform_spec, "\\main.roc")) {
         // Get the directory containing the app file
         const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
-        
+
         // Resolve the platform path relative to the app file's directory
         const resolved_platform_path = if (std.fs.path.isAbsolute(platform_spec))
             try gpa.dupe(u8, platform_spec)
         else
             try std.fs.path.join(gpa, &.{ app_dir, platform_spec });
         defer gpa.free(resolved_platform_path);
-        
+
         // Get the directory containing main.roc
         const dir_path = std.fs.path.dirname(resolved_platform_path) orelse return error.PlatformNotSupported;
-        
+
         // Look for libhost.a in the same directory
         const host_path = try std.fs.path.join(gpa, &.{ dir_path, "libhost.a" });
         defer gpa.free(host_path);
-        
+
         std.fs.cwd().access(host_path, .{}) catch {
             return error.PlatformNotSupported;
         };
-        
+
         return try gpa.dupe(u8, host_path);
     }
 
@@ -875,7 +875,7 @@ fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u
         break :blk try std.fs.path.join(gpa, &.{ app_dir, platform_spec });
     };
     defer gpa.free(resolved_path);
-    
+
     std.fs.cwd().access(resolved_path, .{}) catch {
         return error.PlatformNotSupported;
     };

@@ -315,21 +315,21 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyo
         // For now, we'll implement a simple heuristic:
         // If arg_ptr points to a struct with two i64s, assume it's our int platform
         // Otherwise, assume it's a string platform
-        
+
         // Try to detect if this is our int platform by checking the size
         // A struct with two i64s should be 16 bytes
         const potential_int_args = @as(*const struct { a: i64, b: i64 }, @ptrCast(@alignCast(arg_ptr.?)));
-        
+
         // For simplicity, let's assume if we have arguments and it's not a string function,
         // then it must be our int function. We can make this more robust later.
-        
+
         // Check if this looks like our int function by testing if both values are reasonable
         // (not extremely large, which might indicate we're misinterpreting memory)
         const reasonable_range = 1_000_000_000_000; // 1 trillion
         if (@abs(potential_int_args.a) < reasonable_range and @abs(potential_int_args.b) < reasonable_range) {
             // Handle two-parameter int function (I64, I64 -> I64)
             const args_ptr = potential_int_args;
-            
+
             // Create layout for i64
             const i64_layout = layout.Layout{
                 .tag = .scalar,
@@ -338,7 +338,7 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyo
                     .data = .{ .int = .i64 },
                 } },
             };
-            
+
             // Push first argument
             const arg1_stack_ptr = (interpreter.pushStackValue(i64_layout) catch |err| {
                 var buf: [256]u8 = undefined;
@@ -347,7 +347,7 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyo
             }).?;
             const stack_i64_ptr1: *i64 = @ptrCast(@alignCast(arg1_stack_ptr));
             stack_i64_ptr1.* = args_ptr.a;
-            
+
             // Push second argument
             const arg2_stack_ptr = (interpreter.pushStackValue(i64_layout) catch |err| {
                 var buf: [256]u8 = undefined;
@@ -356,7 +356,7 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyo
             }).?;
             const stack_i64_ptr2: *i64 = @ptrCast(@alignCast(arg2_stack_ptr));
             stack_i64_ptr2.* = args_ptr.b;
-            
+
             // Call the closure with both arguments
             const closure_result = interpreter.callClosureWithStackArgs(expr_idx_enum, 2) catch |err| {
                 var buf: [256]u8 = undefined;
@@ -369,7 +369,7 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyo
             const result_str = formatStackResult(closure_result, &layout_cache, &buf, ops);
             return createRocStrFromData(ops, @constCast(result_str.ptr), result_str.len);
         }
-        
+
         // Single argument case (existing RocStr handling) or fallback
         const arg_str_ptr = @as(*const RocStr, @ptrCast(@alignCast(arg_ptr.?)));
 
