@@ -132,6 +132,10 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             try args.append("macos");
             try args.append("13.0"); // minimum deployment target
             try args.append("13.0"); // SDK version
+
+            // Add SDK path
+            try args.append("-syslibroot");
+            try args.append("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk");
         },
         .linux => {
             // Use static linking to avoid dynamic linker dependency issues
