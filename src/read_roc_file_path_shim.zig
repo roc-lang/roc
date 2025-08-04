@@ -107,13 +107,11 @@ fn readFdInfo() !FdInfo {
 /// Expected format in shared memory: [u64 parent_address][ModuleEnv data]
 export fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void {
     // Use the appropriate evaluation function based on platform
-    const result = if (is_windows)
-        evaluateFromWindowsSharedMemory(ops, arg_ptr)
-    else
-        evaluateFromPosixSharedMemory(ops, arg_ptr);
-
-    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(ret_ptr));
-    roc_str_ptr.* = result;
+    if (is_windows) {
+        evaluateFromWindowsSharedMemoryDirect(ops, ret_ptr, arg_ptr);
+    } else {
+        evaluateFromPosixSharedMemoryDirect(ops, ret_ptr, arg_ptr);
+    }
 }
 
 fn evaluateFromWindowsSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyopaque) RocStr {
@@ -532,6 +530,248 @@ fn formatStackResult(stack_result: eval.Interpreter.StackValue, layout_cache: *l
     } else {
         // Should never happen if we've covered all layout tags
         return std.fmt.bufPrint(buf, "Unknown layout type: {}", .{stack_result.layout.tag}) catch "Error";
+    }
+}
+
+fn evaluateFromWindowsSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) void {
+    _ = ops;
+    _ = ret_ptr;
+    _ = arg_ptr;
+    // TODO: Implement Windows support
+    @panic("Windows support not yet implemented for direct evaluation");
+}
+
+fn evaluateFromPosixSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) void {
+    _ = ops; // Currently unused but may be needed for RocOps callbacks
+    const fd_info = readFdInfo() catch |err| {
+        std.debug.print("readFdInfo error: {}\n", .{err});
+        return;
+    };
+    defer std.heap.page_allocator.free(fd_info.fd_str);
+
+    const shm_fd = std.fmt.parseInt(c_int, fd_info.fd_str, 10) catch {
+        std.debug.print("Failed to parse fd\n", .{});
+        return;
+    };
+
+    defer _ = posix.close(shm_fd);
+
+    // Map the shared memory with read/write permissions and the exact size from the file
+    const mapped_ptr = posix.mmap(
+        null,
+        fd_info.size,
+        0x01 | 0x02, // PROT_READ | PROT_WRITE
+        0x0001, // MAP_SHARED
+        shm_fd,
+        0,
+    ) orelse {
+        std.debug.print("mmap failed\n", .{});
+        return;
+    };
+    const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..fd_info.size];
+    defer _ = posix.munmap(mapped_ptr, fd_info.size);
+
+    // The first allocation in SharedMemoryAllocator starts at offset 504 (0x1f8)
+    const first_alloc_offset = 504;
+    const data_ptr = mapped_memory.ptr + first_alloc_offset;
+
+    // Read the parent address from the first allocation
+    const parent_addr_ptr: *align(1) const u64 = @ptrCast(data_ptr);
+    const parent_addr = parent_addr_ptr.*;
+
+    // Read the expression index (after the u64)
+    const expr_idx_ptr: *align(1) const u32 = @ptrCast(data_ptr + @sizeOf(u64));
+    const expr_idx = expr_idx_ptr.*;
+
+    // Calculate relocation offset
+    const child_addr = @intFromPtr(data_ptr);
+    const offset = @as(isize, @intCast(child_addr)) - @as(isize, @intCast(parent_addr));
+
+    // The parent stored the ModuleEnv at offset 0x10 from the first allocation
+    const module_env_offset = 0x10; // 8 bytes for u64, 4 bytes for u32, 4 bytes padding
+    const env_addr = @intFromPtr(data_ptr) + module_env_offset;
+    const env_ptr = @as(*ModuleEnv, @ptrFromInt(env_addr));
+
+    // Set up the environment
+    env_ptr.gpa = std.heap.page_allocator;
+    env_ptr.relocate(offset);
+
+    // Also relocate the source and module_name strings manually
+    if (env_ptr.source.len > 0) {
+        const old_source_ptr = @intFromPtr(env_ptr.source.ptr);
+        const new_source_ptr = @as(isize, @intCast(old_source_ptr)) + offset;
+        env_ptr.source.ptr = @ptrFromInt(@as(usize, @intCast(new_source_ptr)));
+    }
+
+    if (env_ptr.module_name.len > 0) {
+        const old_module_ptr = @intFromPtr(env_ptr.module_name.ptr);
+        const new_module_ptr = @as(isize, @intCast(old_module_ptr)) + offset;
+        env_ptr.module_name.ptr = @ptrFromInt(@as(usize, @intCast(new_module_ptr)));
+    }
+
+    // Set up the interpreter infrastructure
+    var eval_stack = stack.Stack.initCapacity(std.heap.page_allocator, 64 * 1024) catch {
+        std.debug.print("Stack init failed\n", .{});
+        return;
+    };
+    defer eval_stack.deinit();
+
+    var layout_cache = layout_store.Store.init(env_ptr, &env_ptr.types) catch {
+        std.debug.print("Layout cache init failed\n", .{});
+        return;
+    };
+    defer layout_cache.deinit();
+
+    var interpreter = eval.Interpreter.init(
+        std.heap.page_allocator,
+        env_ptr,
+        &eval_stack,
+        &layout_cache,
+        &env_ptr.types,
+    ) catch {
+        std.debug.print("Interpreter init failed\n", .{});
+        return;
+    };
+    interpreter.initRocOpsEnv();
+    defer interpreter.deinit();
+
+    // Enable tracing to stderr
+    interpreter.startTrace(std.io.getStdErr().writer().any());
+
+    const expr_idx_enum: ModuleEnv.Expr.Idx = @enumFromInt(expr_idx);
+
+    // Check if the expression is a closure by getting its layout
+    const expr_var: types.Var = @enumFromInt(@intFromEnum(expr_idx_enum));
+    const layout_idx = layout_cache.addTypeVar(expr_var) catch {
+        std.debug.print("Layout error\n", .{});
+        return;
+    };
+    const expr_layout = layout_cache.getLayout(layout_idx);
+
+    // Handle closure calls
+    if (expr_layout.tag == .closure and arg_ptr != null) {
+        const closure_expr = env_ptr.store.getExpr(expr_idx_enum);
+        const lambda_expr = switch (closure_expr) {
+            .e_closure => |closure_data| env_ptr.store.getExpr(closure_data.lambda_idx),
+            .e_lambda => closure_expr,
+            else => @panic("Expected closure or lambda"),
+        };
+
+        const param_patterns = switch (lambda_expr) {
+            .e_lambda => |lambda_data| env_ptr.store.slicePatterns(lambda_data.args),
+            else => @panic("Expected lambda"),
+        };
+
+        const param_count = param_patterns.len;
+
+        if (param_count > 0) {
+            // Push arguments onto the stack
+            if (param_count == 1) {
+                // Single parameter case
+                const p0 = param_patterns[0];
+                const arg0_var: types.Var = @enumFromInt(@intFromEnum(p0));
+                const arg0_layout = blk: {
+                    const added = layout_cache.addTypeVar(arg0_var) catch {
+                        std.debug.print("Layout addTypeVar error\n", .{});
+                        return;
+                    };
+                    break :blk layout_cache.getLayout(added);
+                };
+                const size_bytes = layout_cache.layoutSize(arg0_layout);
+                const dest_ptr = interpreter.pushStackValue(arg0_layout) catch {
+                    std.debug.print("Push failed\n", .{});
+                    return;
+                };
+                if (size_bytes > 0) {
+                    const src = (@as([*]u8, @ptrCast(arg_ptr.?)))[0..size_bytes];
+                    const dst = (@as([*]u8, @ptrCast(dest_ptr.?)))[0..size_bytes];
+                    @memcpy(dst, src);
+                }
+            } else {
+                // Multiple parameters
+                var param_vars_buf: [8]types.Var = undefined;
+                std.debug.assert(param_count <= param_vars_buf.len);
+                var idx: usize = 0;
+                while (idx < param_count) : (idx += 1) {
+                    const pat_idx = param_patterns[idx];
+                    param_vars_buf[idx] = @enumFromInt(@intFromEnum(pat_idx));
+                }
+
+                // Compute element layouts
+                var elem_layouts: [8]layout.Layout = undefined;
+                var i_build: usize = 0;
+                while (i_build < param_count) : (i_build += 1) {
+                    const v = param_vars_buf[i_build];
+                    const idx_v = layout_cache.addTypeVar(v) catch {
+                        std.debug.print("addTypeVar error\n", .{});
+                        return;
+                    };
+                    elem_layouts[i_build] = layout_cache.getLayout(idx_v);
+                }
+
+                // Compute offsets
+                var running_offset: usize = 0;
+                var offsets: [8]usize = undefined;
+                i_build = 0;
+                while (i_build < param_count) : (i_build += 1) {
+                    const el = elem_layouts[i_build];
+                    const el_align = el.alignment(base.target.Target.native.target_usize);
+                    const mask = el_align.toByteUnits() - 1;
+                    if ((running_offset & mask) != 0) {
+                        running_offset = (running_offset + mask) & ~mask;
+                    }
+                    offsets[i_build] = running_offset;
+                    running_offset += layout_cache.layoutSize(el);
+                }
+
+                // Copy each element
+                var i_copy: usize = 0;
+                while (i_copy < param_count) : (i_copy += 1) {
+                    const elem_layout = elem_layouts[i_copy];
+                    const elem_size = layout_cache.layoutSize(elem_layout);
+                    const elem_offset = offsets[i_copy];
+
+                    const dest_ptr = interpreter.pushStackValue(elem_layout) catch {
+                        std.debug.print("Push failed\n", .{});
+                        return;
+                    };
+                    if (elem_size > 0) {
+                        const src = (@as([*]u8, @ptrCast(arg_ptr.?)) + elem_offset)[0..elem_size];
+                        const dst = (@as([*]u8, @ptrCast(dest_ptr.?)))[0..elem_size];
+                        @memcpy(dst, src);
+                    }
+                }
+            }
+        }
+
+        // Call the closure
+        const closure_result = interpreter.callClosureWithStackArgs(expr_idx_enum, @intCast(param_count)) catch {
+            std.debug.print("Closure call error\n", .{});
+            return;
+        };
+
+        // Copy result to ret_ptr based on its type
+        copyResultToRetPtr(closure_result, &layout_cache, ret_ptr);
+    } else {
+        // Evaluate non-closure expression
+        const stack_result = interpreter.eval(expr_idx_enum) catch {
+            std.debug.print("Evaluation error\n", .{});
+            return;
+        };
+
+        // Copy result to ret_ptr based on its type
+        copyResultToRetPtr(stack_result, &layout_cache, ret_ptr);
+    }
+}
+
+fn copyResultToRetPtr(stack_result: eval.Interpreter.StackValue, layout_cache: *layout_store.Store, ret_ptr: *anyopaque) void {
+    if (stack_result.ptr == null) return;
+
+    const result_size = layout_cache.layoutSize(stack_result.layout);
+    if (result_size > 0) {
+        const src = @as([*]u8, @ptrCast(stack_result.ptr.?))[0..result_size];
+        const dst = @as([*]u8, @ptrCast(ret_ptr))[0..result_size];
+        @memcpy(dst, src);
     }
 }
 
