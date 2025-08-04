@@ -190,84 +190,7 @@ fn evaluateFromWindowsSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*an
 
     // Format the result based on its layout
     var buf: [1024]u8 = undefined;
-    const result_str = blk: {
-        if (stack_result.layout.tag == .scalar) {
-            if (stack_result.layout.data.scalar.tag == .int) {
-                const precision = stack_result.layout.data.scalar.data.int;
-                const int_val = eval.readIntFromMemory(@ptrCast(stack_result.ptr.?), precision);
-                break :blk std.fmt.bufPrint(&buf, "{}", .{int_val}) catch "Error formatting";
-            } else if (stack_result.layout.data.scalar.tag == .bool) {
-                const bool_val = @as(*const bool, @ptrCast(@alignCast(stack_result.ptr.?))).*;
-                break :blk std.fmt.bufPrint(&buf, "{}", .{bool_val}) catch "Error formatting";
-            } else if (stack_result.layout.data.scalar.tag == .frac) {
-                const float_precision = stack_result.layout.data.scalar.data.frac;
-                switch (float_precision) {
-                    .f32 => {
-                        const float_val = @as(*const f32, @ptrCast(@alignCast(stack_result.ptr.?))).*;
-                        break :blk std.fmt.bufPrint(&buf, "{d}", .{float_val}) catch "Error formatting";
-                    },
-                    .f64 => {
-                        const float_val = @as(*const f64, @ptrCast(@alignCast(stack_result.ptr.?))).*;
-                        break :blk std.fmt.bufPrint(&buf, "{d}", .{float_val}) catch "Error formatting";
-                    },
-                    .dec => {
-                        // Decimal is a 128-bit fixed-point number with 18 decimal places
-                        const dec_ptr = @as(*const builtins.dec.RocDec, @ptrCast(@alignCast(stack_result.ptr.?)));
-                        const dec_str = dec_ptr.to_str(ops);
-                        defer dec_str.decref(ops);
-                        break :blk std.fmt.bufPrint(&buf, "{s}", .{dec_str.asSlice()}) catch "Error formatting";
-                    },
-                }
-            } else if (stack_result.layout.data.scalar.tag == .str) {
-                const str_ptr = @as(*const RocStr, @ptrCast(@alignCast(stack_result.ptr.?)));
-                // Format the string with quotes to show it's a string
-                break :blk std.fmt.bufPrint(&buf, "\"{s}\"", .{str_ptr.asSlice()}) catch "Error formatting";
-            } else if (stack_result.layout.data.scalar.tag == .opaque_ptr) {
-                const ptr_val = @as(*const ?*anyopaque, @ptrCast(@alignCast(stack_result.ptr.?))).*;
-                if (ptr_val) |ptr| {
-                    break :blk std.fmt.bufPrint(&buf, "<opaque pointer: 0x{x}>", .{@intFromPtr(ptr)}) catch "Error formatting";
-                } else {
-                    break :blk std.fmt.bufPrint(&buf, "<null opaque pointer>", .{}) catch "Error formatting";
-                }
-            } else {
-                // This should never happen as we've covered all scalar types
-                break :blk std.fmt.bufPrint(&buf, "Unknown scalar type: {}", .{stack_result.layout.data.scalar.tag}) catch "Error";
-            }
-        } else if (stack_result.layout.tag == .record) {
-            // Format record as: { field1: value1, field2: value2, ... }
-            // For now, just show we have a record with its size
-            const record_data = layout_cache.getRecordData(stack_result.layout.data.record.idx);
-            const num_fields = record_data.fields.count;
-            break :blk std.fmt.bufPrint(&buf, "<record with {} fields, size {} bytes>", .{ num_fields, record_data.size }) catch "Error";
-        } else if (stack_result.layout.tag == .tuple) {
-            // Format tuple as: (elem1, elem2, ...)
-            // For now, just show we have a tuple with its size
-            const tuple_data = layout_cache.getTupleData(stack_result.layout.data.tuple.idx);
-            const num_elems = tuple_data.fields.count;
-            break :blk std.fmt.bufPrint(&buf, "<tuple with {} elements, size {} bytes>", .{ num_elems, tuple_data.size }) catch "Error";
-        } else if (stack_result.layout.tag == .list) {
-            // Format list as: [elem1, elem2, ...]
-            // Lists are more complex as they have runtime length
-            const list_ptr = @as(*const builtins.list.RocList, @ptrCast(@alignCast(stack_result.ptr.?)));
-            break :blk std.fmt.bufPrint(&buf, "<list with {} elements>", .{list_ptr.len()}) catch "Error";
-        } else if (stack_result.layout.tag == .list_of_zst) {
-            // List of zero-sized types (e.g., List({}))
-            const list_ptr = @as(*const builtins.list.RocList, @ptrCast(@alignCast(stack_result.ptr.?)));
-            break :blk std.fmt.bufPrint(&buf, "<list of {} zero-sized elements>", .{list_ptr.len()}) catch "Error";
-        } else if (stack_result.layout.tag == .box) {
-            // Box is a heap-allocated value
-            break :blk std.fmt.bufPrint(&buf, "<box>", .{}) catch "Error";
-        } else if (stack_result.layout.tag == .box_of_zst) {
-            // Box of zero-sized type
-            break :blk std.fmt.bufPrint(&buf, "<box of zero-sized type>", .{}) catch "Error";
-        } else if (stack_result.layout.tag == .closure) {
-            // Function closure
-            break :blk std.fmt.bufPrint(&buf, "<closure>", .{}) catch "Error";
-        } else {
-            // Should never happen if we've covered all layout tags
-            break :blk std.fmt.bufPrint(&buf, "Unknown layout type: {}", .{stack_result.layout.tag}) catch "Error";
-        }
-    };
+    const result_str = formatStackResult(stack_result, &layout_cache, &buf, ops);
 
     return createRocStrFromData(ops, @constCast(result_str.ptr), result_str.len);
 }
@@ -377,13 +300,48 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyo
     interpreter.startTrace(std.io.getStdErr().writer().any());
 
     const expr_idx_enum: ModuleEnv.Expr.Idx = @enumFromInt(expr_idx);
-    
-    // TODO: Check if the expression is a closure and handle arguments properly
-    // For now, just proceed with evaluation - proper closure calling support
-    // needs to be implemented at a higher level in the compilation process
-    _ = arg_ptr; // Unused for now
-    
-    // Evaluate using the REAL interpreter
+
+    // Check if the expression is a closure by getting its layout
+    const expr_var: types.Var = @enumFromInt(@intFromEnum(expr_idx_enum));
+    const layout_idx = layout_cache.addTypeVar(expr_var) catch |err| {
+        var buf: [256]u8 = undefined;
+        const err_str = std.fmt.bufPrint(&buf, "Layout error: {s}", .{@errorName(err)}) catch "Error";
+        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+    };
+    const expr_layout = layout_cache.getLayout(layout_idx);
+
+    // If it's a closure and we have arguments, handle the closure call properly
+    if (expr_layout.tag == .closure and arg_ptr != null) {
+        // The argument is a RocStr from the host
+        const arg_str_ptr = @as(*const RocStr, @ptrCast(@alignCast(arg_ptr.?)));
+
+        // Push the argument onto the stack so the closure can access it
+        const str_layout_idx = layout.Idx.str;
+        const str_layout = layout_cache.getLayout(str_layout_idx);
+        const arg_stack_ptr = (interpreter.pushStackValue(str_layout) catch |err| {
+            var buf: [256]u8 = undefined;
+            const err_str = std.fmt.bufPrint(&buf, "Stack push error: {s}", .{@errorName(err)}) catch "Error";
+            return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+        }).?;
+
+        // Copy the RocStr to the stack
+        const stack_str_ptr: *RocStr = @ptrCast(@alignCast(arg_stack_ptr));
+        stack_str_ptr.* = arg_str_ptr.*;
+
+        // Now call the closure with the argument using our new helper method
+        const closure_result = interpreter.callClosureWithStackArgs(expr_idx_enum, 1) catch |err| {
+            var buf: [256]u8 = undefined;
+            const err_str = std.fmt.bufPrint(&buf, "Closure call error: {s}", .{@errorName(err)}) catch "Error";
+            return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+        };
+
+        // Format and return the result
+        var buf: [1024]u8 = undefined;
+        const result_str = formatStackResult(closure_result, &layout_cache, &buf, ops);
+        return createRocStrFromData(ops, @constCast(result_str.ptr), result_str.len);
+    }
+
+    // Evaluate using the REAL interpreter (for non-closure cases)
     const stack_result = interpreter.eval(expr_idx_enum) catch |err| {
         var buf: [256]u8 = undefined;
         const err_str = std.fmt.bufPrint(&buf, "Evaluation error: {s}", .{@errorName(err)}) catch "Error";
@@ -392,86 +350,87 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyo
 
     // Format the result based on its layout
     var buf: [1024]u8 = undefined;
-    const result_str = blk: {
-        if (stack_result.layout.tag == .scalar) {
-            if (stack_result.layout.data.scalar.tag == .int) {
-                const precision = stack_result.layout.data.scalar.data.int;
-                const int_val = eval.readIntFromMemory(@ptrCast(stack_result.ptr.?), precision);
-                break :blk std.fmt.bufPrint(&buf, "{}", .{int_val}) catch "Error formatting";
-            } else if (stack_result.layout.data.scalar.tag == .bool) {
-                const bool_val = @as(*const bool, @ptrCast(@alignCast(stack_result.ptr.?))).*;
-                break :blk std.fmt.bufPrint(&buf, "{}", .{bool_val}) catch "Error formatting";
-            } else if (stack_result.layout.data.scalar.tag == .frac) {
-                const float_precision = stack_result.layout.data.scalar.data.frac;
-                switch (float_precision) {
-                    .f32 => {
-                        const float_val = @as(*const f32, @ptrCast(@alignCast(stack_result.ptr.?))).*;
-                        break :blk std.fmt.bufPrint(&buf, "{d}", .{float_val}) catch "Error formatting";
-                    },
-                    .f64 => {
-                        const float_val = @as(*const f64, @ptrCast(@alignCast(stack_result.ptr.?))).*;
-                        break :blk std.fmt.bufPrint(&buf, "{d}", .{float_val}) catch "Error formatting";
-                    },
-                    .dec => {
-                        // Decimal is a 128-bit fixed-point number with 18 decimal places
-                        const dec_ptr = @as(*const builtins.dec.RocDec, @ptrCast(@alignCast(stack_result.ptr.?)));
-                        const dec_str = dec_ptr.to_str(ops);
-                        defer dec_str.decref(ops);
-                        break :blk std.fmt.bufPrint(&buf, "{s}", .{dec_str.asSlice()}) catch "Error formatting";
-                    },
-                }
-            } else if (stack_result.layout.data.scalar.tag == .str) {
-                const str_ptr = @as(*const RocStr, @ptrCast(@alignCast(stack_result.ptr.?)));
-                // Format the string with quotes to show it's a string
-                break :blk std.fmt.bufPrint(&buf, "\"{s}\"", .{str_ptr.asSlice()}) catch "Error formatting";
-            } else if (stack_result.layout.data.scalar.tag == .opaque_ptr) {
-                const ptr_val = @as(*const ?*anyopaque, @ptrCast(@alignCast(stack_result.ptr.?))).*;
-                if (ptr_val) |ptr| {
-                    break :blk std.fmt.bufPrint(&buf, "<opaque pointer: 0x{x}>", .{@intFromPtr(ptr)}) catch "Error formatting";
-                } else {
-                    break :blk std.fmt.bufPrint(&buf, "<null opaque pointer>", .{}) catch "Error formatting";
-                }
-            } else {
-                // This should never happen as we've covered all scalar types
-                break :blk std.fmt.bufPrint(&buf, "Unknown scalar type: {}", .{stack_result.layout.data.scalar.tag}) catch "Error";
-            }
-        } else if (stack_result.layout.tag == .record) {
-            // Format record as: { field1: value1, field2: value2, ... }
-            // For now, just show we have a record with its size
-            const record_data = layout_cache.getRecordData(stack_result.layout.data.record.idx);
-            const num_fields = record_data.fields.count;
-            break :blk std.fmt.bufPrint(&buf, "<record with {} fields, size {} bytes>", .{ num_fields, record_data.size }) catch "Error";
-        } else if (stack_result.layout.tag == .tuple) {
-            // Format tuple as: (elem1, elem2, ...)
-            // For now, just show we have a tuple with its size
-            const tuple_data = layout_cache.getTupleData(stack_result.layout.data.tuple.idx);
-            const num_elems = tuple_data.fields.count;
-            break :blk std.fmt.bufPrint(&buf, "<tuple with {} elements, size {} bytes>", .{ num_elems, tuple_data.size }) catch "Error";
-        } else if (stack_result.layout.tag == .list) {
-            // Format list as: [elem1, elem2, ...]
-            // Lists are more complex as they have runtime length
-            const list_ptr = @as(*const builtins.list.RocList, @ptrCast(@alignCast(stack_result.ptr.?)));
-            break :blk std.fmt.bufPrint(&buf, "<list with {} elements>", .{list_ptr.len()}) catch "Error";
-        } else if (stack_result.layout.tag == .list_of_zst) {
-            // List of zero-sized types (e.g., List({}))
-            const list_ptr = @as(*const builtins.list.RocList, @ptrCast(@alignCast(stack_result.ptr.?)));
-            break :blk std.fmt.bufPrint(&buf, "<list of {} zero-sized elements>", .{list_ptr.len()}) catch "Error";
-        } else if (stack_result.layout.tag == .box) {
-            // Box is a heap-allocated value
-            break :blk std.fmt.bufPrint(&buf, "<box>", .{}) catch "Error";
-        } else if (stack_result.layout.tag == .box_of_zst) {
-            // Box of zero-sized type
-            break :blk std.fmt.bufPrint(&buf, "<box of zero-sized type>", .{}) catch "Error";
-        } else if (stack_result.layout.tag == .closure) {
-            // Function closure
-            break :blk std.fmt.bufPrint(&buf, "<closure>", .{}) catch "Error";
-        } else {
-            // Should never happen if we've covered all layout tags
-            break :blk std.fmt.bufPrint(&buf, "Unknown layout type: {}", .{stack_result.layout.tag}) catch "Error";
-        }
-    };
+    const result_str = formatStackResult(stack_result, &layout_cache, &buf, ops);
 
     return createRocStrFromData(ops, @constCast(result_str.ptr), result_str.len);
+}
+
+fn formatStackResult(stack_result: eval.Interpreter.StackValue, layout_cache: *layout_store.Store, buf: *[1024]u8, ops: *builtins.host_abi.RocOps) []const u8 {
+    if (stack_result.layout.tag == .scalar) {
+        if (stack_result.layout.data.scalar.tag == .int) {
+            const precision = stack_result.layout.data.scalar.data.int;
+            const int_val = eval.readIntFromMemory(@ptrCast(stack_result.ptr.?), precision);
+            return std.fmt.bufPrint(buf, "{}", .{int_val}) catch "Error formatting";
+        } else if (stack_result.layout.data.scalar.tag == .bool) {
+            const bool_val = @as(*const bool, @ptrCast(@alignCast(stack_result.ptr.?))).*;
+            return std.fmt.bufPrint(buf, "{}", .{bool_val}) catch "Error formatting";
+        } else if (stack_result.layout.data.scalar.tag == .frac) {
+            const float_precision = stack_result.layout.data.scalar.data.frac;
+            switch (float_precision) {
+                .f32 => {
+                    const float_val = @as(*const f32, @ptrCast(@alignCast(stack_result.ptr.?))).*;
+                    return std.fmt.bufPrint(buf, "{d}", .{float_val}) catch "Error formatting";
+                },
+                .f64 => {
+                    const float_val = @as(*const f64, @ptrCast(@alignCast(stack_result.ptr.?))).*;
+                    return std.fmt.bufPrint(buf, "{d}", .{float_val}) catch "Error formatting";
+                },
+                .dec => {
+                    // Decimal is a 128-bit fixed-point number with 18 decimal places
+                    const dec_ptr = @as(*const builtins.dec.RocDec, @ptrCast(@alignCast(stack_result.ptr.?)));
+                    const dec_str = dec_ptr.to_str(ops);
+                    defer dec_str.decref(ops);
+                    return std.fmt.bufPrint(buf, "{s}", .{dec_str.asSlice()}) catch "Error formatting";
+                },
+            }
+        } else if (stack_result.layout.data.scalar.tag == .str) {
+            const str_ptr = @as(*const RocStr, @ptrCast(@alignCast(stack_result.ptr.?)));
+            return std.fmt.bufPrint(buf, "{s}", .{str_ptr.asSlice()}) catch "Error formatting";
+        } else if (stack_result.layout.data.scalar.tag == .opaque_ptr) {
+            const ptr_val = @as(*const ?*anyopaque, @ptrCast(@alignCast(stack_result.ptr.?))).*;
+            if (ptr_val) |ptr| {
+                return std.fmt.bufPrint(buf, "<opaque pointer: 0x{x}>", .{@intFromPtr(ptr)}) catch "Error formatting";
+            } else {
+                return std.fmt.bufPrint(buf, "<null opaque pointer>", .{}) catch "Error formatting";
+            }
+        } else {
+            // This should never happen as we've covered all scalar types
+            return std.fmt.bufPrint(buf, "Unknown scalar type: {}", .{stack_result.layout.data.scalar.tag}) catch "Error";
+        }
+    } else if (stack_result.layout.tag == .record) {
+        // Format record as: { field1: value1, field2: value2, ... }
+        // For now, just show we have a record with its size
+        const record_data = layout_cache.getRecordData(stack_result.layout.data.record.idx);
+        const num_fields = record_data.fields.count;
+        return std.fmt.bufPrint(buf, "<record with {} fields, size {} bytes>", .{ num_fields, record_data.size }) catch "Error";
+    } else if (stack_result.layout.tag == .tuple) {
+        // Format tuple as: (elem1, elem2, ...)
+        // For now, just show we have a tuple with its size
+        const tuple_data = layout_cache.getTupleData(stack_result.layout.data.tuple.idx);
+        const num_elems = tuple_data.fields.count;
+        return std.fmt.bufPrint(buf, "<tuple with {} elements, size {} bytes>", .{ num_elems, tuple_data.size }) catch "Error";
+    } else if (stack_result.layout.tag == .list) {
+        // Format list as: [elem1, elem2, ...]
+        // Lists are more complex as they have runtime length
+        const list_ptr = @as(*const builtins.list.RocList, @ptrCast(@alignCast(stack_result.ptr.?)));
+        return std.fmt.bufPrint(buf, "<list with {} elements>", .{list_ptr.len()}) catch "Error";
+    } else if (stack_result.layout.tag == .list_of_zst) {
+        // List of zero-sized types (e.g., List({}))
+        const list_ptr = @as(*const builtins.list.RocList, @ptrCast(@alignCast(stack_result.ptr.?)));
+        return std.fmt.bufPrint(buf, "<list of {} zero-sized elements>", .{list_ptr.len()}) catch "Error";
+    } else if (stack_result.layout.tag == .box) {
+        // Box is a heap-allocated value
+        return std.fmt.bufPrint(buf, "<box>", .{}) catch "Error";
+    } else if (stack_result.layout.tag == .box_of_zst) {
+        // Box of zero-sized type
+        return std.fmt.bufPrint(buf, "<box of zero-sized type>", .{}) catch "Error";
+    } else if (stack_result.layout.tag == .closure) {
+        // Function closure
+        return std.fmt.bufPrint(buf, "<closure>", .{}) catch "Error";
+    } else {
+        // Should never happen if we've covered all layout tags
+        return std.fmt.bufPrint(buf, "Unknown layout type: {}", .{stack_result.layout.tag}) catch "Error";
+    }
 }
 
 fn createRocStrFromData(ops: *builtins.host_abi.RocOps, string_data: [*]u8, string_length: usize) RocStr {
