@@ -15,7 +15,7 @@ type=repl
 ---
 Evaluation error: error.LayoutError
 ---
-<scalar>
+"Hello, World!"
 ---
 <list_of_zst>
 # PROBLEMS

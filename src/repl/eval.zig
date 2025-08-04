@@ -350,6 +350,12 @@ pub const Repl = struct {
                         },
                     }
                 },
+                .str => {
+                    // Handle RocStr values
+                    const roc_str: *builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
+                    const str_slice = roc_str.asSlice();
+                    return try std.fmt.allocPrint(self.allocator, "\"{s}\"", .{str_slice});
+                },
                 else => {},
             }
         }
@@ -397,6 +403,15 @@ test "Repl - simple expressions" {
     const result = try repl.step("42");
     defer testing.allocator.free(result);
     try testing.expectEqualStrings("42", result);
+}
+
+test "Repl - string expressions" {
+    var repl = try Repl.init(testing.allocator);
+    defer repl.deinit();
+
+    const result = try repl.step("\"Hello, World!\"");
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("\"Hello, World!\"", result);
 }
 
 test "Repl - redefinition with evaluation" {

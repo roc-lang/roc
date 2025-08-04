@@ -10,10 +10,10 @@ type=repl
 » "Hello, World!"
 ~~~
 # OUTPUT
-<scalar>
+"hello"
 ---
-<scalar>
+"world"
 ---
-<scalar>
+"Hello, World!"
 # PROBLEMS
 NIL
