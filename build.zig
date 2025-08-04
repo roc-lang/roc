@@ -339,7 +339,6 @@ fn addMainExe(
         .strip = strip,
         .pic = true, // Enable Position Independent Code for PIE compatibility
     });
-    builtins_lib.linkLibC();
     // Add the builtins module so it can import "builtins"
     builtins_lib.root_module.addImport("builtins", roc_modules.builtins);
 
