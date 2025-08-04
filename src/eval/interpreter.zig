@@ -40,6 +40,7 @@ const layout = @import("../layout/layout.zig");
 const build_options = @import("build_options");
 const stack = @import("stack.zig");
 
+const StringLiteral = base.StringLiteral;
 const ModuleEnv = compile.ModuleEnv;
 const LayoutTag = layout.LayoutTag;
 const RocDec = builtins.dec.RocDec;
@@ -121,6 +122,7 @@ const WorkKind = enum {
     w_let_bind,
     w_block_cleanup,
     w_dot_access,
+    w_crash,
 };
 
 /// A unit of work to be processed during iterative evaluation.
@@ -153,6 +155,7 @@ pub const WorkItem = struct {
         decl_pattern_idx: ModuleEnv.Pattern.Idx,
         dot_access_field_name: Ident.Idx,
         current_element_idx: usize,
+        crash_msg: StringLiteral.Idx,
     },
 };
 
@@ -302,10 +305,15 @@ fn rocExpectFailed(expect_args: *const builtins.host_abi.RocExpectFailed, env: *
     // TODO: Implement expect support
 }
 
-fn rocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.C) noreturn {
-    _ = env;
-    const msg = crashed_args.utf8_bytes[0..crashed_args.len];
-    std.debug.panic("Roc program crashed: {s}", .{msg});
+fn rocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.C) void {
+    const interp: *Interpreter = @ptrCast(@alignCast(env));
+
+    // Set the crash flag
+    interp.has_crashed = true;
+
+    // Store the crash message
+    const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
+    interp.crash_message = msg_slice;
 }
 
 /// TODO
@@ -340,6 +348,10 @@ pub const Interpreter = struct {
 
     /// RocOps for string allocation and other host operations
     roc_ops: builtins.host_abi.RocOps,
+    /// Flag indicating if the program has crashed
+    has_crashed: bool,
+    /// Crash message (if any)
+    crash_message: ?[]const u8,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -361,11 +373,13 @@ pub const Interpreter = struct {
             .trace_indent = 0,
             .trace_writer = null,
             .roc_ops = undefined, // Will be initialized below
+            .has_crashed = false,
+            .crash_message = null,
         };
 
-        // Initialize RocOps with interpreter bridge
+        // Initialize RocOps with interpreter bridge (env will be set after return)
         interp.roc_ops = builtins.host_abi.RocOps{
-            .env = @ptrCast(&interp),
+            .env = undefined, // Will be set after init returns
             .roc_alloc = &rocAlloc,
             .roc_dealloc = &rocDealloc,
             .roc_realloc = &rocRealloc,
@@ -376,6 +390,24 @@ pub const Interpreter = struct {
         };
 
         return interp;
+    }
+
+    /// Set the env pointer for RocOps to point to this interpreter
+    pub fn initRocOpsEnv(self: *Interpreter) void {
+        self.roc_ops.env = @ptrCast(self);
+    }
+
+    /// Get the crash message if the interpreter has crashed
+    pub fn getCrashMsg(self: *const Interpreter) ?[]const u8 {
+        if (self.has_crashed) {
+            return self.crash_message;
+        }
+        return null;
+    }
+
+    /// Returns the crash message if the program crashed
+    pub fn getCrashMessage(self: *const Interpreter) ?[]const u8 {
+        return self.crash_message;
     }
 
     pub fn deinit(self: *Interpreter) void {
@@ -397,6 +429,10 @@ pub const Interpreter = struct {
                 }
             }
         }
+
+        // Note: crash_message is not owned by the interpreter,
+        // it points to string data that lives in the string table
+        // so we don't need to free it here
 
         self.work_stack.deinit();
         self.value_stack.deinit();
@@ -458,6 +494,14 @@ pub const Interpreter = struct {
                 .w_dot_access => try self.handleDotAccess(
                     work.extra.dot_access_field_name,
                 ),
+                .w_crash => {
+                    const msg = self.env.strings.get(work.extra.crash_msg);
+                    self.roc_ops.crash(msg);
+                    // The crash function will set has_crashed = true
+                    // Clear the work stack to prevent further evaluation
+                    self.work_stack.clearRetainingCapacity();
+                    // The eval loop will check this and return EvalError.Crash
+                },
                 .w_eval_tuple_elements => try self.handleTupleElements(
                     work.expr_idx,
                     work.extra.current_element_idx,
@@ -536,6 +580,16 @@ pub const Interpreter = struct {
                     }
                 },
             }
+
+            // Check if we've crashed and need to exit early
+            if (self.has_crashed) {
+                return EvalError.Crash;
+            }
+        }
+
+        // Check for crashes before trying to get the final value
+        if (self.has_crashed) {
+            return EvalError.Crash;
         }
 
         // Pop the final layout - should be the only thing left on the layout stack
@@ -552,6 +606,11 @@ pub const Interpreter = struct {
         // Ensure both stacks are empty at the end - if not, it's a bug!
         std.debug.assert(self.work_stack.items.len == 0);
         std.debug.assert(self.value_stack.items.len == 0);
+
+        // Final check for crashes before returning
+        if (self.has_crashed) {
+            return EvalError.Crash;
+        }
 
         // With proper calling convention, after cleanup the result is at the start of the stack
         const result_ptr = @as([*]u8, @ptrCast(self.stack_memory.start));
@@ -1035,6 +1094,14 @@ pub const Interpreter = struct {
                                 .kind = .w_eval_expr,
                                 .expr_idx = decl.expr,
                                 .extra = .{ .nothing = {} },
+                            });
+                        },
+                        .s_crash => |crash| {
+                            // Schedule crash to be executed
+                            self.schedule_work(WorkItem{
+                                .kind = .w_crash,
+                                .expr_idx = expr_idx, // e_block's index for tracing
+                                .extra = .{ .crash_msg = crash.msg },
                             });
                         },
                         else => {

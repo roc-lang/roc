@@ -283,6 +283,7 @@ pub const RocDec = extern struct {
 
         if (answer.has_overflowed) {
             roc_ops.crash("Decimal addition overflowed!");
+            unreachable; // The host should handle the crash
         } else {
             return answer.value;
         }
@@ -317,6 +318,7 @@ pub const RocDec = extern struct {
 
         if (answer.has_overflowed) {
             roc_ops.crash("Decimal subtraction overflowed!");
+            unreachable; // The host should handle the crash
         } else {
             return answer.value;
         }
@@ -503,6 +505,7 @@ pub const RocDec = extern struct {
 
         if (answer.has_overflowed) {
             roc_ops.crash("Decimal multiplication overflowed!");
+            unreachable; // The host should handle the crash
         } else {
             return answer.value;
         }

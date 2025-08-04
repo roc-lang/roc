@@ -36,6 +36,7 @@ pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_tr
         &layout_cache,
         &resources.module_env.types,
     );
+    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
 
     if (should_trace == .trace) {
@@ -69,6 +70,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
         &layout_cache,
         &resources.module_env.types,
     );
+    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
 
     if (should_trace == .trace) {
@@ -122,6 +124,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
         &layout_cache,
         &resources.module_env.types,
     );
+    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
 
     if (should_trace == .trace) {
@@ -172,6 +175,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
         &layout_cache,
         &resources.module_env.types,
     );
+    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
 
     if (should_trace == .trace) {

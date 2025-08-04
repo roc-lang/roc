@@ -12,6 +12,7 @@ const stack = @import("../stack.zig");
 const layout_store = @import("../../layout/store.zig");
 const collections = @import("collections");
 const serialization = @import("serialization");
+const builtins = @import("builtins");
 
 const ModuleEnv = compile.ModuleEnv;
 const CompactWriter = serialization.CompactWriter;
@@ -264,6 +265,60 @@ test "error test - divide by zero" {
     try runExpectError("10 % 0", EvalError.DivisionByZero, .no_trace);
 }
 
+test "error test - crash statement" {
+    // Test simple crash statement
+    try runExpectError("crash \"test\"", EvalError.Crash, .no_trace);
+    
+    // Test crash in block with final expression
+    try runExpectError(
+        \\{
+        \\    crash "This is a crash statement"
+        \\    42
+        \\}
+    , EvalError.Crash, .no_trace);
+}
+
+test "crash message storage and retrieval - direct API test" {
+    // Test the getCrashMsg() API directly by simulating what happens during a crash
+    const test_message = "Direct API test message";
+    
+    const resources = try helpers.parseAndCanonicalizeExpr(testing.allocator, "42");
+    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
+
+    var eval_stack = try stack.Stack.initCapacity(testing.allocator, 1024);
+    defer eval_stack.deinit();
+
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+    defer layout_cache.deinit();
+
+    var interpreter = try eval.Interpreter.init(
+        testing.allocator,
+        resources.module_env,
+        &eval_stack,
+        &layout_cache,
+        &resources.module_env.types,
+    );
+    interpreter.initRocOpsEnv();
+    defer interpreter.deinit();
+
+    // Before crash, getCrashMsg should return null
+    try testing.expect(interpreter.getCrashMsg() == null);
+
+    // Simulate what happens when roc_ops.crash() is called
+    const crash_args = builtins.host_abi.RocCrashed{
+        .utf8_bytes = @constCast(test_message.ptr),
+        .len = test_message.len,
+    };
+    
+    // Call the crash function directly (this is what roc_ops.crash() does internally)
+    interpreter.roc_ops.roc_crashed(&crash_args, interpreter.roc_ops.env);
+
+    // After crash, getCrashMsg should return the crash message
+    const crash_msg = interpreter.getCrashMsg();
+    try testing.expect(crash_msg != null);
+    try testing.expectEqualStrings(test_message, crash_msg.?);
+}
+
 test "tuples" {
     // 2-tuple
     const expected_elements1 = &[_]helpers.ExpectedElement{
@@ -367,6 +422,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
         &layout_cache,
         &resources.module_env.types,
     );
+    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
 
     if (should_trace == .trace) {
@@ -531,6 +587,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
             &layout_cache,
             &original_env.types,
         );
+        interpreter.initRocOpsEnv(); // Set the env pointer correctly
         defer interpreter.deinit();
 
         const result = try interpreter.eval(canonicalized_expr_idx.get_idx());
@@ -610,6 +667,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
                 &layout_cache,
                 &deserialized_env.types,
             );
+            interpreter.initRocOpsEnv(); // Set the env pointer correctly
             defer interpreter.deinit();
 
             const result = try interpreter.eval(canonicalized_expr_idx.get_idx());
