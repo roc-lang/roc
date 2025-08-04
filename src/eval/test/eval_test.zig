@@ -569,6 +569,48 @@ test "string refcount - max small string 23 bytes" {
     try runExpectStr("\"12345678901234567890123\"", max_small_str, .no_trace);
 }
 
+test "string refcount - conditional strings" {
+    // Test string reference counting with conditional expressions
+    // This exercises reference counting when strings are used in if-else branches
+    try runExpectStr("if True \"This is a large string that exceeds small string optimization\" else \"Short\"", 
+                     "This is a large string that exceeds small string optimization", .no_trace);
+}
+
+test "string refcount - simpler record test" {
+    // Test record containing integers first to see if the issue is record-specific or string-specific
+    try runExpectInt("{foo: 42}.foo", 42, .no_trace);
+}
+
+test "string refcount - mixed string sizes" {
+    // Test mixture of small and large strings in conditional expressions
+    // Exercise reference counting across different string storage types
+    try runExpectStr("if False \"Small\" else \"This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation\"", 
+                     "This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation", .no_trace);
+}
+
+test "string refcount - nested conditionals with strings" {
+    // Test nested conditional expressions with strings to exercise complex control flow
+    // This tests reference counting when strings are created and destroyed in nested scopes
+    try runExpectStr("if True (if False \"Inner small\" else \"Inner large string that exceeds small string optimization\") else \"Outer\"", 
+                     "Inner large string that exceeds small string optimization", .no_trace);
+}
+
+test "string refcount - record field access small string" {
+    // Test record field access with small strings (uses inline storage)
+    try runExpectStr("{foo: \"Hello\"}.foo", "Hello", .no_trace);
+}
+
+test "string refcount - record field access large string" {
+    // Test record field access with large strings (uses heap allocation)
+    const large_str = "This is a very long string that definitely exceeds the small string optimization limit";
+    try runExpectStr("{foo: \"This is a very long string that definitely exceeds the small string optimization limit\"}.foo", large_str, .no_trace);
+}
+
+test "string refcount - record with empty string" {
+    // Test record field access with empty string (special case)
+    try runExpectStr("{empty: \"\"}.empty", "", .no_trace);
+}
+
 test "ModuleEnv serialization and interpreter evaluation" {
     // This test demonstrates that a ModuleEnv can be successfully:
     // 1. Created and used with the Interpreter to evaluate expressions
