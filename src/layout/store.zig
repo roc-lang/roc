@@ -7,6 +7,7 @@ const layout_ = @import("./layout.zig");
 const collections = @import("collections");
 const work = @import("./work.zig");
 const ModuleEnv = @import("compile").ModuleEnv;
+const builtins = @import("builtins");
 
 const types_store = types.store;
 const target = base.target;
@@ -363,10 +364,12 @@ pub const Store = struct {
                 .int => layout.data.scalar.data.int.size(),
                 .frac => layout.data.scalar.data.frac.size(),
                 .bool => 1, // bool is 1 byte
-                .str, .opaque_ptr => target_usize.size(), // str and opaque_ptr are pointer-sized
+                .str => @sizeOf(builtins.str.RocStr), // RocStr is a 24-byte struct
+                .opaque_ptr => target_usize.size(), // opaque_ptr is pointer-sized
             },
             .box, .box_of_zst => target_usize.size(), // a Box is just a pointer to refcounted memory
-            .list, .list_of_zst => target_usize.size(), // TODO: get this from RocStr.zig and RocList.zig
+            .list => @sizeOf(builtins.list.RocList), // RocList is a 24-byte struct  
+            .list_of_zst => target_usize.size(), // Zero-sized lists might be different
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
             .closure => @sizeOf(layout_.Closure),
