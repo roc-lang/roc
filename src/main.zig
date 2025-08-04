@@ -496,7 +496,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         }
     }
 
-    
     // Run the interpreter as a child process from the temp directory
     var child = std.process.Child.init(&.{temp_exe_path}, gpa);
     child.cwd = std.fs.cwd().realpathAlloc(gpa, ".") catch |err| {
@@ -663,7 +662,7 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
             }
         }
     }
-    
+
     // Store the main expression index for the child
     expr_idx_ptr[0] = main_expr_idx orelse {
         std.log.err("No 'main' definition found in module\n", .{});
@@ -795,7 +794,7 @@ fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u
     if (std.mem.eql(u8, platform_spec, "test")) {
         return gpa.dupe(u8, "libtest_host.a");
     }
-    
+
     // Check for common platform names and map them to host libraries
     if (std.mem.eql(u8, platform_spec, "cli")) {
         // Try to find CLI platform host library
