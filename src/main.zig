@@ -117,7 +117,11 @@ const legalDetailsFileContent = @embedFile("legal_details");
 ///
 /// We pick a large number because we can't resize this without messing up the
 /// child process. It's just virtual address space though, not physical memory.
-const SHARED_MEMORY_SIZE: usize = 8 * 1024 * 1024 * 1024 * 1024; // 8TB
+/// On 32-bit targets, we use 512MB since 2TB won't fit in the address space.
+const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) >= 8)
+    2 * 1024 * 1024 * 1024 * 1024 // 2TB for 64-bit targets
+else
+    512 * 1024 * 1024; // 512MB for 32-bit targets
 
 /// Cross-platform hardlink creation
 fn createHardlink(allocator: Allocator, source: []const u8, dest: []const u8) !void {
