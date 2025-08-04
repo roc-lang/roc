@@ -51,12 +51,17 @@ const FdInfo = struct {
 /// Read the fd/handle and size from the filesystem-based communication mechanism
 fn readFdInfo() !FdInfo {
     // Get our own executable path
-    const exe_path = try std.fs.selfExePathAlloc(std.heap.page_allocator);
+    const exe_path = std.fs.selfExePathAlloc(std.heap.page_allocator) catch |err| {
+        std.debug.print("DEBUG shim: selfExePathAlloc failed: {}\n", .{err});
+        return err;
+    };
     defer std.heap.page_allocator.free(exe_path);
+    std.debug.print("DEBUG shim: exe_path={s}\n", .{exe_path});
 
     // Get the directory containing our executable (should be "roc-tmp-<random>")
     const exe_dir = std.fs.path.dirname(exe_path) orelse return error.InvalidExePath;
     const dir_basename = std.fs.path.basename(exe_dir);
+    std.debug.print("DEBUG shim: exe_dir={s}, dir_basename={s}\n", .{ exe_dir, dir_basename });
 
     // Verify it has the expected prefix
     if (!std.mem.startsWith(u8, dir_basename, "roc-tmp-")) {
@@ -72,6 +77,7 @@ fn readFdInfo() !FdInfo {
 
     const fd_file_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}.txt", .{dir_path});
     defer std.heap.page_allocator.free(fd_file_path);
+    std.debug.print("DEBUG shim: Looking for fd file at: {s}\n", .{fd_file_path});
 
     // Read the fd and size from the file
     const fd_file = std.fs.cwd().openFile(fd_file_path, .{}) catch |err| switch (err) {
@@ -180,20 +186,28 @@ fn evaluateFromWindowsSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
 
     // Evaluate using the REAL interpreter
     const expr_idx_enum: ModuleEnv.Expr.Idx = @enumFromInt(expr_idx);
+    std.debug.print("DEBUG shim: calling interpreter.eval with expr_idx={}\n", .{expr_idx});
     const stack_result = interpreter.eval(expr_idx_enum) catch |err| {
+        std.debug.print("DEBUG shim: interpreter.eval failed: {}\n", .{err});
         var buf: [256]u8 = undefined;
         const err_str = std.fmt.bufPrint(&buf, "Evaluation error: {s}", .{@errorName(err)}) catch "Error";
         return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
     };
+    std.debug.print("DEBUG shim: interpreter.eval succeeded, layout.tag={}\n", .{stack_result.layout.tag});
 
     // Format the result based on its layout
     var buf: [1024]u8 = undefined;
     const result_str = blk: {
         if (stack_result.layout.tag == .scalar) {
+            std.debug.print("DEBUG shim: scalar type={}\n", .{stack_result.layout.data.scalar.tag});
             if (stack_result.layout.data.scalar.tag == .int) {
                 const precision = stack_result.layout.data.scalar.data.int;
+                std.debug.print("DEBUG shim: int precision={}\n", .{precision});
                 const int_val = eval.readIntFromMemory(@ptrCast(stack_result.ptr.?), precision);
-                break :blk std.fmt.bufPrint(&buf, "{}", .{int_val}) catch "Error formatting";
+                std.debug.print("DEBUG shim: int_val={}\n", .{int_val});
+                const formatted = std.fmt.bufPrint(&buf, "{}", .{int_val}) catch "Error formatting";
+                std.debug.print("DEBUG shim: formatted string='{s}', len={}, buf[0]={}, buf[1]={}\n", .{ formatted, formatted.len, buf[0], buf[1] });
+                break :blk formatted;
             } else if (stack_result.layout.data.scalar.tag == .bool) {
                 const bool_val = @as(*const bool, @ptrCast(@alignCast(stack_result.ptr.?))).*;
                 break :blk std.fmt.bufPrint(&buf, "{}", .{bool_val}) catch "Error formatting";
@@ -267,22 +281,30 @@ fn evaluateFromWindowsSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
         }
     };
 
-    return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), result_str.len);
+    return createRocStrFromData(ops, @constCast(result_str.ptr), result_str.len);
 }
 
 fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
-    const fd_info = readFdInfo() catch {
-        return RocStr.empty();
+    
+    const fd_info = readFdInfo() catch |err| {
+        std.debug.print("DEBUG shim: readFdInfo failed: {}\n", .{err});
+        var buf: [256]u8 = undefined;
+        const err_str = std.fmt.bufPrint(&buf, "readFdInfo error: {}", .{err}) catch "Error";
+        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
     };
+    std.debug.print("DEBUG shim: fd_info.fd_str={s}, fd_info.size={}\n", .{ fd_info.fd_str, fd_info.size });
     defer std.heap.page_allocator.free(fd_info.fd_str);
 
-    const shm_fd = std.fmt.parseInt(c_int, fd_info.fd_str, 10) catch {
+    const shm_fd = std.fmt.parseInt(c_int, fd_info.fd_str, 10) catch |err| {
+        std.debug.print("DEBUG shim: parseInt failed: {}\n", .{err});
         return RocStr.empty();
     };
+    std.debug.print("DEBUG shim: parsed fd={}\n", .{shm_fd});
 
     defer _ = posix.close(shm_fd);
 
     // Map the shared memory with read/write permissions and the exact size from the file
+    std.debug.print("DEBUG shim: calling mmap with fd={}, size={}\n", .{ shm_fd, fd_info.size });
     const mapped_ptr = posix.mmap(
         null,
         fd_info.size,
@@ -291,8 +313,10 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
         shm_fd,
         0,
     ) orelse {
+        std.debug.print("DEBUG shim: mmap failed, returning empty\n", .{});
         return RocStr.empty();
     };
+    std.debug.print("DEBUG shim: mmap succeeded, ptr={*}\n", .{mapped_ptr});
     const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..fd_info.size];
     defer _ = posix.munmap(mapped_ptr, fd_info.size);
 
@@ -304,10 +328,12 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
     // Read the parent address from the first allocation
     const parent_addr_ptr: *align(1) const u64 = @ptrCast(data_ptr);
     const parent_addr = parent_addr_ptr.*;
+    std.debug.print("DEBUG shim: parent_addr=0x{x}\n", .{parent_addr});
 
     // Read the expression index (after the u64)
     const expr_idx_ptr: *align(1) const u32 = @ptrCast(data_ptr + @sizeOf(u64));
     const expr_idx = expr_idx_ptr.*;
+    std.debug.print("DEBUG shim: expr_idx={}\n", .{expr_idx});
 
     // Calculate relocation offset (both addresses should be for the data area, not the full mapping)
     const child_addr = @intFromPtr(data_ptr);
@@ -370,20 +396,28 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
 
     // Evaluate using the REAL interpreter
     const expr_idx_enum: ModuleEnv.Expr.Idx = @enumFromInt(expr_idx);
+    std.debug.print("DEBUG shim: calling interpreter.eval with expr_idx={}\n", .{expr_idx});
     const stack_result = interpreter.eval(expr_idx_enum) catch |err| {
+        std.debug.print("DEBUG shim: interpreter.eval failed: {}\n", .{err});
         var buf: [256]u8 = undefined;
         const err_str = std.fmt.bufPrint(&buf, "Evaluation error: {s}", .{@errorName(err)}) catch "Error";
         return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
     };
+    std.debug.print("DEBUG shim: interpreter.eval succeeded, layout.tag={}\n", .{stack_result.layout.tag});
 
     // Format the result based on its layout
     var buf: [1024]u8 = undefined;
     const result_str = blk: {
         if (stack_result.layout.tag == .scalar) {
+            std.debug.print("DEBUG shim: scalar type={}\n", .{stack_result.layout.data.scalar.tag});
             if (stack_result.layout.data.scalar.tag == .int) {
                 const precision = stack_result.layout.data.scalar.data.int;
+                std.debug.print("DEBUG shim: int precision={}\n", .{precision});
                 const int_val = eval.readIntFromMemory(@ptrCast(stack_result.ptr.?), precision);
-                break :blk std.fmt.bufPrint(&buf, "{}", .{int_val}) catch "Error formatting";
+                std.debug.print("DEBUG shim: int_val={}\n", .{int_val});
+                const formatted = std.fmt.bufPrint(&buf, "{}", .{int_val}) catch "Error formatting";
+                std.debug.print("DEBUG shim: formatted string='{s}', len={}, buf[0]={}, buf[1]={}\n", .{ formatted, formatted.len, buf[0], buf[1] });
+                break :blk formatted;
             } else if (stack_result.layout.data.scalar.tag == .bool) {
                 const bool_val = @as(*const bool, @ptrCast(@alignCast(stack_result.ptr.?))).*;
                 break :blk std.fmt.bufPrint(&buf, "{}", .{bool_val}) catch "Error formatting";
@@ -457,7 +491,7 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps) RocStr {
         }
     };
 
-    return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), result_str.len);
+    return createRocStrFromData(ops, @constCast(result_str.ptr), result_str.len);
 }
 
 fn createRocStrFromData(ops: *builtins.host_abi.RocOps, string_data: [*]u8, string_length: usize) RocStr {

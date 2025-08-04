@@ -496,6 +496,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         }
     }
 
+    
     // Run the interpreter as a child process from the temp directory
     var child = std.process.Child.init(&.{temp_exe_path}, gpa);
     child.cwd = std.fs.cwd().realpathAlloc(gpa, ".") catch |err| {
@@ -631,31 +632,47 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     env.module_name = module_name;
     try env.calcLineStarts();
 
-    // Parse the source code as an expression for simplicity
-    var parse_ast = try parse.parseExpr(&env);
+    // Parse the source code as a full module
+    var parse_ast = try parse.parse(&env);
 
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
 
     // Initialize CIR fields in ModuleEnv
-    try env.initCIRFields(shm_allocator, "test");
+    try env.initCIRFields(shm_allocator, module_name);
 
     // Create canonicalizer
     var canonicalizer = try can.init(&env, &parse_ast, null);
 
-    // For parseExpr, the root_node_idx points directly to the expression
-    const main_expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+    // Canonicalize the entire module
+    try canonicalizer.canonicalizeFile();
 
-    const canonicalized_expr_idx = try canonicalizer.canonicalizeExpr(main_expr_idx) orelse {
-        return error.CanonicalizeFailure;
+    // Find the "main" definition in the module
+    // Look through all definitions to find one named "main"
+    var main_expr_idx: ?u32 = null;
+    const defs = env.store.sliceDefs(env.all_defs);
+    for (defs) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_idx = pattern.assign.ident;
+            const ident_text = env.idents.getText(ident_idx);
+            if (std.mem.eql(u8, ident_text, "main")) {
+                main_expr_idx = @intFromEnum(def.expr);
+                break;
+            }
+        }
+    }
+    
+    // Store the main expression index for the child
+    expr_idx_ptr[0] = main_expr_idx orelse {
+        std.log.err("No 'main' definition found in module\n", .{});
+        return error.NoMainFunction;
     };
 
-    // Store the canonicalized expression index for the child
-    expr_idx_ptr[0] = @intFromEnum(canonicalized_expr_idx.idx);
-
-    // Type check the expression
+    // Type check the module
     var checker = try check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions);
-    _ = try checker.checkExpr(canonicalized_expr_idx.idx);
+    try checker.checkDefs();
 
     // Copy the ModuleEnv to the allocated space
     env_ptr.* = env;
@@ -774,6 +791,11 @@ pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (s
 
 /// Resolve a platform specification to a local host library path
 fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})![]u8 {
+    // TEMPORARY: For testing the interpreter, use our test host library
+    if (std.mem.eql(u8, platform_spec, "test")) {
+        return gpa.dupe(u8, "libtest_host.a");
+    }
+    
     // Check for common platform names and map them to host libraries
     if (std.mem.eql(u8, platform_spec, "cli")) {
         // Try to find CLI platform host library
