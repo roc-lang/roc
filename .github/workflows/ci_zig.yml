@@ -67,12 +67,6 @@ jobs:
         run: |
           zig build playground-test -Doptimize=ReleaseSmall -- --verbose
 
-      - name: Run Test Platform Tests
-        run: |
-          zig build -Dllvm
-          ./zig-out/bin/roc --no-cache test/platform/str/app.roc
-          ./zig-out/bin/roc --no-cache test/platform/int/app.roc
-
   zig-tests:
     needs: check-once
     runs-on: ${{ matrix.os }}
@@ -98,6 +92,27 @@ jobs:
       - name: build roc
         run: |
           zig build -Dllvm -Dfuzz -Dsystem-afl=false
+
+      - name: Run Test Platform Tests (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          # Remove pre-built libhost.a files to ensure they're rebuilt with correct PIE settings
+          rm -f test/platform/str/libhost.a test/platform/int/libhost.a
+          # Rebuild test platform host libraries
+          zig build -Dllvm -Dfuzz -Dsystem-afl=false
+          ./zig-out/bin/roc --no-cache test/platform/str/app.roc
+          ./zig-out/bin/roc --no-cache test/platform/int/app.roc
+
+      - name: Run Test Platform Tests (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # Remove pre-built libhost.a files to ensure they're rebuilt with correct PIE settings
+          if (Test-Path test/platform/str/libhost.a) { Remove-Item test/platform/str/libhost.a }
+          if (Test-Path test/platform/int/libhost.a) { Remove-Item test/platform/int/libhost.a }
+          # Rebuild test platform host libraries
+          zig build -Dllvm -Dfuzz -Dsystem-afl=false
+          zig-out\bin\roc.exe --no-cache test/platform/str/app.roc
+          zig-out\bin\roc.exe --no-cache test/platform/int/app.roc
 
       - name: roc executable minimal check (Unix)
         if: runner.os != 'Windows'
