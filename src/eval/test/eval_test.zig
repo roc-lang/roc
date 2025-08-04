@@ -22,6 +22,7 @@ const test_allocator = testing.allocator;
 const EvalError = eval.EvalError;
 const runExpectInt = helpers.runExpectInt;
 const runExpectError = helpers.runExpectError;
+const runExpectStr = helpers.runExpectStr;
 
 test "eval simple number" {
     try runExpectInt("1", 1, .no_trace);
@@ -522,6 +523,50 @@ test "string literals and interpolation" {
         \\    "${hello} ${world}"
         \\}
     , .no_trace);
+}
+
+test "string refcount - basic literal" {
+    // Test basic string literal creation and cleanup
+    try runExpectStr("\"Hello, World!\"", "Hello, World!", .no_trace);
+}
+
+test "string refcount - large string literal" {
+    // Test large string that requires heap allocation and reference counting
+    // This string is longer than SMALL_STR_MAX_LENGTH to trigger heap allocation
+    const large_str = "This is a very long string that definitely exceeds the small string optimization limit in RocStr and will require heap allocation with reference counting";
+    try runExpectStr("\"This is a very long string that definitely exceeds the small string optimization limit in RocStr and will require heap allocation with reference counting\"", large_str, .no_trace);
+}
+
+test "string refcount - heap allocated string" {
+    // Test another large string to exercise reference counting with heap allocation
+    const large_str = "This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation";
+    
+    // Test the large string without trace since it's working
+    try runExpectStr("\"This is a very long string that definitely exceeds the small string optimization limit and requires heap allocation\"", large_str, .no_trace);
+}
+
+test "string refcount - small string optimization" {
+    // Test small string (≤23 bytes) that uses inline storage instead of heap allocation
+    // This should show different behavior in the trace (no heap allocation)
+    try runExpectStr("\"Small string test\"", "Small string test", .no_trace);
+}
+
+test "string refcount - empty string" {
+    // Test empty string as a special case for reference counting
+    // Empty strings are typically optimized differently
+    try runExpectStr("\"\"", "", .no_trace);
+}
+
+test "string refcount - boundary case 25 bytes" {
+    // Test string that's 25 bytes - should trigger heap allocation (>23 bytes)
+    const boundary_str = "1234567890123456789012345"; // 25 bytes - should be big
+    try runExpectStr("\"1234567890123456789012345\"", boundary_str, .no_trace);
+}
+
+test "string refcount - max small string 23 bytes" {
+    // Test string that's exactly 23 bytes - should still use small string optimization
+    const max_small_str = "12345678901234567890123"; // 23 bytes - should be small
+    try runExpectStr("\"12345678901234567890123\"", max_small_str, .no_trace);
 }
 
 test "ModuleEnv serialization and interpreter evaluation" {

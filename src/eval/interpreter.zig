@@ -2275,6 +2275,28 @@ pub const Interpreter = struct {
         self.traceEnter("evaluateStringInterpolation with {} segments", .{segments.len});
         defer self.traceExit("", .{});
 
+        // Optimization: for single string segment, avoid unnecessary cloning and recreation
+        if (segments.len == 1) {
+            // Evaluate the single segment
+            try self.evalExpr(segments[0]);
+            
+            // Check if it's already a string - if so, we can just use it directly
+            const segment_value = try self.popStackValue();
+            if (segment_value.layout.tag == .scalar and segment_value.layout.data.scalar.tag == .str) {
+                // It's already a string, just push it as the final result (no cloning needed)
+                const str_layout = Layout.str();
+                const result_ptr = (try self.pushStackValue(str_layout)).?;
+                const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_ptr));
+                const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(segment_value.ptr.?));
+                dest_str.* = src_str.*; // Move the string (no reference count change needed)
+                
+                const result_value = StackValue{ .layout = str_layout, .ptr = result_ptr };
+                try self.traceValue("final_interpolated_string", result_value);
+                return;
+            }
+        }
+
+        // General case: multiple segments or non-string single segment
         // List to collect all evaluated string segments
         var segment_strings = std.ArrayList(builtins.str.RocStr).init(self.allocator);
         defer {
