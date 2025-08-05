@@ -483,7 +483,6 @@ export fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, ar
     }
 }
 
-
 fn formatStackResult(stack_result: eval.Interpreter.StackValue, layout_cache: *layout_store.Store, buf: *[RESULT_BUFFER_SIZE]u8, ops: *builtins.host_abi.RocOps) []const u8 {
     if (stack_result.layout.tag == .scalar) {
         if (stack_result.layout.data.scalar.tag == .int) {

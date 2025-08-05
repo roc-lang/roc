@@ -17,7 +17,6 @@ const llvm_externs = if (llvm_available) struct {
     extern fn ZigLLDLinkWasm(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
 } else struct {};
 
-
 /// Supported target formats for linking
 pub const TargetFormat = enum {
     elf,
