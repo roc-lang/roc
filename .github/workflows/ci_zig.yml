@@ -101,19 +101,17 @@ jobs:
         run: |
           zig build -Dllvm -Dfuzz -Dsystem-afl=false
 
-      - name: Run Test Platform Tests (Unix)
+      - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'
         run: |
           ./zig-out/bin/roc --no-cache test/platform/str/app.roc
           ./zig-out/bin/roc --no-cache test/platform/int/app.roc
 
-      - name: Run Test Platform Tests (Windows)
+      - name: Run Test Platforms (Windows)
         if: runner.os == 'Windows'
         run: |
-          # TODO: Windows platform tests disabled until linking issues are resolved
-          # zig-out\bin\roc.exe --no-cache test/platform/str/app.roc
-          # zig-out\bin\roc.exe --no-cache test/platform/int/app.roc
-          echo "Windows platform tests temporarily disabled"
+          zig-out\bin\roc.exe --no-cache test/platform/str/app.roc
+          zig-out\bin\roc.exe --no-cache test/platform/int/app.roc
 
       - name: roc executable minimal check (Unix)
         if: runner.os != 'Windows'
