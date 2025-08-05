@@ -777,6 +777,24 @@ pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (s
                     if (std.mem.indexOf(u8, after_quote, "\"")) |quote_end| {
                         const platform_spec = after_quote[0..quote_end];
 
+                        // If it's a relative path, resolve it relative to the app directory
+                        if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../")) {
+                            const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
+                            const platform_path = try std.fs.path.join(gpa, &.{ app_dir, platform_spec });
+                            defer gpa.free(platform_path);
+
+                            // Look for host library near the platform file
+                            const platform_dir = std.fs.path.dirname(platform_path) orelse ".";
+                            const host_path = try std.fs.path.join(gpa, &.{ platform_dir, "libhost.a" });
+                            defer gpa.free(host_path);
+
+                            std.fs.cwd().access(host_path, .{}) catch {
+                                return error.PlatformNotSupported;
+                            };
+
+                            return try gpa.dupe(u8, host_path);
+                        }
+
                         // Try to resolve platform to a local host library
                         return resolvePlatformSpecToHostLib(gpa, platform_spec);
                     }
@@ -790,6 +808,21 @@ pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (s
 
 /// Resolve a platform specification to a local host library path
 fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})![]u8 {
+    // Handle empty platform spec (common in test platforms)
+    if (platform_spec.len == 0) {
+        // Look for libhost.a in common test locations
+        const test_paths = [_][]const u8{
+            "test/platform/str/libhost.a",
+            "libhost.a",
+            "host.a",
+        };
+
+        for (test_paths) |path| {
+            std.fs.cwd().access(path, .{}) catch continue;
+            return try gpa.dupe(u8, path);
+        }
+    }
+
     // TEMPORARY: For testing the interpreter, use our test host library
     if (std.mem.eql(u8, platform_spec, "test")) {
         return gpa.dupe(u8, "libtest_host.a");
