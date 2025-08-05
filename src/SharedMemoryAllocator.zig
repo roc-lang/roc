@@ -208,23 +208,15 @@ pub fn create(size: usize, page_size: usize) !SharedMemoryAllocator {
             // Create a file descriptor for shared memory that can be passed to child processes
             const fd: std.posix.fd_t = blk: {
                 if (builtin.os.tag == .linux) {
-                    // std.os.linux.memfd_create returns usize (I guess to match kernel ABI),
-                    // but the Linux stdlib function returns an i32.
-                    // Later functions expect to be passed one of these, so cast to it.
-                    //
-                    // Source: https://www.man7.org/linux/man-pages/man2/memfd_create.2.html
-                    const fd: i32 = @bitCast(std.os.linux.memfd_create(
-                        // We unlink this name immediately, so it won't pollute
-                        // the child process's namespace. We just want the fd!
-                        "roc_shm",
-                        std.os.linux.MFD.CLOEXEC,
-                    ));
+                    // std.os.linux.memfd_create returns usize but the syscall returns signed int,
+                    // so we will end up having to cast it.
+                    const fd_raw = std.os.linux.memfd_create("roc_shm", std.os.linux.MFD.CLOEXEC);
 
-                    if (fd < 0) {
-                        return error.MemfdCreateFailed;
-                    }
-
-                    break :blk fd;
+                    // On error this returns -1, which is such a large usize that it won't fit in i32, meaning
+                    // we treat that as a failure. (We also have to fail if it's such a large positive number
+                    // that it doesn't fit in i32. Although that scenario should never happen in practice,
+                    // this gracefully handles that scenario as a failure without an extra conditional.)
+                    break :blk std.math.cast(std.posix.fd_t, fd_raw) orelse return error.MemfdCreateFailed;
                 } else {
                     // On other Unix systems, use shm_open with a random name
                     const random_name = std.fmt.allocPrint(std.heap.page_allocator, "/roc_shm_{}", .{std.crypto.random.int(u64)}) catch {
