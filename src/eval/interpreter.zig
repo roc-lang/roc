@@ -131,6 +131,8 @@ const WorkKind = enum {
     w_block_cleanup,
     w_dot_access,
     w_crash,
+    w_str_interpolate_segments,
+    w_str_interpolate_combine,
 };
 
 /// A unit of work to be processed during iterative evaluation.
@@ -157,6 +159,7 @@ pub const WorkItem = struct {
     /// Optional extra data for e.g. if-expressions and lambda call
     extra: union {
         nothing: void,
+        none: void,
         arg_count: u32,
         current_field_idx: usize,
         bindings_stack_len: usize,
@@ -164,6 +167,7 @@ pub const WorkItem = struct {
         dot_access_field_name: Ident.Idx,
         current_element_idx: usize,
         crash_msg: StringLiteral.Idx,
+        segment_count: usize,
     },
 };
 
@@ -226,20 +230,26 @@ pub const Value = struct {
 
 // RocOps wrapper functions for interpreter bridge
 fn rocAlloc(alloc_args: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.C) void {
+    std.log.warn("rocAlloc called with env=0x{x}, alloc_args.length={}", .{ @intFromPtr(env), alloc_args.length });
     const interp: *Interpreter = @ptrCast(@alignCast(env));
+    std.log.warn("rocAlloc: cast to Interpreter succeeded", .{});
 
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
+    std.log.warn("rocAlloc: alignment={}", .{alloc_args.alignment});
 
     // Calculate additional bytes needed to store the size
     const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
     const total_size = alloc_args.length + size_storage_bytes;
+    std.log.warn("rocAlloc: about to allocate {} bytes", .{total_size});
 
-    // Allocate memory including space for size metadata
-    const result = interp.allocator.rawAlloc(total_size, align_enum, @returnAddress());
-
-    const base_ptr = result orelse {
+    // Allocate memory including space for size metadata  
+    std.log.warn("rocAlloc: calling interp.allocator.alloc", .{});
+    const base_slice = interp.allocator.alloc(u8, total_size) catch |err| {
+        std.log.warn("rocAlloc: allocation failed with error: {}", .{err});
         std.debug.panic("Out of memory during rocAlloc", .{});
     };
+    std.log.warn("rocAlloc: alloc returned successfully", .{});
+    const base_ptr = base_slice.ptr;
+    std.log.warn("rocAlloc: allocation succeeded, base_ptr=0x{x}", .{@intFromPtr(base_ptr)});
 
     // Store the total size (including metadata) right before the user data
     const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
@@ -247,6 +257,7 @@ fn rocAlloc(alloc_args: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.
 
     // Return pointer to the user data (after the size metadata)
     alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+    std.log.warn("rocAlloc: returning answer=0x{x}", .{@intFromPtr(alloc_args.answer)});
 }
 
 fn rocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.C) void {
@@ -510,6 +521,8 @@ pub const Interpreter = struct {
                     self.work_stack.clearRetainingCapacity();
                     // The eval loop will check this and return EvalError.Crash
                 },
+                .w_str_interpolate_combine => try self.handleStringInterpolateCombine(work.extra.segment_count),
+                .w_str_interpolate_segments => {}, // Just a marker, no action needed
                 .w_eval_tuple_elements => try self.handleTupleElements(
                     work.expr_idx,
                     work.extra.current_element_idx,
@@ -1209,7 +1222,9 @@ pub const Interpreter = struct {
                 // Initialize the RocStr
                 std.debug.assert(result_value.ptr != null);
                 const roc_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
+                self.traceInfo("e_str_segment: About to call RocStr.fromSlice with content: \"{s}\"", .{literal_content});
                 roc_str.* = builtins.str.RocStr.fromSlice(literal_content, &self.roc_ops);
+                self.traceInfo("e_str_segment: RocStr initialized successfully", .{});
             },
 
             .e_str => |str_expr| {
@@ -1230,8 +1245,23 @@ pub const Interpreter = struct {
                     return;
                 }
 
-                // Evaluate all segments
-                try self.evaluateStringInterpolation(segments);
+                // Schedule string interpolation work items
+                // First, schedule the combine work (executed last due to LIFO)
+                self.schedule_work(WorkItem{
+                    .kind = .w_str_interpolate_combine,
+                    .expr_idx = expr_idx,
+                    .extra = .{ .segment_count = segments.len },
+                });
+
+                // Then schedule evaluation of each segment (in reverse order for LIFO)
+                var i = segments.len;
+                while (i > 0) : (i -= 1) {
+                    self.schedule_work(WorkItem{
+                        .kind = .w_eval_expr,
+                        .expr_idx = segments[i - 1],
+                        .extra = .{ .none = {} },
+                    });
+                }
             },
 
             .e_list, .e_lookup_external, .e_match, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
@@ -2343,6 +2373,7 @@ pub const Interpreter = struct {
 
         // Run the work loop
         while (self.take_work()) |work| {
+            self.traceInfo("callClosureWithStackArgs: processing work item {s}", .{@tagName(work.kind)});
             switch (work.kind) {
                 .w_eval_expr => try self.evalExpr(work.expr_idx),
                 .w_lambda_call => try self.handleLambdaCall(
@@ -2354,6 +2385,7 @@ pub const Interpreter = struct {
                     try self.processWorkItem(work);
                 },
             }
+            self.traceInfo("callClosureWithStackArgs: work item {s} completed, work_stack.len={}", .{ @tagName(work.kind), self.work_stack.items.len });
         }
 
         // Return the result from the top of the stack
@@ -2399,6 +2431,12 @@ pub const Interpreter = struct {
 
             // Field access
             .w_dot_access => try self.handleDotAccess(work.extra.dot_access_field_name),
+
+            // String interpolation combine
+            .w_str_interpolate_combine => try self.handleStringInterpolateCombine(work.extra.segment_count),
+            
+            // String interpolation segments work is just a marker, no action needed
+            .w_str_interpolate_segments => {},
 
             // Runtime errors
             .w_crash => {
@@ -2562,7 +2600,98 @@ pub const Interpreter = struct {
         }
     }
 
+    /// Handle string interpolation combine work item - combines all evaluated segments
+    fn handleStringInterpolateCombine(self: *Interpreter, segment_count: usize) EvalError!void {
+        self.traceEnter("handleStringInterpolateCombine with {} segments", .{segment_count});
+        defer self.traceExit("", .{});
+
+        // Optimization: for single string segment, avoid unnecessary cloning
+        if (segment_count == 1) {
+            // The single segment is already on the stack as the result
+            const segment_value = try self.popStackValue();
+            
+            // If it's already a string, just push it back as the final result
+            if (segment_value.layout.tag == .scalar and segment_value.layout.data.scalar.tag == .str) {
+                const str_layout = Layout.str();
+                const result_value = try self.pushStackValue(str_layout);
+                
+                // Move the string (no reference count change needed)
+                const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(segment_value.ptr.?));
+                const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
+                dest_str.* = src_str.*;
+                
+                return;
+            }
+            
+            // Not a string, convert it
+            const segment_str = try self.valueToString(segment_value);
+            const str_layout = Layout.str();
+            const result_value = try self.pushStackValue(str_layout);
+            const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
+            dest_str.* = segment_str;
+            return;
+        }
+
+        // Multiple segments: collect all evaluated string segments
+        var segment_strings = std.ArrayList(builtins.str.RocStr).init(self.allocator);
+        defer {
+            // Clean up all segment strings
+            for (segment_strings.items) |*segment_str| {
+                segment_str.decref(&self.roc_ops);
+            }
+            segment_strings.deinit();
+        }
+
+        // Pop all segment values from the stack (they're in reverse order due to LIFO)
+        var i = segment_count;
+        while (i > 0) : (i -= 1) {
+            const segment_value = try self.popStackValue();
+            const segment_str = try self.valueToString(segment_value);
+            try segment_strings.insert(0, segment_str);  // Insert at beginning to maintain order
+        }
+
+        // Calculate total length for concatenation
+        var total_len: usize = 0;
+        for (segment_strings.items) |segment_str| {
+            total_len += segment_str.asSlice().len;
+        }
+
+        // Create the result string
+        var result_str: builtins.str.RocStr = undefined;
+
+        if (total_len == 0) {
+            // Empty result
+            result_str = builtins.str.RocStr.empty();
+        } else {
+            // Allocate space for the concatenated string
+            const result_slice = try self.allocator.alloc(u8, total_len);
+            defer self.allocator.free(result_slice);
+
+            // Concatenate all segments
+            var offset: usize = 0;
+            for (segment_strings.items) |segment_str| {
+                const segment_slice = segment_str.asSlice();
+                std.mem.copyForwards(u8, result_slice[offset .. offset + segment_slice.len], segment_slice);
+                offset += segment_slice.len;
+            }
+
+            // Create RocStr from the concatenated data
+            result_str = builtins.str.RocStr.fromSlice(result_slice, &self.roc_ops);
+        }
+
+        // Push the final string onto the stack
+        const str_layout = Layout.str();
+        const result_value = try self.pushStackValue(str_layout);
+        
+        // Copy the result string into the stack value
+        const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
+        dest_str.* = result_str;
+        
+        self.traceInfo("String interpolation complete, result length: {}", .{result_str.asSlice().len});
+    }
+
     /// Evaluate all segments of a string interpolation and combine them into a final string.
+    /// DEPRECATED: This function is replaced by work queue-based evaluation
     fn evaluateStringInterpolation(self: *Interpreter, segments: []const ModuleEnv.Expr.Idx) EvalError!void {
         self.traceEnter("evaluateStringInterpolation with {} segments", .{segments.len});
         defer self.traceExit("", .{});
