@@ -1855,7 +1855,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
                 self.advance(); // consume DoubleDot
 
                 // Parse the extension
-                const ext_expr = try self.parseExprWithBp(0);
+                const ext_expr = try self.parseExpr();
 
                 // Expect comma after extension
                 if (self.peek() != .Comma) {

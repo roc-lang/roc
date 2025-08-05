@@ -139,7 +139,7 @@ fn do_benchmark(branch_name: &'static str) -> HashSet<String> {
     let bench_name_regex = Regex::new(r#"".*""#).expect("Failed to build regex");
 
     for line in stdout_lines {
-        let line_str = line.expect("Failed to get output from banchmark command.");
+        let line_str = line.expect("Failed to get output from benchmark command.");
 
         if line_str.contains("regressed") {
             let regressed_bench_name_line = last_three_lines_queue.get(2).expect(
