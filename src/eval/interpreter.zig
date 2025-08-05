@@ -3019,41 +3019,92 @@ pub const Interpreter = struct {
 
         std.log.warn("Pushing {} closure arguments", .{param_patterns.len});
 
-        if (param_patterns.len == 1) {
-            // Single parameter case
-            const p0 = param_patterns[0];
-            const arg0_var: types.Var = @enumFromInt(@intFromEnum(p0));
-            const arg0_layout_idx = self.layout_cache.addTypeVar(arg0_var) catch {
+        // When multiple arguments are passed from the platform host, they're packed in an
+        // extern struct (tuple-like layout). We need to extract each field from the struct
+        // and push it onto the stack, respecting alignment requirements.
+        var current_offset: usize = 0;
+        const base_ptr = @as([*]u8, @ptrCast(arg_ptr));
+
+        for (param_patterns, 0..) |pattern_idx, i| {
+            // Get the type and layout for this parameter
+            const param_var = ModuleEnv.varFrom(pattern_idx);
+            const param_layout_idx = self.layout_cache.addTypeVar(param_var) catch {
+                std.log.err("Failed to get layout for parameter pattern={}", .{pattern_idx});
                 return error.LayoutError;
             };
-            const arg0_layout = self.layout_cache.getLayout(arg0_layout_idx);
-            const size_bytes = self.layout_cache.layoutSize(arg0_layout);
+            const param_layout = self.layout_cache.getLayout(param_layout_idx);
+            const param_size = self.layout_cache.layoutSize(param_layout);
+            const param_alignment = param_layout.alignment(target_usize);
 
-            const dest_value = self.pushStackValue(arg0_layout) catch {
+            // Align the offset for this field in the struct
+            current_offset = std.mem.alignForward(usize, current_offset, param_alignment.toByteUnits());
+            const field_ptr = base_ptr + current_offset;
+
+            // Push space for this parameter on the stack
+            const dest_value = self.pushStackValue(param_layout) catch {
+                std.log.err("Stack overflow while pushing argument {}", .{i});
                 return error.StackOverflow;
             };
 
-            // Copy the argument data
-            if (size_bytes > 0 and dest_value.ptr != null) {
+            // Transfer the argument data to the stack
+            if (param_size > 0 and dest_value.ptr != null) {
                 std.debug.assert(dest_value.ptr != null);
-                const src = @as([*]const u8, @ptrCast(arg_ptr.?))[0..size_bytes];
-                const dst = @as([*]u8, @ptrCast(dest_value.ptr.?))[0..size_bytes];
 
-                // Debug: log what we're copying
-                std.log.warn("Copying from arg_ptr=0x{x} to stack=0x{x}, size={}", .{ @intFromPtr(arg_ptr.?), @intFromPtr(dest_value.ptr.?), size_bytes });
-                if (size_bytes >= 24) {
-                    // For RocStr, log the first few fields
-                    const src_rocstr = @as(*const builtins.str.RocStr, @ptrCast(@alignCast(arg_ptr.?)));
-                    std.log.warn("Source RocStr: bytes={*}, length={}, capacity={}", .{ src_rocstr.bytes, src_rocstr.length, src_rocstr.capacity_or_alloc_ptr });
+                // For heap-allocated types like RocStr, we need to incref
+                // instead of just copying to avoid double-frees
+                if (param_layout.isRefcounted()) {
+                    try transferHeapAllocatedValue(field_ptr, dest_value.ptr.?, param_layout, param_size);
+                } else {
+                    // For primitive types, just copy the bytes
+                    const src = field_ptr[0..param_size];
+                    const dst = @as([*]u8, @ptrCast(dest_value.ptr.?))[0..param_size];
+                    @memcpy(dst, src);
                 }
 
-                @memcpy(dst, src);
-                std.log.warn("Copied {} bytes from arg_ptr to stack", .{size_bytes});
+                std.log.warn("Pushed argument {} of {} (size={}, offset={})", .{ i + 1, param_patterns.len, param_size, current_offset });
             }
-        } else {
-            // Multiple parameters - for now, just log and skip
-            std.log.warn("Multiple parameter closures not yet implemented in simplified version", .{});
-            return error.UnexpectedClosureStructure;
+
+            // Move to the next field
+            current_offset = current_offset + param_size;
+        }
+    }
+
+    /// Transfer a heap-allocated value by incrementing its refcount
+    fn transferHeapAllocatedValue(
+        src_ptr: *anyopaque,
+        dst_ptr: *anyopaque,
+        value_layout: Layout,
+        size: usize,
+    ) !void {
+        // First copy the bytes
+        const src = @as([*]const u8, @ptrCast(src_ptr))[0..size];
+        const dst = @as([*]u8, @ptrCast(dst_ptr))[0..size];
+        @memcpy(dst, src);
+
+        // Then increment refcount for the appropriate type
+        switch (value_layout.tag) {
+            .scalar => switch (value_layout.data.scalar.tag) {
+                .str => {
+                    // For RocStr, increment the refcount
+                    const roc_str: *RocStr = @ptrCast(@alignCast(dst_ptr));
+                    roc_str.incref(1);
+                    std.log.warn("Incremented refcount for RocStr at 0x{x}", .{@intFromPtr(dst_ptr)});
+                },
+                else => {},
+            },
+            .list, .list_of_zst => {
+                // TODO: Implement list refcounting when needed
+                // For lists, increment refcount
+                // const roc_list: *RocList = @ptrCast(@alignCast(dst_ptr));
+                // roc_list.incref(1, list_elements_refcounted??)
+                std.log.warn("List refcounting not yet implemented", .{});
+            },
+            .box, .box_of_zst => {
+                // For boxes, increment refcount
+                // TODO: Implement box refcounting when needed
+                std.log.warn("Box refcounting not yet implemented", .{});
+            },
+            else => {},
         }
     }
 

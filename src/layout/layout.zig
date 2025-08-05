@@ -373,6 +373,19 @@ pub const Layout = packed struct {
             .tag = .closure,
         };
     }
+
+    /// Check if a layout represents a heap-allocated type that needs refcounting
+    pub fn isRefcounted(self: Layout) bool {
+        return switch (self.tag) {
+            .scalar => switch (self.data.scalar.tag) {
+                .str => true, // RocStr needs refcounting
+                else => false,
+            },
+            .list, .list_of_zst => true, // Lists need refcounting
+            .box, .box_of_zst => true, // Boxes need refcounting
+            else => false,
+        };
+    }
 };
 
 test "Size of Layout type" {

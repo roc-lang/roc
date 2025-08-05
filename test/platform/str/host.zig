@@ -8,7 +8,7 @@ const RocDealloc = builtins.host_abi.RocDealloc;
 const RocRealloc = builtins.host_abi.RocRealloc;
 const RocCrashed = builtins.host_abi.RocCrashed;
 const RocAlloc = builtins.host_abi.RocAlloc;
-const RocCall = builtins.host_abi.RocCall;
+const RocOps = builtins.host_abi.RocOps;
 const RocDbg = builtins.host_abi.RocDbg;
 const RocStr = builtins.str.RocStr;
 
@@ -80,7 +80,7 @@ fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.C) no
 
 // External symbol provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc_entrypoint(ops: *RocCall, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
+extern fn roc_entrypoint(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
 
 /// Platform host entrypoint -- this is where the roc application starts and does platform things
 /// before the platform calls into Roc to do application-specific things.
@@ -93,7 +93,7 @@ pub export fn main() void {
     const stdout = std.io.getStdOut().writer();
 
     // Create the RocOps struct
-    var roc_ops = builtins.host_abi.RocOps{
+    var roc_ops = RocOps{
         .env = @as(*anyopaque, @ptrCast(&host_env)),
         .roc_alloc = rocAllocFn,
         .roc_dealloc = rocDeallocFn,
