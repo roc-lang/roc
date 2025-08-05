@@ -20,11 +20,29 @@ const MODULE_ENV_OFFSET = 0x10; // 8 bytes for u64, 4 bytes for u32, 4 bytes pad
 const MAX_CLOSURE_PARAMS = 8; // Maximum number of closure parameters supported
 const RESULT_BUFFER_SIZE = 1024; // Buffer size for formatting results
 
-// Error types for memory safety
+// Error types for comprehensive error handling
 const MemoryError = error{
     BufferOverflow,
     InvalidOffset,
     NullPointer,
+};
+
+const EvaluationError = error{
+    InvalidExpressionType,
+    UnexpectedClosureStructure,
+    StackInitFailed,
+    LayoutCacheInitFailed,
+    InterpreterInitFailed,
+    EvaluationFailed,
+    ClosureCallFailed,
+    ParameterCountExceeded,
+};
+
+const SharedMemoryError = error{
+    FdInfoReadFailed,
+    SharedMemoryMappingFailed,
+    InvalidMemoryLayout,
+    RelocationFailed,
 };
 
 /// Safely copy memory with bounds checking
@@ -54,10 +72,10 @@ fn safeSlice(ptr: ?*anyopaque, offset: usize, length: usize, total_size: usize) 
 }
 
 /// Validate parameter count is within reasonable bounds
-fn validateParameterCount(param_count: usize) MemoryError!void {
+fn validateParameterCount(param_count: usize) EvaluationError!void {
     if (param_count > MAX_CLOSURE_PARAMS) {
         std.log.err("Parameter count {} exceeds maximum {}", .{ param_count, MAX_CLOSURE_PARAMS });
-        return error.BufferOverflow;
+        return error.ParameterCountExceeded;
     }
 }
 
@@ -80,19 +98,17 @@ fn safeCopyArgument(arg_ptr: ?*anyopaque, dest_ptr: ?*anyopaque, elem_offset: us
 }
 
 /// Common evaluation logic for both POSIX and Windows platforms
-fn evaluateExpression(env_ptr: *ModuleEnv, expr_idx: u32, arg_ptr: ?*anyopaque, ops: *builtins.host_abi.RocOps) !RocStr {
+fn evaluateExpression(env_ptr: *ModuleEnv, expr_idx: u32, arg_ptr: ?*anyopaque, ops: *builtins.host_abi.RocOps) EvaluationError!RocStr {
     // Set up the interpreter infrastructure
     var eval_stack = stack.Stack.initCapacity(std.heap.page_allocator, 64 * 1024) catch |err| {
-        var buf: [256]u8 = undefined;
-        const err_str = std.fmt.bufPrint(&buf, "Stack init error: {s}", .{@errorName(err)}) catch "Error";
-        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+        std.log.err("Stack initialization failed: {s}", .{@errorName(err)});
+        return error.StackInitFailed;
     };
     defer eval_stack.deinit();
 
     var layout_cache = layout_store.Store.init(env_ptr, &env_ptr.types) catch |err| {
-        var buf: [256]u8 = undefined;
-        const err_str = std.fmt.bufPrint(&buf, "Layout cache error: {s}", .{@errorName(err)}) catch "Error";
-        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+        std.log.err("Layout cache initialization failed: {s}", .{@errorName(err)});
+        return error.LayoutCacheInitFailed;
     };
     defer layout_cache.deinit();
 
@@ -103,9 +119,8 @@ fn evaluateExpression(env_ptr: *ModuleEnv, expr_idx: u32, arg_ptr: ?*anyopaque, 
         &layout_cache,
         &env_ptr.types,
     ) catch |err| {
-        var buf: [256]u8 = undefined;
-        const err_str = std.fmt.bufPrint(&buf, "Interpreter init error: {s}", .{@errorName(err)}) catch "Error";
-        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+        std.log.err("Interpreter initialization failed: {s}", .{@errorName(err)});
+        return error.InterpreterInitFailed;
     };
     interpreter.initRocOpsEnv();
     defer interpreter.deinit();
@@ -118,9 +133,8 @@ fn evaluateExpression(env_ptr: *ModuleEnv, expr_idx: u32, arg_ptr: ?*anyopaque, 
     // Check if the expression is a closure by getting its layout
     const expr_var: types.Var = @enumFromInt(@intFromEnum(expr_idx_enum));
     const layout_idx = layout_cache.addTypeVar(expr_var) catch |err| {
-        var buf: [256]u8 = undefined;
-        const err_str = std.fmt.bufPrint(&buf, "Layout error: {s}", .{@errorName(err)}) catch "Error";
-        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+        std.log.err("Failed to add type variable for layout: {s}", .{@errorName(err)});
+        return error.LayoutCacheInitFailed;
     };
     const expr_layout = layout_cache.getLayout(layout_idx);
 
@@ -130,14 +144,16 @@ fn evaluateExpression(env_ptr: *ModuleEnv, expr_idx: u32, arg_ptr: ?*anyopaque, 
 
     // If it's a closure and we have arguments, handle the closure call properly
     if (expr_layout.tag == .closure and arg_ptr != null) {
-        return try evaluateClosure(env_ptr, &interpreter, &layout_cache, expr_idx_enum, arg_ptr, ops);
+        return evaluateClosure(env_ptr, &interpreter, &layout_cache, expr_idx_enum, arg_ptr, ops) catch |err| {
+            std.log.err("Closure evaluation failed: {s}", .{@errorName(err)});
+            return error.ClosureCallFailed;
+        };
     }
 
     // Evaluate using the REAL interpreter (for non-closure cases)
     const stack_result = interpreter.eval(expr_idx_enum) catch |err| {
-        var buf: [256]u8 = undefined;
-        const err_str = std.fmt.bufPrint(&buf, "Evaluation error: {s}", .{@errorName(err)}) catch "Error";
-        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
+        std.log.err("Expression evaluation failed: {s}", .{@errorName(err)});
+        return error.EvaluationFailed;
     };
 
     // Format the result based on its layout
@@ -155,16 +171,21 @@ fn evaluateClosure(env_ptr: *ModuleEnv, interpreter: *eval.Interpreter, layout_c
     const lambda_expr = switch (closure_expr) {
         .e_closure => |closure_data| env_ptr.store.getExpr(closure_data.lambda_idx),
         .e_lambda => closure_expr,
-        else => @panic("Expected closure or lambda"),
+        else => {
+            std.log.err("Expected closure or lambda expression, got: {s}", .{@tagName(closure_expr)});
+            return error.UnexpectedClosureStructure;
+        },
     };
 
     const param_patterns = switch (lambda_expr) {
         .e_lambda => |lambda_data| env_ptr.store.slicePatterns(lambda_data.args),
-        else => @panic("Expected lambda"),
+        else => {
+            std.log.err("Expected lambda expression, got: {s}", .{@tagName(lambda_expr)});
+            return error.UnexpectedClosureStructure;
+        },
     };
 
     const param_count = param_patterns.len;
-    std.log.warn("Closure has {} parameters", .{param_count});
 
     // Validate parameter count
     validateParameterCount(param_count) catch |err| {
@@ -197,21 +218,18 @@ fn pushClosureArguments(interpreter: *eval.Interpreter, layout_cache: *layout_st
         const arg0_var: types.Var = @enumFromInt(@intFromEnum(p0));
         const arg0_layout = blk: {
             const added = layout_cache.addTypeVar(arg0_var) catch |err| {
-                const err_str = std.fmt.bufPrint(buf, "Layout addTypeVar error (single arg): {s}", .{@errorName(err)}) catch "Error";
-                return createRocStrFromData(ops, @as([*]u8, @ptrCast(buf)), err_str.len);
+                return err;
             };
             break :blk layout_cache.getLayout(added);
         };
         const size_bytes = layout_cache.layoutSize(arg0_layout);
         const dest_ptr = interpreter.pushStackValue(arg0_layout) catch |err| {
-            const err_str = std.fmt.bufPrint(buf, "Push failed: {s}", .{@errorName(err)}) catch "Push failed";
-            return createRocStrFromData(ops, @as([*]u8, @ptrCast(buf)), err_str.len);
+            return err;
         };
 
         // Use safe copy with bounds checking for single parameter
         safeCopyArgument(arg_ptr, dest_ptr, 0, size_bytes, size_bytes) catch |err| {
-            const err_str = std.fmt.bufPrint(buf, "Single argument copy error: {s}", .{@errorName(err)}) catch "Single argument copy error";
-            return createRocStrFromData(ops, @as([*]u8, @ptrCast(buf)), err_str.len);
+            return err;
         };
     } else {
         // Multiple parameters case
@@ -221,6 +239,8 @@ fn pushClosureArguments(interpreter: *eval.Interpreter, layout_cache: *layout_st
 
 /// Push multiple arguments for closure calls
 fn pushMultipleArguments(interpreter: *eval.Interpreter, layout_cache: *layout_store.Store, param_patterns: []const ModuleEnv.Pattern.Idx, arg_ptr: ?*anyopaque, buf: *[RESULT_BUFFER_SIZE]u8, ops: *builtins.host_abi.RocOps) !void {
+    _ = ops; // Not used in this function but needed for consistency
+    _ = buf; // Not used in this function but needed for consistency
     const param_count = param_patterns.len;
     var param_vars_buf: [MAX_CLOSURE_PARAMS]types.Var = undefined;
     var idx: usize = 0;
@@ -235,8 +255,7 @@ fn pushMultipleArguments(interpreter: *eval.Interpreter, layout_cache: *layout_s
     while (i_build < param_count) : (i_build += 1) {
         const v = param_vars_buf[i_build];
         const idx_v = layout_cache.addTypeVar(v) catch |err| {
-            const err_str = std.fmt.bufPrint(buf, "addTypeVar error (tuple param {}): {s}", .{ i_build, @errorName(err) }) catch "Error";
-            return createRocStrFromData(ops, @as([*]u8, @ptrCast(buf)), err_str.len);
+            return err;
         };
         elem_layouts[i_build] = layout_cache.getLayout(idx_v);
     }
@@ -267,14 +286,12 @@ fn pushMultipleArguments(interpreter: *eval.Interpreter, layout_cache: *layout_s
         const elem_offset = offsets[i_copy];
 
         const dest_ptr = interpreter.pushStackValue(elem_layout) catch |err| {
-            const err_str = std.fmt.bufPrint(buf, "Push failed: {s}", .{@errorName(err)}) catch "Push failed";
-            return createRocStrFromData(ops, @as([*]u8, @ptrCast(buf)), err_str.len);
+            return err;
         };
 
         // Use safe copy with bounds checking
         safeCopyArgument(arg_ptr, dest_ptr, elem_offset, elem_size, total_tuple_size) catch |err| {
-            const err_str = std.fmt.bufPrint(buf, "Argument copy error: {s}", .{@errorName(err)}) catch "Argument copy error";
-            return createRocStrFromData(ops, @as([*]u8, @ptrCast(buf)), err_str.len);
+            return err;
         };
     }
 }
@@ -302,32 +319,95 @@ const windows = if (is_windows) struct {
 
     extern "kernel32" fn OpenFileMappingW(dwDesiredAccess: DWORD, bInheritHandle: BOOL, lpName: LPCWSTR) ?HANDLE;
     extern "kernel32" fn MapViewOfFile(hFileMappingObject: HANDLE, dwDesiredAccess: DWORD, dwFileOffsetHigh: DWORD, dwFileOffsetLow: DWORD, dwNumberOfBytesToMap: SIZE_T) LPVOID;
+    extern "kernel32" fn MapViewOfFileEx(hFileMappingObject: HANDLE, dwDesiredAccess: DWORD, dwFileOffsetHigh: DWORD, dwFileOffsetLow: DWORD, dwNumberOfBytesToMap: SIZE_T, lpBaseAddress: LPVOID) LPVOID;
     extern "kernel32" fn UnmapViewOfFile(lpBaseAddress: LPVOID) BOOL;
     extern "kernel32" fn CloseHandle(hObject: HANDLE) BOOL;
     extern "kernel32" fn GetFileSizeEx(hFile: HANDLE, lpFileSize: *i64) BOOL;
+    extern "kernel32" fn GetLastError() DWORD;
+    extern "kernel32" fn CreateFileW(lpFileName: LPCWSTR, dwDesiredAccess: DWORD, dwShareMode: DWORD, lpSecurityAttributes: ?*anyopaque, dwCreationDisposition: DWORD, dwFlagsAndAttributes: DWORD, hTemplateFile: ?HANDLE) HANDLE;
+    extern "kernel32" fn ReadFile(hFile: HANDLE, lpBuffer: *anyopaque, nNumberOfBytesToRead: DWORD, lpNumberOfBytesRead: *DWORD, lpOverlapped: ?*anyopaque) BOOL;
 
     const FILE_MAP_READ = 0x0004;
+    const FILE_MAP_WRITE = 0x0002;
+
+    const GENERIC_READ = 0x80000000;
+    const FILE_SHARE_READ = 0x00000001;
+    const OPEN_EXISTING = 3;
+    const FILE_ATTRIBUTE_NORMAL = 0x00000080;
+    const INVALID_HANDLE_VALUE = @as(HANDLE, @ptrFromInt(std.math.maxInt(usize)));
+
+    // Fixed base address for shared memory mapping to avoid ASLR issues
+    // Must match the address used in main.zig
+    const SHARED_MEMORY_BASE_ADDR = @as(?*anyopaque, @ptrFromInt(0x10000000));
 } else struct {};
 
-/// Info read from the coordination file
+/// Info read from the coordination file or command line
 const FdInfo = struct {
     fd_str: []u8,
     size: usize,
 };
 
-/// Read the fd/handle and size from the filesystem-based communication mechanism
-fn readFdInfo() !FdInfo {
+/// Read the fd/handle and size from command line (Windows) or filesystem (POSIX)
+fn readFdInfo() SharedMemoryError!FdInfo {
+    if (comptime is_windows) {
+        return readFdInfoFromCommandLine();
+    } else {
+        return readFdInfoFromFile();
+    }
+}
+
+/// Windows: Read handle and size from command line arguments
+fn readFdInfoFromCommandLine() SharedMemoryError!FdInfo {
+    const args = std.process.argsAlloc(std.heap.page_allocator) catch |err| {
+        std.log.err("Failed to allocate memory for command line arguments: {s}", .{@errorName(err)});
+        return error.FdInfoReadFailed;
+    };
+    defer std.process.argsFree(std.heap.page_allocator, args);
+
+    if (args.len < 3) {
+        std.log.err("Invalid command line arguments: expected at least 3 arguments, got {}", .{args.len});
+        return error.FdInfoReadFailed;
+    }
+
+    const handle_str = args[1];
+    const size_str = args[2];
+
+    const fd_str = std.heap.page_allocator.dupe(u8, handle_str) catch |err| {
+        std.log.err("Failed to duplicate handle string: {s}", .{@errorName(err)});
+        return error.FdInfoReadFailed;
+    };
+    const size = std.fmt.parseInt(usize, size_str, 10) catch |err| {
+        std.log.err("Failed to parse size from '{s}': {s}", .{ size_str, @errorName(err) });
+        return error.FdInfoReadFailed;
+    };
+
+    return FdInfo{
+        .fd_str = fd_str,
+        .size = size,
+    };
+}
+
+/// POSIX: Read fd and size from temporary file (existing approach)
+fn readFdInfoFromFile() SharedMemoryError!FdInfo {
+
     // Get our own executable path
-    const exe_path = try std.fs.selfExePathAlloc(std.heap.page_allocator);
+    const exe_path = std.fs.selfExePathAlloc(std.heap.page_allocator) catch |err| {
+        std.log.err("Failed to get executable path: {s}", .{@errorName(err)});
+        return error.FdInfoReadFailed;
+    };
     defer std.heap.page_allocator.free(exe_path);
 
     // Get the directory containing our executable (should be "roc-tmp-<random>")
-    const exe_dir = std.fs.path.dirname(exe_path) orelse return error.InvalidExePath;
+    const exe_dir = std.fs.path.dirname(exe_path) orelse {
+        std.log.err("Invalid executable path: no directory component", .{});
+        return error.FdInfoReadFailed;
+    };
     const dir_basename = std.fs.path.basename(exe_dir);
 
     // Verify it has the expected prefix
     if (!std.mem.startsWith(u8, dir_basename, "roc-tmp-")) {
-        return error.UnexpectedDirName;
+        std.log.err("Unexpected directory name: expected 'roc-tmp-*', got '{s}'", .{dir_basename});
+        return error.FdInfoReadFailed;
     }
 
     // Construct the fd file path by appending .txt to the directory path
@@ -337,29 +417,49 @@ fn readFdInfo() !FdInfo {
         dir_path = dir_path[0 .. dir_path.len - 1];
     }
 
-    const fd_file_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}.txt", .{dir_path});
+    const fd_file_path = std.fmt.allocPrint(std.heap.page_allocator, "{s}.txt", .{dir_path}) catch |err| {
+        std.log.err("Failed to format fd file path: {s}", .{@errorName(err)});
+        return error.FdInfoReadFailed;
+    };
     defer std.heap.page_allocator.free(fd_file_path);
 
-    // Read the fd and size from the file
-    const fd_file = std.fs.cwd().openFile(fd_file_path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return error.FdFileNotFound,
-        else => return err,
+    // Use standard file operations instead of Windows API
+    const file = std.fs.cwd().openFile(fd_file_path, .{}) catch |err| {
+        std.log.err("Failed to open fd file: {s}", .{@errorName(err)});
+        return error.FdInfoReadFailed;
     };
-    defer fd_file.close();
+    defer file.close();
 
-    const content = try fd_file.readToEndAlloc(std.heap.page_allocator, 128);
-    defer std.heap.page_allocator.free(content);
+    var buffer: [128]u8 = undefined;
+    const bytes_read = file.readAll(&buffer) catch |err| {
+        std.log.err("Failed to read fd file: {s}", .{@errorName(err)});
+        return error.FdInfoReadFailed;
+    };
+
+    const content = buffer[0..bytes_read];
 
     // Don't delete the fd file yet - let the parent process clean it up
     // std.fs.cwd().deleteFile(fd_file_path) catch {};
 
     // Parse the content: first line is fd, second line is size
     var lines = std.mem.tokenizeScalar(u8, content, '\n');
-    const fd_line = lines.next() orelse return error.InvalidFileFormat;
-    const size_line = lines.next() orelse return error.InvalidFileFormat;
+    const fd_line = lines.next() orelse {
+        std.log.err("Invalid fd file format: missing fd line", .{});
+        return error.FdInfoReadFailed;
+    };
+    const size_line = lines.next() orelse {
+        std.log.err("Invalid fd file format: missing size line", .{});
+        return error.FdInfoReadFailed;
+    };
 
-    const fd_str = try std.heap.page_allocator.dupe(u8, std.mem.trim(u8, fd_line, " \r\t"));
-    const size = try std.fmt.parseInt(usize, std.mem.trim(u8, size_line, " \r\t"), 10);
+    const fd_str = std.heap.page_allocator.dupe(u8, std.mem.trim(u8, fd_line, " \r\t")) catch |err| {
+        std.log.err("Failed to duplicate fd string: {s}", .{@errorName(err)});
+        return error.FdInfoReadFailed;
+    };
+    const size = std.fmt.parseInt(usize, std.mem.trim(u8, size_line, " \r\t"), 10) catch |err| {
+        std.log.err("Failed to parse size from '{s}': {s}", .{ size_line, @errorName(err) });
+        return error.FdInfoReadFailed;
+    };
 
     return FdInfo{
         .fd_str = fd_str,
@@ -373,91 +473,18 @@ fn readFdInfo() !FdInfo {
 export fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void {
     // Use the appropriate evaluation function based on platform
     if (is_windows) {
-        evaluateFromWindowsSharedMemoryDirect(ops, ret_ptr, arg_ptr);
+        evaluateFromWindowsSharedMemoryDirect(ops, ret_ptr, arg_ptr) catch |err| {
+            std.log.err("Error evaluating from Windows shared memory: {s}", .{@errorName(err)});
+        };
     } else {
-        evaluateFromPosixSharedMemoryDirect(ops, ret_ptr, arg_ptr);
+        evaluateFromPosixSharedMemoryDirect(ops, ret_ptr, arg_ptr) catch |err| {
+            std.log.err("Error evaluating from POSIX shared memory: {s}", .{@errorName(err)});
+        };
     }
 }
 
-fn evaluateFromWindowsSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyopaque) RocStr {
-    _ = arg_ptr; // Unused for now, Windows support to be added later
-    const fd_info = readFdInfo() catch {
-        return RocStr.empty();
-    };
-    defer std.heap.page_allocator.free(fd_info.fd_str);
-
-    const handle_int = std.fmt.parseInt(usize, fd_info.fd_str, 10) catch {
-        return RocStr.empty();
-    };
-
-    const shm_handle = @as(windows.HANDLE, @ptrFromInt(handle_int));
-
-    // Map the shared memory with the exact size
-    const mapped_ptr = windows.MapViewOfFile(shm_handle, windows.FILE_MAP_READ, 0, 0, fd_info.size) orelse {
-        return RocStr.empty();
-    };
-    defer _ = windows.UnmapViewOfFile(mapped_ptr);
-
-    // Read the parent address from the beginning
-    const parent_addr_ptr: *align(1) const u64 = @ptrCast(mapped_ptr);
-    const parent_addr = parent_addr_ptr.*;
-
-    // Read the expression index (after the u64)
-    const expr_idx_ptr: *align(1) const u32 = @ptrCast(@as([*]u8, @ptrCast(mapped_ptr)) + @sizeOf(u64));
-    const expr_idx = expr_idx_ptr.*;
-
-    // Calculate relocation offset
-    const child_addr = @intFromPtr(mapped_ptr);
-    const offset = @as(isize, @intCast(child_addr)) - @as(isize, @intCast(parent_addr));
-
-    // Get pointer to ModuleEnv (after the u64 and u32)
-    const env_ptr = @as(*ModuleEnv, @ptrCast(@alignCast(@as([*]u8, @ptrCast(mapped_ptr)) + @sizeOf(u64) + @sizeOf(u32))));
-
-    // Relocate the ModuleEnv
-    env_ptr.relocate(offset);
-
-    // Set up the real interpreter infrastructure
-    var eval_stack = stack.Stack.initCapacity(std.heap.page_allocator, 64 * 1024) catch |err| {
-        var buf: [256]u8 = undefined;
-        const err_str = std.fmt.bufPrint(&buf, "Stack init error: {s}", .{@errorName(err)}) catch "Error";
-        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
-    };
-    defer eval_stack.deinit();
-
-    var layout_cache = layout_store.Store.init(env_ptr, &env_ptr.types) catch |err| {
-        var buf: [256]u8 = undefined;
-        const err_str = std.fmt.bufPrint(&buf, "Layout cache error: {s}", .{@errorName(err)}) catch "Error";
-        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
-    };
-    defer layout_cache.deinit();
-
-    var interpreter = eval.Interpreter.init(
-        std.heap.page_allocator,
-        env_ptr,
-        &eval_stack,
-        &layout_cache,
-        &env_ptr.types,
-    ) catch |err| {
-        var buf: [256]u8 = undefined;
-        const err_str = std.fmt.bufPrint(&buf, "Interpreter init error: {s}", .{@errorName(err)}) catch "Error";
-        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
-    };
-    defer interpreter.deinit();
-
-    // Evaluate using the REAL interpreter
-    const expr_idx_enum: ModuleEnv.Expr.Idx = @enumFromInt(expr_idx);
-    const stack_result = interpreter.eval(expr_idx_enum) catch |err| {
-        var buf: [256]u8 = undefined;
-        const err_str = std.fmt.bufPrint(&buf, "Evaluation error: {s}", .{@errorName(err)}) catch "Error";
-        return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
-    };
-
-    // Format the result based on its layout
-    var buf: [RESULT_BUFFER_SIZE]u8 = undefined;
-    const result_str = formatStackResult(stack_result, &layout_cache, &buf, ops);
-
-    return createRocStrFromData(ops, @constCast(result_str.ptr), result_str.len);
-}
+// Legacy function removed - replaced with evaluateFromWindowsSharedMemoryDirect()
+// which uses proper named shared memory instead of invalid handle passing
 
 fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyopaque) RocStr {
     const fd_info = readFdInfo() catch |err| {
@@ -535,6 +562,7 @@ fn evaluateFromPosixSharedMemory(ops: *builtins.host_abi.RocOps, arg_ptr: ?*anyo
 
     // Use common evaluation logic
     return evaluateExpression(setup.env_ptr, setup.expr_idx, arg_ptr, ops) catch |err| {
+        std.log.err("POSIX shared memory evaluation failed: {s}", .{@errorName(err)});
         var buf: [256]u8 = undefined;
         const err_str = std.fmt.bufPrint(&buf, "Evaluation failed: {s}", .{@errorName(err)}) catch "Evaluation failed";
         return createRocStrFromData(ops, @as([*]u8, @ptrCast(&buf)), err_str.len);
@@ -619,58 +647,70 @@ fn formatStackResult(stack_result: eval.Interpreter.StackValue, layout_cache: *l
     }
 }
 
-fn evaluateFromWindowsSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) void {
+fn evaluateFromWindowsSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) !void {
     _ = ops;
-    _ = ret_ptr;
-    _ = arg_ptr;
-    // TODO: Implement Windows support
-    @panic("Windows support not yet implemented for direct evaluation");
-}
 
-fn evaluateFromPosixSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) void {
-    _ = ops; // Currently unused but may be needed for RocOps callbacks
     const fd_info = readFdInfo() catch |err| {
-        std.debug.print("readFdInfo error: {}\n", .{err});
-        return;
+        std.log.err("Windows: Failed to read fd info: {s}", .{@errorName(err)});
+        return err;
     };
     defer std.heap.page_allocator.free(fd_info.fd_str);
 
-    const shm_fd = std.fmt.parseInt(c_int, fd_info.fd_str, 10) catch {
-        std.debug.print("Failed to parse fd\n", .{});
-        return;
+    // Parse the inherited handle from command line argument
+    const handle_uint = std.fmt.parseInt(usize, fd_info.fd_str, 10) catch |err| {
+        std.log.err("Windows: Failed to parse handle from '{s}': {s}", .{ fd_info.fd_str, @errorName(err) });
+        return err;
     };
 
-    defer _ = posix.close(shm_fd);
+    const shm_handle = @as(windows.HANDLE, @ptrFromInt(handle_uint));
 
-    // Map the shared memory with read/write permissions and the exact size from the file
-    const mapped_ptr = posix.mmap(
-        null,
-        fd_info.size,
-        0x01 | 0x02, // PROT_READ | PROT_WRITE
-        0x0001, // MAP_SHARED
-        shm_fd,
-        0,
-    ) orelse {
-        std.debug.print("mmap failed\n", .{});
-        return;
+    // Map the shared memory at the same fixed address as the parent to eliminate ASLR issues
+    const mapped_ptr = windows.MapViewOfFileEx(shm_handle, windows.FILE_MAP_READ | windows.FILE_MAP_WRITE, 0, 0, fd_info.size, windows.SHARED_MEMORY_BASE_ADDR) orelse {
+        const error_code = windows.GetLastError();
+        std.log.err("Windows: Failed to map shared memory view (size: {}, error: {})", .{ fd_info.size, error_code });
+        return error.SharedMemoryMappingFailed;
     };
     const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..fd_info.size];
-    defer _ = posix.munmap(mapped_ptr, fd_info.size);
+    defer _ = windows.UnmapViewOfFile(mapped_ptr);
+    // Don't close the inherited handle - it belongs to the parent process
+
+    // Validate memory layout before accessing
+    if (fd_info.size < FIRST_ALLOC_OFFSET + @sizeOf(u64) + @sizeOf(u32)) {
+        std.log.err("Windows: Invalid memory layout: size {} is too small (minimum required: {})", .{ fd_info.size, FIRST_ALLOC_OFFSET + @sizeOf(u64) + @sizeOf(u32) });
+        return error.InvalidMemoryLayout;
+    }
 
     // The first allocation in SharedMemoryAllocator starts at offset FIRST_ALLOC_OFFSET
     const data_ptr = mapped_memory.ptr + FIRST_ALLOC_OFFSET;
 
-    // Read the parent address from the first allocation
-    const parent_addr_ptr: *align(1) const u64 = @ptrCast(data_ptr);
-    const parent_addr = parent_addr_ptr.*;
+    // Read the parent's shared memory base address from the first allocation
+    const parent_base_addr_ptr: *align(1) const u64 = @ptrCast(data_ptr);
+    const parent_base_addr = parent_base_addr_ptr.*;
 
     // Read the expression index (after the u64)
     const expr_idx_ptr: *align(1) const u32 = @ptrCast(data_ptr + @sizeOf(u64));
     const expr_idx = expr_idx_ptr.*;
 
-    // Calculate relocation offset
-    const child_addr = @intFromPtr(data_ptr);
-    const offset = @as(isize, @intCast(child_addr)) - @as(isize, @intCast(parent_addr));
+    // Calculate relocation offset using safer pointer arithmetic
+    const child_base_addr = @intFromPtr(mapped_ptr);
+    const parent_base_addr_usize = @as(usize, @intCast(parent_base_addr));
+
+    // Use safer arithmetic to avoid overflow in relocate functions
+    // Instead of computing a huge offset, we'll pass the base addresses directly
+    const offset = if (child_base_addr >= parent_base_addr_usize)
+        @as(isize, @intCast(child_base_addr - parent_base_addr_usize))
+    else
+        -@as(isize, @intCast(parent_base_addr_usize - child_base_addr));
+
+    // Sanity check for overflow potential
+    if (@abs(offset) > std.math.maxInt(isize) / 2) {
+        return;
+    }
+
+    // Validate that we have enough space for ModuleEnv
+    if (fd_info.size < FIRST_ALLOC_OFFSET + MODULE_ENV_OFFSET + @sizeOf(ModuleEnv)) {
+        return;
+    }
 
     // The parent stored the ModuleEnv at MODULE_ENV_OFFSET from the first allocation
     const env_addr = @intFromPtr(data_ptr) + MODULE_ENV_OFFSET;
@@ -694,16 +734,227 @@ fn evaluateFromPosixSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: 
     }
 
     // Set up the interpreter infrastructure
-    var eval_stack = stack.Stack.initCapacity(std.heap.page_allocator, 64 * 1024) catch {
-        std.debug.print("Stack init failed\n", .{});
-        return;
-    };
+    var eval_stack = try stack.Stack.initCapacity(std.heap.page_allocator, 64 * 1024);
     defer eval_stack.deinit();
 
-    var layout_cache = layout_store.Store.init(env_ptr, &env_ptr.types) catch {
-        std.debug.print("Layout cache init failed\n", .{});
+    var layout_cache = try layout_store.Store.init(env_ptr, &env_ptr.types);
+    defer layout_cache.deinit();
+
+    var interpreter = try eval.Interpreter.init(
+        std.heap.page_allocator,
+        env_ptr,
+        &eval_stack,
+        &layout_cache,
+        &env_ptr.types,
+    );
+    interpreter.initRocOpsEnv();
+    defer interpreter.deinit();
+
+    // Enable tracing to stderr
+    interpreter.startTrace(std.io.getStdErr().writer().any());
+
+    const expr_idx_enum: ModuleEnv.Expr.Idx = @enumFromInt(expr_idx);
+
+    // Check if the expression is a closure by getting its layout
+    const expr_var: types.Var = @enumFromInt(@intFromEnum(expr_idx_enum));
+    const layout_idx = layout_cache.addTypeVar(expr_var) catch {
         return;
     };
+    const expr_layout = layout_cache.getLayout(layout_idx);
+
+    // Debug the layout and arguments
+
+    // Handle closure calls
+    if (expr_layout.tag == .closure and arg_ptr != null) {
+        const closure_expr = env_ptr.store.getExpr(expr_idx_enum);
+        const lambda_expr = switch (closure_expr) {
+            .e_closure => |closure_data| env_ptr.store.getExpr(closure_data.lambda_idx),
+            .e_lambda => closure_expr,
+            else => {
+                std.log.err("Windows evaluation: Expected closure or lambda expression, got: {s}", .{@tagName(closure_expr)});
+                return;
+            },
+        };
+
+        const param_patterns = switch (lambda_expr) {
+            .e_lambda => |lambda_data| env_ptr.store.slicePatterns(lambda_data.args),
+            else => {
+                std.log.err("Windows evaluation: Expected lambda expression, got: {s}", .{@tagName(lambda_expr)});
+                return;
+            },
+        };
+
+        const param_count = param_patterns.len;
+
+        // Validate parameter count in direct evaluation too
+        validateParameterCount(param_count) catch {
+            return;
+        };
+
+        if (param_count > 0) {
+            // Push arguments onto the stack
+            if (param_count == 1) {
+                // Single parameter - direct push
+                const param_pat_idx = param_patterns[0];
+                const param_var: types.Var = @enumFromInt(@intFromEnum(param_pat_idx));
+                const param_layout_idx = layout_cache.addTypeVar(param_var) catch {
+                    return;
+                };
+                const param_layout = layout_cache.getLayout(param_layout_idx);
+
+                const dest_ptr = interpreter.pushStackValue(param_layout) catch {
+                    return;
+                };
+                const size = layout_cache.layoutSize(param_layout);
+                const src = @as([*]u8, @ptrCast(arg_ptr))[0..size];
+                const dest = @as([*]u8, @ptrCast(dest_ptr))[0..size];
+                @memcpy(dest, src);
+            } else {
+                // Multiple parameters
+                var param_vars_buf: [MAX_CLOSURE_PARAMS]types.Var = undefined;
+                std.debug.assert(param_count <= param_vars_buf.len);
+                var idx: usize = 0;
+                while (idx < param_count) : (idx += 1) {
+                    const pat_idx = param_patterns[idx];
+                    param_vars_buf[idx] = @enumFromInt(@intFromEnum(pat_idx));
+                }
+
+                // Compute element layouts
+                var elem_layouts: [MAX_CLOSURE_PARAMS]layout.Layout = undefined;
+                var i_build: usize = 0;
+                while (i_build < param_count) : (i_build += 1) {
+                    const v = param_vars_buf[i_build];
+                    const idx_v = try layout_cache.addTypeVar(v);
+                    elem_layouts[i_build] = layout_cache.getLayout(idx_v);
+                }
+
+                // Compute offsets
+                var running_offset: usize = 0;
+                var offsets: [MAX_CLOSURE_PARAMS]usize = undefined;
+                i_build = 0;
+                while (i_build < param_count) : (i_build += 1) {
+                    const el = elem_layouts[i_build];
+                    const el_align = el.alignment(base.target.Target.native.target_usize);
+                    const mask = el_align.toByteUnits() - 1;
+                    if ((running_offset & mask) != 0) {
+                        running_offset = (running_offset + mask) & ~mask;
+                    }
+                    offsets[i_build] = running_offset;
+                    running_offset += layout_cache.layoutSize(el);
+                }
+
+                // Copy each element
+                var i_copy: usize = 0;
+                while (i_copy < param_count) : (i_copy += 1) {
+                    const elem_layout = elem_layouts[i_copy];
+                    const elem_size = layout_cache.layoutSize(elem_layout);
+                    const elem_offset = offsets[i_copy];
+
+                    const dest_ptr = interpreter.pushStackValue(elem_layout) catch {
+                        return;
+                    };
+                    // Calculate total tuple size for bounds checking
+                    const total_tuple_size = if (i_copy == 0) running_offset else running_offset;
+                    if (elem_offset + elem_size > total_tuple_size) {
+                        return;
+                    }
+                    const src = @as([*]u8, @ptrCast(arg_ptr))[elem_offset .. elem_offset + elem_size];
+                    const dest = @as([*]u8, @ptrCast(dest_ptr))[0..elem_size];
+                    @memcpy(dest, src);
+                }
+            }
+        }
+
+        // Call the closure and get the result
+        const closure_result = interpreter.callClosureWithStackArgs(expr_idx_enum, @intCast(param_count)) catch |err| {
+            std.log.err("Windows evaluation: Closure call failed: {s}", .{@errorName(err)});
+            return;
+        };
+
+        // Copy result to ret_ptr based on its type (not as a string)
+        copyResultToRetPtr(closure_result, &layout_cache, ret_ptr);
+
+        return;
+    } else {
+        // Evaluate non-closure expression with enhanced error reporting
+        const stack_result = try interpreter.eval(expr_idx_enum);
+
+        // Copy result to ret_ptr based on its type
+        copyResultToRetPtr(stack_result, &layout_cache, ret_ptr);
+    }
+}
+
+fn evaluateFromPosixSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) !void {
+    _ = ops; // Currently unused but may be needed for RocOps callbacks
+    const fd_info = readFdInfo() catch |err| {
+        std.log.err("POSIX: Failed to read fd info: {s}", .{@errorName(err)});
+        return;
+    };
+    defer std.heap.page_allocator.free(fd_info.fd_str);
+
+    const shm_fd = std.fmt.parseInt(c_int, fd_info.fd_str, 10) catch |err| {
+        std.log.err("POSIX: Failed to parse fd from '{s}': {s}", .{ fd_info.fd_str, @errorName(err) });
+        return;
+    };
+
+    defer _ = posix.close(shm_fd);
+
+    // Map the shared memory with read/write permissions and the exact size from the file
+    const mapped_ptr = posix.mmap(
+        null,
+        fd_info.size,
+        0x01 | 0x02, // PROT_READ | PROT_WRITE
+        0x0001, // MAP_SHARED
+        shm_fd,
+        0,
+    ) orelse {
+        std.log.err("POSIX: Failed to map shared memory (size: {})", .{fd_info.size});
+        return;
+    };
+    const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..fd_info.size];
+    defer _ = posix.munmap(mapped_ptr, fd_info.size);
+
+    // The first allocation in SharedMemoryAllocator starts at offset FIRST_ALLOC_OFFSET
+    const data_ptr = mapped_memory.ptr + FIRST_ALLOC_OFFSET;
+
+    // Read the parent's shared memory base address from the first allocation
+    const parent_base_addr_ptr: *align(1) const u64 = @ptrCast(data_ptr);
+    const parent_base_addr = parent_base_addr_ptr.*;
+
+    // Read the expression index (after the u64)
+    const expr_idx_ptr: *align(1) const u32 = @ptrCast(data_ptr + @sizeOf(u64));
+    const expr_idx = expr_idx_ptr.*;
+
+    // Calculate relocation offset - parent stored base address, child needs to compare with its base
+    const child_base_addr = @intFromPtr(mapped_ptr); // mapped_ptr is the base address of child's mapping
+    const offset = @as(isize, @intCast(child_base_addr)) - @as(isize, @intCast(parent_base_addr));
+
+    // The parent stored the ModuleEnv at MODULE_ENV_OFFSET from the first allocation
+    const env_addr = @intFromPtr(data_ptr) + MODULE_ENV_OFFSET;
+    const env_ptr = @as(*ModuleEnv, @ptrFromInt(env_addr));
+
+    // Set up the environment
+    env_ptr.gpa = std.heap.page_allocator;
+    env_ptr.relocate(offset);
+
+    // Also relocate the source and module_name strings manually
+    if (env_ptr.source.len > 0) {
+        const old_source_ptr = @intFromPtr(env_ptr.source.ptr);
+        const new_source_ptr = @as(isize, @intCast(old_source_ptr)) + offset;
+        env_ptr.source.ptr = @ptrFromInt(@as(usize, @intCast(new_source_ptr)));
+    }
+
+    if (env_ptr.module_name.len > 0) {
+        const old_module_ptr = @intFromPtr(env_ptr.module_name.ptr);
+        const new_module_ptr = @as(isize, @intCast(old_module_ptr)) + offset;
+        env_ptr.module_name.ptr = @ptrFromInt(@as(usize, @intCast(new_module_ptr)));
+    }
+
+    // Set up the interpreter infrastructure
+    var eval_stack = try stack.Stack.initCapacity(std.heap.page_allocator, 64 * 1024);
+    defer eval_stack.deinit();
+
+    var layout_cache = try layout_store.Store.init(env_ptr, &env_ptr.types);
     defer layout_cache.deinit();
 
     var interpreter = eval.Interpreter.init(
@@ -713,7 +964,6 @@ fn evaluateFromPosixSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: 
         &layout_cache,
         &env_ptr.types,
     ) catch {
-        std.debug.print("Interpreter init failed\n", .{});
         return;
     };
     interpreter.initRocOpsEnv();
@@ -727,7 +977,6 @@ fn evaluateFromPosixSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: 
     // Check if the expression is a closure by getting its layout
     const expr_var: types.Var = @enumFromInt(@intFromEnum(expr_idx_enum));
     const layout_idx = layout_cache.addTypeVar(expr_var) catch {
-        std.debug.print("Layout error\n", .{});
         return;
     };
     const expr_layout = layout_cache.getLayout(layout_idx);
@@ -738,19 +987,24 @@ fn evaluateFromPosixSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: 
         const lambda_expr = switch (closure_expr) {
             .e_closure => |closure_data| env_ptr.store.getExpr(closure_data.lambda_idx),
             .e_lambda => closure_expr,
-            else => @panic("Expected closure or lambda"),
+            else => {
+                std.log.err("POSIX evaluation: Expected closure or lambda expression, got: {s}", .{@tagName(closure_expr)});
+                return;
+            },
         };
 
         const param_patterns = switch (lambda_expr) {
             .e_lambda => |lambda_data| env_ptr.store.slicePatterns(lambda_data.args),
-            else => @panic("Expected lambda"),
+            else => {
+                std.log.err("POSIX evaluation: Expected lambda expression, got: {s}", .{@tagName(lambda_expr)});
+                return;
+            },
         };
 
         const param_count = param_patterns.len;
 
         // Validate parameter count in direct evaluation too
         validateParameterCount(param_count) catch {
-            std.debug.print("Invalid parameter count in direct evaluation\n", .{});
             return;
         };
 
@@ -762,19 +1016,16 @@ fn evaluateFromPosixSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: 
                 const arg0_var: types.Var = @enumFromInt(@intFromEnum(p0));
                 const arg0_layout = blk: {
                     const added = layout_cache.addTypeVar(arg0_var) catch {
-                        std.debug.print("Layout addTypeVar error\n", .{});
                         return;
                     };
                     break :blk layout_cache.getLayout(added);
                 };
                 const size_bytes = layout_cache.layoutSize(arg0_layout);
                 const dest_ptr = interpreter.pushStackValue(arg0_layout) catch {
-                    std.debug.print("Push failed\n", .{});
                     return;
                 };
                 // Use safe copy with bounds checking for single parameter in direct evaluation
                 safeCopyArgument(arg_ptr, dest_ptr, 0, size_bytes, size_bytes) catch {
-                    std.debug.print("Single argument copy failed in direct evaluation\n", .{});
                     return;
                 };
             } else {
@@ -793,7 +1044,6 @@ fn evaluateFromPosixSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: 
                 while (i_build < param_count) : (i_build += 1) {
                     const v = param_vars_buf[i_build];
                     const idx_v = layout_cache.addTypeVar(v) catch {
-                        std.debug.print("addTypeVar error\n", .{});
                         return;
                     };
                     elem_layouts[i_build] = layout_cache.getLayout(idx_v);
@@ -822,7 +1072,6 @@ fn evaluateFromPosixSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: 
                     const elem_offset = offsets[i_copy];
 
                     const dest_ptr = interpreter.pushStackValue(elem_layout) catch {
-                        std.debug.print("Push failed\n", .{});
                         return;
                     };
                     // Calculate total tuple size for bounds checking
@@ -830,7 +1079,6 @@ fn evaluateFromPosixSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: 
 
                     // Use safe copy with bounds checking in direct evaluation
                     safeCopyArgument(arg_ptr, dest_ptr, elem_offset, elem_size, total_tuple_size) catch {
-                        std.debug.print("Argument copy failed in direct evaluation\n", .{});
                         return;
                     };
                 }
@@ -839,7 +1087,6 @@ fn evaluateFromPosixSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: 
 
         // Call the closure
         const closure_result = interpreter.callClosureWithStackArgs(expr_idx_enum, @intCast(param_count)) catch {
-            std.debug.print("Closure call error\n", .{});
             return;
         };
 
@@ -848,7 +1095,6 @@ fn evaluateFromPosixSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: 
     } else {
         // Evaluate non-closure expression
         const stack_result = interpreter.eval(expr_idx_enum) catch {
-            std.debug.print("Evaluation error\n", .{});
             return;
         };
 
@@ -858,7 +1104,10 @@ fn evaluateFromPosixSharedMemoryDirect(ops: *builtins.host_abi.RocOps, ret_ptr: 
 }
 
 fn copyResultToRetPtr(stack_result: eval.Interpreter.StackValue, layout_cache: *layout_store.Store, ret_ptr: *anyopaque) void {
-    if (stack_result.ptr == null) return;
+    if (stack_result.ptr == null) {
+        std.log.warn("Stack result pointer is null, cannot copy result", .{});
+        return;
+    }
 
     const result_size = layout_cache.layoutSize(stack_result.layout);
     if (result_size > 0) {

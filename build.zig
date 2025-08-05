@@ -85,6 +85,17 @@ pub fn build(b: *std.Build) void {
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
 
     // Add playground WASM executable
+    //
+    // Windows workaround: Use ReleaseSmall for playground WASM when not in debug mode
+    // This avoids Windows PE file embedding limitations that cause error code 5 (Access Denied)
+    // with ReleaseSafe optimization. The issue occurs because Windows has restrictions on
+    // PE section sizes, and embedding large files (like the 5.7MB playground.wasm) with
+    // ReleaseSafe optimization exceeds these limits.
+    const playground_optimize = if (target.result.os.tag == .windows)
+        std.builtin.OptimizeMode.ReleaseSmall
+    else
+        optimize;
+
     const playground_exe = b.addExecutable(.{
         .name = "playground",
         .root_source_file = b.path("src/playground.zig"),
@@ -92,7 +103,7 @@ pub fn build(b: *std.Build) void {
             .cpu_arch = .wasm32,
             .os_tag = .freestanding,
         }),
-        .optimize = optimize,
+        .optimize = playground_optimize,
     });
     playground_exe.entry = .disabled;
     playground_exe.rdynamic = true;
@@ -112,11 +123,17 @@ pub fn build(b: *std.Build) void {
     });
 
     // Add playground integration test executable
+    // Use the same Windows workaround for the integration test that embeds the WASM file
+    const playground_test_optimize = if (target.result.os.tag == .windows and optimize != .Debug)
+        std.builtin.OptimizeMode.ReleaseSmall
+    else
+        optimize;
+
     const playground_integration_test_exe = b.addExecutable(.{
         .name = "playground_integration_test",
         .root_source_file = b.path("test/playground-intergration/main.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = playground_test_optimize,
     });
     playground_integration_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
     playground_integration_test_exe.root_module.addAnonymousImport("playground_wasm", .{ .root_source_file = playground_install.emitted_bin });
@@ -302,11 +319,27 @@ fn addMainExe(
         .root_source_file = b.path("test/platform/str/host.zig"),
         .target = target,
         .optimize = optimize,
-        .strip = strip,
+        .strip = true,
         .pic = true, // Enable Position Independent Code for PIE compatibility
     });
     test_platform_host_lib.linkLibC();
     test_platform_host_lib.root_module.addImport("builtins", roc_modules.builtins);
+    // Force bundle compiler-rt to resolve runtime symbols like __main
+    test_platform_host_lib.bundle_compiler_rt = true;
+
+    // Add Windows system libraries for the host library
+    if (target.result.os.tag == .windows) {
+        test_platform_host_lib.linkSystemLibrary("kernel32");
+        test_platform_host_lib.linkSystemLibrary("ntdll");
+        test_platform_host_lib.linkSystemLibrary("psapi");
+        test_platform_host_lib.linkSystemLibrary("user32");
+        test_platform_host_lib.linkSystemLibrary("advapi32");
+        // Add Windows __main stub for MinGW-style initialization
+        test_platform_host_lib.addCSourceFile(.{
+            .file = b.path("src/windows_main_stub.c"),
+            .flags = &.{"-std=c99"},
+        });
+    }
 
     // Copy the test platform host library to the source directory
     const copy_test_host = b.addUpdateSourceFiles();
@@ -319,11 +352,19 @@ fn addMainExe(
         .root_source_file = b.path("test/platform/int/host.zig"),
         .target = target,
         .optimize = optimize,
-        .strip = strip,
+        .strip = true,
         .pic = true, // Enable Position Independent Code for PIE compatibility
     });
     test_platform_int_host_lib.linkLibC();
     test_platform_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
+
+    // Add Windows __main stub for MinGW-style initialization
+    if (target.result.os.tag == .windows) {
+        test_platform_int_host_lib.addCSourceFile(.{
+            .file = b.path("src/windows_main_stub.c"),
+            .flags = &.{"-std=c99"},
+        });
+    }
 
     // Copy the int test platform host library to the source directory
     const copy_test_int_host = b.addUpdateSourceFiles();
@@ -360,6 +401,15 @@ fn addMainExe(
     shim_lib.linkLibrary(builtins_lib);
     // Force bundle compiler-rt to resolve math symbols
     shim_lib.bundle_compiler_rt = true;
+
+    // Add Windows system libraries for the shim library
+    if (target.result.os.tag == .windows) {
+        shim_lib.linkSystemLibrary("kernel32");
+        shim_lib.linkSystemLibrary("ntdll");
+        shim_lib.linkSystemLibrary("psapi");
+        shim_lib.linkSystemLibrary("user32");
+        shim_lib.linkSystemLibrary("advapi32");
+    }
 
     // Install shim.a to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});

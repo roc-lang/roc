@@ -456,7 +456,7 @@ pub const Interpreter = struct {
 
         // We'll calculate the result pointer at the end based on the final layout
 
-        self.traceInfo("══ EXPRESSION ══", .{});
+        self.traceInfo("== EXPRESSION ==", .{});
         self.traceExpression(expr_idx);
 
         self.schedule_work(WorkItem{
@@ -633,14 +633,14 @@ pub const Interpreter = struct {
             if (work.kind == .w_block_cleanup) {
                 self.printTraceIndent();
                 writer.print(
-                    "🏗️  scheduling {s}\n",
+                    "-> scheduling {s}\n",
                     .{@tagName(work.kind)},
                 ) catch {};
             } else {
                 const expr = self.env.store.getExpr(work.expr_idx);
                 self.printTraceIndent();
                 writer.print(
-                    "🏗️  scheduling {s} for ({s})\n",
+                    "-> scheduling {s} for ({s})\n",
                     .{ @tagName(work.kind), @tagName(expr) },
                 ) catch {};
             }
@@ -656,14 +656,14 @@ pub const Interpreter = struct {
                 if (work.kind == .w_block_cleanup) {
                     self.printTraceIndent();
                     writer.print(
-                        "🏗️  starting {s}\n",
+                        "-> starting {s}\n",
                         .{@tagName(work.kind)},
                     ) catch {};
                 } else {
                     const expr = self.env.store.getExpr(work.expr_idx);
                     self.printTraceIndent();
                     writer.print(
-                        "🏗️  starting {s} for ({s})\n",
+                        "-> starting {s} for ({s})\n",
                         .{ @tagName(work.kind), @tagName(expr) },
                     ) catch {};
                 }
@@ -1887,7 +1887,7 @@ pub const Interpreter = struct {
         self.trace_indent = 0;
         self.trace_writer = writer;
         writer.print("\n...", .{}) catch {};
-        writer.print("\n\n══ TRACE START ═══════════════════════════════════\n", .{}) catch {};
+        writer.print("\n\n== TRACE START ===================================\n", .{}) catch {};
     }
 
     /// End the current debug trace session
@@ -1895,7 +1895,7 @@ pub const Interpreter = struct {
     pub fn endTrace(self: *Interpreter) void {
         if (!DEBUG_ENABLED) return;
         if (self.trace_writer) |writer| {
-            writer.print("══ TRACE END ═════════════════════════════════════\n", .{}) catch {};
+            writer.print("== TRACE END =====================================\n", .{}) catch {};
         }
         self.trace_indent = 0;
         self.trace_writer = null;
@@ -1915,7 +1915,7 @@ pub const Interpreter = struct {
     pub fn traceEnter(self: *Interpreter, comptime fmt: []const u8, args: anytype) void {
         if (self.trace_writer) |writer| {
             self.printTraceIndent();
-            writer.print("🔵 " ++ fmt ++ "\n", args) catch {};
+            writer.print(">> " ++ fmt ++ "\n", args) catch {};
             self.trace_indent += 1;
         }
     }
@@ -1925,7 +1925,7 @@ pub const Interpreter = struct {
         if (self.trace_writer) |writer| {
             if (self.trace_indent > 0) self.trace_indent -= 1;
             self.printTraceIndent();
-            writer.print("🔴 " ++ fmt ++ "\n", args) catch {};
+            writer.print("<< " ++ fmt ++ "\n", args) catch {};
         }
     }
 
@@ -1933,7 +1933,7 @@ pub const Interpreter = struct {
     pub fn tracePrint(self: *const Interpreter, comptime fmt: []const u8, args: anytype) void {
         if (self.trace_writer) |writer| {
             self.printTraceIndent();
-            writer.print("⚪ " ++ fmt ++ "\n", args) catch {};
+            writer.print("* " ++ fmt ++ "\n", args) catch {};
         }
     }
 
@@ -1941,7 +1941,7 @@ pub const Interpreter = struct {
     pub fn traceInfo(self: *const Interpreter, comptime fmt: []const u8, args: anytype) void {
         if (self.trace_writer) |writer| {
             self.printTraceIndent();
-            writer.print("ℹ️  " ++ fmt ++ "\n", args) catch {};
+            writer.print("  " ++ fmt ++ "\n", args) catch {};
         }
     }
 
@@ -1949,7 +1949,7 @@ pub const Interpreter = struct {
     pub fn traceWarn(self: *const Interpreter, comptime fmt: []const u8, args: anytype) void {
         if (self.trace_writer) |writer| {
             self.printTraceIndent();
-            writer.print("⚠️  " ++ fmt ++ "\n", args) catch {};
+            writer.print("! " ++ fmt ++ "\n", args) catch {};
         }
     }
 
@@ -1957,7 +1957,7 @@ pub const Interpreter = struct {
     pub fn traceError(self: *const Interpreter, comptime fmt: []const u8, args: anytype) void {
         if (self.trace_writer) |writer| {
             self.printTraceIndent();
-            writer.print("🔴 " ++ fmt ++ "\n", args) catch {};
+            writer.print("ERROR: " ++ fmt ++ "\n", args) catch {};
         }
     }
 
@@ -1991,7 +1991,7 @@ pub const Interpreter = struct {
 
             self.printTraceIndent();
 
-            writer.print("🖼️\t", .{}) catch {};
+            writer.print("   ", .{}) catch {};
 
             tree.toStringPretty(writer) catch {};
 
@@ -2003,7 +2003,7 @@ pub const Interpreter = struct {
     pub fn traceSuccess(self: *const Interpreter, comptime fmt: []const u8, args: anytype) void {
         if (self.trace_writer) |writer| {
             self.printTraceIndent();
-            writer.print("✅ " ++ fmt ++ "\n", args) catch {};
+            writer.print("[OK] " ++ fmt ++ "\n", args) catch {};
         }
     }
 
@@ -2026,7 +2026,7 @@ pub const Interpreter = struct {
             const stack_str = std.mem.join(self.allocator, separator, stack_repr.items) catch return;
             defer self.allocator.free(stack_str);
 
-            writer.print("ℹ️  STACK : BOTTOM [{s}] TOP\n", .{stack_str}) catch {};
+            writer.print("  STACK : BOTTOM [{s}] TOP\n", .{stack_str}) catch {};
         }
     }
 
@@ -2035,7 +2035,7 @@ pub const Interpreter = struct {
         if (self.trace_writer) |writer| {
             self.printTraceIndent();
             const size = self.layout_cache.layoutSize(layout_val);
-            writer.print("📐 LAYOUT ({s}): tag={s}, size={}\n", .{ label, @tagName(layout_val.tag), size }) catch {};
+            writer.print("  LAYOUT ({s}): tag={s}, size={}\n", .{ label, @tagName(layout_val.tag), size }) catch {};
         }
     }
 
@@ -2694,7 +2694,7 @@ pub const Interpreter = struct {
     fn writeIntToMemoryAndTrace(self: *const Interpreter, ptr: *anyopaque, value: i128, precision: types.Num.Int.Precision) void {
         if (self.trace_writer) |writer| {
             self.printTraceIndent();
-            writer.print("✍️  writeInt {d} to ptr {}\n", .{ value, @intFromPtr(ptr) }) catch {};
+            writer.print("  writeInt {d} to ptr {}\n", .{ value, @intFromPtr(ptr) }) catch {};
         }
         writeIntToMemory(ptr, value, precision);
     }
@@ -2703,7 +2703,7 @@ pub const Interpreter = struct {
         const value = readIntFromMemory(ptr, precision);
         if (self.trace_writer) |writer| {
             self.printTraceIndent();
-            writer.print("📖  readInt {d} from ptr {}\n", .{ value, @intFromPtr(ptr) }) catch {};
+            writer.print("  readInt {d} from ptr {}\n", .{ value, @intFromPtr(ptr) }) catch {};
         }
         return value;
     }

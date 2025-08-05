@@ -60,6 +60,7 @@ const windows = if (builtin.os.tag == .windows) struct {
 
     extern "kernel32" fn CreateFileMappingW(hFile: HANDLE, lpFileMappingAttributes: ?*anyopaque, flProtect: DWORD, dwMaximumSizeHigh: DWORD, dwMaximumSizeLow: DWORD, lpName: LPCWSTR) ?HANDLE;
     extern "kernel32" fn MapViewOfFile(hFileMappingObject: HANDLE, dwDesiredAccess: DWORD, dwFileOffsetHigh: DWORD, dwFileOffsetLow: DWORD, dwNumberOfBytesToMap: SIZE_T) LPVOID;
+    extern "kernel32" fn MapViewOfFileEx(hFileMappingObject: HANDLE, dwDesiredAccess: DWORD, dwFileOffsetHigh: DWORD, dwFileOffsetLow: DWORD, dwNumberOfBytesToMap: SIZE_T, lpBaseAddress: LPVOID) LPVOID;
     extern "kernel32" fn UnmapViewOfFile(lpBaseAddress: LPVOID) BOOL;
     extern "kernel32" fn CloseHandle(hObject: HANDLE) BOOL;
     extern "kernel32" fn OpenFileMappingW(dwDesiredAccess: DWORD, bInheritHandle: BOOL, lpName: LPCWSTR) ?HANDLE;
@@ -67,6 +68,10 @@ const windows = if (builtin.os.tag == .windows) struct {
 
     const PAGE_READWRITE = 0x04;
     const FILE_MAP_ALL_ACCESS = 0x001f;
+
+    // Fixed base address for shared memory mapping to avoid ASLR issues
+    // Using 0x10000000 (256MB) which is typically available on Windows
+    const SHARED_MEMORY_BASE_ADDR = @as(LPVOID, @ptrFromInt(0x10000000));
     const INVALID_HANDLE_VALUE = @as(HANDLE, @ptrFromInt(std.math.maxInt(usize)));
     const FALSE = 0;
 
@@ -169,12 +174,13 @@ pub fn create(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: 
                 return error.CreateFileMappingFailed;
             }
 
-            const base_ptr = windows.MapViewOfFile(
+            const base_ptr = windows.MapViewOfFileEx(
                 handle.?,
                 windows.FILE_MAP_ALL_ACCESS,
                 0, // offset high
                 0, // offset low
                 aligned_size,
+                windows.SHARED_MEMORY_BASE_ADDR, // Fixed address to avoid ASLR issues
             );
 
             if (base_ptr == null) {
@@ -297,12 +303,13 @@ pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8, page_size: usize
             }
 
             // First map just the header
-            const header_ptr = windows.MapViewOfFile(
+            const header_ptr = windows.MapViewOfFileEx(
                 handle.?,
                 windows.FILE_MAP_ALL_ACCESS,
                 0,
                 0,
                 @sizeOf(Header),
+                windows.SHARED_MEMORY_BASE_ADDR, // Fixed address to avoid ASLR issues
             );
 
             if (header_ptr == null) {
@@ -321,12 +328,13 @@ pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8, page_size: usize
             // Now map the actual size
             const actual_size = @as(usize, @intCast(header.used_size));
             // Map the actual size based on header
-            const base_ptr = windows.MapViewOfFile(
+            const base_ptr = windows.MapViewOfFileEx(
                 handle.?,
                 windows.FILE_MAP_ALL_ACCESS,
                 0,
                 0,
                 actual_size,
+                windows.SHARED_MEMORY_BASE_ADDR, // Fixed address to avoid ASLR issues
             );
 
             if (base_ptr == null) {
@@ -431,12 +439,13 @@ pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: us
                 return error.OpenFileMappingFailed;
             }
 
-            const base_ptr = windows.MapViewOfFile(
+            const base_ptr = windows.MapViewOfFileEx(
                 handle.?,
                 windows.FILE_MAP_ALL_ACCESS,
                 0, // offset high
                 0, // offset low
                 @sizeOf(Header), // Map just the header first
+                windows.SHARED_MEMORY_BASE_ADDR, // Fixed address to avoid ASLR issues
             );
 
             if (base_ptr == null) {

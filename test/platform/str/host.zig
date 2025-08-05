@@ -41,9 +41,20 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
 
 /// Roc debug function
 fn rocDbgFn(roc_dbg: *const builtins.host_abi.RocDbg, env: *anyopaque) callconv(.C) void {
-    _ = env;
+    const host: *HostEnv = @ptrCast(@alignCast(env));
+    const allocator = host.arena.allocator();
+
     const message = roc_dbg.utf8_bytes[0..roc_dbg.len];
-    std.debug.print("ROC DBG: {s}\n", .{message});
+    const bytes = std.fmt.allocPrint(allocator, "ROC DBG: {s}\n", .{message}) catch |err| {
+        std.log.err("Failed to allocate debug message: {s}", .{@errorName(err)});
+        return;
+    };
+    defer allocator.free(bytes);
+
+    std.io.getStdErr().writeAll(bytes) catch |err| {
+        std.log.err("Failed to write debug message to stderr: {s}", .{@errorName(err)});
+        return;
+    };
 }
 
 /// Roc expect failed function
@@ -66,7 +77,7 @@ extern fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, ar
 
 /// Platform host entrypoint -- this is where the roc application starts and does platform things
 /// before the platform calls into Roc to do application-specific things.
-pub fn main() !void {
+pub export fn main() void {
     var host_env = HostEnv{
         .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
     };
@@ -95,7 +106,7 @@ pub fn main() !void {
     const Args = struct {
         str: RocStr,
     };
-    
+
     var args = Args{
         .str = input_roc_str,
     };
@@ -107,11 +118,17 @@ pub fn main() !void {
 
     // Get the string as a slice and print it
     const result_slice = roc_str.asSlice();
-    try stdout.print("{s}", .{result_slice});
-    
+    stdout.print("{s}", .{result_slice}) catch {
+        std.log.err("Failed to write to stdout\n", .{});
+        std.process.exit(1);
+    };
+
     // Verify the result contains the expected input
     const expected_substring = "Got the following from the host: string from host";
-    if (std.mem.indexOf(u8, result_slice, expected_substring) == null) {
+    if (std.mem.indexOf(u8, result_slice, expected_substring) != null) {
+        stdout.print("\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n", .{}) catch {};
+    } else {
+        stdout.print("\n\x1b[31mFAIL\x1b[0m: Result does not contain expected substring!\n", .{}) catch {};
         std.process.exit(1);
     }
 }

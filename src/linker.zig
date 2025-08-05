@@ -49,6 +49,239 @@ fn getMinimumDeploymentTarget(allocator: Allocator) ![]u8 {
     return allocator.dupe(u8, "13.0");
 }
 
+/// Windows SDK paths for linking
+const WindowsSDKPaths = struct {
+    um_lib: []u8,
+    ucrt_lib: []u8,
+};
+
+/// Find Windows SDK installation and return library paths
+fn findWindowsSDK(allocator: Allocator) !WindowsSDKPaths {
+    // Try to find Windows SDK via registry query
+    var child = std.process.Child.init(&.{ "reg", "query", "HKLM\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots", "/v", "KitsRoot10", "/reg:64" }, allocator);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+
+    child.spawn() catch {
+        // Try 32-bit registry if 64-bit fails
+        child = std.process.Child.init(&.{ "reg", "query", "HKLM\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots", "/v", "KitsRoot10", "/reg:32" }, allocator);
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Pipe;
+        try child.spawn();
+    };
+
+    const stdout = try child.stdout.?.reader().readAllAlloc(allocator, 4096);
+    defer allocator.free(stdout);
+    const term = try child.wait();
+
+    if (term != .Exited or term.Exited != 0) {
+        return error.WindowsSDKNotFound;
+    }
+
+    // Parse registry output to find SDK root
+    var lines = std.mem.splitScalar(u8, stdout, '\n');
+    var sdk_root: ?[]const u8 = null;
+
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r\n");
+        if (std.mem.indexOf(u8, trimmed, "KitsRoot10")) |_| {
+            if (std.mem.indexOf(u8, trimmed, "REG_SZ")) |reg_sz_pos| {
+                const after_reg_sz = trimmed[reg_sz_pos + "REG_SZ".len ..];
+                sdk_root = std.mem.trim(u8, after_reg_sz, " \t\r\n");
+                break;
+            }
+        }
+    }
+
+    const root = sdk_root orelse return error.WindowsSDKNotFound;
+
+    // Find the latest Windows 10/11 SDK version
+    const lib_dir = try std.fmt.allocPrint(allocator, "{s}Lib", .{root});
+    defer allocator.free(lib_dir);
+
+    var lib_dir_handle = std.fs.cwd().openDir(lib_dir, .{ .iterate = true }) catch {
+        return error.WindowsSDKNotFound;
+    };
+    defer lib_dir_handle.close();
+
+    var latest_version: ?[]u8 = null;
+    var iterator = lib_dir_handle.iterate();
+
+    while (try iterator.next()) |entry| {
+        if (entry.kind == .directory and std.mem.startsWith(u8, entry.name, "10.")) {
+            if (latest_version == null or std.mem.order(u8, entry.name, latest_version.?) == .gt) {
+                if (latest_version) |old| allocator.free(old);
+                latest_version = try allocator.dupe(u8, entry.name);
+            }
+        }
+    }
+
+    const version = latest_version orelse return error.WindowsSDKNotFound;
+    defer allocator.free(version);
+
+    // Determine architecture suffix
+    const arch_suffix = switch (builtin.target.cpu.arch) {
+        .x86_64 => "x64",
+        .x86 => "x86",
+        .aarch64 => "arm64",
+        else => "x64", // default to x64
+    };
+
+    // Build final library paths
+    const um_lib = try std.fmt.allocPrint(allocator, "{s}Lib\\{s}\\um\\{s}", .{ root, version, arch_suffix });
+    const ucrt_lib = try std.fmt.allocPrint(allocator, "{s}Lib\\{s}\\ucrt\\{s}", .{ root, version, arch_suffix });
+
+    // Verify paths exist
+    std.fs.cwd().access(um_lib, .{}) catch {
+        allocator.free(um_lib);
+        allocator.free(ucrt_lib);
+        return error.WindowsSDKNotFound;
+    };
+
+    std.fs.cwd().access(ucrt_lib, .{}) catch {
+        allocator.free(um_lib);
+        allocator.free(ucrt_lib);
+        return error.WindowsSDKNotFound;
+    };
+
+    return WindowsSDKPaths{
+        .um_lib = um_lib,
+        .ucrt_lib = ucrt_lib,
+    };
+}
+
+/// Find Windows system libraries in common locations
+fn findWindowsSystemLibs(allocator: Allocator) ![][]u8 {
+    var lib_paths = std.ArrayList([]u8).init(allocator);
+    errdefer {
+        for (lib_paths.items) |path| {
+            allocator.free(path);
+        }
+        lib_paths.deinit();
+    }
+
+    // Try the original Windows SDK approach first
+    if (findWindowsSDK(allocator)) |sdk_paths| {
+        defer allocator.free(sdk_paths.um_lib);
+        defer allocator.free(sdk_paths.ucrt_lib);
+
+        try lib_paths.append(try allocator.dupe(u8, sdk_paths.um_lib));
+        try lib_paths.append(try allocator.dupe(u8, sdk_paths.ucrt_lib));
+
+        return lib_paths.toOwnedSlice();
+    } else |_| {}
+
+    // Try common Visual Studio install locations
+    const vs_paths = [_][]const u8{
+        "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC",
+        "C:\\Program Files\\Microsoft Visual Studio\\2022\\Professional\\VC\\Tools\\MSVC",
+        "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\VC\\Tools\\MSVC",
+        "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Tools\\MSVC",
+        "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Professional\\VC\\Tools\\MSVC",
+        "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Enterprise\\VC\\Tools\\MSVC",
+    };
+
+    for (vs_paths) |vs_path| {
+        const dir = std.fs.cwd().openDir(vs_path, .{ .iterate = true }) catch continue;
+        defer dir.close();
+
+        var iterator = dir.iterate();
+        while (iterator.next() catch break) |entry| {
+            if (entry.kind == .directory) {
+                const arch_suffix = switch (builtin.target.cpu.arch) {
+                    .x86_64 => "x64",
+                    .x86 => "x86",
+                    .aarch64 => "arm64",
+                    else => "x64",
+                };
+
+                const lib_path = std.fmt.allocPrint(allocator, "{s}\\{s}\\lib\\{s}", .{ vs_path, entry.name, arch_suffix }) catch continue;
+
+                // Check if this lib directory exists
+                std.fs.cwd().access(lib_path, .{}) catch {
+                    allocator.free(lib_path);
+                    continue;
+                };
+
+                try lib_paths.append(lib_path);
+                break; // Use the first version found
+            }
+        }
+
+        if (lib_paths.items.len > 0) break;
+    }
+
+    // Try Windows Kit locations
+    const kit_paths = [_][]const u8{
+        "C:\\Program Files (x86)\\Windows Kits\\10\\Lib",
+        "C:\\Program Files\\Windows Kits\\10\\Lib",
+    };
+
+    for (kit_paths) |kit_path| {
+        const dir = std.fs.cwd().openDir(kit_path, .{ .iterate = true }) catch continue;
+        defer dir.close();
+
+        var latest_version: ?[]u8 = null;
+        var iterator = dir.iterate();
+
+        while (iterator.next() catch break) |entry| {
+            if (entry.kind == .directory and std.mem.startsWith(u8, entry.name, "10.")) {
+                if (latest_version == null or std.mem.order(u8, entry.name, latest_version.?) == .gt) {
+                    if (latest_version) |old| allocator.free(old);
+                    latest_version = allocator.dupe(u8, entry.name) catch continue;
+                }
+            }
+        }
+
+        if (latest_version) |version| {
+            defer allocator.free(version);
+
+            const arch_suffix = switch (builtin.target.cpu.arch) {
+                .x86_64 => "x64",
+                .x86 => "x86",
+                .aarch64 => "arm64",
+                else => "x64",
+            };
+
+            const um_lib = std.fmt.allocPrint(allocator, "{s}\\{s}\\um\\{s}", .{ kit_path, version, arch_suffix }) catch continue;
+            const ucrt_lib = std.fmt.allocPrint(allocator, "{s}\\{s}\\ucrt\\{s}", .{ kit_path, version, arch_suffix }) catch {
+                allocator.free(um_lib);
+                continue;
+            };
+
+            // Check if both directories exist
+            const um_exists = blk: {
+                std.fs.cwd().access(um_lib, .{}) catch {
+                    break :blk false;
+                };
+                break :blk true;
+            };
+
+            const ucrt_exists = blk: {
+                std.fs.cwd().access(ucrt_lib, .{}) catch {
+                    break :blk false;
+                };
+                break :blk true;
+            };
+
+            if (um_exists and ucrt_exists) {
+                try lib_paths.append(um_lib);
+                try lib_paths.append(ucrt_lib);
+                break;
+            } else {
+                allocator.free(um_lib);
+                allocator.free(ucrt_lib);
+            }
+        }
+    }
+
+    if (lib_paths.items.len == 0) {
+        return error.WindowsSDKNotFound;
+    }
+
+    return lib_paths.toOwnedSlice();
+}
+
 /// Supported target formats for linking
 pub const TargetFormat = enum {
     elf,
@@ -106,19 +339,19 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
     var args = std.ArrayList([]const u8).init(allocator);
     defer args.deinit();
 
-    // Add linker name (required as first argument)
-    try args.append("lld");
-
-    // Add output argument
-    try args.append("-o");
-    try args.append(config.output_path);
-
-    // Suppress LLD warnings
-    try args.append("-w");
-
-    // Add platform-specific flags
+    // Add platform-specific linker name and arguments
     switch (builtin.target.os.tag) {
         .macos => {
+            // Add linker name for macOS
+            try args.append("ld64.lld");
+
+            // Add output argument
+            try args.append("-o");
+            try args.append(config.output_path);
+
+            // Suppress LLD warnings
+            try args.append("-w");
+
             // Add architecture flag
             try args.append("-arch");
             switch (builtin.target.cpu.arch) {
@@ -138,15 +371,79 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             try args.append("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk");
         },
         .linux => {
+            // Add linker name for Linux
+            try args.append("ld.lld");
+
+            // Add output argument
+            try args.append("-o");
+            try args.append(config.output_path);
+
+            // Suppress LLD warnings
+            try args.append("-w");
+
             // Use static linking to avoid dynamic linker dependency issues
             try args.append("-static");
         },
         .windows => {
-            // Windows linking is more complex and needs significant work
-            // For now, return an error to fall back to clang
-            return LinkError.LLVMNotAvailable;
+            // Add linker name for Windows COFF
+            try args.append("lld-link");
+
+            // Add output argument using Windows style
+            const out_arg = try std.fmt.allocPrint(allocator, "/out:{s}", .{config.output_path});
+            try args.append(out_arg);
+
+            // Add subsystem flag (console by default)
+            try args.append("/subsystem:console");
+
+            // Add machine type based on target architecture
+            switch (builtin.target.cpu.arch) {
+                .x86_64 => try args.append("/machine:x64"),
+                .x86 => try args.append("/machine:x86"),
+                .aarch64 => try args.append("/machine:arm64"),
+                else => try args.append("/machine:x64"), // default to x64
+            }
+
+            // Let the CRT choose the proper startup (mainCRTStartup) implicitly.
+            // Explicitly setting /entry can bypass initialization and cause unresolved symbols like __main.
+            // Removed explicit /entry.
+
+            // Use standard Windows system libraries that are always available
+            // These are part of the core Windows OS and don't require a full SDK
+            try args.append("/defaultlib:kernel32");
+            try args.append("/defaultlib:ntdll");
+
+            // Use dynamic MSVC CRTs available on Windows systems
+            try args.append("/defaultlib:ucrt");
+            try args.append("/defaultlib:vcruntime");
+            try args.append("/defaultlib:msvcrt");
+            try args.append("/defaultlib:legacy_stdio_definitions"); // For older stdio functions
+
+            // Essential libraries for basic functionality
+            try args.append("/defaultlib:user32");
+            try args.append("/defaultlib:advapi32");
+
+            // Additional libraries for more complete functionality
+            try args.append("/defaultlib:shell32");
+            try args.append("/defaultlib:ole32");
+            try args.append("/defaultlib:oleaut32");
+            try args.append("/defaultlib:uuid");
+            try args.append("/defaultlib:winmm");
+
+            // Suppress warnings using Windows style
+            try args.append("/ignore:4217"); // Ignore locally defined symbol imported warnings
+            try args.append("/ignore:4049"); // Ignore locally defined symbol imported warnings
         },
-        else => {},
+        else => {
+            // Generic ELF linker
+            try args.append("ld.lld");
+
+            // Add output argument
+            try args.append("-o");
+            try args.append(config.output_path);
+
+            // Suppress LLD warnings
+            try args.append("-w");
+        },
     }
 
     // Add object files
