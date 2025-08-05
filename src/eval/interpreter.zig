@@ -2205,6 +2205,21 @@ pub const Interpreter = struct {
         layout: Layout,
         /// Ptr to the actual value in stack memory
         ptr: ?*anyopaque,
+
+        /// Copy this stack value to a destination pointer with bounds checking
+        pub fn copyToPtr(self: StackValue, layout_cache: *layout_store.Store, dest_ptr: *anyopaque) void {
+            if (self.ptr == null) {
+                std.log.warn("Stack result pointer is null, cannot copy result", .{});
+                return;
+            }
+
+            const result_size = layout_cache.layoutSize(self.layout);
+            if (result_size > 0) {
+                const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
+                const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
+                @memcpy(dst, src);
+            }
+        }
     };
 
     /// Public method to call a closure with arguments already on the stack
