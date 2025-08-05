@@ -407,8 +407,8 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             // Explicitly setting /entry can bypass initialization and cause unresolved symbols like __main.
             // Removed explicit /entry.
 
-            // Use standard Windows system libraries that are always available
-            // These are part of the core Windows OS and don't require a full SDK
+            // Use only essential Windows system libraries for basic console applications
+            // These are part of the core Windows OS and should be available on all Windows systems
             try args.append("/defaultlib:kernel32");
             try args.append("/defaultlib:ntdll");
 
@@ -416,18 +416,6 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             try args.append("/defaultlib:ucrt");
             try args.append("/defaultlib:vcruntime");
             try args.append("/defaultlib:msvcrt");
-            try args.append("/defaultlib:legacy_stdio_definitions"); // For older stdio functions
-
-            // Essential libraries for basic functionality
-            try args.append("/defaultlib:user32");
-            try args.append("/defaultlib:advapi32");
-
-            // Additional libraries for more complete functionality
-            try args.append("/defaultlib:shell32");
-            try args.append("/defaultlib:ole32");
-            try args.append("/defaultlib:oleaut32");
-            try args.append("/defaultlib:uuid");
-            try args.append("/defaultlib:winmm");
 
             // Suppress warnings using Windows style
             try args.append("/ignore:4217"); // Ignore locally defined symbol imported warnings
