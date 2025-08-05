@@ -93,7 +93,7 @@ fn evaluateFromSharedMemory(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque,
     );
 
     // Evaluate the expression (with optional arguments)
-    std.log.warn("About to call evaluateExpression with expr_idx={}, ret_ptr=0x{x}, arg_ptr={?}", .{expr_idx, @intFromPtr(ret_ptr), arg_ptr});
+    std.log.warn("About to call evaluateExpression with expr_idx={}, ret_ptr=0x{x}, arg_ptr={?}", .{ expr_idx, @intFromPtr(ret_ptr), arg_ptr });
     try interpreter.evaluateExpression(expr_idx, ret_ptr, ops, arg_ptr);
     std.log.warn("evaluateExpression completed successfully", .{});
 }
@@ -207,8 +207,6 @@ fn createInterpreter(env_ptr: *ModuleEnv) ShimError!Interpreter {
         return error.InterpreterSetupFailed;
     };
     errdefer interpreter.deinit();
-
-    interpreter.initRocOpsEnv();
 
     // Enable tracing to stderr
     interpreter.startTrace(std.io.getStdErr().writer().any());

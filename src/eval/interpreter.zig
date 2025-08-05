@@ -41,17 +41,17 @@ const build_options = @import("build_options");
 const stack = @import("stack.zig");
 
 const StringLiteral = base.StringLiteral;
+const RocOps = builtins.host_abi.RocOps;
+const RocList = builtins.list.RocList;
 const ModuleEnv = compile.ModuleEnv;
+const RocStr = builtins.str.RocStr;
 const LayoutTag = layout.LayoutTag;
 const RocDec = builtins.dec.RocDec;
 const SExprTree = base.SExprTree;
 const Closure = layout_.Closure;
 const Layout = layout.Layout;
-const Ident = base.Ident;
 const Expr = ModuleEnv.Expr;
-const RocStr = builtins.str.RocStr;
-const RocList = builtins.list.RocList;
-const RocOps = builtins.host_abi.RocOps;
+const Ident = base.Ident;
 const target_usize = base.target.Target.native.target_usize;
 const types_store = types.store;
 const target = base.target;
@@ -228,112 +228,7 @@ pub const Value = struct {
     offset: u32,
 };
 
-// RocOps wrapper functions for interpreter bridge
-fn rocAlloc(alloc_args: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.C) void {
-    std.log.warn("rocAlloc called with env=0x{x}, alloc_args.length={}", .{ @intFromPtr(env), alloc_args.length });
-    const interp: *Interpreter = @ptrCast(@alignCast(env));
-    std.log.warn("rocAlloc: cast to Interpreter succeeded", .{});
-
-    std.log.warn("rocAlloc: alignment={}", .{alloc_args.alignment});
-
-    // Calculate additional bytes needed to store the size
-    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
-    const total_size = alloc_args.length + size_storage_bytes;
-    std.log.warn("rocAlloc: about to allocate {} bytes", .{total_size});
-
-    // Allocate memory including space for size metadata  
-    std.log.warn("rocAlloc: calling interp.allocator.alloc", .{});
-    const base_slice = interp.allocator.alloc(u8, total_size) catch |err| {
-        std.log.warn("rocAlloc: allocation failed with error: {}", .{err});
-        std.debug.panic("Out of memory during rocAlloc", .{});
-    };
-    std.log.warn("rocAlloc: alloc returned successfully", .{});
-    const base_ptr = base_slice.ptr;
-    std.log.warn("rocAlloc: allocation succeeded, base_ptr=0x{x}", .{@intFromPtr(base_ptr)});
-
-    // Store the total size (including metadata) right before the user data
-    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-    size_ptr.* = total_size;
-
-    // Return pointer to the user data (after the size metadata)
-    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
-    std.log.warn("rocAlloc: returning answer=0x{x}", .{@intFromPtr(alloc_args.answer)});
-}
-
-fn rocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.C) void {
-    const interp: *Interpreter = @ptrCast(@alignCast(env));
-
-    // Calculate where the size metadata is stored
-    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
-
-    // Read the total size from metadata
-    const total_size = size_ptr.*;
-
-    // Calculate the base pointer (start of actual allocation)
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
-
-    // Calculate alignment
-    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
-    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
-
-    // Free the memory (including the size metadata)
-    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
-    interp.allocator.rawFree(slice, align_enum, @returnAddress());
-}
-
-fn rocRealloc(realloc_args: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.C) void {
-    const interp: *Interpreter = @ptrCast(@alignCast(env));
-
-    // Calculate where the size metadata is stored for the old allocation
-    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
-
-    // Read the old total size from metadata
-    const old_total_size = old_size_ptr.*;
-
-    // Calculate the old base pointer (start of actual allocation)
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
-
-    // Calculate new total size needed
-    const new_total_size = realloc_args.new_length + size_storage_bytes;
-
-    // Perform reallocation
-    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
-    const new_slice = interp.allocator.realloc(old_slice, new_total_size) catch {
-        std.debug.panic("Out of memory during rocRealloc", .{});
-    };
-
-    // Store the new total size in the metadata
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
-    new_size_ptr.* = new_total_size;
-
-    // Return pointer to the user data (after the size metadata)
-    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
-}
-
-fn rocDbg(dbg_args: *const builtins.host_abi.RocDbg, env: *anyopaque) callconv(.C) void {
-    _ = dbg_args;
-    _ = env;
-    // TODO: Implement dbg support
-}
-
-fn rocExpectFailed(expect_args: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.C) void {
-    _ = expect_args;
-    _ = env;
-    // TODO: Implement expect support
-}
-
-fn rocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.C) void {
-    const interp: *Interpreter = @ptrCast(@alignCast(env));
-
-    // Set the crash flag
-    interp.has_crashed = true;
-
-    // Store the crash message
-    const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
-    interp.crash_message = msg_slice;
-}
+// Removed custom RocOps functions - now using host's RocOps directly
 
 /// TODO
 pub const Interpreter = struct {
@@ -365,8 +260,6 @@ pub const Interpreter = struct {
     /// Writer interface for trace output (null when no trace active)
     trace_writer: ?std.io.AnyWriter,
 
-    /// RocOps for string allocation and other host operations
-    roc_ops: builtins.host_abi.RocOps,
     /// Flag indicating if the program has crashed
     has_crashed: bool,
     /// Crash message (if any)
@@ -379,7 +272,7 @@ pub const Interpreter = struct {
         layout_cache: *layout_store.Store,
         type_store: *types_store.Store,
     ) !Interpreter {
-        var interp = Interpreter{
+        const interp = Interpreter{
             .allocator = allocator,
             .env = cir,
             .stack_memory = stack_memory,
@@ -391,29 +284,11 @@ pub const Interpreter = struct {
             .frame_stack = try std.ArrayList(CallFrame).initCapacity(allocator, 128),
             .trace_indent = 0,
             .trace_writer = null,
-            .roc_ops = undefined, // Will be initialized below
             .has_crashed = false,
             .crash_message = null,
         };
 
-        // Initialize RocOps with interpreter bridge (env will be set after return)
-        interp.roc_ops = builtins.host_abi.RocOps{
-            .env = undefined, // Will be set after init returns
-            .roc_alloc = &rocAlloc,
-            .roc_dealloc = &rocDealloc,
-            .roc_realloc = &rocRealloc,
-            .roc_dbg = &rocDbg,
-            .roc_expect_failed = &rocExpectFailed,
-            .roc_crashed = &rocCrashed,
-            .host_fns = undefined, // No host functions for interpreter
-        };
-
         return interp;
-    }
-
-    /// Set the env pointer for RocOps to point to this interpreter
-    pub fn initRocOpsEnv(self: *Interpreter) void {
-        self.roc_ops.env = @ptrCast(self);
     }
 
     /// Get the crash message if the interpreter has crashed
@@ -442,7 +317,8 @@ pub const Interpreter = struct {
                     // This is a heap-allocated string binding, clean it up properly
                     const str_ptr: *builtins.str.RocStr = @ptrCast(@alignCast(binding.value_ptr));
                     if (!str_ptr.isSmallStr()) {
-                        str_ptr.decref(&self.roc_ops); // Decrement reference count for big strings
+                        // TODO: Need host RocOps for proper cleanup
+                        // str_ptr.decref(roc_ops); // Decrement reference count for big strings
                     }
                     self.allocator.destroy(str_ptr);
                 }
@@ -463,7 +339,7 @@ pub const Interpreter = struct {
     ///
     /// This is the main entry point for expression evaluation. Uses an iterative
     /// work queue approach to evaluate complex expressions without recursion.
-    pub fn eval(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx) EvalError!StackValue {
+    pub fn eval(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, roc_ops: *builtins.host_abi.RocOps) EvalError!StackValue {
         // Ensure work_stack and value_stack are empty before we start. (stack_memory might not be, and that's fine!)
         std.debug.assert(self.work_stack.items.len == 0);
         std.debug.assert(self.value_stack.items.len == 0);
@@ -483,7 +359,7 @@ pub const Interpreter = struct {
         // Main evaluation loop
         while (self.take_work()) |work| {
             switch (work.kind) {
-                .w_eval_expr => try self.evalExpr(work.expr_idx),
+                .w_eval_expr => try self.evalExpr(work.expr_idx, roc_ops),
                 .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
                     try self.completeBinop(work.kind);
                 },
@@ -505,7 +381,7 @@ pub const Interpreter = struct {
                     work.expr_idx,
                     work.extra.arg_count,
                 ),
-                .w_lambda_return => try self.handleLambdaReturn(),
+                .w_lambda_return => try self.handleLambdaReturn(roc_ops),
                 .w_eval_record_fields => try self.handleRecordFields(
                     work.expr_idx,
                     work.extra.current_field_idx,
@@ -515,13 +391,13 @@ pub const Interpreter = struct {
                 ),
                 .w_crash => {
                     const msg = self.env.strings.get(work.extra.crash_msg);
-                    self.roc_ops.crash(msg);
+                    roc_ops.crash(msg);
                     // The crash function will set has_crashed = true
                     // Clear the work stack to prevent further evaluation
                     self.work_stack.clearRetainingCapacity();
                     // The eval loop will check this and return EvalError.Crash
                 },
-                .w_str_interpolate_combine => try self.handleStringInterpolateCombine(work.extra.segment_count),
+                .w_str_interpolate_combine => try self.handleStringInterpolateCombine(work.extra.segment_count, roc_ops),
                 .w_str_interpolate_segments => {}, // Just a marker, no action needed
                 .w_eval_tuple_elements => try self.handleTupleElements(
                     work.expr_idx,
@@ -584,7 +460,7 @@ pub const Interpreter = struct {
                             if (binding_ptr_val < stack_start_ptr or binding_ptr_val >= stack_end_ptr) {
                                 const str_ptr: *builtins.str.RocStr = @ptrCast(@alignCast(binding.value_ptr));
                                 if (!str_ptr.isSmallStr()) {
-                                    str_ptr.decref(&self.roc_ops);
+                                    str_ptr.decref(roc_ops);
                                 }
                                 self.allocator.destroy(str_ptr);
                             }
@@ -712,7 +588,7 @@ pub const Interpreter = struct {
     /// # Error Handling
     /// Malformed expressions result in runtime error placeholders rather
     /// than evaluation failure.
-    fn evalExpr(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx) EvalError!void {
+    fn evalExpr(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, roc_ops: *RocOps) EvalError!void {
         const expr = self.env.store.getExpr(expr_idx);
 
         self.traceEnter("evalExpr {s}", .{@tagName(expr)});
@@ -1223,7 +1099,7 @@ pub const Interpreter = struct {
                 std.debug.assert(result_value.ptr != null);
                 const roc_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
                 self.traceInfo("e_str_segment: About to call RocStr.fromSlice with content: \"{s}\"", .{literal_content});
-                roc_str.* = builtins.str.RocStr.fromSlice(literal_content, &self.roc_ops);
+                roc_str.* = builtins.str.RocStr.fromSlice(literal_content, roc_ops);
                 self.traceInfo("e_str_segment: RocStr initialized successfully", .{});
             },
 
@@ -1667,7 +1543,7 @@ pub const Interpreter = struct {
         });
     }
 
-    fn handleLambdaReturn(self: *Interpreter) !void {
+    fn handleLambdaReturn(self: *Interpreter, roc_ops: *builtins.host_abi.RocOps) !void {
         const frame = self.frame_stack.pop() orelse return error.InvalidStackState;
 
         // The return value is on top of the stack.
@@ -1705,7 +1581,7 @@ pub const Interpreter = struct {
             if (binding.layout.tag == .scalar and binding.layout.data.scalar.tag == .str) {
                 // This is a heap-allocated string binding that needs cleanup
                 const str_storage: *builtins.str.RocStr = @ptrCast(@alignCast(binding.value_ptr));
-                str_storage.decref(&self.roc_ops);
+                str_storage.decref(roc_ops);
                 self.allocator.destroy(str_storage);
             }
         }
@@ -2352,7 +2228,7 @@ pub const Interpreter = struct {
     /// Public method to call a closure with arguments already on the stack
     /// This method assumes the arguments are already pushed onto the stack in the correct order
     /// and schedules the necessary work items to evaluate the closure and call it
-    pub fn callClosureWithStackArgs(self: *Interpreter, closure_expr_idx: ModuleEnv.Expr.Idx, arg_count: u32) EvalError!StackValue {
+    pub fn callClosureWithStackArgs(self: *Interpreter, closure_expr_idx: ModuleEnv.Expr.Idx, arg_count: u32, roc_ops: *builtins.host_abi.RocOps) EvalError!StackValue {
         // Schedule work items in reverse order (they execute LIFO)
 
         // 3. Lambda call (executed LAST after closure and args are on stack)
@@ -2375,14 +2251,14 @@ pub const Interpreter = struct {
         while (self.take_work()) |work| {
             self.traceInfo("callClosureWithStackArgs: processing work item {s}", .{@tagName(work.kind)});
             switch (work.kind) {
-                .w_eval_expr => try self.evalExpr(work.expr_idx),
+                .w_eval_expr => try self.evalExpr(work.expr_idx, roc_ops),
                 .w_lambda_call => try self.handleLambdaCall(
                     work.expr_idx,
                     work.extra.arg_count,
                 ),
                 else => {
                     // Handle other work types that might be generated
-                    try self.processWorkItem(work);
+                    try self.processWorkItem(work, roc_ops);
                 },
             }
             self.traceInfo("callClosureWithStackArgs: work item {s} completed, work_stack.len={}", .{ @tagName(work.kind), self.work_stack.items.len });
@@ -2393,7 +2269,7 @@ pub const Interpreter = struct {
     }
 
     /// Helper to process other work item types that might be generated during closure evaluation
-    fn processWorkItem(self: *Interpreter, work: WorkItem) EvalError!void {
+    fn processWorkItem(self: *Interpreter, work: WorkItem, roc_ops: *builtins.host_abi.RocOps) EvalError!void {
         self.tracePrint("processWorkItem: {s}", .{@tagName(work.kind)});
 
         switch (work.kind) {
@@ -2407,7 +2283,7 @@ pub const Interpreter = struct {
             .w_unary_not => try self.completeUnaryNot(),
 
             // Control flow
-            .w_lambda_return => try self.handleLambdaReturn(),
+            .w_lambda_return => try self.handleLambdaReturn(roc_ops),
             .w_if_check_condition => {
                 // Extract branch index from extra data - this is a simplified handler
                 // The actual implementation would need more context about branches
@@ -2420,7 +2296,7 @@ pub const Interpreter = struct {
             .w_eval_tuple_elements => try self.handleTupleElements(work.expr_idx, work.extra.current_element_idx),
 
             // Block cleanup
-            .w_block_cleanup => try self.handleBlockCleanup(work.expr_idx, @intCast(work.extra.bindings_stack_len)),
+            .w_block_cleanup => try self.handleBlockCleanup(work.expr_idx, @intCast(work.extra.bindings_stack_len), roc_ops),
 
             // Let bindings
             .w_let_bind => {
@@ -2433,8 +2309,8 @@ pub const Interpreter = struct {
             .w_dot_access => try self.handleDotAccess(work.extra.dot_access_field_name),
 
             // String interpolation combine
-            .w_str_interpolate_combine => try self.handleStringInterpolateCombine(work.extra.segment_count),
-            
+            .w_str_interpolate_combine => try self.handleStringInterpolateCombine(work.extra.segment_count, roc_ops),
+
             // String interpolation segments work is just a marker, no action needed
             .w_str_interpolate_segments => {},
 
@@ -2454,7 +2330,7 @@ pub const Interpreter = struct {
     }
 
     /// Helper to handle block cleanup work items
-    fn handleBlockCleanup(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, bindings_to_keep: u32) EvalError!void {
+    fn handleBlockCleanup(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, bindings_to_keep: u32, roc_ops: *builtins.host_abi.RocOps) EvalError!void {
         const values_to_keep: u32 = @intFromEnum(expr_idx);
         self.traceInfo(
             "Block cleanup: resetting bindings from {} to {}, values from {} to {}",
@@ -2502,7 +2378,7 @@ pub const Interpreter = struct {
                 if (binding_ptr_val < stack_start_ptr or binding_ptr_val >= stack_end_ptr) {
                     const str_ptr: *builtins.str.RocStr = @ptrCast(@alignCast(binding.value_ptr));
                     if (!str_ptr.isSmallStr()) {
-                        str_ptr.decref(&self.roc_ops);
+                        str_ptr.decref(roc_ops);
                     }
                 }
             }
@@ -2578,13 +2454,13 @@ pub const Interpreter = struct {
     }
 
     /// Convert a StackValue to a RocStr
-    fn valueToString(self: *Interpreter, value: StackValue) EvalError!builtins.str.RocStr {
+    fn valueToString(_: *Interpreter, value: StackValue, roc_ops: *builtins.host_abi.RocOps) EvalError!builtins.str.RocStr {
         switch (value.layout.tag) {
             .scalar => switch (value.layout.data.scalar.tag) {
                 .str => {
                     // Already a string, clone it
                     const existing_str: *const builtins.str.RocStr = @ptrCast(@alignCast(value.ptr.?));
-                    return existing_str.clone(&self.roc_ops);
+                    return existing_str.clone(roc_ops);
                 },
                 else => {
                     // We don't support implicit automatic conversion to strings
@@ -2601,7 +2477,7 @@ pub const Interpreter = struct {
     }
 
     /// Handle string interpolation combine work item - combines all evaluated segments
-    fn handleStringInterpolateCombine(self: *Interpreter, segment_count: usize) EvalError!void {
+    fn handleStringInterpolateCombine(self: *Interpreter, segment_count: usize, roc_ops: *builtins.host_abi.RocOps) EvalError!void {
         self.traceEnter("handleStringInterpolateCombine with {} segments", .{segment_count});
         defer self.traceExit("", .{});
 
@@ -2624,7 +2500,7 @@ pub const Interpreter = struct {
             }
             
             // Not a string, convert it
-            const segment_str = try self.valueToString(segment_value);
+            const segment_str = try self.valueToString(segment_value, roc_ops);
             const str_layout = Layout.str();
             const result_value = try self.pushStackValue(str_layout);
             const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
@@ -2637,7 +2513,7 @@ pub const Interpreter = struct {
         defer {
             // Clean up all segment strings
             for (segment_strings.items) |*segment_str| {
-                segment_str.decref(&self.roc_ops);
+                segment_str.decref(roc_ops);
             }
             segment_strings.deinit();
         }
@@ -2646,8 +2522,8 @@ pub const Interpreter = struct {
         var i = segment_count;
         while (i > 0) : (i -= 1) {
             const segment_value = try self.popStackValue();
-            const segment_str = try self.valueToString(segment_value);
-            try segment_strings.insert(0, segment_str);  // Insert at beginning to maintain order
+            const segment_str = try self.valueToString(segment_value, roc_ops);
+            try segment_strings.insert(0, segment_str); // Insert at beginning to maintain order
         }
 
         // Calculate total length for concatenation
@@ -2676,7 +2552,7 @@ pub const Interpreter = struct {
             }
 
             // Create RocStr from the concatenated data
-            result_str = builtins.str.RocStr.fromSlice(result_slice, &self.roc_ops);
+            result_str = builtins.str.RocStr.fromSlice(result_slice, roc_ops);
         }
 
         // Push the final string onto the stack
@@ -2692,14 +2568,14 @@ pub const Interpreter = struct {
 
     /// Evaluate all segments of a string interpolation and combine them into a final string.
     /// DEPRECATED: This function is replaced by work queue-based evaluation
-    fn evaluateStringInterpolation(self: *Interpreter, segments: []const ModuleEnv.Expr.Idx) EvalError!void {
+    fn evaluateStringInterpolation(self: *Interpreter, segments: []const ModuleEnv.Expr.Idx, roc_ops: *builtins.host_abi.RocOps) EvalError!void {
         self.traceEnter("evaluateStringInterpolation with {} segments", .{segments.len});
         defer self.traceExit("", .{});
 
         // Optimization: for single string segment, avoid unnecessary cloning and recreation
         if (segments.len == 1) {
             // Evaluate the single segment
-            try self.evalExpr(segments[0]);
+            try self.evalExpr(segments[0], roc_ops);
 
             // Check if it's already a string - if so, we can just use it directly
             const segment_value = try self.popStackValue();
@@ -2725,7 +2601,7 @@ pub const Interpreter = struct {
         defer {
             // Clean up all segment strings
             for (segment_strings.items) |*segment_str| {
-                segment_str.decref(&self.roc_ops);
+                segment_str.decref(roc_ops);
             }
             segment_strings.deinit();
         }
@@ -2734,11 +2610,11 @@ pub const Interpreter = struct {
         for (segments) |segment_idx| {
 
             // Evaluate the segment expression
-            try self.evalExpr(segment_idx);
+            try self.evalExpr(segment_idx, roc_ops);
 
             // Pop the result and convert to string
             const segment_value = try self.popStackValue();
-            const segment_str = try self.valueToString(segment_value);
+            const segment_str = try self.valueToString(segment_value, roc_ops);
 
             try segment_strings.append(segment_str);
         }
@@ -2769,7 +2645,7 @@ pub const Interpreter = struct {
             }
 
             // Create RocStr from the concatenated data
-            result_str = builtins.str.RocStr.fromSlice(result_slice, &self.roc_ops);
+            result_str = builtins.str.RocStr.fromSlice(result_slice, roc_ops);
         }
 
         // Push the final string onto the stack
@@ -3120,7 +2996,7 @@ pub const Interpreter = struct {
             try self.evaluateClosure(expr_idx, ret_ptr, ops);
         } else {
             // Regular expression evaluation
-            const result_value = self.eval(expr_idx) catch |err| {
+            const result_value = self.eval(expr_idx, ops) catch |err| {
                 std.log.err("Expression evaluation failed: {s}", .{@errorName(err)});
                 return error.EvaluationFailed;
             };
@@ -3252,7 +3128,7 @@ pub const Interpreter = struct {
 
         std.log.warn("evaluateClosure: calling closure with {} args", .{arg_count});
 
-        const result_value = try self.callClosureWithStackArgs(expr_idx, arg_count);
+        const result_value = try self.callClosureWithStackArgs(expr_idx, arg_count, ops);
 
         // Copy the result
         result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
@@ -3342,6 +3218,7 @@ pub const Interpreter = struct {
         const closure_result = self.callClosureWithStackArgs(
             expr_idx,
             @intCast(param_patterns.len),
+            ops,
         ) catch |err| {
             std.log.err("callClosureWithStackArgs failed with err: {s}", .{@errorName(err)});
             return error.EvaluationFailed;
