@@ -168,8 +168,11 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(all_tests);
         test_step.dependOn(&run_tests.step);
 
-        // Add success message after all tests complete
-        const tests_passed_step = b.addSystemCommand(&.{ "echo", "All tests passed!" });
+        // Add success message after all tests complete (cross-platform)
+        const tests_passed_step = if (builtin.target.os.tag == .windows)
+            b.addSystemCommand(&.{ "cmd.exe", "/c", "echo", "All tests passed!" })
+        else
+            b.addSystemCommand(&.{ "echo", "All tests passed!" });
         tests_passed_step.step.dependOn(&run_tests.step);
         test_step.dependOn(&tests_passed_step.step);
     }
