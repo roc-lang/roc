@@ -48,6 +48,8 @@ const SExprTree = base.SExprTree;
 const Closure = layout_.Closure;
 const Layout = layout.Layout;
 const Ident = base.Ident;
+const Expr = ModuleEnv.Expr;
+const RocStr = builtins.str.RocStr;
 const target_usize = base.target.Target.native.target_usize;
 const types_store = types.store;
 const target = base.target;
@@ -2213,11 +2215,66 @@ pub const Interpreter = struct {
                 return;
             }
 
+            if (self.layout.tag.scalar and self.layout.data.scalar.tag.str) {
+                // Clone the RocStr into the interpreter's heap
+                const src_str: *const RocStr = @ptrCast(arg_ptr);
+                const dest_str: *RocStr = @ptrCast(ptr.?);
+                dest_str.* = src_str.clone(ops);
+            }
+
             const result_size = layout_cache.layoutSize(self.layout);
             if (result_size > 0) {
                 const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
                 const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
                 @memcpy(dst, src);
+            }
+        }
+
+        /// Type-aware result handling that properly formats results for platforms
+        fn handleResult(
+            stack_result: eval.Interpreter.StackValue,
+            layout_cache: *layout_store.Store,
+            ops: *builtins.host_abi.RocOps,
+            ret_ptr: *anyopaque,
+        ) ShimError!void {
+            switch (stack_result.layout.tag) {
+                .scalar => {
+                    switch (stack_result.layout.data.scalar.tag) {
+                        .int, .bool, .frac => {
+                            // Direct copy for primitive types
+                            const result_size = layout_cache.layoutSize(stack_result.layout);
+                            if (result_size > 0 and stack_result.ptr != null) {
+                                const src = @as([*]u8, @ptrCast(stack_result.ptr.?))[0..result_size];
+                                const dst = @as([*]u8, @ptrCast(ret_ptr))[0..result_size];
+                                @memcpy(dst, src);
+                            }
+                        },
+                        .str => {
+                            if (stack_result.ptr == null) {
+                                // Return empty string
+                                const empty_str = RocStr.empty();
+                                const dst = @as(*RocStr, @ptrCast(@alignCast(ret_ptr)));
+                                dst.* = empty_str;
+                                return;
+                            }
+
+                            // Get the string from interpreter result
+                            const src_str = @as(*const RocStr, @ptrCast(@alignCast(stack_result.ptr.?))).*;
+
+                            // Create new RocStr using host's allocator
+                            const new_str = if (src_str.isSmallStr())
+                                src_str // Small strings can be copied directly
+                            else
+                                src_str.clone(ops); // Large strings need proper allocation
+
+                            // Copy to return pointer
+                            const dst = @as(*RocStr, @ptrCast(@alignCast(ret_ptr)));
+                            dst.* = new_str;
+                        },
+                        else => return error.UnsupportedResultType,
+                    }
+                },
+                else => return error.UnsupportedResultType,
             }
         }
     };
@@ -2381,7 +2438,7 @@ pub const Interpreter = struct {
         }
     }
 
-    pub fn pushStackValue(self: *Interpreter, value_layout: Layout) !?*anyopaque {
+    pub fn pushStackValue(self: *Interpreter, value_layout: Layout) error{ StackOverflow, OutOfMemory }!?*anyopaque {
         self.tracePrint("pushStackValue {s}", .{@tagName(value_layout.tag)});
         self.traceStackState();
 
@@ -2860,6 +2917,157 @@ pub const Interpreter = struct {
         }
         return false;
     }
+
+    /// Evaluate the expression and handle both closures and simple expressions
+    fn evaluateExpression(
+        self: *Interpreter,
+        expr_idx: ModuleEnv.Expr.Idx,
+        arg_ptr: ?*anyopaque,
+        ret_ptr: *anyopaque,
+        ops: *builtins.host_abi.RocOps,
+    ) !void {
+        // Check if the expression is a closure by getting its layout
+        const expr_var = self.env.varFrom(expr_idx);
+        const layout_idx = self.layout_cache.addTypeVar(expr_var) catch {
+            return error.EvaluationFailed;
+        };
+        const expr_layout = self.layout_cache.getLayout(layout_idx);
+
+        if (expr_layout.tag == .closure and arg_ptr != null) {
+            try self.evaluateClosure(expr_idx, arg_ptr, ret_ptr, ops);
+        } else {
+            try self.evaluateSimpleExpression(expr_idx, ret_ptr, ops);
+        }
+    }
+
+    /// Evaluate a closure with arguments
+    fn evaluateClosure(
+        self: *Interpreter,
+        expr_idx: ModuleEnv.Expr.Idx,
+        arg_ptr: *anyopaque,
+        ret_ptr: *anyopaque,
+        ops: *builtins.host_abi.RocOps,
+    ) !void {
+
+        // Get closure parameter patterns
+        const param_patterns = try getClosureParameterPatterns(self.env, expr_idx) catch {
+            std.log.err("Failed to get closure parameter patterns for expr={}", .{expr_idx});
+            return error.EvaluationFailed;
+        };
+
+        if (param_patterns.len > 0) {
+            if (param_patterns.len == 1) {
+                // Single parameter case - direct inline implementation
+                const arg_var = self.env.varFrom(param_patterns[0]);
+                const arg_layout_idx = try self.layout_cache.addTypeVar(arg_var);
+                const arg_layout = self.layout_cache.getLayout(arg_layout_idx);
+
+                // allocate space for the argument on the stack
+                const dest_ptr = self.pushStackValue(arg_layout) catch |err| {
+                    std.log.err("Failed to pushStackValue for single parameter: {s}", .{@errorName(err)});
+                    return error.EvaluationFailed;
+                };
+
+                if (dest_ptr == null) {
+                    // layout is zero-sized, no value to copy
+                    return;
+                }
+
+                // write the value into our pointer
+                if (arg_layout.tag == .scalar and arg_layout.data.scalar.tag == .str) {
+                    // Clone the RocStr into the interpreter's heap
+                    const src_str: *const RocStr = @ptrCast(arg_ptr);
+                    const dest_str: *RocStr = @ptrCast(dest_ptr.?);
+                    dest_str.* = src_str.clone(ops);
+                } else {
+                    // Copy the value directly
+                    const arg_slice: [*]u8 = @ptrCast(arg_ptr);
+                    const dest_slice: [*]u8 = @ptrCast(dest_ptr.?);
+                    @memcpy(dest_slice, arg_slice);
+                }
+            } else {
+                // Multiple parameters case - proper alignment calculations
+                std.log.warn("  multiple params: handling {} parameters", .{param_patterns.len});
+
+                const param_count = param_patterns.len;
+
+                // Convert patterns to variables and compute layouts
+                var param_vars_buf: [8]types.Var = undefined;
+                var elem_layouts: [8]layout.Layout = undefined;
+                var offsets: [8]usize = undefined;
+
+                // Convert patterns to variables
+                for (param_patterns, 0..) |pat_idx, i| {
+                    param_vars_buf[i] = @enumFromInt(@intFromEnum(pat_idx));
+                }
+
+                // Compute element layouts
+                for (0..param_count) |i| {
+                    const v = param_vars_buf[i];
+                    const idx_v = self.layout_cache.addTypeVar(v) catch {
+                        return error.EvaluationFailed;
+                    };
+                    elem_layouts[i] = self.layout_cache.getLayout(idx_v);
+                }
+
+                // Compute proper offsets using native target alignment rules
+                var running_offset: usize = 0;
+                for (0..param_count) |i| {
+                    const elem_layout = elem_layouts[i];
+                    const elem_align = elem_layout.alignment(base.target.Target.native.target_usize);
+                    const elem_size = self.layout_cache.layoutSize(elem_layout);
+                    const mask = elem_align.toByteUnits() - 1;
+
+                    // Apply alignment
+                    if ((running_offset & mask) != 0) {
+                        running_offset = (running_offset + mask) & ~mask;
+                    }
+
+                    offsets[i] = running_offset;
+                    running_offset += elem_size;
+                }
+
+                // Push arguments with proper alignment
+                for (0..param_count) |i| {
+                    const elem_layout = elem_layouts[i];
+                    const elem_size = self.layout_cache.layoutSize(elem_layout);
+                    const elem_offset = offsets[i];
+
+                    std.log.warn("  param {}: size={}, offset={}, total_size={}", .{ i, elem_size, elem_offset, running_offset });
+
+                    const dest_ptr = self.pushStackValue(elem_layout) catch |err| {
+                        std.log.err("  param {} pushStackValue failed: {s}", .{ i, @errorName(err) });
+                        return error.EvaluationFailed;
+                    };
+
+                    // write the value into our pointer
+                    if (elem_layout.tag == .scalar and elem_layout.data.scalar.tag == .str) {
+                        // Clone the RocStr into the interpreter's heap
+                        const src_ptr = @as([*]u8, @ptrCast(arg_ptr)) + elem_offset;
+                        const src_str: *const RocStr = @ptrCast(src_ptr);
+                        const dest_str: *RocStr = @ptrCast(dest_ptr.?);
+                        dest_str.* = src_str.clone(ops);
+                    } else {
+                        // Copy the value directly
+                        const src_ptr = @as([*]u8, @ptrCast(arg_ptr)) + elem_offset;
+                        const arg_slice: []u8 = .{ .len = elem_size, .ptr = @ptrCast(src_ptr) };
+                        const dest_slice: []u8 = .{ .len = elem_size, .ptr = @ptrCast(dest_ptr.?) };
+                        @memcpy(dest_slice, arg_slice);
+                    }
+                }
+            }
+        }
+
+        const closure_result = self.callClosureWithStackArgs(
+            expr_idx,
+            @intCast(param_patterns.len),
+        ) catch |err| {
+            std.log.err("callClosureWithStackArgs failed with err: {}", .{@errorName(err)});
+            return error.EvaluationFailed;
+        };
+
+        try handleResult(closure_result, self.layout_cache, ops, ret_ptr);
+    }
 };
 
 // Helper function to write an integer to memory with the correct precision
@@ -3064,4 +3272,21 @@ test "stack-based comparisons" {
         try std.testing.expect(bool_layout.data.scalar.tag == .int);
         try std.testing.expect(bool_layout.data.scalar.data.int == .u8);
     }
+}
+
+/// Get parameter patterns from a closure expression
+fn getClosureParameterPatterns(env_ptr: *const ModuleEnv, expr_idx: Expr.Idx) ![]const ModuleEnv.Pattern.Idx {
+    const closure_expr = env_ptr.store.getExpr(expr_idx);
+    const lambda_expr = switch (closure_expr) {
+        .e_closure => |closure_data| env_ptr.store.getExpr(closure_data.lambda_idx),
+        .e_lambda => closure_expr,
+        else => return error.ExprNotClosureOrLambda,
+    };
+
+    const param_patterns = switch (lambda_expr) {
+        .e_lambda => |lambda_data| env_ptr.store.slicePatterns(lambda_data.args),
+        else => return error.ExpectedLambdaExpression,
+    };
+
+    return param_patterns;
 }

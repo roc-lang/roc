@@ -188,14 +188,14 @@ fn setupModuleEnv(shm_handle: SharedMemoryHandle) ShimError!*ModuleEnv {
 /// Create and initialize interpreter with heap-allocated stable objects
 fn createInterpreter(env_ptr: *ModuleEnv) ShimError!struct { eval.Interpreter, InterpreterCleanup } {
     const allocator = std.heap.page_allocator;
-    
+
     // Allocate stack on heap to ensure stable address
     const eval_stack = allocator.create(stack.Stack) catch {
         std.log.err("Stack allocation failed", .{});
         return error.InterpreterSetupFailed;
     };
     errdefer allocator.destroy(eval_stack);
-    
+
     eval_stack.* = stack.Stack.initCapacity(allocator, 64 * 1024) catch {
         std.log.err("Stack initialization failed", .{});
         return error.InterpreterSetupFailed;
@@ -208,7 +208,7 @@ fn createInterpreter(env_ptr: *ModuleEnv) ShimError!struct { eval.Interpreter, I
         return error.InterpreterSetupFailed;
     };
     errdefer allocator.destroy(layout_cache);
-    
+
     layout_cache.* = layout_store.Store.init(env_ptr, &env_ptr.types) catch {
         std.log.err("Layout cache initialization failed", .{});
         return error.InterpreterSetupFailed;
@@ -238,7 +238,7 @@ fn createInterpreter(env_ptr: *ModuleEnv) ShimError!struct { eval.Interpreter, I
         .layout_cache = layout_cache,
         .allocator = allocator,
     };
-    
+
     return .{ interpreter, cleanup };
 }
 
@@ -252,226 +252,6 @@ fn readExpressionInfo(shm_handle: SharedMemoryHandle) ShimError!ExpressionInfo {
         .expr_idx = expr_idx,
         .expr_idx_enum = @enumFromInt(expr_idx),
     };
-}
-
-/// Evaluate the expression and handle both closures and simple expressions
-fn evaluateExpression(
-    interpreter: *eval.Interpreter,
-    expr_info: ExpressionInfo,
-    arg_ptr: ?*anyopaque,
-    ret_ptr: *anyopaque,
-    ops: *builtins.host_abi.RocOps,
-) ShimError!void {
-    // Check if the expression is a closure by getting its layout
-    const expr_var: types.Var = @enumFromInt(@intFromEnum(expr_info.expr_idx_enum));
-    const layout_idx = interpreter.layout_cache.addTypeVar(expr_var) catch {
-        return error.EvaluationFailed;
-    };
-    const expr_layout = interpreter.layout_cache.getLayout(layout_idx);
-
-    // Debug output
-    std.log.warn("Expression layout tag: {s}", .{@tagName(expr_layout.tag)});
-    std.log.warn("arg_ptr is null: {}", .{arg_ptr == null});
-
-    if (expr_layout.tag == .closure and arg_ptr != null) {
-        try evaluateClosure(interpreter, expr_info.expr_idx_enum, arg_ptr, ret_ptr, ops);
-    } else {
-        try evaluateSimpleExpression(interpreter, expr_info.expr_idx_enum, ret_ptr, ops);
-    }
-}
-
-/// Evaluate a closure with arguments
-fn evaluateClosure(
-    interpreter: *eval.Interpreter,
-    expr_idx_enum: ModuleEnv.Expr.Idx,
-    arg_ptr: ?*anyopaque,
-    ret_ptr: *anyopaque,
-    ops: *builtins.host_abi.RocOps,
-) ShimError!void {
-    std.log.warn("DEBUG: Starting closure evaluation", .{});
-
-    // Get closure parameter patterns
-    const param_patterns = getClosureParameterPatterns(interpreter.env, expr_idx_enum) catch {
-        std.log.err("Failed to get closure parameter patterns", .{});
-        return error.EvaluationFailed;
-    };
-
-    std.log.warn("DEBUG: Got {} parameter patterns", .{param_patterns.len});
-
-    // Validate and push arguments (using original approach temporarily)
-    if (param_patterns.len > 0) {
-        std.log.warn("DEBUG: About to push closure arguments", .{});
-
-        // Debug stack state before pushing arguments
-        std.log.warn("  stack used: {}, capacity: {}, available: {}", .{
-            interpreter.stack_memory.used,
-            interpreter.stack_memory.capacity,
-            interpreter.stack_memory.capacity - interpreter.stack_memory.used,
-        });
-        std.log.warn("  stack start ptr: 0x{x}", .{@intFromPtr(interpreter.stack_memory.start)});
-
-        // Try a simple stack operation to see if the stack itself is corrupted
-        std.log.warn("  testing basic stack allocation...", .{});
-        _ = interpreter.stack_memory.start; // Silence unused variable warning
-        std.log.warn("  stack test: can access start ptr", .{});
-
-        // Use the original non-abstracted approach to isolate the issue
-        if (param_patterns.len == 1) {
-            // Single parameter case - direct inline implementation
-            const p0 = param_patterns[0];
-            const arg0_var: types.Var = @enumFromInt(@intFromEnum(p0));
-            const arg0_layout_idx = interpreter.layout_cache.addTypeVar(arg0_var) catch {
-                return error.EvaluationFailed;
-            };
-            const arg0_layout = interpreter.layout_cache.getLayout(arg0_layout_idx);
-            const size_bytes = interpreter.layout_cache.layoutSize(arg0_layout);
-
-            std.log.warn("  single param: about to pushStackValue, size={}", .{size_bytes});
-            const dest_ptr = interpreter.pushStackValue(arg0_layout) catch |err| {
-                std.log.err("  single param pushStackValue failed: {s}", .{@errorName(err)});
-                return error.EvaluationFailed;
-            };
-            std.log.warn("  single param: pushStackValue succeeded, dest=0x{x}", .{@intFromPtr(dest_ptr)});
-
-            // Check if this is a string parameter that needs special handling
-            if (arg0_layout.tag == .scalar and arg0_layout.data.scalar.tag == .str) {
-                std.log.warn("  detected RocStr parameter, creating valid copy", .{});
-                
-                // Get the source RocStr from host memory
-                const src_str = @as(*const RocStr, @ptrCast(@alignCast(arg_ptr))).*;
-                
-                // Create a new RocStr with valid pointers in interpreter memory space
-                const new_str = if (src_str.isSmallStr()) 
-                    src_str  // Small strings can be copied directly
-                else
-                    src_str.clone(ops);  // Large strings need proper allocation with interpreter's ops
-                
-                // Copy the new RocStr to the interpreter stack
-                const dst = @as(*RocStr, @ptrCast(@alignCast(dest_ptr)));
-                dst.* = new_str;
-                
-                std.log.warn("  RocStr copy completed successfully", .{});
-            } else {
-                // For non-string types, use raw copy as before
-                safe_memory.safeCopyArgument(arg_ptr, dest_ptr, 0, size_bytes, size_bytes) catch |err| {
-                    std.log.err("  single param safeCopyArgument failed: {s}", .{@errorName(err)});
-                    return error.EvaluationFailed;
-                };
-                std.log.warn("  raw argument copy succeeded", .{});
-            }
-        } else {
-            // Multiple parameters case - proper alignment calculations
-            std.log.warn("  multiple params: handling {} parameters", .{param_patterns.len});
-            
-            const param_count = param_patterns.len;
-            
-            // Convert patterns to variables and compute layouts
-            var param_vars_buf: [8]types.Var = undefined;
-            var elem_layouts: [8]layout.Layout = undefined;
-            var offsets: [8]usize = undefined;
-            
-            // Convert patterns to variables
-            for (param_patterns, 0..) |pat_idx, i| {
-                param_vars_buf[i] = @enumFromInt(@intFromEnum(pat_idx));
-            }
-            
-            // Compute element layouts
-            for (0..param_count) |i| {
-                const v = param_vars_buf[i];
-                const idx_v = interpreter.layout_cache.addTypeVar(v) catch {
-                    return error.EvaluationFailed;
-                };
-                elem_layouts[i] = interpreter.layout_cache.getLayout(idx_v);
-            }
-            
-            // Compute proper offsets using native target alignment rules
-            var running_offset: usize = 0;
-            for (0..param_count) |i| {
-                const elem_layout = elem_layouts[i];
-                const elem_align = elem_layout.alignment(base.target.Target.native.target_usize);
-                const elem_size = interpreter.layout_cache.layoutSize(elem_layout);
-                const mask = elem_align.toByteUnits() - 1;
-                
-                // Apply alignment
-                if ((running_offset & mask) != 0) {
-                    running_offset = (running_offset + mask) & ~mask;
-                }
-                
-                offsets[i] = running_offset;
-                running_offset += elem_size;
-            }
-            
-            // Push arguments with proper alignment
-            for (0..param_count) |i| {
-                const elem_layout = elem_layouts[i];
-                const elem_size = interpreter.layout_cache.layoutSize(elem_layout);
-                const elem_offset = offsets[i];
-                
-                std.log.warn("  param {}: size={}, offset={}, total_size={}", .{ i, elem_size, elem_offset, running_offset });
-
-                const dest_ptr = interpreter.pushStackValue(elem_layout) catch |err| {
-                    std.log.err("  param {} pushStackValue failed: {s}", .{ i, @errorName(err) });
-                    return error.EvaluationFailed;
-                };
-
-                // Check if this is a string parameter that needs special handling
-                if (elem_layout.tag == .scalar and elem_layout.data.scalar.tag == .str) {
-                    std.log.warn("  param {}: detected RocStr, creating valid copy", .{i});
-                    
-                    // Calculate source pointer for this parameter
-                    const src_ptr = @as([*]u8, @ptrCast(arg_ptr)) + elem_offset;
-                    const src_str = @as(*const RocStr, @ptrCast(@alignCast(src_ptr))).*;
-                    
-                    // Create a new RocStr with valid pointers in interpreter memory space
-                    const new_str = if (src_str.isSmallStr()) 
-                        src_str  // Small strings can be copied directly
-                    else
-                        src_str.clone(ops);  // Large strings need proper allocation
-                    
-                    // Copy the new RocStr to the interpreter stack
-                    const dst = @as(*RocStr, @ptrCast(@alignCast(dest_ptr)));
-                    dst.* = new_str;
-                    
-                    std.log.warn("  param {}: RocStr copy completed", .{i});
-                } else {
-                    // For non-string types, use raw copy as before
-                    safe_memory.safeCopyArgument(arg_ptr, dest_ptr, elem_offset, elem_size, running_offset) catch |err| {
-                        std.log.err("  param {} safeCopyArgument failed: {s}", .{ i, @errorName(err) });
-                        return error.EvaluationFailed;
-                    };
-                    std.log.warn("  param {}: raw copy completed", .{i});
-                }
-            }
-        }
-        std.log.warn("DEBUG: Successfully pushed closure arguments", .{});
-    }
-
-    // Debug closure expression data
-    std.log.warn("DEBUG: About to call closure", .{});
-    std.log.warn("  expr_idx_enum: {}", .{@intFromEnum(expr_idx_enum)});
-    std.log.warn("  param_count: {}", .{param_patterns.len});
-
-    // Check if the closure expression is valid
-    const closure_expr = interpreter.env.store.getExpr(expr_idx_enum);
-    std.log.warn("  closure_expr tag: {s}", .{@tagName(closure_expr)});
-
-    // Validate interpreter state
-    std.log.warn("  interpreter initialized: {}", .{true});
-
-    std.log.warn("DEBUG: About to call callClosureWithStackArgs with expr_idx={}, param_count={}", .{ @intFromEnum(expr_idx_enum), param_patterns.len });
-    const closure_result = interpreter.callClosureWithStackArgs(
-        expr_idx_enum,
-        @intCast(param_patterns.len),
-    ) catch {
-        std.log.err("Closure call failed", .{});
-        return error.EvaluationFailed;
-    };
-    std.log.warn("DEBUG: callClosureWithStackArgs returned successfully", .{});
-
-    std.log.warn("DEBUG: Closure call succeeded, about to handle result", .{});
-    // Type-aware result handling instead of raw copy
-    try handleResult(closure_result, interpreter.layout_cache, ops, ret_ptr);
-    std.log.warn("DEBUG: Result handled successfully", .{});
 }
 
 /// Evaluate a simple (non-closure) expression
@@ -488,119 +268,6 @@ fn evaluateSimpleExpression(
 
     // Type-aware result handling instead of raw copy
     try handleResult(stack_result, interpreter.layout_cache, ops, ret_ptr);
-}
-
-/// Get parameter patterns from a closure expression
-fn getClosureParameterPatterns(env_ptr: *const ModuleEnv, expr_idx_enum: ModuleEnv.Expr.Idx) ![]const ModuleEnv.Pattern.Idx {
-    const closure_expr = env_ptr.store.getExpr(expr_idx_enum);
-    const lambda_expr = switch (closure_expr) {
-        .e_closure => |closure_data| env_ptr.store.getExpr(closure_data.lambda_idx),
-        .e_lambda => closure_expr,
-        else => {
-            std.log.err("Expected closure or lambda expression, got: {s}", .{@tagName(closure_expr)});
-            return error.UnexpectedClosureStructure;
-        },
-    };
-
-    const param_patterns = switch (lambda_expr) {
-        .e_lambda => |lambda_data| env_ptr.store.slicePatterns(lambda_data.args),
-        else => {
-            std.log.err("Expected lambda expression, got: {s}", .{@tagName(lambda_expr)});
-            return error.UnexpectedClosureStructure;
-        },
-    };
-
-    return param_patterns;
-}
-
-/// Type-aware result handling that properly formats results for platforms
-fn handleResult(
-    stack_result: eval.Interpreter.StackValue,
-    layout_cache: *layout_store.Store,
-    ops: *builtins.host_abi.RocOps,
-    ret_ptr: *anyopaque,
-) ShimError!void {
-    switch (stack_result.layout.tag) {
-        .scalar => {
-            switch (stack_result.layout.data.scalar.tag) {
-                .int => handleIntResult(stack_result, layout_cache, ret_ptr),
-                .str => try handleStringResult(stack_result, layout_cache, ops, ret_ptr),
-                .bool => handleBoolResult(stack_result, layout_cache, ret_ptr),
-                .frac => handleFloatResult(stack_result, layout_cache, ret_ptr),
-                else => return error.UnsupportedResultType,
-            }
-        },
-        else => return error.UnsupportedResultType,
-    }
-}
-
-/// Handle integer results with direct copy
-fn handleIntResult(stack_result: eval.Interpreter.StackValue, layout_cache: *layout_store.Store, ret_ptr: *anyopaque) void {
-    // Direct copy for primitive types
-    const result_size = layout_cache.layoutSize(stack_result.layout);
-    if (result_size > 0 and stack_result.ptr != null) {
-        const src = @as([*]u8, @ptrCast(stack_result.ptr.?))[0..result_size];
-        const dst = @as([*]u8, @ptrCast(ret_ptr))[0..result_size];
-        @memcpy(dst, src);
-    }
-}
-
-/// Handle boolean results with direct copy
-fn handleBoolResult(stack_result: eval.Interpreter.StackValue, layout_cache: *layout_store.Store, ret_ptr: *anyopaque) void {
-    // Direct copy for boolean types
-    const result_size = layout_cache.layoutSize(stack_result.layout);
-    if (result_size > 0 and stack_result.ptr != null) {
-        const src = @as([*]u8, @ptrCast(stack_result.ptr.?))[0..result_size];
-        const dst = @as([*]u8, @ptrCast(ret_ptr))[0..result_size];
-        @memcpy(dst, src);
-    }
-}
-
-/// Handle float results with direct copy
-fn handleFloatResult(stack_result: eval.Interpreter.StackValue, layout_cache: *layout_store.Store, ret_ptr: *anyopaque) void {
-    // Direct copy for float types
-    const result_size = layout_cache.layoutSize(stack_result.layout);
-    if (result_size > 0 and stack_result.ptr != null) {
-        const src = @as([*]u8, @ptrCast(stack_result.ptr.?))[0..result_size];
-        const dst = @as([*]u8, @ptrCast(ret_ptr))[0..result_size];
-        @memcpy(dst, src);
-    }
-}
-
-/// Handle string results with proper RocStr creation
-fn handleStringResult(
-    stack_result: eval.Interpreter.StackValue,
-    layout_cache: *layout_store.Store,
-    ops: *builtins.host_abi.RocOps,
-    ret_ptr: *anyopaque,
-) !void {
-    _ = layout_cache; // Unused for now but may be needed for validation
-    
-    if (stack_result.ptr == null) {
-        // Return empty string
-        const empty_str = RocStr.empty();
-        const dst = @as(*RocStr, @ptrCast(@alignCast(ret_ptr)));
-        dst.* = empty_str;
-        return;
-    }
-
-    // Get the string from interpreter result
-    const src_str = @as(*const RocStr, @ptrCast(@alignCast(stack_result.ptr.?))).*;
-    
-    // Create new RocStr using host's allocator
-    const new_str = if (src_str.isSmallStr()) 
-        src_str  // Small strings can be copied directly
-    else
-        src_str.clone(ops);  // Large strings need proper allocation
-    
-    // Copy to return pointer
-    const dst = @as(*RocStr, @ptrCast(@alignCast(ret_ptr)));
-    dst.* = new_str;
-}
-
-/// Create error RocStr for consistent error handling
-fn createErrorRocStr(ops: *builtins.host_abi.RocOps, error_msg: []const u8) RocStr {
-    return RocStr.fromBytes(error_msg.ptr, error_msg.len, ops);
 }
 
 /// Temporary: Original pushClosureArguments function for debugging

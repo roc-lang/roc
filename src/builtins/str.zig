@@ -113,16 +113,6 @@ pub const RocStr = extern struct {
         return RocStr.init(slice.ptr, slice.len, roc_ops);
     }
 
-    /// Create a RocStr from raw bytes and length, using RocOps for allocation
-    /// This is a convenience wrapper around the existing functionality
-    pub fn fromBytes(
-        bytes: [*]const u8,
-        length: usize,
-        roc_ops: *RocOps,
-    ) RocStr {
-        return RocStr.init(bytes, length, roc_ops);
-    }
-
     fn allocateBig(
         length: usize,
         capacity: usize,
