@@ -93,7 +93,7 @@ pub const ClosureArgumentPusher = struct {
         arg_ptr: ?*anyopaque,
     ) ClosureArgError!void {
         const param_count = param_patterns.len;
-        
+
         // Convert patterns to type variables
         var param_vars_buf: [MAX_CLOSURE_PARAMS]types.Var = undefined;
         for (param_patterns, 0..) |pat_idx, idx| {
@@ -138,19 +138,18 @@ pub const ClosureArgumentPusher = struct {
 
     /// Compute layout offsets and total size for multiple arguments
     fn computeLayoutInfo(self: *ClosureArgumentPusher, layouts: []const layout.Layout) ClosureArgError!LayoutInfo {
-        
         var offsets: [MAX_CLOSURE_PARAMS]usize = undefined;
         var running_offset: usize = 0;
 
         for (layouts, 0..) |elem_layout, i| {
             const elem_align = elem_layout.alignment(base.target.Target.native.target_usize);
             const mask = elem_align.toByteUnits() - 1;
-            
+
             // Apply alignment
             if ((running_offset & mask) != 0) {
                 running_offset = (running_offset + mask) & ~mask;
             }
-            
+
             offsets[i] = running_offset;
             running_offset += self.layout_cache.layoutSize(elem_layout);
         }

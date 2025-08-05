@@ -43,7 +43,7 @@ pub fn formatStackResult(
 /// Format scalar values (numbers, booleans, strings, etc.)
 fn formatScalar(stack_result: eval.Interpreter.StackValue, buf: []u8, ops: *RocOps) []const u8 {
     const scalar_data = stack_result.layout.data.scalar;
-    
+
     switch (scalar_data.tag) {
         .int => {
             const precision = scalar_data.data.int;
