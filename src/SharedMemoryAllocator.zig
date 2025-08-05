@@ -59,7 +59,7 @@ const windows = if (builtin.os.tag == .windows) struct {
     const LPCWSTR = [*:0]const u16;
     const SIZE_T = usize;
 
-    extern "kernel32" fn CreateFileMappingW(hFile: HANDLE, lpFileMappingAttributes: ?*anyopaque, flProtect: DWORD, dwMaximumSizeHigh: DWORD, dwMaximumSizeLow: DWORD, lpName: LPCWSTR) ?HANDLE;
+    extern "kernel32" fn CreateFileMappingW(hFile: HANDLE, lpFileMappingAttributes: ?*anyopaque, flProtect: DWORD, dwMaximumSizeHigh: DWORD, dwMaximumSizeLow: DWORD, lpName: ?LPCWSTR) ?HANDLE;
     extern "kernel32" fn MapViewOfFile(hFileMappingObject: HANDLE, dwDesiredAccess: DWORD, dwFileOffsetHigh: DWORD, dwFileOffsetLow: DWORD, dwNumberOfBytesToMap: SIZE_T) LPVOID;
     extern "kernel32" fn UnmapViewOfFile(lpBaseAddress: LPVOID) BOOL;
     extern "kernel32" fn CloseHandle(hObject: HANDLE) BOOL;
