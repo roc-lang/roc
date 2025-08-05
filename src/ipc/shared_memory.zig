@@ -207,14 +207,14 @@ fn readFdInfoFromCommandLine(allocator: std.mem.Allocator) SharedMemoryError!FdI
 fn readFdInfoFromFile(allocator: std.mem.Allocator) SharedMemoryError!FdInfo {
     // Get our own executable path
     const exe_path = std.fs.selfExePathAlloc(allocator) catch {
-        std.log.err("Failed to get executable path");
+        std.log.err("Failed to get executable path", .{});
         return error.FdInfoReadFailed;
     };
     defer allocator.free(exe_path);
 
     // Get the directory containing our executable (should be "roc-tmp-<random>")
     const exe_dir = std.fs.path.dirname(exe_path) orelse {
-        std.log.err("Invalid executable path: no directory component");
+        std.log.err("Invalid executable path: no directory component", .{});
         return error.FdInfoReadFailed;
     };
     const dir_basename = std.fs.path.basename(exe_dir);
@@ -232,21 +232,21 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator) SharedMemoryError!FdInfo {
     }
 
     const fd_file_path = std.fmt.allocPrint(allocator, "{s}.txt", .{dir_path}) catch {
-        std.log.err("Failed to format fd file path");
+        std.log.err("Failed to format fd file path", .{});
         return error.AllocationFailed;
     };
     defer allocator.free(fd_file_path);
 
     // Read the file
     const file = std.fs.cwd().openFile(fd_file_path, .{}) catch {
-        std.log.err("Failed to open fd file");
+        std.log.err("Failed to open fd file", .{});
         return error.FileNotFound;
     };
     defer file.close();
 
     var buffer: [128]u8 = undefined;
     const bytes_read = file.readAll(&buffer) catch {
-        std.log.err("Failed to read fd file");
+        std.log.err("Failed to read fd file", .{});
         return error.FileReadFailed;
     };
 
@@ -255,16 +255,16 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator) SharedMemoryError!FdInfo {
     // Parse the content: first line is fd, second line is size
     var lines = std.mem.tokenizeScalar(u8, content, '\n');
     const fd_line = lines.next() orelse {
-        std.log.err("Invalid fd file format: missing fd line");
+        std.log.err("Invalid fd file format: missing fd line", .{});
         return error.FdInfoReadFailed;
     };
     const size_line = lines.next() orelse {
-        std.log.err("Invalid fd file format: missing size line");
+        std.log.err("Invalid fd file format: missing size line", .{});
         return error.FdInfoReadFailed;
     };
 
     const fd_str = allocator.dupe(u8, std.mem.trim(u8, fd_line, " \r\t")) catch {
-        std.log.err("Failed to duplicate fd string");
+        std.log.err("Failed to duplicate fd string", .{});
         return error.AllocationFailed;
     };
 

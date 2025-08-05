@@ -22,6 +22,7 @@ const closure_args = @import("eval/closure_args.zig");
 const RocStr = builtins.str.RocStr;
 const ModuleEnv = compile.ModuleEnv;
 const SharedMemoryHandle = shared_memory.SharedMemoryHandle;
+const Interpreter = eval.Interpreter;
 
 // Constants for shared memory layout
 const FIRST_ALLOC_OFFSET = 504; // 0x1f8 - First allocation starts at this offset
@@ -79,44 +80,22 @@ fn evaluateFromSharedMemory(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque,
     const env_ptr = try setupModuleEnv(shm_handle);
 
     // Set up interpreter infrastructure
-    var interpreter, var cleanup = try createInterpreter(env_ptr);
-    defer {
-        interpreter.deinit();
-        cleanup.deinit();
-    }
+    var interpreter = try createInterpreter(env_ptr);
+    defer interpreter.deinit();
 
     // Get expression info from shared memory
-    const expr_info = try readExpressionInfo(shm_handle);
+    const expr_idx: ModuleEnv.Expr.Idx = @enumFromInt(
+        safe_memory.safeRead(u32, shm_handle.ptr, FIRST_ALLOC_OFFSET + @sizeOf(u64), shm_handle.size) catch {
+            return error.MemoryLayoutInvalid;
+        },
+    );
+
+    // TODO push args onto the stack for the closure evaluation
+    _ = arg_ptr;
 
     // Evaluate the expression
-    try evaluateExpression(
-        &interpreter,
-        expr_info,
-        arg_ptr,
-        ret_ptr,
-        ops,
-    );
+    try interpreter.evaluateExpression(expr_idx, ret_ptr, ops);
 }
-
-/// Expression information read from shared memory
-const ExpressionInfo = struct {
-    expr_idx: u32,
-    expr_idx_enum: ModuleEnv.Expr.Idx,
-};
-
-/// Simple cleanup helper for interpreter resources
-const InterpreterCleanup = struct {
-    eval_stack: *stack.Stack,
-    layout_cache: *layout_store.Store,
-    allocator: std.mem.Allocator,
-
-    fn deinit(self: *InterpreterCleanup) void {
-        self.layout_cache.deinit();
-        self.eval_stack.deinit();
-        self.allocator.destroy(self.layout_cache);
-        self.allocator.destroy(self.eval_stack);
-    }
-};
 
 /// Set up ModuleEnv from shared memory with proper relocation
 fn setupModuleEnv(shm_handle: SharedMemoryHandle) ShimError!*ModuleEnv {
@@ -186,7 +165,7 @@ fn setupModuleEnv(shm_handle: SharedMemoryHandle) ShimError!*ModuleEnv {
 }
 
 /// Create and initialize interpreter with heap-allocated stable objects
-fn createInterpreter(env_ptr: *ModuleEnv) ShimError!struct { eval.Interpreter, InterpreterCleanup } {
+fn createInterpreter(env_ptr: *ModuleEnv) ShimError!Interpreter {
     const allocator = std.heap.page_allocator;
 
     // Allocate stack on heap to ensure stable address
@@ -233,136 +212,101 @@ fn createInterpreter(env_ptr: *ModuleEnv) ShimError!struct { eval.Interpreter, I
     // Enable tracing to stderr
     interpreter.startTrace(std.io.getStdErr().writer().any());
 
-    const cleanup = InterpreterCleanup{
-        .eval_stack = eval_stack,
-        .layout_cache = layout_cache,
-        .allocator = allocator,
-    };
-
-    return .{ interpreter, cleanup };
+    return interpreter;
 }
+// /// Temporary: Original pushClosureArguments function for debugging
+// fn pushClosureArgumentsOriginal(interpreter: *eval.Interpreter, layout_cache: *layout_store.Store, param_patterns: []const ModuleEnv.Pattern.Idx, arg_ptr: ?*anyopaque) !void {
+//     const param_count = param_patterns.len;
 
-/// Read expression information from shared memory
-fn readExpressionInfo(shm_handle: SharedMemoryHandle) ShimError!ExpressionInfo {
-    const expr_idx = safe_memory.safeRead(u32, shm_handle.ptr, FIRST_ALLOC_OFFSET + @sizeOf(u64), shm_handle.size) catch {
-        return error.MemoryLayoutInvalid;
-    };
+//     if (param_count == 1) {
+//         // Single parameter case
+//         const p0 = param_patterns[0];
+//         const arg0_var: types.Var = @enumFromInt(@intFromEnum(p0));
+//         const arg0_layout = blk: {
+//             const added = layout_cache.addTypeVar(arg0_var) catch |err| {
+//                 return err;
+//             };
+//             break :blk layout_cache.getLayout(added);
+//         };
+//         const size_bytes = layout_cache.layoutSize(arg0_layout);
+//         const dest_ptr = interpreter.pushStackValue(arg0_layout) catch |err| {
+//             return err;
+//         };
 
-    return ExpressionInfo{
-        .expr_idx = expr_idx,
-        .expr_idx_enum = @enumFromInt(expr_idx),
-    };
-}
+//         // Use safe copy with bounds checking for single parameter
+//         std.log.warn("  single param: size_bytes = {}", .{size_bytes});
+//         safe_memory.safeCopyArgument(arg_ptr, dest_ptr, 0, size_bytes, size_bytes) catch |err| {
+//             std.log.err("  safeCopyArgument failed: {s}", .{@errorName(err)});
+//             return err;
+//         };
+//     } else {
+//         // Multiple parameters case - inline the original logic
+//         var param_vars_buf: [8]types.Var = undefined;
+//         var idx: usize = 0;
+//         while (idx < param_count) : (idx += 1) {
+//             const pat_idx = param_patterns[idx];
+//             param_vars_buf[idx] = @enumFromInt(@intFromEnum(pat_idx));
+//         }
 
-/// Evaluate a simple (non-closure) expression
-fn evaluateSimpleExpression(
-    interpreter: *eval.Interpreter,
-    expr_idx_enum: ModuleEnv.Expr.Idx,
-    ret_ptr: *anyopaque,
-    ops: *builtins.host_abi.RocOps,
-) ShimError!void {
-    const stack_result = interpreter.eval(expr_idx_enum) catch {
-        std.log.err("Expression evaluation failed", .{});
-        return error.EvaluationFailed;
-    };
+//         // Compute element layouts
+//         var elem_layouts: [8]layout.Layout = undefined;
+//         var i_build: usize = 0;
+//         while (i_build < param_count) : (i_build += 1) {
+//             const v = param_vars_buf[i_build];
+//             const idx_v = layout_cache.addTypeVar(v) catch |err| {
+//                 return err;
+//             };
+//             elem_layouts[i_build] = layout_cache.getLayout(idx_v);
+//         }
 
-    // Type-aware result handling instead of raw copy
-    try handleResult(stack_result, interpreter.layout_cache, ops, ret_ptr);
-}
+//         // Compute offsets using native target alignment rules
+//         var offsets: [8]usize = undefined;
+//         var running_offset: usize = 0;
+//         var j: usize = 0;
+//         while (j < param_count) : (j += 1) {
+//             const elem_layout = elem_layouts[j];
+//             const elem_align = elem_layout.alignment(base.target.Target.native.target_usize);
+//             const elem_size = layout_cache.layoutSize(elem_layout);
+//             const mask = elem_align.toByteUnits() - 1;
 
-/// Temporary: Original pushClosureArguments function for debugging
-fn pushClosureArgumentsOriginal(interpreter: *eval.Interpreter, layout_cache: *layout_store.Store, param_patterns: []const ModuleEnv.Pattern.Idx, arg_ptr: ?*anyopaque) !void {
-    const param_count = param_patterns.len;
+//             std.log.warn("  layout {}: align={}, size={}, running_offset={}", .{ j, elem_align.toByteUnits(), elem_size, running_offset });
 
-    if (param_count == 1) {
-        // Single parameter case
-        const p0 = param_patterns[0];
-        const arg0_var: types.Var = @enumFromInt(@intFromEnum(p0));
-        const arg0_layout = blk: {
-            const added = layout_cache.addTypeVar(arg0_var) catch |err| {
-                return err;
-            };
-            break :blk layout_cache.getLayout(added);
-        };
-        const size_bytes = layout_cache.layoutSize(arg0_layout);
-        const dest_ptr = interpreter.pushStackValue(arg0_layout) catch |err| {
-            return err;
-        };
+//             // Apply alignment
+//             if ((running_offset & mask) != 0) {
+//                 running_offset = (running_offset + mask) & ~mask;
+//             }
 
-        // Use safe copy with bounds checking for single parameter
-        std.log.warn("  single param: size_bytes = {}", .{size_bytes});
-        safe_memory.safeCopyArgument(arg_ptr, dest_ptr, 0, size_bytes, size_bytes) catch |err| {
-            std.log.err("  safeCopyArgument failed: {s}", .{@errorName(err)});
-            return err;
-        };
-    } else {
-        // Multiple parameters case - inline the original logic
-        var param_vars_buf: [8]types.Var = undefined;
-        var idx: usize = 0;
-        while (idx < param_count) : (idx += 1) {
-            const pat_idx = param_patterns[idx];
-            param_vars_buf[idx] = @enumFromInt(@intFromEnum(pat_idx));
-        }
+//             offsets[j] = running_offset;
+//             running_offset += elem_size;
 
-        // Compute element layouts
-        var elem_layouts: [8]layout.Layout = undefined;
-        var i_build: usize = 0;
-        while (i_build < param_count) : (i_build += 1) {
-            const v = param_vars_buf[i_build];
-            const idx_v = layout_cache.addTypeVar(v) catch |err| {
-                return err;
-            };
-            elem_layouts[i_build] = layout_cache.getLayout(idx_v);
-        }
+//             std.log.warn("  layout {}: final offset={}, new running_offset={}", .{ j, offsets[j], running_offset });
+//         }
 
-        // Compute offsets using native target alignment rules
-        var offsets: [8]usize = undefined;
-        var running_offset: usize = 0;
-        var j: usize = 0;
-        while (j < param_count) : (j += 1) {
-            const elem_layout = elem_layouts[j];
-            const elem_align = elem_layout.alignment(base.target.Target.native.target_usize);
-            const elem_size = layout_cache.layoutSize(elem_layout);
-            const mask = elem_align.toByteUnits() - 1;
+//         // Copy each element from arg_ptr + computed offset to the interpreter stack
+//         std.log.warn("  multiple params: total_size = {}", .{running_offset});
+//         var k: usize = 0;
+//         while (k < param_count) : (k += 1) {
+//             const elem_layout = elem_layouts[k];
+//             const elem_size = layout_cache.layoutSize(elem_layout);
+//             const elem_offset = offsets[k];
 
-            std.log.warn("  layout {}: align={}, size={}, running_offset={}", .{ j, elem_align.toByteUnits(), elem_size, running_offset });
+//             std.log.warn("  param {}: offset={}, size={}", .{ k, elem_offset, elem_size });
 
-            // Apply alignment
-            if ((running_offset & mask) != 0) {
-                running_offset = (running_offset + mask) & ~mask;
-            }
+//             std.log.warn("  about to pushStackValue for param {}", .{k});
+//             const dest_ptr = interpreter.pushStackValue(elem_layout) catch |err| {
+//                 std.log.err("  pushStackValue failed for param {}: {s}", .{ k, @errorName(err) });
+//                 return err;
+//             };
+//             std.log.warn("  pushStackValue succeeded for param {}, dest_ptr = 0x{x}", .{ k, @intFromPtr(dest_ptr) });
 
-            offsets[j] = running_offset;
-            running_offset += elem_size;
-
-            std.log.warn("  layout {}: final offset={}, new running_offset={}", .{ j, offsets[j], running_offset });
-        }
-
-        // Copy each element from arg_ptr + computed offset to the interpreter stack
-        std.log.warn("  multiple params: total_size = {}", .{running_offset});
-        var k: usize = 0;
-        while (k < param_count) : (k += 1) {
-            const elem_layout = elem_layouts[k];
-            const elem_size = layout_cache.layoutSize(elem_layout);
-            const elem_offset = offsets[k];
-
-            std.log.warn("  param {}: offset={}, size={}", .{ k, elem_offset, elem_size });
-
-            std.log.warn("  about to pushStackValue for param {}", .{k});
-            const dest_ptr = interpreter.pushStackValue(elem_layout) catch |err| {
-                std.log.err("  pushStackValue failed for param {}: {s}", .{ k, @errorName(err) });
-                return err;
-            };
-            std.log.warn("  pushStackValue succeeded for param {}, dest_ptr = 0x{x}", .{ k, @intFromPtr(dest_ptr) });
-
-            // Use safe copy with bounds checking
-            const arg_addr = if (arg_ptr) |ptr| @intFromPtr(ptr) else 0;
-            std.log.warn("  about to safeCopyArgument: arg_ptr=0x{x}, dest_ptr=0x{x}, offset={}, size={}, max_size={}", .{ arg_addr, @intFromPtr(dest_ptr), elem_offset, elem_size, running_offset });
-            safe_memory.safeCopyArgument(arg_ptr, dest_ptr, elem_offset, elem_size, running_offset) catch |err| {
-                std.log.err("  safeCopyArgument failed for param {}: {s}", .{ k, @errorName(err) });
-                return err;
-            };
-            std.log.warn("  safeCopyArgument succeeded for param {}", .{k});
-        }
-    }
-}
+//             // Use safe copy with bounds checking
+//             const arg_addr = if (arg_ptr) |ptr| @intFromPtr(ptr) else 0;
+//             std.log.warn("  about to safeCopyArgument: arg_ptr=0x{x}, dest_ptr=0x{x}, offset={}, size={}, max_size={}", .{ arg_addr, @intFromPtr(dest_ptr), elem_offset, elem_size, running_offset });
+//             safe_memory.safeCopyArgument(arg_ptr, dest_ptr, elem_offset, elem_size, running_offset) catch |err| {
+//                 std.log.err("  safeCopyArgument failed for param {}: {s}", .{ k, @errorName(err) });
+//                 return err;
+//             };
+//             std.log.warn("  safeCopyArgument succeeded for param {}", .{k});
+//         }
+//     }
+// }

@@ -50,6 +50,8 @@ const Layout = layout.Layout;
 const Ident = base.Ident;
 const Expr = ModuleEnv.Expr;
 const RocStr = builtins.str.RocStr;
+const RocList = builtins.list.RocList;
+const RocOps = builtins.host_abi.RocOps;
 const target_usize = base.target.Target.native.target_usize;
 const types_store = types.store;
 const target = base.target;
@@ -716,11 +718,11 @@ pub const Interpreter = struct {
             .e_int => |int_lit| {
                 const layout_idx = try self.getLayoutIdx(expr_idx);
                 const expr_layout = self.layout_cache.getLayout(layout_idx);
-                const result_ptr = (try self.pushStackValue(expr_layout)).?;
+                const result_value = try self.pushStackValue(expr_layout);
 
                 if (expr_layout.tag == .scalar and expr_layout.data.scalar.tag == .int) {
                     const precision = expr_layout.data.scalar.data.int;
-                    self.writeIntToMemoryAndTrace(result_ptr, int_lit.value.toI128(), precision);
+                    self.writeIntToMemoryAndTrace(result_value.ptr.?, int_lit.value.toI128(), precision);
                     self.traceInfo("Pushed integer literal {d}", .{int_lit.value.toI128()});
                 } else {
                     return error.LayoutError;
@@ -730,9 +732,9 @@ pub const Interpreter = struct {
             .e_frac_f32 => |float_lit| {
                 const layout_idx = try self.getLayoutIdx(expr_idx);
                 const expr_layout = self.layout_cache.getLayout(layout_idx);
-                const result_ptr = (try self.pushStackValue(expr_layout)).?;
+                const result_value = try self.pushStackValue(expr_layout);
 
-                const typed_ptr = @as(*f32, @ptrCast(@alignCast(result_ptr)));
+                const typed_ptr = @as(*f32, @ptrCast(@alignCast(result_value.ptr.?)));
                 typed_ptr.* = float_lit.value;
 
                 self.traceEnter("PUSH e_frac_f32 {}", .{float_lit.value});
@@ -741,9 +743,9 @@ pub const Interpreter = struct {
             .e_frac_f64 => |float_lit| {
                 const layout_idx = try self.getLayoutIdx(expr_idx);
                 const expr_layout = self.layout_cache.getLayout(layout_idx);
-                const result_ptr = (try self.pushStackValue(expr_layout)).?;
+                const result_value = try self.pushStackValue(expr_layout);
 
-                const typed_ptr = @as(*f64, @ptrCast(@alignCast(result_ptr)));
+                const typed_ptr = @as(*f64, @ptrCast(@alignCast(result_value.ptr.?)));
                 typed_ptr.* = float_lit.value;
 
                 self.traceEnter("PUSH e_frac_f64 {}", .{float_lit.value});
@@ -753,9 +755,9 @@ pub const Interpreter = struct {
             .e_zero_argument_tag => |tag| {
                 const layout_idx = try self.getLayoutIdx(expr_idx);
                 const expr_layout = self.layout_cache.getLayout(layout_idx);
-                const result_ptr = (try self.pushStackValue(expr_layout)).?;
+                const result_value = try self.pushStackValue(expr_layout);
 
-                const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
+                const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
                 const tag_name = self.env.idents.getText(tag.name);
                 if (std.mem.eql(u8, tag_name, "True")) {
                     tag_ptr.* = 1;
@@ -770,16 +772,21 @@ pub const Interpreter = struct {
             .e_empty_record => {
                 const layout_idx = try self.getLayoutIdx(expr_idx);
                 const expr_layout = self.layout_cache.getLayout(layout_idx);
-                // Empty record has no bytes
-                _ = (try self.pushStackValue(expr_layout)).?;
+                const result_value = try self.pushStackValue(expr_layout);
+
+                // Empty record is zero-sized and has no bytes
+                std.debug.assert(result_value.ptr == null);
             },
 
             // Empty list
             .e_empty_list => {
                 const layout_idx = try self.getLayoutIdx(expr_idx);
                 const expr_layout = self.layout_cache.getLayout(layout_idx);
-                // Empty list has no bytes
-                _ = (try self.pushStackValue(expr_layout)).?;
+                const result_value = try self.pushStackValue(expr_layout);
+
+                // Initialize empty list
+                const list: *RocList = @ptrCast(@alignCast(result_value.ptr.?));
+                list.* = RocList.empty();
             },
 
             // Binary operations
@@ -863,7 +870,8 @@ pub const Interpreter = struct {
                 while (reversed_bindings.next()) |binding| {
                     if (binding.pattern_idx == lookup.pattern_idx) {
                         self.traceInfo("Found binding for pattern_idx={}", .{@intFromEnum(lookup.pattern_idx)});
-                        const dest_ptr = (try self.pushStackValue(binding.layout)).?;
+                        const dest_value = try self.pushStackValue(binding.layout);
+                        const dest_ptr = dest_value.ptr.?;
                         const binding_size = self.layout_cache.layoutSize(binding.layout);
                         if (binding_size > 0) {
                             // Note: For heap-allocated bindings (like cloned strings), we skip the stack bounds check
@@ -921,7 +929,8 @@ pub const Interpreter = struct {
 
                                     if (capture_size > 0) {
                                         const src_ptr = captures_ptr + offset;
-                                        const dest_ptr = (try self.pushStackValue(capture_layout)).?;
+                                        const dest_value = try self.pushStackValue(capture_layout);
+                                        const dest_ptr = dest_value.ptr.?;
                                         self.traceInfo("Copying capture lookup from {} to {}", .{ @intFromPtr(src_ptr), @intFromPtr(dest_ptr) });
                                         std.mem.copyForwards(u8, @as([*]u8, @ptrCast(dest_ptr))[0..capture_size], src_ptr[0..capture_size]);
                                         return;
@@ -972,7 +981,8 @@ pub const Interpreter = struct {
             .e_tag => |tag| {
                 const layout_idx = try self.getLayoutIdx(expr_idx);
                 const expr_layout = self.layout_cache.getLayout(layout_idx);
-                const result_ptr = (try self.pushStackValue(expr_layout)).?;
+                const result_value = try self.pushStackValue(expr_layout);
+                const result_ptr = result_value.ptr.?;
 
                 // For now, handle boolean tags (True/False) as u8
                 const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
@@ -1121,7 +1131,8 @@ pub const Interpreter = struct {
             .e_frac_dec => |dec_lit| {
                 const layout_idx = try self.getLayoutIdx(expr_idx);
                 const expr_layout = self.layout_cache.getLayout(layout_idx);
-                const result_ptr = (try self.pushStackValue(expr_layout)).?;
+                const result_value = try self.pushStackValue(expr_layout);
+                const result_ptr = result_value.ptr.?;
 
                 // Store RocDec value directly in memory
                 const typed_ptr = @as(*RocDec, @ptrCast(@alignCast(result_ptr)));
@@ -1136,7 +1147,8 @@ pub const Interpreter = struct {
             .e_dec_small => |small_dec| {
                 const layout_idx = try self.getLayoutIdx(expr_idx);
                 const expr_layout = self.layout_cache.getLayout(layout_idx);
-                const result_ptr = (try self.pushStackValue(expr_layout)).?;
+                const result_value = try self.pushStackValue(expr_layout);
+                const result_ptr = result_value.ptr.?;
 
                 // Convert small decimal to RocDec
                 // e_dec_small stores numerator/10^denominator_power_of_ten
@@ -1177,14 +1189,12 @@ pub const Interpreter = struct {
 
                 // Allocate stack space for RocStr
                 const str_layout = Layout.str();
-                const roc_str_ptr = (try self.pushStackValue(str_layout)).?;
-                const roc_str: *builtins.str.RocStr = @ptrCast(@alignCast(roc_str_ptr));
+                const result_value = try self.pushStackValue(str_layout);
+                try self.traceValue("e_str_segment", result_value);
 
                 // Initialize the RocStr
+                const roc_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
                 roc_str.* = builtins.str.RocStr.fromSlice(literal_content, &self.roc_ops);
-
-                const result_value = StackValue{ .layout = str_layout, .ptr = roc_str_ptr };
-                try self.traceValue("e_str_segment", result_value);
             },
 
             .e_str => |str_expr| {
@@ -1192,13 +1202,16 @@ pub const Interpreter = struct {
                 self.traceInfo("Starting string interpolation with {} segments", .{segments.len});
 
                 if (segments.len == 0) {
+
                     // Empty string
                     const str_layout = Layout.str();
-                    const empty_str_ptr = (try self.pushStackValue(str_layout)).?;
-                    const empty_str: *builtins.str.RocStr = @ptrCast(@alignCast(empty_str_ptr));
-                    empty_str.* = builtins.str.RocStr.empty();
-                    const result_value = StackValue{ .layout = str_layout, .ptr = empty_str_ptr };
+                    const result_value = try self.pushStackValue(str_layout);
                     try self.traceValue("empty_e_str", result_value);
+
+                    // Initialize the empty RocStr
+                    const empty_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
+                    empty_str.* = builtins.str.RocStr.empty();
+
                     return;
                 }
 
@@ -1329,7 +1342,8 @@ pub const Interpreter = struct {
             else => unreachable,
         };
 
-        const result_ptr = (try self.pushStackValue(result_layout)).?;
+        const result_value = try self.pushStackValue(result_layout);
+        const result_ptr = result_value.ptr.?;
 
         const lhs_precision: types.Num.Int.Precision = lhs.layout.data.scalar.data.int;
 
@@ -1871,12 +1885,14 @@ pub const Interpreter = struct {
 
         // Push the field value onto the stack
         if (field_size > 0) {
-            const result_ptr = (try self.pushStackValue(field_layout)).?;
+            const result_value = try self.pushStackValue(field_layout);
+            const result_ptr = result_value.ptr.?;
             const dest = @as([*]u8, @ptrCast(result_ptr));
             std.mem.copyForwards(u8, dest[0..field_size], field_ptr[0..field_size]);
         } else {
             // Zero-sized field
-            _ = try self.pushStackValue(field_layout);
+            const result_value = try self.pushStackValue(field_layout);
+            std.debug.assert(result_value.ptr == null);
         }
 
         self.traceInfo("Accessed field '{s}' at offset {}, size {}", .{ field_name, field_offset, field_size });
@@ -2209,16 +2225,16 @@ pub const Interpreter = struct {
         ptr: ?*anyopaque,
 
         /// Copy this stack value to a destination pointer with bounds checking
-        pub fn copyToPtr(self: StackValue, layout_cache: *layout_store.Store, dest_ptr: *anyopaque) void {
+        pub fn copyToPtr(self: StackValue, layout_cache: *layout_store.Store, dest_ptr: *anyopaque, ops: *RocOps) void {
             if (self.ptr == null) {
                 std.log.warn("Stack result pointer is null, cannot copy result", .{});
                 return;
             }
 
-            if (self.layout.tag.scalar and self.layout.data.scalar.tag.str) {
+            if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
                 // Clone the RocStr into the interpreter's heap
-                const src_str: *const RocStr = @ptrCast(arg_ptr);
-                const dest_str: *RocStr = @ptrCast(ptr.?);
+                const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
+                const dest_str: *RocStr = @ptrCast(@alignCast(dest_ptr));
                 dest_str.* = src_str.clone(ops);
             }
 
@@ -2236,7 +2252,7 @@ pub const Interpreter = struct {
             layout_cache: *layout_store.Store,
             ops: *builtins.host_abi.RocOps,
             ret_ptr: *anyopaque,
-        ) ShimError!void {
+        ) !void {
             switch (stack_result.layout.tag) {
                 .scalar => {
                     switch (stack_result.layout.data.scalar.tag) {
@@ -2432,13 +2448,13 @@ pub const Interpreter = struct {
         self.bindings_stack.items.len = bindings_to_keep;
 
         // Put the result back on the stack.
-        const result_ptr = try self.pushStackValue(result_val.layout);
+        const result_value = try self.pushStackValue(result_val.layout);
         if (result_size > 0) {
-            std.mem.copyForwards(u8, @as([*]u8, @ptrCast(result_ptr.?))[0..result_size], temp_buffer);
+            std.mem.copyForwards(u8, @as([*]u8, @ptrCast(result_value.ptr.?))[0..result_size], temp_buffer);
         }
     }
 
-    pub fn pushStackValue(self: *Interpreter, value_layout: Layout) error{ StackOverflow, OutOfMemory }!?*anyopaque {
+    pub fn pushStackValue(self: *Interpreter, value_layout: Layout) error{ StackOverflow, OutOfMemory }!StackValue {
         self.tracePrint("pushStackValue {s}", .{@tagName(value_layout.tag)});
         self.traceStackState();
 
@@ -2468,7 +2484,10 @@ pub const Interpreter = struct {
             .offset = offset,
         });
 
-        return value_ptr;
+        return StackValue{
+            .layout = value_layout,
+            .ptr = value_ptr,
+        };
     }
 
     /// Helper to pop a value from the stacks.
@@ -2528,15 +2547,17 @@ pub const Interpreter = struct {
             // Check if it's already a string - if so, we can just use it directly
             const segment_value = try self.popStackValue();
             if (segment_value.layout.tag == .scalar and segment_value.layout.data.scalar.tag == .str) {
+
                 // It's already a string, just push it as the final result (no cloning needed)
                 const str_layout = Layout.str();
-                const result_ptr = (try self.pushStackValue(str_layout)).?;
-                const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_ptr));
-                const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(segment_value.ptr.?));
-                dest_str.* = src_str.*; // Move the string (no reference count change needed)
-
-                const result_value = StackValue{ .layout = str_layout, .ptr = result_ptr };
+                const result_value = try self.pushStackValue(str_layout);
                 try self.traceValue("final_interpolated_string", result_value);
+
+                // Move the string (no reference count change needed)
+                const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(segment_value.ptr.?));
+                const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
+                dest_str.* = src_str.*;
+
                 return;
             }
         }
@@ -2596,12 +2617,12 @@ pub const Interpreter = struct {
 
         // Push the final string onto the stack
         const str_layout = Layout.str();
-        const result_ptr = (try self.pushStackValue(str_layout)).?;
-        const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_ptr));
-        dest_str.* = result_str;
-
-        const result_value = StackValue{ .layout = str_layout, .ptr = result_ptr };
+        const result_value = try self.pushStackValue(str_layout);
         try self.traceValue("final_interpolated_string", result_value);
+
+        // Copy the result string into the stack value
+        const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
+        dest_str.* = result_str;
     }
 
     /// Helper to peek at a value on the evaluation stacks without popping it.
@@ -2919,38 +2940,42 @@ pub const Interpreter = struct {
     }
 
     /// Evaluate the expression and handle both closures and simple expressions
-    fn evaluateExpression(
+    pub fn evaluateExpression(
         self: *Interpreter,
         expr_idx: ModuleEnv.Expr.Idx,
-        arg_ptr: ?*anyopaque,
         ret_ptr: *anyopaque,
         ops: *builtins.host_abi.RocOps,
     ) !void {
         // Check if the expression is a closure by getting its layout
-        const expr_var = self.env.varFrom(expr_idx);
+        const expr_var = ModuleEnv.varFrom(expr_idx);
         const layout_idx = self.layout_cache.addTypeVar(expr_var) catch {
             return error.EvaluationFailed;
         };
         const expr_layout = self.layout_cache.getLayout(layout_idx);
 
-        if (expr_layout.tag == .closure and arg_ptr != null) {
-            try self.evaluateClosure(expr_idx, arg_ptr, ret_ptr, ops);
-        } else {
-            try self.evaluateSimpleExpression(expr_idx, ret_ptr, ops);
+        // If it's not a closure, evaluate it as a simple expression
+        if (expr_layout.tag != .closure) {
+            const result_value = self.eval(expr_idx) catch {
+                std.log.err("Expression evaluation failed", .{});
+                return error.EvaluationFailed;
+            };
+            result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
         }
+
+        // Evaluate the closure if it exists
+        try self.evaluateClosure(expr_idx, ret_ptr, ops);
     }
 
     /// Evaluate a closure with arguments
     fn evaluateClosure(
         self: *Interpreter,
         expr_idx: ModuleEnv.Expr.Idx,
-        arg_ptr: *anyopaque,
         ret_ptr: *anyopaque,
         ops: *builtins.host_abi.RocOps,
     ) !void {
 
         // Get closure parameter patterns
-        const param_patterns = try getClosureParameterPatterns(self.env, expr_idx) catch {
+        const param_patterns = getClosureParameterPatterns(self.env, expr_idx) catch {
             std.log.err("Failed to get closure parameter patterns for expr={}", .{expr_idx});
             return error.EvaluationFailed;
         };
@@ -2958,33 +2983,17 @@ pub const Interpreter = struct {
         if (param_patterns.len > 0) {
             if (param_patterns.len == 1) {
                 // Single parameter case - direct inline implementation
-                const arg_var = self.env.varFrom(param_patterns[0]);
+                const arg_var = ModuleEnv.varFrom(param_patterns[0]);
                 const arg_layout_idx = try self.layout_cache.addTypeVar(arg_var);
                 const arg_layout = self.layout_cache.getLayout(arg_layout_idx);
 
                 // allocate space for the argument on the stack
-                const dest_ptr = self.pushStackValue(arg_layout) catch |err| {
+                const dest_value = self.pushStackValue(arg_layout) catch |err| {
                     std.log.err("Failed to pushStackValue for single parameter: {s}", .{@errorName(err)});
                     return error.EvaluationFailed;
                 };
 
-                if (dest_ptr == null) {
-                    // layout is zero-sized, no value to copy
-                    return;
-                }
-
-                // write the value into our pointer
-                if (arg_layout.tag == .scalar and arg_layout.data.scalar.tag == .str) {
-                    // Clone the RocStr into the interpreter's heap
-                    const src_str: *const RocStr = @ptrCast(arg_ptr);
-                    const dest_str: *RocStr = @ptrCast(dest_ptr.?);
-                    dest_str.* = src_str.clone(ops);
-                } else {
-                    // Copy the value directly
-                    const arg_slice: [*]u8 = @ptrCast(arg_ptr);
-                    const dest_slice: [*]u8 = @ptrCast(dest_ptr.?);
-                    @memcpy(dest_slice, arg_slice);
-                }
+                dest_value.copyToPtr(self.layout_cache, ret_ptr, ops);
             } else {
                 // Multiple parameters case - proper alignment calculations
                 std.log.warn("  multiple params: handling {} parameters", .{param_patterns.len});
@@ -3028,32 +3037,10 @@ pub const Interpreter = struct {
                 }
 
                 // Push arguments with proper alignment
-                for (0..param_count) |i| {
-                    const elem_layout = elem_layouts[i];
-                    const elem_size = self.layout_cache.layoutSize(elem_layout);
-                    const elem_offset = offsets[i];
+                for (elem_layouts) |arg_layout| {
+                    const arg_value = try self.pushStackValue(arg_layout);
 
-                    std.log.warn("  param {}: size={}, offset={}, total_size={}", .{ i, elem_size, elem_offset, running_offset });
-
-                    const dest_ptr = self.pushStackValue(elem_layout) catch |err| {
-                        std.log.err("  param {} pushStackValue failed: {s}", .{ i, @errorName(err) });
-                        return error.EvaluationFailed;
-                    };
-
-                    // write the value into our pointer
-                    if (elem_layout.tag == .scalar and elem_layout.data.scalar.tag == .str) {
-                        // Clone the RocStr into the interpreter's heap
-                        const src_ptr = @as([*]u8, @ptrCast(arg_ptr)) + elem_offset;
-                        const src_str: *const RocStr = @ptrCast(src_ptr);
-                        const dest_str: *RocStr = @ptrCast(dest_ptr.?);
-                        dest_str.* = src_str.clone(ops);
-                    } else {
-                        // Copy the value directly
-                        const src_ptr = @as([*]u8, @ptrCast(arg_ptr)) + elem_offset;
-                        const arg_slice: []u8 = .{ .len = elem_size, .ptr = @ptrCast(src_ptr) };
-                        const dest_slice: []u8 = .{ .len = elem_size, .ptr = @ptrCast(dest_ptr.?) };
-                        @memcpy(dest_slice, arg_slice);
-                    }
+                    arg_value.copyToPtr(self.layout_cache, ret_ptr, ops);
                 }
             }
         }
@@ -3062,11 +3049,11 @@ pub const Interpreter = struct {
             expr_idx,
             @intCast(param_patterns.len),
         ) catch |err| {
-            std.log.err("callClosureWithStackArgs failed with err: {}", .{@errorName(err)});
+            std.log.err("callClosureWithStackArgs failed with err: {s}", .{@errorName(err)});
             return error.EvaluationFailed;
         };
 
-        try handleResult(closure_result, self.layout_cache, ops, ret_ptr);
+        closure_result.copyToPtr(self.layout_cache, ret_ptr, ops);
     }
 };
 
@@ -3211,12 +3198,12 @@ test "stack-based binary operations" {
         };
 
         // Push 2
-        const ptr1 = try interpreter.pushStackValue(int_layout);
-        @as(*i64, @ptrCast(@alignCast(ptr1))).* = 2;
+        const two_value = try interpreter.pushStackValue(int_layout);
+        @as(*i64, @ptrCast(@alignCast(two_value.ptr.?))).* = 2;
 
         // Push 3
-        const ptr2 = try interpreter.pushStackValue(int_layout);
-        @as(*i64, @ptrCast(@alignCast(ptr2))).* = 3;
+        const three_value = try interpreter.pushStackValue(int_layout);
+        @as(*i64, @ptrCast(@alignCast(three_value.ptr.?))).* = 3;
 
         // Perform addition
         try interpreter.completeBinop(.w_binop_add);
@@ -3252,12 +3239,12 @@ test "stack-based comparisons" {
         };
 
         // Push 5
-        const ptr1 = try interpreter.pushStackValue(int_layout);
-        @as(*i64, @ptrCast(@alignCast(ptr1))).* = 5;
+        const five_value = try interpreter.pushStackValue(int_layout);
+        @as(*i64, @ptrCast(@alignCast(five_value.ptr.?))).* = 5;
 
         // Push 3
-        const ptr2 = try interpreter.pushStackValue(int_layout);
-        @as(*i64, @ptrCast(@alignCast(ptr2))).* = 3;
+        const three_ptr = try interpreter.pushStackValue(int_layout);
+        @as(*i64, @ptrCast(@alignCast(three_ptr.ptr.?))).* = 3;
 
         // Perform comparison
         try interpreter.completeBinop(.w_binop_gt);
