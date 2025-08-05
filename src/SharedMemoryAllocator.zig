@@ -206,13 +206,24 @@ pub fn create(size: usize, page_size: usize) !SharedMemoryAllocator {
         },
         .linux, .macos, .freebsd, .openbsd, .netbsd => {
             // Create a file descriptor for shared memory that can be passed to child processes
-            const fd = blk: {
+            const fd: std.posix.fd_t = blk: {
                 if (builtin.os.tag == .linux) {
-                    // On Linux, use memfd_create for anonymous shared memory with fd
-                    const fd = std.os.linux.memfd_create("roc_shm", std.os.linux.MFD.CLOEXEC);
+                    // std.os.linux.memfd_create returns usize (I guess to match kernel ABI),
+                    // but the Linux stdlib function returns an i32.
+                    // Later functions expect to be passed one of these, so cast to it.
+                    //
+                    // Source: https://www.man7.org/linux/man-pages/man2/memfd_create.2.html
+                    const fd: i32 = @bitCast(std.os.linux.memfd_create(
+                        // We unlink this name immediately, so it won't pollute
+                        // the child process's namespace. We just want the fd!
+                        "roc_shm",
+                        std.os.linux.MFD.CLOEXEC,
+                    ));
+
                     if (fd < 0) {
                         return error.MemfdCreateFailed;
                     }
+
                     break :blk fd;
                 } else {
                     // On other Unix systems, use shm_open with a random name
@@ -237,6 +248,7 @@ pub fn create(size: usize, page_size: usize) !SharedMemoryAllocator {
                     }
 
                     // Immediately unlink so it gets cleaned up when all references are closed
+                    // (If this fails somehow, it's not worth taking any action.)
                     _ = c.shm_unlink(shm_name.ptr);
 
                     break :blk fd;

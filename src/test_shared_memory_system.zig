@@ -121,7 +121,7 @@ test "integration - shared memory setup and parsing" {
     defer allocator.free(roc_path);
 
     // Test that we can set up shared memory with ModuleEnv
-    const shm_handle = main.setupSharedMemoryWithModuleEnv(roc_path) catch |err| {
+    const shm_handle = main.setupSharedMemoryWithModuleEnv(allocator, roc_path) catch |err| {
         std.log.warn("Failed to set up shared memory: {}, skipping integration test\n", .{err});
         return;
     };
@@ -164,7 +164,7 @@ test "integration - compilation pipeline for different expressions" {
         defer allocator.free(roc_path);
 
         // Test the full compilation pipeline (parse -> canonicalize -> typecheck)
-        const shm_handle = main.setupSharedMemoryWithModuleEnv(roc_path) catch |err| {
+        const shm_handle = main.setupSharedMemoryWithModuleEnv(allocator, roc_path) catch |err| {
             std.log.warn("Failed to set up shared memory for expression: {s}, error: {}\n", .{ roc_content, err });
             continue;
         };
@@ -198,7 +198,7 @@ test "integration - error handling in compilation" {
     defer allocator.free(roc_path);
 
     // This should fail during parsing/compilation
-    const result = main.setupSharedMemoryWithModuleEnv(roc_path);
+    const result = main.setupSharedMemoryWithModuleEnv(allocator, roc_path);
 
     // We expect this to either fail or succeed (depending on parser error handling)
     // The important thing is that it doesn't crash

@@ -397,10 +397,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     };
 
     if (!exe_exists) {
-        // If --no-cache, delete existing executable to ensure we get a fresh one
-        if (args.no_cache) {
-            std.fs.cwd().deleteFile(exe_path) catch {}; // Ignore errors if file doesn't exist
-        }
 
         // Resolve platform from app header
         const host_path = resolvePlatformHost(gpa, args.path) catch |err| {
@@ -416,71 +412,37 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         };
         defer gpa.free(shim_path);
 
-        // Extract shim library if not cached, or if --no-cache is specified
-        const should_extract_shim = if (args.no_cache) true else blk: {
-            std.fs.cwd().access(shim_path, .{}) catch {
-                break :blk true; // Shim not found, need to extract
-            };
-            break :blk false; // Shim exists and caching is enabled
-        };
-
-        if (should_extract_shim) {
-            // If --no-cache, delete existing shim to ensure we get a fresh one
-            if (args.no_cache) {
-                std.fs.cwd().deleteFile(shim_path) catch {}; // Ignore errors if file doesn't exist
-            }
-
+        // Only extract if the shim doesn't already exist in cache
+        std.fs.cwd().access(shim_path, .{}) catch {
+            // Shim not found in cache, extract it
             extractReadRocFilePathShimLibrary(gpa, shim_path) catch |err| {
                 std.log.err("Failed to extract read roc file path shim library: {}\n", .{err});
                 std.process.exit(1);
             };
+        };
+
+        // Link the host.a with our shim to create the interpreter executable using clang
+        const link_result = std.process.Child.run(.{
+            .allocator = gpa,
+            .argv = &.{ "clang", "-o", exe_path, host_path, shim_path },
+        }) catch |err| {
+            std.log.err("Failed to link executable: {}\n", .{err});
+            std.process.exit(1);
+        };
+        defer gpa.free(link_result.stdout);
+        defer gpa.free(link_result.stderr);
+
+        if (link_result.term.Exited != 0) {
+            std.log.err("Linker failed with exit code: {}\n", .{link_result.term.Exited});
+            if (link_result.stderr.len > 0) {
+                std.log.err("Linker stderr: {s}\n", .{link_result.stderr});
+            }
+            std.process.exit(1);
         }
-
-        // Link the host.a with our shim to create the interpreter executable using our linker
-        // Try LLD first, fallback to clang if LLVM is not available
-        const link_config = linker.LinkConfig{
-            .output_path = exe_path,
-            .object_files = &.{ host_path, shim_path },
-            .can_exit_early = false,
-            .disable_output = false,
-        };
-
-        linker.link(gpa, link_config) catch |err| switch (err) {
-            linker.LinkError.LLVMNotAvailable => {
-                // Fallback to clang when LLVM is not available
-                const link_result = std.process.Child.run(.{
-                    .allocator = gpa,
-                    .argv = &.{ "clang", "-o", exe_path, host_path, shim_path },
-                }) catch |clang_err| {
-                    std.log.err("Failed to link executable with both LLD and clang: LLD unavailable, clang error: {}\n", .{clang_err});
-                    std.process.exit(1);
-                };
-                defer gpa.free(link_result.stdout);
-                defer gpa.free(link_result.stderr);
-                if (link_result.term.Exited != 0) {
-                    std.log.err("Linker failed with exit code: {}\n", .{link_result.term.Exited});
-                    if (link_result.stderr.len > 0) {
-                        std.log.err("Linker stderr: {s}\n", .{link_result.stderr});
-                    }
-                    if (link_result.stdout.len > 0) {
-                        std.log.err("Linker stdout: {s}\n", .{link_result.stdout});
-                    }
-                    std.process.exit(1);
-                }
-            },
-            linker.LinkError.LinkFailed => {
-                std.log.err("LLD linker failed to create executable\n", .{});
-                std.process.exit(1);
-            },
-            else => {
-                std.log.err("Failed to link executable: {}\n", .{err});
-                std.process.exit(1);
-            },
-        };
     }
 
     // Set up shared memory with ModuleEnv
-    const shm_handle = setupSharedMemoryWithModuleEnv(args.path) catch |err| {
+    const shm_handle = setupSharedMemoryWithModuleEnv(gpa, args.path) catch |err| {
         std.log.err("Failed to set up shared memory with ModuleEnv: {}\n", .{err});
         std.process.exit(1);
     };
@@ -627,7 +589,7 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 /// Set up shared memory with a compiled ModuleEnv from a Roc file.
 /// This parses, canonicalizes, and type-checks the Roc file, with the resulting ModuleEnv
 /// ending up in shared memory because all allocations were done into shared memory.
-pub fn setupSharedMemoryWithModuleEnv(roc_file_path: []const u8) !SharedMemoryHandle {
+pub fn setupSharedMemoryWithModuleEnv(_: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size);
@@ -816,7 +778,7 @@ pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (s
                         const platform_spec = after_quote[0..quote_end];
 
                         // Try to resolve platform to a local host library
-                        return resolvePlatformSpecToHostLib(gpa, platform_spec, roc_file_path);
+                        return resolvePlatformSpecToHostLib(gpa, platform_spec);
                     }
                 }
             }
@@ -826,107 +788,50 @@ pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (s
     return error.NoPlatformFound;
 }
 
-/// Try to resolve a named platform (like "cli", "basic-cli") to a host library
-fn resolveNamedPlatform(gpa: std.mem.Allocator, platform_name: []const u8) ?[]u8 {
+/// Resolve a platform specification to a local host library path
+fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})![]u8 {
     // TEMPORARY: For testing the interpreter, use our test host library
-    if (std.mem.eql(u8, platform_name, "test")) {
-        return gpa.dupe(u8, "libtest_host.a") catch null;
+    if (std.mem.eql(u8, platform_spec, "test")) {
+        return gpa.dupe(u8, "libtest_host.a");
     }
 
-    if (std.mem.eql(u8, platform_name, "cli")) {
+    // Check for common platform names and map them to host libraries
+    if (std.mem.eql(u8, platform_spec, "cli")) {
+        // Try to find CLI platform host library
         const cli_paths = [_][]const u8{
             "zig-out/lib/libplatform_host_cli.a",
             "platform/cli/host.a",
             "platforms/cli/host.a",
         };
-        return findFirstExistingPath(gpa, &cli_paths);
-    }
 
-    if (std.mem.eql(u8, platform_name, "basic-cli")) {
+        for (cli_paths) |path| {
+            std.fs.cwd().access(path, .{}) catch continue;
+            return try gpa.dupe(u8, path);
+        }
+    } else if (std.mem.eql(u8, platform_spec, "basic-cli")) {
+        // Try to find basic-cli platform host library
         const basic_cli_paths = [_][]const u8{
             "zig-out/lib/libplatform_host_basic_cli.a",
             "platform/basic-cli/host.a",
             "platforms/basic-cli/host.a",
         };
-        return findFirstExistingPath(gpa, &basic_cli_paths);
-    }
 
-    return null;
-}
-
-/// Find the first existing path from a list of candidates
-fn findFirstExistingPath(gpa: std.mem.Allocator, paths: []const []const u8) ?[]u8 {
-    for (paths) |path| {
-        std.fs.cwd().access(path, .{}) catch continue;
-        return gpa.dupe(u8, path) catch null;
-    }
-    return null;
-}
-
-/// Resolve a platform main.roc file path to its corresponding libhost.a
-fn resolvePlatformMainRoc(gpa: std.mem.Allocator, platform_spec: []const u8, roc_file_path: []const u8) ![]u8 {
-    // Get the directory containing the app file
-    const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
-
-    // Resolve the platform path relative to the app file's directory
-    const resolved_platform_path = if (std.fs.path.isAbsolute(platform_spec))
-        try gpa.dupe(u8, platform_spec)
-    else
-        try std.fs.path.join(gpa, &.{ app_dir, platform_spec });
-    defer gpa.free(resolved_platform_path);
-
-    // Get the directory containing main.roc
-    const dir_path = std.fs.path.dirname(resolved_platform_path) orelse return error.PlatformNotSupported;
-
-    // Look for libhost.a in the same directory
-    const host_path = try std.fs.path.join(gpa, &.{ dir_path, "libhost.a" });
-    errdefer gpa.free(host_path);
-
-    std.fs.cwd().access(host_path, .{}) catch {
-        return error.PlatformNotSupported;
-    };
-
-    return host_path;
-}
-
-/// Resolve a direct file path (absolute or relative to the app file)
-fn resolveDirectPath(gpa: std.mem.Allocator, platform_spec: []const u8, roc_file_path: []const u8) ![]u8 {
-    const resolved_path = if (std.fs.path.isAbsolute(platform_spec))
-        try gpa.dupe(u8, platform_spec)
-    else blk: {
-        const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
-        break :blk try std.fs.path.join(gpa, &.{ app_dir, platform_spec });
-    };
-    errdefer gpa.free(resolved_path);
-
-    std.fs.cwd().access(resolved_path, .{}) catch {
-        return error.PlatformNotSupported;
-    };
-
-    return resolved_path;
-}
-
-/// Resolve a platform specification to a local host library path
-fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8, roc_file_path: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})![]u8 {
-    // Try URL detection first
-    if (std.mem.startsWith(u8, platform_spec, "http")) {
+        for (basic_cli_paths) |path| {
+            std.fs.cwd().access(path, .{}) catch continue;
+            return try gpa.dupe(u8, path);
+        }
+    } else if (std.mem.startsWith(u8, platform_spec, "http")) {
         // This is a URL - for production, would download and resolve
         // For now, return not supported
         return error.PlatformNotSupported;
     }
 
-    // Try named platforms
-    if (resolveNamedPlatform(gpa, platform_spec)) |path| {
-        return path;
-    }
-
-    // Check if it's a path to a platform main.roc file
-    if (std.mem.endsWith(u8, platform_spec, "/main.roc") or std.mem.endsWith(u8, platform_spec, "\\main.roc")) {
-        return resolvePlatformMainRoc(gpa, platform_spec, roc_file_path);
-    }
-
     // Try to interpret as a direct file path
-    return resolveDirectPath(gpa, platform_spec, roc_file_path);
+    std.fs.cwd().access(platform_spec, .{}) catch {
+        return error.PlatformNotSupported;
+    };
+
+    return try gpa.dupe(u8, platform_spec);
 }
 
 /// Extract the embedded read_roc_file_path_shim library to the specified path
