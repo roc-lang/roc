@@ -2275,9 +2275,12 @@ pub const Interpreter = struct {
             .w_eval_record_fields => try self.handleRecordFields(work.expr_idx, work.extra.current_field_idx),
             .w_eval_tuple_elements => try self.handleTupleElements(work.expr_idx, work.extra.current_element_idx),
 
-            // Let bindings and other complex work items
-            .w_let_bind, .w_block_cleanup => {
-                // These require more complex state management that's handled in the main eval loop
+            // Block cleanup
+            .w_block_cleanup => try self.handleBlockCleanup(work.expr_idx, @intCast(work.extra.bindings_stack_len)),
+
+            // Let bindings
+            .w_let_bind => {
+                // Let bindings require more complex state management that's handled in the main eval loop
                 std.log.warn("Complex work item {s} not supported in processWorkItem", .{@tagName(work.kind)});
                 return error.UnsupportedWorkItem;
             },
@@ -2297,6 +2300,69 @@ pub const Interpreter = struct {
                 std.log.err("Unexpected work item in processWorkItem: {s}", .{@tagName(work.kind)});
                 return error.UnexpectedWorkItem;
             },
+        }
+    }
+
+    /// Helper to handle block cleanup work items
+    fn handleBlockCleanup(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, bindings_to_keep: u32) EvalError!void {
+        const values_to_keep: u32 = @intFromEnum(expr_idx);
+        self.traceInfo(
+            "Block cleanup: resetting bindings from {} to {}, values from {} to {}",
+            .{ self.bindings_stack.items.len, bindings_to_keep, self.value_stack.items.len, values_to_keep },
+        );
+
+        // The block's result is on top of the stack. We need to preserve it.
+        const result_val = try self.popStackValue();
+
+        var result_size: u32 = 0;
+        _ = result_val.layout.alignment(target_usize); // Used for memory alignment
+        if (result_val.layout.tag == .closure and result_val.ptr != null) {
+            const closure: *const Closure = @ptrCast(@alignCast(result_val.ptr.?));
+            const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
+            const captures_size = self.layout_cache.layoutSize(captures_layout);
+            result_size = @sizeOf(Closure) + captures_size;
+        } else {
+            result_size = self.layout_cache.layoutSize(result_val.layout);
+        }
+
+        // Copy to a temp buffer
+        const temp_buffer = try self.allocator.alloc(u8, result_size);
+        defer self.allocator.free(temp_buffer);
+        if (result_size > 0) {
+            std.mem.copyForwards(u8, temp_buffer, @as([*]const u8, @ptrCast(result_val.ptr.?))[0..result_size]);
+        }
+
+        // Now, clean up the values defined within the block.
+        if (self.value_stack.items.len > values_to_keep) {
+            const first_val_to_pop_offset = self.value_stack.items[values_to_keep].offset;
+            self.value_stack.items.len = values_to_keep;
+            self.stack_memory.used = first_val_to_pop_offset;
+        }
+
+        // Clean up bindings, including any heap-allocated strings.
+        var i = self.bindings_stack.items.len;
+        while (i > bindings_to_keep) {
+            i -= 1;
+            const binding = self.bindings_stack.items[i];
+            if (binding.layout.tag == .scalar and binding.layout.data.scalar.tag == .str) {
+                const stack_start_ptr = @intFromPtr(self.stack_memory.start);
+                const stack_end_ptr = stack_start_ptr + self.stack_memory.capacity;
+                const binding_ptr_val = @intFromPtr(binding.value_ptr);
+
+                if (binding_ptr_val < stack_start_ptr or binding_ptr_val >= stack_end_ptr) {
+                    const str_ptr: *builtins.str.RocStr = @ptrCast(@alignCast(binding.value_ptr));
+                    if (!str_ptr.isSmallStr()) {
+                        str_ptr.decref(&self.roc_ops);
+                    }
+                }
+            }
+        }
+        self.bindings_stack.items.len = bindings_to_keep;
+
+        // Put the result back on the stack.
+        const result_ptr = try self.pushStackValue(result_val.layout);
+        if (result_size > 0) {
+            std.mem.copyForwards(u8, @as([*]u8, @ptrCast(result_ptr.?))[0..result_size], temp_buffer);
         }
     }
 
