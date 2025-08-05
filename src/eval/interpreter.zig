@@ -534,6 +534,7 @@ pub const Interpreter = struct {
                     var result_size: u32 = 0;
                     const result_alignment = result_val.layout.alignment(target_usize);
                     if (result_val.layout.tag == .closure and result_val.ptr != null) {
+                        std.debug.assert(result_val.ptr != null);
                         const closure: *const Closure = @ptrCast(@alignCast(result_val.ptr.?));
                         const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
                         const captures_size = self.layout_cache.layoutSize(captures_layout);
@@ -546,6 +547,7 @@ pub const Interpreter = struct {
                     const temp_buffer = try self.allocator.alloc(u8, result_size);
                     defer self.allocator.free(temp_buffer);
                     if (result_size > 0) {
+                        std.debug.assert(result_val.ptr != null);
                         std.mem.copyForwards(u8, temp_buffer, @as([*]const u8, @ptrCast(result_val.ptr.?))[0..result_size]);
                     }
 
@@ -734,6 +736,7 @@ pub const Interpreter = struct {
                 const expr_layout = self.layout_cache.getLayout(layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
 
+                std.debug.assert(result_value.ptr != null);
                 const typed_ptr = @as(*f32, @ptrCast(@alignCast(result_value.ptr.?)));
                 typed_ptr.* = float_lit.value;
 
@@ -745,6 +748,7 @@ pub const Interpreter = struct {
                 const expr_layout = self.layout_cache.getLayout(layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
 
+                std.debug.assert(result_value.ptr != null);
                 const typed_ptr = @as(*f64, @ptrCast(@alignCast(result_value.ptr.?)));
                 typed_ptr.* = float_lit.value;
 
@@ -757,6 +761,7 @@ pub const Interpreter = struct {
                 const expr_layout = self.layout_cache.getLayout(layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
 
+                std.debug.assert(result_value.ptr != null);
                 const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
                 const tag_name = self.env.idents.getText(tag.name);
                 if (std.mem.eql(u8, tag_name, "True")) {
@@ -785,6 +790,7 @@ pub const Interpreter = struct {
                 const result_value = try self.pushStackValue(expr_layout);
 
                 // Initialize empty list
+                std.debug.assert(result_value.ptr != null);
                 const list: *RocList = @ptrCast(@alignCast(result_value.ptr.?));
                 list.* = RocList.empty();
             },
@@ -871,6 +877,7 @@ pub const Interpreter = struct {
                     if (binding.pattern_idx == lookup.pattern_idx) {
                         self.traceInfo("Found binding for pattern_idx={}", .{@intFromEnum(lookup.pattern_idx)});
                         const dest_value = try self.pushStackValue(binding.layout);
+                        std.debug.assert(dest_value.ptr != null);
                         const dest_ptr = dest_value.ptr.?;
                         const binding_size = self.layout_cache.layoutSize(binding.layout);
                         if (binding_size > 0) {
@@ -1190,9 +1197,17 @@ pub const Interpreter = struct {
                 // Allocate stack space for RocStr
                 const str_layout = Layout.str();
                 const result_value = try self.pushStackValue(str_layout);
+
+                if (result_value.ptr) |ptr| {
+                    self.traceInfo("e_str_segment: result_value.ptr = 0x{x}", .{@intFromPtr(ptr)});
+                } else {
+                    self.traceInfo("e_str_segment: result_value.ptr is NULL!", .{});
+                }
+
                 try self.traceValue("e_str_segment", result_value);
 
                 // Initialize the RocStr
+                std.debug.assert(result_value.ptr != null);
                 const roc_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
                 roc_str.* = builtins.str.RocStr.fromSlice(literal_content, &self.roc_ops);
             },
@@ -2073,6 +2088,7 @@ pub const Interpreter = struct {
             switch (value.layout.tag) {
                 .scalar => switch (value.layout.data.scalar.tag) {
                     .int => {
+                        std.debug.assert(value.ptr != null);
                         const int_val = self.readIntFromMemoryAndTrace(value.ptr.?, value.layout.data.scalar.data.int);
                         writer.print("int({s}) {}\n", .{
                             @tagName(value.layout.data.scalar.data.int),
@@ -2080,23 +2096,25 @@ pub const Interpreter = struct {
                         }) catch {};
                     },
                     .frac => {
+                        std.debug.assert(value.ptr != null);
                         const float_val = @as(*f64, @ptrCast(@alignCast(value.ptr.?))).*;
                         writer.print("float {d}\n", .{float_val}) catch {};
                     },
                     .bool => {
+                        std.debug.assert(value.ptr != null);
                         const bool_val = @as(*u8, @ptrCast(@alignCast(value.ptr.?))).*;
                         writer.print("bool {}\n", .{bool_val != 0}) catch {};
                     },
                     .str => {
-                        const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(value.ptr.?));
-                        const content = roc_str.asSlice();
-                        const truncated = if (content.len > 50) content[0..47] ++ "..." else content;
-                        const size_type = if (roc_str.isSmallStr()) "small" else "big";
-                        writer.print("str({s}) \"{s}\"\n", .{ size_type, truncated }) catch {};
+                        std.debug.assert(value.ptr != null);
+                        _ = @as(*const builtins.str.RocStr, @ptrCast(@alignCast(value.ptr.?)));
+                        // Don't try to read the string content yet - it might not be initialized
+                        writer.print("str(uninitialized)\n", .{}) catch {};
                     },
                     else => writer.print("scalar({s})\n", .{@tagName(value.layout.data.scalar.tag)}) catch {},
                 },
                 .closure => {
+                    std.debug.assert(value.ptr != null);
                     const closure: *const Closure = @ptrCast(@alignCast(value.ptr.?));
                     writer.print("closure(body_idx={}, captures_layout_idx={})\n", .{
                         closure.body_idx,
@@ -2231,19 +2249,25 @@ pub const Interpreter = struct {
                 return;
             }
 
+            const result_size = layout_cache.layoutSize(self.layout);
+            if (result_size == 0) {
+                std.log.warn("Result has zero size, nothing to copy", .{});
+                return;
+            }
+
             if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
                 // Clone the RocStr into the interpreter's heap
+                std.debug.assert(self.ptr != null);
                 const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
                 const dest_str: *RocStr = @ptrCast(@alignCast(dest_ptr));
                 dest_str.* = src_str.clone(ops);
+                return;
             }
 
-            const result_size = layout_cache.layoutSize(self.layout);
-            if (result_size > 0) {
-                const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
-                const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
-                @memcpy(dst, src);
-            }
+            std.debug.assert(self.ptr != null);
+            const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
+            const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
+            @memcpy(dst, src);
         }
 
         /// Type-aware result handling that properly formats results for platforms
@@ -2484,10 +2508,14 @@ pub const Interpreter = struct {
             .offset = offset,
         });
 
-        return StackValue{
+        const result = StackValue{
             .layout = value_layout,
             .ptr = value_ptr,
         };
+
+        self.traceInfo("pushStackValue returning: ptr={?}, layout={s}", .{ value_ptr, @tagName(value_layout.tag) });
+
+        return result;
     }
 
     /// Helper to pop a value from the stacks.
@@ -2945,29 +2973,115 @@ pub const Interpreter = struct {
         expr_idx: ModuleEnv.Expr.Idx,
         ret_ptr: *anyopaque,
         ops: *builtins.host_abi.RocOps,
+        arg_ptr: ?*anyopaque,
     ) !void {
-        // Check if the expression is a closure by getting its layout
+        std.log.warn("evaluateExpression: expr_idx={}, ret_ptr=0x{x}, arg_ptr={?}", .{ expr_idx, @intFromPtr(ret_ptr), arg_ptr });
+
+        // Check if this is a closure and if we have arguments to push
         const expr_var = ModuleEnv.varFrom(expr_idx);
         const layout_idx = self.layout_cache.addTypeVar(expr_var) catch {
             return error.EvaluationFailed;
         };
         const expr_layout = self.layout_cache.getLayout(layout_idx);
 
-        // If it's not a closure, evaluate it as a simple expression
-        if (expr_layout.tag != .closure) {
-            const result_value = self.eval(expr_idx) catch {
-                std.log.err("Expression evaluation failed", .{});
+        if (expr_layout.tag == .closure and arg_ptr != null) {
+            // This is a closure and we have arguments - push them and call it
+            try self.pushClosureArguments(expr_idx, arg_ptr.?);
+            std.log.warn("evaluateExpression: calling closure with {} args on stack", .{self.value_stack.items.len});
+            try self.evaluateClosure(expr_idx, ret_ptr, ops);
+        } else {
+            // Regular expression evaluation
+            const result_value = self.eval(expr_idx) catch |err| {
+                std.log.err("Expression evaluation failed: {s}", .{@errorName(err)});
                 return error.EvaluationFailed;
             };
+
+            std.log.warn("evaluateExpression: about to copy result to ret_ptr", .{});
             result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
         }
 
-        // Evaluate the closure if it exists
-        try self.evaluateClosure(expr_idx, ret_ptr, ops);
+        std.log.warn("evaluateExpression: copy completed successfully", .{});
     }
 
-    /// Evaluate a closure with arguments
+    /// Push closure arguments onto the interpreter stack
+    fn pushClosureArguments(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, arg_ptr: *anyopaque) !void {
+
+        // Get closure parameter patterns from the expression
+        const param_patterns = getClosureParameterPatterns(self.env, expr_idx) catch {
+            std.log.err("Failed to get closure parameter patterns for expr={}", .{expr_idx});
+            return error.UnexpectedClosureStructure;
+        };
+
+        if (param_patterns.len == 0) {
+            std.log.warn("No parameters found for closure", .{});
+            return;
+        }
+
+        std.log.warn("Pushing {} closure arguments", .{param_patterns.len});
+
+        if (param_patterns.len == 1) {
+            // Single parameter case
+            const p0 = param_patterns[0];
+            const arg0_var: types.Var = @enumFromInt(@intFromEnum(p0));
+            const arg0_layout_idx = self.layout_cache.addTypeVar(arg0_var) catch {
+                return error.LayoutError;
+            };
+            const arg0_layout = self.layout_cache.getLayout(arg0_layout_idx);
+            const size_bytes = self.layout_cache.layoutSize(arg0_layout);
+
+            const dest_value = self.pushStackValue(arg0_layout) catch {
+                return error.StackOverflow;
+            };
+
+            // Copy the argument data
+            if (size_bytes > 0 and dest_value.ptr != null) {
+                std.debug.assert(dest_value.ptr != null);
+                const src = @as([*]const u8, @ptrCast(arg_ptr.?))[0..size_bytes];
+                const dst = @as([*]u8, @ptrCast(dest_value.ptr.?))[0..size_bytes];
+
+                // Debug: log what we're copying
+                std.log.warn("Copying from arg_ptr=0x{x} to stack=0x{x}, size={}", .{ @intFromPtr(arg_ptr.?), @intFromPtr(dest_value.ptr.?), size_bytes });
+                if (size_bytes >= 24) {
+                    // For RocStr, log the first few fields
+                    const src_rocstr = @as(*const builtins.str.RocStr, @ptrCast(@alignCast(arg_ptr.?)));
+                    std.log.warn("Source RocStr: bytes={*}, length={}, capacity={}", .{ src_rocstr.bytes, src_rocstr.length, src_rocstr.capacity_or_alloc_ptr });
+                }
+
+                @memcpy(dst, src);
+                std.log.warn("Copied {} bytes from arg_ptr to stack", .{size_bytes});
+            }
+        } else {
+            // Multiple parameters - for now, just log and skip
+            std.log.warn("Multiple parameter closures not yet implemented in simplified version", .{});
+            return error.UnexpectedClosureStructure;
+        }
+    }
+
+    /// Evaluate a closure with arguments already on the stack
     fn evaluateClosure(
+        self: *Interpreter,
+        expr_idx: ModuleEnv.Expr.Idx,
+        ret_ptr: *anyopaque,
+        ops: *builtins.host_abi.RocOps,
+    ) !void {
+        std.log.warn("evaluateClosure: starting with {} items on value_stack", .{self.value_stack.items.len});
+
+        // The arguments are already on the stack from pushClosureArguments
+        // Call the closure directly with those arguments
+        const arg_count: u32 = @intCast(self.value_stack.items.len);
+
+        std.log.warn("evaluateClosure: calling closure with {} args", .{arg_count});
+
+        const result_value = try self.callClosureWithStackArgs(expr_idx, arg_count);
+
+        // Copy the result
+        result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
+
+        std.log.warn("evaluateClosure: completed successfully", .{});
+    }
+
+    /// Old evaluateClosure implementation - keeping for reference
+    fn evaluateClosureOld(
         self: *Interpreter,
         expr_idx: ModuleEnv.Expr.Idx,
         ret_ptr: *anyopaque,

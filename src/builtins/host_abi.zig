@@ -21,10 +21,10 @@ pub const RocCall = fn (
     /// The host must ensure that this address points to enough memory for the
     /// Roc function to write its entire return value into the address.
     *anyopaque,
-    /// Varargs, all of which are pointers (to arguments that will be passed
-    /// into the Roc function). Arguments with small sizes can be combined into
-    /// a struct, and a pointer to that struct can be passed as one of these.
-    anytype,
+    /// A pointer to a Roc tuple containing the arguments to pass into the Roc function.
+    ///
+    /// For a zig host use an `extern struct` for well-defined in-memory layout matching the C ABI for the target
+    *anyopaque,
 ) callconv(.C) void;
 
 /// The operations (in the form of function pointers) that a running Roc program

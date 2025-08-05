@@ -3,6 +3,13 @@
 const std = @import("std");
 const builtins = @import("builtins");
 
+const RocExpectFailed = builtins.host_abi.RocExpectFailed;
+const RocDealloc = builtins.host_abi.RocDealloc;
+const RocRealloc = builtins.host_abi.RocRealloc;
+const RocCrashed = builtins.host_abi.RocCrashed;
+const RocAlloc = builtins.host_abi.RocAlloc;
+const RocCall = builtins.host_abi.RocCall;
+const RocDbg = builtins.host_abi.RocDbg;
 const RocStr = builtins.str.RocStr;
 
 /// Host environment - contains our arena allocator
@@ -11,7 +18,7 @@ const HostEnv = struct {
 };
 
 /// Roc allocation function
-fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.C) void {
+fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const host: *HostEnv = @ptrCast(@alignCast(env));
     const allocator = host.arena.allocator();
 
@@ -26,21 +33,21 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
 }
 
 /// Roc deallocation function
-fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.C) void {
+fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.C) void {
     _ = roc_dealloc;
     _ = env;
     // NoOp as our arena frees all memory at once
 }
 
 /// Roc reallocation function
-fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.C) void {
+fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.C) void {
     _ = roc_realloc;
     _ = env;
     @panic("Realloc not implemented in this example");
 }
 
 /// Roc debug function
-fn rocDbgFn(roc_dbg: *const builtins.host_abi.RocDbg, env: *anyopaque) callconv(.C) void {
+fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.C) void {
     const host: *HostEnv = @ptrCast(@alignCast(env));
     const allocator = host.arena.allocator();
 
@@ -58,14 +65,14 @@ fn rocDbgFn(roc_dbg: *const builtins.host_abi.RocDbg, env: *anyopaque) callconv(
 }
 
 /// Roc expect failed function
-fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.C) void {
+fn rocExpectFailedFn(roc_expect: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
     _ = env;
     const message = roc_expect.utf8_bytes[0..roc_expect.len];
     std.debug.print("ROC EXPECT FAILED: {s}\n", .{message});
 }
 
 /// Roc crashed function
-fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.C) noreturn {
+fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.C) noreturn {
     _ = env;
     const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
     @panic(message);
@@ -73,7 +80,7 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaqu
 
 // External symbol provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
+extern fn roc_entrypoint(ops: *RocCall, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
 
 /// Platform host entrypoint -- this is where the roc application starts and does platform things
 /// before the platform calls into Roc to do application-specific things.
@@ -103,7 +110,8 @@ pub export fn main() void {
     defer input_roc_str.decref(&roc_ops);
 
     // Arguments struct for single string parameter - consistent with struct-based approach
-    const Args = struct {
+    // `extern struct` has well-defined in-memory layout matching the C ABI for the target
+    const Args = extern struct {
         str: RocStr,
     };
 

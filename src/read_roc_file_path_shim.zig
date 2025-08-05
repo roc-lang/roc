@@ -45,15 +45,17 @@ const ShimError = error{
     BugUnboxedFlexVar,
     BugUnboxedRigidVar,
     UnsupportedResultType,
-} || shared_memory.SharedMemoryError || closure_args.ClosureArgError || safe_memory.MemoryError;
+} || shared_memory.SharedMemoryError || closure_args.ClosureArgError || safe_memory.MemoryError || eval.EvalError;
 
 /// Exported symbol that reads ModuleEnv from shared memory and evaluates it
 /// Returns a RocStr to the caller
 /// Expected format in shared memory: [u64 parent_address][ModuleEnv data]
 export fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void {
+    std.log.warn("roc_entrypoint called with ret_ptr=0x{x}", .{@intFromPtr(ret_ptr)});
     evaluateFromSharedMemory(ops, ret_ptr, arg_ptr) catch |err| {
         std.log.err("Error evaluating from shared memory: {s}", .{@errorName(err)});
     };
+    std.log.warn("roc_entrypoint returning", .{});
 }
 
 /// Cross-platform shared memory evaluation
@@ -90,11 +92,10 @@ fn evaluateFromSharedMemory(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque,
         },
     );
 
-    // TODO push args onto the stack for the closure evaluation
-    _ = arg_ptr;
-
-    // Evaluate the expression
-    try interpreter.evaluateExpression(expr_idx, ret_ptr, ops);
+    // Evaluate the expression (with optional arguments)
+    std.log.warn("About to call evaluateExpression with expr_idx={}, ret_ptr=0x{x}, arg_ptr={?}", .{expr_idx, @intFromPtr(ret_ptr), arg_ptr});
+    try interpreter.evaluateExpression(expr_idx, ret_ptr, ops, arg_ptr);
+    std.log.warn("evaluateExpression completed successfully", .{});
 }
 
 /// Set up ModuleEnv from shared memory with proper relocation
@@ -214,6 +215,7 @@ fn createInterpreter(env_ptr: *ModuleEnv) ShimError!Interpreter {
 
     return interpreter;
 }
+
 // /// Temporary: Original pushClosureArguments function for debugging
 // fn pushClosureArgumentsOriginal(interpreter: *eval.Interpreter, layout_cache: *layout_store.Store, param_patterns: []const ModuleEnv.Pattern.Idx, arg_ptr: ?*anyopaque) !void {
 //     const param_count = param_patterns.len;
