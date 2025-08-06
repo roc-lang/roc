@@ -3,9 +3,20 @@
 //! which has been built with a shim that lets it communicate efficiently with the
 //! compiler via shared memory.
 //!
-//! This allocator maps a gigantic anonymous virtual address region, one that's
-//! so large that needing to resize it should never come up in practice. (This is
-//! important, since coordinating resizing with the child process would be fraught.)
+//! This allocator maps a large anonymous virtual address region (512MB on 64-bit systems,
+//! 256MB on 32-bit systems). The size is chosen to be large enough that needing to
+//! resize it should never come up in practice, since coordinating resizing with the
+//! child process would be complex.
+//!
+//! ## Cross-platform coordination
+//!
+//! The allocator uses platform-specific coordination mechanisms:
+//!
+//! **Windows**: Passes the shared memory handle and size via command line arguments
+//! to the child process. Uses anonymous file mapping objects with handle inheritance.
+//!
+//! **POSIX (Linux/macOS/BSD)**: Creates a coordination file next to the child executable
+//! containing the file descriptor and size.
 //!
 //! An important detail is that it provides access to the child process via a file
 //! descriptor rather than using named shared memory. As it turns out, macOS has a
@@ -15,54 +26,15 @@
 //! parent process instead gives a fd to the child for the shared memory, the child
 //! process is allowed to use that to map in the shared memory and access it that way.
 //!
-//! One more design note on that: the fd is given to the child process by creating a
-//! text file with the same path as the child's executable, but with a different filename.
-//! Since the child executable will have been hardlinked to a random tempdir, and since
-//! it can access its own executable's path while running, it can use that to reliably
-//! discover the path to this text file in a tempdir without the parent process having
-//! to pollute the child process's env vars or CLI args with information from the compiler.
-//! (The text file contains both the file descriptor integer as well as the allocation size.)
+//! The coordination logic is handled by `src/ipc/coordination.zig`, while the
+//! low-level platform operations are abstracted in `src/ipc/platform.zig`.
 
 const std = @import("std");
 const builtin = @import("builtin");
+const platform = @import("ipc/platform.zig");
+const coordination = @import("ipc/coordination.zig");
 
 const SharedMemoryAllocator = @This();
-
-// Windows API declarations
-const windows = if (builtin.os.tag == .windows) struct {
-    const HANDLE = *anyopaque;
-    const DWORD = u32;
-    const BOOL = c_int;
-    const LPVOID = ?*anyopaque;
-    const LPCWSTR = [*:0]const u16;
-    const SIZE_T = usize;
-
-    extern "kernel32" fn CreateFileMappingW(hFile: HANDLE, lpFileMappingAttributes: ?*anyopaque, flProtect: DWORD, dwMaximumSizeHigh: DWORD, dwMaximumSizeLow: DWORD, lpName: ?LPCWSTR) ?HANDLE;
-    extern "kernel32" fn MapViewOfFile(hFileMappingObject: HANDLE, dwDesiredAccess: DWORD, dwFileOffsetHigh: DWORD, dwFileOffsetLow: DWORD, dwNumberOfBytesToMap: SIZE_T) LPVOID;
-    extern "kernel32" fn UnmapViewOfFile(lpBaseAddress: LPVOID) BOOL;
-    extern "kernel32" fn CloseHandle(hObject: HANDLE) BOOL;
-    extern "kernel32" fn OpenFileMappingW(dwDesiredAccess: DWORD, bInheritHandle: BOOL, lpName: LPCWSTR) ?HANDLE;
-    extern "kernel32" fn GetSystemInfo(lpSystemInfo: *SYSTEM_INFO) void;
-
-    const PAGE_READWRITE = 0x04;
-    const FILE_MAP_ALL_ACCESS = 0x001f;
-    const INVALID_HANDLE_VALUE = @as(HANDLE, @ptrFromInt(std.math.maxInt(usize)));
-    const FALSE = 0;
-
-    const SYSTEM_INFO = extern struct {
-        wProcessorArchitecture: u16,
-        wReserved: u16,
-        dwPageSize: DWORD,
-        lpMinimumApplicationAddress: LPVOID,
-        lpMaximumApplicationAddress: LPVOID,
-        dwActiveProcessorMask: *align(1) DWORD,
-        dwNumberOfProcessors: DWORD,
-        dwProcessorType: DWORD,
-        dwAllocationGranularity: DWORD,
-        wProcessorLevel: u16,
-        wProcessorRevision: u16,
-    };
-} else struct {};
 
 /// Header stored at the beginning of shared memory to communicate metadata
 pub const Header = extern struct {
@@ -87,182 +59,112 @@ is_owner: bool,
 /// Page size for this system
 page_size: usize,
 
-const Handle = switch (builtin.os.tag) {
-    .windows => std.os.windows.HANDLE,
-    else => std.posix.fd_t,
-};
-
-/// Error type for unsupported operating systems
-pub const PageSizeError = error{UnsupportedOperatingSystem};
+const Handle = platform.Handle;
 
 /// Get the system's page size at runtime
-pub fn getSystemPageSize() PageSizeError!usize {
-    const page_size: usize = switch (builtin.os.tag) {
-        .windows => blk: {
-            var system_info: windows.SYSTEM_INFO = undefined;
-            windows.GetSystemInfo(&system_info);
-            break :blk @intCast(system_info.dwPageSize);
-        },
-        .linux => blk: {
-            const result = std.os.linux.getauxval(std.elf.AT_PAGESZ);
-            break :blk if (result != 0) result else 4096;
-        },
-        .macos, .ios, .tvos, .watchos => blk: {
-            var page_size_c: usize = undefined;
-            var size: usize = @sizeOf(usize);
-            _ = std.c.sysctlbyname("hw.pagesize", &page_size_c, &size, null, 0);
-            break :blk page_size_c;
-        },
-        .freebsd, .netbsd, .openbsd, .dragonfly => blk: {
-            const result = std.c.getpagesize();
-            break :blk @intCast(result);
-        },
-        else => return error.UnsupportedOperatingSystem,
-    };
-
-    // Ensure page_size is a power of 2 (required for alignForward)
-    // Round up to the next power of 2 if needed (no-op if already power of 2)
-    return std.math.ceilPowerOfTwo(usize, page_size) catch 4096;
+pub fn getSystemPageSize() !usize {
+    return platform.getSystemPageSize();
 }
 
 /// Creates a new anonymous shared memory region with the given size
 pub fn create(size: usize, page_size: usize) !SharedMemoryAllocator {
     const aligned_size = std.mem.alignForward(usize, size, page_size);
 
-    switch (builtin.os.tag) {
-        .windows => {
-            // Windows: CreateFileMapping without a name (anonymous)
-            const handle = windows.CreateFileMappingW(
-                windows.INVALID_HANDLE_VALUE,
-                null, // default security
-                windows.PAGE_READWRITE,
-                @intCast(aligned_size >> 32), // high 32 bits
-                @intCast(aligned_size & 0xFFFFFFFF), // low 32 bits
-                null, // anonymous mapping
-            );
+    // Create the shared memory mapping
+    const handle = try platform.createMapping(aligned_size);
+    errdefer platform.closeHandle(handle, true);
 
-            if (handle == null) {
-                return error.CreateFileMappingFailed;
-            }
+    // Map the memory
+    const base_ptr = try platform.mapMemory(handle, aligned_size, platform.SHARED_MEMORY_BASE_ADDR);
+    errdefer platform.unmapMemory(base_ptr, aligned_size);
 
-            const base_ptr = windows.MapViewOfFile(
-                handle.?,
-                windows.FILE_MAP_ALL_ACCESS,
-                0, // offset high
-                0, // offset low
-                aligned_size,
-            );
+    const result = SharedMemoryAllocator{
+        .handle = handle,
+        .base_ptr = @ptrCast(@alignCast(base_ptr)),
+        .total_size = aligned_size,
+        .offset = std.atomic.Value(usize).init(@sizeOf(Header)), // Start after header
+        .is_owner = true,
+        .page_size = page_size,
+    };
 
-            if (base_ptr == null) {
-                _ = windows.CloseHandle(handle.?);
-                return error.MapViewOfFileFailed;
-            }
+    // Initialize header
+    const header_ptr = @as(*Header, @ptrCast(@alignCast(result.base_ptr)));
+    header_ptr.* = Header{
+        .total_size = aligned_size,
+    };
 
-            const result = SharedMemoryAllocator{
-                .handle = handle.?,
-                .base_ptr = @ptrCast(@alignCast(base_ptr)),
-                .total_size = aligned_size,
-                .offset = std.atomic.Value(usize).init(@sizeOf(Header)), // Start after header
-                .is_owner = true,
-                .page_size = page_size,
-            };
+    return result;
+}
 
-            // Initialize header
-            const header_ptr = @as(*Header, @ptrCast(@alignCast(result.base_ptr)));
-            header_ptr.* = Header{
-                .total_size = aligned_size,
-            };
+/// Opens an existing shared memory region by reading its header first.
+/// This function will map only the required amount of memory as specified in the header.
+pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8, page_size: usize) !SharedMemoryAllocator {
+    // Open the named shared memory
+    const handle = try platform.openMapping(gpa, name);
+    errdefer platform.closeHandle(handle, false);
 
-            return result;
-        },
-        .linux, .macos, .freebsd, .openbsd, .netbsd => {
-            // Create a file descriptor for shared memory that can be passed to child processes
-            const fd: std.posix.fd_t = blk: {
-                if (builtin.os.tag == .linux) {
-                    // std.os.linux.memfd_create returns usize but the syscall returns signed int,
-                    // so we will end up having to cast it.
-                    const fd_raw = std.os.linux.memfd_create("roc_shm", std.os.linux.MFD.CLOEXEC);
+    // First map just the header
+    const header_ptr = try platform.mapMemory(handle, @sizeOf(Header), platform.SHARED_MEMORY_BASE_ADDR);
+    const header = @as(*const Header, @ptrCast(@alignCast(header_ptr))).*;
+    platform.unmapMemory(header_ptr, @sizeOf(Header));
 
-                    // On error this returns -1, which is such a large usize that it won't fit in i32, meaning
-                    // we treat that as a failure. (We also have to fail if it's such a large positive number
-                    // that it doesn't fit in i32. Although that scenario should never happen in practice,
-                    // this gracefully handles that scenario as a failure without an extra conditional.)
-                    break :blk std.math.cast(std.posix.fd_t, fd_raw) orelse return error.MemfdCreateFailed;
-                } else {
-                    // POSIX shared memory functions (only needed for macOS and BSD; Windows and Linux
-                    // have different ways of mapping shared memory.)
-                    const c = struct {
-                        extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
-                        extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
-                    };
-
-                    // On other Unix systems, use shm_open with a random name
-                    const random_name = std.fmt.allocPrint(std.heap.page_allocator, "/roc_shm_{}", .{std.crypto.random.int(u64)}) catch {
-                        return error.OutOfMemory;
-                    };
-                    defer std.heap.page_allocator.free(random_name);
-
-                    const shm_name = std.fmt.allocPrintZ(std.heap.page_allocator, "{s}", .{random_name}) catch {
-                        return error.OutOfMemory;
-                    };
-                    defer std.heap.page_allocator.free(shm_name);
-
-                    const fd = c.shm_open(
-                        shm_name.ptr,
-                        @as(u32, @bitCast(std.posix.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true })),
-                        0o600,
-                    );
-
-                    if (fd < 0) {
-                        return error.ShmOpenFailed;
-                    }
-
-                    // Immediately unlink so it gets cleaned up when all references are closed
-                    // (If this fails somehow, it's not worth taking any action.)
-                    _ = c.shm_unlink(shm_name.ptr);
-
-                    break :blk fd;
-                }
-            };
-
-            // Set the size of the shared memory
-            std.posix.ftruncate(fd, aligned_size) catch {
-                _ = std.posix.close(fd);
-                return error.FtruncateFailed;
-            };
-
-            // Map the shared memory
-            const base_ptr = std.posix.mmap(
-                null,
-                aligned_size,
-                std.posix.PROT.READ | std.posix.PROT.WRITE,
-                .{ .TYPE = .SHARED },
-                fd,
-                0,
-            ) catch |err| {
-                _ = std.posix.close(fd);
-                return err;
-            };
-
-            const result = SharedMemoryAllocator{
-                .handle = fd,
-                .base_ptr = @ptrCast(@alignCast(base_ptr.ptr)),
-                .total_size = aligned_size,
-                .offset = std.atomic.Value(usize).init(@sizeOf(Header)), // Start after header
-                .is_owner = true,
-                .page_size = page_size,
-            };
-
-            // Initialize header
-            const header_ptr = @as(*Header, @ptrCast(@alignCast(result.base_ptr)));
-            header_ptr.* = Header{
-                .total_size = aligned_size,
-            };
-
-            return result;
-        },
-        else => @compileError("Unsupported platform"),
+    if (header.magic != 0x524F4353) {
+        return error.InvalidSharedMemory;
     }
+
+    // Now map the actual size from the header
+    const actual_size = @as(usize, @intCast(header.used_size));
+    const base_ptr = try platform.mapMemory(handle, actual_size, platform.SHARED_MEMORY_BASE_ADDR);
+    errdefer platform.unmapMemory(base_ptr, actual_size);
+
+    return SharedMemoryAllocator{
+        .handle = handle,
+        .base_ptr = @ptrCast(@alignCast(base_ptr)),
+        .total_size = actual_size,
+        .offset = std.atomic.Value(usize).init(@as(usize, @intCast(header.data_offset))),
+        .is_owner = false,
+        .page_size = page_size,
+    };
+}
+
+/// Opens an existing shared memory region created by another process.
+///
+/// IMPORTANT: The `size` parameter should be the actual used size from the parent
+/// process (obtained via getRecommendedMapSize()), NOT the original allocated size.
+/// This is especially important on macOS where the shared memory object remains at
+/// its original size and cannot be truncated.
+pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: usize) !SharedMemoryAllocator {
+    const aligned_size = std.mem.alignForward(usize, size, page_size);
+
+    // Open the named shared memory
+    const handle = try platform.openMapping(gpa, name);
+    errdefer platform.closeHandle(handle, false);
+
+    // Map the memory
+    const base_ptr = try platform.mapMemory(handle, aligned_size, platform.SHARED_MEMORY_BASE_ADDR);
+    errdefer platform.unmapMemory(base_ptr, aligned_size);
+
+    return SharedMemoryAllocator{
+        .handle = handle,
+        .base_ptr = @ptrCast(@alignCast(base_ptr)),
+        .total_size = aligned_size,
+        .offset = std.atomic.Value(usize).init(@sizeOf(Header)),
+        .is_owner = false,
+        .page_size = page_size,
+    };
+}
+
+/// Creates a SharedMemoryAllocator from coordination info.
+/// This is a convenience method for child processes that reads coordination info
+/// and creates the allocator in one step.
+pub fn fromCoordination(gpa: std.mem.Allocator, page_size: usize) !SharedMemoryAllocator {
+    // Read coordination info
+    var fd_info = try coordination.readFdInfo(gpa);
+    defer fd_info.deinit(gpa);
+
+    // Parse the handle and create the allocator
+    const handle = try coordination.parseHandle(fd_info.fd_str);
+    return fromFd(handle, fd_info.size, page_size);
 }
 
 /// Creates a SharedMemoryAllocator from an existing file descriptor.
@@ -270,54 +172,18 @@ pub fn create(size: usize, page_size: usize) !SharedMemoryAllocator {
 pub fn fromFd(fd: Handle, size: usize, page_size: usize) !SharedMemoryAllocator {
     const aligned_size = std.mem.alignForward(usize, size, page_size);
 
-    switch (builtin.os.tag) {
-        .windows => {
-            // On Windows, the fd is actually a handle to a file mapping object
-            const base_ptr = windows.MapViewOfFile(
-                fd,
-                windows.FILE_MAP_ALL_ACCESS,
-                0,
-                0,
-                aligned_size,
-            );
+    // Map the memory using the provided handle
+    const base_ptr = try platform.mapMemory(fd, aligned_size, platform.SHARED_MEMORY_BASE_ADDR);
+    errdefer platform.unmapMemory(base_ptr, aligned_size);
 
-            if (base_ptr == null) {
-                return error.MapViewOfFileFailed;
-            }
-
-            return SharedMemoryAllocator{
-                .handle = fd,
-                .base_ptr = @ptrCast(@alignCast(base_ptr)),
-                .total_size = aligned_size,
-                .offset = std.atomic.Value(usize).init(@sizeOf(Header)),
-                .is_owner = false,
-                .page_size = page_size,
-            };
-        },
-        .linux, .macos, .freebsd, .openbsd, .netbsd => {
-            // Map the shared memory using the provided file descriptor
-            const base_ptr = std.posix.mmap(
-                null,
-                aligned_size,
-                std.posix.PROT.READ | std.posix.PROT.WRITE,
-                .{ .TYPE = .SHARED },
-                fd,
-                0,
-            ) catch |err| {
-                return err;
-            };
-
-            return SharedMemoryAllocator{
-                .handle = fd,
-                .base_ptr = @ptrCast(@alignCast(base_ptr.ptr)),
-                .total_size = aligned_size,
-                .offset = std.atomic.Value(usize).init(@sizeOf(Header)),
-                .is_owner = false,
-                .page_size = page_size,
-            };
-        },
-        else => @compileError("Unsupported platform"),
-    }
+    return SharedMemoryAllocator{
+        .handle = fd,
+        .base_ptr = @ptrCast(@alignCast(base_ptr)),
+        .total_size = aligned_size,
+        .offset = std.atomic.Value(usize).init(@sizeOf(Header)),
+        .is_owner = false,
+        .page_size = page_size,
+    };
 }
 
 /// Updates the header with the current used size.
@@ -334,18 +200,8 @@ pub fn deinit(self: *SharedMemoryAllocator, gpa: std.mem.Allocator) void {
     if (self.is_owner) {
         self.updateHeader();
     }
-    switch (builtin.os.tag) {
-        .windows => {
-            _ = windows.UnmapViewOfFile(self.base_ptr);
-            _ = windows.CloseHandle(self.handle);
-        },
-        .linux, .macos, .freebsd, .openbsd, .netbsd => {
-            std.posix.munmap(@alignCast(self.base_ptr[0..self.total_size]));
-            _ = std.posix.close(self.handle);
-            // The shared memory is automatically cleaned up when all references are closed
-        },
-        else => @compileError("Unsupported platform"),
-    }
+    platform.unmapMemory(self.base_ptr, self.total_size);
+    platform.closeHandle(self.handle, self.is_owner);
 }
 
 /// Returns a std.mem.Allocator interface for this shared memory allocator
@@ -454,6 +310,17 @@ pub fn getRecommendedMapSize(self: *const SharedMemoryAllocator) usize {
 /// Get the remaining available memory
 pub fn getAvailableSize(self: *const SharedMemoryAllocator) usize {
     return self.total_size - self.offset.load(.monotonic);
+}
+
+/// Get the platform handle for this shared memory
+/// Useful for child processes that need to manage the handle directly
+pub fn getHandle(self: *const SharedMemoryAllocator) Handle {
+    return self.handle;
+}
+
+/// Get the base pointer for this shared memory
+pub fn getBasePtr(self: *const SharedMemoryAllocator) [*]align(1) u8 {
+    return self.base_ptr;
 }
 
 /// Reset the allocator to allow reuse (only safe if no allocations are still in use!)

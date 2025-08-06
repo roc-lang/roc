@@ -14,11 +14,19 @@ const types = @import("types");
 const reporting = @import("reporting");
 const Can = @import("can");
 const Check = @import("check");
+const builtins = @import("builtins");
 
 const cache = @import("cache/mod.zig");
 const fmt = @import("fmt.zig");
 const repl = @import("repl/eval.zig");
 
+const RocExpectFailed = builtins.host_abi.RocExpectFailed;
+const RocCrashed = builtins.host_abi.RocCrashed;
+const RocDealloc = builtins.host_abi.RocDealloc;
+const RocRealloc = builtins.host_abi.RocRealloc;
+const RocAlloc = builtins.host_abi.RocAlloc;
+const RocOps = builtins.host_abi.RocOps;
+const RocDbg = builtins.host_abi.RocDbg;
 const ModuleEnv = compile.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
@@ -633,6 +641,7 @@ pub fn main() !void {
     var expect_threads: bool = false;
     var expected_section_command = UpdateCommand.none;
     var output_section_command = UpdateCommand.none;
+    var trace_eval: bool = false;
 
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--verbose")) {
@@ -641,6 +650,8 @@ pub fn main() !void {
             generate_html = true;
         } else if (std.mem.eql(u8, arg, "--debug")) {
             debug_mode = true;
+        } else if (std.mem.eql(u8, arg, "--trace-eval")) {
+            trace_eval = true;
         } else if (std.mem.eql(u8, arg, "--threads")) {
             if (max_threads != 0) {
                 std.log.err("`--threads` should only be specified once.", .{});
@@ -694,6 +705,7 @@ pub fn main() !void {
                 \\  --verbose       Enable verbose logging
                 \\  --html          Generate HTML output files
                 \\  --debug         Use GeneralPurposeAllocator for debugging (default: c_allocator)
+                \\  --trace-eval    Enable interpreter trace output (only works with single REPL snapshot)
                 \\  --threads <n>   Number of threads to use (0 = auto-detect, 1 = single-threaded). Default: 0.
                 \\  --check-expected     Validate that EXPECTED sections match PROBLEMS sections
                 \\  --update-expected    Update EXPECTED sections based on PROBLEMS sections
@@ -724,11 +736,25 @@ pub fn main() !void {
         max_threads = 1;
     }
 
+    // Validate --trace-eval flag usage
+    if (trace_eval) {
+        if (snapshot_paths.items.len == 0) {
+            std.log.err("--trace-eval requires exactly one snapshot file to be specified", .{});
+            std.process.exit(1);
+        }
+        if (snapshot_paths.items.len > 1) {
+            std.log.err("--trace-eval can only be used with a single snapshot file. Got {} files.", .{snapshot_paths.items.len});
+            std.log.err("Usage: roc snapshot --trace-eval <path_to_single_repl_snapshot.md>", .{});
+            std.process.exit(1);
+        }
+    }
+
     const config = Config{
         .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
         .generate_html = generate_html,
         .expected_section_command = expected_section_command,
         .output_section_command = output_section_command,
+        .trace_eval = trace_eval,
     };
 
     if (config.maybe_fuzz_corpus_path != null) {
@@ -1220,6 +1246,7 @@ const Config = struct {
     expected_section_command: UpdateCommand,
     output_section_command: UpdateCommand,
     disable_updates: bool = false, // Disable updates for check mode
+    trace_eval: bool = false,
 };
 
 const ProcessResult = struct {
@@ -2287,6 +2314,12 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
         }
     };
 
+    // Validate trace-eval flag usage
+    if (config.trace_eval and content.meta.node_type != .repl) {
+        std.log.err("--trace-eval can only be used with REPL snapshots (type=repl), but '{s}' has type={s}", .{ snapshot_path, content.meta.node_type.toString() });
+        std.process.exit(1);
+    }
+
     // Process the content through the shared compilation pipeline
     const success = processSnapshotContent(gpa, content, snapshot_path, config) catch |err| {
         log("failed to process snapshot content: {s}", .{@errorName(err)});
@@ -2419,6 +2452,7 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
     try generateSourceSection(&output, &content);
     success = try generateReplOutputSection(&output, output_path, &content, config) and success;
     try generateReplProblemsSection(&output, &content);
+    try generateReplCanonicalizeSection(&output, &content);
 
     try generateHtmlClosing(&output);
 
@@ -2456,9 +2490,17 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         }
     }
 
+    var snapshot_ops = SnapshotOps.init(output.gpa);
+    defer snapshot_ops.deinit();
+
     // Initialize REPL
-    var repl_instance = try repl.Repl.init(output.gpa);
+    var repl_instance = try repl.Repl.init(output.gpa, snapshot_ops.get_ops());
     defer repl_instance.deinit();
+
+    // Enable tracing if requested
+    if (config.trace_eval) {
+        repl_instance.setTraceWriter(std.io.getStdErr().writer().any());
+    }
 
     // Process each input and generate output
     var actual_outputs = std.ArrayList([]const u8).init(output.gpa);
@@ -2561,13 +2603,36 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 }
                 try output.end_section();
             } else {
-                if (actual_outputs.items.len != 0) {
+                // No existing OUTPUT section - generate one for new snapshots
+                try output.begin_section("OUTPUT");
+                for (actual_outputs.items, 0..) |repl_output, i| {
+                    if (i > 0) {
+                        try output.md_writer.writeAll("---\n");
+                    }
+                    try output.md_writer.writeAll(repl_output);
+                    try output.md_writer.writeByte('\n');
+
+                    // HTML output
+                    if (output.html_writer) |writer| {
+                        if (i > 0) {
+                            try writer.writeAll("                <hr>\n");
+                        }
+                        try writer.writeAll("                <div class=\"repl-output\">");
+                        for (repl_output) |char| {
+                            try escapeHtmlChar(writer, char);
+                        }
+                        try writer.writeAll("</div>\n");
+                    }
+                }
+                try output.end_section();
+
+                if (actual_outputs.items.len != 0 and emit_error) {
                     std.debug.print("REPL output count mismatch: got {} outputs, expected {} in {s}\n", .{
                         actual_outputs.items.len,
                         0,
                         snapshot_path,
                     });
-                    success = success and !emit_error;
+                    success = false;
                 }
             }
         },
@@ -2593,9 +2658,230 @@ fn generateReplProblemsSection(output: *DualOutput, content: *const Content) !vo
     try output.end_section();
 }
 
+/// Generate CANONICALIZE section for REPL snapshots
+fn generateReplCanonicalizeSection(output: *DualOutput, content: *const Content) !void {
+    // Parse REPL inputs from the source
+    var lines = std.mem.tokenizeScalar(u8, content.source, '\n');
+    var inputs = std.ArrayList([]const u8).init(output.gpa);
+    defer inputs.deinit();
+
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len > 2 and std.mem.startsWith(u8, trimmed, "» ")) {
+            try inputs.append(trimmed[2..]);
+        }
+    }
+
+    try output.begin_section("CANONICALIZE");
+    try output.begin_code_block("clojure");
+
+    // Generate canonical forms for each input
+    for (inputs.items, 0..) |input, i| {
+        if (i > 0) {
+            try output.md_writer.writeAll("---\n");
+        }
+
+        // Create a temporary ModuleEnv for this input
+        var module_env = ModuleEnv.init(output.gpa, input) catch |err| {
+            try output.md_writer.print("Error creating module env: {s}\n", .{@errorName(err)});
+            continue;
+        };
+        defer module_env.deinit();
+
+        // Parse the input as an expression
+        var parse_ast = parse.parseExpr(&module_env) catch |err| {
+            try output.md_writer.print("Parse error: {s}\n", .{@errorName(err)});
+            continue;
+        };
+        defer parse_ast.deinit(output.gpa);
+
+        // Initialize canonicalization
+        try module_env.initCIRFields(output.gpa, "repl");
+        var can = Can.init(&module_env, &parse_ast, null) catch |err| {
+            try output.md_writer.print("Can init error: {s}\n", .{@errorName(err)});
+            continue;
+        };
+        defer can.deinit();
+
+        // Canonicalize the expression
+        const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+        const maybe_canonical_expr = can.canonicalizeExpr(expr_idx) catch |err| {
+            try output.md_writer.print("Canonicalize error: {s}\n", .{@errorName(err)});
+            continue;
+        };
+
+        if (maybe_canonical_expr) |canonical_expr| {
+            // Generate S-expression tree for the canonical form
+            var tree = SExprTree.init(output.gpa);
+            defer tree.deinit();
+
+            module_env.pushToSExprTree(canonical_expr.idx, &tree) catch |err| {
+                try output.md_writer.print("S-expr tree error: {s}\n", .{@errorName(err)});
+                continue;
+            };
+
+            tree.toStringPretty(output.md_writer.any()) catch |err| {
+                try output.md_writer.print("S-expr format error: {s}\n", .{@errorName(err)});
+                continue;
+            };
+            try output.md_writer.writeAll("\n");
+
+            // HTML output
+            if (output.html_writer) |writer| {
+                if (i > 0) {
+                    try writer.writeAll("                <hr>\n");
+                }
+                try writer.writeAll("                <div class=\"repl-canonical\">");
+                tree.toHtml(writer.any()) catch |err| {
+                    try writer.print("S-expr HTML error: {s}", .{@errorName(err)});
+                };
+                try writer.writeAll("</div>\n");
+            }
+        } else {
+            try output.md_writer.writeAll("Failed to canonicalize\n");
+
+            if (output.html_writer) |writer| {
+                if (i > 0) {
+                    try writer.writeAll("                <hr>\n");
+                }
+                try writer.writeAll("                <div class=\"repl-canonical\">Failed to canonicalize</div>\n");
+            }
+        }
+    }
+
+    try output.end_code_block();
+    try output.end_section();
+}
+
 test "snapshot validation" {
     const allocator = std.testing.allocator;
     if (!try checkSnapshotExpectations(allocator)) {
         return error.SnapshotValidationFailed;
     }
+}
+
+/// An implementation of RocOps for snapshot testing.
+pub const SnapshotOps = struct {
+    allocator: std.mem.Allocator,
+    roc_ops: RocOps,
+
+    pub fn init(allocator: std.mem.Allocator) SnapshotOps {
+        return SnapshotOps{
+            .allocator = allocator,
+            .roc_ops = RocOps{
+                .env = undefined, // will be set below
+                .roc_alloc = snapshotRocAlloc,
+                .roc_dealloc = snapshotRocDealloc,
+                .roc_realloc = snapshotRocRealloc,
+                .roc_dbg = snapshotRocDbg,
+                .roc_expect_failed = snapshotRocExpectFailed,
+                .roc_crashed = snapshotRocCrashed,
+                .host_fns = undefined, // Not used in snapshots
+            },
+        };
+    }
+
+    pub fn deinit(self: *SnapshotOps) void {
+        _ = self;
+        // nothing to do here?
+    }
+
+    pub fn get_ops(self: *SnapshotOps) *RocOps {
+        self.roc_ops.env = @ptrCast(self);
+        return &self.roc_ops;
+    }
+};
+
+fn snapshotRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
+    const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
+
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
+
+    // Calculate additional bytes needed to store the size
+    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
+    const total_size = alloc_args.length + size_storage_bytes;
+
+    // Allocate memory including space for size metadata
+    const result = snapshot_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
+
+    const base_ptr = result orelse {
+        std.debug.panic("Out of memory during snapshotRocAlloc", .{});
+    };
+
+    // Store the total size (including metadata) right before the user data
+    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
+    size_ptr.* = total_size;
+
+    // Return pointer to the user data (after the size metadata)
+    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+}
+
+fn snapshotRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void {
+    const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
+
+    // Calculate where the size metadata is stored
+    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
+    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
+
+    // Read the total size from metadata
+    const total_size = size_ptr.*;
+
+    // Calculate the base pointer (start of actual allocation)
+    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
+
+    // Calculate alignment
+    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
+    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
+
+    // Free the memory (including the size metadata)
+    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
+    snapshot_env.allocator.rawFree(slice, align_enum, @returnAddress());
+}
+
+fn snapshotRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void {
+    const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
+
+    // Calculate where the size metadata is stored for the old allocation
+    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
+    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
+
+    // Read the old total size from metadata
+    const old_total_size = old_size_ptr.*;
+
+    // Calculate the old base pointer (start of actual allocation)
+    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
+
+    // Calculate new total size needed
+    const new_total_size = realloc_args.new_length + size_storage_bytes;
+
+    // Perform reallocation
+    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
+    const new_slice = snapshot_env.allocator.realloc(old_slice, new_total_size) catch {
+        std.debug.panic("Out of memory during snapshotRocRealloc", .{});
+    };
+
+    // Store the new total size in the metadata
+    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
+    new_size_ptr.* = new_total_size;
+
+    // Return pointer to the user data (after the size metadata)
+    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+}
+
+fn snapshotRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
+    _ = dbg_args;
+    _ = env;
+    @panic("snapshotRocDbg not implemented yet");
+}
+
+fn snapshotRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
+    _ = expect_args;
+    _ = env;
+    @panic("snapshotRocExpectFailed not implemented yet");
+}
+
+fn snapshotRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
+    _ = env;
+    const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
+    std.log.err("Test program crashed: {s}", .{msg_slice});
 }

@@ -17,38 +17,6 @@ const llvm_externs = if (llvm_available) struct {
     extern fn ZigLLDLinkWasm(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
 } else struct {};
 
-/// Gets a reasonable minimum deployment target for macOS based on the current system
-fn getMinimumDeploymentTarget(allocator: Allocator) ![]u8 {
-    // Try to get the current macOS version
-    var child = std.process.Child.init(&.{ "sw_vers", "-productVersion" }, allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-
-    try child.spawn();
-    const stdout = try child.stdout.?.reader().readAllAlloc(allocator, 1024);
-    defer allocator.free(stdout);
-    _ = try child.wait();
-
-    // Parse the version string (e.g., "15.5.1" -> [15, 5, 1])
-    const version_str = std.mem.trim(u8, stdout, " \n\r\t");
-    var version_parts = std.mem.splitScalar(u8, version_str, '.');
-
-    if (version_parts.next()) |major_str| {
-        const major = std.fmt.parseInt(u8, major_str, 10) catch {
-            // If we can't parse, fall back to a conservative default
-            return allocator.dupe(u8, "13.0");
-        };
-
-        // Use the current major version as the deployment target
-        // This matches the SDK version and avoids warnings
-        const deployment_major: u8 = major;
-        return std.fmt.allocPrint(allocator, "{d}.0", .{deployment_major});
-    }
-
-    // Fallback if version parsing fails
-    return allocator.dupe(u8, "13.0");
-}
-
 /// Supported target formats for linking
 pub const TargetFormat = enum {
     elf,
@@ -106,19 +74,19 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
     var args = std.ArrayList([]const u8).init(allocator);
     defer args.deinit();
 
-    // Add linker name (required as first argument)
-    try args.append("lld");
-
-    // Add output argument
-    try args.append("-o");
-    try args.append(config.output_path);
-
-    // Suppress LLD warnings
-    try args.append("-w");
-
-    // Add platform-specific flags
+    // Add platform-specific linker name and arguments
     switch (builtin.target.os.tag) {
         .macos => {
+            // Add linker name for macOS
+            try args.append("ld64.lld");
+
+            // Add output argument
+            try args.append("-o");
+            try args.append(config.output_path);
+
+            // Suppress LLD warnings
+            try args.append("-w");
+
             // Add architecture flag
             try args.append("-arch");
             switch (builtin.target.cpu.arch) {
@@ -138,15 +106,67 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             try args.append("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk");
         },
         .linux => {
+            // Add linker name for Linux
+            try args.append("ld.lld");
+
+            // Add output argument
+            try args.append("-o");
+            try args.append(config.output_path);
+
+            // Suppress LLD warnings
+            try args.append("-w");
+
             // Use static linking to avoid dynamic linker dependency issues
             try args.append("-static");
         },
         .windows => {
-            // Windows linking is more complex and needs significant work
-            // For now, return an error to fall back to clang
-            return LinkError.LLVMNotAvailable;
+            // Add linker name for Windows COFF
+            try args.append("lld-link");
+
+            // Add output argument using Windows style
+            const out_arg = try std.fmt.allocPrint(allocator, "/out:{s}", .{config.output_path});
+            try args.append(out_arg);
+
+            // Add subsystem flag (console by default)
+            try args.append("/subsystem:console");
+
+            // Add machine type based on target architecture
+            switch (builtin.target.cpu.arch) {
+                .x86_64 => try args.append("/machine:x64"),
+                .x86 => try args.append("/machine:x86"),
+                .aarch64 => try args.append("/machine:arm64"),
+                else => try args.append("/machine:x64"), // default to x64
+            }
+
+            // Let the CRT choose the proper startup (mainCRTStartup) implicitly.
+            // Explicitly setting /entry can bypass initialization and cause unresolved symbols like __main.
+            // Removed explicit /entry.
+
+            // Use only essential Windows system libraries for basic console applications
+            // These are part of the core Windows OS and should be available on all Windows systems
+            try args.append("/defaultlib:kernel32");
+            try args.append("/defaultlib:ntdll");
+
+            // Use dynamic MSVC CRTs available on Windows systems
+            try args.append("/defaultlib:ucrt");
+            try args.append("/defaultlib:vcruntime");
+            try args.append("/defaultlib:msvcrt");
+
+            // Suppress warnings using Windows style
+            try args.append("/ignore:4217"); // Ignore locally defined symbol imported warnings
+            try args.append("/ignore:4049"); // Ignore locally defined symbol imported warnings
         },
-        else => {},
+        else => {
+            // Generic ELF linker
+            try args.append("ld.lld");
+
+            // Add output argument
+            try args.append("-o");
+            try args.append(config.output_path);
+
+            // Suppress LLD warnings
+            try args.append("-w");
+        },
     }
 
     // Add object files

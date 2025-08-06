@@ -12,6 +12,7 @@ const parse = @import("parse");
 const tracy = @import("tracy");
 
 const SharedMemoryAllocator = @import("./SharedMemoryAllocator.zig");
+const platform = @import("ipc/platform.zig");
 const fmt = @import("fmt.zig");
 const coordinate_simple = @import("coordinate_simple.zig");
 const Filesystem = @import("fs/Filesystem.zig");
@@ -94,15 +95,50 @@ const windows = if (is_windows) struct {
     const LPVOID = ?*anyopaque;
     const LPCWSTR = [*:0]const u16;
     const SIZE_T = usize;
+    const STARTUPINFOW = extern struct {
+        cb: DWORD,
+        lpReserved: ?LPCWSTR,
+        lpDesktop: ?LPCWSTR,
+        lpTitle: ?LPCWSTR,
+        dwX: DWORD,
+        dwY: DWORD,
+        dwXSize: DWORD,
+        dwYSize: DWORD,
+        dwXCountChars: DWORD,
+        dwYCountChars: DWORD,
+        dwFillAttribute: DWORD,
+        dwFlags: DWORD,
+        wShowWindow: u16,
+        cbReserved2: u16,
+        lpReserved2: ?*u8,
+        hStdInput: ?HANDLE,
+        hStdOutput: ?HANDLE,
+        hStdError: ?HANDLE,
+    };
+    const PROCESS_INFORMATION = extern struct {
+        hProcess: HANDLE,
+        hThread: HANDLE,
+        dwProcessId: DWORD,
+        dwThreadId: DWORD,
+    };
 
-    extern "kernel32" fn CreateFileMappingW(hFile: HANDLE, lpFileMappingAttributes: ?*anyopaque, flProtect: DWORD, dwMaximumSizeHigh: DWORD, dwMaximumSizeLow: DWORD, lpName: LPCWSTR) ?HANDLE;
-    extern "kernel32" fn MapViewOfFile(hFileMappingObject: HANDLE, dwDesiredAccess: DWORD, dwFileOffsetHigh: DWORD, dwFileOffsetLow: DWORD, dwNumberOfBytesToMap: SIZE_T) LPVOID;
-    extern "kernel32" fn UnmapViewOfFile(lpBaseAddress: LPVOID) BOOL;
-    extern "kernel32" fn CloseHandle(hObject: HANDLE) BOOL;
+    extern "kernel32" fn SetHandleInformation(hObject: HANDLE, dwMask: DWORD, dwFlags: DWORD) BOOL;
+    extern "kernel32" fn CreateProcessW(
+        lpApplicationName: ?LPCWSTR,
+        lpCommandLine: ?[*:0]u16,
+        lpProcessAttributes: ?*anyopaque,
+        lpThreadAttributes: ?*anyopaque,
+        bInheritHandles: BOOL,
+        dwCreationFlags: DWORD,
+        lpEnvironment: ?*anyopaque,
+        lpCurrentDirectory: ?LPCWSTR,
+        lpStartupInfo: *STARTUPINFOW,
+        lpProcessInformation: *PROCESS_INFORMATION,
+    ) BOOL;
+    extern "kernel32" fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) DWORD;
 
-    const PAGE_READWRITE = 0x04;
-    const FILE_MAP_ALL_ACCESS = 0x001f;
-    const INVALID_HANDLE_VALUE = @as(HANDLE, @ptrFromInt(std.math.maxInt(usize)));
+    const HANDLE_FLAG_INHERIT = 0x00000001;
+    const INFINITE = 0xFFFFFFFF;
 } else struct {};
 
 const benchTokenizer = bench.benchTokenizer;
@@ -119,9 +155,9 @@ const legalDetailsFileContent = @embedFile("legal_details");
 /// child process. It's just virtual address space though, not physical memory.
 /// On 32-bit targets, we use 512MB since 2TB won't fit in the address space.
 const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) >= 8)
-    2 * 1024 * 1024 * 1024 * 1024 // 2TB for 64-bit targets
+    512 * 1024 * 1024 // 512MB for 64-bit targets (reduced from 2TB for Windows compatibility)
 else
-    512 * 1024 * 1024; // 512MB for 32-bit targets
+    256 * 1024 * 1024; // 256MB for 32-bit targets
 
 /// Cross-platform hardlink creation
 fn createHardlink(allocator: Allocator, source: []const u8, dest: []const u8) !void {
@@ -211,7 +247,10 @@ pub fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, shm_ha
             std.mem.trimRight(u8, temp_dir, "/\\")
         else
             std.mem.trimRight(u8, temp_dir, "/");
-        const dir_name_with_txt = try std.fmt.allocPrint(allocator, "{s}/roc-tmp-{s}.txt", .{ normalized_temp_dir, random_suffix });
+        const dir_name_with_txt = if (comptime is_windows)
+            try std.fmt.allocPrint(allocator, "{s}\\roc-tmp-{s}.txt", .{ normalized_temp_dir, random_suffix })
+        else
+            try std.fmt.allocPrint(allocator, "{s}/roc-tmp-{s}.txt", .{ normalized_temp_dir, random_suffix });
         errdefer allocator.free(dir_name_with_txt);
 
         // Get the directory path by slicing off the .txt suffix
@@ -250,17 +289,18 @@ pub fn createTempDirStructure(allocator: Allocator, exe_path: []const u8, shm_ha
                 return err;
             },
         };
-        defer fd_file.close();
+        // Note: We'll close this explicitly later, before spawning the child
 
-        // Write fd and size to file (format: fd\nsize)
-        // This allows the child to know exactly how many bytes to mmap
-        const fd_str = if (comptime is_windows)
-            try std.fmt.allocPrint(allocator, "{}\n{}", .{ @intFromPtr(shm_handle.fd), shm_handle.size })
-        else
-            try std.fmt.allocPrint(allocator, "{}\n{}", .{ shm_handle.fd, shm_handle.size });
+        // Write shared memory info to file (POSIX only - Windows uses command line args)
+        const fd_str = try std.fmt.allocPrint(allocator, "{}\n{}", .{ shm_handle.fd, shm_handle.size });
         defer allocator.free(fd_str);
 
         try fd_file.writeAll(fd_str);
+
+        // IMPORTANT: Flush and close the file explicitly before spawning child process
+        // On Windows, having the file open can prevent child process access
+        try fd_file.sync(); // Ensure data is written to disk
+        fd_file.close();
 
         // Create hardlink to executable in temp directory
         const exe_basename = std.fs.path.basename(exe_path);
@@ -485,18 +525,99 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     // Ensure we clean up shared memory resources on all exit paths
     defer {
         if (comptime is_windows) {
-            _ = windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = windows.CloseHandle(@ptrCast(shm_handle.fd));
+            _ = platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            _ = platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
             _ = posix.munmap(shm_handle.ptr, shm_handle.size);
             _ = c.close(shm_handle.fd);
         }
     }
 
+    if (comptime is_windows) {
+        // Windows: Use handle inheritance approach
+        runWithWindowsHandleInheritance(gpa, exe_path, shm_handle) catch |err| {
+            std.log.err("Failed to run with Windows handle inheritance: {}\n", .{err});
+            std.process.exit(1);
+        };
+    } else {
+        // POSIX: Use existing file descriptor inheritance approach
+        runWithPosixFdInheritance(gpa, exe_path, shm_handle, &cache_manager) catch |err| {
+            std.log.err("Failed to run with POSIX fd inheritance: {}\n", .{err});
+            std.process.exit(1);
+        };
+    }
+}
+
+/// Run child process using Windows handle inheritance (idiomatic Windows approach)
+fn runWithWindowsHandleInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: SharedMemoryHandle) !void {
+    // Make the shared memory handle inheritable
+    if (windows.SetHandleInformation(@ptrCast(shm_handle.fd), windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT) == 0) {
+        std.log.err("Failed to set handle as inheritable\n", .{});
+        return error.HandleInheritanceFailed;
+    }
+
+    // Convert paths to Windows wide strings
+    const exe_path_w = try std.unicode.utf8ToUtf16LeAllocZ(gpa, exe_path);
+    defer gpa.free(exe_path_w);
+
+    const cwd = try std.fs.cwd().realpathAlloc(gpa, ".");
+    defer gpa.free(cwd);
+    const cwd_w = try std.unicode.utf8ToUtf16LeAllocZ(gpa, cwd);
+    defer gpa.free(cwd_w);
+
+    // Create command line with handle and size as arguments
+    const handle_uint = @intFromPtr(shm_handle.fd);
+    const cmd_line = try std.fmt.allocPrintZ(gpa, "\"{s}\" {} {}", .{ exe_path, handle_uint, shm_handle.size });
+    defer gpa.free(cmd_line);
+    const cmd_line_w = try std.unicode.utf8ToUtf16LeAllocZ(gpa, cmd_line);
+    defer gpa.free(cmd_line_w);
+
+    // Set up process creation structures
+    var startup_info = std.mem.zeroes(windows.STARTUPINFOW);
+    startup_info.cb = @sizeOf(windows.STARTUPINFOW);
+
+    var process_info = std.mem.zeroes(windows.PROCESS_INFORMATION);
+
+    // Create the child process with handle inheritance
+
+    // Create the child process with handle inheritance enabled
+    const success = windows.CreateProcessW(
+        exe_path_w.ptr, // Application name
+        cmd_line_w.ptr, // Command line (mutable)
+        null, // Process attributes
+        null, // Thread attributes
+        1, // bInheritHandles = TRUE
+        0, // Creation flags
+        null, // Environment
+        cwd_w.ptr, // Current directory
+        &startup_info, // Startup info
+        &process_info, // Process info
+    );
+
+    if (success == 0) {
+        std.log.err("CreateProcessW failed\n", .{});
+        return error.ProcessCreationFailed;
+    }
+
+    // Child process spawned successfully
+
+    // Wait for the child process to complete
+    const wait_result = windows.WaitForSingleObject(process_info.hProcess, windows.INFINITE);
+    if (wait_result != 0) { // WAIT_OBJECT_0 = 0
+        std.log.err("WaitForSingleObject failed or timed out\n", .{});
+    }
+
+    // Clean up process handles
+    _ = platform.windows.CloseHandle(process_info.hProcess);
+    _ = platform.windows.CloseHandle(process_info.hThread);
+}
+
+/// Run child process using POSIX file descriptor inheritance (existing approach for Unix)
+fn runWithPosixFdInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: SharedMemoryHandle, cache_manager: *CacheManager) !void {
     // Get cache directory for temporary files
     const temp_cache_dir = cache_manager.config.getTempDir(gpa) catch |err| {
         std.log.err("Failed to get temp cache directory: {}\n", .{err});
-        std.process.exit(1);
+        return err;
     };
     defer gpa.free(temp_cache_dir);
 
@@ -505,38 +626,36 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         error.PathAlreadyExists => {},
         else => {
             std.log.err("Failed to create temp cache directory: {}\n", .{err});
-            std.process.exit(1);
+            return err;
         },
     };
 
     // Create temporary directory structure for fd communication
     const temp_exe_path = createTempDirStructure(gpa, exe_path, shm_handle, temp_cache_dir) catch |err| {
         std.log.err("Failed to create temp dir structure: {}\n", .{err});
-        std.process.exit(1);
+        return err;
     };
     defer gpa.free(temp_exe_path);
 
-    // Configure handle/fd inheritance for all platforms
-    if (comptime !is_windows) {
-        var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
-        if (flags < 0) {
-            std.log.err("Failed to get fd flags: {}\n", .{c._errno().*});
-            std.process.exit(1);
-        }
+    // Configure fd inheritance
+    var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
+    if (flags < 0) {
+        std.log.err("Failed to get fd flags: {}\n", .{c._errno().*});
+        return error.FdConfigFailed;
+    }
 
-        flags &= ~@as(c_int, posix.FD_CLOEXEC);
+    flags &= ~@as(c_int, posix.FD_CLOEXEC);
 
-        if (posix.fcntl(shm_handle.fd, posix.F_SETFD, flags) < 0) {
-            std.log.err("Failed to set fd flags: {}\n", .{c._errno().*});
-            std.process.exit(1);
-        }
+    if (posix.fcntl(shm_handle.fd, posix.F_SETFD, flags) < 0) {
+        std.log.err("Failed to set fd flags: {}\n", .{c._errno().*});
+        return error.FdConfigFailed;
     }
 
     // Run the interpreter as a child process from the temp directory
     var child = std.process.Child.init(&.{temp_exe_path}, gpa);
     child.cwd = std.fs.cwd().realpathAlloc(gpa, ".") catch |err| {
         std.log.err("Failed to get current directory: {}\n", .{err});
-        std.process.exit(1);
+        return err;
     };
     defer gpa.free(child.cwd.?);
 
@@ -544,15 +663,17 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
 
+    // Spawn the child process
     child.spawn() catch |err| {
         std.log.err("Failed to spawn {s}: {}\n", .{ exe_path, err });
-        std.process.exit(1);
+        return err;
     };
+    // Child process spawned successfully
 
     // Wait for child to complete
     _ = child.wait() catch |err| {
         std.log.err("Failed waiting for child process: {}\n", .{err});
-        std.process.exit(1);
+        return err;
     };
 }
 
@@ -579,31 +700,29 @@ pub fn writeToSharedMemory(data: []const u8) !SharedMemoryHandle {
 }
 
 fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHandle {
-    const shm_name_wide = std.unicode.utf8ToUtf16LeStringLiteral("ROC_FILE_TO_INTERPRET");
-
-    // Create shared memory object
-    const shm_handle = windows.CreateFileMappingW(
-        windows.INVALID_HANDLE_VALUE,
+    // Create anonymous shared memory object (no name for handle inheritance)
+    const shm_handle = platform.windows.CreateFileMappingW(
+        platform.windows.INVALID_HANDLE_VALUE,
         null,
-        windows.PAGE_READWRITE,
+        platform.windows.PAGE_READWRITE,
         0,
         @intCast(total_size),
-        shm_name_wide,
+        null, // Anonymous - no name needed for handle inheritance
     ) orelse {
-        std.debug.print("Failed to create shared memory mapping\n", .{});
+        std.log.err("Failed to create shared memory mapping\n", .{});
         return error.SharedMemoryCreateFailed;
     };
 
-    // Map the shared memory
-    const mapped_ptr = windows.MapViewOfFile(
+    // Map the shared memory at a fixed address to avoid ASLR issues
+    const mapped_ptr = platform.windows.MapViewOfFileEx(
         shm_handle,
-        windows.FILE_MAP_ALL_ACCESS,
+        platform.windows.FILE_MAP_ALL_ACCESS,
         0,
         0,
         0,
+        platform.SHARED_MEMORY_BASE_ADDR,
     ) orelse {
-        _ = windows.CloseHandle(shm_handle);
-        std.debug.print("Failed to map shared memory\n", .{});
+        _ = platform.windows.CloseHandle(shm_handle);
         return error.SharedMemoryMapFailed;
     };
 
@@ -637,10 +756,10 @@ pub fn setupSharedMemoryWithModuleEnv(_: std.mem.Allocator, roc_file_path: []con
     // Also store the canonicalized expression index for the child to evaluate
     const expr_idx_ptr = try shm_allocator.alloc(u32, 1);
 
-    // Store the parent's address where the first allocation is
-    // The first allocation starts at offset 504 (0x1f8) from base
-    const first_alloc_addr = @intFromPtr(shm.base_ptr) + 504;
-    offset_ptr[0] = first_alloc_addr;
+    // Store the base address of the shared memory mapping (for ASLR-safe relocation)
+    // The child will calculate the offset from its own base address
+    const shm_base_addr = @intFromPtr(shm.base_ptr);
+    offset_ptr[0] = shm_base_addr;
 
     // Allocate and store a pointer to the ModuleEnv
     const env_ptr = try shm_allocator.create(ModuleEnv);
@@ -720,8 +839,8 @@ pub fn setupSharedMemoryWithModuleEnv(_: std.mem.Allocator, roc_file_path: []con
     // Update the header with used size
     shm.updateHeader();
 
-    // Return the shared memory handle
-    // The caller is responsible for cleanup
+    // Return the shared memory handle from SharedMemoryAllocator
+    // This ensures we use the SAME shared memory region for both processes
     return SharedMemoryHandle{
         .fd = shm.handle,
         .ptr = shm.base_ptr,
@@ -738,15 +857,12 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
     // Create shared memory object
     const shm_fd = posix.shm_open(shm_name, 0x0002 | 0x0200, 0o666); // O_RDWR | O_CREAT
     if (shm_fd < 0) {
-        const errno = c._errno().*;
-        std.debug.print("Failed to create shared memory: {s}, fd = {}, errno = {}\n", .{ shm_name, shm_fd, errno });
         return error.SharedMemoryCreateFailed;
     }
 
     // Set the size of the shared memory object
     if (c.ftruncate(shm_fd, @intCast(total_size)) != 0) {
         _ = c.close(shm_fd);
-        std.debug.print("Failed to set shared memory size\n", .{});
         return error.SharedMemoryTruncateFailed;
     }
 
@@ -760,7 +876,6 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
         0,
     ) orelse {
         _ = c.close(shm_fd);
-        std.debug.print("Failed to map shared memory\n", .{});
         return error.SharedMemoryMapFailed;
     };
     const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..total_size];

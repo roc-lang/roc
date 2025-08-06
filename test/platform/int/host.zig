@@ -114,9 +114,9 @@ pub fn main() !void {
     try stdout.print("Roc computed: {}\n", .{result});
 
     if (result == expected) {
-        try stdout.print("✓ Results match!\n", .{});
+        try stdout.print("\x1b[32mSUCCESS\x1b[0m: Results match!\n", .{});
     } else {
-        try stdout.print("✗ Results differ!\n", .{});
+        try stdout.print("\x1b[31mFAIL\x1b[0m: Results differ!\n", .{});
         std.process.exit(1);
     }
 }

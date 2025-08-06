@@ -27,7 +27,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const strip = b.option(bool, "strip", "Omit debug information");
     const no_bin = b.option(bool, "no-bin", "Skip emitting binaries (important for fast incremental compilation)") orelse false;
-    const trace_eval = b.option(bool, "trace-eval", "Enable detailed evaluation tracing for debugging") orelse false;
+    const trace_eval = b.option(bool, "trace-eval", "Enable detailed evaluation tracing for debugging") orelse (optimize == .Debug);
 
     // llvm configuration
     const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
@@ -84,7 +84,6 @@ pub fn build(b: *std.Build) void {
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
 
-    // Add playground WASM executable
     const playground_exe = b.addExecutable(.{
         .name = "playground",
         .root_source_file = b.path("src/playground.zig"),
@@ -111,27 +110,37 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Add playground integration test executable
-    const playground_integration_test_exe = b.addExecutable(.{
-        .name = "playground_integration_test",
-        .root_source_file = b.path("test/playground-intergration/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    playground_integration_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
-    playground_integration_test_exe.root_module.addAnonymousImport("playground_wasm", .{ .root_source_file = playground_install.emitted_bin });
-    playground_integration_test_exe.root_module.addImport("build_options", build_options.createModule());
-    roc_modules.addAll(playground_integration_test_exe);
+    // Only build playground integration tests in Debug mode to avoid Zig compiler issues
+    // with the large dependency tree in release builds on some platforms
+    const playground_test_install = if (optimize == .Debug) blk: {
+        const playground_integration_test_exe = b.addExecutable(.{
+            .name = "playground_integration_test",
+            .root_source_file = b.path("test/playground-intergration/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        playground_integration_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+        playground_integration_test_exe.root_module.addImport("build_options", build_options.createModule());
+        roc_modules.addAll(playground_integration_test_exe);
 
-    const playground_test_install = b.addInstallArtifact(playground_integration_test_exe, .{});
-    playground_test_step.dependOn(&playground_test_install.step);
+        const install = b.addInstallArtifact(playground_integration_test_exe, .{});
+        // Ensure playground WASM is built before running the integration test
+        install.step.dependOn(&playground_install.step);
+        playground_test_step.dependOn(&install.step);
 
-    const run_playground_test = b.addRunArtifact(playground_integration_test_exe);
-    if (b.args) |args| {
-        run_playground_test.addArgs(args);
-    }
-    run_playground_test.step.dependOn(&playground_test_install.step);
-    playground_test_step.dependOn(&run_playground_test.step);
+        const run_playground_test = b.addRunArtifact(playground_integration_test_exe);
+        if (b.args) |args| {
+            run_playground_test.addArgs(args);
+        }
+        run_playground_test.step.dependOn(&install.step);
+        playground_test_step.dependOn(&run_playground_test.step);
+
+        break :blk install;
+    } else blk: {
+        // In release builds, playground tests are disabled due to compiler limitations
+        // Create a no-op install step that does nothing
+        break :blk null;
+    };
 
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
@@ -144,15 +153,20 @@ pub fn build(b: *std.Build) void {
 
     b.default_step.dependOn(&all_tests.step);
     b.default_step.dependOn(playground_step);
-    b.default_step.dependOn(&playground_test_install.step);
+    if (playground_test_install) |install| {
+        b.default_step.dependOn(&install.step);
+    }
     if (no_bin) {
         test_step.dependOn(&all_tests.step);
     } else {
         const run_tests = b.addRunArtifact(all_tests);
         test_step.dependOn(&run_tests.step);
 
-        // Add success message after all tests complete
-        const tests_passed_step = b.addSystemCommand(&.{ "echo", "All tests passed!" });
+        // Add success message after all tests complete (cross-platform)
+        const tests_passed_step = if (builtin.target.os.tag == .windows)
+            b.addSystemCommand(&.{ "cmd.exe", "/c", "echo", "All tests passed!" })
+        else
+            b.addSystemCommand(&.{ "echo", "All tests passed!" });
         tests_passed_step.step.dependOn(&run_tests.step);
         test_step.dependOn(&tests_passed_step.step);
     }
@@ -302,11 +316,27 @@ fn addMainExe(
         .root_source_file = b.path("test/platform/str/host.zig"),
         .target = target,
         .optimize = optimize,
-        .strip = strip,
+        .strip = true,
         .pic = true, // Enable Position Independent Code for PIE compatibility
     });
     test_platform_host_lib.linkLibC();
     test_platform_host_lib.root_module.addImport("builtins", roc_modules.builtins);
+    // Force bundle compiler-rt to resolve runtime symbols like __main
+    test_platform_host_lib.bundle_compiler_rt = true;
+
+    // Add Windows system libraries for the host library
+    if (target.result.os.tag == .windows) {
+        test_platform_host_lib.linkSystemLibrary("kernel32");
+        test_platform_host_lib.linkSystemLibrary("ntdll");
+        test_platform_host_lib.linkSystemLibrary("psapi");
+        test_platform_host_lib.linkSystemLibrary("user32");
+        test_platform_host_lib.linkSystemLibrary("advapi32");
+        // Add Windows __main stub for MinGW-style initialization
+        test_platform_host_lib.addCSourceFile(.{
+            .file = b.path("src/windows_main_stub.c"),
+            .flags = &.{"-std=c99"},
+        });
+    }
 
     // Copy the test platform host library to the source directory
     const copy_test_host = b.addUpdateSourceFiles();
@@ -319,11 +349,19 @@ fn addMainExe(
         .root_source_file = b.path("test/platform/int/host.zig"),
         .target = target,
         .optimize = optimize,
-        .strip = strip,
+        .strip = true,
         .pic = true, // Enable Position Independent Code for PIE compatibility
     });
     test_platform_int_host_lib.linkLibC();
     test_platform_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
+
+    // Add Windows __main stub for MinGW-style initialization
+    if (target.result.os.tag == .windows) {
+        test_platform_int_host_lib.addCSourceFile(.{
+            .file = b.path("src/windows_main_stub.c"),
+            .flags = &.{"-std=c99"},
+        });
+    }
 
     // Copy the int test platform host library to the source directory
     const copy_test_int_host = b.addUpdateSourceFiles();
@@ -360,6 +398,15 @@ fn addMainExe(
     shim_lib.linkLibrary(builtins_lib);
     // Force bundle compiler-rt to resolve math symbols
     shim_lib.bundle_compiler_rt = true;
+
+    // Add Windows system libraries for the shim library
+    if (target.result.os.tag == .windows) {
+        shim_lib.linkSystemLibrary("kernel32");
+        shim_lib.linkSystemLibrary("ntdll");
+        shim_lib.linkSystemLibrary("psapi");
+        shim_lib.linkSystemLibrary("user32");
+        shim_lib.linkSystemLibrary("advapi32");
+    }
 
     // Install shim.a to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});

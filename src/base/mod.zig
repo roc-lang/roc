@@ -9,6 +9,8 @@ pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 
+pub const safe_memory = @import("safe_memory.zig");
+
 pub const target = @import("target.zig");
 
 pub const PackedDataSpan = @import("PackedDataSpan.zig").PackedDataSpan;

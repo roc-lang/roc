@@ -61,7 +61,7 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaqu
 }
 
 // External symbol provided by the Roc runtime object file
-extern fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque) callconv(.C) void;
+extern fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: *anyopaque) callconv(.C) void;
 
 /// Platform host entrypoint -- this is where the roc application starts and does platform things
 /// before the platform calls into Roc to do application-specific things.
@@ -85,9 +85,13 @@ pub fn main() !void {
         .host_fns = undefined, // No host functions for this simple example
     };
 
-    // Call the Roc entrypoint to get our string
+    // Create an input string to pass to the Roc function
+    var input_str = RocStr.fromSlice("Hello from host!", &roc_ops);
+    defer input_str.decref(&roc_ops);
+
+    // Call the Roc entrypoint with the input string
     var roc_str: RocStr = undefined;
-    roc_entrypoint(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)));
+    roc_entrypoint(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)), @as(*anyopaque, @ptrCast(&input_str)));
     defer roc_str.decref(&roc_ops);
 
     // Get the string as a slice and print it

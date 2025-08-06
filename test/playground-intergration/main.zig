@@ -1,6 +1,5 @@
 const std = @import("std");
 const bytebox = @import("bytebox");
-const playground_wasm = @embedFile("playground_wasm");
 const build_options = @import("build_options");
 
 var verbose_mode = false;
@@ -352,8 +351,12 @@ fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Al
 ///
 /// - `gpa` allocator is the GeneralPurposeAllocator, intended for bytebox VM.
 /// - `arena` allocator is the ArenaAllocator, used for other test harness allocations.
-fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator) !WasmInterface {
-    const wasm_data: []const u8 = playground_wasm;
+/// - `wasm_path` is the path to the WASM file to load.
+fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const u8) !WasmInterface {
+    const wasm_data: []const u8 = std.fs.cwd().readFileAlloc(arena, wasm_path, std.math.maxInt(usize)) catch |err| {
+        logDebug("[ERROR] Failed to read WASM file '{s}': {}\n", .{ wasm_path, err });
+        return err;
+    };
 
     // Create and decode the module definition using the arena allocator
     var module_def = try bytebox.createModuleDefinition(arena, .{ .debug_name = "playground_wasm" });
@@ -695,7 +698,8 @@ fn runTestSteps(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, te
 // Main test runner with statistics and filtering
 // - `arena` allocator is for test harness allocations.
 // - `gpa` allocator is for the bytebox VM.
-fn runTests(arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []const TestCase) !TestStats {
+// - `wasm_path` is the path to the WASM file to load.
+fn runTests(arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []const TestCase, wasm_path: []const u8) !TestStats {
     var stats = TestStats{
         .total = test_cases.len,
         .start_time = std.time.nanoTimestamp(),
@@ -709,7 +713,7 @@ fn runTests(arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []cons
 
     for (test_cases) |case| {
         logDebug("\n[INFO] Setting up WASM interface for test case: {s}...\n", .{case.name});
-        var wasm_interface = setupWasm(gpa, arena) catch |err| {
+        var wasm_interface = setupWasm(gpa, arena, wasm_path) catch |err| {
             logDebug("[ERROR] Failed to setup WASM for test case '{s}': {}\n", .{ case.name, err });
             stats.failed += 1;
             try failures.append(.{
@@ -801,17 +805,34 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    for (args) |arg| {
+    var wasm_path: ?[]const u8 = null;
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
         if (std.mem.eql(u8, arg, "--verbose")) {
             verbose_mode = true;
         } else if (std.mem.eql(u8, arg, "--help")) {
-            try stdout.writer().print("Usage: playground-test [options]\n", .{});
+            try stdout.writer().print("Usage: playground-test [options] [wasm-path]\n", .{});
             try stdout.writer().print("Options:\n", .{});
             try stdout.writer().print("  --verbose           Enable verbose mode\n", .{});
+            try stdout.writer().print("  --wasm-path PATH    Path to the playground WASM file\n", .{});
             try stdout.writer().print("  --help              Display this help message\n", .{});
             return;
+        } else if (std.mem.eql(u8, arg, "--wasm-path")) {
+            i += 1;
+            if (i >= args.len) {
+                try stdout.writer().print("Error: --wasm-path requires a path argument\n", .{});
+                return;
+            }
+            wasm_path = args[i];
+        } else if (!std.mem.startsWith(u8, arg, "--")) {
+            // Positional argument - treat as WASM path
+            wasm_path = arg;
         }
     }
+
+    // Default WASM path if not provided
+    const playground_wasm_path = wasm_path orelse "zig-out/bin/playground.wasm";
 
     // Setup our test cases
     var test_cases = std.ArrayList(TestCase).init(allocator);
@@ -959,7 +980,7 @@ pub fn main() !void {
     logDebug("[INFO] Starting Playground Integration Tests...\n", .{});
     logDebug("[INFO] Running {} test cases\n", .{test_cases.items.len});
 
-    const stats = try runTests(allocator, gpa.allocator(), test_cases.items);
+    const stats = try runTests(allocator, gpa.allocator(), test_cases.items, playground_wasm_path);
 
     logDebug("\nAll Playground Integration Tests Completed!\n", .{});
     logDebug("Final Results: {}/{} passed ({d:0.}%)\n", .{ stats.passed, stats.total, stats.successRate() });

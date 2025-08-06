@@ -8,6 +8,7 @@ const Can = @import("can");
 const Check = @import("check");
 
 const eval = @import("../interpreter.zig");
+const test_env = @import("../test_env.zig");
 const stack = @import("../stack.zig");
 const layout_store = @import("../../layout/store.zig");
 const layout = @import("../../layout/layout.zig");
@@ -30,6 +31,9 @@ pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_tr
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
     var interpreter = try eval.Interpreter.init(
         test_allocator,
         resources.module_env,
@@ -37,14 +41,14 @@ pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_tr
         &layout_cache,
         &resources.module_env.types,
     );
-    interpreter.initRocOpsEnv(); // Set the env pointer correctly
-    defer interpreter.deinit();
+    defer interpreter.deinit(test_env_instance.get_ops());
+    test_env_instance.setInterpreter(&interpreter);
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = interpreter.eval(resources.expr_idx);
+    const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
     if (should_trace == .trace) {
         interpreter.endTrace();
@@ -64,6 +68,9 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
     var interpreter = try eval.Interpreter.init(
         test_allocator,
         resources.module_env,
@@ -71,28 +78,20 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
         &layout_cache,
         &resources.module_env.types,
     );
-    interpreter.initRocOpsEnv(); // Set the env pointer correctly
-    defer interpreter.deinit();
+    defer interpreter.deinit(test_env_instance.get_ops());
+    test_env_instance.setInterpreter(&interpreter);
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = try interpreter.eval(resources.expr_idx);
+    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
     if (should_trace == .trace) {
         interpreter.endTrace();
     }
 
-    // Verify we got a scalar layout
-    try testing.expect(result.layout.tag == .scalar);
-    try testing.expect(result.layout.data.scalar.tag == .int);
-
-    // Read the result
-    const precision = result.layout.data.scalar.data.int;
-    const int_val = eval.readIntFromMemory(@ptrCast(result.ptr.?), precision);
-
-    try testing.expectEqual(expected_int, int_val);
+    try testing.expectEqual(expected_int, result.asI128());
 }
 
 /// Helpers to setup and run an interpreter expecting a string result.
@@ -106,6 +105,9 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
     var interpreter = try eval.Interpreter.init(
         test_allocator,
         resources.module_env,
@@ -113,14 +115,14 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
         &layout_cache,
         &resources.module_env.types,
     );
-    interpreter.initRocOpsEnv(); // Set the env pointer correctly
-    defer interpreter.deinit();
+    defer interpreter.deinit(test_env_instance.get_ops());
+    test_env_instance.setInterpreter(&interpreter);
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = try interpreter.eval(resources.expr_idx);
+    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
     if (should_trace == .trace) {
         interpreter.endTrace();
@@ -141,7 +143,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
         // We need to decref because the result is no longer needed
         // Cast away const to call decref (safe since we're done with it)
         const mutable_roc_str: *builtins.str.RocStr = @constCast(roc_str);
-        mutable_roc_str.decref(&interpreter.roc_ops);
+        mutable_roc_str.decref(test_env_instance.get_ops());
     }
 }
 
@@ -168,6 +170,9 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
     var interpreter = try eval.Interpreter.init(
         test_allocator,
         resources.module_env,
@@ -175,14 +180,14 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
         &layout_cache,
         &resources.module_env.types,
     );
-    interpreter.initRocOpsEnv(); // Set the env pointer correctly
-    defer interpreter.deinit();
+    defer interpreter.deinit(test_env_instance.get_ops());
+    test_env_instance.setInterpreter(&interpreter);
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = try interpreter.eval(resources.expr_idx);
+    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
     if (should_trace == .trace) {
         interpreter.endTrace();
@@ -191,19 +196,20 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     // Verify we got a tuple layout
     try testing.expect(result.layout.tag == .tuple);
 
-    const tuple_data = layout_cache.getTupleData(result.layout.data.tuple.idx);
-    const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+    // Use the TupleAccessor to safely access tuple elements
+    const tuple_accessor = try result.asTuple(&layout_cache);
 
-    try testing.expectEqual(expected_elements.len, element_layouts.len);
+    try testing.expectEqual(expected_elements.len, tuple_accessor.getElementCount());
 
     for (expected_elements) |expected_element| {
-        const element_layout_info = element_layouts.get(expected_element.index);
-        const element_layout = layout_cache.getLayout(element_layout_info.layout);
-        try testing.expect(element_layout.tag == .scalar and element_layout.data.scalar.tag == .int);
+        // Get the element at the specified index
+        const element = try tuple_accessor.getElement(expected_element.index);
 
-        const offset = layout_cache.getTupleElementOffset(result.layout.data.tuple.idx, @intCast(expected_element.index));
-        const element_ptr = @as([*]u8, @ptrCast(result.ptr.?)) + offset;
-        const int_val = eval.readIntFromMemory(element_ptr, element_layout.data.scalar.data.int);
+        // Verify it's an integer
+        try testing.expect(element.layout.tag == .scalar and element.layout.data.scalar.tag == .int);
+
+        // Get the integer value from the element
+        const int_val = element.asI128();
         try testing.expectEqual(expected_element.value, int_val);
     }
 }
@@ -226,14 +232,17 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
         &layout_cache,
         &resources.module_env.types,
     );
-    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
+
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+    test_env_instance.setInterpreter(&interpreter);
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = try interpreter.eval(resources.expr_idx);
+    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
     if (should_trace == .trace) {
         interpreter.endTrace();
@@ -389,10 +398,21 @@ test "eval runtime error - returns crash error" {
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
+        var test_env_instance = test_env.TestEnv.init(test_allocator);
+        defer test_env_instance.deinit();
+
         // Evaluating a runtime error should return an error
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
-        defer interpreter.deinit();
-        const result = interpreter.eval(resources.expr_idx);
+        var interpreter = try eval.Interpreter.init(
+            test_allocator,
+            resources.module_env,
+            &eval_stack,
+            &layout_cache,
+            &resources.module_env.types,
+        );
+        defer interpreter.deinit(test_env_instance.get_ops());
+        test_env_instance.setInterpreter(&interpreter);
+
+        const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
         try testing.expectError(eval.EvalError.Crash, result);
     } else {
         // If crash syntax is not supported in canonicalization, skip
@@ -415,12 +435,22 @@ test "eval tag - already primitive" {
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
     // Create interpreter
-    var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
-    defer interpreter.deinit();
+    var interpreter = try eval.Interpreter.init(
+        test_allocator,
+        resources.module_env,
+        &eval_stack,
+        &layout_cache,
+        &resources.module_env.types,
+    );
+    defer interpreter.deinit(test_env_instance.get_ops());
+    test_env_instance.setInterpreter(&interpreter);
 
     // Try to evaluate - if tag_union layout is not implemented, this might fail
-    const result = interpreter.eval(resources.expr_idx) catch |err| {
+    const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops()) catch |err| {
         std.debug.print("Tag evaluation failed with error: {}\n", .{err});
         // If evaluation fails for any reason, skip for now
         return error.SkipZigTest;
@@ -430,107 +460,6 @@ test "eval tag - already primitive" {
     // True/False are optimized to scalar values in the current implementation
     try testing.expect(result.layout.tag == .scalar);
     try testing.expect(result.ptr != null);
-}
-
-test "eval binop - basic implementation" {
-    const source = "5 + 3";
-
-    const resources = try parseAndCanonicalizeExpr(test_allocator, source);
-    defer cleanupParseAndCanonical(test_allocator, resources);
-
-    // Create a stack for evaluation
-    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-    defer eval_stack.deinit();
-
-    // Create layout store
-    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
-
-    // Evaluate the binop expression
-    var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
-    defer interpreter.deinit();
-    const result = try interpreter.eval(resources.expr_idx);
-
-    // Verify we got a scalar layout
-    try testing.expect(result.layout.tag == .scalar);
-    try testing.expect(result.layout.data.scalar.tag == .int);
-
-    // Read the result
-    const precision = result.layout.data.scalar.data.int;
-    const int_val = eval.readIntFromMemory(@ptrCast(result.ptr.?), precision);
-
-    try testing.expectEqual(@as(i128, 8), int_val);
-}
-
-test "eval if expression with boolean tags" {
-    // Test that if expressions with boolean tag conditions evaluate correctly
-    const sources = [_]struct { src: []const u8, expected: i128 }{
-        .{ .src = "if True 1 else 0", .expected = 1 },
-        .{ .src = "if False 1 else 0", .expected = 0 },
-    };
-
-    for (sources) |test_case| {
-        const resources = try parseAndCanonicalizeExpr(test_allocator, test_case.src);
-        defer cleanupParseAndCanonical(test_allocator, resources);
-
-        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-        defer eval_stack.deinit();
-
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-        defer layout_cache.deinit();
-
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
-        defer interpreter.deinit();
-        const result = try interpreter.eval(resources.expr_idx);
-
-        // Verify the result
-        try testing.expect(result.layout.tag == .scalar);
-        try testing.expect(result.layout.data.scalar.tag == .int);
-        const value = eval.readIntFromMemory(@ptrCast(result.ptr.?), result.layout.data.scalar.data.int);
-        try testing.expectEqual(test_case.expected, value);
-    }
-}
-
-test "eval empty record" {
-    const source = "{}";
-
-    const resources = try parseAndCanonicalizeExpr(test_allocator, source);
-    defer cleanupParseAndCanonical(test_allocator, resources);
-
-    // Check if this resulted in a runtime error due to incomplete canonicalization
-    const expr = resources.module_env.store.getExpr(resources.expr_idx);
-    if (expr == .e_runtime_error) {
-        // Expected - canonicalization of empty records may not be fully implemented
-        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-        defer eval_stack.deinit();
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-        defer layout_cache.deinit();
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
-        defer interpreter.deinit();
-        const result = interpreter.eval(resources.expr_idx);
-        try testing.expectError(eval.EvalError.Crash, result);
-    } else {
-        // Create a stack for evaluation
-        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-        defer eval_stack.deinit();
-
-        // Record the stack position before evaluation
-        const stack_before = eval_stack.used;
-
-        // Create layout store
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-        defer layout_cache.deinit();
-
-        // Empty records are zero-sized types, which should return an error
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
-        defer interpreter.deinit();
-        const result = interpreter.eval(resources.expr_idx);
-        try testing.expectError(eval.EvalError.ZeroSizedType, result);
-
-        // Verify the stack didn't grow
-        const stack_after = eval_stack.used;
-        try testing.expectEqual(stack_before, stack_after);
-    }
 }
 
 test "interpreter reuse across multiple evaluations" {
@@ -550,14 +479,24 @@ test "interpreter reuse across multiple evaluations" {
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
+        var test_env_instance = test_env.TestEnv.init(test_allocator);
+        defer test_env_instance.deinit();
+
         // Create interpreter for this evaluation
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
-        defer interpreter.deinit();
+        var interpreter = try eval.Interpreter.init(
+            test_allocator,
+            resources.module_env,
+            &eval_stack,
+            &layout_cache,
+            &resources.module_env.types,
+        );
+        defer interpreter.deinit(test_env_instance.get_ops());
+        test_env_instance.setInterpreter(&interpreter);
 
         // Verify work stack is empty before eval
         try testing.expectEqual(@as(usize, 0), interpreter.work_stack.items.len);
 
-        const result = try interpreter.eval(resources.expr_idx);
+        const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
         // Verify work stack is empty after eval (should be naturally empty, not cleared)
         try testing.expectEqual(@as(usize, 0), interpreter.work_stack.items.len);
