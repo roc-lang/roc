@@ -31,6 +31,9 @@ pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_tr
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
     var interpreter = try eval.Interpreter.init(
         test_allocator,
         resources.module_env,
@@ -38,18 +41,14 @@ pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_tr
         &layout_cache,
         &resources.module_env.types,
     );
-    defer interpreter.deinit();
-
-    var test_env_instance = test_env.TestEnv.init(test_allocator);
-    defer test_env_instance.deinit();
+    defer interpreter.deinit(test_env_instance.get_ops());
     test_env_instance.setInterpreter(&interpreter);
-    var roc_ops = test_env_instance.roc_ops();
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = interpreter.eval(resources.expr_idx, &roc_ops);
+    const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
     if (should_trace == .trace) {
         interpreter.endTrace();
@@ -69,6 +68,9 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
     var interpreter = try eval.Interpreter.init(
         test_allocator,
         resources.module_env,
@@ -76,18 +78,14 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
         &layout_cache,
         &resources.module_env.types,
     );
-    defer interpreter.deinit();
-
-    var test_env_instance = test_env.TestEnv.init(test_allocator);
-    defer test_env_instance.deinit();
+    defer interpreter.deinit(test_env_instance.get_ops());
     test_env_instance.setInterpreter(&interpreter);
-    var roc_ops = test_env_instance.roc_ops();
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = try interpreter.eval(resources.expr_idx, &roc_ops);
+    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
     if (should_trace == .trace) {
         interpreter.endTrace();
@@ -107,6 +105,9 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
     var interpreter = try eval.Interpreter.init(
         test_allocator,
         resources.module_env,
@@ -114,18 +115,14 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
         &layout_cache,
         &resources.module_env.types,
     );
-    defer interpreter.deinit();
-
-    var test_env_instance = test_env.TestEnv.init(test_allocator);
-    defer test_env_instance.deinit();
+    defer interpreter.deinit(test_env_instance.get_ops());
     test_env_instance.setInterpreter(&interpreter);
-    var roc_ops = test_env_instance.roc_ops();
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = try interpreter.eval(resources.expr_idx, &roc_ops);
+    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
     if (should_trace == .trace) {
         interpreter.endTrace();
@@ -146,7 +143,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
         // We need to decref because the result is no longer needed
         // Cast away const to call decref (safe since we're done with it)
         const mutable_roc_str: *builtins.str.RocStr = @constCast(roc_str);
-        mutable_roc_str.decref(&roc_ops);
+        mutable_roc_str.decref(test_env_instance.get_ops());
     }
 }
 
@@ -173,6 +170,9 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
     var interpreter = try eval.Interpreter.init(
         test_allocator,
         resources.module_env,
@@ -180,18 +180,14 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
         &layout_cache,
         &resources.module_env.types,
     );
-    defer interpreter.deinit();
-
-    var test_env_instance = test_env.TestEnv.init(test_allocator);
-    defer test_env_instance.deinit();
+    defer interpreter.deinit(test_env_instance.get_ops());
     test_env_instance.setInterpreter(&interpreter);
-    var roc_ops = test_env_instance.roc_ops();
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = try interpreter.eval(resources.expr_idx, &roc_ops);
+    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
     if (should_trace == .trace) {
         interpreter.endTrace();
@@ -202,13 +198,13 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
 
     // Use the TupleAccessor to safely access tuple elements
     const tuple_accessor = try result.asTuple(&layout_cache);
-    
+
     try testing.expectEqual(expected_elements.len, tuple_accessor.getElementCount());
 
     for (expected_elements) |expected_element| {
         // Get the element at the specified index
         const element = try tuple_accessor.getElement(expected_element.index);
-        
+
         // Verify it's an integer
         try testing.expect(element.layout.tag == .scalar and element.layout.data.scalar.tag == .int);
 
@@ -241,13 +237,12 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     var test_env_instance = test_env.TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
     test_env_instance.setInterpreter(&interpreter);
-    var roc_ops = test_env_instance.roc_ops();
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = try interpreter.eval(resources.expr_idx, &roc_ops);
+    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
     if (should_trace == .trace) {
         interpreter.endTrace();
@@ -403,15 +398,21 @@ test "eval runtime error - returns crash error" {
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
-        // Evaluating a runtime error should return an error
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
-        defer interpreter.deinit();
-
         var test_env_instance = test_env.TestEnv.init(test_allocator);
         defer test_env_instance.deinit();
+
+        // Evaluating a runtime error should return an error
+        var interpreter = try eval.Interpreter.init(
+            test_allocator,
+            resources.module_env,
+            &eval_stack,
+            &layout_cache,
+            &resources.module_env.types,
+        );
+        defer interpreter.deinit(test_env_instance.get_ops());
         test_env_instance.setInterpreter(&interpreter);
-        var roc_ops = test_env_instance.roc_ops();
-        const result = interpreter.eval(resources.expr_idx, &roc_ops);
+
+        const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
         try testing.expectError(eval.EvalError.Crash, result);
     } else {
         // If crash syntax is not supported in canonicalization, skip
@@ -434,17 +435,22 @@ test "eval tag - already primitive" {
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
-    // Create interpreter
-    var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
-    defer interpreter.deinit();
-
     var test_env_instance = test_env.TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
+
+    // Create interpreter
+    var interpreter = try eval.Interpreter.init(
+        test_allocator,
+        resources.module_env,
+        &eval_stack,
+        &layout_cache,
+        &resources.module_env.types,
+    );
+    defer interpreter.deinit(test_env_instance.get_ops());
     test_env_instance.setInterpreter(&interpreter);
-    var roc_ops = test_env_instance.roc_ops();
 
     // Try to evaluate - if tag_union layout is not implemented, this might fail
-    const result = interpreter.eval(resources.expr_idx, &roc_ops) catch |err| {
+    const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops()) catch |err| {
         std.debug.print("Tag evaluation failed with error: {}\n", .{err});
         // If evaluation fails for any reason, skip for now
         return error.SkipZigTest;
@@ -473,19 +479,24 @@ test "interpreter reuse across multiple evaluations" {
         var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
         defer layout_cache.deinit();
 
-        // Create interpreter for this evaluation
-        var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
-        defer interpreter.deinit();
-
         var test_env_instance = test_env.TestEnv.init(test_allocator);
         defer test_env_instance.deinit();
+
+        // Create interpreter for this evaluation
+        var interpreter = try eval.Interpreter.init(
+            test_allocator,
+            resources.module_env,
+            &eval_stack,
+            &layout_cache,
+            &resources.module_env.types,
+        );
+        defer interpreter.deinit(test_env_instance.get_ops());
         test_env_instance.setInterpreter(&interpreter);
-        var roc_ops = test_env_instance.roc_ops();
 
         // Verify work stack is empty before eval
         try testing.expectEqual(@as(usize, 0), interpreter.work_stack.items.len);
 
-        const result = try interpreter.eval(resources.expr_idx, &roc_ops);
+        const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
         // Verify work stack is empty after eval (should be naturally empty, not cleared)
         try testing.expectEqual(@as(usize, 0), interpreter.work_stack.items.len);

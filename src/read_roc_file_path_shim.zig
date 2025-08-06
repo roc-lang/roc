@@ -17,6 +17,7 @@ const shared_memory = @import("ipc/shared_memory.zig");
 
 const RocStr = builtins.str.RocStr;
 const ModuleEnv = compile.ModuleEnv;
+const RocOps = builtins.host_abi.RocOps;
 const SharedMemoryHandle = shared_memory.SharedMemoryHandle;
 const Interpreter = eval.Interpreter;
 const safe_memory = base.safe_memory;
@@ -53,7 +54,7 @@ export fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, ar
 }
 
 /// Cross-platform shared memory evaluation
-fn evaluateFromSharedMemory(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) ShimError!void {
+fn evaluateFromSharedMemory(roc_ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) ShimError!void {
 
     // Read shared memory coordination info
     var fd_info = SharedMemoryHandle.readFdInfo(std.heap.page_allocator) catch |err| {
@@ -77,7 +78,7 @@ fn evaluateFromSharedMemory(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque,
 
     // Set up interpreter infrastructure
     var interpreter = try createInterpreter(env_ptr);
-    defer interpreter.deinit();
+    defer interpreter.deinit(roc_ops);
 
     // Get expression info from shared memory
     const expr_idx: ModuleEnv.Expr.Idx = @enumFromInt(
@@ -87,7 +88,7 @@ fn evaluateFromSharedMemory(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque,
     );
 
     // Evaluate the expression (with optional arguments)
-    try interpreter.evaluateExpression(expr_idx, ret_ptr, ops, arg_ptr);
+    try interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr);
 }
 
 /// Set up ModuleEnv from shared memory with proper relocation

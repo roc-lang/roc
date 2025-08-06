@@ -315,7 +315,7 @@ pub const Repl = struct {
         var interpreter = eval.Interpreter.init(self.allocator, cir, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
-        defer interpreter.deinit();
+        defer interpreter.deinit(self.roc_ops);
 
         // Evaluate the expression
         const result = interpreter.eval(canonical_expr_idx.get_idx(), self.roc_ops) catch |err| {
@@ -589,7 +589,7 @@ test "Repl - minimal interpreter integration" {
 
     // Step 8: Create interpreter
     var interpreter = try eval.Interpreter.init(gpa, cir, &eval_stack, &layout_cache, &module_env.types);
-    defer interpreter.deinit();
+    defer interpreter.deinit(test_env.get_ops());
 
     // Step 9: Evaluate
     const result = try interpreter.eval(canonical_expr_idx.get_idx(), test_env.get_ops());

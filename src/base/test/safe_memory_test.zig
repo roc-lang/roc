@@ -1,3 +1,5 @@
+//! Helper functions for testing safe memory operations
+
 const std = @import("std");
 const safe_memory = @import("base");
 

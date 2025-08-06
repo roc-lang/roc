@@ -301,3 +301,59 @@ pub const TupleAccessor = struct {
         return self.layout_cache.getLayout(element_layout_info.layout);
     }
 };
+
+/// Get this value as a string pointer
+pub fn asRocStr(self: StackValue) *RocStr {
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .str);
+    return @ptrCast(@alignCast(self.ptr.?));
+}
+
+/// Get this value as a closure pointer
+pub fn asClosure(self: StackValue) *const Closure {
+    std.debug.assert(self.layout.tag == .closure);
+    std.debug.assert(self.ptr != null);
+    return @ptrCast(@alignCast(self.ptr.?));
+}
+
+/// Clone this value for binding (handles ref counting)
+pub fn cloneForBinding(self: StackValue) StackValue {
+    if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
+        const roc_str = self.asRocStr();
+        roc_str.incref(1);
+    }
+    // For non-strings, just reference the same memory
+    return self;
+}
+
+/// Copy value data to another StackValue (with special string handling)
+pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) void {
+    std.debug.assert(self.is_initialized);
+    std.debug.assert(dest.ptr != null);
+
+    const size = layout_cache.layoutSize(self.layout);
+    if (size == 0) return;
+
+    if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
+        // String: use proper struct copy and increment ref count
+        const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
+        const dest_str: *RocStr = @ptrCast(@alignCast(dest.ptr.?));
+        dest_str.* = src_str.*;
+        dest_str.incref(1);
+    } else {
+        // Everything else just copy the bytes
+        std.mem.copyForwards(
+            u8,
+            @as([*]u8, @ptrCast(dest.ptr.?))[0..size],
+            @as([*]const u8, @ptrCast(self.ptr.?))[0..size],
+        );
+    }
+}
+
+/// Create a StackValue view of a memory region (no copy)
+pub fn fromPtr(layout: Layout, ptr: *anyopaque) StackValue {
+    return StackValue{
+        .layout = layout,
+        .ptr = ptr,
+        .is_initialized = true,
+    };
+}

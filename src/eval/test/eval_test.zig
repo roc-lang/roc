@@ -293,6 +293,9 @@ test "crash message storage and retrieval - direct API test" {
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
+    var test_env_instance = test_env.TestEnv.init(testing.allocator);
+    defer test_env_instance.deinit();
+
     var interpreter = try eval.Interpreter.init(
         testing.allocator,
         resources.module_env,
@@ -300,12 +303,8 @@ test "crash message storage and retrieval - direct API test" {
         &layout_cache,
         &resources.module_env.types,
     );
-    defer interpreter.deinit();
-
-    var test_env_instance = test_env.TestEnv.init(testing.allocator);
-    defer test_env_instance.deinit();
+    defer interpreter.deinit(test_env_instance.get_ops());
     test_env_instance.setInterpreter(&interpreter);
-    var roc_ops = test_env_instance.roc_ops();
 
     // Test that crash functionality works through RocOps
     // Before crash, getCrashMsg should return null
@@ -318,7 +317,7 @@ test "crash message storage and retrieval - direct API test" {
     };
 
     // Call the crash function directly through test RocOps
-    roc_ops.roc_crashed(&crash_args, roc_ops.env);
+    test_env_instance.get_ops().roc_crashed(&crash_args, test_env_instance.get_ops().env);
 
     // After crash, getCrashMsg should return the crash message
     const crash_msg = interpreter.getCrashMsg();
@@ -413,6 +412,9 @@ test "lambdas nested closures" {
 
 // Helper function to test that evaluation succeeds without checking specific values
 fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !void {
+    var test_env_instance = test_env.TestEnv.init(testing.allocator);
+    defer test_env_instance.deinit();
+
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
@@ -429,16 +431,13 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
         &layout_cache,
         &resources.module_env.types,
     );
-    defer interpreter.deinit();
-
-    var test_env_instance = test_env.TestEnv.init(std.testing.allocator);
-    var roc_ops = test_env_instance.roc_ops();
+    defer interpreter.deinit(test_env_instance.get_ops());
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = interpreter.eval(resources.expr_idx, &roc_ops);
+    const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
     if (should_trace == .trace) {
         interpreter.endTrace();
@@ -635,9 +634,12 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // This verifies the complete round-trip of compilation state preservation
     // through serialization, which is critical for incremental compilation
     // and distributed build systems.
+    //
+    const source = "5 + 8";
 
     const gpa = test_allocator;
-    const source = "5 + 8";
+    var test_env_instance = test_env.TestEnv.init(gpa);
+    defer test_env_instance.deinit();
 
     // Create original ModuleEnv
     var original_env = try ModuleEnv.init(gpa, source);
@@ -688,12 +690,9 @@ test "ModuleEnv serialization and interpreter evaluation" {
             &layout_cache,
             &original_env.types,
         );
-        defer interpreter.deinit();
+        defer interpreter.deinit(test_env_instance.get_ops());
 
-        var test_env_instance = test_env.TestEnv.init(gpa);
-        var roc_ops = test_env_instance.roc_ops();
-
-        const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), &roc_ops);
+        const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), test_env_instance.get_ops());
 
         try testing.expectEqual(@as(i128, 13), result.asI128());
     }
@@ -763,12 +762,9 @@ test "ModuleEnv serialization and interpreter evaluation" {
                 &layout_cache,
                 &deserialized_env.types,
             );
-            defer interpreter.deinit();
+            defer interpreter.deinit(test_env_instance.get_ops());
 
-            var test_env_instance = test_env.TestEnv.init(gpa);
-            var roc_ops = test_env_instance.roc_ops();
-
-            const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), &roc_ops);
+            const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), test_env_instance.get_ops());
 
             // Verify we get the same result from the deserialized ModuleEnv
             try testing.expectEqual(@as(i128, 13), result.asI128());

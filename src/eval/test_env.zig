@@ -16,11 +16,13 @@ const RocCrashed = builtins.host_abi.RocCrashed;
 pub const TestEnv = struct {
     allocator: std.mem.Allocator,
     interpreter: ?*interpreter.Interpreter,
+    roc_ops: ?RocOps,
 
     pub fn init(allocator: std.mem.Allocator) TestEnv {
         return TestEnv{
             .allocator = allocator,
             .interpreter = null,
+            .roc_ops = null,
         };
     }
 
@@ -42,17 +44,20 @@ pub const TestEnv = struct {
         }
     }
 
-    pub fn roc_ops(self: *TestEnv) RocOps {
-        return RocOps{
-            .env = self,
-            .roc_alloc = testRocAlloc,
-            .roc_dealloc = testRocDealloc,
-            .roc_realloc = testRocRealloc,
-            .roc_dbg = testRocDbg,
-            .roc_expect_failed = testRocExpectFailed,
-            .roc_crashed = testRocCrashed,
-            .host_fns = undefined, // Not used in tests
-        };
+    pub fn get_ops(self: *TestEnv) *RocOps {
+        if (self.roc_ops == null) {
+            self.roc_ops = RocOps{
+                .env = @ptrCast(self),
+                .roc_alloc = testRocAlloc,
+                .roc_dealloc = testRocDealloc,
+                .roc_realloc = testRocRealloc,
+                .roc_dbg = testRocDbg,
+                .roc_expect_failed = testRocExpectFailed,
+                .roc_crashed = testRocCrashed,
+                .host_fns = undefined, // Not used in tests
+            };
+        }
+        return &(self.roc_ops.?);
     }
 };
 

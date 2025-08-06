@@ -206,19 +206,22 @@ pub const CallFrame = struct {
     is_tail_call: bool = false,
 };
 
-/// Binds a function parameter (i.e. pattern_idx) to an argument value (located in the value stack) during function calls.
+/// Binds a function parameter (i.e. pattern_idx) to an argument value during function calls.
 ///
 /// # Memory Safety
-/// The `value_ptr` points into the interpreter's `stack_memory` and is only
-/// valid while the function call is active. Must not be accessed after
-/// the function call completes as this may have been freed or overwritten.
+/// The binding references the value in the interpreter's stack.
 const Binding = struct {
     /// Pattern index that this binding satisfies (for pattern matching)
     pattern_idx: ModuleEnv.Pattern.Idx,
-    /// Index of the argument's value in stack memory (points to the start of the value)
-    value_ptr: *anyopaque,
-    /// Type and layout information for the argument value
-    layout: Layout,
+    /// The bound value
+    value: StackValue,
+
+    pub fn cleanup(self: *const Binding, roc_ops: *RocOps) void {
+        if (self.value.layout.tag == .scalar and self.value.layout.data.scalar.tag == .str) {
+            const roc_str = self.value.asRocStr();
+            roc_str.decref(roc_ops);
+        }
+    }
 };
 
 /// Represents a value on the stack, uses an offset keeps this
@@ -303,25 +306,76 @@ pub const Interpreter = struct {
         return null;
     }
 
-    pub fn deinit(self: *Interpreter) void {
-        // Clean up heap-allocated string bindings
-        for (self.bindings_stack.items) |binding| {
-            if (binding.layout.tag == .scalar and binding.layout.data.scalar.tag == .str) {
-                // Check if this is a heap-allocated binding (outside stack bounds)
-                const stack_start_ptr = @intFromPtr(self.stack_memory.start);
-                const stack_end_ptr = stack_start_ptr + self.stack_memory.capacity;
-                const binding_ptr_val = @intFromPtr(binding.value_ptr);
+    /// Look up a binding in the local bindings stack
+    fn lookupBinding(self: *Interpreter, pattern_idx: ModuleEnv.Pattern.Idx) ?StackValue {
+        var reversed = std.mem.reverseIterator(self.bindings_stack.items);
+        while (reversed.next()) |binding| {
+            if (binding.pattern_idx == pattern_idx) {
+                self.traceInfo("Found binding for pattern_idx={}", .{@intFromEnum(pattern_idx)});
+                return binding.value;
+            }
+        }
+        return null;
+    }
 
-                if (binding_ptr_val < stack_start_ptr or binding_ptr_val >= stack_end_ptr) {
-                    // This is a heap-allocated string binding, clean it up properly
-                    const str_ptr: *builtins.str.RocStr = @ptrCast(@alignCast(binding.value_ptr));
-                    if (!str_ptr.isSmallStr()) {
-                        // TODO: Need host RocOps for proper cleanup
-                        // str_ptr.decref(roc_ops); // Decrement reference count for big strings
-                    }
-                    self.allocator.destroy(str_ptr);
+    /// Look up a capture in the current closure
+    fn lookupCapture(self: *Interpreter, pattern_idx: ModuleEnv.Pattern.Idx) !?StackValue {
+        if (self.frame_stack.items.len == 0) return null;
+
+        const frame = self.frame_stack.items[self.frame_stack.items.len - 1];
+        const closure_val = self.value_stack.items[frame.value_base + frame.arg_count];
+        if (closure_val.layout.tag != .closure) return null;
+
+        // Get closure using StackValue helper
+        const closure_stack_val = StackValue.fromPtr(closure_val.layout, &self.stack_memory.start[closure_val.offset]);
+        const closure = closure_stack_val.asClosure();
+        const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
+        const captures_ptr = @as([*]u8, @ptrCast(&self.stack_memory.start[closure_val.offset])) + @sizeOf(Closure);
+
+        const pattern = self.env.store.getPattern(pattern_idx);
+        const ident_idx = switch (pattern) {
+            .assign => |a| a.ident,
+            else => return error.LayoutError,
+        };
+        const capture_name_text = self.env.idents.getText(ident_idx);
+
+        if (captures_layout.tag == .record) {
+            const record_data = self.layout_cache.getRecordData(captures_layout.data.record.idx);
+            if (record_data.fields.count > 0) {
+                if (self.layout_cache.getRecordFieldOffsetByName(
+                    captures_layout.data.record.idx,
+                    capture_name_text,
+                )) |offset| {
+                    // Found it!
+                    self.traceInfo("Found capture '{s}' at offset {}", .{ capture_name_text, offset });
+                    const capture_layout_idx = try self.getLayoutIdx(pattern_idx);
+                    const capture_layout = self.layout_cache.getLayout(capture_layout_idx);
+
+                    const src_ptr = captures_ptr + offset;
+                    return StackValue.fromPtr(capture_layout, src_ptr);
                 }
             }
+        }
+        return null;
+    }
+
+    /// Look up a global definition
+    fn lookupGlobal(self: *Interpreter, pattern_idx: ModuleEnv.Pattern.Idx) ?ModuleEnv.Expr.Idx {
+        const defs = self.env.store.sliceDefs(self.env.all_defs);
+        for (defs) |def_idx| {
+            const def = self.env.store.getDef(def_idx);
+            if (@intFromEnum(def.pattern) == @intFromEnum(pattern_idx)) {
+                self.traceInfo("Found global definition for pattern_idx={}", .{@intFromEnum(pattern_idx)});
+                return def.expr;
+            }
+        }
+        return null;
+    }
+
+    pub fn deinit(self: *Interpreter, roc_ops: *RocOps) void {
+        // Clean up bindings
+        for (self.bindings_stack.items) |binding| {
+            binding.cleanup(roc_ops);
         }
 
         // Note: crash_message is not owned by the interpreter,
@@ -338,7 +392,7 @@ pub const Interpreter = struct {
     ///
     /// This is the main entry point for expression evaluation. Uses an iterative
     /// work queue approach to evaluate complex expressions without recursion.
-    pub fn eval(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, roc_ops: *builtins.host_abi.RocOps) EvalError!StackValue {
+    pub fn eval(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, roc_ops: *RocOps) EvalError!StackValue {
         // Ensure work_stack and value_stack are empty before we start. (stack_memory might not be, and that's fine!)
         std.debug.assert(self.work_stack.items.len == 0);
         std.debug.assert(self.value_stack.items.len == 0);
@@ -379,6 +433,7 @@ pub const Interpreter = struct {
                 .w_lambda_call => try self.handleLambdaCall(
                     work.expr_idx,
                     work.extra.arg_count,
+                    roc_ops,
                 ),
                 .w_lambda_return => try self.handleLambdaReturn(roc_ops),
                 .w_eval_record_fields => try self.handleRecordFields(
@@ -407,7 +462,7 @@ pub const Interpreter = struct {
                     const pattern_idx: ModuleEnv.Pattern.Idx = work.extra.decl_pattern_idx;
                     const value = try self.peekStackValue(1); // Don't pop!
 
-                    try self.bindPattern(pattern_idx, value); // Value stays on stack for the block's lifetime
+                    try self.bindPattern(pattern_idx, value, roc_ops); // Value stays on stack for the block's lifetime
                 },
                 .w_block_cleanup => {
                     const bindings_to_keep = work.extra.bindings_stack_len;
@@ -452,19 +507,7 @@ pub const Interpreter = struct {
                     while (i > bindings_to_keep) {
                         i -= 1;
                         const binding = self.bindings_stack.items[i];
-                        if (binding.layout.tag == .scalar and binding.layout.data.scalar.tag == .str) {
-                            const stack_start_ptr = @intFromPtr(self.stack_memory.start);
-                            const stack_end_ptr = stack_start_ptr + self.stack_memory.capacity;
-                            const binding_ptr_val = @intFromPtr(binding.value_ptr);
-
-                            if (binding_ptr_val < stack_start_ptr or binding_ptr_val >= stack_end_ptr) {
-                                const str_ptr: *builtins.str.RocStr = @ptrCast(@alignCast(binding.value_ptr));
-                                if (!str_ptr.isSmallStr()) {
-                                    str_ptr.decref(roc_ops);
-                                }
-                                self.allocator.destroy(str_ptr);
-                            }
-                        }
+                        binding.cleanup(roc_ops);
                     }
                     self.bindings_stack.items.len = bindings_to_keep;
 
@@ -760,95 +803,30 @@ pub const Interpreter = struct {
                 self.traceInfo("evalExpr e_lookup_local pattern_idx={}", .{@intFromEnum(lookup.pattern_idx)});
                 self.tracePattern(lookup.pattern_idx);
 
-                // 1. Search local bindings (most recent scope first)
-                var reversed_bindings = std.mem.reverseIterator(self.bindings_stack.items);
-                while (reversed_bindings.next()) |binding| {
-                    if (binding.pattern_idx == lookup.pattern_idx) {
-                        self.traceInfo("Found binding for pattern_idx={}", .{@intFromEnum(lookup.pattern_idx)});
-                        const dest_value = try self.pushStackValue(binding.layout);
-                        std.debug.assert(dest_value.ptr != null);
-                        const dest_ptr = dest_value.ptr.?;
-                        const binding_size = self.layout_cache.layoutSize(binding.layout);
-                        if (binding_size > 0) {
-                            // Note: For heap-allocated bindings (like cloned strings), we skip the stack bounds check
-
-                            // Special handling for string bindings - copy as proper RocStr struct instead of bytes
-                            if (binding.layout.tag == .scalar and binding.layout.data.scalar.tag == .str) {
-                                const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(binding.value_ptr));
-                                const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(dest_ptr));
-                                dest_str.* = src_str.*; // Proper struct assignment
-
-                                // Increment reference count to ensure heap-allocated strings don't get freed
-                                dest_str.incref(1);
-                            } else {
-                                // For all other types, use regular memory copying
-                                std.mem.copyForwards(u8, @as([*]u8, @ptrCast(dest_ptr))[0..binding_size], @as([*]const u8, @ptrCast(binding.value_ptr))[0..binding_size]);
-                            }
-                        }
-                        return;
-                    }
+                // 1. Search local bindings
+                if (self.lookupBinding(lookup.pattern_idx)) |binding_value| {
+                    // Push a copy of the bound value
+                    const dest_value = try self.pushStackValue(binding_value.layout);
+                    binding_value.copyTo(dest_value, self.layout_cache);
+                    return;
                 }
 
-                // 2. If not found, check captures of the current closure
-                if (self.frame_stack.items.len > 0) {
-                    const frame = self.frame_stack.items[self.frame_stack.items.len - 1];
-                    const closure_val = self.value_stack.items[frame.value_base + frame.arg_count];
-                    if (closure_val.layout.tag == .closure) {
-                        const closure_ptr = &self.stack_memory.start[closure_val.offset];
-                        const closure: *const Closure = @ptrCast(@alignCast(closure_ptr));
-                        const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
-                        const captures_ptr = @as([*]u8, @ptrCast(closure_ptr)) + @sizeOf(Closure);
-
-                        const pattern = self.env.store.getPattern(lookup.pattern_idx);
-                        const ident_idx = switch (pattern) {
-                            .assign => |a| a.ident,
-                            else => return error.LayoutError,
-                        };
-                        const capture_name_text = self.env.idents.getText(ident_idx);
-
-                        if (captures_layout.tag == .record) {
-                            const record_data = self.layout_cache.getRecordData(captures_layout.data.record.idx);
-                            if (record_data.fields.count > 0) {
-                                if (self.layout_cache.getRecordFieldOffsetByName(
-                                    captures_layout.data.record.idx,
-                                    capture_name_text,
-                                )) |offset| {
-                                    // Found it!
-                                    self.traceInfo("Found capture '{s}' at offset {}", .{ capture_name_text, offset });
-                                    const capture_layout_idx = try self.getLayoutIdx(lookup.pattern_idx);
-                                    const capture_layout = self.layout_cache.getLayout(capture_layout_idx);
-                                    const capture_size = self.layout_cache.layoutSize(capture_layout);
-
-                                    if (capture_size > 0) {
-                                        const src_ptr = captures_ptr + offset;
-                                        const dest_value = try self.pushStackValue(capture_layout);
-                                        const dest_ptr = dest_value.ptr.?;
-                                        self.traceInfo("Copying capture lookup from {} to {}", .{ @intFromPtr(src_ptr), @intFromPtr(dest_ptr) });
-                                        std.mem.copyForwards(u8, @as([*]u8, @ptrCast(dest_ptr))[0..capture_size], src_ptr[0..capture_size]);
-                                        return;
-                                    }
-                                } else {
-                                    // Not in this closure's captures, continue to globals
-                                    self.traceWarn("Capture '{s}' not found in current closure's captures. Searching globals.", .{capture_name_text});
-                                }
-                            }
-                        }
-                    }
+                // 2. Check captures in current closure
+                if (try self.lookupCapture(lookup.pattern_idx)) |capture_value| {
+                    // Push a copy of the captured value
+                    const dest_value = try self.pushStackValue(capture_value.layout);
+                    capture_value.copyTo(dest_value, self.layout_cache);
+                    return;
                 }
 
-                // 3. If not found, fall back to global definitions
-                const defs = self.env.store.sliceDefs(self.env.all_defs);
-                for (defs) |def_idx| {
-                    const def = self.env.store.getDef(def_idx);
-                    if (@intFromEnum(def.pattern) == @intFromEnum(lookup.pattern_idx)) {
-                        self.traceInfo("Found global definition for pattern_idx={}", .{@intFromEnum(lookup.pattern_idx)});
-                        try self.work_stack.append(.{
-                            .kind = .w_eval_expr,
-                            .expr_idx = def.expr,
-                            .extra = .{ .nothing = {} },
-                        });
-                        return;
-                    }
+                // 3. Fall back to global definitions
+                if (self.lookupGlobal(lookup.pattern_idx)) |def_expr| {
+                    self.schedule_work(WorkItem{
+                        .kind = .w_eval_expr,
+                        .expr_idx = def_expr,
+                        .extra = .{ .nothing = {} },
+                    });
+                    return;
                 }
 
                 self.traceError("Pattern not found for lookup_local: pattern_idx={}", .{@intFromEnum(lookup.pattern_idx)});
@@ -1457,7 +1435,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn handleLambdaCall(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, arg_count: u32) !void {
+    fn handleLambdaCall(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, arg_count: u32, roc_ops: *RocOps) !void {
         self.traceEnter("handleLambdaCall {}", .{expr_idx});
         defer self.traceExit("", .{});
 
@@ -1515,7 +1493,7 @@ pub const Interpreter = struct {
             const arg_index_from_top = arg_count - i + 2;
             const arg = try self.peekStackValue(arg_index_from_top);
 
-            try self.bindPattern(param_idx, arg);
+            try self.bindPattern(param_idx, arg, roc_ops);
         }
 
         // 4. Schedule the work to copy the return value and break down the stack frame.
@@ -1568,12 +1546,7 @@ pub const Interpreter = struct {
 
         // Clean up heap-allocated string bindings before truncating bindings stack
         for (self.bindings_stack.items[frame.bindings_base..]) |binding| {
-            if (binding.layout.tag == .scalar and binding.layout.data.scalar.tag == .str) {
-                // This is a heap-allocated string binding that needs cleanup
-                const str_storage: *builtins.str.RocStr = @ptrCast(@alignCast(binding.value_ptr));
-                str_storage.decref(roc_ops);
-                self.allocator.destroy(str_storage);
-            }
+            binding.cleanup(roc_ops);
         }
 
         // reset the stacks
@@ -1965,32 +1938,17 @@ pub const Interpreter = struct {
         }
     }
 
-    fn bindPattern(self: *Interpreter, pattern_idx: ModuleEnv.Pattern.Idx, value: StackValue) EvalError!void {
+    fn bindPattern(self: *Interpreter, pattern_idx: ModuleEnv.Pattern.Idx, value: StackValue, roc_ops: *RocOps) EvalError!void {
         const pattern = self.env.store.getPattern(pattern_idx);
         switch (pattern) {
             .assign => |assign_pattern| {
-                // For a variable pattern, we create a binding for the variable
-                var binding_ptr = value.ptr.?;
-
-                if (value.layout.tag == .scalar and value.layout.data.scalar.tag == .str) {
-                    const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(value.ptr.?));
-                    const str_storage = try self.allocator.create(builtins.str.RocStr);
-                    str_storage.* = src_str.*;
-                    binding_ptr = str_storage;
-
-                    // Increment the ref count of the underlying string data
-                    str_storage.incref(1);
-                }
-
                 const binding = Binding{
                     .pattern_idx = pattern_idx,
-                    .value_ptr = binding_ptr,
-                    .layout = value.layout,
+                    .value = value.cloneForBinding(),
                 };
-                self.traceInfo("Binding '{s}' (pattern_idx={}) to ptr {}", .{
+                self.traceInfo("Binding '{s}' (pattern_idx={})", .{
                     self.env.idents.getText(assign_pattern.ident),
                     @intFromEnum(pattern_idx),
-                    @intFromPtr(binding.value_ptr),
                 });
                 try self.traceValue("value", value);
                 try self.bindings_stack.append(binding);
@@ -2027,15 +1985,13 @@ pub const Interpreter = struct {
                     const field_layout = self.layout_cache.getLayout(record_fields.get(index).layout);
                     const field_ptr = record_ptr + field_offset;
 
-                    // Recursively bind the sub-pattern
+                    // Recursively bind the sub-pattern using StackValue.fromPtr
                     const inner_pattern_idx = switch (destruct.kind) {
                         .Required => |p_idx| p_idx,
                         .SubPattern => |p_idx| p_idx,
                     };
-                    try self.bindPattern(inner_pattern_idx, .{
-                        .layout = field_layout,
-                        .ptr = field_ptr,
-                    });
+                    const field_value = StackValue.fromPtr(field_layout, field_ptr);
+                    try self.bindPattern(inner_pattern_idx, field_value, roc_ops);
                 }
             },
             .tuple => |tuple_pattern| {
@@ -2054,7 +2010,7 @@ pub const Interpreter = struct {
 
                 for (patterns, 0..) |inner_pattern_idx, i| {
                     const element_value = try tuple_accessor.getElement(i);
-                    try self.bindPattern(inner_pattern_idx, element_value);
+                    try self.bindPattern(inner_pattern_idx, element_value, roc_ops);
                 }
             },
             else => {
@@ -2067,7 +2023,7 @@ pub const Interpreter = struct {
     /// Public method to call a closure with arguments already on the stack
     /// This method assumes the arguments are already pushed onto the stack in the correct order
     /// and schedules the necessary work items to evaluate the closure and call it
-    pub fn callClosureWithStackArgs(self: *Interpreter, closure_expr_idx: ModuleEnv.Expr.Idx, arg_count: u32, roc_ops: *builtins.host_abi.RocOps) EvalError!StackValue {
+    pub fn callClosureWithStackArgs(self: *Interpreter, closure_expr_idx: ModuleEnv.Expr.Idx, arg_count: u32, roc_ops: *RocOps) EvalError!StackValue {
         // Schedule work items in reverse order (they execute LIFO)
 
         // 3. Lambda call (executed LAST after closure and args are on stack)
@@ -2094,6 +2050,7 @@ pub const Interpreter = struct {
                 .w_lambda_call => try self.handleLambdaCall(
                     work.expr_idx,
                     work.extra.arg_count,
+                    roc_ops,
                 ),
                 else => {
                     // Handle other work types that might be generated
@@ -2209,18 +2166,7 @@ pub const Interpreter = struct {
         while (i > bindings_to_keep) {
             i -= 1;
             const binding = self.bindings_stack.items[i];
-            if (binding.layout.tag == .scalar and binding.layout.data.scalar.tag == .str) {
-                const stack_start_ptr = @intFromPtr(self.stack_memory.start);
-                const stack_end_ptr = stack_start_ptr + self.stack_memory.capacity;
-                const binding_ptr_val = @intFromPtr(binding.value_ptr);
-
-                if (binding_ptr_val < stack_start_ptr or binding_ptr_val >= stack_end_ptr) {
-                    const str_ptr: *builtins.str.RocStr = @ptrCast(@alignCast(binding.value_ptr));
-                    if (!str_ptr.isSmallStr()) {
-                        str_ptr.decref(roc_ops);
-                    }
-                }
-            }
+            binding.cleanup(roc_ops);
         }
         self.bindings_stack.items.len = bindings_to_keep;
 
@@ -2681,7 +2627,7 @@ pub const Interpreter = struct {
                 // Get the variable name from the binding's pattern
                 const binding_name = self.getPatternVariableName(binding.pattern_idx);
                 if (binding_name != null and std.mem.eql(u8, binding_name.?, capture_name_text)) {
-                    try self.copyCapture(captures_ptr, capture_name_text, binding.value_ptr, binding.layout, captures_record_layout);
+                    try self.copyCapture(captures_ptr, capture_name_text, binding.value.ptr.?, binding.value.layout, captures_record_layout);
                     copied = true;
                     break;
                 }
@@ -3018,7 +2964,7 @@ test "stack-based binary operations" {
     // Track layouts
     // Create interpreter
     var interpreter = try Interpreter.init(allocator, undefined, &eval_stack, undefined, undefined);
-    defer interpreter.deinit();
+    defer interpreter.deinit(undefined);
 
     // Test addition: 2 + 3 = 5
     {
@@ -3060,7 +3006,7 @@ test "stack-based comparisons" {
 
     // Create interpreter
     var interpreter = try Interpreter.init(allocator, undefined, &eval_stack, undefined, undefined);
-    defer interpreter.deinit();
+    defer interpreter.deinit(undefined);
 
     // Test 5 > 3 = True (1)
     {
