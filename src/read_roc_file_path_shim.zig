@@ -13,12 +13,11 @@ const stack = @import("eval/stack.zig");
 const layout_store = @import("layout/store.zig");
 const layout = @import("layout/layout.zig");
 
-const shared_memory = @import("ipc/shared_memory.zig");
+const SharedMemoryAllocator = @import("SharedMemoryAllocator.zig");
 
 const RocStr = builtins.str.RocStr;
 const ModuleEnv = compile.ModuleEnv;
 const RocOps = builtins.host_abi.RocOps;
-const SharedMemoryHandle = shared_memory.SharedMemoryHandle;
 const Interpreter = eval.Interpreter;
 const safe_memory = base.safe_memory;
 
@@ -55,34 +54,29 @@ export fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, ar
 
 /// Cross-platform shared memory evaluation
 fn evaluateFromSharedMemory(roc_ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) ShimError!void {
+    const allocator = std.heap.page_allocator;
 
-    // Read shared memory coordination info
-    var fd_info = SharedMemoryHandle.readFdInfo(std.heap.page_allocator) catch |err| {
-        std.log.err("Failed to read shared memory coordination info: {s}", .{@errorName(err)});
+    // Get page size
+    const page_size = SharedMemoryAllocator.getSystemPageSize() catch 4096;
+
+    // Create shared memory allocator from coordination info
+    var shm = SharedMemoryAllocator.fromCoordination(allocator, page_size) catch |err| {
+        std.log.err("Failed to create shared memory allocator: {s}", .{@errorName(err)});
         return error.SharedMemoryError;
     };
-    defer fd_info.deinit(std.heap.page_allocator);
-
-    // Create shared memory handle and map memory
-    var shm_handle = SharedMemoryHandle.fromFdInfo(fd_info) catch |err| {
-        std.log.err("Failed to create shared memory handle: {s}", .{@errorName(err)});
-        return error.SharedMemoryError;
-    };
-    defer {
-        shm_handle.unmap();
-        SharedMemoryHandle.closeHandle(shm_handle.platform_handle);
-    }
+    defer shm.deinit(allocator);
 
     // Set up ModuleEnv from shared memory
-    const env_ptr = try setupModuleEnv(shm_handle);
+    const env_ptr = try setupModuleEnv(&shm);
 
     // Set up interpreter infrastructure
     var interpreter = try createInterpreter(env_ptr);
     defer interpreter.deinit(roc_ops);
 
     // Get expression info from shared memory
+    const base_ptr = shm.getBasePtr();
     const expr_idx: ModuleEnv.Expr.Idx = @enumFromInt(
-        safe_memory.safeRead(u32, shm_handle.ptr, FIRST_ALLOC_OFFSET + @sizeOf(u64), shm_handle.size) catch {
+        safe_memory.safeRead(u32, base_ptr, FIRST_ALLOC_OFFSET + @sizeOf(u64), shm.total_size) catch {
             return error.MemoryLayoutInvalid;
         },
     );
@@ -92,26 +86,25 @@ fn evaluateFromSharedMemory(roc_ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*an
 }
 
 /// Set up ModuleEnv from shared memory with proper relocation
-fn setupModuleEnv(shm_handle: SharedMemoryHandle) ShimError!*ModuleEnv {
+fn setupModuleEnv(shm: *SharedMemoryAllocator) ShimError!*ModuleEnv {
     // Validate memory layout
     const min_required_size = FIRST_ALLOC_OFFSET + @sizeOf(u64) + @sizeOf(u32) + MODULE_ENV_OFFSET + @sizeOf(ModuleEnv);
-    if (shm_handle.size < min_required_size) {
-        std.log.err("Invalid memory layout: size {} is too small (minimum required: {})", .{ shm_handle.size, min_required_size });
+    if (shm.total_size < min_required_size) {
+        std.log.err("Invalid memory layout: size {} is too small (minimum required: {})", .{ shm.total_size, min_required_size });
         return error.MemoryLayoutInvalid;
     }
 
+    // Get base pointer
+    const base_ptr = shm.getBasePtr();
+    
     // Read parent's shared memory base address and calculate relocation offset
-    const data_ptr = @as([*]u8, @ptrCast(shm_handle.ptr)) + FIRST_ALLOC_OFFSET;
-    const parent_base_addr = safe_memory.safeRead(u64, shm_handle.ptr, FIRST_ALLOC_OFFSET, shm_handle.size) catch {
+    const data_ptr = base_ptr + FIRST_ALLOC_OFFSET;
+    const parent_base_addr = safe_memory.safeRead(u64, base_ptr, FIRST_ALLOC_OFFSET, shm.total_size) catch {
         return error.MemoryLayoutInvalid;
     };
 
     // Calculate relocation offset
-    const child_base_addr = if (builtin.target.os.tag == .windows)
-        @intFromPtr(shm_handle.ptr)
-    else
-        @intFromPtr(shm_handle.ptr);
-
+    const child_base_addr = @intFromPtr(base_ptr);
     const offset = @as(isize, @intCast(child_base_addr)) - @as(isize, @intCast(parent_base_addr));
 
     // Sanity check for overflow potential

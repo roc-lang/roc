@@ -12,6 +12,7 @@ const parse = @import("parse");
 const tracy = @import("tracy");
 
 const SharedMemoryAllocator = @import("./SharedMemoryAllocator.zig");
+const platform = @import("ipc/platform.zig");
 const fmt = @import("fmt.zig");
 const coordinate_simple = @import("coordinate_simple.zig");
 const Filesystem = @import("fs/Filesystem.zig");
@@ -121,11 +122,6 @@ const windows = if (is_windows) struct {
         dwThreadId: DWORD,
     };
 
-    extern "kernel32" fn CreateFileMappingW(hFile: HANDLE, lpFileMappingAttributes: ?*anyopaque, flProtect: DWORD, dwMaximumSizeHigh: DWORD, dwMaximumSizeLow: DWORD, lpName: ?LPCWSTR) ?HANDLE;
-    extern "kernel32" fn MapViewOfFile(hFileMappingObject: HANDLE, dwDesiredAccess: DWORD, dwFileOffsetHigh: DWORD, dwFileOffsetLow: DWORD, dwNumberOfBytesToMap: SIZE_T) LPVOID;
-    extern "kernel32" fn MapViewOfFileEx(hFileMappingObject: HANDLE, dwDesiredAccess: DWORD, dwFileOffsetHigh: DWORD, dwFileOffsetLow: DWORD, dwNumberOfBytesToMap: SIZE_T, lpBaseAddress: LPVOID) LPVOID;
-    extern "kernel32" fn UnmapViewOfFile(lpBaseAddress: LPVOID) BOOL;
-    extern "kernel32" fn CloseHandle(hObject: HANDLE) BOOL;
     extern "kernel32" fn SetHandleInformation(hObject: HANDLE, dwMask: DWORD, dwFlags: DWORD) BOOL;
     extern "kernel32" fn CreateProcessW(
         lpApplicationName: ?LPCWSTR,
@@ -141,15 +137,8 @@ const windows = if (is_windows) struct {
     ) BOOL;
     extern "kernel32" fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) DWORD;
 
-    const PAGE_READWRITE = 0x04;
-    const FILE_MAP_ALL_ACCESS = 0x001f;
-    const INVALID_HANDLE_VALUE = @as(HANDLE, @ptrFromInt(std.math.maxInt(usize)));
     const HANDLE_FLAG_INHERIT = 0x00000001;
     const INFINITE = 0xFFFFFFFF;
-
-    // Fixed base address for shared memory mapping to avoid ASLR issues
-    // Using 0x10000000 (256MB) which is typically available on Windows
-    const SHARED_MEMORY_BASE_ADDR = @as(LPVOID, @ptrFromInt(0x10000000));
 } else struct {};
 
 const benchTokenizer = bench.benchTokenizer;
@@ -166,9 +155,9 @@ const legalDetailsFileContent = @embedFile("legal_details");
 /// child process. It's just virtual address space though, not physical memory.
 /// On 32-bit targets, we use 512MB since 2TB won't fit in the address space.
 const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) >= 8)
-    2 * 1024 * 1024 * 1024 * 1024 // 2TB for 64-bit targets
+    512 * 1024 * 1024 // 512MB for 64-bit targets (reduced from 2TB for Windows compatibility)
 else
-    512 * 1024 * 1024; // 512MB for 32-bit targets
+    256 * 1024 * 1024; // 256MB for 32-bit targets
 
 /// Cross-platform hardlink creation
 fn createHardlink(allocator: Allocator, source: []const u8, dest: []const u8) !void {
@@ -536,8 +525,8 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     // Ensure we clean up shared memory resources on all exit paths
     defer {
         if (comptime is_windows) {
-            _ = windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = windows.CloseHandle(@ptrCast(shm_handle.fd));
+            _ = platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            _ = platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
             _ = posix.munmap(shm_handle.ptr, shm_handle.size);
             _ = c.close(shm_handle.fd);
@@ -619,8 +608,8 @@ fn runWithWindowsHandleInheritance(gpa: Allocator, exe_path: []const u8, shm_han
     }
 
     // Clean up process handles
-    _ = windows.CloseHandle(process_info.hProcess);
-    _ = windows.CloseHandle(process_info.hThread);
+    _ = platform.windows.CloseHandle(process_info.hProcess);
+    _ = platform.windows.CloseHandle(process_info.hThread);
 }
 
 /// Run child process using POSIX file descriptor inheritance (existing approach for Unix)
@@ -712,10 +701,10 @@ pub fn writeToSharedMemory(data: []const u8) !SharedMemoryHandle {
 
 fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHandle {
     // Create anonymous shared memory object (no name for handle inheritance)
-    const shm_handle = windows.CreateFileMappingW(
-        windows.INVALID_HANDLE_VALUE,
+    const shm_handle = platform.windows.CreateFileMappingW(
+        platform.windows.INVALID_HANDLE_VALUE,
         null,
-        windows.PAGE_READWRITE,
+        platform.windows.PAGE_READWRITE,
         0,
         @intCast(total_size),
         null, // Anonymous - no name needed for handle inheritance
@@ -725,15 +714,15 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
     };
 
     // Map the shared memory at a fixed address to avoid ASLR issues
-    const mapped_ptr = windows.MapViewOfFileEx(
+    const mapped_ptr = platform.windows.MapViewOfFileEx(
         shm_handle,
-        windows.FILE_MAP_ALL_ACCESS,
+        platform.windows.FILE_MAP_ALL_ACCESS,
         0,
         0,
         0,
-        windows.SHARED_MEMORY_BASE_ADDR,
+        platform.SHARED_MEMORY_BASE_ADDR,
     ) orelse {
-        _ = windows.CloseHandle(shm_handle);
+        _ = platform.windows.CloseHandle(shm_handle);
         return error.SharedMemoryMapFailed;
     };
 
