@@ -138,18 +138,9 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
                 else => try args.append("/machine:x64"), // default to x64
             }
 
-            // Let the CRT choose the proper startup (mainCRTStartup) implicitly.
-            // Explicitly setting /entry can bypass initialization and cause unresolved symbols like __main.
-            // Removed explicit /entry.
-
-            // Use only essential Windows system libraries for basic console applications
-            // These are part of the core Windows OS and should be available on all Windows systems
+            // These are part of the core Windows OS and are available on all Windows systems
             try args.append("/defaultlib:kernel32");
             try args.append("/defaultlib:ntdll");
-
-            // Use dynamic MSVC CRTs available on Windows systems
-            try args.append("/defaultlib:ucrt");
-            try args.append("/defaultlib:vcruntime");
             try args.append("/defaultlib:msvcrt");
 
             // Suppress warnings using Windows style

@@ -326,11 +326,6 @@ fn addMainExe(
 
     // Add Windows system libraries for the host library
     if (target.result.os.tag == .windows) {
-        test_platform_host_lib.linkSystemLibrary("kernel32");
-        test_platform_host_lib.linkSystemLibrary("ntdll");
-        test_platform_host_lib.linkSystemLibrary("psapi");
-        test_platform_host_lib.linkSystemLibrary("user32");
-        test_platform_host_lib.linkSystemLibrary("advapi32");
         // Add Windows __main stub for MinGW-style initialization
         test_platform_host_lib.addCSourceFile(.{
             .file = b.path("src/windows_main_stub.c"),
@@ -398,15 +393,6 @@ fn addMainExe(
     shim_lib.linkLibrary(builtins_lib);
     // Force bundle compiler-rt to resolve math symbols
     shim_lib.bundle_compiler_rt = true;
-
-    // Add Windows system libraries for the shim library
-    if (target.result.os.tag == .windows) {
-        shim_lib.linkSystemLibrary("kernel32");
-        shim_lib.linkSystemLibrary("ntdll");
-        shim_lib.linkSystemLibrary("psapi");
-        shim_lib.linkSystemLibrary("user32");
-        shim_lib.linkSystemLibrary("advapi32");
-    }
 
     // Install shim.a to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});
