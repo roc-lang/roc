@@ -14,3 +14,11 @@ type=repl
 0
 # PROBLEMS
 NIL
+# CANONICALIZE
+~~~clojure
+(e-nominal @1.2-1.6 (nominal "Bool")
+	(e-tag @1.2-1.6 (name "True")))
+---
+(e-nominal @1.2-1.7 (nominal "Bool")
+	(e-tag @1.2-1.7 (name "False")))
+~~~

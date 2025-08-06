@@ -20,3 +20,13 @@ type=repl
 255
 # PROBLEMS
 NIL
+# CANONICALIZE
+~~~clojure
+(e-int @1.2-1.7 (value "42"))
+---
+(e-frac-f64 @1.2-1.9 (value "3.14"))
+---
+(e-frac-dec @1.2-1.8 (value "1.5"))
+---
+(e-int @1.2-1.7 (value "255"))
+~~~

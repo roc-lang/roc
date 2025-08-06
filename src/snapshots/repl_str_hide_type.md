@@ -17,3 +17,14 @@ type=repl
 "Hello, World!"
 # PROBLEMS
 NIL
+# CANONICALIZE
+~~~clojure
+(e-string @1.2-1.9
+	(e-literal @1.3-1.8 (string "hello")))
+---
+(e-string @1.2-1.9
+	(e-literal @1.3-1.8 (string "world")))
+---
+(e-string @1.2-1.17
+	(e-literal @1.3-1.16 (string "Hello, World!")))
+~~~
