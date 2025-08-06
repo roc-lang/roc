@@ -2714,7 +2714,7 @@ fn generateReplCanonicalizeSection(output: *DualOutput, content: *const Content)
             // Generate S-expression tree for the canonical form
             var tree = SExprTree.init(output.gpa);
             defer tree.deinit();
-            
+
             module_env.pushToSExprTree(canonical_expr.idx, &tree) catch |err| {
                 try output.md_writer.print("S-expr tree error: {s}\n", .{@errorName(err)});
                 continue;
@@ -2739,7 +2739,7 @@ fn generateReplCanonicalizeSection(output: *DualOutput, content: *const Content)
             }
         } else {
             try output.md_writer.writeAll("Failed to canonicalize\n");
-            
+
             if (output.html_writer) |writer| {
                 if (i > 0) {
                     try writer.writeAll("                <hr>\n");

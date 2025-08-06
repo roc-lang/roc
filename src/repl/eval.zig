@@ -328,14 +328,14 @@ pub const Repl = struct {
         if (self.trace_writer) |trace_writer| {
             interpreter.startTrace(trace_writer);
         }
-        
+
         const result = interpreter.eval(canonical_expr_idx.get_idx(), self.roc_ops) catch |err| {
             if (self.trace_writer) |_| {
                 interpreter.endTrace();
             }
             return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err});
         };
-        
+
         if (self.trace_writer) |_| {
             interpreter.endTrace();
         }
