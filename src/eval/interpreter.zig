@@ -398,7 +398,7 @@ pub const Interpreter = struct {
                 },
                 .w_str_interpolate_combine => try self.handleStringInterpolateCombine(work.extra.segment_count, roc_ops),
                 .w_str_interpolate_segments => {}, // Just a marker, no action needed
-                .w_eval_tuple_elements => try self.handleTupleElements(
+                .w_eval_tuple_elements => try self.evaluateTuple(
                     work.expr_idx,
                     work.extra.current_element_idx,
                     roc_ops,
@@ -569,7 +569,7 @@ pub const Interpreter = struct {
     }
 
     /// Helper to get the layout for an expression
-    fn getLayoutIdx(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx) EvalError!layout.Idx {
+    fn getLayoutIdx(self: *Interpreter, expr_idx: anytype) EvalError!layout.Idx {
         const expr_var: types.Var = @enumFromInt(@intFromEnum(expr_idx));
         const layout_idx = self.layout_cache.addTypeVar(expr_var) catch |err| switch (err) {
             error.ZeroSizedType => return error.ZeroSizedType,
@@ -815,11 +815,7 @@ pub const Interpreter = struct {
                                 )) |offset| {
                                     // Found it!
                                     self.traceInfo("Found capture '{s}' at offset {}", .{ capture_name_text, offset });
-                                    const capture_var: types.Var = @enumFromInt(@intFromEnum(lookup.pattern_idx));
-                                    const capture_layout_idx = self.layout_cache.addTypeVar(capture_var) catch |err| switch (err) {
-                                        error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
-                                        else => |e| return e,
-                                    };
+                                    const capture_layout_idx = try self.getLayoutIdx(lookup.pattern_idx);
                                     const capture_layout = self.layout_cache.getLayout(capture_layout_idx);
                                     const capture_size = self.layout_cache.layoutSize(capture_layout);
 
@@ -1612,7 +1608,7 @@ pub const Interpreter = struct {
         // 2. If there's a current field to process, schedule its evaluation.
         // 3. Schedule the next call to `handleRecordFields` to process the *next* field.
 
-        const record_layout_idx = self.layout_cache.addTypeVar(@enumFromInt(@intFromEnum(record_expr_idx))) catch unreachable;
+        const record_layout_idx = try self.getLayoutIdx(record_expr_idx);
         const record_layout = self.layout_cache.getLayout(record_layout_idx);
         const record_data = self.layout_cache.getRecordData(record_layout.data.record.idx);
         const sorted_fields = self.layout_cache.record_fields.sliceRange(record_data.getFields());
@@ -2136,7 +2132,7 @@ pub const Interpreter = struct {
 
             // Record/tuple evaluation
             .w_eval_record_fields => try self.handleRecordFields(work.expr_idx, work.extra.current_field_idx),
-            .w_eval_tuple_elements => try self.handleTupleElements(work.expr_idx, work.extra.current_element_idx, roc_ops),
+            .w_eval_tuple_elements => try self.evaluateTuple(work.expr_idx, work.extra.current_element_idx, roc_ops),
 
             // Block cleanup
             .w_block_cleanup => try self.handleBlockCleanup(work.expr_idx, @intCast(work.extra.bindings_stack_len), roc_ops),
@@ -2617,12 +2613,7 @@ pub const Interpreter = struct {
             self.traceInfo("Processing capture: pattern_idx={}, name={s}", .{ @intFromEnum(capture.pattern_idx), self.env.getIdentText(capture.name) });
 
             // Get the layout for this capture
-            const capture_var: types.Var = @enumFromInt(@intFromEnum(capture.pattern_idx));
-            const capture_layout_idx = self.layout_cache.addTypeVar(capture_var) catch |err| switch (err) {
-                error.ZeroSizedType => return error.ZeroSizedType,
-                error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
-                else => |e| return e,
-            };
+            const capture_layout_idx = try self.getLayoutIdx(capture.pattern_idx);
             const capture_layout = self.layout_cache.getLayout(capture_layout_idx);
 
             field_layouts[i] = capture_layout;
@@ -2767,8 +2758,7 @@ pub const Interpreter = struct {
                         capture_name_text,
                     ) orelse continue; // Not in this closure's captures
 
-                    const capture_var: types.Var = @enumFromInt(@intFromEnum(capture.pattern_idx));
-                    const capture_layout_idx = self.layout_cache.addTypeVar(capture_var) catch continue;
+                    const capture_layout_idx = try self.getLayoutIdx(capture.pattern_idx);
                     const capture_layout = self.layout_cache.getLayout(capture_layout_idx);
                     const capture_size = self.layout_cache.layoutSize(capture_layout);
 
@@ -2814,9 +2804,7 @@ pub const Interpreter = struct {
 
         // Check if this is a closure and if we have arguments to push
         const expr_var = ModuleEnv.varFrom(expr_idx);
-        const layout_idx = self.layout_cache.addTypeVar(expr_var) catch {
-            return error.EvaluationFailed;
-        };
+        const layout_idx = try self.getLayoutIdx(expr_var);
         const expr_layout = self.layout_cache.getLayout(layout_idx);
 
         if (expr_layout.tag == .closure and arg_ptr != null) {
@@ -2859,11 +2847,7 @@ pub const Interpreter = struct {
 
         for (param_patterns, 0..) |pattern_idx, i| {
             // Get the type and layout for this parameter
-            const param_var = ModuleEnv.varFrom(pattern_idx);
-            const param_layout_idx = self.layout_cache.addTypeVar(param_var) catch {
-                std.log.err("Failed to get layout for parameter pattern={}", .{pattern_idx});
-                return error.LayoutError;
-            };
+            const param_layout_idx = try self.getLayoutIdx(pattern_idx);
             const param_layout = self.layout_cache.getLayout(param_layout_idx);
             const param_size = self.layout_cache.layoutSize(param_layout);
             const param_alignment = param_layout.alignment(target_usize);
@@ -2965,11 +2949,17 @@ pub const Interpreter = struct {
         result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
     }
 
-    fn handleTupleElements(self: *Interpreter, tuple_expr_idx: ModuleEnv.Expr.Idx, current_element_idx: usize, roc_ops: *RocOps) EvalError!void {
-        self.traceEnter("handleTupleElements tuple_expr_idx={}, current_element_idx={}", .{ tuple_expr_idx, current_element_idx });
-        defer self.traceExit("", .{});
+    /// This function handles the incremental construction of tuples by processing one element at a time using a work queue to avoid recursion.
+    ///
+    ///   The function uses the interpreter's work queue system:
+    ///   - First call: `current_element_idx = 0`, schedules evaluation of first element
+    ///   - Subsequent calls: Copy previous element result, schedule next element
+    ///   - Final call: Copy last element, tuple construction complete
+    ///   This approach allows the interpreter to construct complex nested data structures without using recursion, maintaining all state in explicit work items on the work stack.
+    fn evaluateTuple(self: *Interpreter, tuple_expr_idx: ModuleEnv.Expr.Idx, current_element_idx: usize, roc_ops: *RocOps) EvalError!void {
+        self.traceInfo("evaluateTuple tuple_expr_idx={}, current_element_idx={}", .{ tuple_expr_idx, current_element_idx });
 
-        const tuple_layout_idx = self.layout_cache.addTypeVar(@enumFromInt(@intFromEnum(tuple_expr_idx))) catch unreachable;
+        const tuple_layout_idx = try self.getLayoutIdx(tuple_expr_idx);
         const tuple_layout = self.layout_cache.getLayout(tuple_layout_idx);
         const tuple_data = self.layout_cache.getTupleData(tuple_layout.data.tuple.idx);
         const element_layouts = self.layout_cache.tuple_fields.sliceRange(tuple_data.getFields());

@@ -2,7 +2,7 @@
 //!
 //! This is the public facing interface for interacting with stack values.
 //!
-//! It provides methods for copying, cloning, and accessing the value safely using the provided layout information to assert various properties.
+//! It provides methods for working with the value safely using the layout.
 
 const std = @import("std");
 const base = @import("base");

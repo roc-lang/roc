@@ -13,21 +13,17 @@ const stack = @import("eval/stack.zig");
 const layout_store = @import("layout/store.zig");
 const layout = @import("layout/layout.zig");
 
-// New abstractions
 const shared_memory = @import("ipc/shared_memory.zig");
-const safe_memory = @import("base/safe_memory.zig");
-const format_utils = @import("eval/format.zig");
-const closure_args = @import("eval/closure_args.zig");
 
 const RocStr = builtins.str.RocStr;
 const ModuleEnv = compile.ModuleEnv;
 const SharedMemoryHandle = shared_memory.SharedMemoryHandle;
 const Interpreter = eval.Interpreter;
+const safe_memory = base.safe_memory;
 
 // Constants for shared memory layout
 const FIRST_ALLOC_OFFSET = 504; // 0x1f8 - First allocation starts at this offset
 const MODULE_ENV_OFFSET = 0x10; // 8 bytes for u64, 4 bytes for u32, 4 bytes padding
-const RESULT_BUFFER_SIZE = format_utils.RESULT_BUFFER_SIZE;
 
 /// Comprehensive error handling for the shim
 const ShimError = error{
@@ -45,7 +41,7 @@ const ShimError = error{
     BugUnboxedFlexVar,
     BugUnboxedRigidVar,
     UnsupportedResultType,
-} || shared_memory.SharedMemoryError || closure_args.ClosureArgError || safe_memory.MemoryError || eval.EvalError;
+} || safe_memory.MemoryError || eval.EvalError;
 
 /// Exported symbol that reads ModuleEnv from shared memory and evaluates it
 /// Returns a RocStr to the caller
