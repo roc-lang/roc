@@ -19,14 +19,15 @@ Green => LocalStatus-Complete
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_032.md:3:24:3:25
+PARSE ERROR - fuzz_crash_032.md:3:24:3:25
+PARSE ERROR - fuzz_crash_032.md:3:26:3:27
+PARSE ERROR - fuzz_crash_032.md:3:34:3:35
+PARSE ERROR - fuzz_crash_032.md:3:44:3:45
 IMPORT MUST BE TOP LEVEL - fuzz_crash_032.md:6:18:6:24
 UNEXPECTED TOKEN IN PATTERN - fuzz_crash_032.md:9:21:9:22
 PARSE ERROR - fuzz_crash_032.md:9:22:9:22
 UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:3:14:3:17
 UNDECLARED TYPE - fuzz_crash_032.md:3:21:3:24
-INVALID STATEMENT - fuzz_crash_032.md:3:24:3:25
-INVALID STATEMENT - fuzz_crash_032.md:3:26:3:45
 NOT IMPLEMENTED - :0:0:0:0
 UNDECLARED TYPE - fuzz_crash_032.md:6:25:6:30
 INVALID PATTERN - :0:0:0:0
@@ -34,9 +35,9 @@ UNDECLARED TYPE - fuzz_crash_032.md:10:3:10:4
 EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:13:1:14
 EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:9:1:12
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_032.md:3:24:3:25:**
@@ -44,6 +45,66 @@ Here is the problematic code:
 LocalStatus :lue => Loc= [Pending, Complete]
 ```
                        ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_032.md:3:26:3:27:**
+```roc
+LocalStatus :lue => Loc= [Pending, Complete]
+```
+                         ^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+Here is the problematic code:
+**fuzz_crash_032.md:3:34:3:35:**
+```roc
+LocalStatus :lue => Loc= [Pending, Complete]
+```
+                                 ^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+Here is the problematic code:
+**fuzz_crash_032.md:3:44:3:45:**
+```roc
+LocalStatus :lue => Loc= [Pending, Complete]
+```
+                                           ^
 
 
 **IMPORT MUST BE TOP LEVEL**
@@ -104,28 +165,6 @@ This type is referenced here:
 LocalStatus :lue => Loc= [Pending, Complete]
 ```
                     ^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_032.md:3:24:3:25:**
-```roc
-LocalStatus :lue => Loc= [Pending, Complete]
-```
-                       ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_032.md:3:26:3:45:**
-```roc
-LocalStatus :lue => Loc= [Pending, Complete]
-```
-                         ^^^^^^^^^^^^^^^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -206,10 +245,10 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 			(ty-fn @3.14-3.24
 				(ty-var @3.14-3.17 (raw "lue"))
 				(ty @3.21-3.24 (name "Loc"))))
-		(e-malformed @3.24-3.25 (reason "expr_unexpected_token"))
-		(e-list @3.26-3.45
-			(e-tag @3.27-3.34 (raw "Pending"))
-			(e-tag @3.36-3.44 (raw "Complete")))
+		(s-malformed @3.24-3.25 (tag "statement_unexpected_token"))
+		(s-malformed @3.26-3.27 (tag "statement_unexpected_token"))
+		(s-malformed @3.27-3.35 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @3.36-3.45 (tag "expected_colon_after_type_annotation"))
 		(s-type-anno @5.1-5.16 (name "olor")
 			(ty-fn @5.8-5.16
 				(_)
@@ -244,7 +283,7 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 module [tus, r]
 
 LocalStatus : lue => Loc
-[Pending, Complete]
+
 
 olor : _ -> tus
 olor = |color| {

@@ -53,13 +53,12 @@ transform = |result|
 # EXPECTED
 PARSE ERROR - qualified_type_canonicalization.md:8:1:8:7
 PARSE ERROR - qualified_type_canonicalization.md:8:14:8:21
-UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:10:15:10:23
-UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:10:24:10:32
+PARSE ERROR - qualified_type_canonicalization.md:10:15:10:23
+PARSE ERROR - qualified_type_canonicalization.md:10:24:10:32
+PARSE ERROR - qualified_type_canonicalization.md:10:33:10:34
+PARSE ERROR - qualified_type_canonicalization.md:10:39:10:40
 MODULE NOT FOUND - qualified_type_canonicalization.md:9:1:9:13
 MODULE NOT FOUND - qualified_type_canonicalization.md:10:1:10:15
-INVALID STATEMENT - qualified_type_canonicalization.md:10:15:10:23
-INVALID STATEMENT - qualified_type_canonicalization.md:10:24:10:32
-INVALID STATEMENT - qualified_type_canonicalization.md:10:33:10:40
 MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
 UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
@@ -109,9 +108,9 @@ import Basics.Result
              ^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.ModuleB** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **qualified_type_canonicalization.md:10:15:10:23:**
@@ -121,9 +120,9 @@ import ModuleA.ModuleB exposing [TypeC]
               ^^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **exposing** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **qualified_type_canonicalization.md:10:24:10:32:**
@@ -131,6 +130,42 @@ Here is the problematic code:
 import ModuleA.ModuleB exposing [TypeC]
 ```
                        ^^^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**qualified_type_canonicalization.md:10:33:10:34:**
+```roc
+import ModuleA.ModuleB exposing [TypeC]
+```
+                                ^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+Here is the problematic code:
+**qualified_type_canonicalization.md:10:39:10:40:**
+```roc
+import ModuleA.ModuleB exposing [TypeC]
+```
+                                      ^
 
 
 **MODULE NOT FOUND**
@@ -153,39 +188,6 @@ You're attempting to use this module here:
 import ModuleA.ModuleB exposing [TypeC]
 ```
 ^^^^^^^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**qualified_type_canonicalization.md:10:15:10:23:**
-```roc
-import ModuleA.ModuleB exposing [TypeC]
-```
-              ^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**qualified_type_canonicalization.md:10:24:10:32:**
-```roc
-import ModuleA.ModuleB exposing [TypeC]
-```
-                       ^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**qualified_type_canonicalization.md:10:33:10:40:**
-```roc
-import ModuleA.ModuleB exposing [TypeC]
-```
-                                ^^^^^^^
 
 
 **MODULE NOT FOUND**
@@ -421,10 +423,10 @@ CloseCurly(44:5-44:6),EndOfFile(44:6-44:6),
 		(s-malformed @8.8-8.21 (tag "expected_colon_after_type_annotation"))
 		(s-import @9.1-9.13 (raw "Color"))
 		(s-import @10.1-10.15 (raw "ModuleA"))
-		(e-malformed @10.15-10.23 (reason "expr_unexpected_token"))
-		(e-malformed @10.24-10.32 (reason "expr_unexpected_token"))
-		(e-list @10.33-10.40
-			(e-tag @10.34-10.39 (raw "TypeC")))
+		(s-malformed @10.15-10.23 (tag "statement_unexpected_token"))
+		(s-malformed @10.24-10.32 (tag "statement_unexpected_token"))
+		(s-malformed @10.33-10.34 (tag "statement_unexpected_token"))
+		(s-malformed @10.34-10.40 (tag "expected_colon_after_type_annotation"))
 		(s-import @11.1-11.32 (raw "ExternalModule") (alias "ExtMod"))
 		(s-type-anno @14.1-14.28 (name "simpleQualified")
 			(ty @14.19-14.28 (name "Color.RGB")))
@@ -521,7 +523,7 @@ CloseCurly(44:5-44:6),EndOfFile(44:6-44:6),
 
 import Color
 import ModuleA
-[TypeC]
+
 import ExternalModule as ExtMod
 
 # Simple qualified type

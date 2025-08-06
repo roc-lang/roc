@@ -19,16 +19,15 @@ green : Color
 green = Green
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - nominal_import_wildcard.md:3:13:3:15
+PARSE ERROR - nominal_import_wildcard.md:3:13:3:15
 MODULE NOT FOUND - nominal_import_wildcard.md:3:1:3:13
-INVALID STATEMENT - nominal_import_wildcard.md:3:13:3:15
 UNDECLARED TYPE - nominal_import_wildcard.md:5:7:5:12
 UNDECLARED TYPE - nominal_import_wildcard.md:8:8:8:13
 UNDECLARED TYPE - nominal_import_wildcard.md:11:9:11:14
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.*** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **nominal_import_wildcard.md:3:13:3:15:**
@@ -47,17 +46,6 @@ You're attempting to use this module here:
 import Color.*
 ```
 ^^^^^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**nominal_import_wildcard.md:3:13:3:15:**
-```roc
-import Color.*
-```
-            ^^
 
 
 **UNDECLARED TYPE**
@@ -117,7 +105,7 @@ LowerIdent(12:1-12:6),OpAssign(12:7-12:8),UpperIdent(12:9-12:14),EndOfFile(12:14
 				(text "blue"))))
 	(statements
 		(s-import @3.1-3.13 (raw "Color"))
-		(e-malformed @3.13-3.15 (reason "expr_unexpected_token"))
+		(s-malformed @3.13-3.15 (tag "statement_unexpected_token"))
 		(s-type-anno @5.1-5.12 (name "red")
 			(ty @5.7-5.12 (name "Color")))
 		(s-decl @6.1-6.10

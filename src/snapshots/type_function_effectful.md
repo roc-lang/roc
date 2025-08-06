@@ -13,16 +13,14 @@ runEffect! = |fn!, x| fn!(x)
 main! = |_| {}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:3:25:3:27
-UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:3:31:3:33
-INVALID STATEMENT - type_function_effectful.md:3:25:3:27
-INVALID STATEMENT - type_function_effectful.md:3:28:3:30
-INVALID STATEMENT - type_function_effectful.md:3:31:3:33
-INVALID STATEMENT - type_function_effectful.md:3:34:3:36
+PARSE ERROR - type_function_effectful.md:3:25:3:27
+PARSE ERROR - type_function_effectful.md:3:28:3:30
+PARSE ERROR - type_function_effectful.md:3:31:3:33
+PARSE ERROR - type_function_effectful.md:3:34:3:36
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **->** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **type_function_effectful.md:3:25:3:27:**
@@ -32,33 +30,11 @@ runEffect! : (_a => _b) -> _a => _b
                         ^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=>** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**type_function_effectful.md:3:31:3:33:**
-```roc
-runEffect! : (_a => _b) -> _a => _b
-```
-                              ^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_function_effectful.md:3:25:3:27:**
-```roc
-runEffect! : (_a => _b) -> _a => _b
-```
-                        ^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 **type_function_effectful.md:3:28:3:30:**
 ```roc
 runEffect! : (_a => _b) -> _a => _b
@@ -66,10 +42,11 @@ runEffect! : (_a => _b) -> _a => _b
                            ^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
+Here is the problematic code:
 **type_function_effectful.md:3:31:3:33:**
 ```roc
 runEffect! : (_a => _b) -> _a => _b
@@ -77,10 +54,11 @@ runEffect! : (_a => _b) -> _a => _b
                               ^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
+Here is the problematic code:
 **type_function_effectful.md:3:34:3:36:**
 ```roc
 runEffect! : (_a => _b) -> _a => _b
@@ -114,10 +92,10 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 			(ty-fn @3.15-3.23
 				(underscore-ty-var @3.15-3.17 (raw "_a"))
 				(underscore-ty-var @3.21-3.23 (raw "_b"))))
-		(e-malformed @3.25-3.27 (reason "expr_unexpected_token"))
-		(e-ident @3.28-3.30 (raw "_a"))
-		(e-malformed @3.31-3.33 (reason "expr_unexpected_token"))
-		(e-ident @3.34-3.36 (raw "_b"))
+		(s-malformed @3.25-3.27 (tag "statement_unexpected_token"))
+		(s-malformed @3.28-3.30 (tag "statement_unexpected_token"))
+		(s-malformed @3.31-3.33 (tag "statement_unexpected_token"))
+		(s-malformed @3.34-3.36 (tag "statement_unexpected_token"))
 		(s-decl @4.1-4.29
 			(p-ident @4.1-4.11 (raw "runEffect!"))
 			(e-lambda @4.14-4.29
@@ -139,8 +117,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
 runEffect! : (_a => _b)
-_a
-_b
+
 runEffect! = |fn!, x| fn!(x)
 
 main! = |_| {}

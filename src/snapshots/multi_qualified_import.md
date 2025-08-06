@@ -21,29 +21,29 @@ data : json.Core.Utf8.EncodedData
 data = json.Core.Utf8.encode("hello")
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:3:17:3:22
-UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:3:23:3:31
-UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:12:14:17
-UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:17:14:22
-UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:22:14:29
+PARSE ERROR - multi_qualified_import.md:3:17:3:22
+PARSE ERROR - multi_qualified_import.md:3:23:3:31
+PARSE ERROR - multi_qualified_import.md:3:32:3:33
+PARSE ERROR - multi_qualified_import.md:3:40:3:41
+PARSE ERROR - multi_qualified_import.md:14:12:14:17
+PARSE ERROR - multi_qualified_import.md:14:17:14:22
+PARSE ERROR - multi_qualified_import.md:14:22:14:29
+PARSE ERROR - multi_qualified_import.md:14:29:14:30
+PARSE ERROR - multi_qualified_import.md:14:30:14:31
+PARSE ERROR - multi_qualified_import.md:14:31:14:36
+PARSE ERROR - multi_qualified_import.md:14:36:14:37
+PARSE ERROR - multi_qualified_import.md:14:37:14:38
 MODULE NOT FOUND - multi_qualified_import.md:3:1:3:17
-INVALID STATEMENT - multi_qualified_import.md:3:17:3:22
-INVALID STATEMENT - multi_qualified_import.md:3:23:3:31
-INVALID STATEMENT - multi_qualified_import.md:3:32:3:41
 UNDECLARED TYPE - multi_qualified_import.md:5:16:5:23
 UNDEFINED VARIABLE - multi_qualified_import.md:6:16:6:45
 MODULE NOT IMPORTED - multi_qualified_import.md:9:11:9:33
 UNUSED VARIABLE - multi_qualified_import.md:10:12:10:19
 MODULE NOT IMPORTED - multi_qualified_import.md:13:8:13:34
 UNDEFINED VARIABLE - multi_qualified_import.md:14:8:14:12
-INVALID STATEMENT - multi_qualified_import.md:14:12:14:17
-INVALID STATEMENT - multi_qualified_import.md:14:17:14:22
-INVALID STATEMENT - multi_qualified_import.md:14:22:14:29
-INVALID STATEMENT - multi_qualified_import.md:14:29:14:38
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Utf8** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **multi_qualified_import.md:3:17:3:22:**
@@ -53,9 +53,9 @@ import json.Core.Utf8 exposing [Encoder]
                 ^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **exposing** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **multi_qualified_import.md:3:23:3:31:**
@@ -65,9 +65,45 @@ import json.Core.Utf8 exposing [Encoder]
                       ^^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Core** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**multi_qualified_import.md:3:32:3:33:**
+```roc
+import json.Core.Utf8 exposing [Encoder]
+```
+                               ^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+Here is the problematic code:
+**multi_qualified_import.md:3:40:3:41:**
+```roc
+import json.Core.Utf8 exposing [Encoder]
+```
+                                       ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **multi_qualified_import.md:14:12:14:17:**
@@ -77,9 +113,9 @@ data = json.Core.Utf8.encode("hello")
            ^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Utf8** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **multi_qualified_import.md:14:17:14:22:**
@@ -89,9 +125,9 @@ data = json.Core.Utf8.encode("hello")
                 ^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.encode** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **multi_qualified_import.md:14:22:14:29:**
@@ -99,6 +135,66 @@ Here is the problematic code:
 data = json.Core.Utf8.encode("hello")
 ```
                      ^^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**multi_qualified_import.md:14:29:14:30:**
+```roc
+data = json.Core.Utf8.encode("hello")
+```
+                            ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**multi_qualified_import.md:14:30:14:31:**
+```roc
+data = json.Core.Utf8.encode("hello")
+```
+                             ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**multi_qualified_import.md:14:31:14:36:**
+```roc
+data = json.Core.Utf8.encode("hello")
+```
+                              ^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**multi_qualified_import.md:14:36:14:37:**
+```roc
+data = json.Core.Utf8.encode("hello")
+```
+                                   ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**multi_qualified_import.md:14:37:14:38:**
+```roc
+data = json.Core.Utf8.encode("hello")
+```
+                                    ^
 
 
 **MODULE NOT FOUND**
@@ -110,39 +206,6 @@ You're attempting to use this module here:
 import json.Core.Utf8 exposing [Encoder]
 ```
 ^^^^^^^^^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**multi_qualified_import.md:3:17:3:22:**
-```roc
-import json.Core.Utf8 exposing [Encoder]
-```
-                ^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**multi_qualified_import.md:3:23:3:31:**
-```roc
-import json.Core.Utf8 exposing [Encoder]
-```
-                      ^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**multi_qualified_import.md:3:32:3:41:**
-```roc
-import json.Core.Utf8 exposing [Encoder]
-```
-                               ^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -232,50 +295,6 @@ data = json.Core.Utf8.encode("hello")
        ^^^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**multi_qualified_import.md:14:12:14:17:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-           ^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**multi_qualified_import.md:14:17:14:22:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                ^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**multi_qualified_import.md:14:22:14:29:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                     ^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**multi_qualified_import.md:14:29:14:38:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                            ^^^^^^^^^
-
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:21),CloseSquare(1:21-1:22),
@@ -296,10 +315,10 @@ LowerIdent(14:1-14:5),OpAssign(14:6-14:7),LowerIdent(14:8-14:12),NoSpaceDotUpper
 				(text "json_encoder"))))
 	(statements
 		(s-import @3.1-3.17 (raw "json.Core"))
-		(e-malformed @3.17-3.22 (reason "expr_unexpected_token"))
-		(e-malformed @3.23-3.31 (reason "expr_unexpected_token"))
-		(e-list @3.32-3.41
-			(e-tag @3.33-3.40 (raw "Encoder")))
+		(s-malformed @3.17-3.22 (tag "statement_unexpected_token"))
+		(s-malformed @3.23-3.31 (tag "statement_unexpected_token"))
+		(s-malformed @3.32-3.33 (tag "statement_unexpected_token"))
+		(s-malformed @3.33-3.41 (tag "expected_colon_after_type_annotation"))
 		(s-type-anno @5.1-5.23 (name "json_encoder")
 			(ty @5.16-5.23 (name "Encoder")))
 		(s-decl @6.1-6.45
@@ -321,19 +340,21 @@ LowerIdent(14:1-14:5),OpAssign(14:6-14:7),LowerIdent(14:8-14:12),NoSpaceDotUpper
 		(s-decl @14.1-14.12
 			(p-ident @14.1-14.5 (raw "data"))
 			(e-ident @14.8-14.12 (raw "json")))
-		(e-malformed @14.12-14.17 (reason "expr_unexpected_token"))
-		(e-malformed @14.17-14.22 (reason "expr_unexpected_token"))
-		(e-malformed @14.22-14.29 (reason "expr_unexpected_token"))
-		(e-tuple @14.29-14.38
-			(e-string @14.30-14.37
-				(e-string-part @14.31-14.36 (raw "hello"))))))
+		(s-malformed @14.12-14.17 (tag "statement_unexpected_token"))
+		(s-malformed @14.17-14.22 (tag "statement_unexpected_token"))
+		(s-malformed @14.22-14.29 (tag "statement_unexpected_token"))
+		(s-malformed @14.29-14.30 (tag "statement_unexpected_token"))
+		(s-malformed @14.30-14.31 (tag "statement_unexpected_token"))
+		(s-malformed @14.31-14.36 (tag "statement_unexpected_token"))
+		(s-malformed @14.36-14.37 (tag "statement_unexpected_token"))
+		(s-malformed @14.37-14.38 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
 module [json_encoder]
 
 import json.Core
-[Encoder]
+
 
 json_encoder : Encoder
 json_encoder = Json.Core.Utf8.defaultEncoder
@@ -345,7 +366,7 @@ process = |encoder| "processing"
 # Test with multiple qualifiers
 data : json.Core.Utf8.EncodedData
 data = json
-("hello")
+
 ~~~
 # CANONICALIZE
 ~~~clojure

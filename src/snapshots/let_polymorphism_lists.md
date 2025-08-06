@@ -37,14 +37,14 @@ main = |_| {
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:12:26:12:27
+PARSE ERROR - let_polymorphism_lists.md:12:28:12:41
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:13:26:13:27
+PARSE ERROR - let_polymorphism_lists.md:13:28:13:41
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:14:30:14:31
+PARSE ERROR - let_polymorphism_lists.md:14:32:14:45
 UNKNOWN OPERATOR - let_polymorphism_lists.md:12:16:12:27
-INVALID STATEMENT - let_polymorphism_lists.md:12:28:12:41
 UNKNOWN OPERATOR - let_polymorphism_lists.md:13:16:13:27
-INVALID STATEMENT - let_polymorphism_lists.md:13:28:13:41
 UNKNOWN OPERATOR - let_polymorphism_lists.md:14:18:14:31
-INVALID STATEMENT - let_polymorphism_lists.md:14:32:14:45
 UNDEFINED VARIABLE - let_polymorphism_lists.md:25:12:25:20
 UNDEFINED VARIABLE - let_polymorphism_lists.md:26:12:26:20
 UNDEFINED VARIABLE - let_polymorphism_lists.md:27:12:27:20
@@ -61,6 +61,18 @@ all_int_list = int_list ++ my_empty_list
                          ^
 
 
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**let_polymorphism_lists.md:12:28:12:41:**
+```roc
+all_int_list = int_list ++ my_empty_list
+```
+                           ^^^^^^^^^^^^^
+
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **+** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
@@ -71,6 +83,18 @@ Here is the problematic code:
 all_str_list = str_list ++ my_empty_list
 ```
                          ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**let_polymorphism_lists.md:13:28:13:41:**
+```roc
+all_str_list = str_list ++ my_empty_list
+```
+                           ^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -85,6 +109,18 @@ all_float_list = float_list ++ my_empty_list
                              ^
 
 
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**let_polymorphism_lists.md:14:32:14:45:**
+```roc
+all_float_list = float_list ++ my_empty_list
+```
+                               ^^^^^^^^^^^^^
+
+
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 
@@ -95,17 +131,6 @@ all_int_list = int_list ++ my_empty_list
                ^^^^^^^^^^^
 
 Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**let_polymorphism_lists.md:12:28:12:41:**
-```roc
-all_int_list = int_list ++ my_empty_list
-```
-                           ^^^^^^^^^^^^^
-
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
@@ -118,17 +143,6 @@ all_str_list = str_list ++ my_empty_list
 
 Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**let_polymorphism_lists.md:13:28:13:41:**
-```roc
-all_str_list = str_list ++ my_empty_list
-```
-                           ^^^^^^^^^^^^^
-
-
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 
@@ -139,17 +153,6 @@ all_float_list = float_list ++ my_empty_list
                  ^^^^^^^^^^^^^
 
 Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**let_polymorphism_lists.md:14:32:14:45:**
-```roc
-all_float_list = float_list ++ my_empty_list
-```
-                               ^^^^^^^^^^^^^
-
 
 **UNDEFINED VARIABLE**
 Nothing is named `len` in this scope.
@@ -246,19 +249,19 @@ CloseCurly(29:1-29:2),EndOfFile(29:2-29:2),
 			(e-binop @12.16-12.27 (op "+")
 				(e-ident @12.16-12.24 (raw "int_list"))
 				(e-malformed @12.26-12.27 (reason "expr_unexpected_token"))))
-		(e-ident @12.28-12.41 (raw "my_empty_list"))
+		(s-malformed @12.28-12.41 (tag "statement_unexpected_token"))
 		(s-decl @13.1-13.27
 			(p-ident @13.1-13.13 (raw "all_str_list"))
 			(e-binop @13.16-13.27 (op "+")
 				(e-ident @13.16-13.24 (raw "str_list"))
 				(e-malformed @13.26-13.27 (reason "expr_unexpected_token"))))
-		(e-ident @13.28-13.41 (raw "my_empty_list"))
+		(s-malformed @13.28-13.41 (tag "statement_unexpected_token"))
 		(s-decl @14.1-14.31
 			(p-ident @14.1-14.15 (raw "all_float_list"))
 			(e-binop @14.18-14.31 (op "+")
 				(e-ident @14.18-14.28 (raw "float_list"))
 				(e-malformed @14.30-14.31 (reason "expr_unexpected_token"))))
-		(e-ident @14.32-14.45 (raw "my_empty_list"))
+		(s-malformed @14.32-14.45 (tag "statement_unexpected_token"))
 		(s-decl @17.1-17.19
 			(p-ident @17.1-17.10 (raw "get_empty"))
 			(e-lambda @17.13-17.19
@@ -318,11 +321,11 @@ float_list = [1.1, 2.2, 3.3]
 
 # Append empty list (polymorphic use)
 all_int_list = int_list + 
-my_empty_list
+
 all_str_list = str_list + 
-my_empty_list
+
 all_float_list = float_list + 
-my_empty_list
+
 
 # Function returning empty list
 get_empty = |_| []
@@ -400,8 +403,8 @@ main = |_| {
 		(e-closure @23.8-29.2
 			(captures
 				(capture @12.1-12.13 (ident "all_int_list"))
-				(capture @13.1-13.13 (ident "all_str_list"))
-				(capture @14.1-14.15 (ident "all_float_list")))
+				(capture @14.1-14.15 (ident "all_float_list"))
+				(capture @13.1-13.13 (ident "all_str_list")))
 			(e-lambda @23.8-29.2
 				(args
 					(p-underscore @23.9-23.10))

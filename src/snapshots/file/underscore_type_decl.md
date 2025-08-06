@@ -18,22 +18,25 @@ PARSE ERROR - underscore_type_decl.md:5:1:5:6
 PARSE ERROR - underscore_type_decl.md:5:20:5:21
 PARSE ERROR - underscore_type_decl.md:5:23:5:24
 PARSE ERROR - underscore_type_decl.md:5:15:5:19
-UNEXPECTED TOKEN IN EXPRESSION - underscore_type_decl.md:6:7:6:8
-UNEXPECTED TOKEN IN EXPRESSION - underscore_type_decl.md:6:13:6:14
+PARSE ERROR - underscore_type_decl.md:6:6:6:7
+PARSE ERROR - underscore_type_decl.md:6:7:6:8
+PARSE ERROR - underscore_type_decl.md:6:8:6:9
+PARSE ERROR - underscore_type_decl.md:6:10:6:11
+PARSE ERROR - underscore_type_decl.md:6:11:6:12
+PARSE ERROR - underscore_type_decl.md:6:13:6:14
 PARSE ERROR - underscore_type_decl.md:6:20:6:21
 PARSE ERROR - underscore_type_decl.md:6:23:6:24
 PARSE ERROR - underscore_type_decl.md:6:15:6:19
-UNEXPECTED TOKEN IN EXPRESSION - underscore_type_decl.md:7:7:7:8
-UNEXPECTED TOKEN IN EXPRESSION - underscore_type_decl.md:7:10:7:11
-UNEXPECTED TOKEN IN EXPRESSION - underscore_type_decl.md:7:13:7:14
+PARSE ERROR - underscore_type_decl.md:7:6:7:7
+PARSE ERROR - underscore_type_decl.md:7:7:7:8
+PARSE ERROR - underscore_type_decl.md:7:8:7:9
+PARSE ERROR - underscore_type_decl.md:7:10:7:11
+PARSE ERROR - underscore_type_decl.md:7:11:7:12
+PARSE ERROR - underscore_type_decl.md:7:13:7:14
 PARSE ERROR - underscore_type_decl.md:7:20:7:21
 PARSE ERROR - underscore_type_decl.md:7:23:7:24
 PARSE ERROR - underscore_type_decl.md:7:15:7:19
 MODULE NOT FOUND - underscore_type_decl.md:3:1:3:30
-INVALID STATEMENT - underscore_type_decl.md:6:6:6:12
-INVALID STATEMENT - underscore_type_decl.md:6:13:6:14
-INVALID STATEMENT - underscore_type_decl.md:7:6:7:12
-INVALID STATEMENT - underscore_type_decl.md:7:13:7:14
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.
@@ -107,9 +110,21 @@ Pair1(x, _) = Pair(0, 1)
               ^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **_** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:6:6:6:7:**
+```roc
+Pair2(_, y) = Pair(0, 1)
+```
+     ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **underscore_type_decl.md:6:7:6:8:**
@@ -119,9 +134,45 @@ Pair2(_, y) = Pair(0, 1)
       ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:6:8:6:9:**
+```roc
+Pair2(_, y) = Pair(0, 1)
+```
+       ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:6:10:6:11:**
+```roc
+Pair2(_, y) = Pair(0, 1)
+```
+         ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:6:11:6:12:**
+```roc
+Pair2(_, y) = Pair(0, 1)
+```
+          ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **underscore_type_decl.md:6:13:6:14:**
@@ -179,9 +230,21 @@ Pair2(_, y) = Pair(0, 1)
               ^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **_** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:7:6:7:7:**
+```roc
+Pair3(_, _) = Pair(0, 1)
+```
+     ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **underscore_type_decl.md:7:7:7:8:**
@@ -191,9 +254,21 @@ Pair3(_, _) = Pair(0, 1)
       ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **_** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:7:8:7:9:**
+```roc
+Pair3(_, _) = Pair(0, 1)
+```
+       ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **underscore_type_decl.md:7:10:7:11:**
@@ -203,9 +278,21 @@ Pair3(_, _) = Pair(0, 1)
          ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:7:11:7:12:**
+```roc
+Pair3(_, _) = Pair(0, 1)
+```
+          ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **underscore_type_decl.md:7:13:7:14:**
@@ -274,50 +361,6 @@ import Module exposing [Pair]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_type_decl.md:6:6:6:12:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-     ^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_type_decl.md:6:13:6:14:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-            ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_type_decl.md:7:6:7:12:**
-```roc
-Pair3(_, _) = Pair(0, 1)
-```
-     ^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_type_decl.md:7:13:7:14:**
-```roc
-Pair3(_, _) = Pair(0, 1)
-```
-            ^
-
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
@@ -337,15 +380,19 @@ UpperIdent(7:1-7:6),NoSpaceOpenRound(7:6-7:7),Underscore(7:7-7:8),Comma(7:8-7:9)
 				(exposed-upper-ident @3.25-3.29 (text "Pair"))))
 		(s-malformed @5.1-5.14 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @5.15-6.6 (tag "expected_colon_after_type_annotation"))
-		(e-tuple @6.6-6.12
-			(e-malformed @6.7-6.8 (reason "expr_unexpected_token"))
-			(e-ident @6.10-6.11 (raw "y")))
-		(e-malformed @6.13-6.14 (reason "expr_unexpected_token"))
+		(s-malformed @6.6-6.7 (tag "statement_unexpected_token"))
+		(s-malformed @6.7-6.8 (tag "statement_unexpected_token"))
+		(s-malformed @6.8-6.9 (tag "statement_unexpected_token"))
+		(s-malformed @6.10-6.11 (tag "statement_unexpected_token"))
+		(s-malformed @6.11-6.12 (tag "statement_unexpected_token"))
+		(s-malformed @6.13-6.14 (tag "statement_unexpected_token"))
 		(s-malformed @6.15-7.6 (tag "expected_colon_after_type_annotation"))
-		(e-tuple @7.6-7.12
-			(e-malformed @7.7-7.8 (reason "expr_unexpected_token"))
-			(e-malformed @7.10-7.11 (reason "expr_unexpected_token")))
-		(e-malformed @7.13-7.14 (reason "expr_unexpected_token"))
+		(s-malformed @7.6-7.7 (tag "statement_unexpected_token"))
+		(s-malformed @7.7-7.8 (tag "statement_unexpected_token"))
+		(s-malformed @7.8-7.9 (tag "statement_unexpected_token"))
+		(s-malformed @7.10-7.11 (tag "statement_unexpected_token"))
+		(s-malformed @7.11-7.12 (tag "statement_unexpected_token"))
+		(s-malformed @7.13-7.14 (tag "statement_unexpected_token"))
 		(s-malformed @7.15-7.25 (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
@@ -354,8 +401,6 @@ module []
 
 import Module exposing [Pair]
 
-(, y)
-(, )
 
 ~~~
 # CANONICALIZE

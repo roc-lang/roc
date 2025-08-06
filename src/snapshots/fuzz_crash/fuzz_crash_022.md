@@ -17,17 +17,15 @@ getUser = |id| if (id > 1!) "big" else "l"
 # EXPECTED
 PARSE ERROR - fuzz_crash_022.md:1:1:1:4
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_022.md:1:19:1:27
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:1:32:1:33
+PARSE ERROR - fuzz_crash_022.md:1:28:1:29
+PARSE ERROR - fuzz_crash_022.md:1:29:1:30
+PARSE ERROR - fuzz_crash_022.md:1:30:1:31
+PARSE ERROR - fuzz_crash_022.md:1:32:1:33
 PARSE ERROR - fuzz_crash_022.md:6:27:6:28
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:8:7:8:8
+PARSE ERROR - fuzz_crash_022.md:8:1:8:2
 MALFORMED TYPE - fuzz_crash_022.md:1:19:1:27
-INVALID STATEMENT - fuzz_crash_022.md:1:28:1:31
-INVALID STATEMENT - fuzz_crash_022.md:1:32:1:33
 INVALID IF CONDITION - :0:0:0:0
 UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
-INVALID STATEMENT - fuzz_crash_022.md:8:1:8:6
-INVALID STATEMENT - fuzz_crash_022.md:8:7:8:8
-INVALID STATEMENT - fuzz_crash_022.md:8:9:8:25
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_package_or_platform_name`
@@ -53,9 +51,45 @@ app [main!] { |f: platform "c" }
                   ^^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_022.md:1:28:1:29:**
+```roc
+app [main!] { |f: platform "c" }
+```
+                           ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_022.md:1:29:1:30:**
+```roc
+app [main!] { |f: platform "c" }
+```
+                            ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_022.md:1:30:1:31:**
+```roc
+app [main!] { |f: platform "c" }
+```
+                             ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_022.md:1:32:1:33:**
@@ -77,16 +111,16 @@ getUser = |id| if (id > 1!) "big" else "l"
                           ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_022.md:8:7:8:8:**
+**fuzz_crash_022.md:8:1:8:2:**
 ```roc
 -ain! = |_| getUser(900)
 ```
-      ^
+^
 
 
 **MALFORMED TYPE**
@@ -97,28 +131,6 @@ This type annotation is malformed or contains invalid syntax.
 app [main!] { |f: platform "c" }
 ```
                   ^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_022.md:1:28:1:31:**
-```roc
-app [main!] { |f: platform "c" }
-```
-                           ^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_022.md:1:32:1:33:**
-```roc
-app [main!] { |f: platform "c" }
-```
-                               ^
 
 
 **INVALID IF CONDITION**
@@ -138,39 +150,6 @@ getUser = |id| if (id > 1!) "big" else "l"
            ^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_022.md:8:1:8:6:**
-```roc
--ain! = |_| getUser(900)
-```
-^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_022.md:8:7:8:8:**
-```roc
--ain! = |_| getUser(900)
-```
-      ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_022.md:8:9:8:25:**
-```roc
--ain! = |_| getUser(900)
-```
-        ^^^^^^^^^^^^^^^^
-
-
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),OpBar(1:15-1:16),LowerIdent(1:16-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:30),StringEnd(1:30-1:31),CloseCurly(1:32-1:33),
@@ -186,9 +165,10 @@ OpUnaryMinus(8:1-8:2),LowerIdent(8:2-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Unde
 	(statements
 		(s-type-anno @1.16-1.27 (name "f")
 			(ty-malformed @1.19-1.27 (tag "ty_anno_unexpected_token")))
-		(e-string @1.28-1.31
-			(e-string-part @1.29-1.30 (raw "c")))
-		(e-malformed @1.32-1.33 (reason "expr_unexpected_token"))
+		(s-malformed @1.28-1.29 (tag "statement_unexpected_token"))
+		(s-malformed @1.29-1.30 (tag "statement_unexpected_token"))
+		(s-malformed @1.30-1.31 (tag "statement_unexpected_token"))
+		(s-malformed @1.32-1.33 (tag "statement_unexpected_token"))
 		(s-type-decl @3.1-3.13
 			(header @3.1-3.7 (name "UserId")
 				(args))
@@ -208,20 +188,19 @@ OpUnaryMinus(8:1-8:2),LowerIdent(8:2-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Unde
 						(e-string-part @6.30-6.33 (raw "big")))
 					(e-string @6.40-6.43
 						(e-string-part @6.41-6.42 (raw "l"))))))
-		(unary "-"
-			(e-ident @8.2-8.6 (raw "ain!")))
-		(e-malformed @8.7-8.8 (reason "expr_unexpected_token"))
-		(e-lambda @8.9-8.25
-			(args
-				(p-underscore))
-			(e-apply @8.13-8.25
-				(e-ident @8.13-8.20 (raw "getUser"))
-				(e-int @8.21-8.24 (raw "900"))))))
+		(s-malformed @8.1-8.2 (tag "statement_unexpected_token"))
+		(s-decl @8.2-8.25
+			(p-ident @8.2-8.6 (raw "ain!"))
+			(e-lambda @8.9-8.25
+				(args
+					(p-underscore))
+				(e-apply @8.13-8.25
+					(e-ident @8.13-8.20 (raw "getUser"))
+					(e-int @8.21-8.24 (raw "900")))))))
 ~~~
 # FORMATTED
 ~~~roc
 f : 
-"c"
 
 
 UserId : U64
@@ -229,8 +208,7 @@ UserId : U64
 ser : UserId -> Str
 getUser = |id| if  "big" else "l"
 
--ain!
-|_| getUser(900)
+ain! = |_| getUser(900)
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -241,6 +219,18 @@ getUser = |id| if  "big" else "l"
 			(args
 				(p-assign @6.12-6.14 (ident "id")))
 			(e-runtime-error (tag "if_condition_not_canonicalized"))))
+	(d-let
+		(p-assign @8.2-8.6 (ident "ain!"))
+		(e-closure @8.9-8.25
+			(captures
+				(capture @6.1-6.8 (ident "getUser")))
+			(e-lambda @8.9-8.25
+				(args
+					(p-underscore @8.10-8.11))
+				(e-call @8.13-8.25
+					(e-lookup-local @8.13-8.20
+						(p-assign @6.1-6.8 (ident "getUser")))
+					(e-int @8.21-8.24 (value "900"))))))
 	(s-alias-decl @3.1-3.13
 		(ty-header @3.1-3.7 (name "UserId"))
 		(ty @3.10-3.13 (name "U64"))))
@@ -249,10 +239,12 @@ getUser = |id| if  "big" else "l"
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.8 (type "_arg -> Error")))
+		(patt @6.1-6.8 (type "_arg -> Error"))
+		(patt @8.2-8.6 (type "_arg -> Error")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
 			(ty-header @3.1-3.7 (name "UserId"))))
 	(expressions
-		(expr @6.11-6.43 (type "_arg -> Error"))))
+		(expr @6.11-6.43 (type "_arg -> Error"))
+		(expr @8.9-8.25 (type "_arg -> Error"))))
 ~~~

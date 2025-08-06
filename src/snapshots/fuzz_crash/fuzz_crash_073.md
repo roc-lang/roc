@@ -9,14 +9,39 @@ module[]!0.t
 ~~~
 # EXPECTED
 ASCII CONTROL CHARACTER - :0:0:0:0
+PARSE ERROR - fuzz_crash_073.md:1:9:1:10
+PARSE ERROR - fuzz_crash_073.md:1:10:1:11
 PARSE ERROR - fuzz_crash_073.md:1:12:1:14
-INVALID STATEMENT - fuzz_crash_073.md:1:9:1:14
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
 
 **PARSE ERROR**
-A parsing error occurred: `expr_dot_suffix_not_allowed`
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_073.md:1:9:1:10:**
+```roc
+module[]!0.t
+```
+        ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_073.md:1:10:1:11:**
+```roc
+module[]!0.t
+```
+         ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
@@ -25,17 +50,6 @@ Here is the problematic code:
 module[]!0.t
 ```
            ^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_073.md:1:9:1:14:**
-```roc
-module[]!0.t
-```
-        ^^^^^
 
 
 # TOKENS
@@ -48,13 +62,14 @@ KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),OpBang(1:9-1:10),Int(
 	(module @1.1-1.9
 		(exposes @1.7-1.9))
 	(statements
-		(unary "!"
-			(e-malformed @1.12-1.14 (reason "expr_dot_suffix_not_allowed")))))
+		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
+		(s-malformed @1.10-1.11 (tag "statement_unexpected_token"))
+		(s-malformed @1.12-1.14 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
 module []
-!
+
 ~~~
 # CANONICALIZE
 ~~~clojure

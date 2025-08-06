@@ -10,8 +10,8 @@ type=file
 # EXPECTED
 ASCII CONTROL CHARACTER - :0:0:0:0
 MISSING HEADER - fuzz_crash_008.md:1:1:1:2
-PARSE ERROR - fuzz_crash_008.md:1:5:1:5
-INVALID STATEMENT - fuzz_crash_008.md:1:3:1:5
+PARSE ERROR - fuzz_crash_008.md:1:3:1:4
+PARSE ERROR - fuzz_crash_008.md:1:4:1:5
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -33,26 +33,27 @@ Here is the problematic code:
 
 
 **PARSE ERROR**
-A parsing error occurred: `expected_expr_bar`
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_008.md:1:5:1:5:**
+**fuzz_crash_008.md:1:3:1:4:**
 ```roc
 ||1
 ```
-    
+  ^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_008.md:1:3:1:5:**
+Here is the problematic code:
+**fuzz_crash_008.md:1:4:1:5:**
 ```roc
 ||1
 ```
-  ^^
+   ^
 
 
 # TOKENS
@@ -64,7 +65,8 @@ OpBar(1:1-1:2),OpBar(1:3-1:4),Int(1:4-1:5),EndOfFile(1:5-1:5),
 (file @1.1-1.5
 	(malformed-header @1.1-1.2 (tag "missing_header"))
 	(statements
-		(e-malformed @1.5-1.5 (reason "expected_expr_bar"))))
+		(s-malformed @1.3-1.4 (tag "statement_unexpected_token"))
+		(s-malformed @1.4-1.5 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

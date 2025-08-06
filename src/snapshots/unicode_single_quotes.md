@@ -45,7 +45,7 @@ UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:15:5:15:7
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:16:5:16:11
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:17:5:17:9
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:20:5:20:7
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:23:1:23:3
+PARSE ERROR - unicode_single_quotes.md:23:1:23:3
 INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
@@ -55,7 +55,6 @@ INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 UNKNOWN OPERATOR - unicode_single_quotes.md:20:5:20:7
-INVALID STATEMENT - unicode_single_quotes.md:23:1:23:3
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
@@ -183,9 +182,9 @@ y = 'u
     ^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **unicode_single_quotes.md:23:1:23:3:**
@@ -229,17 +228,6 @@ y = 'u
     ^^
 
 Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**unicode_single_quotes.md:23:1:23:3:**
-```roc
-'\
-```
-^^
-
 
 # TOKENS
 ~~~zig
@@ -289,7 +277,7 @@ MalformedSingleQuoteUnclosed(23:1-23:3),EndOfFile(23:3-23:3),
 		(s-decl @20.1-20.7
 			(p-ident @20.1-20.2 (raw "y"))
 			(e-malformed @20.5-20.7 (reason "expr_unexpected_token")))
-		(e-malformed @23.1-23.3 (reason "expr_unexpected_token"))))
+		(s-malformed @23.1-23.3 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

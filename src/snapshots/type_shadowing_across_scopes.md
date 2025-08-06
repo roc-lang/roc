@@ -21,13 +21,11 @@ InnerModule : {
 # EXPECTED
 PARSE ERROR - type_shadowing_across_scopes.md:11:5:11:11
 PARSE ERROR - type_shadowing_across_scopes.md:11:24:11:31
-UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:11:31:11:32
-UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:12:1:12:2
+PARSE ERROR - type_shadowing_across_scopes.md:11:31:11:32
+PARSE ERROR - type_shadowing_across_scopes.md:12:1:12:2
 TYPE REDECLARED - type_shadowing_across_scopes.md:3:1:3:31
 MALFORMED TYPE - type_shadowing_across_scopes.md:11:24:11:31
 UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
-INVALID STATEMENT - type_shadowing_across_scopes.md:11:31:11:32
-INVALID STATEMENT - type_shadowing_across_scopes.md:12:1:12:2
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_type_field_name`
@@ -53,9 +51,9 @@ Here is the problematic code:
                        ^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **]** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **type_shadowing_across_scopes.md:11:31:11:32:**
@@ -65,9 +63,9 @@ Here is the problematic code:
                               ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **type_shadowing_across_scopes.md:12:1:12:2:**
@@ -115,28 +113,6 @@ The unused variable is declared here:
 processData = |data|
 ```
                ^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_shadowing_across_scopes.md:11:31:11:32:**
-```roc
-    Result : [Success, Failure]
-```
-                              ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_shadowing_across_scopes.md:12:1:12:2:**
-```roc
-}
-```
-^
 
 
 # TOKENS
@@ -187,8 +163,8 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 			(header @10.1-10.12 (name "InnerModule")
 				(args))
 			(ty-malformed @11.24-11.31 (tag "expected_ty_close_curly_or_comma")))
-		(e-malformed @11.31-11.32 (reason "expr_unexpected_token"))
-		(e-malformed @12.1-12.2 (reason "expr_unexpected_token"))))
+		(s-malformed @11.31-11.32 (tag "statement_unexpected_token"))
+		(s-malformed @12.1-12.2 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

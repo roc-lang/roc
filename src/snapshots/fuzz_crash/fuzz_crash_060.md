@@ -11,23 +11,165 @@ module[]C:k||match 0{0|#
 ~~~
 # EXPECTED
 UNCLOSED STRING - :0:0:0:0
-PARSE ERROR - fuzz_crash_060.md:2:2:2:2
+PARSE ERROR - fuzz_crash_060.md:1:12:1:13
+PARSE ERROR - fuzz_crash_060.md:1:13:1:14
+PARSE ERROR - fuzz_crash_060.md:1:14:1:19
+PARSE ERROR - fuzz_crash_060.md:1:20:1:21
+PARSE ERROR - fuzz_crash_060.md:1:21:1:22
+PARSE ERROR - fuzz_crash_060.md:1:22:1:23
+PARSE ERROR - fuzz_crash_060.md:1:23:1:24
+PARSE ERROR - fuzz_crash_060.md:2:1:2:2
+PARSE ERROR - fuzz_crash_060.md:2:2:2:3
+PARSE ERROR - fuzz_crash_060.md:2:3:2:3
+PARSE ERROR - fuzz_crash_060.md:2:3:2:3
+PARSE ERROR - fuzz_crash_060.md:3:1:3:2
 UNDECLARED TYPE VARIABLE - fuzz_crash_060.md:1:11:1:12
-INVALID STATEMENT - fuzz_crash_060.md:1:12:3:2
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
 
 **PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_060.md:2:2:2:2:**
+**fuzz_crash_060.md:1:12:1:13:**
+```roc
+module[]C:k||match 0{0|#
+```
+           ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_060.md:1:13:1:14:**
+```roc
+module[]C:k||match 0{0|#
+```
+            ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_060.md:1:14:1:19:**
+```roc
+module[]C:k||match 0{0|#
+```
+             ^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_060.md:1:20:1:21:**
+```roc
+module[]C:k||match 0{0|#
+```
+                   ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_060.md:1:21:1:22:**
+```roc
+module[]C:k||match 0{0|#
+```
+                    ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_060.md:1:22:1:23:**
+```roc
+module[]C:k||match 0{0|#
+```
+                     ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_060.md:1:23:1:24:**
+```roc
+module[]C:k||match 0{0|#
+```
+                      ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_060.md:2:1:2:2:**
 ```roc
 0"
 ```
- 
+^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_060.md:2:2:2:3:**
+```roc
+0"
+```
+ ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_060.md:2:3:2:3:**
+```roc
+0"
+```
+  
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_060.md:2:3:2:3:**
+```roc
+0"
+```
+  
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_060.md:3:1:3:2:**
+```roc
+}
+```
+^
 
 
 **UNDECLARED TYPE VARIABLE**
@@ -41,18 +183,6 @@ This type variable is referenced here:
 module[]C:k||match 0{0|#
 ```
           ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_060.md:1:12:3:2:**
-```roc
-module[]C:k||match 0{0|#
-0"
-}
-```
 
 
 # TOKENS
@@ -71,27 +201,26 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 			(header @1.9-1.10 (name "C")
 				(args))
 			(ty-var @1.11-1.12 (raw "k")))
-		(e-lambda @1.12-3.2
-			(args)
-			(e-match
-				(e-int @1.20-1.21 (raw "0"))
-				(branches
-					(branch @1.22-2.3
-						(p-alternatives
-							(p-int @1.22-1.23 (raw "0"))
-							(p-int @2.1-2.2 (raw "0")))
-						(e-string @2.2-2.3
-							(e-string-part @2.3-2.3 (raw "")))))))))
+		(s-malformed @1.12-1.13 (tag "statement_unexpected_token"))
+		(s-malformed @1.13-1.14 (tag "statement_unexpected_token"))
+		(s-malformed @1.14-1.19 (tag "statement_unexpected_token"))
+		(s-malformed @1.20-1.21 (tag "statement_unexpected_token"))
+		(s-malformed @1.21-1.22 (tag "statement_unexpected_token"))
+		(s-malformed @1.22-1.23 (tag "statement_unexpected_token"))
+		(s-malformed @1.23-1.24 (tag "statement_unexpected_token"))
+		(s-malformed @2.1-2.2 (tag "statement_unexpected_token"))
+		(s-malformed @2.2-2.3 (tag "statement_unexpected_token"))
+		(s-malformed @2.3-2.3 (tag "statement_unexpected_token"))
+		(s-malformed @2.3-2.3 (tag "statement_unexpected_token"))
+		(s-malformed @3.1-3.2 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
 module []
 C : k
-|| match 0 {
-	0
-	|
-		0 => ""
-}
+
+
+
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -8,12 +8,13 @@ type=file
 module[]s:b->c where module(a).t:c,u:o...
 ~~~
 # EXPECTED
-INVALID STATEMENT - fuzz_crash_057.md:1:39:1:42
+PARSE ERROR - fuzz_crash_057.md:1:39:1:42
 # PROBLEMS
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
+Here is the problematic code:
 **fuzz_crash_057.md:1:39:1:42:**
 ```roc
 module[]s:b->c where module(a).t:c,u:o...
@@ -41,14 +42,14 @@ KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),LowerIdent(1:9-1:10),
 					(ty-var @1.34-1.35 (raw "c")))))
 		(s-type-anno @1.36-1.39 (name "u")
 			(ty-var @1.38-1.39 (raw "o")))
-		(e-ellipsis)))
+		(s-malformed @1.39-1.42 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
 module []
 s : b -> c where module(a).t : c
 u : o
-...
+
 ~~~
 # CANONICALIZE
 ~~~clojure

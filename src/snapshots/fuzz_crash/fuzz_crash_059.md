@@ -9,9 +9,112 @@ app[]{f:platform""}import	B	as
 G	if 0{}else||0
 ~~~
 # EXPECTED
+PARSE ERROR - fuzz_crash_059.md:2:3:2:5
+PARSE ERROR - fuzz_crash_059.md:2:6:2:7
+PARSE ERROR - fuzz_crash_059.md:2:7:2:8
+PARSE ERROR - fuzz_crash_059.md:2:8:2:9
+PARSE ERROR - fuzz_crash_059.md:2:9:2:13
+PARSE ERROR - fuzz_crash_059.md:2:13:2:14
+PARSE ERROR - fuzz_crash_059.md:2:14:2:15
+PARSE ERROR - fuzz_crash_059.md:2:15:2:16
 MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
-INVALID STATEMENT - fuzz_crash_059.md:2:3:2:16
 # PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_059.md:2:3:2:5:**
+```roc
+G	if 0{}else||0
+```
+  ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_059.md:2:6:2:7:**
+```roc
+G	if 0{}else||0
+```
+     ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_059.md:2:7:2:8:**
+```roc
+G	if 0{}else||0
+```
+      ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_059.md:2:8:2:9:**
+```roc
+G	if 0{}else||0
+```
+       ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_059.md:2:9:2:13:**
+```roc
+G	if 0{}else||0
+```
+        ^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_059.md:2:13:2:14:**
+```roc
+G	if 0{}else||0
+```
+            ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_059.md:2:14:2:15:**
+```roc
+G	if 0{}else||0
+```
+             ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_059.md:2:15:2:16:**
+```roc
+G	if 0{}else||0
+```
+              ^
+
+
 **MODULE NOT FOUND**
 The module `B` was not found in this Roc project.
 
@@ -21,17 +124,6 @@ You're attempting to use this module here:
 app[]{f:platform""}import	B	as
 G	if 0{}else||0
 ```
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_059.md:2:3:2:16:**
-```roc
-G	if 0{}else||0
-```
-  ^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -53,19 +145,21 @@ UpperIdent(2:1-2:2),KwIf(2:3-2:5),Int(2:6-2:7),OpenCurly(2:7-2:8),CloseCurly(2:8
 					(e-string-part @1.18-1.18 (raw ""))))))
 	(statements
 		(s-import @1.20-2.2 (raw "B") (alias "G"))
-		(e-if-then-else @2.3-2.16
-			(e-int @2.6-2.7 (raw "0"))
-			(e-record @2.7-2.9)
-			(e-lambda @2.13-2.16
-				(args)
-				(e-int @2.15-2.16 (raw "0"))))))
+		(s-malformed @2.3-2.5 (tag "statement_unexpected_token"))
+		(s-malformed @2.6-2.7 (tag "statement_unexpected_token"))
+		(s-malformed @2.7-2.8 (tag "statement_unexpected_token"))
+		(s-malformed @2.8-2.9 (tag "statement_unexpected_token"))
+		(s-malformed @2.9-2.13 (tag "statement_unexpected_token"))
+		(s-malformed @2.13-2.14 (tag "statement_unexpected_token"))
+		(s-malformed @2.14-2.15 (tag "statement_unexpected_token"))
+		(s-malformed @2.15-2.16 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
 app [] { f: platform "" }
 import B as
 G
-if 0 {} else || 0
+
 ~~~
 # CANONICALIZE
 ~~~clojure

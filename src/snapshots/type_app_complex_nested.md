@@ -17,7 +17,9 @@ processComplex = |result|
 
 # Test multiple levels of nesting
 deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
-deepNested = |_| crash "not implemented"
+deepNested = |_| {
+	crash "not implemented"
+}
 
 # Test type alias with complex nesting
 ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
@@ -25,33 +27,18 @@ ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_app_complex_nested.md:13:18:13:23
-UNDECLARED TYPE - type_app_complex_nested.md:16:33:16:38
-UNDECLARED TYPE - type_app_complex_nested.md:16:54:16:59
+UNDECLARED TYPE - type_app_complex_nested.md:18:33:18:38
+UNDECLARED TYPE - type_app_complex_nested.md:18:54:18:59
 UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
 UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
-INVALID LAMBDA - :0:0:0:0
-INVALID STATEMENT - type_app_complex_nested.md:13:24:13:41
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **crash** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_app_complex_nested.md:13:18:13:23:**
-```roc
-deepNested = |_| crash "not implemented"
-```
-                 ^^^^^
-
-
 **UNDECLARED TYPE**
 The type _Maybe_ is not declared in this scope.
 
 This type is referenced here:
-**type_app_complex_nested.md:16:33:16:38:**
+**type_app_complex_nested.md:18:33:18:38:**
 ```roc
 ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 ```
@@ -62,7 +49,7 @@ ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 The type _Error_ is not declared in this scope.
 
 This type is referenced here:
-**type_app_complex_nested.md:16:54:16:59:**
+**type_app_complex_nested.md:18:54:18:59:**
 ```roc
 ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 ```
@@ -114,20 +101,6 @@ deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
              ^^^^^
 
 
-**INVALID LAMBDA**
-The body of this lambda expression is not valid.
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_app_complex_nested.md:13:24:13:41:**
-```roc
-deepNested = |_| crash "not implemented"
-```
-                       ^^^^^^^^^^^^^^^^^
-
-
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
@@ -138,13 +111,15 @@ UpperIdent(7:9-7:11),NoSpaceOpenRound(7:11-7:12),LowerIdent(7:12-7:21),CloseRoun
 UpperIdent(8:9-8:12),NoSpaceOpenRound(8:12-8:13),Underscore(8:13-8:14),CloseRound(8:14-8:15),OpFatArrow(8:16-8:18),OpenSquare(8:19-8:20),CloseSquare(8:20-8:21),
 CloseCurly(9:5-9:6),
 LowerIdent(12:1-12:11),OpColon(12:12-12:13),UpperIdent(12:14-12:19),NoSpaceOpenRound(12:19-12:20),UpperIdent(12:20-12:26),NoSpaceOpenRound(12:26-12:27),UpperIdent(12:27-12:31),NoSpaceOpenRound(12:31-12:32),UpperIdent(12:32-12:36),NoSpaceOpenRound(12:36-12:37),UpperIdent(12:37-12:40),Comma(12:40-12:41),LowerIdent(12:42-12:43),CloseRound(12:43-12:44),CloseRound(12:44-12:45),Comma(12:45-12:46),NamedUnderscore(12:47-12:49),CloseRound(12:49-12:50),CloseRound(12:50-12:51),OpArrow(12:52-12:54),LowerIdent(12:55-12:56),
-LowerIdent(13:1-13:11),OpAssign(13:12-13:13),OpBar(13:14-13:15),Underscore(13:15-13:16),OpBar(13:16-13:17),KwCrash(13:18-13:23),StringStart(13:24-13:25),StringPart(13:25-13:40),StringEnd(13:40-13:41),
-UpperIdent(16:1-16:12),NoSpaceOpenRound(16:12-16:13),LowerIdent(16:13-16:14),Comma(16:14-16:15),LowerIdent(16:16-16:17),CloseRound(16:17-16:18),OpColon(16:19-16:20),UpperIdent(16:21-16:27),NoSpaceOpenRound(16:27-16:28),UpperIdent(16:28-16:32),NoSpaceOpenRound(16:32-16:33),UpperIdent(16:33-16:38),NoSpaceOpenRound(16:38-16:39),LowerIdent(16:39-16:40),CloseRound(16:40-16:41),CloseRound(16:41-16:42),Comma(16:42-16:43),UpperIdent(16:44-16:48),NoSpaceOpenRound(16:48-16:49),UpperIdent(16:49-16:52),Comma(16:52-16:53),UpperIdent(16:54-16:59),NoSpaceOpenRound(16:59-16:60),LowerIdent(16:60-16:61),CloseRound(16:61-16:62),CloseRound(16:62-16:63),CloseRound(16:63-16:64),
-LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:11),OpBar(18:11-18:12),LowerIdent(18:13-18:27),NoSpaceOpenRound(18:27-18:28),UpperIdent(18:28-18:30),NoSpaceOpenRound(18:30-18:31),OpenSquare(18:31-18:32),UpperIdent(18:32-18:36),NoSpaceOpenRound(18:36-18:37),Int(18:37-18:39),CloseRound(18:39-18:40),Comma(18:40-18:41),UpperIdent(18:42-18:46),CloseSquare(18:46-18:47),CloseRound(18:47-18:48),CloseRound(18:48-18:49),EndOfFile(18:49-18:49),
+LowerIdent(13:1-13:11),OpAssign(13:12-13:13),OpBar(13:14-13:15),Underscore(13:15-13:16),OpBar(13:16-13:17),OpenCurly(13:18-13:19),
+KwCrash(14:2-14:7),StringStart(14:8-14:9),StringPart(14:9-14:24),StringEnd(14:24-14:25),
+CloseCurly(15:1-15:2),
+UpperIdent(18:1-18:12),NoSpaceOpenRound(18:12-18:13),LowerIdent(18:13-18:14),Comma(18:14-18:15),LowerIdent(18:16-18:17),CloseRound(18:17-18:18),OpColon(18:19-18:20),UpperIdent(18:21-18:27),NoSpaceOpenRound(18:27-18:28),UpperIdent(18:28-18:32),NoSpaceOpenRound(18:32-18:33),UpperIdent(18:33-18:38),NoSpaceOpenRound(18:38-18:39),LowerIdent(18:39-18:40),CloseRound(18:40-18:41),CloseRound(18:41-18:42),Comma(18:42-18:43),UpperIdent(18:44-18:48),NoSpaceOpenRound(18:48-18:49),UpperIdent(18:49-18:52),Comma(18:52-18:53),UpperIdent(18:54-18:59),NoSpaceOpenRound(18:59-18:60),LowerIdent(18:60-18:61),CloseRound(18:61-18:62),CloseRound(18:62-18:63),CloseRound(18:63-18:64),
+LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:11),OpBar(20:11-20:12),LowerIdent(20:13-20:27),NoSpaceOpenRound(20:27-20:28),UpperIdent(20:28-20:30),NoSpaceOpenRound(20:30-20:31),OpenSquare(20:31-20:32),UpperIdent(20:32-20:36),NoSpaceOpenRound(20:36-20:37),Int(20:37-20:39),CloseRound(20:39-20:40),Comma(20:40-20:41),UpperIdent(20:42-20:46),CloseSquare(20:46-20:47),CloseRound(20:47-20:48),CloseRound(20:48-20:49),EndOfFile(20:49-20:49),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-18.49
+(file @1.1-20.49
 	(app @1.1-1.53
 		(provides @1.5-1.12
 			(exposed-lower-ident @1.6-1.11
@@ -205,46 +180,48 @@ LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:
 								(ty-var @12.42-12.43 (raw "a"))))
 						(underscore-ty-var @12.47-12.49 (raw "_b"))))
 				(ty-var @12.55-12.56 (raw "a"))))
-		(s-decl @13.1-13.23
+		(s-decl @13.1-15.2
 			(p-ident @13.1-13.11 (raw "deepNested"))
-			(e-lambda @13.14-13.23
+			(e-lambda @13.14-15.2
 				(args
 					(p-underscore))
-				(e-malformed @13.18-13.23 (reason "expr_unexpected_token"))))
-		(e-string @13.24-13.41
-			(e-string-part @13.25-13.40 (raw "not implemented")))
-		(s-type-decl @16.1-16.64
-			(header @16.1-16.18 (name "ComplexType")
+				(e-block @13.18-15.2
+					(statements
+						(s-crash @14.2-14.25
+							(e-string @14.8-14.25
+								(e-string-part @14.9-14.24 (raw "not implemented"))))))))
+		(s-type-decl @18.1-18.64
+			(header @18.1-18.18 (name "ComplexType")
 				(args
-					(ty-var @16.13-16.14 (raw "a"))
-					(ty-var @16.16-16.17 (raw "b"))))
-			(ty-apply @16.21-16.64
-				(ty @16.21-16.27 (name "Result"))
-				(ty-apply @16.28-16.42
-					(ty @16.28-16.32 (name "List"))
-					(ty-apply @16.33-16.41
-						(ty @16.33-16.38 (name "Maybe"))
-						(ty-var @16.39-16.40 (raw "a"))))
-				(ty-apply @16.44-16.63
-					(ty @16.44-16.48 (name "Dict"))
-					(ty @16.49-16.52 (name "Str"))
-					(ty-apply @16.54-16.62
-						(ty @16.54-16.59 (name "Error"))
-						(ty-var @16.60-16.61 (raw "b"))))))
-		(s-decl @18.1-18.49
-			(p-ident @18.1-18.6 (raw "main!"))
-			(e-lambda @18.9-18.49
+					(ty-var @18.13-18.14 (raw "a"))
+					(ty-var @18.16-18.17 (raw "b"))))
+			(ty-apply @18.21-18.64
+				(ty @18.21-18.27 (name "Result"))
+				(ty-apply @18.28-18.42
+					(ty @18.28-18.32 (name "List"))
+					(ty-apply @18.33-18.41
+						(ty @18.33-18.38 (name "Maybe"))
+						(ty-var @18.39-18.40 (raw "a"))))
+				(ty-apply @18.44-18.63
+					(ty @18.44-18.48 (name "Dict"))
+					(ty @18.49-18.52 (name "Str"))
+					(ty-apply @18.54-18.62
+						(ty @18.54-18.59 (name "Error"))
+						(ty-var @18.60-18.61 (raw "b"))))))
+		(s-decl @20.1-20.49
+			(p-ident @20.1-20.6 (raw "main!"))
+			(e-lambda @20.9-20.49
 				(args
 					(p-underscore))
-				(e-apply @18.13-18.49
-					(e-ident @18.13-18.27 (raw "processComplex"))
-					(e-apply @18.28-18.48
-						(e-tag @18.28-18.30 (raw "Ok"))
-						(e-list @18.31-18.47
-							(e-apply @18.32-18.40
-								(e-tag @18.32-18.36 (raw "Some"))
-								(e-int @18.37-18.39 (raw "42")))
-							(e-tag @18.42-18.46 (raw "None")))))))))
+				(e-apply @20.13-20.49
+					(e-ident @20.13-20.27 (raw "processComplex"))
+					(e-apply @20.28-20.48
+						(e-tag @20.28-20.30 (raw "Ok"))
+						(e-list @20.31-20.47
+							(e-apply @20.32-20.40
+								(e-tag @20.32-20.36 (raw "Some"))
+								(e-int @20.37-20.39 (raw "42")))
+							(e-tag @20.42-20.46 (raw "None")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -260,8 +237,9 @@ processComplex = |result|
 
 # Test multiple levels of nesting
 deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
-deepNested = |_| 
-"not implemented"
+deepNested = |_| {
+	crash "not implemented"
+}
 
 # Test type alias with complex nesting
 ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
@@ -309,7 +287,12 @@ main! = |_| processComplex(Ok([Some(42), None]))
 						(ty-var @4.71-4.72 (name "a")))))))
 	(d-let
 		(p-assign @13.1-13.11 (ident "deepNested"))
-		(e-runtime-error (tag "lambda_body_not_canonicalized"))
+		(e-lambda @13.14-15.2
+			(args
+				(p-underscore @13.15-13.16))
+			(e-block @13.18-15.2
+				(s-crash @14.2-14.25 (msg "not implemented"))
+				(e-empty_record @13.18-15.2)))
 		(annotation @13.1-13.11
 			(declared-type
 				(ty-fn @12.14-12.56 (effectful false)
@@ -322,53 +305,53 @@ main! = |_| processComplex(Ok([Some(42), None]))
 							(ty-var @12.47-12.49 (name "_b"))))
 					(ty-var @12.55-12.56 (name "a"))))))
 	(d-let
-		(p-assign @18.1-18.6 (ident "main!"))
-		(e-closure @18.9-18.49
+		(p-assign @20.1-20.6 (ident "main!"))
+		(e-closure @20.9-20.49
 			(captures
 				(capture @5.1-5.15 (ident "processComplex")))
-			(e-lambda @18.9-18.49
+			(e-lambda @20.9-20.49
 				(args
-					(p-underscore @18.10-18.11))
-				(e-call @18.13-18.49
-					(e-lookup-local @18.13-18.27
+					(p-underscore @20.10-20.11))
+				(e-call @20.13-20.49
+					(e-lookup-local @20.13-20.27
 						(p-assign @5.1-5.15 (ident "processComplex")))
-					(e-tag @18.28-18.30 (name "Ok")
+					(e-tag @20.28-20.30 (name "Ok")
 						(args
-							(e-list @18.31-18.47
+							(e-list @20.31-20.47
 								(elems
-									(e-tag @18.32-18.36 (name "Some")
+									(e-tag @20.32-20.36 (name "Some")
 										(args
-											(e-int @18.37-18.39 (value "42"))))
-									(e-tag @18.42-18.46 (name "None"))))))))))
-	(s-alias-decl @16.1-16.64
-		(ty-header @16.1-16.18 (name "ComplexType")
+											(e-int @20.37-20.39 (value "42"))))
+									(e-tag @20.42-20.46 (name "None"))))))))))
+	(s-alias-decl @18.1-18.64
+		(ty-header @18.1-18.18 (name "ComplexType")
 			(ty-args
-				(ty-var @16.13-16.14 (name "a"))
-				(ty-var @16.16-16.17 (name "b"))))
-		(ty-apply @16.21-16.64 (symbol "Result")
-			(ty-apply @16.28-16.42 (symbol "List")
-				(ty-apply @16.33-16.41 (symbol "Maybe")
-					(ty-var @16.39-16.40 (name "a"))))
-			(ty-apply @16.44-16.63 (symbol "Dict")
-				(ty @16.49-16.52 (name "Str"))
-				(ty-apply @16.54-16.62 (symbol "Error")
-					(ty-var @16.60-16.61 (name "b")))))))
+				(ty-var @18.13-18.14 (name "a"))
+				(ty-var @18.16-18.17 (name "b"))))
+		(ty-apply @18.21-18.64 (symbol "Result")
+			(ty-apply @18.28-18.42 (symbol "List")
+				(ty-apply @18.33-18.41 (symbol "Maybe")
+					(ty-var @18.39-18.40 (name "a"))))
+			(ty-apply @18.44-18.63 (symbol "Dict")
+				(ty @18.49-18.52 (name "Str"))
+				(ty-apply @18.54-18.62 (symbol "Error")
+					(ty-var @18.60-18.61 (name "b")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @5.1-5.15 (type "Error -> Error"))
-		(patt @13.1-13.11 (type "Error"))
-		(patt @18.1-18.6 (type "_arg -> Error")))
+		(patt @13.1-13.11 (type "Error -> {}"))
+		(patt @20.1-20.6 (type "_arg -> Error")))
 	(type_decls
-		(alias @16.1-16.64 (type "Error")
-			(ty-header @16.1-16.18 (name "ComplexType")
+		(alias @18.1-18.64 (type "Error")
+			(ty-header @18.1-18.18 (name "ComplexType")
 				(ty-args
-					(ty-var @16.13-16.14 (name "a"))
-					(ty-var @16.16-16.17 (name "b"))))))
+					(ty-var @18.13-18.14 (name "a"))
+					(ty-var @18.16-18.17 (name "b"))))))
 	(expressions
 		(expr @5.18-9.6 (type "Error -> Error"))
-		(expr @13.18-13.23 (type "Error"))
-		(expr @18.9-18.49 (type "_arg -> Error"))))
+		(expr @13.14-15.2 (type "Error -> {}"))
+		(expr @20.9-20.49 (type "_arg -> Error"))))
 ~~~

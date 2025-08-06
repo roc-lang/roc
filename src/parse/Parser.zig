@@ -1209,6 +1209,10 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) std.mem.Allocato
         else => {},
     }
 
+    if (statementType == .top_level) {
+        return try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
+    }
+
     // We didn't find any statements, so we must be parsing the final expression.
     const start = self.pos;
     const expr = try self.parseExpr();

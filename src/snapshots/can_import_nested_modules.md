@@ -33,23 +33,19 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:3:19:3:26
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:4:19:4:24
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:4:25:4:27
+PARSE ERROR - can_import_nested_modules.md:3:19:3:26
+PARSE ERROR - can_import_nested_modules.md:4:19:4:24
+PARSE ERROR - can_import_nested_modules.md:4:25:4:27
 PARSE ERROR - can_import_nested_modules.md:5:1:5:7
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:13:5:20
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:20:5:27
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:28:5:36
+PARSE ERROR - can_import_nested_modules.md:5:8:5:13
+PARSE ERROR - can_import_nested_modules.md:5:13:5:20
+PARSE ERROR - can_import_nested_modules.md:5:20:5:27
+PARSE ERROR - can_import_nested_modules.md:5:28:5:36
+PARSE ERROR - can_import_nested_modules.md:5:37:5:38
+PARSE ERROR - can_import_nested_modules.md:5:38:5:45
+PARSE ERROR - can_import_nested_modules.md:5:45:5:46
 MODULE NOT FOUND - can_import_nested_modules.md:3:1:3:19
-INVALID STATEMENT - can_import_nested_modules.md:3:19:3:26
 MODULE NOT FOUND - can_import_nested_modules.md:4:1:4:19
-INVALID STATEMENT - can_import_nested_modules.md:4:19:4:24
-INVALID STATEMENT - can_import_nested_modules.md:4:25:4:27
-INVALID STATEMENT - can_import_nested_modules.md:5:8:5:13
-INVALID STATEMENT - can_import_nested_modules.md:5:13:5:20
-INVALID STATEMENT - can_import_nested_modules.md:5:20:5:27
-INVALID STATEMENT - can_import_nested_modules.md:5:28:5:36
-INVALID STATEMENT - can_import_nested_modules.md:5:37:5:46
 MODULE NOT IMPORTED - can_import_nested_modules.md:8:15:8:30
 UNDEFINED VARIABLE - can_import_nested_modules.md:9:26:9:41
 MODULE NOT IMPORTED - can_import_nested_modules.md:12:28:12:42
@@ -64,9 +60,9 @@ MODULE NOT IMPORTED - can_import_nested_modules.md:25:47:25:61
 MODULE NOT IMPORTED - can_import_nested_modules.md:25:63:25:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:26:24:26:41
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Config** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **can_import_nested_modules.md:3:19:3:26:**
@@ -76,9 +72,9 @@ import json.Parser.Config
                   ^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Auth** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **can_import_nested_modules.md:4:19:4:24:**
@@ -88,9 +84,9 @@ import http.Client.Auth as HttpAuth
                   ^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **as** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **can_import_nested_modules.md:4:25:4:27:**
@@ -124,9 +120,21 @@ import utils.String.Format exposing [padLeft]
 ^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.String** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**can_import_nested_modules.md:5:8:5:13:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+       ^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **can_import_nested_modules.md:5:13:5:20:**
@@ -136,9 +144,9 @@ import utils.String.Format exposing [padLeft]
             ^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Format** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **can_import_nested_modules.md:5:20:5:27:**
@@ -148,9 +156,9 @@ import utils.String.Format exposing [padLeft]
                    ^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **exposing** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **can_import_nested_modules.md:5:28:5:36:**
@@ -158,6 +166,42 @@ Here is the problematic code:
 import utils.String.Format exposing [padLeft]
 ```
                            ^^^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**can_import_nested_modules.md:5:37:5:38:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+                                    ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**can_import_nested_modules.md:5:38:5:45:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+                                     ^^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**can_import_nested_modules.md:5:45:5:46:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+                                            ^
 
 
 **MODULE NOT FOUND**
@@ -171,17 +215,6 @@ import json.Parser.Config
 ^^^^^^^^^^^^^^^^^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**can_import_nested_modules.md:3:19:3:26:**
-```roc
-import json.Parser.Config
-```
-                  ^^^^^^^
-
-
 **MODULE NOT FOUND**
 The module `http.Client` was not found in this Roc project.
 
@@ -191,83 +224,6 @@ You're attempting to use this module here:
 import http.Client.Auth as HttpAuth
 ```
 ^^^^^^^^^^^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**can_import_nested_modules.md:4:19:4:24:**
-```roc
-import http.Client.Auth as HttpAuth
-```
-                  ^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**can_import_nested_modules.md:4:25:4:27:**
-```roc
-import http.Client.Auth as HttpAuth
-```
-                        ^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**can_import_nested_modules.md:5:8:5:13:**
-```roc
-import utils.String.Format exposing [padLeft]
-```
-       ^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**can_import_nested_modules.md:5:13:5:20:**
-```roc
-import utils.String.Format exposing [padLeft]
-```
-            ^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**can_import_nested_modules.md:5:20:5:27:**
-```roc
-import utils.String.Format exposing [padLeft]
-```
-                   ^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**can_import_nested_modules.md:5:28:5:36:**
-```roc
-import utils.String.Format exposing [padLeft]
-```
-                           ^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**can_import_nested_modules.md:5:37:5:46:**
-```roc
-import utils.String.Format exposing [padLeft]
-```
-                                    ^^^^^^^^^
 
 
 **MODULE NOT IMPORTED**
@@ -468,17 +424,18 @@ LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17
 		(exposes @1.8-1.10))
 	(statements
 		(s-import @3.1-3.19 (raw "json.Parser"))
-		(e-malformed @3.19-3.26 (reason "expr_unexpected_token"))
+		(s-malformed @3.19-3.26 (tag "statement_unexpected_token"))
 		(s-import @4.1-4.19 (raw "http.Client"))
-		(e-malformed @4.19-4.24 (reason "expr_unexpected_token"))
-		(e-malformed @4.25-4.27 (reason "expr_unexpected_token"))
+		(s-malformed @4.19-4.24 (tag "statement_unexpected_token"))
+		(s-malformed @4.25-4.27 (tag "statement_unexpected_token"))
 		(s-malformed @4.28-5.7 (tag "expected_colon_after_type_annotation"))
-		(e-ident @5.8-5.13 (raw "utils"))
-		(e-malformed @5.13-5.20 (reason "expr_unexpected_token"))
-		(e-malformed @5.20-5.27 (reason "expr_unexpected_token"))
-		(e-malformed @5.28-5.36 (reason "expr_unexpected_token"))
-		(e-list @5.37-5.46
-			(e-ident @5.38-5.45 (raw "padLeft")))
+		(s-malformed @5.8-5.13 (tag "statement_unexpected_token"))
+		(s-malformed @5.13-5.20 (tag "statement_unexpected_token"))
+		(s-malformed @5.20-5.27 (tag "statement_unexpected_token"))
+		(s-malformed @5.28-5.36 (tag "statement_unexpected_token"))
+		(s-malformed @5.37-5.38 (tag "statement_unexpected_token"))
+		(s-malformed @5.38-5.45 (tag "statement_unexpected_token"))
+		(s-malformed @5.45-5.46 (tag "statement_unexpected_token"))
 		(s-type-anno @8.1-8.37 (name "parseConfig")
 			(ty-fn @8.15-8.37
 				(ty @8.15-8.30 (name "Config.Settings"))
@@ -560,8 +517,7 @@ module []
 import json.Parser
 
 import http.Client
-utils
-[padLeft]
+
 
 # Test multi-level type qualification
 parseConfig : Config.Settings -> Str

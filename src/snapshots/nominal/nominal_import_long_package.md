@@ -13,18 +13,17 @@ red : CE
 red = ... # not implemented
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:21:3:27
-UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:28:3:36
-LIST NOT CLOSED - nominal_import_long_package.md:3:51:3:52
+PARSE ERROR - nominal_import_long_package.md:3:21:3:27
+PARSE ERROR - nominal_import_long_package.md:3:28:3:36
+PARSE ERROR - nominal_import_long_package.md:3:37:3:38
+PARSE ERROR - nominal_import_long_package.md:3:46:3:48
+PARSE ERROR - nominal_import_long_package.md:3:51:3:52
 MODULE NOT FOUND - nominal_import_long_package.md:3:1:3:21
-INVALID STATEMENT - nominal_import_long_package.md:3:21:3:27
-INVALID STATEMENT - nominal_import_long_package.md:3:28:3:36
-INVALID STATEMENT - nominal_import_long_package.md:3:37:3:52
 UNDECLARED TYPE - nominal_import_long_package.md:5:7:5:9
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Color** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **nominal_import_long_package.md:3:21:3:27:**
@@ -34,9 +33,9 @@ import design.Styles.Color exposing [Encoder as CE]
                     ^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **exposing** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **nominal_import_long_package.md:3:28:3:36:**
@@ -46,10 +45,57 @@ import design.Styles.Color exposing [Encoder as CE]
                            ^^^^^^^^
 
 
-**LIST NOT CLOSED**
-This list is missing a closing bracket or has a syntax error.
-Lists must be closed with **]** and list items must be separated by commas.
-For example:     [1, 2, 3]
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**nominal_import_long_package.md:3:37:3:38:**
+```roc
+import design.Styles.Color exposing [Encoder as CE]
+```
+                                    ^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+Here is the problematic code:
+**nominal_import_long_package.md:3:46:3:48:**
+```roc
+import design.Styles.Color exposing [Encoder as CE]
+```
+                                             ^^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
 
 Here is the problematic code:
 **nominal_import_long_package.md:3:51:3:52:**
@@ -68,39 +114,6 @@ You're attempting to use this module here:
 import design.Styles.Color exposing [Encoder as CE]
 ```
 ^^^^^^^^^^^^^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**nominal_import_long_package.md:3:21:3:27:**
-```roc
-import design.Styles.Color exposing [Encoder as CE]
-```
-                    ^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**nominal_import_long_package.md:3:28:3:36:**
-```roc
-import design.Styles.Color exposing [Encoder as CE]
-```
-                           ^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**nominal_import_long_package.md:3:37:3:52:**
-```roc
-import design.Styles.Color exposing [Encoder as CE]
-```
-                                    ^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -130,9 +143,11 @@ LowerIdent(6:1-6:4),OpAssign(6:5-6:6),TripleDot(6:7-6:10),EndOfFile(6:28-6:28),
 				(text "red"))))
 	(statements
 		(s-import @3.1-3.21 (raw "design.Styles"))
-		(e-malformed @3.21-3.27 (reason "expr_unexpected_token"))
-		(e-malformed @3.28-3.36 (reason "expr_unexpected_token"))
-		(e-malformed @3.51-3.52 (reason "expected_expr_close_square_or_comma"))
+		(s-malformed @3.21-3.27 (tag "statement_unexpected_token"))
+		(s-malformed @3.28-3.36 (tag "statement_unexpected_token"))
+		(s-malformed @3.37-3.38 (tag "statement_unexpected_token"))
+		(s-malformed @3.38-3.48 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @3.49-3.52 (tag "expected_colon_after_type_annotation"))
 		(s-type-anno @5.1-5.9 (name "red")
 			(ty @5.7-5.9 (name "CE")))
 		(s-decl @6.1-6.10

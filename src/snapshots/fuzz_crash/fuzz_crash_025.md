@@ -35,15 +35,12 @@ j = -17011687303715884105728
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_025.md:11:1:11:2
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:11:3:11:4
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:14:48:14:49
+PARSE ERROR - fuzz_crash_025.md:11:3:11:4
+PARSE ERROR - fuzz_crash_025.md:11:5:11:25
+PARSE ERROR - fuzz_crash_025.md:14:48:14:49
 PARSE ERROR - fuzz_crash_025.md:15:1:15:2
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:15:3:15:4
-INVALID STATEMENT - fuzz_crash_025.md:11:3:11:4
-INVALID STATEMENT - fuzz_crash_025.md:11:5:11:25
-INVALID STATEMENT - fuzz_crash_025.md:14:48:14:49
-INVALID STATEMENT - fuzz_crash_025.md:15:3:15:4
-INVALID STATEMENT - fuzz_crash_025.md:15:4:15:5
+PARSE ERROR - fuzz_crash_025.md:15:3:15:4
+PARSE ERROR - fuzz_crash_025.md:15:4:15:5
 TYPE MISMATCH - fuzz_crash_025.md:13:5:13:9
 # PROBLEMS
 **PARSE ERROR**
@@ -70,9 +67,9 @@ d = 18446744073709551615
 ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_025.md:11:3:11:4:**
@@ -82,9 +79,21 @@ d = 18446744073709551615
   ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_025.md:11:5:11:25:**
+```roc
+d = 18446744073709551615
+```
+    ^^^^^^^^^^^^^^^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_025.md:14:48:14:49:**
@@ -118,9 +127,9 @@ f =8
 ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_025.md:15:3:15:4:**
@@ -130,54 +139,11 @@ f =8
   ^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_025.md:11:3:11:4:**
-```roc
-d = 18446744073709551615
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_025.md:11:5:11:25:**
-```roc
-d = 18446744073709551615
-```
-    ^^^^^^^^^^^^^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_025.md:14:48:14:49:**
-```roc
-e = 3402823669209384634633746074317682114553.14: I8
-```
-                                               ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_025.md:15:3:15:4:**
-```roc
-f =8
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
+Here is the problematic code:
 **fuzz_crash_025.md:15:4:15:5:**
 ```roc
 f =8
@@ -243,17 +209,17 @@ LowerIdent(27:1-27:2),OpAssign(27:3-27:4),Int(27:5-27:29),EndOfFile(27:29-27:29)
 			(p-ident @10.1-10.2 (raw "c"))
 			(e-int @10.5-10.14 (raw "429496729")))
 		(s-malformed @10.15-11.2 (tag "expected_colon_after_type_annotation"))
-		(e-malformed @11.3-11.4 (reason "expr_unexpected_token"))
-		(e-int @11.5-11.25 (raw "18446744073709551615"))
+		(s-malformed @11.3-11.4 (tag "statement_unexpected_token"))
+		(s-malformed @11.5-11.25 (tag "statement_unexpected_token"))
 		(s-type-anno @13.1-13.9 (name "e")
 			(ty @13.5-13.9 (name "U128")))
 		(s-decl @14.1-14.48
 			(p-ident @14.1-14.2 (raw "e"))
 			(e-frac @14.5-14.48 (raw "3402823669209384634633746074317682114553.14")))
-		(e-malformed @14.48-14.49 (reason "expr_unexpected_token"))
+		(s-malformed @14.48-14.49 (tag "statement_unexpected_token"))
 		(s-malformed @14.50-15.2 (tag "expected_colon_after_type_annotation"))
-		(e-malformed @15.3-15.4 (reason "expr_unexpected_token"))
-		(e-int @15.4-15.5 (raw "8"))
+		(s-malformed @15.3-15.4 (tag "statement_unexpected_token"))
+		(s-malformed @15.4-15.5 (tag "statement_unexpected_token"))
 		(s-type-anno @17.1-17.8 (name "g")
 			(ty @17.5-17.8 (name "I16")))
 		(s-decl @18.1-18.11
@@ -287,11 +253,11 @@ b = 65535
 
 c : U32
 c = 429496729
-18446744073709551615
+
 
 e : U128
 e = 3402823669209384634633746074317682114553.14
-8
+
 
 g : I16
 g = -32768

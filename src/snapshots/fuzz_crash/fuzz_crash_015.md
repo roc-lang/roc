@@ -13,12 +13,11 @@ type=file
 # EXPECTED
 LEADING ZERO - :0:0:0:0
 MISSING HEADER - fuzz_crash_015.md:1:1:1:4
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_015.md:1:4:1:6
+PARSE ERROR - fuzz_crash_015.md:1:4:1:6
+PARSE ERROR - fuzz_crash_015.md:2:1:2:4
+PARSE ERROR - fuzz_crash_015.md:3:1:3:4
 PARSE ERROR - fuzz_crash_015.md:3:4:3:6
-INVALID STATEMENT - fuzz_crash_015.md:1:4:1:6
-INVALID STATEMENT - fuzz_crash_015.md:2:1:2:4
-INVALID STATEMENT - fuzz_crash_015.md:3:1:3:6
-INVALID STATEMENT - fuzz_crash_015.md:4:1:4:3
+PARSE ERROR - fuzz_crash_015.md:4:1:4:3
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -39,9 +38,9 @@ Here is the problematic code:
 ^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.0** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_015.md:1:4:1:6:**
@@ -52,7 +51,31 @@ Here is the problematic code:
 
 
 **PARSE ERROR**
-A parsing error occurred: `expr_dot_suffix_not_allowed`
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_015.md:2:1:2:4:**
+```roc
+0_0
+```
+^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_015.md:3:1:3:4:**
+```roc
+0u8.0
+```
+^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
@@ -63,43 +86,11 @@ Here is the problematic code:
    ^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_015.md:1:4:1:6:**
-```roc
-0o0.0
-```
-   ^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_015.md:2:1:2:4:**
-```roc
-0_0
-```
-^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_015.md:3:1:3:6:**
-```roc
-0u8.0
-```
-^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
+Here is the problematic code:
 **fuzz_crash_015.md:4:1:4:3:**
 ```roc
 0_
@@ -119,17 +110,18 @@ Int(4:1-4:3),EndOfFile(4:3-4:3),
 (file @1.1-4.3
 	(malformed-header @1.1-1.4 (tag "missing_header"))
 	(statements
-		(e-malformed @1.4-1.6 (reason "expr_unexpected_token"))
-		(e-int @2.1-2.4 (raw "0_0"))
-		(e-malformed @3.4-3.6 (reason "expr_dot_suffix_not_allowed"))
-		(e-int @4.1-4.3 (raw "0_"))))
+		(s-malformed @1.4-1.6 (tag "statement_unexpected_token"))
+		(s-malformed @2.1-2.4 (tag "statement_unexpected_token"))
+		(s-malformed @3.1-3.4 (tag "statement_unexpected_token"))
+		(s-malformed @3.4-3.6 (tag "statement_unexpected_token"))
+		(s-malformed @4.1-4.3 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
 
-0_0
 
-0_
+
+
 ~~~
 # CANONICALIZE
 ~~~clojure
