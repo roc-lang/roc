@@ -28,7 +28,7 @@ pub const NodeStore = @import("NodeStore.zig");
 /// Represents the intermediate representation or Abstract Syntax Tree (AST) of a parsed Roc file.
 pub const AST = @import("AST.zig");
 
-fn runParse(env: *ModuleEnv, parserCall: *const fn (*Parser) std.mem.Allocator.Error!u32) std.mem.Allocator.Error!AST {
+fn runParse(env: *ModuleEnv, parserCall: *const fn (*Parser) Parser.Error!u32) Parser.Error!AST {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -62,38 +62,38 @@ fn runParse(env: *ModuleEnv, parserCall: *const fn (*Parser) std.mem.Allocator.E
 
 /// Parses a single Roc file.  The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parse(env: *ModuleEnv) std.mem.Allocator.Error!AST {
+pub fn parse(env: *ModuleEnv) Parser.Error!AST {
     return try runParse(env, parseFileAndReturnIdx);
 }
 
-fn parseFileAndReturnIdx(parser: *Parser) std.mem.Allocator.Error!u32 {
+fn parseFileAndReturnIdx(parser: *Parser) Parser.Error!u32 {
     try parser.parseFile();
     return 0;
 }
 
-fn parseExprAndReturnIdx(parser: *Parser) std.mem.Allocator.Error!u32 {
+fn parseExprAndReturnIdx(parser: *Parser) Parser.Error!u32 {
     const id = try parser.parseExpr();
     return @intFromEnum(id);
 }
 
 /// Parses a Roc expression - only for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parseExpr(env: *ModuleEnv) std.mem.Allocator.Error!AST {
+pub fn parseExpr(env: *ModuleEnv) Parser.Error!AST {
     return try runParse(env, parseExprAndReturnIdx);
 }
 
-fn parseHeaderAndReturnIdx(parser: *Parser) std.mem.Allocator.Error!u32 {
+fn parseHeaderAndReturnIdx(parser: *Parser) Parser.Error!u32 {
     const id = try parser.parseHeader();
     return @intFromEnum(id);
 }
 
 /// Parses a Roc Header - only for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parseHeader(env: *ModuleEnv) std.mem.Allocator.Error!AST {
+pub fn parseHeader(env: *ModuleEnv) Parser.Error!AST {
     return try runParse(env, parseHeaderAndReturnIdx);
 }
 
-fn parseStatementAndReturnIdx(parser: *Parser) std.mem.Allocator.Error!u32 {
+fn parseStatementAndReturnIdx(parser: *Parser) Parser.Error!u32 {
     const maybe_statement_idx = try parser.parseStmt();
     if (maybe_statement_idx) |idx| {
         return @intFromEnum(idx);
@@ -103,6 +103,6 @@ fn parseStatementAndReturnIdx(parser: *Parser) std.mem.Allocator.Error!u32 {
 
 /// Parses a single Roc statement for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parseStatement(env: *ModuleEnv) std.mem.Allocator.Error!AST {
+pub fn parseStatement(env: *ModuleEnv) Parser.Error!AST {
     return try runParse(env, parseStatementAndReturnIdx);
 }

@@ -18,6 +18,7 @@ const Layout = layout.Layout;
 const Closure = eval.Closure;
 const testing = std.testing;
 const test_allocator = testing.allocator;
+const ParseError = parse.Parser.Error;
 
 /// Helper function to run an expression and expect a specific error.
 pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_trace: enum { trace, no_trace }) !void {
@@ -270,7 +271,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 }
 
 /// Parse and canonicalize an expression.
-pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!struct {
+pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) ParseError!struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
     can: *Can,

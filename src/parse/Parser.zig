@@ -21,6 +21,7 @@ const TokenIdx = Token.Idx;
 const tokenize = parse.tokenize;
 
 const MAX_PARSE_DIAGNOSTICS: usize = 1_000;
+const MAX_NESTING_LEVELS: u8 = 128;
 
 /// A parser which tokenizes and parses source code into an abstract syntax tree.
 pub const Parser = @This();
@@ -32,6 +33,7 @@ store: NodeStore,
 scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
 diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
+nesting_counter: u8,
 
 /// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer) std.mem.Allocator.Error!Parser {
@@ -46,6 +48,7 @@ pub fn init(tokens: TokenizedBuffer) std.mem.Allocator.Error!Parser {
         .scratch_nodes = .{},
         .diagnostics = .{},
         .cached_malformed_node = null,
+        .nesting_counter = MAX_NESTING_LEVELS,
     };
 }
 
@@ -116,14 +119,31 @@ pub fn peekN(self: *Parser, n: u32) Token.Tag {
     return self.tok_buf.tokens.items(.tag)[next];
 }
 
+const StackError = error{TooNested};
+pub const Error = std.mem.Allocator.Error || StackError;
+
+pub fn nest(self: *Parser) !void {
+    if (self.nesting_counter == 0) {
+        return StackError.TooNested;
+    }
+    self.nesting_counter = self.nesting_counter - 1;
+}
+
+pub fn unnest(self: *Parser) void {
+    if (self.nesting_counter >= MAX_NESTING_LEVELS) {
+        return;
+    }
+    self.nesting_counter = self.nesting_counter + 1;
+}
+
 /// add a diagnostic error
-pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, region: AST.TokenizedRegion) std.mem.Allocator.Error!void {
+pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, region: AST.TokenizedRegion) Error!void {
     if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
         try self.diagnostics.append(self.gpa, .{ .tag = tag, .region = region });
     }
 }
 /// add a malformed token
-pub fn pushMalformed(self: *Parser, comptime T: type, tag: AST.Diagnostic.Tag, start: TokenIdx) std.mem.Allocator.Error!T {
+pub fn pushMalformed(self: *Parser, comptime T: type, tag: AST.Diagnostic.Tag, start: TokenIdx) Error!T {
     const pos = self.pos;
 
     if (self.peek() != .EndOfFile) {
@@ -170,7 +190,7 @@ pub fn pushMalformed(self: *Parser, comptime T: type, tag: AST.Diagnostic.Tag, s
 /// parse a `.roc` module
 ///
 /// the tokens are provided at Parser initialisation
-pub fn parseFile(self: *Parser) std.mem.Allocator.Error!void {
+pub fn parseFile(self: *Parser) Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -205,7 +225,7 @@ pub fn parseFile(self: *Parser) std.mem.Allocator.Error!void {
 /// Parses the items of type T until we encounter end_token, with each item separated by a Comma token
 ///
 /// Returns the ending position of the collection
-fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, scratch_fn: fn (*NodeStore, T) std.mem.Allocator.Error!void, parser: fn (*Parser) std.mem.Allocator.Error!T) !void {
+fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, scratch_fn: fn (*NodeStore, T) Error!void, parser: fn (*Parser) Error!T) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -243,7 +263,7 @@ fn debugToken(self: *Parser, window: usize) void {
 /// provides_entry :: [LowerIdent|UpperIdent] Comma Newline*
 /// package_entry :: LowerIdent Comma "platform"? String Comma
 /// app_header :: KwApp Newline* OpenSquare provides_entry* CloseSquare OpenCurly package_entry CloseCurly
-pub fn parseHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
+pub fn parseHeader(self: *Parser) Error!AST.Header.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -280,7 +300,7 @@ pub fn parseHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
 ///     packages { foo: "../foo.roc" }
 ///     imports []
 ///     provides [main_for_host]
-pub fn parsePlatformHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
+pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -345,6 +365,7 @@ pub fn parsePlatformHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx
                 );
             },
             error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
         }
     };
     const rigids_span = try self.store.exposedItemSpanFrom(rigids_top);
@@ -384,6 +405,7 @@ pub fn parsePlatformHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx
                 );
             },
             error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
         }
     };
     const signatures_span = try self.store.annoRecordFieldSpanFrom(signatures_top);
@@ -428,6 +450,7 @@ pub fn parsePlatformHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx
                 );
             },
             error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
         }
     };
     const exposes_span = try self.store.exposedItemSpanFrom(exposes_top);
@@ -472,6 +495,7 @@ pub fn parsePlatformHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx
                 );
             },
             error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
         }
     };
     const packages_span = try self.store.recordFieldSpanFrom(packages_top);
@@ -516,6 +540,7 @@ pub fn parsePlatformHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx
                 );
             },
             error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
         }
     };
     const provides_span = try self.store.exposedItemSpanFrom(provides_top);
@@ -541,7 +566,7 @@ pub fn parsePlatformHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx
 /// parse an `.roc` package header
 ///
 /// e.g. `package [ foo ] { something: "package/path/main.roc" }`
-pub fn parsePackageHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
+pub fn parsePackageHeader(self: *Parser) Error!AST.Header.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -569,6 +594,7 @@ pub fn parsePackageHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx 
                 return try self.pushMalformed(AST.Header.Idx, .import_exposing_no_close, start);
             },
             error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
         }
     };
     const exposes_span = try self.store.exposedItemSpanFrom(scratch_top);
@@ -593,6 +619,7 @@ pub fn parsePackageHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx 
                 return try self.pushMalformed(AST.Header.Idx, .expected_package_platform_close_curly, start);
             },
             error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
         }
     };
     const packages_span = try self.store.recordFieldSpanFrom(fields_scratch_top);
@@ -616,7 +643,7 @@ pub fn parsePackageHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx 
 /// Parse a Roc Hosted header
 ///
 /// e.g. `hosted [foo]`
-fn parseHostedHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
+fn parseHostedHeader(self: *Parser) Error!AST.Header.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -645,6 +672,7 @@ fn parseHostedHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
                 return try self.pushMalformed(AST.Header.Idx, .import_exposing_no_close, self.pos);
             },
             error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
         }
     };
     const exposes_span = try self.store.exposedItemSpanFrom(scratch_top);
@@ -665,7 +693,7 @@ fn parseHostedHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
 /// parse a Roc module header
 ///
 /// e.g. `module [foo]`
-fn parseModuleHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
+fn parseModuleHeader(self: *Parser) Error!AST.Header.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -694,6 +722,7 @@ fn parseModuleHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
                 return try self.pushMalformed(AST.Header.Idx, .import_exposing_no_close, self.pos);
             },
             error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
         }
     };
     const exposes_span = try self.store.exposedItemSpanFrom(scratch_top);
@@ -714,7 +743,7 @@ fn parseModuleHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
 /// parse an `.roc` application header
 ///
 /// e.g. `app [main!] { pf: "../some-platform.roc" }`
-pub fn parseAppHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
+pub fn parseAppHeader(self: *Parser) Error!AST.Header.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -743,6 +772,7 @@ pub fn parseAppHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
                 return try self.pushMalformed(AST.Header.Idx, .import_exposing_no_close, start);
             },
             error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
         }
     };
     const provides_span = try self.store.exposedItemSpanFrom(scratch_top);
@@ -838,7 +868,7 @@ pub fn parseAppHeader(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
 }
 
 /// Parses an ExposedItem, adding it to the NodeStore and returning the Idx
-pub fn parseExposedItem(self: *Parser) std.mem.Allocator.Error!AST.ExposedItem.Idx {
+pub fn parseExposedItem(self: *Parser) Error!AST.ExposedItem.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -905,7 +935,7 @@ const StatementType = enum { top_level, in_body };
 /// Parse a top level roc statement
 ///
 /// e.g. `import Foo`
-pub fn parseTopLevelStatement(self: *Parser) std.mem.Allocator.Error!?AST.Statement.Idx {
+pub fn parseTopLevelStatement(self: *Parser) Error!?AST.Statement.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -915,7 +945,7 @@ pub fn parseTopLevelStatement(self: *Parser) std.mem.Allocator.Error!?AST.Statem
 /// parse a in-body roc statement
 ///
 /// e.g. `foo = 2 + x`
-pub fn parseStmt(self: *Parser) std.mem.Allocator.Error!?AST.Statement.Idx {
+pub fn parseStmt(self: *Parser) Error!?AST.Statement.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -925,7 +955,7 @@ pub fn parseStmt(self: *Parser) std.mem.Allocator.Error!?AST.Statement.Idx {
 /// parse a roc statement
 ///
 /// e.g. `import Foo`, or `foo = 2 + x`
-fn parseStmtByType(self: *Parser, statementType: StatementType) std.mem.Allocator.Error!?AST.Statement.Idx {
+fn parseStmtByType(self: *Parser, statementType: StatementType) Error!?AST.Statement.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -976,6 +1006,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) std.mem.Allocato
                                 return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
                             },
                             error.OutOfMemory => return error.OutOfMemory,
+                            error.TooNested => return error.TooNested,
                         }
                     };
                     exposes = try self.store.exposedItemSpanFrom(scratch_top);
@@ -1219,7 +1250,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) std.mem.Allocato
     return statement_idx;
 }
 
-fn parseWhereConstraint(self: *Parser) std.mem.Allocator.Error!?AST.Collection.Idx {
+fn parseWhereConstraint(self: *Parser) Error!?AST.Collection.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1306,7 +1337,7 @@ const Alternatives = enum {
 };
 
 /// todo -- what does this do?
-pub fn parsePattern(self: *Parser, alternatives: Alternatives) std.mem.Allocator.Error!AST.Pattern.Idx {
+pub fn parsePattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1363,6 +1394,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) std.mem.Allocator
                                     return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
                                 },
                                 error.OutOfMemory => return error.OutOfMemory,
+                                error.TooNested => return error.TooNested,
                             }
                         };
                         const args = try self.store.patternSpanFrom(scratch_top);
@@ -1528,6 +1560,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) std.mem.Allocator
                             return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
                         },
                         error.OutOfMemory => return error.OutOfMemory,
+                        error.TooNested => return error.TooNested,
                     }
                 };
                 const patterns = try self.store.patternSpanFrom(scratch_top);
@@ -1574,7 +1607,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) std.mem.Allocator
     } });
 }
 
-fn parseAsPattern(self: *Parser, pattern: AST.Pattern.Idx) std.mem.Allocator.Error!AST.Pattern.Idx {
+fn parseAsPattern(self: *Parser, pattern: AST.Pattern.Idx) Error!AST.Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1596,13 +1629,13 @@ fn parseAsPattern(self: *Parser, pattern: AST.Pattern.Idx) std.mem.Allocator.Err
     return p;
 }
 
-fn parsePatternNoAlts(self: *Parser) std.mem.Allocator.Error!AST.Pattern.Idx {
+fn parsePatternNoAlts(self: *Parser) Error!AST.Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     return try self.parsePattern(.alternatives_forbidden);
 }
-fn parsePatternWithAlts(self: *Parser) std.mem.Allocator.Error!AST.Pattern.Idx {
+fn parsePatternWithAlts(self: *Parser) Error!AST.Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1610,7 +1643,7 @@ fn parsePatternWithAlts(self: *Parser) std.mem.Allocator.Error!AST.Pattern.Idx {
 }
 
 /// todo
-pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) std.mem.Allocator.Error!AST.PatternRecordField.Idx {
+pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) Error!AST.PatternRecordField.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1672,7 +1705,7 @@ const QualificationResult = struct {
 
 /// Parses a qualification chain (e.g., "json.Core.Utf8" -> ["json", "Core"])
 /// Returns the qualifiers and the final token
-fn parseQualificationChain(self: *Parser) std.mem.Allocator.Error!QualificationResult {
+fn parseQualificationChain(self: *Parser) Error!QualificationResult {
     std.debug.assert(self.peek() == .UpperIdent or self.peek() == .LowerIdent);
 
     const scratch_top = self.store.scratchTokenTop();
@@ -1711,7 +1744,7 @@ fn parseQualificationChain(self: *Parser) std.mem.Allocator.Error!QualificationR
 }
 
 /// todo
-pub fn parseExpr(self: *Parser) std.mem.Allocator.Error!AST.Expr.Idx {
+pub fn parseExpr(self: *Parser) Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1719,9 +1752,11 @@ pub fn parseExpr(self: *Parser) std.mem.Allocator.Error!AST.Expr.Idx {
 }
 
 /// todo
-pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Expr.Idx {
+pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
+    try self.nest();
+    defer self.unnest();
 
     const start = self.pos;
 
@@ -1813,6 +1848,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
                         return try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_square_or_comma, self.pos);
                     },
                     error.OutOfMemory => return error.OutOfMemory,
+                    error.TooNested => return error.TooNested,
                 }
             };
             const items = try self.store.exprSpanFrom(scratch_top);
@@ -1835,6 +1871,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
                         return try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_round_or_comma, self.pos);
                     },
                     error.OutOfMemory => return error.OutOfMemory,
+                    error.TooNested => return error.TooNested,
                 }
             };
             const items = try self.store.exprSpanFrom(scratch_top);
@@ -1872,6 +1909,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
                             return try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
                         },
                         error.OutOfMemory => return error.OutOfMemory,
+                        error.TooNested => return error.TooNested,
                     }
                 };
                 const fields = try self.store.recordFieldSpanFrom(scratch_top);
@@ -1958,6 +1996,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
                         return try self.pushMalformed(AST.Expr.Idx, .expected_expr_bar, self.pos);
                     },
                     error.OutOfMemory => return error.OutOfMemory,
+                    error.TooNested => return error.TooNested,
                 }
             };
             const args = try self.store.patternSpanFrom(scratch_top);
@@ -2134,7 +2173,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) std.mem.Allocator.Error!AST.Ex
 }
 
 /// todo
-fn parseExprSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) std.mem.Allocator.Error!AST.Expr.Idx {
+fn parseExprSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2153,6 +2192,7 @@ fn parseExprSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) std.mem.Allocator
                         return try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, start);
                     },
                     error.OutOfMemory => return error.OutOfMemory,
+                    error.TooNested => return error.TooNested,
                 }
             };
             const args = try self.store.exprSpanFrom(scratch_top);
@@ -2185,7 +2225,7 @@ fn parseExprSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) std.mem.Allocator
 }
 
 /// todo
-pub fn parseRecordField(self: *Parser) std.mem.Allocator.Error!AST.RecordField.Idx {
+pub fn parseRecordField(self: *Parser) Error!AST.RecordField.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2209,7 +2249,7 @@ pub fn parseRecordField(self: *Parser) std.mem.Allocator.Error!AST.RecordField.I
 }
 
 /// todo
-pub fn parseBranch(self: *Parser) std.mem.Allocator.Error!AST.MatchBranch.Idx {
+pub fn parseBranch(self: *Parser) Error!AST.MatchBranch.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2241,7 +2281,7 @@ pub fn parseBranch(self: *Parser) std.mem.Allocator.Error!AST.MatchBranch.Idx {
 }
 
 /// todo
-pub fn parseStringExpr(self: *Parser) std.mem.Allocator.Error!AST.Expr.Idx {
+pub fn parseStringExpr(self: *Parser) Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2311,7 +2351,7 @@ pub fn parseStringExpr(self: *Parser) std.mem.Allocator.Error!AST.Expr.Idx {
 }
 
 /// todo
-pub fn parseStringPattern(self: *Parser) std.mem.Allocator.Error!AST.Pattern.Idx {
+pub fn parseStringPattern(self: *Parser) Error!AST.Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2326,7 +2366,7 @@ pub fn parseStringPattern(self: *Parser) std.mem.Allocator.Error!AST.Pattern.Idx
 }
 
 /// todo
-pub fn parseTypeHeader(self: *Parser) std.mem.Allocator.Error!AST.TypeHeader.Idx {
+pub fn parseTypeHeader(self: *Parser) Error!AST.TypeHeader.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2352,6 +2392,7 @@ pub fn parseTypeHeader(self: *Parser) std.mem.Allocator.Error!AST.TypeHeader.Idx
                 return try self.pushMalformed(AST.TypeHeader.Idx, .expected_ty_anno_close_round_or_comma, start);
             },
             error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
         }
     };
     const args = try self.store.typeAnnoSpanFrom(scratch_top);
@@ -2362,7 +2403,7 @@ pub fn parseTypeHeader(self: *Parser) std.mem.Allocator.Error!AST.TypeHeader.Idx
     });
 }
 
-fn parseTypeIdent(self: *Parser) std.mem.Allocator.Error!AST.TypeAnno.Idx {
+fn parseTypeIdent(self: *Parser) Error!AST.TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2391,7 +2432,7 @@ const TyFnArgs = enum {
 };
 
 /// Parse a type annotation, e.g. `Foo(a) : (a,Str,I64)`
-pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocator.Error!AST.TypeAnno.Idx {
+pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2432,6 +2473,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocato
                             return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, start);
                         },
                         error.OutOfMemory => return error.OutOfMemory,
+                        error.TooNested => return error.TooNested,
                     }
                 };
 
@@ -2505,6 +2547,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocato
                         return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
                     },
                     error.OutOfMemory => return error.OutOfMemory,
+                    error.TooNested => return error.TooNested,
                 }
             };
             const fields = try self.store.annoRecordFieldSpanFrom(scratch_top);
@@ -2577,7 +2620,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocato
 }
 
 /// todo
-pub fn parseTypeAnnoInCollection(self: *Parser) std.mem.Allocator.Error!AST.TypeAnno.Idx {
+pub fn parseTypeAnnoInCollection(self: *Parser) Error!AST.TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2585,7 +2628,7 @@ pub fn parseTypeAnnoInCollection(self: *Parser) std.mem.Allocator.Error!AST.Type
 }
 
 /// todo
-pub fn parseAnnoRecordField(self: *Parser) std.mem.Allocator.Error!AST.AnnoRecordField.Idx {
+pub fn parseAnnoRecordField(self: *Parser) Error!AST.AnnoRecordField.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2619,7 +2662,7 @@ pub fn parseAnnoRecordField(self: *Parser) std.mem.Allocator.Error!AST.AnnoRecor
 /// e.g. `a.hash(hasher) -> hasher`
 /// e.g. `hasher.Hasher`
 /// e.g. `module(a).decode(List(U8)) -> a`
-pub fn parseWhereClause(self: *Parser) std.mem.Allocator.Error!AST.WhereClause.Idx {
+pub fn parseWhereClause(self: *Parser) Error!AST.WhereClause.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2784,7 +2827,7 @@ pub fn parseWhereClause(self: *Parser) std.mem.Allocator.Error!AST.WhereClause.I
 ///     ...
 ///     <stmtN>
 /// }
-pub fn parseBlock(self: *Parser, start: u32) std.mem.Allocator.Error!AST.Expr.Idx {
+pub fn parseBlock(self: *Parser, start: u32) Error!AST.Expr.Idx {
     const scratch_top = self.store.scratchStatementTop();
 
     while (self.peek() != .EndOfFile) {
@@ -2817,7 +2860,7 @@ pub fn parseBlock(self: *Parser, start: u32) std.mem.Allocator.Error!AST.Expr.Id
 ///     ...
 ///     <recordFieldN>
 /// }
-pub fn parseRecord(self: *Parser, start: u32) std.mem.Allocator.Error!AST.Expr.Idx {
+pub fn parseRecord(self: *Parser, start: u32) Error!AST.Expr.Idx {
     const scratch_top = self.store.scratchRecordFieldTop();
     self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch |err| {
         switch (err) {
@@ -2826,6 +2869,7 @@ pub fn parseRecord(self: *Parser, start: u32) std.mem.Allocator.Error!AST.Expr.I
                 return try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
             },
             error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
         }
     };
     const fields = try self.store.recordFieldSpanFrom(scratch_top);
