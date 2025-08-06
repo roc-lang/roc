@@ -125,13 +125,6 @@ pub fn getSystemPageSize() PageSizeError!usize {
     return std.math.ceilPowerOfTwo(usize, page_size) catch 4096;
 }
 
-// Platform-specific C declarations
-const c = struct {
-    // POSIX shared memory functions (only needed for non-Linux Unix systems)
-    extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
-    extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
-};
-
 /// Creates a new anonymous shared memory region with the given size
 pub fn create(size: usize, page_size: usize) !SharedMemoryAllocator {
     const aligned_size = std.mem.alignForward(usize, size, page_size);
@@ -196,6 +189,13 @@ pub fn create(size: usize, page_size: usize) !SharedMemoryAllocator {
                     // this gracefully handles that scenario as a failure without an extra conditional.)
                     break :blk std.math.cast(std.posix.fd_t, fd_raw) orelse return error.MemfdCreateFailed;
                 } else {
+                    // POSIX shared memory functions (only needed for macOS and BSD; Windows and Linux
+                    // have different ways of mapping shared memory.)
+                    const c = struct {
+                        extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
+                        extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
+                    };
+
                     // On other Unix systems, use shm_open with a random name
                     const random_name = std.fmt.allocPrint(std.heap.page_allocator, "/roc_shm_{}", .{std.crypto.random.int(u64)}) catch {
                         return error.OutOfMemory;
