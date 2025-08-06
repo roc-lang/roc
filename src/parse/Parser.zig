@@ -120,16 +120,18 @@ pub fn peekN(self: *Parser, n: u32) Token.Tag {
 }
 
 const StackError = error{TooNested};
+
+/// The error set that methods of the Parser return
 pub const Error = std.mem.Allocator.Error || StackError;
 
-pub fn nest(self: *Parser) !void {
+fn nest(self: *Parser) !void {
     if (self.nesting_counter == 0) {
         return StackError.TooNested;
     }
     self.nesting_counter = self.nesting_counter - 1;
 }
 
-pub fn unnest(self: *Parser) void {
+fn unnest(self: *Parser) void {
     if (self.nesting_counter >= MAX_NESTING_LEVELS) {
         return;
     }
