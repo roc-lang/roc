@@ -74,6 +74,9 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
             error.NoSpaceLeft => {
                 @panic("No Space Left");
             },
+            error.TooNested => {
+                @panic("Too much nesting");
+            },
         }
     };
     defer result.deinit(gpa);
