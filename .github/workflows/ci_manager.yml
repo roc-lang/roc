@@ -27,6 +27,7 @@ jobs:
           filters: |
             zig:
               - 'src/**'
+              - 'test/**'
               - 'build.zig'
               - 'build.zig.zon'
               - '.github/workflows/ci_zig.yml'
@@ -41,6 +42,7 @@ jobs:
             other_than_zig:
               - '**/*'
               - '!src/**'
+              - '!test/**'
               - '!build.zig'
               - '!build.zig.zon'
               - '!.github/workflows/ci_zig.yml'
