@@ -98,6 +98,7 @@ pub const EvalError = error{
     UnexpectedWorkItem,
     RuntimeCrash,
     InvalidBindingsState,
+    TupleIndexOutOfBounds,
 };
 
 /// Maximum number of capture fields allowed in a closure
@@ -397,6 +398,7 @@ pub const Interpreter = struct {
                 .w_eval_tuple_elements => try self.handleTupleElements(
                     work.expr_idx,
                     work.extra.current_element_idx,
+                    roc_ops,
                 ),
                 .w_let_bind => {
                     const pattern_idx: ModuleEnv.Pattern.Idx = work.extra.decl_pattern_idx;
@@ -1696,63 +1698,6 @@ pub const Interpreter = struct {
         }
     }
 
-    fn handleTupleElements(self: *Interpreter, tuple_expr_idx: ModuleEnv.Expr.Idx, current_element_idx: usize) EvalError!void {
-        self.traceEnter("handleTupleElements tuple_expr_idx={}, current_element_idx={}", .{ tuple_expr_idx, current_element_idx });
-        defer self.traceExit("", .{});
-
-        const tuple_layout_idx = self.layout_cache.addTypeVar(@enumFromInt(@intFromEnum(tuple_expr_idx))) catch unreachable;
-        const tuple_layout = self.layout_cache.getLayout(tuple_layout_idx);
-        const tuple_data = self.layout_cache.getTupleData(tuple_layout.data.tuple.idx);
-        const element_layouts = self.layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
-
-        // Step 1: Copy the value of the *previous* element (if any) into the tuple structure.
-        if (current_element_idx > 0) {
-            const prev_element_index = current_element_idx - 1;
-            const prev_element_layout_info = element_layouts.get(@intCast(prev_element_index));
-            const prev_element_layout = self.layout_cache.getLayout(prev_element_layout_info.layout);
-            const prev_element_size = self.layout_cache.layoutSize(prev_element_layout);
-
-            const prev_element_value = try self.popStackValue();
-            const tuple_value_on_stack = try self.peekStackValue(1);
-            const tuple_base_ptr = @as([*]u8, @ptrCast(tuple_value_on_stack.ptr.?));
-
-            const prev_element_offset = self.layout_cache.getTupleElementOffset(tuple_layout.data.tuple.idx, @intCast(prev_element_index));
-
-            if (prev_element_size > 0) {
-                const dest_ptr = tuple_base_ptr + prev_element_offset;
-                const src_ptr = @as([*]const u8, @ptrCast(prev_element_value.ptr.?));
-                std.mem.copyForwards(u8, dest_ptr[0..prev_element_size], src_ptr[0..prev_element_size]);
-
-                self.traceInfo("Copied element {} (size={}) to offset {}", .{ prev_element_index, prev_element_size, prev_element_offset });
-            }
-        }
-
-        // Step 2 & 3: Schedule work for the current element.
-        if (current_element_idx < element_layouts.len) {
-            self.schedule_work(WorkItem{
-                .kind = .w_eval_tuple_elements,
-                .expr_idx = tuple_expr_idx,
-                .extra = .{ .current_element_idx = current_element_idx + 1 },
-            });
-
-            const tuple_expr = self.env.store.getExpr(tuple_expr_idx);
-            const cir_elements = switch (tuple_expr) {
-                .e_tuple => |t| self.env.store.sliceExpr(t.elems),
-                else => unreachable,
-            };
-
-            const current_element_expr_idx = cir_elements[@intCast(current_element_idx)];
-
-            self.schedule_work(WorkItem{
-                .kind = .w_eval_expr,
-                .expr_idx = current_element_expr_idx,
-                .extra = .{ .nothing = {} },
-            });
-        } else {
-            self.traceInfo("All tuple elements processed for tuple_expr_idx={}", .{tuple_expr_idx});
-        }
-    }
-
     fn handleDotAccess(self: *Interpreter, field_name_idx: Ident.Idx) EvalError!void {
         self.traceEnter("handleDotAccess field_name_idx={}", .{field_name_idx});
         defer self.traceExit("", .{});
@@ -2096,28 +2041,21 @@ pub const Interpreter = struct {
             },
             .tuple => |tuple_pattern| {
                 const patterns = self.env.store.slicePatterns(tuple_pattern.patterns);
-                const tuple_ptr = @as([*]u8, @ptrCast(@alignCast(value.ptr.?)));
 
                 if (value.layout.tag != .tuple) {
                     return error.LayoutError;
                 }
-                const tuple_data = self.layout_cache.getTupleData(value.layout.data.tuple.idx);
-                const element_layouts = self.layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
 
-                if (patterns.len != element_layouts.len) {
+                // Use TupleAccessor for safe tuple element access
+                const tuple_accessor = try value.asTuple(self.layout_cache);
+
+                if (patterns.len != tuple_accessor.getElementCount()) {
                     return error.ArityMismatch;
                 }
 
                 for (patterns, 0..) |inner_pattern_idx, i| {
-                    const element_layout_info = element_layouts.get(i);
-                    const element_layout = self.layout_cache.getLayout(element_layout_info.layout);
-                    const element_offset = self.layout_cache.getTupleElementOffset(value.layout.data.tuple.idx, @intCast(i));
-                    const element_ptr = tuple_ptr + element_offset;
-
-                    try self.bindPattern(inner_pattern_idx, .{
-                        .layout = element_layout,
-                        .ptr = element_ptr,
-                    });
+                    const element_value = try tuple_accessor.getElement(i);
+                    try self.bindPattern(inner_pattern_idx, element_value);
                 }
             },
             else => {
@@ -2333,6 +2271,23 @@ pub const Interpreter = struct {
                 else => return error.UnsupportedResultType,
             }
         }
+
+        /// Create a TupleAccessor for safe tuple element access
+        pub fn asTuple(self: StackValue, layout_cache: *layout_store.Store) !TupleAccessor {
+            std.debug.assert(self.is_initialized); // Tuple must be initialized before accessing
+            std.debug.assert(self.ptr != null);
+            std.debug.assert(self.layout.tag == .tuple);
+
+            const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
+            const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+
+            return TupleAccessor{
+                .base_value = self,
+                .layout_cache = layout_cache,
+                .tuple_layout = self.layout,
+                .element_layouts = element_layouts,
+            };
+        }
     };
 
     /// Public method to call a closure with arguments already on the stack
@@ -2403,7 +2358,7 @@ pub const Interpreter = struct {
 
             // Record/tuple evaluation
             .w_eval_record_fields => try self.handleRecordFields(work.expr_idx, work.extra.current_field_idx),
-            .w_eval_tuple_elements => try self.handleTupleElements(work.expr_idx, work.extra.current_element_idx),
+            .w_eval_tuple_elements => try self.handleTupleElements(work.expr_idx, work.extra.current_element_idx, roc_ops),
 
             // Block cleanup
             .w_block_cleanup => try self.handleBlockCleanup(work.expr_idx, @intCast(work.extra.bindings_stack_len), roc_ops),
@@ -3231,6 +3186,57 @@ pub const Interpreter = struct {
         // Copy the result
         result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
     }
+
+    fn handleTupleElements(self: *Interpreter, tuple_expr_idx: ModuleEnv.Expr.Idx, current_element_idx: usize, roc_ops: *RocOps) EvalError!void {
+        self.traceEnter("handleTupleElements tuple_expr_idx={}, current_element_idx={}", .{ tuple_expr_idx, current_element_idx });
+        defer self.traceExit("", .{});
+
+        const tuple_layout_idx = self.layout_cache.addTypeVar(@enumFromInt(@intFromEnum(tuple_expr_idx))) catch unreachable;
+        const tuple_layout = self.layout_cache.getLayout(tuple_layout_idx);
+        const tuple_data = self.layout_cache.getTupleData(tuple_layout.data.tuple.idx);
+        const element_layouts = self.layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+
+        // Step 1: Copy the value of the *previous* element (if any) into the tuple structure.
+        if (current_element_idx > 0) {
+            const prev_element_index = current_element_idx - 1;
+
+            const prev_element_value = try self.popStackValue();
+            const tuple_value_on_stack = try self.peekStackValue(1);
+
+            // Use TupleAccessor for safe element access
+            const tuple_accessor = try tuple_value_on_stack.asTuple(self.layout_cache);
+
+            // Set the previous element using safe accessor
+            try tuple_accessor.setElement(prev_element_index, prev_element_value, roc_ops);
+
+            self.traceInfo("Copied element {} using TupleAccessor", .{prev_element_index});
+        }
+
+        // Step 2 & 3: Schedule work for the current element.
+        if (current_element_idx < element_layouts.len) {
+            self.schedule_work(WorkItem{
+                .kind = .w_eval_tuple_elements,
+                .expr_idx = tuple_expr_idx,
+                .extra = .{ .current_element_idx = current_element_idx + 1 },
+            });
+
+            const tuple_expr = self.env.store.getExpr(tuple_expr_idx);
+            const cir_elements = switch (tuple_expr) {
+                .e_tuple => |t| self.env.store.sliceExpr(t.elems),
+                else => unreachable,
+            };
+
+            const current_element_expr_idx = cir_elements[@intCast(current_element_idx)];
+
+            self.schedule_work(WorkItem{
+                .kind = .w_eval_expr,
+                .expr_idx = current_element_expr_idx,
+                .extra = .{ .nothing = {} },
+            });
+        } else {
+            self.traceInfo("All tuple elements processed for tuple_expr_idx={}", .{tuple_expr_idx});
+        }
+    }
 };
 
 /// Helper function to read an integer from memory with the correct precision
@@ -3397,3 +3403,57 @@ fn getClosureParameterPatterns(env_ptr: *const ModuleEnv, expr_idx: Expr.Idx) ![
 
     return param_patterns;
 }
+
+/// Safe accessor for tuple elements with bounds checking and proper memory management
+pub const TupleAccessor = struct {
+    base_value: Interpreter.StackValue,
+    layout_cache: *layout_store.Store,
+    tuple_layout: Layout,
+    element_layouts: layout_.TupleField.SafeMultiList.Slice,
+
+    /// Get a StackValue for the element at the given index
+    pub fn getElement(self: TupleAccessor, index: usize) !Interpreter.StackValue {
+        if (index >= self.element_layouts.len) {
+            return error.TupleIndexOutOfBounds;
+        }
+
+        std.debug.assert(self.base_value.is_initialized);
+        std.debug.assert(self.base_value.ptr != null);
+
+        const element_layout_info = self.element_layouts.get(index);
+        const element_layout = self.layout_cache.getLayout(element_layout_info.layout);
+
+        // Get the offset for this element within the tuple
+        const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.data.tuple.idx, @intCast(index));
+
+        // Calculate the element pointer with proper alignment
+        const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
+        const element_ptr = @as(*anyopaque, @ptrCast(base_ptr + element_offset));
+
+        return Interpreter.StackValue{
+            .layout = element_layout,
+            .ptr = element_ptr,
+            .is_initialized = true, // Elements in existing tuples are initialized
+        };
+    }
+
+    /// Set an element by copying from a source StackValue
+    pub fn setElement(self: TupleAccessor, index: usize, source: Interpreter.StackValue, ops: *RocOps) !void {
+        const dest_element = try self.getElement(index);
+        source.copyToPtr(self.layout_cache, dest_element.ptr.?, ops);
+    }
+
+    /// Get the number of elements in this tuple
+    pub fn getElementCount(self: TupleAccessor) usize {
+        return self.element_layouts.len;
+    }
+
+    /// Get the layout of the element at the given index
+    pub fn getElementLayout(self: TupleAccessor, index: usize) !Layout {
+        if (index >= self.element_layouts.len) {
+            return error.TupleIndexOutOfBounds;
+        }
+        const element_layout_info = self.element_layouts.get(index);
+        return self.layout_cache.getLayout(element_layout_info.layout);
+    }
+};
