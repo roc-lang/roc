@@ -1,49 +1,27 @@
-//! Cross-platform shared memory allocator for sharing data between parent and child processes.
+//! Shared memory allocator for sharing data between parent and child processes.
+//! This is used to efficiently transfer compiler data structures to a host binary
+//! which has been built with a shim that lets it communicate efficiently with the
+//! compiler via shared memory.
 //!
-//! This allocator creates a large anonymous shared memory region that can be accessed by both
-//! parent and child processes. It uses platform-specific APIs to ensure compatibility across
-//! Linux, macOS, BSD, and Windows.
+//! This allocator maps a gigantic anonymous virtual address region, one that's
+//! so large that needing to resize it should never come up in practice. (This is
+//! important, since coordinating resizing with the child process would be fraught.)
 //!
-//! ## Example Usage
+//! An important detail is that it provides access to the child process via a file
+//! descriptor rather than using named shared memory. As it turns out, macOS has a
+//! security restriction where if a process creates an executable on disk (which Roc's
+//! compiler does), and then runs that executable, the child process is not allowed
+//! to call shm_open(). (If it tries to, shm_open always fails with errno 13.) If the
+//! parent process instead gives a fd to the child for the shared memory, the child
+//! process is allowed to use that to map in the shared memory and access it that way.
 //!
-//! Parent process:
-//! ```zig
-//! const page_size = try SharedMemoryAllocator.getSystemPageSize();
-//! const size = 1024 * 1024 * 1024; // 1GB
-//! var shm = try SharedMemoryAllocator.create(allocator, size, page_size);
-//! defer shm.deinit(allocator);
-//!
-//! // Use the allocator...
-//! const data = try shm.allocator().alloc(u8, 1000);
-//!
-//! // Get the actual used size for the child
-//! const used_size = shm.getRecommendedMapSize();
-//!
-//! // Spawn child with the fd and size info
-//! const result = try std.process.Child.run(.{
-//!     .allocator = allocator,
-//!     .argv = &.{ "child_process",
-//!                 try std.fmt.allocPrint(allocator, "--shm-fd={}", .{shm.handle}),
-//!                 try std.fmt.allocPrint(allocator, "--shm-size={}", .{used_size}) },
-//! });
-//! ```
-//!
-//! Child process:
-//! ```zig
-//! // Parse command line args to get fd and size
-//! const shm_fd = args.shm_fd; // File descriptor passed from parent
-//! const shm_size = args.shm_size; // The actual used size, not 1GB
-//!
-//! // Open with the actual used size, not the full 1GB
-//! const page_size = try SharedMemoryAllocator.getSystemPageSize();
-//! var shm = try SharedMemoryAllocator.fromFd(allocator, shm_fd, shm_size, page_size);
-//! defer shm.deinit(allocator);
-//!
-//! // Access the data...
-//! ```
-//!
-//! This approach uses anonymous shared memory which is simpler and more portable
-//! than named shared memory objects.
+//! One more design note on that: the fd is given to the child process by creating a
+//! text file with the same path as the child's executable, but with a different filename.
+//! Since the child executable will have been hardlinked to a random tempdir, and since
+//! it can access its own executable's path while running, it can use that to reliably
+//! discover the path to this text file in a tempdir without the parent process having
+//! to pollute the child process's env vars or CLI args with information from the compiler.
+//! (The text file contains both the file descriptor integer as well as the allocation size.)
 
 const std = @import("std");
 const builtin = @import("builtin");
