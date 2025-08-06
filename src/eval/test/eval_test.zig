@@ -303,6 +303,8 @@ test "crash message storage and retrieval - direct API test" {
     defer interpreter.deinit();
 
     var test_env_instance = test_env.TestEnv.init(testing.allocator);
+    defer test_env_instance.deinit();
+    test_env_instance.setInterpreter(&interpreter);
     var roc_ops = test_env_instance.roc_ops();
 
     // Test that crash functionality works through RocOps

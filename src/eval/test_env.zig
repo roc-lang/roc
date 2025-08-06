@@ -1,21 +1,42 @@
 const std = @import("std");
 const builtins = @import("builtins");
+const interpreter = @import("interpreter.zig");
 
 const RocOps = builtins.host_abi.RocOps;
-const RocAlloc =  builtins.host_abi.RocAlloc;
-const RocDealloc =  builtins.host_abi.RocDealloc;
-const RocRealloc =  builtins.host_abi.RocRealloc;
-const RocDbg =  builtins.host_abi.RocDbg;
-const RocExpectFailed =  builtins.host_abi.RocExpectFailed;
-const RocCrashed =  builtins.host_abi.RocCrashed;
+const RocAlloc = builtins.host_abi.RocAlloc;
+const RocDealloc = builtins.host_abi.RocDealloc;
+const RocRealloc = builtins.host_abi.RocRealloc;
+const RocDbg = builtins.host_abi.RocDbg;
+const RocExpectFailed = builtins.host_abi.RocExpectFailed;
+const RocCrashed = builtins.host_abi.RocCrashed;
 
 pub const TestEnv = struct {
     allocator: std.mem.Allocator,
+    interpreter: ?*interpreter.Interpreter,
 
     pub fn init(allocator: std.mem.Allocator) TestEnv {
-        return TestEnv {
+        return TestEnv{
             .allocator = allocator,
+            .interpreter = null,
         };
+    }
+
+    pub fn setInterpreter(self: *TestEnv, interp: *interpreter.Interpreter) void {
+        self.interpreter = interp;
+    }
+
+    pub fn deinit(self: *TestEnv) void {
+        // Clean up crash message if we allocated it
+        if (self.interpreter) |interp| {
+            if (interp.crash_message) |msg| {
+                // Only free if we allocated it (not a string literal)
+                if (std.mem.eql(u8, msg, "Failed to store crash message")) {
+                    // Don't free string literals
+                } else {
+                    self.allocator.free(msg);
+                }
+            }
+        }
     }
 
     pub fn roc_ops(self: *TestEnv) RocOps {
@@ -121,7 +142,18 @@ fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) cal
 }
 
 fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
-    _ = env;
+    const test_env: *TestEnv = @ptrCast(@alignCast(env));
     const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
-    std.log.err("Test program crashed: {s}", .{msg_slice});
+
+    // Set crash state on the interpreter if it's available
+    if (test_env.interpreter) |interp| {
+        interp.has_crashed = true;
+        // Store the crash message - we need to allocate and copy it since the original may be temporary
+        const owned_msg = test_env.allocator.dupe(u8, msg_slice) catch |err| {
+            std.log.err("Failed to allocate crash message: {}", .{err});
+            interp.crash_message = "Failed to store crash message";
+            return;
+        };
+        interp.crash_message = owned_msg;
+    }
 }

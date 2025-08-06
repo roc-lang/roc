@@ -41,6 +41,8 @@ pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_tr
     defer interpreter.deinit();
 
     var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+    test_env_instance.setInterpreter(&interpreter);
     var roc_ops = test_env_instance.roc_ops();
 
     if (should_trace == .trace) {
@@ -77,6 +79,8 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     defer interpreter.deinit();
 
     var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+    test_env_instance.setInterpreter(&interpreter);
     var roc_ops = test_env_instance.roc_ops();
 
     if (should_trace == .trace) {
@@ -121,6 +125,8 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     defer interpreter.deinit();
 
     var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+    test_env_instance.setInterpreter(&interpreter);
     var roc_ops = test_env_instance.roc_ops();
 
     if (should_trace == .trace) {
@@ -185,6 +191,8 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     defer interpreter.deinit();
 
     var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+    test_env_instance.setInterpreter(&interpreter);
     var roc_ops = test_env_instance.roc_ops();
 
     if (should_trace == .trace) {
@@ -238,6 +246,8 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     defer interpreter.deinit();
 
     var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+    test_env_instance.setInterpreter(&interpreter);
     var roc_ops = test_env_instance.roc_ops();
 
     if (should_trace == .trace) {
@@ -405,6 +415,8 @@ test "eval runtime error - returns crash error" {
         defer interpreter.deinit();
 
         var test_env_instance = test_env.TestEnv.init(test_allocator);
+        defer test_env_instance.deinit();
+        test_env_instance.setInterpreter(&interpreter);
         var roc_ops = test_env_instance.roc_ops();
         const result = interpreter.eval(resources.expr_idx, &roc_ops);
         try testing.expectError(eval.EvalError.Crash, result);
@@ -434,6 +446,8 @@ test "eval tag - already primitive" {
     defer interpreter.deinit();
 
     var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+    test_env_instance.setInterpreter(&interpreter);
     var roc_ops = test_env_instance.roc_ops();
 
     // Try to evaluate - if tag_union layout is not implemented, this might fail
@@ -468,6 +482,8 @@ test "eval binop - basic implementation" {
     defer interpreter.deinit();
 
     var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+    test_env_instance.setInterpreter(&interpreter);
     var roc_ops = test_env_instance.roc_ops();
     const result = try interpreter.eval(resources.expr_idx, &roc_ops);
 
@@ -503,6 +519,8 @@ test "eval if expression with boolean tags" {
         defer interpreter.deinit();
 
         var test_env_instance = test_env.TestEnv.init(test_allocator);
+        defer test_env_instance.deinit();
+        test_env_instance.setInterpreter(&interpreter);
         var roc_ops = test_env_instance.roc_ops();
         const result = try interpreter.eval(resources.expr_idx, &roc_ops);
 
@@ -532,6 +550,8 @@ test "eval empty record" {
         defer interpreter.deinit();
 
         var test_env_instance = test_env.TestEnv.init(test_allocator);
+        defer test_env_instance.deinit();
+        test_env_instance.setInterpreter(&interpreter);
         var roc_ops = test_env_instance.roc_ops();
         const result = interpreter.eval(resources.expr_idx, &roc_ops);
         try testing.expectError(eval.EvalError.Crash, result);
@@ -552,6 +572,8 @@ test "eval empty record" {
         defer interpreter.deinit();
 
         var test_env_instance = test_env.TestEnv.init(test_allocator);
+        defer test_env_instance.deinit();
+        test_env_instance.setInterpreter(&interpreter);
         var roc_ops = test_env_instance.roc_ops();
         const result = interpreter.eval(resources.expr_idx, &roc_ops);
         try testing.expectError(eval.EvalError.ZeroSizedType, result);
@@ -584,6 +606,8 @@ test "interpreter reuse across multiple evaluations" {
         defer interpreter.deinit();
 
         var test_env_instance = test_env.TestEnv.init(test_allocator);
+        defer test_env_instance.deinit();
+        test_env_instance.setInterpreter(&interpreter);
         var roc_ops = test_env_instance.roc_ops();
 
         // Verify work stack is empty before eval
