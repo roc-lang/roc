@@ -84,18 +84,6 @@ pub fn build(b: *std.Build) void {
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
 
-    // Add playground WASM executable
-    //
-    // Windows workaround: Use ReleaseSmall for playground WASM when not in debug mode
-    // This avoids Windows PE file embedding limitations that cause error code 5 (Access Denied)
-    // with ReleaseSafe optimization. The issue occurs because Windows has restrictions on
-    // PE section sizes, and embedding large files (like the 5.7MB playground.wasm) with
-    // ReleaseSafe optimization exceeds these limits.
-    const playground_optimize = if (target.result.os.tag == .windows)
-        std.builtin.OptimizeMode.ReleaseSmall
-    else
-        optimize;
-
     const playground_exe = b.addExecutable(.{
         .name = "playground",
         .root_source_file = b.path("src/playground.zig"),
@@ -103,7 +91,7 @@ pub fn build(b: *std.Build) void {
             .cpu_arch = .wasm32,
             .os_tag = .freestanding,
         }),
-        .optimize = playground_optimize,
+        .optimize = optimize,
     });
     playground_exe.entry = .disabled;
     playground_exe.rdynamic = true;
@@ -122,33 +110,37 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Add playground integration test executable
-    // Use the same Windows workaround for the integration test that embeds the WASM file
-    const playground_test_optimize = if (target.result.os.tag == .windows and optimize != .Debug)
-        std.builtin.OptimizeMode.ReleaseSmall
-    else
-        optimize;
+    // Only build playground integration tests in Debug mode to avoid Zig compiler issues
+    // with the large dependency tree in release builds on some platforms
+    const playground_test_install = if (optimize == .Debug) blk: {
+        const playground_integration_test_exe = b.addExecutable(.{
+            .name = "playground_integration_test",
+            .root_source_file = b.path("test/playground-intergration/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        playground_integration_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+        playground_integration_test_exe.root_module.addImport("build_options", build_options.createModule());
+        roc_modules.addAll(playground_integration_test_exe);
 
-    const playground_integration_test_exe = b.addExecutable(.{
-        .name = "playground_integration_test",
-        .root_source_file = b.path("test/playground-intergration/main.zig"),
-        .target = target,
-        .optimize = playground_test_optimize,
-    });
-    playground_integration_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
-    playground_integration_test_exe.root_module.addAnonymousImport("playground_wasm", .{ .root_source_file = playground_install.emitted_bin });
-    playground_integration_test_exe.root_module.addImport("build_options", build_options.createModule());
-    roc_modules.addAll(playground_integration_test_exe);
+        const install = b.addInstallArtifact(playground_integration_test_exe, .{});
+        // Ensure playground WASM is built before running the integration test
+        install.step.dependOn(&playground_install.step);
+        playground_test_step.dependOn(&install.step);
 
-    const playground_test_install = b.addInstallArtifact(playground_integration_test_exe, .{});
-    playground_test_step.dependOn(&playground_test_install.step);
+        const run_playground_test = b.addRunArtifact(playground_integration_test_exe);
+        if (b.args) |args| {
+            run_playground_test.addArgs(args);
+        }
+        run_playground_test.step.dependOn(&install.step);
+        playground_test_step.dependOn(&run_playground_test.step);
 
-    const run_playground_test = b.addRunArtifact(playground_integration_test_exe);
-    if (b.args) |args| {
-        run_playground_test.addArgs(args);
-    }
-    run_playground_test.step.dependOn(&playground_test_install.step);
-    playground_test_step.dependOn(&run_playground_test.step);
+        break :blk install;
+    } else blk: {
+        // In release builds, playground tests are disabled due to compiler limitations
+        // Create a no-op install step that does nothing
+        break :blk null;
+    };
 
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
@@ -161,7 +153,9 @@ pub fn build(b: *std.Build) void {
 
     b.default_step.dependOn(&all_tests.step);
     b.default_step.dependOn(playground_step);
-    b.default_step.dependOn(&playground_test_install.step);
+    if (playground_test_install) |install| {
+        b.default_step.dependOn(&install.step);
+    }
     if (no_bin) {
         test_step.dependOn(&all_tests.step);
     } else {

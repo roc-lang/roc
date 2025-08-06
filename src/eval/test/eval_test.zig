@@ -621,7 +621,7 @@ test "string refcount - simple integer closure" {
 }
 
 test "string refcount - simple string closure" {
-    try runExpectStr("(|s| s)(\"Test\")", "Test", .trace);
+    try runExpectStr("(|s| s)(\"Test\")", "Test", .no_trace);
 }
 
 test "ModuleEnv serialization and interpreter evaluation" {

@@ -438,7 +438,7 @@ pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: us
                 windows.FILE_MAP_ALL_ACCESS,
                 0, // offset high
                 0, // offset low
-                aligned_size, // Map the aligned size 
+                aligned_size, // Map the aligned size
                 windows.SHARED_MEMORY_BASE_ADDR, // Fixed address to avoid ASLR issues
             );
 
