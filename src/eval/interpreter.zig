@@ -299,11 +299,6 @@ pub const Interpreter = struct {
         return null;
     }
 
-    /// Returns the crash message if the program crashed
-    pub fn getCrashMessage(self: *const Interpreter) ?[]const u8 {
-        return self.crash_message;
-    }
-
     pub fn deinit(self: *Interpreter) void {
         // Clean up heap-allocated string bindings
         for (self.bindings_stack.items) |binding| {
@@ -519,6 +514,7 @@ pub const Interpreter = struct {
         return StackValue{
             .layout = final_value.layout,
             .ptr = @as(*anyopaque, @ptrCast(result_ptr)),
+            .is_initialized = true,
         };
     }
 
@@ -609,11 +605,10 @@ pub const Interpreter = struct {
             .e_int => |int_lit| {
                 const layout_idx = try self.getLayoutIdx(expr_idx);
                 const expr_layout = self.layout_cache.getLayout(layout_idx);
-                const result_value = try self.pushStackValue(expr_layout);
+                var result_value = try self.pushStackValue(expr_layout);
 
                 if (expr_layout.tag == .scalar and expr_layout.data.scalar.tag == .int) {
-                    const precision = expr_layout.data.scalar.data.int;
-                    self.writeIntToMemoryAndTrace(result_value.ptr.?, int_lit.value.toI128(), precision);
+                    result_value.setInt(int_lit.value.toI128());
                     self.traceInfo("Pushed integer literal {d}", .{int_lit.value.toI128()});
                 } else {
                     return error.LayoutError;
@@ -1236,8 +1231,8 @@ pub const Interpreter = struct {
         }
 
         // Read the values
-        const lhs_val = self.readIntFromMemoryAndTrace(lhs.ptr.?, lhs.layout.data.scalar.data.int);
-        const rhs_val = self.readIntFromMemoryAndTrace(rhs.ptr.?, rhs.layout.data.scalar.data.int);
+        const lhs_val = lhs.asInt();
+        const rhs_val = rhs.asInt();
 
         // Pop the operands from the stack, which we can safely do after reading their values
         _ = try self.popStackValue();
@@ -1263,80 +1258,77 @@ pub const Interpreter = struct {
             else => unreachable,
         };
 
-        const result_value = try self.pushStackValue(result_layout);
-        const result_ptr = result_value.ptr.?;
+        var result_value = try self.pushStackValue(result_layout);
 
-        const lhs_precision: types.Num.Int.Precision = lhs.layout.data.scalar.data.int;
-
-        // Perform the operation and write to our result_ptr
+        // Perform the operation and write to our result_value
         switch (kind) {
             .w_binop_add => {
                 const result_val: i128 = lhs_val + rhs_val;
                 self.traceInfo("Addition operation: {} + {} = {}", .{ lhs_val, rhs_val, result_val });
-                self.writeIntToMemoryAndTrace(result_ptr, result_val, lhs_precision);
+                result_value.setInt(result_val);
             },
             .w_binop_sub => {
                 const result_val: i128 = lhs_val - rhs_val;
-                self.writeIntToMemoryAndTrace(result_ptr, result_val, lhs_precision);
+                result_value.setInt(result_val);
             },
             .w_binop_mul => {
                 const result_val: i128 = lhs_val * rhs_val;
-                self.writeIntToMemoryAndTrace(result_ptr, result_val, lhs_precision);
+                result_value.setInt(result_val);
             },
             .w_binop_div => {
                 if (rhs_val == 0) {
                     return error.DivisionByZero;
                 }
                 const result_val: i128 = @divTrunc(lhs_val, rhs_val);
-                self.writeIntToMemoryAndTrace(result_ptr, result_val, lhs_precision);
+                result_value.setInt(result_val);
             },
             .w_binop_div_trunc => {
                 if (rhs_val == 0) {
                     return error.DivisionByZero;
                 }
                 const result_val: i128 = @divTrunc(lhs_val, rhs_val);
-                self.writeIntToMemoryAndTrace(result_ptr, result_val, lhs_precision);
+                result_value.setInt(result_val);
             },
             .w_binop_rem => {
                 if (rhs_val == 0) {
                     return error.DivisionByZero;
                 }
                 const result_val: i128 = @rem(lhs_val, rhs_val);
-                self.writeIntToMemoryAndTrace(result_ptr, result_val, lhs_precision);
+                result_value.setInt(result_val);
             },
             .w_binop_eq => {
-                const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
-                bool_ptr.* = if (lhs_val == rhs_val) 1 else 0;
+                const bool_result: i128 = if (lhs_val == rhs_val) 1 else 0;
+                result_value.setInt(bool_result);
             },
             .w_binop_ne => {
-                const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
-                bool_ptr.* = if (lhs_val != rhs_val) 1 else 0;
+                const bool_result: i128 = if (lhs_val != rhs_val) 1 else 0;
+                result_value.setInt(bool_result);
             },
             .w_binop_gt => {
-                const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
-                bool_ptr.* = if (lhs_val > rhs_val) 1 else 0;
+                const bool_result: i128 = if (lhs_val > rhs_val) 1 else 0;
+                result_value.setInt(bool_result);
             },
             .w_binop_lt => {
-                const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
-                bool_ptr.* = if (lhs_val < rhs_val) 1 else 0;
+                const bool_result: i128 = if (lhs_val < rhs_val) 1 else 0;
+                result_value.setInt(bool_result);
             },
             .w_binop_ge => {
-                const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
-                bool_ptr.* = if (lhs_val >= rhs_val) 1 else 0;
+                const bool_result: i128 = if (lhs_val >= rhs_val) 1 else 0;
+                result_value.setInt(bool_result);
             },
             .w_binop_le => {
-                const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
-                bool_ptr.* = if (lhs_val <= rhs_val) 1 else 0;
+                const bool_result: i128 = if (lhs_val <= rhs_val) 1 else 0;
+                result_value.setInt(bool_result);
             },
             .w_binop_and => {
-                const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
                 // Boolean AND: both operands must be truthy (non-zero)
-                bool_ptr.* = if (lhs_val != 0 and rhs_val != 0) 1 else 0;
+                const bool_result: i128 = if (lhs_val != 0 and rhs_val != 0) 1 else 0;
+                result_value.setInt(bool_result);
             },
             .w_binop_or => {
-                const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
                 // Boolean OR: at least one operand must be truthy (non-zero)
-                bool_ptr.* = if (lhs_val != 0 or rhs_val != 0) 1 else 0;
+                const bool_result: i128 = if (lhs_val != 0 or rhs_val != 0) 1 else 0;
+                result_value.setInt(bool_result);
             },
             else => unreachable,
         }
@@ -1344,7 +1336,7 @@ pub const Interpreter = struct {
 
     fn completeUnaryMinus(self: *Interpreter) EvalError!void {
         // Pop the operand layout
-        const operand_value = try self.peekStackValue(1);
+        var operand_value = try self.peekStackValue(1);
         const operand_layout = operand_value.layout;
 
         // For now, only support integer operations
@@ -1357,14 +1349,11 @@ pub const Interpreter = struct {
             return error.LayoutError;
         }
 
-        // Calculate operand size and read the value
-        const operand_val = self.readIntFromMemoryAndTrace(operand_value.ptr.?, operand_scalar.data.int);
-
+        // Read the value and negate it in-place
+        const operand_val = operand_value.asInt();
+        operand_value.is_initialized = false; // reset the flag to permit replacement of the value.
+        operand_value.setInt(-operand_val);
         self.traceInfo("Unary minus operation: -{} = {}", .{ operand_val, -operand_val });
-
-        // Negate the value and write it back to the same location
-        const result_val: i128 = -operand_val;
-        self.writeIntToMemoryAndTrace(operand_value.ptr.?, result_val, operand_scalar.data.int);
     }
 
     fn completeUnaryNot(self: *Interpreter) EvalError!void {
@@ -1995,7 +1984,7 @@ pub const Interpreter = struct {
                 .scalar => switch (value.layout.data.scalar.tag) {
                     .int => {
                         std.debug.assert(value.ptr != null);
-                        const int_val = self.readIntFromMemoryAndTrace(value.ptr.?, value.layout.data.scalar.data.int);
+                        const int_val = value.asInt();
                         writer.print("int({s}) {}\n", .{
                             @tagName(value.layout.data.scalar.data.int),
                             int_val,
@@ -2147,9 +2136,12 @@ pub const Interpreter = struct {
         layout: Layout,
         /// Ptr to the actual value in stack memory
         ptr: ?*anyopaque,
+        /// Flag to track whether the memory has been initialized
+        is_initialized: bool = false,
 
         /// Copy this stack value to a destination pointer with bounds checking
         pub fn copyToPtr(self: StackValue, layout_cache: *layout_store.Store, dest_ptr: *anyopaque, ops: *RocOps) void {
+            std.debug.assert(self.is_initialized); // Source must be initialized before copying
             if (self.ptr == null) {
                 std.log.err("Stack result pointer is null, cannot copy result", .{});
                 return;
@@ -2229,6 +2221,69 @@ pub const Interpreter = struct {
             const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
             const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
             @memcpy(dst, src);
+        }
+
+        /// Read this StackValue's integer value, ensuring it's initialized
+        pub fn asInt(self: StackValue) i128 {
+            std.debug.assert(self.is_initialized); // Ensure initialized before reading
+            std.debug.assert(self.ptr != null);
+            std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+
+            const precision = self.layout.data.scalar.data.int;
+            return readIntFromMemory(self.ptr.?, precision);
+        }
+
+        /// Update an already-initialized StackValue's integer value
+        pub fn setInt(self: *StackValue, value: i128) void {
+            std.debug.assert(!self.is_initialized); // Avoid accidental overwrite, manually toggle this if updating an already initialized value
+            std.debug.assert(self.ptr != null);
+            std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+
+            const precision = self.layout.data.scalar.data.int;
+
+            // Inline integer writing logic with proper type casting and alignment
+            switch (precision) {
+                .u8 => {
+                    const typed_ptr: *u8 = @ptrCast(@alignCast(self.ptr.?));
+                    typed_ptr.* = @intCast(value);
+                },
+                .u16 => {
+                    const typed_ptr: *u16 = @ptrCast(@alignCast(self.ptr.?));
+                    typed_ptr.* = @intCast(value);
+                },
+                .u32 => {
+                    const typed_ptr: *u32 = @ptrCast(@alignCast(self.ptr.?));
+                    typed_ptr.* = @intCast(value);
+                },
+                .u64 => {
+                    const typed_ptr: *u64 = @ptrCast(@alignCast(self.ptr.?));
+                    typed_ptr.* = @intCast(value);
+                },
+                .u128 => {
+                    const typed_ptr: *u128 = @ptrCast(@alignCast(self.ptr.?));
+                    typed_ptr.* = @intCast(value);
+                },
+                .i8 => {
+                    const typed_ptr: *i8 = @ptrCast(@alignCast(self.ptr.?));
+                    typed_ptr.* = @intCast(value);
+                },
+                .i16 => {
+                    const typed_ptr: *i16 = @ptrCast(@alignCast(self.ptr.?));
+                    typed_ptr.* = @intCast(value);
+                },
+                .i32 => {
+                    const typed_ptr: *i32 = @ptrCast(@alignCast(self.ptr.?));
+                    typed_ptr.* = @intCast(value);
+                },
+                .i64 => {
+                    const typed_ptr: *i64 = @ptrCast(@alignCast(self.ptr.?));
+                    typed_ptr.* = @intCast(value);
+                },
+                .i128 => {
+                    const typed_ptr: *i128 = @ptrCast(@alignCast(self.ptr.?));
+                    typed_ptr.* = value;
+                },
+            }
         }
 
         /// Type-aware result handling that properly formats results for platforms
@@ -2480,6 +2535,7 @@ pub const Interpreter = struct {
         const result = StackValue{
             .layout = value_layout,
             .ptr = value_ptr,
+            .is_initialized = false,
         };
 
         self.traceInfo("pushStackValue returning: ptr={?}, layout={s}", .{ value_ptr, @tagName(value_layout.tag) });
@@ -2501,10 +2557,10 @@ pub const Interpreter = struct {
         self.traceInfo("POP val_size={}, old_stack_used={}, new_stack_used={}", .{ value_size, old_stack_used, self.stack_memory.used });
 
         if (value_size == 0) {
-            return StackValue{ .layout = value.layout, .ptr = null };
+            return StackValue{ .layout = value.layout, .ptr = null, .is_initialized = true };
         } else {
             const ptr = &self.stack_memory.start[value.offset];
-            return StackValue{ .layout = value.layout, .ptr = @as(*anyopaque, @ptrCast(ptr)) };
+            return StackValue{ .layout = value.layout, .ptr = @as(*anyopaque, @ptrCast(ptr)), .is_initialized = true };
         }
     }
 
@@ -2721,11 +2777,11 @@ pub const Interpreter = struct {
         const value_size = self.layout_cache.layoutSize(value.layout);
 
         if (value_size == 0) {
-            return StackValue{ .layout = value.layout, .ptr = null };
+            return StackValue{ .layout = value.layout, .ptr = null, .is_initialized = true };
         }
 
         const ptr = &self.stack_memory.start[value.offset];
-        const result = StackValue{ .layout = value.layout, .ptr = @as(*anyopaque, @ptrCast(ptr)) };
+        const result = StackValue{ .layout = value.layout, .ptr = @as(*anyopaque, @ptrCast(ptr)), .is_initialized = true };
 
         return result;
     }
@@ -2870,76 +2926,6 @@ pub const Interpreter = struct {
             },
             else => return null,
         }
-    }
-
-    fn writeIntToMemoryAndTrace(self: *const Interpreter, ptr: *anyopaque, value: i128, precision: types.Num.Int.Precision) void {
-        if (self.trace_writer) |writer| {
-            self.printTraceIndent();
-            writer.print("  writeInt {d} to ptr {}\n", .{ value, @intFromPtr(ptr) }) catch {};
-        }
-
-        // Inline integer writing logic with proper type casting and alignment
-        switch (precision) {
-            .u8 => {
-                const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u8) == 0);
-                typed_ptr.* = @as(u8, @intCast(value));
-            },
-            .u16 => {
-                const typed_ptr = @as(*u16, @ptrCast(@alignCast(ptr)));
-                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u16) == 0);
-                typed_ptr.* = @as(u16, @intCast(value));
-            },
-            .u32 => {
-                const typed_ptr = @as(*u32, @ptrCast(@alignCast(ptr)));
-                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u32) == 0);
-                typed_ptr.* = @as(u32, @intCast(value));
-            },
-            .u64 => {
-                const typed_ptr = @as(*u64, @ptrCast(@alignCast(ptr)));
-                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u64) == 0);
-                typed_ptr.* = @as(u64, @intCast(value));
-            },
-            .u128 => {
-                const typed_ptr = @as(*u128, @ptrCast(@alignCast(ptr)));
-                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u128) == 0);
-                typed_ptr.* = @as(u128, @intCast(value));
-            },
-            .i8 => {
-                const typed_ptr = @as(*i8, @ptrCast(@alignCast(ptr)));
-                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i8) == 0);
-                typed_ptr.* = @as(i8, @intCast(value));
-            },
-            .i16 => {
-                const typed_ptr = @as(*i16, @ptrCast(@alignCast(ptr)));
-                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i16) == 0);
-                typed_ptr.* = @as(i16, @intCast(value));
-            },
-            .i32 => {
-                const typed_ptr = @as(*i32, @ptrCast(@alignCast(ptr)));
-                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i32) == 0);
-                typed_ptr.* = @as(i32, @intCast(value));
-            },
-            .i64 => {
-                const typed_ptr = @as(*i64, @ptrCast(@alignCast(ptr)));
-                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i64) == 0);
-                typed_ptr.* = @as(i64, @intCast(value));
-            },
-            .i128 => {
-                const typed_ptr = @as(*i128, @ptrCast(@alignCast(ptr)));
-                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i128) == 0);
-                typed_ptr.* = value;
-            },
-        }
-    }
-
-    fn readIntFromMemoryAndTrace(self: *const Interpreter, ptr: *anyopaque, precision: types.Num.Int.Precision) i128 {
-        const value = readIntFromMemory(ptr, precision);
-        if (self.trace_writer) |writer| {
-            self.printTraceIndent();
-            writer.print("  readInt {d} from ptr {}\n", .{ value, @intFromPtr(ptr) }) catch {};
-        }
-        return value;
     }
 
     /// Copies captured values into closure memory
