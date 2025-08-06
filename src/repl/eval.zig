@@ -331,7 +331,7 @@ pub const Repl = struct {
                     return try self.allocator.dupe(u8, if (bool_value.* == 1) "True" else "False");
                 },
                 .int => {
-                    const value: i128 = eval.readIntFromMemory(@ptrCast(result.ptr.?), result.layout.data.scalar.data.int);
+                    const value = result.asI128();
                     return try std.fmt.allocPrint(self.allocator, "{d}", .{value});
                 },
                 .frac => {
@@ -599,8 +599,7 @@ test "Repl - minimal interpreter integration" {
     try testing.expect(result.layout.data.scalar.tag == .int);
 
     // Read the value back
-    const precision = result.layout.data.scalar.data.int;
-    const value: i128 = eval.readIntFromMemory(@ptrCast(result.ptr.?), precision);
+    const value = result.asI128();
 
     try testing.expectEqual(@as(i128, 42), value);
 }

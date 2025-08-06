@@ -695,14 +695,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), &roc_ops);
 
-        // Verify we got the expected result
-        try testing.expect(result.layout.tag == .scalar);
-        try testing.expect(result.layout.data.scalar.tag == .int);
-
-        const precision = result.layout.data.scalar.data.int;
-        const int_val = eval.readIntFromMemory(@ptrCast(result.ptr.?), precision);
-
-        try testing.expectEqual(@as(i128, 13), int_val);
+        try testing.expectEqual(@as(i128, 13), result.asI128());
     }
 
     // Test 2: Full serialization and deserialization with interpreter evaluation
@@ -778,13 +771,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
             const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), &roc_ops);
 
             // Verify we get the same result from the deserialized ModuleEnv
-            try testing.expect(result.layout.tag == .scalar);
-            try testing.expect(result.layout.data.scalar.tag == .int);
-
-            const precision = result.layout.data.scalar.data.int;
-            const int_val = eval.readIntFromMemory(@ptrCast(result.ptr.?), precision);
-
-            try testing.expectEqual(@as(i128, 13), int_val);
+            try testing.expectEqual(@as(i128, 13), result.asI128());
         }
     }
 }

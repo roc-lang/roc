@@ -37,6 +37,7 @@ const collections = @import("collections");
 const layout = @import("../layout/layout.zig");
 const build_options = @import("build_options");
 const stack = @import("stack.zig");
+const StackValue = @import("StackValue.zig");
 
 const StringLiteral = base.StringLiteral;
 const RocOps = builtins.host_abi.RocOps;
@@ -220,8 +221,11 @@ const Binding = struct {
     layout: Layout,
 };
 
-/// Represents a value on the stack.
-pub const Value = struct {
+/// Represents a value on the stack, uses an offset keeps this
+/// compact and efficient.
+///
+/// See `StackValue` for the public facing API.
+const InternalStackValue = struct {
     /// Type layout of the value
     layout: Layout,
     /// Offset into the `stack_memory` where the value is stored
@@ -248,7 +252,7 @@ pub const Interpreter = struct {
     ///
     /// There's one value per logical value in the layout stack, but that value
     /// will consume an arbitrary amount of space in the `stack_memory`
-    value_stack: std.ArrayList(Value),
+    value_stack: std.ArrayList(InternalStackValue),
     /// Active parameter or local bindings
     bindings_stack: std.ArrayList(Binding),
     /// Function stack
@@ -279,7 +283,7 @@ pub const Interpreter = struct {
             .layout_cache = layout_cache,
             .type_store = type_store,
             .work_stack = try std.ArrayList(WorkItem).initCapacity(allocator, 128),
-            .value_stack = try std.ArrayList(Value).initCapacity(allocator, 128),
+            .value_stack = try std.ArrayList(InternalStackValue).initCapacity(allocator, 128),
             .bindings_stack = try std.ArrayList(Binding).initCapacity(allocator, 128),
             .frame_stack = try std.ArrayList(CallFrame).initCapacity(allocator, 128),
             .trace_indent = 0,
@@ -1173,7 +1177,7 @@ pub const Interpreter = struct {
                 const closure_alignment = closure_layout.alignment(target_usize);
                 const closure_ptr = try self.stack_memory.alloca(total_size, closure_alignment);
 
-                try self.value_stack.append(Value{
+                try self.value_stack.append(InternalStackValue{
                     .layout = closure_layout,
                     .offset = @as(u32, @truncate(@intFromPtr(closure_ptr) - @intFromPtr(@as(*const u8, @ptrCast(self.stack_memory.start))))),
                 });
@@ -1232,8 +1236,8 @@ pub const Interpreter = struct {
         }
 
         // Read the values
-        const lhs_val = lhs.asInt();
-        const rhs_val = rhs.asInt();
+        const lhs_val = lhs.asI128();
+        const rhs_val = rhs.asI128();
 
         // Pop the operands from the stack, which we can safely do after reading their values
         _ = try self.popStackValue();
@@ -1351,7 +1355,7 @@ pub const Interpreter = struct {
         }
 
         // Read the value and negate it in-place
-        const operand_val = operand_value.asInt();
+        const operand_val = operand_value.asI128();
         operand_value.is_initialized = false; // reset the flag to permit replacement of the value.
         operand_value.setInt(-operand_val);
         self.traceInfo("Unary minus operation: -{} = {}", .{ operand_val, -operand_val });
@@ -1928,7 +1932,7 @@ pub const Interpreter = struct {
                 .scalar => switch (value.layout.data.scalar.tag) {
                     .int => {
                         std.debug.assert(value.ptr != null);
-                        const int_val = value.asInt();
+                        const int_val = value.asI128();
                         writer.print("int({s}) {}\n", .{
                             @tagName(value.layout.data.scalar.data.int),
                             int_val,
@@ -2063,231 +2067,6 @@ pub const Interpreter = struct {
             },
         }
     }
-
-    /// The layout and an offset to the value in stack memory.
-    ///
-    /// The caller is responsible for interpreting the memory correctly
-    /// based on the layout information.
-    pub const StackValue = struct {
-        /// Type and memory layout information for the result value
-        layout: Layout,
-        /// Ptr to the actual value in stack memory
-        ptr: ?*anyopaque,
-        /// Flag to track whether the memory has been initialized
-        is_initialized: bool = false,
-
-        /// Copy this stack value to a destination pointer with bounds checking
-        pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, ops: *RocOps) void {
-            std.debug.assert(self.is_initialized); // Source must be initialized before copying
-            if (self.ptr == null) {
-                std.log.err("Stack result pointer is null, cannot copy result", .{});
-                return;
-            }
-
-            const result_size = layout_cache.layoutSize(self.layout);
-            if (result_size == 0) {
-                return;
-            }
-
-            if (self.layout.tag == .scalar) {
-                switch (self.layout.data.scalar.tag) {
-                    .str => {
-                        // Clone the RocStr into the interpreter's heap
-                        std.debug.assert(self.ptr != null);
-                        const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
-                        const dest_str: *RocStr = @ptrCast(@alignCast(dest_ptr));
-                        dest_str.* = src_str.clone(ops);
-                        return;
-                    },
-                    .int => {
-                        // Use type-specific integer copying with precision
-                        std.debug.assert(self.ptr != null);
-                        const precision = self.layout.data.scalar.data.int;
-                        const value = readIntFromMemory(self.ptr.?, precision);
-
-                        // Inline integer writing logic with proper type casting and alignment
-                        switch (precision) {
-                            .u8 => {
-                                const typed_ptr: *u8 = @ptrCast(@alignCast(dest_ptr));
-                                typed_ptr.* = @intCast(value);
-                            },
-                            .u16 => {
-                                const typed_ptr: *u16 = @ptrCast(@alignCast(dest_ptr));
-                                typed_ptr.* = @intCast(value);
-                            },
-                            .u32 => {
-                                const typed_ptr: *u32 = @ptrCast(@alignCast(dest_ptr));
-                                typed_ptr.* = @intCast(value);
-                            },
-                            .u64 => {
-                                const typed_ptr: *u64 = @ptrCast(@alignCast(dest_ptr));
-                                typed_ptr.* = @intCast(value);
-                            },
-                            .u128 => {
-                                const typed_ptr: *u128 = @ptrCast(@alignCast(dest_ptr));
-                                typed_ptr.* = @intCast(value);
-                            },
-                            .i8 => {
-                                const typed_ptr: *i8 = @ptrCast(@alignCast(dest_ptr));
-                                typed_ptr.* = @intCast(value);
-                            },
-                            .i16 => {
-                                const typed_ptr: *i16 = @ptrCast(@alignCast(dest_ptr));
-                                typed_ptr.* = @intCast(value);
-                            },
-                            .i32 => {
-                                const typed_ptr: *i32 = @ptrCast(@alignCast(dest_ptr));
-                                typed_ptr.* = @intCast(value);
-                            },
-                            .i64 => {
-                                const typed_ptr: *i64 = @ptrCast(@alignCast(dest_ptr));
-                                typed_ptr.* = @intCast(value);
-                            },
-                            .i128 => {
-                                const typed_ptr: *i128 = @ptrCast(@alignCast(dest_ptr));
-                                typed_ptr.* = value;
-                            },
-                        }
-                        return;
-                    },
-                    else => {},
-                }
-            }
-
-            std.debug.assert(self.ptr != null);
-            const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
-            const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
-            @memcpy(dst, src);
-        }
-
-        /// Read this StackValue's integer value, ensuring it's initialized
-        pub fn asInt(self: StackValue) i128 {
-            std.debug.assert(self.is_initialized); // Ensure initialized before reading
-            std.debug.assert(self.ptr != null);
-            std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
-
-            const precision = self.layout.data.scalar.data.int;
-            return readIntFromMemory(self.ptr.?, precision);
-        }
-
-        /// Update an already-initialized StackValue's integer value
-        pub fn setInt(self: *StackValue, value: i128) void {
-            std.debug.assert(!self.is_initialized); // Avoid accidental overwrite, manually toggle this if updating an already initialized value
-            std.debug.assert(self.ptr != null);
-            std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
-
-            const precision = self.layout.data.scalar.data.int;
-
-            // Inline integer writing logic with proper type casting and alignment
-            switch (precision) {
-                .u8 => {
-                    const typed_ptr: *u8 = @ptrCast(@alignCast(self.ptr.?));
-                    typed_ptr.* = @intCast(value);
-                },
-                .u16 => {
-                    const typed_ptr: *u16 = @ptrCast(@alignCast(self.ptr.?));
-                    typed_ptr.* = @intCast(value);
-                },
-                .u32 => {
-                    const typed_ptr: *u32 = @ptrCast(@alignCast(self.ptr.?));
-                    typed_ptr.* = @intCast(value);
-                },
-                .u64 => {
-                    const typed_ptr: *u64 = @ptrCast(@alignCast(self.ptr.?));
-                    typed_ptr.* = @intCast(value);
-                },
-                .u128 => {
-                    const typed_ptr: *u128 = @ptrCast(@alignCast(self.ptr.?));
-                    typed_ptr.* = @intCast(value);
-                },
-                .i8 => {
-                    const typed_ptr: *i8 = @ptrCast(@alignCast(self.ptr.?));
-                    typed_ptr.* = @intCast(value);
-                },
-                .i16 => {
-                    const typed_ptr: *i16 = @ptrCast(@alignCast(self.ptr.?));
-                    typed_ptr.* = @intCast(value);
-                },
-                .i32 => {
-                    const typed_ptr: *i32 = @ptrCast(@alignCast(self.ptr.?));
-                    typed_ptr.* = @intCast(value);
-                },
-                .i64 => {
-                    const typed_ptr: *i64 = @ptrCast(@alignCast(self.ptr.?));
-                    typed_ptr.* = @intCast(value);
-                },
-                .i128 => {
-                    const typed_ptr: *i128 = @ptrCast(@alignCast(self.ptr.?));
-                    typed_ptr.* = value;
-                },
-            }
-        }
-
-        /// Type-aware result handling that properly formats results for platforms
-        fn handleResult(
-            stack_result: eval.Interpreter.StackValue,
-            layout_cache: *LayoutStore,
-            ops: *builtins.host_abi.RocOps,
-            ret_ptr: *anyopaque,
-        ) !void {
-            switch (stack_result.layout.tag) {
-                .scalar => {
-                    switch (stack_result.layout.data.scalar.tag) {
-                        .int, .bool, .frac => {
-                            // Direct copy for primitive types
-                            const result_size = layout_cache.layoutSize(stack_result.layout);
-                            if (result_size > 0 and stack_result.ptr != null) {
-                                const src = @as([*]u8, @ptrCast(stack_result.ptr.?))[0..result_size];
-                                const dst = @as([*]u8, @ptrCast(ret_ptr))[0..result_size];
-                                @memcpy(dst, src);
-                            }
-                        },
-                        .str => {
-                            if (stack_result.ptr == null) {
-                                // Return empty string
-                                const empty_str = RocStr.empty();
-                                const dst = @as(*RocStr, @ptrCast(@alignCast(ret_ptr)));
-                                dst.* = empty_str;
-                                return;
-                            }
-
-                            // Get the string from interpreter result
-                            const src_str = @as(*const RocStr, @ptrCast(@alignCast(stack_result.ptr.?))).*;
-
-                            // Create new RocStr using host's allocator
-                            const new_str = if (src_str.isSmallStr())
-                                src_str // Small strings can be copied directly
-                            else
-                                src_str.clone(ops); // Large strings need proper allocation
-
-                            // Copy to return pointer
-                            const dst = @as(*RocStr, @ptrCast(@alignCast(ret_ptr)));
-                            dst.* = new_str;
-                        },
-                        else => return error.UnsupportedResultType,
-                    }
-                },
-                else => return error.UnsupportedResultType,
-            }
-        }
-
-        /// Create a TupleAccessor for safe tuple element access
-        pub fn asTuple(self: StackValue, layout_cache: *LayoutStore) !TupleAccessor {
-            std.debug.assert(self.is_initialized); // Tuple must be initialized before accessing
-            std.debug.assert(self.ptr != null);
-            std.debug.assert(self.layout.tag == .tuple);
-
-            const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
-            const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
-
-            return TupleAccessor{
-                .base_value = self,
-                .layout_cache = layout_cache,
-                .tuple_layout = self.layout,
-                .element_layouts = element_layouts,
-            };
-        }
-    };
 
     /// Public method to call a closure with arguments already on the stack
     /// This method assumes the arguments are already pushed onto the stack in the correct order
@@ -2481,7 +2260,7 @@ pub const Interpreter = struct {
 
         self.traceInfo("PUSH val_size={}, old_stack_used={}, new_stack_used={}", .{ value_size, old_stack_used, self.stack_memory.used });
 
-        try self.value_stack.append(Value{
+        try self.value_stack.append(InternalStackValue{
             .layout = value_layout,
             .offset = offset,
         });
@@ -2777,7 +2556,7 @@ pub const Interpreter = struct {
         const closure_ptr = try self.stack_memory.alloca(total_size, total_alignment);
 
         // Manually push the layout onto the value stack
-        try self.value_stack.append(Value{
+        try self.value_stack.append(InternalStackValue{
             .layout = closure_layout,
             .offset = @as(u32, @truncate(@intFromPtr(closure_ptr) - @intFromPtr(@as(*const u8, @ptrCast(self.stack_memory.start))))),
         });
@@ -3238,66 +3017,6 @@ pub const Interpreter = struct {
     }
 };
 
-/// Helper function to read an integer from memory with the correct precision
-pub fn readIntFromMemory(ptr: *anyopaque, precision: types.Num.Int.Precision) i128 {
-    return switch (precision) {
-        .u8 => blk: {
-            const typed_ptr = @as(*const u8, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u8) == 0);
-            break :blk @as(i128, typed_ptr.*);
-        },
-        .u16 => blk: {
-            const typed_ptr = @as(*const u16, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u16) == 0);
-            break :blk @as(i128, typed_ptr.*);
-        },
-        .u32 => blk: {
-            const typed_ptr = @as(*const u32, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u32) == 0);
-            break :blk @as(i128, typed_ptr.*);
-        },
-        .u64 => blk: {
-            const typed_ptr = @as(*const u64, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u64) == 0);
-            break :blk @as(i128, typed_ptr.*);
-        },
-        .u128 => blk: {
-            const typed_ptr = @as(*const u128, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u128) == 0);
-            break :blk @as(i128, @intCast(typed_ptr.*));
-        },
-        .i8 => blk: {
-            const typed_ptr = @as(*const i8, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i8) == 0);
-            break :blk @as(i128, typed_ptr.*);
-        },
-        .i16 => blk: {
-            const typed_ptr = @as(*const i16, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i16) == 0);
-            break :blk @as(i128, typed_ptr.*);
-        },
-        .i32 => blk: {
-            const typed_ptr = @as(*const i32, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i32) == 0);
-            break :blk @as(i128, typed_ptr.*);
-        },
-        .i64 => blk: {
-            const typed_ptr = @as(*const i64, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i64) == 0);
-            break :blk @as(i128, typed_ptr.*);
-        },
-        .i128 => blk: {
-            const typed_ptr = @as(*const i128, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i128) == 0);
-            break :blk typed_ptr.*;
-        },
-    };
-}
-
-test {
-    _ = @import("test/eval_test.zig");
-}
-
 test "stack-based binary operations" {
     // Test that the stack-based interpreter correctly evaluates binary operations
     const allocator = std.testing.allocator;
@@ -3402,57 +3121,3 @@ fn getClosureParameterPatterns(env_ptr: *const ModuleEnv, expr_idx: Expr.Idx) ![
 
     return param_patterns;
 }
-
-/// Safe accessor for tuple elements with bounds checking and proper memory management
-pub const TupleAccessor = struct {
-    base_value: Interpreter.StackValue,
-    layout_cache: *LayoutStore,
-    tuple_layout: Layout,
-    element_layouts: layout.TupleField.SafeMultiList.Slice,
-
-    /// Get a StackValue for the element at the given index
-    pub fn getElement(self: TupleAccessor, index: usize) !Interpreter.StackValue {
-        if (index >= self.element_layouts.len) {
-            return error.TupleIndexOutOfBounds;
-        }
-
-        std.debug.assert(self.base_value.is_initialized);
-        std.debug.assert(self.base_value.ptr != null);
-
-        const element_layout_info = self.element_layouts.get(index);
-        const element_layout = self.layout_cache.getLayout(element_layout_info.layout);
-
-        // Get the offset for this element within the tuple
-        const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.data.tuple.idx, @intCast(index));
-
-        // Calculate the element pointer with proper alignment
-        const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
-        const element_ptr = @as(*anyopaque, @ptrCast(base_ptr + element_offset));
-
-        return Interpreter.StackValue{
-            .layout = element_layout,
-            .ptr = element_ptr,
-            .is_initialized = true, // Elements in existing tuples are initialized
-        };
-    }
-
-    /// Set an element by copying from a source StackValue
-    pub fn setElement(self: TupleAccessor, index: usize, source: Interpreter.StackValue, ops: *RocOps) !void {
-        const dest_element = try self.getElement(index);
-        source.copyToPtr(self.layout_cache, dest_element.ptr.?, ops);
-    }
-
-    /// Get the number of elements in this tuple
-    pub fn getElementCount(self: TupleAccessor) usize {
-        return self.element_layouts.len;
-    }
-
-    /// Get the layout of the element at the given index
-    pub fn getElementLayout(self: TupleAccessor, index: usize) !Layout {
-        if (index >= self.element_layouts.len) {
-            return error.TupleIndexOutOfBounds;
-        }
-        const element_layout_info = self.element_layouts.get(index);
-        return self.layout_cache.getLayout(element_layout_info.layout);
-    }
-};
