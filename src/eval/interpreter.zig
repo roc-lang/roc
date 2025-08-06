@@ -2485,20 +2485,20 @@ pub const Interpreter = struct {
         if (segment_count == 1) {
             // The single segment is already on the stack as the result
             const segment_value = try self.popStackValue();
-            
+
             // If it's already a string, just push it back as the final result
             if (segment_value.layout.tag == .scalar and segment_value.layout.data.scalar.tag == .str) {
                 const str_layout = Layout.str();
                 const result_value = try self.pushStackValue(str_layout);
-                
+
                 // Move the string (no reference count change needed)
                 const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(segment_value.ptr.?));
                 const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
                 dest_str.* = src_str.*;
-                
+
                 return;
             }
-            
+
             // Not a string, convert it
             const segment_str = try self.valueToString(segment_value, roc_ops);
             const str_layout = Layout.str();
@@ -2558,11 +2558,11 @@ pub const Interpreter = struct {
         // Push the final string onto the stack
         const str_layout = Layout.str();
         const result_value = try self.pushStackValue(str_layout);
-        
+
         // Copy the result string into the stack value
         const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
         dest_str.* = result_str;
-        
+
         self.traceInfo("String interpolation complete, result length: {}", .{result_str.asSlice().len});
     }
 
