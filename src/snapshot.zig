@@ -14,11 +14,19 @@ const types = @import("types");
 const reporting = @import("reporting");
 const Can = @import("can");
 const Check = @import("check");
+const builtins = @import("builtins");
 
 const cache = @import("cache/mod.zig");
 const fmt = @import("fmt.zig");
 const repl = @import("repl/eval.zig");
 
+const RocExpectFailed = builtins.host_abi.RocExpectFailed;
+const RocCrashed = builtins.host_abi.RocCrashed;
+const RocDealloc = builtins.host_abi.RocDealloc;
+const RocRealloc = builtins.host_abi.RocRealloc;
+const RocAlloc = builtins.host_abi.RocAlloc;
+const RocOps = builtins.host_abi.RocOps;
+const RocDbg = builtins.host_abi.RocDbg;
 const ModuleEnv = compile.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
@@ -2456,8 +2464,11 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         }
     }
 
+    var snapshot_ops = SnapshotOps.init(output.gpa);
+    defer snapshot_ops.deinit();
+
     // Initialize REPL
-    var repl_instance = try repl.Repl.init(output.gpa);
+    var repl_instance = try repl.Repl.init(output.gpa, snapshot_ops.get_ops());
     defer repl_instance.deinit();
 
     // Process each input and generate output
@@ -2598,4 +2609,74 @@ test "snapshot validation" {
     if (!try checkSnapshotExpectations(allocator)) {
         return error.SnapshotValidationFailed;
     }
+}
+
+pub const SnapshotOps = struct {
+    allocator: std.mem.Allocator,
+    roc_ops: RocOps,
+
+    pub fn init(allocator: std.mem.Allocator) SnapshotOps {
+        return SnapshotOps{
+            .allocator = allocator,
+            .roc_ops = RocOps{
+                .env = undefined, // will be set below
+                .roc_alloc = snapshotRocAlloc,
+                .roc_dealloc = snapshotRocDealloc,
+                .roc_realloc = snapshotRocRealloc,
+                .roc_dbg = snapshotRocDbg,
+                .roc_expect_failed = snapshotRocExpectFailed,
+                .roc_crashed = snapshotRocCrashed,
+                .host_fns = undefined, // Not used in snapshots
+            },
+        };
+    }
+
+    pub fn deinit(self: *SnapshotOps) void {
+        _ = self;
+        // nothing to do here?
+    }
+
+    pub fn get_ops(self: *SnapshotOps) *RocOps {
+        self.roc_ops.env = @ptrCast(self);
+        return &self.roc_ops;
+    }
+};
+
+fn snapshotRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
+    const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
+
+    const slice = snapshot_env.allocator.alloc(u8, alloc_args.length) catch {
+        @panic("allocation failed");
+    };
+    alloc_args.answer = slice.ptr;
+}
+
+fn snapshotRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void {
+    _ = dealloc_args;
+    _ = env;
+    // For snapshots, we need to track the allocation inline with the data.
+}
+
+fn snapshotRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void {
+    _ = env;
+    _ = realloc_args;
+    @panic("snapshotRocRealloc not implemented yet - our current snapshots don't need realloc");
+}
+
+fn snapshotRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
+    _ = dbg_args;
+    _ = env;
+    @panic("snapshotRocDbg not implemented yet");
+}
+
+fn snapshotRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
+    _ = expect_args;
+    _ = env;
+    @panic("snapshotRocExpectFailed not implemented yet");
+}
+
+fn snapshotRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
+    _ = env;
+    const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
+    std.log.err("Test program crashed: {s}", .{msg_slice});
 }

@@ -7,13 +7,13 @@ const parse = @import("parse");
 const types = @import("types");
 const Can = @import("can");
 const Check = @import("check");
+const builtins = @import("builtins");
 
 const layout_store = @import("../layout/store.zig");
 const layout = @import("../layout/layout.zig");
 const eval = @import("../eval/interpreter.zig");
 const stack = @import("../eval/stack.zig");
-const test_env = @import("../eval/test_env.zig");
-const builtins = @import("builtins");
+const TestEnv = @import("repl_test_env.zig").TestEnv;
 
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
@@ -378,100 +378,118 @@ pub const Repl = struct {
 const testing = std.testing;
 
 test "Repl - initialization and cleanup" {
-    var repl = try Repl.init(testing.allocator);
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
     defer repl.deinit();
 
     try testing.expect(repl.past_defs.items.len == 0);
 }
 
 test "Repl - special commands" {
-    var repl = try Repl.init(testing.allocator);
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
     defer repl.deinit();
 
     const help_result = try repl.step(":help");
-    defer testing.allocator.free(help_result);
+    defer std.testing.allocator.free(help_result);
     try testing.expect(std.mem.indexOf(u8, help_result, "Enter an expression") != null);
 
     const exit_result = try repl.step(":exit");
-    defer testing.allocator.free(exit_result);
+    defer std.testing.allocator.free(exit_result);
     try testing.expectEqualStrings("Goodbye!", exit_result);
 
     const empty_result = try repl.step("");
-    defer testing.allocator.free(empty_result);
+    defer std.testing.allocator.free(empty_result);
     try testing.expectEqualStrings("", empty_result);
 }
 
 test "Repl - simple expressions" {
-    var repl = try Repl.init(testing.allocator);
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
     defer repl.deinit();
 
     const result = try repl.step("42");
-    defer testing.allocator.free(result);
+    defer std.testing.allocator.free(result);
     try testing.expectEqualStrings("42", result);
 }
 
 test "Repl - string expressions" {
-    var repl = try Repl.init(testing.allocator);
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
     defer repl.deinit();
 
     const result = try repl.step("\"Hello, World!\"");
-    defer testing.allocator.free(result);
+    defer std.testing.allocator.free(result);
     try testing.expectEqualStrings("\"Hello, World!\"", result);
 }
 
 test "Repl - redefinition with evaluation" {
-    var repl = try Repl.init(testing.allocator);
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
     defer repl.deinit();
 
     // First definition of x
     const result1 = try repl.step("x = 5");
-    defer testing.allocator.free(result1);
+    defer std.testing.allocator.free(result1);
     try testing.expectEqualStrings("5", result1);
 
     // Define y in terms of x (returns <needs context> as context-aware evaluation is not yet implemented)
     const result2 = try repl.step("y = x + 1");
-    defer testing.allocator.free(result2);
+    defer std.testing.allocator.free(result2);
     try testing.expectEqualStrings("<needs context>", result2);
 
     // Redefine x
     const result3 = try repl.step("x = 6");
-    defer testing.allocator.free(result3);
+    defer std.testing.allocator.free(result3);
     try testing.expectEqualStrings("6", result3);
 
     // Evaluate x (returns <needs context> as context-aware evaluation is not yet implemented)
     const result4 = try repl.step("x");
-    defer testing.allocator.free(result4);
+    defer std.testing.allocator.free(result4);
     try testing.expectEqualStrings("<needs context>", result4);
 
     // Evaluate y (returns <needs context> as context-aware evaluation is not yet implemented)
     const result5 = try repl.step("y");
-    defer testing.allocator.free(result5);
+    defer std.testing.allocator.free(result5);
     try testing.expectEqualStrings("<needs context>", result5);
 }
 
 test "Repl - build full source with redefinitions" {
-    var repl = try Repl.init(testing.allocator);
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
     defer repl.deinit();
 
     // Add definitions manually to test source building
     try repl.past_defs.append(.{
-        .source = try testing.allocator.dupe(u8, "x = 5"),
-        .kind = .{ .assignment = try testing.allocator.dupe(u8, "x") },
+        .source = try std.testing.allocator.dupe(u8, "x = 5"),
+        .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "x") },
     });
 
     try repl.past_defs.append(.{
-        .source = try testing.allocator.dupe(u8, "y = x + 1"),
-        .kind = .{ .assignment = try testing.allocator.dupe(u8, "y") },
+        .source = try std.testing.allocator.dupe(u8, "y = x + 1"),
+        .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "y") },
     });
 
     try repl.past_defs.append(.{
-        .source = try testing.allocator.dupe(u8, "x = 6"),
-        .kind = .{ .assignment = try testing.allocator.dupe(u8, "x") },
+        .source = try std.testing.allocator.dupe(u8, "x = 6"),
+        .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "x") },
     });
 
     // Build full source for evaluating y
     const full_source = try repl.buildFullSource("y");
-    defer testing.allocator.free(full_source);
+    defer std.testing.allocator.free(full_source);
 
     const expected =
         \\x = 5
@@ -483,23 +501,26 @@ test "Repl - build full source with redefinitions" {
 }
 
 test "Repl - past def ordering" {
-    var repl = try Repl.init(testing.allocator);
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
     defer repl.deinit();
 
     // Manually add definitions to test ordering
     try repl.past_defs.append(.{
-        .source = try testing.allocator.dupe(u8, "x = 1"),
-        .kind = .{ .assignment = try testing.allocator.dupe(u8, "x") },
+        .source = try std.testing.allocator.dupe(u8, "x = 1"),
+        .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "x") },
     });
 
     try repl.past_defs.append(.{
-        .source = try testing.allocator.dupe(u8, "x = 2"),
-        .kind = .{ .assignment = try testing.allocator.dupe(u8, "x") },
+        .source = try std.testing.allocator.dupe(u8, "x = 2"),
+        .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "x") },
     });
 
     try repl.past_defs.append(.{
-        .source = try testing.allocator.dupe(u8, "x = 3"),
-        .kind = .{ .assignment = try testing.allocator.dupe(u8, "x") },
+        .source = try std.testing.allocator.dupe(u8, "x = 3"),
+        .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "x") },
     });
 
     // Verify all definitions are kept in order
@@ -510,7 +531,7 @@ test "Repl - past def ordering" {
 
     // Build source shows all definitions
     const full_source = try repl.buildFullSource("x");
-    defer testing.allocator.free(full_source);
+    defer std.testing.allocator.free(full_source);
 
     const expected =
         \\x = 1
@@ -522,23 +543,26 @@ test "Repl - past def ordering" {
 }
 
 test "Repl - minimal interpreter integration" {
-    const allocator = testing.allocator;
+    const gpa = std.testing.allocator;
+
+    var test_env = TestEnv.init(gpa);
+    defer test_env.deinit();
 
     // Step 1: Create module environment
     const source = "42";
-    var module_env = try ModuleEnv.init(allocator, source);
+    var module_env = try ModuleEnv.init(gpa, source);
     defer module_env.deinit();
 
     // Step 2: Parse as expression
     var parse_ast = try parse.parseExpr(&module_env);
-    defer parse_ast.deinit(allocator);
+    defer parse_ast.deinit(gpa);
 
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
 
     // Step 3: Create CIR
     const cir = &module_env; // CIR is now just ModuleEnv
-    try cir.initCIRFields(allocator, "test");
+    try cir.initCIRFields(gpa, "test");
 
     // Step 4: Canonicalize
     var can = try Can.init(cir, &parse_ast, null);
@@ -550,13 +574,13 @@ test "Repl - minimal interpreter integration" {
     };
 
     // Step 5: Type check
-    var checker = try Check.init(allocator, &module_env.types, cir, &.{}, &cir.store.regions);
+    var checker = try Check.init(gpa, &module_env.types, cir, &.{}, &cir.store.regions);
     defer checker.deinit();
 
     _ = try checker.checkExpr(canonical_expr_idx.get_idx());
 
     // Step 6: Create evaluation stack
-    var eval_stack = try stack.Stack.initCapacity(allocator, 1024);
+    var eval_stack = try stack.Stack.initCapacity(gpa, 1024);
     defer eval_stack.deinit();
 
     // Step 7: Create layout cache
@@ -564,13 +588,11 @@ test "Repl - minimal interpreter integration" {
     defer layout_cache.deinit();
 
     // Step 8: Create interpreter
-    var interpreter = try eval.Interpreter.init(allocator, cir, &eval_stack, &layout_cache, &module_env.types);
+    var interpreter = try eval.Interpreter.init(gpa, cir, &eval_stack, &layout_cache, &module_env.types);
     defer interpreter.deinit();
 
-    // Step 9: Create test environment and evaluate
-    var test_env_instance = test_env.TestEnv.init(allocator);
-    var roc_ops = test_env_instance.roc_ops();
-    const result = try interpreter.eval(canonical_expr_idx.get_idx(), &roc_ops);
+    // Step 9: Evaluate
+    const result = try interpreter.eval(canonical_expr_idx.get_idx(), test_env.get_ops());
 
     // Step 10: Verify result
     try testing.expect(result.layout.tag == .scalar);
