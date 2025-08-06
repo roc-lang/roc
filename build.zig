@@ -115,7 +115,7 @@ pub fn build(b: *std.Build) void {
     const playground_test_install = if (optimize == .Debug) blk: {
         const playground_integration_test_exe = b.addExecutable(.{
             .name = "playground_integration_test",
-            .root_source_file = b.path("test/playground-intergration/main.zig"),
+            .root_source_file = b.path("test/playground-integration/main.zig"),
             .target = target,
             .optimize = optimize,
         });
@@ -294,26 +294,10 @@ fn addMainExe(
         .link_libc = true,
     });
 
-    // Create host.a static library at build time
-    const host_lib = b.addStaticLibrary(.{
-        .name = "platform_host_str_simple",
-        .root_source_file = b.path("src/platform_host_str_simple.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = strip,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
-    });
-    host_lib.linkLibC();
-    host_lib.root_module.addImport("builtins", roc_modules.builtins);
-
-    // Install host.a to the output directory
-    const install_host = b.addInstallArtifact(host_lib, .{});
-    b.getInstallStep().dependOn(&install_host.step);
-
     // Create test platform host static library (str)
     const test_platform_host_lib = b.addStaticLibrary(.{
         .name = "test_platform_str_host",
-        .root_source_file = b.path("test/platform/str/host.zig"),
+        .root_source_file = b.path("test/str/platform/host.zig"),
         .target = target,
         .optimize = optimize,
         .strip = true,
@@ -336,13 +320,13 @@ fn addMainExe(
     // Copy the test platform host library to the source directory
     const copy_test_host = b.addUpdateSourceFiles();
     const test_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-    copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/platform/str", test_host_filename }));
+    copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform", test_host_filename }));
     b.getInstallStep().dependOn(&copy_test_host.step);
 
     // Create test platform host static library (int)
     const test_platform_int_host_lib = b.addStaticLibrary(.{
         .name = "test_platform_int_host",
-        .root_source_file = b.path("test/platform/int/host.zig"),
+        .root_source_file = b.path("test/int/platform/host.zig"),
         .target = target,
         .optimize = optimize,
         .strip = true,
@@ -362,7 +346,7 @@ fn addMainExe(
     // Copy the int test platform host library to the source directory
     const copy_test_int_host = b.addUpdateSourceFiles();
     const test_int_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-    copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/platform/int", test_int_host_filename }));
+    copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform", test_int_host_filename }));
     b.getInstallStep().dependOn(&copy_test_int_host.step);
 
     // Create builtins static library at build time with minimal dependencies
@@ -382,7 +366,7 @@ fn addMainExe(
     // Create shim static library at build time
     const shim_lib = b.addStaticLibrary(.{
         .name = "roc_shim",
-        .root_source_file = b.path("src/read_roc_file_path_shim.zig"),
+        .root_source_file = b.path("src/roc_shim.zig"),
         .target = target,
         .optimize = optimize,
         .strip = strip,
