@@ -335,7 +335,8 @@ fn addMainExe(
 
     // Copy the test platform host library to the source directory
     const copy_test_host = b.addUpdateSourceFiles();
-    copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), "test/platform/str/libhost.a");
+    const test_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+    copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/platform/str", test_host_filename }));
     b.getInstallStep().dependOn(&copy_test_host.step);
 
     // Create test platform host static library (int)
@@ -360,7 +361,8 @@ fn addMainExe(
 
     // Copy the int test platform host library to the source directory
     const copy_test_int_host = b.addUpdateSourceFiles();
-    copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), "test/platform/int/libhost.a");
+    const test_int_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+    copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/platform/int", test_int_host_filename }));
     b.getInstallStep().dependOn(&copy_test_int_host.step);
 
     // Create builtins static library at build time with minimal dependencies
@@ -379,7 +381,7 @@ fn addMainExe(
 
     // Create shim static library at build time
     const shim_lib = b.addStaticLibrary(.{
-        .name = "read_roc_file_path_shim",
+        .name = "roc_shim",
         .root_source_file = b.path("src/read_roc_file_path_shim.zig"),
         .target = target,
         .optimize = optimize,
@@ -394,13 +396,16 @@ fn addMainExe(
     // Force bundle compiler-rt to resolve math symbols
     shim_lib.bundle_compiler_rt = true;
 
-    // Install shim.a to the output directory
+    // Install shim library to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});
     b.getInstallStep().dependOn(&install_shim.step);
 
-    // Copy shim library to source directory for embedding
+    // We need to copy the shim library to the src/ directory for embedding as binary data
+    // This is because @embedFile happens at compile time and needs the file to exist already
+    // and zig doesn't permit embedding files from directories outside the source tree.
     const copy_shim = b.addUpdateSourceFiles();
-    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), "src/libread_roc_file_path_shim.a");
+    const shim_filename = if (target.result.os.tag == .windows) "roc_shim.lib" else "libroc_shim.a";
+    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src", shim_filename }));
     exe.step.dependOn(&copy_shim.step);
 
     const config = b.addOptions();
