@@ -2151,13 +2151,12 @@ pub const Interpreter = struct {
         /// Copy this stack value to a destination pointer with bounds checking
         pub fn copyToPtr(self: StackValue, layout_cache: *layout_store.Store, dest_ptr: *anyopaque, ops: *RocOps) void {
             if (self.ptr == null) {
-                std.log.warn("Stack result pointer is null, cannot copy result", .{});
+                std.log.err("Stack result pointer is null, cannot copy result", .{});
                 return;
             }
 
             const result_size = layout_cache.layoutSize(self.layout);
             if (result_size == 0) {
-                std.log.warn("Result has zero size, nothing to copy", .{});
                 return;
             }
 
@@ -2980,7 +2979,10 @@ pub const Interpreter = struct {
         ops: *builtins.host_abi.RocOps,
         arg_ptr: ?*anyopaque,
     ) !void {
-        std.log.warn("evaluateExpression: expr_idx={}, ret_ptr=0x{x}, arg_ptr={?}", .{ expr_idx, @intFromPtr(ret_ptr), arg_ptr });
+        self.traceInfo(
+            "evaluateExpression: expr_idx={}, ret_ptr=0x{x}, arg_ptr={?}",
+            .{ expr_idx, @intFromPtr(ret_ptr), arg_ptr },
+        );
 
         // Check if this is a closure and if we have arguments to push
         const expr_var = ModuleEnv.varFrom(expr_idx);
@@ -2992,7 +2994,10 @@ pub const Interpreter = struct {
         if (expr_layout.tag == .closure and arg_ptr != null) {
             // This is a closure and we have arguments - push them and call it
             try self.pushClosureArguments(expr_idx, arg_ptr.?);
-            std.log.warn("evaluateExpression: calling closure with {} args on stack", .{self.value_stack.items.len});
+            self.traceInfo(
+                "evaluateExpression: calling closure with {} args on stack",
+                .{self.value_stack.items.len},
+            );
             try self.evaluateClosure(expr_idx, ret_ptr, ops);
         } else {
             // Regular expression evaluation
@@ -3001,11 +3006,8 @@ pub const Interpreter = struct {
                 return error.EvaluationFailed;
             };
 
-            std.log.warn("evaluateExpression: about to copy result to ret_ptr", .{});
             result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
         }
-
-        std.log.warn("evaluateExpression: copy completed successfully", .{});
     }
 
     /// Push closure arguments onto the interpreter stack
@@ -3018,11 +3020,8 @@ pub const Interpreter = struct {
         };
 
         if (param_patterns.len == 0) {
-            std.log.warn("No parameters found for closure", .{});
             return;
         }
-
-        std.log.warn("Pushing {} closure arguments", .{param_patterns.len});
 
         // When multiple arguments are passed from the platform host, they're packed in an
         // extern struct (tuple-like layout). We need to extract each field from the struct
@@ -3058,7 +3057,7 @@ pub const Interpreter = struct {
                 // For heap-allocated types like RocStr, we need to incref
                 // instead of just copying to avoid double-frees
                 if (param_layout.isRefcounted()) {
-                    try transferHeapAllocatedValue(field_ptr, dest_value.ptr.?, param_layout, param_size);
+                    try self.transferHeapAllocatedValue(field_ptr, dest_value.ptr.?, param_layout, param_size);
                 } else {
                     // For primitive types, just copy the bytes
                     const src = field_ptr[0..param_size];
@@ -3066,7 +3065,10 @@ pub const Interpreter = struct {
                     @memcpy(dst, src);
                 }
 
-                std.log.warn("Pushed argument {} of {} (size={}, offset={})", .{ i + 1, param_patterns.len, param_size, current_offset });
+                self.traceInfo(
+                    "Pushed closure argument {} of {} (size={}, offset={})",
+                    .{ i + 1, param_patterns.len, param_size, current_offset },
+                );
             }
 
             // Move to the next field
@@ -3076,6 +3078,7 @@ pub const Interpreter = struct {
 
     /// Transfer a heap-allocated value by incrementing its refcount
     fn transferHeapAllocatedValue(
+        self: *Interpreter,
         src_ptr: *anyopaque,
         dst_ptr: *anyopaque,
         value_layout: Layout,
@@ -3093,7 +3096,6 @@ pub const Interpreter = struct {
                     // For RocStr, increment the refcount
                     const roc_str: *RocStr = @ptrCast(@alignCast(dst_ptr));
                     roc_str.incref(1);
-                    std.log.warn("Incremented refcount for RocStr at 0x{x}", .{@intFromPtr(dst_ptr)});
                 },
                 else => {},
             },
@@ -3102,12 +3104,12 @@ pub const Interpreter = struct {
                 // For lists, increment refcount
                 // const roc_list: *RocList = @ptrCast(@alignCast(dst_ptr));
                 // roc_list.incref(1, list_elements_refcounted??)
-                std.log.warn("List refcounting not yet implemented", .{});
+                self.traceWarn("List refcounting not yet implemented", .{});
             },
             .box, .box_of_zst => {
                 // For boxes, increment refcount
                 // TODO: Implement box refcounting when needed
-                std.log.warn("Box refcounting not yet implemented", .{});
+                self.traceWarn("Box refcounting not yet implemented", .{});
             },
             else => {},
         }
@@ -3120,111 +3122,19 @@ pub const Interpreter = struct {
         ret_ptr: *anyopaque,
         ops: *builtins.host_abi.RocOps,
     ) !void {
-        std.log.warn("evaluateClosure: starting with {} items on value_stack", .{self.value_stack.items.len});
+        self.traceInfo(
+            "evaluateClosure: starting with {} items on value_stack",
+            .{self.value_stack.items.len},
+        );
 
         // The arguments are already on the stack from pushClosureArguments
         // Call the closure directly with those arguments
         const arg_count: u32 = @intCast(self.value_stack.items.len);
 
-        std.log.warn("evaluateClosure: calling closure with {} args", .{arg_count});
-
         const result_value = try self.callClosureWithStackArgs(expr_idx, arg_count, ops);
 
         // Copy the result
         result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
-
-        std.log.warn("evaluateClosure: completed successfully", .{});
-    }
-
-    /// Old evaluateClosure implementation - keeping for reference
-    fn evaluateClosureOld(
-        self: *Interpreter,
-        expr_idx: ModuleEnv.Expr.Idx,
-        ret_ptr: *anyopaque,
-        ops: *builtins.host_abi.RocOps,
-    ) !void {
-
-        // Get closure parameter patterns
-        const param_patterns = getClosureParameterPatterns(self.env, expr_idx) catch {
-            std.log.err("Failed to get closure parameter patterns for expr={}", .{expr_idx});
-            return error.EvaluationFailed;
-        };
-
-        if (param_patterns.len > 0) {
-            if (param_patterns.len == 1) {
-                // Single parameter case - direct inline implementation
-                const arg_var = ModuleEnv.varFrom(param_patterns[0]);
-                const arg_layout_idx = try self.layout_cache.addTypeVar(arg_var);
-                const arg_layout = self.layout_cache.getLayout(arg_layout_idx);
-
-                // allocate space for the argument on the stack
-                const dest_value = self.pushStackValue(arg_layout) catch |err| {
-                    std.log.err("Failed to pushStackValue for single parameter: {s}", .{@errorName(err)});
-                    return error.EvaluationFailed;
-                };
-
-                dest_value.copyToPtr(self.layout_cache, ret_ptr, ops);
-            } else {
-                // Multiple parameters case - proper alignment calculations
-                std.log.warn("  multiple params: handling {} parameters", .{param_patterns.len});
-
-                const param_count = param_patterns.len;
-
-                // Convert patterns to variables and compute layouts
-                var param_vars_buf: [8]types.Var = undefined;
-                var elem_layouts: [8]layout.Layout = undefined;
-                var offsets: [8]usize = undefined;
-
-                // Convert patterns to variables
-                for (param_patterns, 0..) |pat_idx, i| {
-                    param_vars_buf[i] = @enumFromInt(@intFromEnum(pat_idx));
-                }
-
-                // Compute element layouts
-                for (0..param_count) |i| {
-                    const v = param_vars_buf[i];
-                    const idx_v = self.layout_cache.addTypeVar(v) catch {
-                        return error.EvaluationFailed;
-                    };
-                    elem_layouts[i] = self.layout_cache.getLayout(idx_v);
-                }
-
-                // Compute proper offsets using native target alignment rules
-                var running_offset: usize = 0;
-                for (0..param_count) |i| {
-                    const elem_layout = elem_layouts[i];
-                    const elem_align = elem_layout.alignment(base.target.Target.native.target_usize);
-                    const elem_size = self.layout_cache.layoutSize(elem_layout);
-                    const mask = elem_align.toByteUnits() - 1;
-
-                    // Apply alignment
-                    if ((running_offset & mask) != 0) {
-                        running_offset = (running_offset + mask) & ~mask;
-                    }
-
-                    offsets[i] = running_offset;
-                    running_offset += elem_size;
-                }
-
-                // Push arguments with proper alignment
-                for (elem_layouts) |arg_layout| {
-                    const arg_value = try self.pushStackValue(arg_layout);
-
-                    arg_value.copyToPtr(self.layout_cache, ret_ptr, ops);
-                }
-            }
-        }
-
-        const closure_result = self.callClosureWithStackArgs(
-            expr_idx,
-            @intCast(param_patterns.len),
-            ops,
-        ) catch |err| {
-            std.log.err("callClosureWithStackArgs failed with err: {s}", .{@errorName(err)});
-            return error.EvaluationFailed;
-        };
-
-        closure_result.copyToPtr(self.layout_cache, ret_ptr, ops);
     }
 };
 
