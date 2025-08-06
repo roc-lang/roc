@@ -57,6 +57,8 @@ pub const Repl = struct {
     eval_stack: stack.Stack,
     /// Operations for the Roc runtime
     roc_ops: *RocOps,
+    /// Optional trace writer for debugging evaluation
+    trace_writer: ?std.io.AnyWriter,
 
     pub fn init(allocator: Allocator, roc_ops: *RocOps) !Repl {
         const eval_stack = try stack.Stack.initCapacity(allocator, 8192);
@@ -66,7 +68,12 @@ pub const Repl = struct {
             .past_defs = std.ArrayList(PastDef).init(allocator),
             .eval_stack = eval_stack,
             .roc_ops = roc_ops,
+            .trace_writer = null,
         };
+    }
+
+    pub fn setTraceWriter(self: *Repl, trace_writer: std.io.AnyWriter) void {
+        self.trace_writer = trace_writer;
     }
 
     pub fn deinit(self: *Repl) void {
@@ -318,9 +325,20 @@ pub const Repl = struct {
         defer interpreter.deinit(self.roc_ops);
 
         // Evaluate the expression
+        if (self.trace_writer) |trace_writer| {
+            interpreter.startTrace(trace_writer);
+        }
+        
         const result = interpreter.eval(canonical_expr_idx.get_idx(), self.roc_ops) catch |err| {
+            if (self.trace_writer) |_| {
+                interpreter.endTrace();
+            }
             return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err});
         };
+        
+        if (self.trace_writer) |_| {
+            interpreter.endTrace();
+        }
 
         // Format the result immediately while memory is still valid
         if (result.layout.tag == .scalar) {

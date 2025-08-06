@@ -641,6 +641,7 @@ pub fn main() !void {
     var expect_threads: bool = false;
     var expected_section_command = UpdateCommand.none;
     var output_section_command = UpdateCommand.none;
+    var trace_eval: bool = false;
 
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--verbose")) {
@@ -649,6 +650,8 @@ pub fn main() !void {
             generate_html = true;
         } else if (std.mem.eql(u8, arg, "--debug")) {
             debug_mode = true;
+        } else if (std.mem.eql(u8, arg, "--trace-eval")) {
+            trace_eval = true;
         } else if (std.mem.eql(u8, arg, "--threads")) {
             if (max_threads != 0) {
                 std.log.err("`--threads` should only be specified once.", .{});
@@ -702,6 +705,7 @@ pub fn main() !void {
                 \\  --verbose       Enable verbose logging
                 \\  --html          Generate HTML output files
                 \\  --debug         Use GeneralPurposeAllocator for debugging (default: c_allocator)
+                \\  --trace-eval    Enable interpreter trace output (only works with single REPL snapshot)
                 \\  --threads <n>   Number of threads to use (0 = auto-detect, 1 = single-threaded). Default: 0.
                 \\  --check-expected     Validate that EXPECTED sections match PROBLEMS sections
                 \\  --update-expected    Update EXPECTED sections based on PROBLEMS sections
@@ -732,11 +736,25 @@ pub fn main() !void {
         max_threads = 1;
     }
 
+    // Validate --trace-eval flag usage
+    if (trace_eval) {
+        if (snapshot_paths.items.len == 0) {
+            std.log.err("--trace-eval requires exactly one snapshot file to be specified", .{});
+            std.process.exit(1);
+        }
+        if (snapshot_paths.items.len > 1) {
+            std.log.err("--trace-eval can only be used with a single snapshot file. Got {} files.", .{snapshot_paths.items.len});
+            std.log.err("Usage: roc snapshot --trace-eval <path_to_single_repl_snapshot.md>", .{});
+            std.process.exit(1);
+        }
+    }
+
     const config = Config{
         .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
         .generate_html = generate_html,
         .expected_section_command = expected_section_command,
         .output_section_command = output_section_command,
+        .trace_eval = trace_eval,
     };
 
     if (config.maybe_fuzz_corpus_path != null) {
@@ -1228,6 +1246,7 @@ const Config = struct {
     expected_section_command: UpdateCommand,
     output_section_command: UpdateCommand,
     disable_updates: bool = false, // Disable updates for check mode
+    trace_eval: bool = false,
 };
 
 const ProcessResult = struct {
@@ -2295,6 +2314,12 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
         }
     };
 
+    // Validate trace-eval flag usage
+    if (config.trace_eval and content.meta.node_type != .repl) {
+        std.log.err("--trace-eval can only be used with REPL snapshots (type=repl), but '{s}' has type={s}", .{ snapshot_path, content.meta.node_type.toString() });
+        std.process.exit(1);
+    }
+
     // Process the content through the shared compilation pipeline
     const success = processSnapshotContent(gpa, content, snapshot_path, config) catch |err| {
         log("failed to process snapshot content: {s}", .{@errorName(err)});
@@ -2471,6 +2496,11 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     // Initialize REPL
     var repl_instance = try repl.Repl.init(output.gpa, snapshot_ops.get_ops());
     defer repl_instance.deinit();
+
+    // Enable tracing if requested
+    if (config.trace_eval) {
+        repl_instance.setTraceWriter(std.io.getStdErr().writer().any());
+    }
 
     // Process each input and generate output
     var actual_outputs = std.ArrayList([]const u8).init(output.gpa);
