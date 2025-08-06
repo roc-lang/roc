@@ -2611,6 +2611,7 @@ test "snapshot validation" {
     }
 }
 
+/// An implementation of RocOps for snapshot testing.
 pub const SnapshotOps = struct {
     allocator: std.mem.Allocator,
     roc_ops: RocOps,

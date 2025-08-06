@@ -34,8 +34,6 @@ const compile = @import("compile");
 const builtins = @import("builtins");
 const collections = @import("collections");
 
-const layout_store = @import("../layout/store.zig");
-const layout_ = @import("../layout/layout.zig");
 const layout = @import("../layout/layout.zig");
 const build_options = @import("build_options");
 const stack = @import("stack.zig");
@@ -48,12 +46,13 @@ const RocStr = builtins.str.RocStr;
 const LayoutTag = layout.LayoutTag;
 const RocDec = builtins.dec.RocDec;
 const SExprTree = base.SExprTree;
-const Closure = layout_.Closure;
+const Closure = layout.Closure;
 const Layout = layout.Layout;
 const Expr = ModuleEnv.Expr;
 const Ident = base.Ident;
+const LayoutStore = layout.store.Store;
+const TypeStore = types.store.Store;
 const target_usize = base.target.Target.native.target_usize;
-const types_store = types.store;
 const target = base.target;
 
 /// Debug configuration set at build time using flag `zig build test -Dtrace-eval`
@@ -240,9 +239,9 @@ pub const Interpreter = struct {
     /// Stack memory for storing expression values during evaluation
     stack_memory: *stack.Stack,
     /// Cache for type layout information and size calculations
-    layout_cache: *layout_store.Store,
+    layout_cache: *LayoutStore,
     /// Type information store from the type checker
-    type_store: *types_store.Store,
+    type_store: *TypeStore,
     /// Work queue for iterative expression evaluation (LIFO stack)
     work_stack: std.ArrayList(WorkItem),
     /// Parallel stack tracking type layouts of values in `stack_memory`
@@ -270,8 +269,8 @@ pub const Interpreter = struct {
         allocator: std.mem.Allocator,
         cir: *const ModuleEnv,
         stack_memory: *stack.Stack,
-        layout_cache: *layout_store.Store,
-        type_store: *types_store.Store,
+        layout_cache: *LayoutStore,
+        type_store: *TypeStore,
     ) !Interpreter {
         const interp = Interpreter{
             .allocator = allocator,
@@ -2078,7 +2077,7 @@ pub const Interpreter = struct {
         is_initialized: bool = false,
 
         /// Copy this stack value to a destination pointer with bounds checking
-        pub fn copyToPtr(self: StackValue, layout_cache: *layout_store.Store, dest_ptr: *anyopaque, ops: *RocOps) void {
+        pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, ops: *RocOps) void {
             std.debug.assert(self.is_initialized); // Source must be initialized before copying
             if (self.ptr == null) {
                 std.log.err("Stack result pointer is null, cannot copy result", .{});
@@ -2227,7 +2226,7 @@ pub const Interpreter = struct {
         /// Type-aware result handling that properly formats results for platforms
         fn handleResult(
             stack_result: eval.Interpreter.StackValue,
-            layout_cache: *layout_store.Store,
+            layout_cache: *LayoutStore,
             ops: *builtins.host_abi.RocOps,
             ret_ptr: *anyopaque,
         ) !void {
@@ -2273,7 +2272,7 @@ pub const Interpreter = struct {
         }
 
         /// Create a TupleAccessor for safe tuple element access
-        pub fn asTuple(self: StackValue, layout_cache: *layout_store.Store) !TupleAccessor {
+        pub fn asTuple(self: StackValue, layout_cache: *LayoutStore) !TupleAccessor {
             std.debug.assert(self.is_initialized); // Tuple must be initialized before accessing
             std.debug.assert(self.ptr != null);
             std.debug.assert(self.layout.tag == .tuple);
@@ -3407,9 +3406,9 @@ fn getClosureParameterPatterns(env_ptr: *const ModuleEnv, expr_idx: Expr.Idx) ![
 /// Safe accessor for tuple elements with bounds checking and proper memory management
 pub const TupleAccessor = struct {
     base_value: Interpreter.StackValue,
-    layout_cache: *layout_store.Store,
+    layout_cache: *LayoutStore,
     tuple_layout: Layout,
-    element_layouts: layout_.TupleField.SafeMultiList.Slice,
+    element_layouts: layout.TupleField.SafeMultiList.Slice,
 
     /// Get a StackValue for the element at the given index
     pub fn getElement(self: TupleAccessor, index: usize) !Interpreter.StackValue {

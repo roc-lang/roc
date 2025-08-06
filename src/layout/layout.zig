@@ -9,6 +9,9 @@ const types = @import("types");
 const collections = @import("collections");
 const ModuleEnv = @import("compile").ModuleEnv;
 
+/// **Layout Store**
+pub const store = @import("store.zig");
+
 const Ident = base.Ident;
 const target = base.target;
 

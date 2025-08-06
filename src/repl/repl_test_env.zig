@@ -1,3 +1,5 @@
+//! An implementation of RocOps for testing purposes.
+
 const std = @import("std");
 const builtins = @import("builtins");
 const interpreter = @import("../eval/interpreter.zig");
@@ -10,6 +12,7 @@ const RocDbg = builtins.host_abi.RocDbg;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
 
+/// An implementation of RocOps for testing purposes.
 pub const TestEnv = struct {
     allocator: std.mem.Allocator,
     roc_ops: RocOps,
