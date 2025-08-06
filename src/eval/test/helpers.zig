@@ -200,17 +200,20 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     // Verify we got a tuple layout
     try testing.expect(result.layout.tag == .tuple);
 
-    const tuple_data = layout_cache.getTupleData(result.layout.data.tuple.idx);
-    const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
-
-    try testing.expectEqual(expected_elements.len, element_layouts.len);
+    // Use the TupleAccessor to safely access tuple elements
+    const tuple_accessor = try result.asTuple(&layout_cache);
+    
+    try testing.expectEqual(expected_elements.len, tuple_accessor.getElementCount());
 
     for (expected_elements) |expected_element| {
-        const element_layout_info = element_layouts.get(expected_element.index);
-        const element_layout = layout_cache.getLayout(element_layout_info.layout);
-        try testing.expect(element_layout.tag == .scalar and element_layout.data.scalar.tag == .int);
+        // Get the element at the specified index
+        const element = try tuple_accessor.getElement(expected_element.index);
+        
+        // Verify it's an integer
+        try testing.expect(element.layout.tag == .scalar and element.layout.data.scalar.tag == .int);
 
-        const int_val = result.asI128();
+        // Get the integer value from the element
+        const int_val = element.asI128();
         try testing.expectEqual(expected_element.value, int_val);
     }
 }
