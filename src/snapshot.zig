@@ -2573,13 +2573,36 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 }
                 try output.end_section();
             } else {
-                if (actual_outputs.items.len != 0) {
+                // No existing OUTPUT section - generate one for new snapshots
+                try output.begin_section("OUTPUT");
+                for (actual_outputs.items, 0..) |repl_output, i| {
+                    if (i > 0) {
+                        try output.md_writer.writeAll("---\n");
+                    }
+                    try output.md_writer.writeAll(repl_output);
+                    try output.md_writer.writeByte('\n');
+
+                    // HTML output
+                    if (output.html_writer) |writer| {
+                        if (i > 0) {
+                            try writer.writeAll("                <hr>\n");
+                        }
+                        try writer.writeAll("                <div class=\"repl-output\">");
+                        for (repl_output) |char| {
+                            try escapeHtmlChar(writer, char);
+                        }
+                        try writer.writeAll("</div>\n");
+                    }
+                }
+                try output.end_section();
+
+                if (actual_outputs.items.len != 0 and emit_error) {
                     std.debug.print("REPL output count mismatch: got {} outputs, expected {} in {s}\n", .{
                         actual_outputs.items.len,
                         0,
                         snapshot_path,
                     });
-                    success = success and !emit_error;
+                    success = false;
                 }
             }
         },
