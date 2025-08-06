@@ -2160,13 +2160,69 @@ pub const Interpreter = struct {
                 return;
             }
 
-            if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
-                // Clone the RocStr into the interpreter's heap
-                std.debug.assert(self.ptr != null);
-                const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
-                const dest_str: *RocStr = @ptrCast(@alignCast(dest_ptr));
-                dest_str.* = src_str.clone(ops);
-                return;
+            if (self.layout.tag == .scalar) {
+                switch (self.layout.data.scalar.tag) {
+                    .str => {
+                        // Clone the RocStr into the interpreter's heap
+                        std.debug.assert(self.ptr != null);
+                        const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
+                        const dest_str: *RocStr = @ptrCast(@alignCast(dest_ptr));
+                        dest_str.* = src_str.clone(ops);
+                        return;
+                    },
+                    .int => {
+                        // Use type-specific integer copying with precision
+                        std.debug.assert(self.ptr != null);
+                        const precision = self.layout.data.scalar.data.int;
+                        const value = readIntFromMemory(self.ptr.?, precision);
+
+                        // Inline integer writing logic with proper type casting and alignment
+                        switch (precision) {
+                            .u8 => {
+                                const typed_ptr: *u8 = @ptrCast(@alignCast(dest_ptr));
+                                typed_ptr.* = @intCast(value);
+                            },
+                            .u16 => {
+                                const typed_ptr: *u16 = @ptrCast(@alignCast(dest_ptr));
+                                typed_ptr.* = @intCast(value);
+                            },
+                            .u32 => {
+                                const typed_ptr: *u32 = @ptrCast(@alignCast(dest_ptr));
+                                typed_ptr.* = @intCast(value);
+                            },
+                            .u64 => {
+                                const typed_ptr: *u64 = @ptrCast(@alignCast(dest_ptr));
+                                typed_ptr.* = @intCast(value);
+                            },
+                            .u128 => {
+                                const typed_ptr: *u128 = @ptrCast(@alignCast(dest_ptr));
+                                typed_ptr.* = @intCast(value);
+                            },
+                            .i8 => {
+                                const typed_ptr: *i8 = @ptrCast(@alignCast(dest_ptr));
+                                typed_ptr.* = @intCast(value);
+                            },
+                            .i16 => {
+                                const typed_ptr: *i16 = @ptrCast(@alignCast(dest_ptr));
+                                typed_ptr.* = @intCast(value);
+                            },
+                            .i32 => {
+                                const typed_ptr: *i32 = @ptrCast(@alignCast(dest_ptr));
+                                typed_ptr.* = @intCast(value);
+                            },
+                            .i64 => {
+                                const typed_ptr: *i64 = @ptrCast(@alignCast(dest_ptr));
+                                typed_ptr.* = @intCast(value);
+                            },
+                            .i128 => {
+                                const typed_ptr: *i128 = @ptrCast(@alignCast(dest_ptr));
+                                typed_ptr.* = value;
+                            },
+                        }
+                        return;
+                    },
+                    else => {},
+                }
             }
 
             std.debug.assert(self.ptr != null);
@@ -2821,7 +2877,60 @@ pub const Interpreter = struct {
             self.printTraceIndent();
             writer.print("  writeInt {d} to ptr {}\n", .{ value, @intFromPtr(ptr) }) catch {};
         }
-        writeIntToMemory(ptr, value, precision);
+
+        // Inline integer writing logic with proper type casting and alignment
+        switch (precision) {
+            .u8 => {
+                const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
+                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u8) == 0);
+                typed_ptr.* = @as(u8, @intCast(value));
+            },
+            .u16 => {
+                const typed_ptr = @as(*u16, @ptrCast(@alignCast(ptr)));
+                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u16) == 0);
+                typed_ptr.* = @as(u16, @intCast(value));
+            },
+            .u32 => {
+                const typed_ptr = @as(*u32, @ptrCast(@alignCast(ptr)));
+                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u32) == 0);
+                typed_ptr.* = @as(u32, @intCast(value));
+            },
+            .u64 => {
+                const typed_ptr = @as(*u64, @ptrCast(@alignCast(ptr)));
+                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u64) == 0);
+                typed_ptr.* = @as(u64, @intCast(value));
+            },
+            .u128 => {
+                const typed_ptr = @as(*u128, @ptrCast(@alignCast(ptr)));
+                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u128) == 0);
+                typed_ptr.* = @as(u128, @intCast(value));
+            },
+            .i8 => {
+                const typed_ptr = @as(*i8, @ptrCast(@alignCast(ptr)));
+                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i8) == 0);
+                typed_ptr.* = @as(i8, @intCast(value));
+            },
+            .i16 => {
+                const typed_ptr = @as(*i16, @ptrCast(@alignCast(ptr)));
+                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i16) == 0);
+                typed_ptr.* = @as(i16, @intCast(value));
+            },
+            .i32 => {
+                const typed_ptr = @as(*i32, @ptrCast(@alignCast(ptr)));
+                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i32) == 0);
+                typed_ptr.* = @as(i32, @intCast(value));
+            },
+            .i64 => {
+                const typed_ptr = @as(*i64, @ptrCast(@alignCast(ptr)));
+                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i64) == 0);
+                typed_ptr.* = @as(i64, @intCast(value));
+            },
+            .i128 => {
+                const typed_ptr = @as(*i128, @ptrCast(@alignCast(ptr)));
+                std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i128) == 0);
+                typed_ptr.* = value;
+            },
+        }
     }
 
     fn readIntFromMemoryAndTrace(self: *const Interpreter, ptr: *anyopaque, precision: types.Num.Int.Precision) i128 {
@@ -3137,62 +3246,6 @@ pub const Interpreter = struct {
         result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
     }
 };
-
-// Helper function to write an integer to memory with the correct precision
-fn writeIntToMemory(ptr: *anyopaque, value: i128, precision: types.Num.Int.Precision) void {
-    switch (precision) {
-        .u8 => {
-            const typed_ptr = @as(*u8, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u8) == 0);
-            typed_ptr.* = @as(u8, @intCast(value));
-        },
-        .u16 => {
-            const typed_ptr = @as(*u16, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u16) == 0);
-            typed_ptr.* = @as(u16, @intCast(value));
-        },
-        .u32 => {
-            const typed_ptr = @as(*u32, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u32) == 0);
-            typed_ptr.* = @as(u32, @intCast(value));
-        },
-        .u64 => {
-            const typed_ptr = @as(*u64, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u64) == 0);
-            typed_ptr.* = @as(u64, @intCast(value));
-        },
-        .u128 => {
-            const typed_ptr = @as(*u128, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(u128) == 0);
-            typed_ptr.* = @as(u128, @intCast(value));
-        },
-        .i8 => {
-            const typed_ptr = @as(*i8, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i8) == 0);
-            typed_ptr.* = @as(i8, @intCast(value));
-        },
-        .i16 => {
-            const typed_ptr = @as(*i16, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i16) == 0);
-            typed_ptr.* = @as(i16, @intCast(value));
-        },
-        .i32 => {
-            const typed_ptr = @as(*i32, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i32) == 0);
-            typed_ptr.* = @as(i32, @intCast(value));
-        },
-        .i64 => {
-            const typed_ptr = @as(*i64, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i64) == 0);
-            typed_ptr.* = @as(i64, @intCast(value));
-        },
-        .i128 => {
-            const typed_ptr = @as(*i128, @ptrCast(@alignCast(ptr)));
-            std.debug.assert(@intFromPtr(typed_ptr) % @alignOf(i128) == 0);
-            typed_ptr.* = value;
-        },
-    }
-}
 
 /// Helper function to read an integer from memory with the correct precision
 pub fn readIntFromMemory(ptr: *anyopaque, precision: types.Num.Int.Precision) i128 {

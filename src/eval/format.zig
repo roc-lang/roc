@@ -8,13 +8,14 @@ const layout_store = @import("../layout/store.zig");
 
 const RocStr = builtins.str.RocStr;
 const RocOps = builtins.host_abi.RocOps;
+const StackValue = eval.Interpreter.StackValue;
 
 /// Buffer size for formatting results
 pub const RESULT_BUFFER_SIZE = 1024;
 
 /// Format a stack result into a human-readable string
 pub fn formatStackResult(
-    stack_result: eval.Interpreter.StackValue,
+    stack_result: StackValue,
     layout_cache: *layout_store.Store,
     buf: []u8,
     ops: *RocOps,
@@ -41,7 +42,7 @@ pub fn formatStackResult(
 }
 
 /// Format scalar values (numbers, booleans, strings, etc.)
-fn formatScalar(stack_result: eval.Interpreter.StackValue, buf: []u8, ops: *RocOps) []const u8 {
+fn formatScalar(stack_result: StackValue, buf: []u8, ops: *RocOps) []const u8 {
     const scalar_data = stack_result.layout.data.scalar;
 
     switch (scalar_data.tag) {
@@ -68,7 +69,7 @@ fn formatScalar(stack_result: eval.Interpreter.StackValue, buf: []u8, ops: *RocO
 }
 
 /// Format floating point values
-fn formatFloat(stack_result: eval.Interpreter.StackValue, float_precision: anytype, buf: []u8, ops: *RocOps) []const u8 {
+fn formatFloat(stack_result: StackValue, float_precision: anytype, buf: []u8, ops: *RocOps) []const u8 {
     switch (float_precision) {
         .f32 => {
             const float_val = @as(*const f32, @ptrCast(@alignCast(stack_result.ptr.?))).*;
@@ -89,7 +90,7 @@ fn formatFloat(stack_result: eval.Interpreter.StackValue, float_precision: anyty
 }
 
 /// Format opaque pointer values
-fn formatOpaquePtr(stack_result: eval.Interpreter.StackValue, buf: []u8) []const u8 {
+fn formatOpaquePtr(stack_result: StackValue, buf: []u8) []const u8 {
     const ptr_val = @as(*const ?*anyopaque, @ptrCast(@alignCast(stack_result.ptr.?))).*;
     if (ptr_val) |ptr| {
         return std.fmt.bufPrint(buf, "<opaque pointer: 0x{x}>", .{@intFromPtr(ptr)}) catch "Error formatting";
@@ -99,27 +100,27 @@ fn formatOpaquePtr(stack_result: eval.Interpreter.StackValue, buf: []u8) []const
 }
 
 /// Format record values
-fn formatRecord(stack_result: eval.Interpreter.StackValue, layout_cache: *layout_store.Store, buf: []u8) []const u8 {
+fn formatRecord(stack_result: StackValue, layout_cache: *layout_store.Store, buf: []u8) []const u8 {
     const record_data = layout_cache.getRecordData(stack_result.layout.data.record.idx);
     const num_fields = record_data.fields.count;
     return std.fmt.bufPrint(buf, "<record with {} fields, size {} bytes>", .{ num_fields, record_data.size }) catch "Error";
 }
 
 /// Format tuple values
-fn formatTuple(stack_result: eval.Interpreter.StackValue, layout_cache: *layout_store.Store, buf: []u8) []const u8 {
+fn formatTuple(stack_result: StackValue, layout_cache: *layout_store.Store, buf: []u8) []const u8 {
     const tuple_data = layout_cache.getTupleData(stack_result.layout.data.tuple.idx);
     const num_elems = tuple_data.fields.count;
     return std.fmt.bufPrint(buf, "<tuple with {} elements, size {} bytes>", .{ num_elems, tuple_data.size }) catch "Error";
 }
 
 /// Format list values
-fn formatList(stack_result: eval.Interpreter.StackValue, buf: []u8) []const u8 {
+fn formatList(stack_result: StackValue, buf: []u8) []const u8 {
     const list_ptr = @as(*const builtins.list.RocList, @ptrCast(@alignCast(stack_result.ptr.?)));
     return std.fmt.bufPrint(buf, "<list with {} elements>", .{list_ptr.len()}) catch "Error";
 }
 
 /// Format list of zero-sized types
-fn formatListOfZst(stack_result: eval.Interpreter.StackValue, buf: []u8) []const u8 {
+fn formatListOfZst(stack_result: StackValue, buf: []u8) []const u8 {
     const list_ptr = @as(*const builtins.list.RocList, @ptrCast(@alignCast(stack_result.ptr.?)));
     return std.fmt.bufPrint(buf, "<list of {} zero-sized elements>", .{list_ptr.len()}) catch "Error";
 }
