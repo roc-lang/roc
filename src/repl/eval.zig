@@ -12,12 +12,14 @@ const layout_store = @import("../layout/store.zig");
 const layout = @import("../layout/layout.zig");
 const eval = @import("../eval/interpreter.zig");
 const stack = @import("../eval/stack.zig");
+const test_env = @import("../eval/test_env.zig");
 const builtins = @import("builtins");
 
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = compile.ModuleEnv;
 const RocDec = builtins.dec.RocDec;
+const RocOps = builtins.host_abi.RocOps;
 const types_store = types.store;
 const writers = types.writers;
 const target = base.target;
@@ -53,14 +55,17 @@ pub const Repl = struct {
     past_defs: std.ArrayList(PastDef),
     /// Stack for evaluation
     eval_stack: stack.Stack,
+    /// Operations for the Roc runtime
+    roc_ops: *RocOps,
 
-    pub fn init(allocator: Allocator) !Repl {
+    pub fn init(allocator: Allocator, roc_ops: *RocOps) !Repl {
         const eval_stack = try stack.Stack.initCapacity(allocator, 8192);
 
         return Repl{
             .allocator = allocator,
             .past_defs = std.ArrayList(PastDef).init(allocator),
             .eval_stack = eval_stack,
+            .roc_ops = roc_ops,
         };
     }
 
@@ -313,7 +318,7 @@ pub const Repl = struct {
         defer interpreter.deinit();
 
         // Evaluate the expression
-        const result = interpreter.eval(canonical_expr_idx.get_idx()) catch |err| {
+        const result = interpreter.eval(canonical_expr_idx.get_idx(), self.roc_ops) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err});
         };
 
@@ -562,8 +567,10 @@ test "Repl - minimal interpreter integration" {
     var interpreter = try eval.Interpreter.init(allocator, cir, &eval_stack, &layout_cache, &module_env.types);
     defer interpreter.deinit();
 
-    // Step 9: Evaluate
-    const result = try interpreter.eval(canonical_expr_idx.get_idx());
+    // Step 9: Create test environment and evaluate
+    var test_env_instance = test_env.TestEnv.init(allocator);
+    var roc_ops = test_env_instance.roc_ops();
+    const result = try interpreter.eval(canonical_expr_idx.get_idx(), &roc_ops);
 
     // Step 10: Verify result
     try testing.expect(result.layout.tag == .scalar);

@@ -8,6 +8,7 @@ const Can = @import("can");
 const Check = @import("check");
 
 const eval = @import("../interpreter.zig");
+const test_env = @import("../test_env.zig");
 const stack = @import("../stack.zig");
 const layout_store = @import("../../layout/store.zig");
 const layout = @import("../../layout/layout.zig");
@@ -37,14 +38,16 @@ pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_tr
         &layout_cache,
         &resources.module_env.types,
     );
-    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
+
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    var roc_ops = test_env_instance.roc_ops();
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = interpreter.eval(resources.expr_idx);
+    const result = interpreter.eval(resources.expr_idx, &roc_ops);
 
     if (should_trace == .trace) {
         interpreter.endTrace();
@@ -71,14 +74,16 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
         &layout_cache,
         &resources.module_env.types,
     );
-    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
+
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    var roc_ops = test_env_instance.roc_ops();
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = try interpreter.eval(resources.expr_idx);
+    const result = try interpreter.eval(resources.expr_idx, &roc_ops);
 
     if (should_trace == .trace) {
         interpreter.endTrace();
@@ -113,14 +118,16 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
         &layout_cache,
         &resources.module_env.types,
     );
-    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
+
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    var roc_ops = test_env_instance.roc_ops();
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = try interpreter.eval(resources.expr_idx);
+    const result = try interpreter.eval(resources.expr_idx, &roc_ops);
 
     if (should_trace == .trace) {
         interpreter.endTrace();
@@ -141,7 +148,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
         // We need to decref because the result is no longer needed
         // Cast away const to call decref (safe since we're done with it)
         const mutable_roc_str: *builtins.str.RocStr = @constCast(roc_str);
-        mutable_roc_str.decref(&interpreter.roc_ops);
+        mutable_roc_str.decref(&roc_ops);
     }
 }
 
@@ -175,14 +182,16 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
         &layout_cache,
         &resources.module_env.types,
     );
-    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
+
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    var roc_ops = test_env_instance.roc_ops();
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = try interpreter.eval(resources.expr_idx);
+    const result = try interpreter.eval(resources.expr_idx, &roc_ops);
 
     if (should_trace == .trace) {
         interpreter.endTrace();
@@ -226,14 +235,16 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
         &layout_cache,
         &resources.module_env.types,
     );
-    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
+
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    var roc_ops = test_env_instance.roc_ops();
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = try interpreter.eval(resources.expr_idx);
+    const result = try interpreter.eval(resources.expr_idx, &roc_ops);
 
     if (should_trace == .trace) {
         interpreter.endTrace();
@@ -392,7 +403,10 @@ test "eval runtime error - returns crash error" {
         // Evaluating a runtime error should return an error
         var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
-        const result = interpreter.eval(resources.expr_idx);
+
+        var test_env_instance = test_env.TestEnv.init(test_allocator);
+        var roc_ops = test_env_instance.roc_ops();
+        const result = interpreter.eval(resources.expr_idx, &roc_ops);
         try testing.expectError(eval.EvalError.Crash, result);
     } else {
         // If crash syntax is not supported in canonicalization, skip
@@ -419,8 +433,11 @@ test "eval tag - already primitive" {
     var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
     defer interpreter.deinit();
 
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    var roc_ops = test_env_instance.roc_ops();
+
     // Try to evaluate - if tag_union layout is not implemented, this might fail
-    const result = interpreter.eval(resources.expr_idx) catch |err| {
+    const result = interpreter.eval(resources.expr_idx, &roc_ops) catch |err| {
         std.debug.print("Tag evaluation failed with error: {}\n", .{err});
         // If evaluation fails for any reason, skip for now
         return error.SkipZigTest;
@@ -449,7 +466,10 @@ test "eval binop - basic implementation" {
     // Evaluate the binop expression
     var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
     defer interpreter.deinit();
-    const result = try interpreter.eval(resources.expr_idx);
+
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    var roc_ops = test_env_instance.roc_ops();
+    const result = try interpreter.eval(resources.expr_idx, &roc_ops);
 
     // Verify we got a scalar layout
     try testing.expect(result.layout.tag == .scalar);
@@ -481,7 +501,10 @@ test "eval if expression with boolean tags" {
 
         var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
-        const result = try interpreter.eval(resources.expr_idx);
+
+        var test_env_instance = test_env.TestEnv.init(test_allocator);
+        var roc_ops = test_env_instance.roc_ops();
+        const result = try interpreter.eval(resources.expr_idx, &roc_ops);
 
         // Verify the result
         try testing.expect(result.layout.tag == .scalar);
@@ -507,7 +530,10 @@ test "eval empty record" {
         defer layout_cache.deinit();
         var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
-        const result = interpreter.eval(resources.expr_idx);
+
+        var test_env_instance = test_env.TestEnv.init(test_allocator);
+        var roc_ops = test_env_instance.roc_ops();
+        const result = interpreter.eval(resources.expr_idx, &roc_ops);
         try testing.expectError(eval.EvalError.Crash, result);
     } else {
         // Create a stack for evaluation
@@ -524,7 +550,10 @@ test "eval empty record" {
         // Empty records are zero-sized types, which should return an error
         var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
-        const result = interpreter.eval(resources.expr_idx);
+
+        var test_env_instance = test_env.TestEnv.init(test_allocator);
+        var roc_ops = test_env_instance.roc_ops();
+        const result = interpreter.eval(resources.expr_idx, &roc_ops);
         try testing.expectError(eval.EvalError.ZeroSizedType, result);
 
         // Verify the stack didn't grow
@@ -554,10 +583,13 @@ test "interpreter reuse across multiple evaluations" {
         var interpreter = try eval.Interpreter.init(test_allocator, resources.module_env, &eval_stack, &layout_cache, &resources.module_env.types);
         defer interpreter.deinit();
 
+        var test_env_instance = test_env.TestEnv.init(test_allocator);
+        var roc_ops = test_env_instance.roc_ops();
+
         // Verify work stack is empty before eval
         try testing.expectEqual(@as(usize, 0), interpreter.work_stack.items.len);
 
-        const result = try interpreter.eval(resources.expr_idx);
+        const result = try interpreter.eval(resources.expr_idx, &roc_ops);
 
         // Verify work stack is empty after eval (should be naturally empty, not cleared)
         try testing.expectEqual(@as(usize, 0), interpreter.work_stack.items.len);

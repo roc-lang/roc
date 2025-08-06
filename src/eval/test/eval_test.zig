@@ -2,6 +2,7 @@
 const std = @import("std");
 const helpers = @import("helpers.zig");
 const eval = @import("../interpreter.zig");
+const test_env = @import("../test_env.zig");
 const compile = @import("compile");
 const parse = @import("parse");
 const types = @import("types");
@@ -299,9 +300,12 @@ test "crash message storage and retrieval - direct API test" {
         &layout_cache,
         &resources.module_env.types,
     );
-    interpreter.initRocOpsEnv();
     defer interpreter.deinit();
 
+    var test_env_instance = test_env.TestEnv.init(testing.allocator);
+    var roc_ops = test_env_instance.roc_ops();
+
+    // Test that crash functionality works through RocOps
     // Before crash, getCrashMsg should return null
     try testing.expect(interpreter.getCrashMsg() == null);
 
@@ -311,8 +315,8 @@ test "crash message storage and retrieval - direct API test" {
         .len = test_message.len,
     };
 
-    // Call the crash function directly (this is what roc_ops.crash() does internally)
-    interpreter.roc_ops.roc_crashed(&crash_args, interpreter.roc_ops.env);
+    // Call the crash function directly through test RocOps
+    roc_ops.roc_crashed(&crash_args, roc_ops.env);
 
     // After crash, getCrashMsg should return the crash message
     const crash_msg = interpreter.getCrashMsg();
@@ -423,14 +427,16 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
         &layout_cache,
         &resources.module_env.types,
     );
-    interpreter.initRocOpsEnv(); // Set the env pointer correctly
     defer interpreter.deinit();
+
+    var test_env_instance = test_env.TestEnv.init(std.testing.allocator);
+    var roc_ops = test_env_instance.roc_ops();
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
-    const result = interpreter.eval(resources.expr_idx);
+    const result = interpreter.eval(resources.expr_idx, &roc_ops);
 
     if (should_trace == .trace) {
         interpreter.endTrace();
@@ -680,10 +686,12 @@ test "ModuleEnv serialization and interpreter evaluation" {
             &layout_cache,
             &original_env.types,
         );
-        interpreter.initRocOpsEnv(); // Set the env pointer correctly
         defer interpreter.deinit();
 
-        const result = try interpreter.eval(canonicalized_expr_idx.get_idx());
+        var test_env_instance = test_env.TestEnv.init(gpa);
+        var roc_ops = test_env_instance.roc_ops();
+
+        const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), &roc_ops);
 
         // Verify we got the expected result
         try testing.expect(result.layout.tag == .scalar);
@@ -760,10 +768,12 @@ test "ModuleEnv serialization and interpreter evaluation" {
                 &layout_cache,
                 &deserialized_env.types,
             );
-            interpreter.initRocOpsEnv(); // Set the env pointer correctly
             defer interpreter.deinit();
 
-            const result = try interpreter.eval(canonicalized_expr_idx.get_idx());
+            var test_env_instance = test_env.TestEnv.init(gpa);
+            var roc_ops = test_env_instance.roc_ops();
+
+            const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), &roc_ops);
 
             // Verify we get the same result from the deserialized ModuleEnv
             try testing.expect(result.layout.tag == .scalar);
