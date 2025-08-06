@@ -5,7 +5,7 @@ const build_options = @import("build_options");
 
 var verbose_mode = false;
 
-/// Verbose debug logging
+/// Verbose debug logging.
 fn logDebug(comptime format: []const u8, args: anytype) void {
     if (verbose_mode) {
         std.debug.print(format, args);
