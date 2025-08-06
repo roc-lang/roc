@@ -4,17 +4,17 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-// Platform detection
+/// Platform detection
 pub const is_windows = builtin.target.os.tag == .windows;
 
-// Platform-specific handle type
+/// Platform-specific handle type
 pub const Handle = if (is_windows) *anyopaque else std.posix.fd_t;
 
-// Fixed base address for shared memory mapping on Windows to avoid ASLR issues
-// Using 0x10000000 (256MB) which is typically available on Windows
+/// Fixed base address for shared memory mapping on Windows to avoid ASLR issues
+/// Using 0x10000000 (256MB) which is typically available on Windows
 pub const SHARED_MEMORY_BASE_ADDR: ?*anyopaque = if (is_windows) @ptrFromInt(0x10000000) else null;
 
-// Windows API declarations
+/// Windows API declarations
 pub const windows = if (is_windows) struct {
     pub const HANDLE = *anyopaque;
     pub const DWORD = u32;
@@ -82,7 +82,7 @@ pub const windows = if (is_windows) struct {
     };
 } else struct {};
 
-// POSIX shared memory functions
+/// POSIX shared memory functions
 pub const posix = if (!is_windows) struct {
     pub extern "c" fn mmap(
         addr: ?*anyopaque,
@@ -156,13 +156,13 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
             else
                 0;
             const size_low: windows.DWORD = @intCast(size & 0xFFFFFFFF);
-            
+
             const handle = windows.CreateFileMappingW(
                 windows.INVALID_HANDLE_VALUE,
                 null, // default security
                 windows.PAGE_READWRITE,
                 size_high, // high 32 bits
-                size_low,  // low 32 bits
+                size_low, // low 32 bits
                 null, // anonymous mapping
             );
 

@@ -177,35 +177,35 @@ pub fn writeFdInfo(
     } else {
         // On POSIX, write a coordination file
         const fd = @as(c_int, @intCast(handle));
-        
+
         // Get the directory of the target executable
         const target_dir = std.fs.path.dirname(target_path) orelse {
             return error.InvalidTargetPath;
         };
-        
+
         // Create the coordination file path
         const coord_file_path = std.fmt.allocPrint(allocator, "{s}.txt", .{target_dir}) catch {
             return error.OutOfMemory;
         };
         defer allocator.free(coord_file_path);
-        
+
         // Write the coordination file
         const file = std.fs.cwd().createFile(coord_file_path, .{}) catch |err| {
             std.log.err("Failed to create coordination file at '{s}': {}", .{ coord_file_path, err });
             return err;
         };
         defer file.close();
-        
+
         const content = std.fmt.allocPrint(allocator, "{}\n{}\n", .{ fd, size }) catch {
             return error.OutOfMemory;
         };
         defer allocator.free(content);
-        
+
         file.writeAll(content) catch |err| {
             std.log.err("Failed to write coordination file: {}", .{err});
             return err;
         };
-        
+
         // Return empty string for POSIX (no command line args needed)
         return "";
     }

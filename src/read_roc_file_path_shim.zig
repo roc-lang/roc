@@ -96,7 +96,7 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator) ShimError!*ModuleEnv {
 
     // Get base pointer
     const base_ptr = shm.getBasePtr();
-    
+
     // Read parent's shared memory base address and calculate relocation offset
     const data_ptr = base_ptr + FIRST_ALLOC_OFFSET;
     const parent_base_addr = safe_memory.safeRead(u64, base_ptr, FIRST_ALLOC_OFFSET, shm.total_size) catch {
