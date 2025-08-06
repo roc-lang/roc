@@ -342,7 +342,7 @@ pub fn deinit(self: *SharedMemoryAllocator, gpa: std.mem.Allocator) void {
         .linux, .macos, .freebsd, .openbsd, .netbsd => {
             std.posix.munmap(@alignCast(self.base_ptr[0..self.total_size]));
             _ = std.posix.close(self.handle);
-            // Memory is automatically cleaned up when all references are closed
+            // The shared memory is automatically cleaned up when all references are closed
         },
         else => @compileError("Unsupported platform"),
     }
