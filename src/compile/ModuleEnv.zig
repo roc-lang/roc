@@ -1109,7 +1109,7 @@ pub fn serialize(
         .store = (try self.store.serialize(allocator, writer)).*,
     };
 
-    // IMPORTANT: Set gpa field to all zeros as requested
+    // set gpa to all zeros, so that what we write to the file is deterministic
     @memset(@as([*]u8, @ptrCast(&offset_self.gpa))[0..@sizeOf(@TypeOf(offset_self.gpa))], 0);
 
     return @constCast(offset_self);
