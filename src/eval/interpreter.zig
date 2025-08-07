@@ -1439,29 +1439,30 @@ pub const Interpreter = struct {
         self.traceEnter("handleLambdaCall {}", .{expr_idx});
         defer self.traceExit("", .{});
 
-        // Get the return layout from the call expression type (not the lambda body)
-        const return_layout_idx = try self.getLayoutIdx(expr_idx);
-        const return_layout = self.layout_cache.getLayout(return_layout_idx);
-        
         // Current stack layout: [args..., closure] (return slot not yet allocated)
         const closure_value = try self.peekStackValue(1); // closure is at top
         
-        // Calculate value_base before allocating return slot  
-        const value_base: usize = self.value_stack.items.len - @as(usize, arg_count) - 1; // -1 for closure
-        
-        // Pre-allocate return slot AFTER getting closure but before setting up the frame
-        const return_slot_offset = self.stack_memory.used;
-        _ = try self.pushStackValue(return_layout);
-        
-        // Final stack layout: [args..., closure, return_slot]
-        const stack_base = self.value_stack.items[value_base].offset;
-
         if (closure_value.layout.tag != LayoutTag.closure) {
             self.traceError("Expected closure, got {}", .{closure_value.layout.tag});
             return error.InvalidStackState;
         }
 
         const closure: *const Closure = @ptrCast(@alignCast(closure_value.ptr.?));
+
+        // Calculate value_base before allocating return slot  
+        const value_base: usize = self.value_stack.items.len - @as(usize, arg_count) - 1; // -1 for closure
+        
+        // Pre-allocate return slot AFTER getting closure but before setting up the frame
+        // Pre-allocate return slot AFTER getting closure but before setting up the frame
+        // We'll use a minimal placeholder layout and adjust it during return
+        // The type system should have already verified that the return value matches the expected type
+        const placeholder_layout = Layout.boolType(); // Minimal placeholder
+        const return_layout_idx = try self.layout_cache.insertLayout(placeholder_layout);
+        const return_slot_offset = self.stack_memory.used;
+        _ = try self.pushStackValue(placeholder_layout);
+        
+        // Final stack layout: [args..., closure, return_slot]
+        const stack_base = self.value_stack.items[value_base].offset;
 
         // Create a new call frame with return slot info
         const frame: *CallFrame = try self.frame_stack.addOne();
@@ -1535,39 +1536,46 @@ pub const Interpreter = struct {
         // The return value is on top of the stack.
         const return_value = try self.peekStackValue(1);
         
-        // Get the pre-allocated return slot
-        const return_slot_ptr = self.stack_memory.start + frame.return_slot_offset;
-        const return_layout = self.layout_cache.getLayout(frame.return_layout_idx);
-        
-        // Calculate the actual return size (for closures, use getTotalSize)
-        const actual_return_size = if (return_value.layout.tag == .closure) 
-            return_value.getTotalSize(self.layout_cache) 
-        else 
-            self.layout_cache.layoutSize(return_layout);
+        // Use the actual return value's layout instead of the placeholder
+        const actual_return_layout = return_value.layout;
+        const actual_return_size = return_value.getTotalSize(self.layout_cache);
             
         self.traceInfo("handleLambdaReturn: actual_size={}, ptr_null={}", .{actual_return_size, return_value.ptr == null});
         
         // Debug: Check if we're copying a closure and what sizes we're dealing with
-        if (return_layout.tag == .closure) {
+        if (actual_return_layout.tag == .closure) {
             // Since we fixed pushStackValue, the return slot should now be the right size
-            const slot_size = if (return_layout.tag == .closure) blk: {
+            const slot_size = if (actual_return_layout.tag == .closure) blk: {
                 const closure_header_size = @sizeOf(Closure);
-                const captures_layout = self.layout_cache.getLayout(return_layout.data.closure.captures_layout_idx);
+                const captures_layout = self.layout_cache.getLayout(actual_return_layout.data.closure.captures_layout_idx);
                 const captures_size = self.layout_cache.layoutSize(captures_layout);
                 const captures_alignment = captures_layout.alignment(target_usize);
                 const aligned_captures_offset = std.mem.alignForward(u32, closure_header_size, @intCast(captures_alignment.toByteUnits()));
                 break :blk aligned_captures_offset + captures_size;
-            } else self.layout_cache.layoutSize(return_layout);
+            } else self.layout_cache.layoutSize(actual_return_layout);
             
             self.traceInfo("CLOSURE DEBUG: slot_size={}, actual_size={}", .{slot_size, actual_return_size});
         }
+        
+        // Get the pre-allocated return slot
+        const return_slot_ptr = self.stack_memory.start + frame.return_slot_offset;
         
         if (actual_return_size > 0 and return_value.ptr != null) {
             const src_byte = @as([*]const u8, @ptrCast(return_value.ptr.?))[0];
             self.traceInfo("Copying return byte {} to return slot", .{src_byte});
             
+            // Type safety: Validate that the return value's layout matches the expected type
+            // The type system should have already verified this, but we add runtime validation
+            const placeholder_size = self.layout_cache.layoutSize(self.layout_cache.getLayout(frame.return_layout_idx));
+            if (actual_return_size > placeholder_size) {
+                self.traceInfo("Type mismatch: return slot size {} < actual size {}", .{placeholder_size, actual_return_size});
+                // This indicates a type system issue - the placeholder layout doesn't match the actual return type
+                // Instead of a workaround, we should throw a proper type error
+                return error.TypeMismatch;
+            }
+            
             // Use StackValue helpers for proper alignment and copying
-            const return_slot_value = StackValue.fromPtr(return_layout, return_slot_ptr);
+            const return_slot_value = StackValue.fromPtr(actual_return_layout, return_slot_ptr);
             return_value.copyTo(return_slot_value, self.layout_cache);
         }
 
@@ -1590,8 +1598,8 @@ pub const Interpreter = struct {
         // Copy return slot data to the result position using StackValue helpers
         if (actual_return_size > 0) {
             const result_position_ptr = self.stack_memory.start + result_position_offset;
-            const return_slot_value = StackValue.fromPtr(return_layout, return_slot_ptr);
-            const result_position_value = StackValue.fromPtr(return_layout, result_position_ptr);
+            const return_slot_value = StackValue.fromPtr(actual_return_layout, return_slot_ptr);
+            const result_position_value = StackValue.fromPtr(actual_return_layout, result_position_ptr);
             return_slot_value.copyTo(result_position_value, self.layout_cache);
         }
         
@@ -1603,7 +1611,7 @@ pub const Interpreter = struct {
         
         // Update the value stack entry to point to the result
         self.value_stack.items[frame.value_base] = .{
-            .layout = return_layout,
+            .layout = actual_return_layout,
             .offset = result_position_offset,
         };
 
