@@ -2039,6 +2039,17 @@ const Formatter = struct {
 
                         return false;
                     },
+                    .if_then_else => |i| {
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, i.condition)) {
+                            return true;
+                        }
+
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, i.then)) {
+                            return true;
+                        }
+
+                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, i.@"else");
+                    },
                     else => return false,
                 }
             },
