@@ -2021,6 +2021,13 @@ const Formatter = struct {
                     .unary_op => |u| {
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, u.expr);
                     },
+                    .field_access => |f| {
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, f.left)) {
+                            return true;
+                        }
+
+                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, f.right);
+                    },
                     else => return false,
                 }
             },
