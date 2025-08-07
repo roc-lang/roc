@@ -1539,17 +1539,30 @@ pub const Interpreter = struct {
         const return_slot_ptr = self.stack_memory.start + frame.return_slot_offset;
         const return_layout = self.layout_cache.getLayout(frame.return_layout_idx);
         
-        // Copy the return value directly to the pre-allocated slot using StackValue helpers
-        const return_slot_size = self.layout_cache.layoutSize(return_layout);
-        self.traceInfo("handleLambdaReturn: copy check - size={}, ptr_null={}", .{return_slot_size, return_value.ptr == null});
+        // Calculate the actual return size (for closures, use getTotalSize)
+        const actual_return_size = if (return_value.layout.tag == .closure) 
+            return_value.getTotalSize(self.layout_cache) 
+        else 
+            self.layout_cache.layoutSize(return_layout);
+            
+        self.traceInfo("handleLambdaReturn: actual_size={}, ptr_null={}", .{actual_return_size, return_value.ptr == null});
         
         // Debug: Check if we're copying a closure and what sizes we're dealing with
         if (return_layout.tag == .closure) {
-            const total_size_needed = return_value.getTotalSize(self.layout_cache);
-            self.traceInfo("CLOSURE DEBUG: layout_size={}, total_size_needed={}", .{return_slot_size, total_size_needed});
+            // Since we fixed pushStackValue, the return slot should now be the right size
+            const slot_size = if (return_layout.tag == .closure) blk: {
+                const closure_header_size = @sizeOf(Closure);
+                const captures_layout = self.layout_cache.getLayout(return_layout.data.closure.captures_layout_idx);
+                const captures_size = self.layout_cache.layoutSize(captures_layout);
+                const captures_alignment = captures_layout.alignment(target_usize);
+                const aligned_captures_offset = std.mem.alignForward(u32, closure_header_size, @intCast(captures_alignment.toByteUnits()));
+                break :blk aligned_captures_offset + captures_size;
+            } else self.layout_cache.layoutSize(return_layout);
+            
+            self.traceInfo("CLOSURE DEBUG: slot_size={}, actual_size={}", .{slot_size, actual_return_size});
         }
         
-        if (return_slot_size > 0 and return_value.ptr != null) {
+        if (actual_return_size > 0 and return_value.ptr != null) {
             const src_byte = @as([*]const u8, @ptrCast(return_value.ptr.?))[0];
             self.traceInfo("Copying return byte {} to return slot", .{src_byte});
             
@@ -1575,7 +1588,7 @@ pub const Interpreter = struct {
         const result_position_offset = self.value_stack.items[frame.value_base].offset;
         
         // Copy return slot data to the result position using StackValue helpers
-        if (return_slot_size > 0) {
+        if (actual_return_size > 0) {
             const result_position_ptr = self.stack_memory.start + result_position_offset;
             const return_slot_value = StackValue.fromPtr(return_layout, return_slot_ptr);
             const result_position_value = StackValue.fromPtr(return_layout, result_position_ptr);
@@ -1586,7 +1599,7 @@ pub const Interpreter = struct {
         self.work_stack.items.len = frame.work_base;
         self.bindings_stack.items.len = frame.bindings_base;
         self.value_stack.items.len = frame.value_base + 1; // Keep one slot for the result
-        self.stack_memory.used = result_position_offset + return_slot_size;
+        self.stack_memory.used = result_position_offset + actual_return_size;
         
         // Update the value stack entry to point to the result
         self.value_stack.items[frame.value_base] = .{
@@ -2169,7 +2182,28 @@ pub const Interpreter = struct {
         self.tracePrint("pushStackValue {s}", .{@tagName(value_layout.tag)});
         self.traceStackState();
 
-        const value_size = self.layout_cache.layoutSize(value_layout);
+        // For closures, we need to calculate the total size including captures
+        const value_size = if (value_layout.tag == .closure) blk: {
+            // The layout should contain the captures layout information
+            // We need to calculate the total size: Closure header + aligned captures
+            const closure_header_size = @sizeOf(Closure);
+            
+            // Get the captures layout from the closure layout
+            const captures_layout = self.layout_cache.getLayout(value_layout.data.closure.captures_layout_idx);
+            const captures_size = self.layout_cache.layoutSize(captures_layout);
+            const captures_alignment = captures_layout.alignment(target_usize);
+            
+            // Calculate aligned offset for captures after header
+            const aligned_captures_offset = std.mem.alignForward(u32, closure_header_size, @intCast(captures_alignment.toByteUnits()));
+            const total_size = aligned_captures_offset + captures_size;
+            
+            self.traceInfo("Closure allocation: header={}, captures={}, aligned_offset={}, total={}", .{
+                closure_header_size, captures_size, aligned_captures_offset, total_size
+            });
+            
+            break :blk total_size;
+        } else self.layout_cache.layoutSize(value_layout);
+        
         const old_stack_used = self.stack_memory.used;
         var value_ptr: ?*anyopaque = null;
         var offset: u32 = self.stack_memory.used;
