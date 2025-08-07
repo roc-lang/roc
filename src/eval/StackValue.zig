@@ -357,3 +357,44 @@ pub fn fromPtr(layout: Layout, ptr: *anyopaque) StackValue {
         .is_initialized = true,
     };
 }
+
+/// Copy value data to another StackValue WITHOUT incrementing refcounts (move semantics)
+pub fn copyWithoutRefcount(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) void {
+    std.debug.assert(self.is_initialized);
+    std.debug.assert(dest.ptr != null);
+
+    const size = layout_cache.layoutSize(self.layout);
+    if (size == 0) return;
+
+    if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
+        // String: use proper struct copy WITHOUT incrementing ref count (move semantics)
+        const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
+        const dest_str: *RocStr = @ptrCast(@alignCast(dest.ptr.?));
+        dest_str.* = src_str.*; // Just copy the struct, no refcount change
+    } else {
+        // Everything else just copy the bytes
+        std.mem.copyForwards(
+            u8,
+            @as([*]u8, @ptrCast(dest.ptr.?))[0..size],
+            @as([*]const u8, @ptrCast(self.ptr.?))[0..size],
+        );
+    }
+}
+
+/// Increment reference count for refcounted types (no-op for others)
+pub fn incref(self: StackValue) void {
+    if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
+        const roc_str = self.asRocStr();
+        roc_str.incref(1);
+    }
+    std.debug.panic("called incref on a non-refcounted value {}", .{self.layout});
+}
+
+/// Decrement reference count for refcounted types (no-op for others)
+pub fn decref(self: StackValue, ops: *RocOps) void {
+    if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
+        const roc_str = self.asRocStr();
+        roc_str.decref(ops);
+    }
+    std.debug.panic("called decref on a non-refcounted value {}", .{self.layout});
+}
