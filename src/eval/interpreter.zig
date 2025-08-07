@@ -1300,13 +1300,29 @@ pub const Interpreter = struct {
                 result_value.setInt(bool_result);
             },
             .w_binop_and => {
-                // Boolean AND: both operands must be truthy (non-zero)
-                const bool_result: i128 = if (lhs_val != 0 and rhs_val != 0) 1 else 0;
+                // Boolean AND: both operands must be actual boolean values (0 or 1)
+                if (lhs_val != 0 and lhs_val != 1) {
+                    self.traceError("Boolean AND: left operand is not a boolean value: {}", .{lhs_val});
+                    return error.TypeMismatch;
+                }
+                if (rhs_val != 0 and rhs_val != 1) {
+                    self.traceError("Boolean AND: right operand is not a boolean value: {}", .{rhs_val});
+                    return error.TypeMismatch;
+                }
+                const bool_result: i128 = if (lhs_val == 1 and rhs_val == 1) 1 else 0;
                 result_value.setInt(bool_result);
             },
             .w_binop_or => {
-                // Boolean OR: at least one operand must be truthy (non-zero)
-                const bool_result: i128 = if (lhs_val != 0 or rhs_val != 0) 1 else 0;
+                // Boolean OR: both operands must be actual boolean values (0 or 1)
+                if (lhs_val != 0 and lhs_val != 1) {
+                    self.traceError("Boolean OR: left operand is not a boolean value: {}", .{lhs_val});
+                    return error.TypeMismatch;
+                }
+                if (rhs_val != 0 and rhs_val != 1) {
+                    self.traceError("Boolean OR: right operand is not a boolean value: {}", .{rhs_val});
+                    return error.TypeMismatch;
+                }
+                const bool_result: i128 = if (lhs_val == 1 or rhs_val == 1) 1 else 0;
                 result_value.setInt(bool_result);
             },
             else => unreachable,
@@ -1360,6 +1376,12 @@ pub const Interpreter = struct {
 
         self.traceInfo("Unary not operation: bool tag value = {}", .{bool_val});
 
+        // Validate that the operand is a proper boolean value (0 or 1)
+        if (bool_val != 0 and bool_val != 1) {
+            self.traceError("Unary not: operand is not a boolean value: {}", .{bool_val});
+            return error.TypeMismatch;
+        }
+
         // Boolean tag values: 0 = False, 1 = True
         // Negate the boolean value
         const result_val: u8 = if (bool_val == 0) 1 else 0;
@@ -1394,6 +1416,12 @@ pub const Interpreter = struct {
 
         const branch = self.env.store.getIfBranch(branches[branch_index]);
 
+        // Validate that the condition is a proper boolean value (0 or 1)
+        if (cond_val != 0 and cond_val != 1) {
+            self.traceError("If condition is not a boolean value: {}", .{cond_val});
+            return error.TypeMismatch;
+        }
+        
         if (cond_val == 1) {
             // Condition is true, evaluate this branch's body
             self.schedule_work(WorkItem{
