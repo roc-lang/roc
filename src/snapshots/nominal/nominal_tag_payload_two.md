@@ -120,8 +120,8 @@ is_ok = |result| match result {
 		(e-lambda @6.6-6.24
 			(args
 				(p-assign @6.7-6.8 (ident "a")))
-			(e-nominal @6.10-6.21 (nominal "MyResult")
-				(e-tag @6.10-6.21 (name "Ok")
+			(e-nominal @6.10-6.24 (nominal "MyResult")
+				(e-tag @6.10-6.24 (name "Ok")
 					(args
 						(e-lookup-local @6.22-6.23
 							(p-assign @6.7-6.8 (ident "a")))))))
@@ -182,7 +182,7 @@ is_ok = |result| match result {
 (inferred-types
 	(defs
 		(patt @6.1-6.3 (type "ok -> MyResult(ok, err)"))
-		(patt @9.1-9.6 (type "MyResult(ok, err) -> Bool")))
+		(patt @9.1-9.6 (type "MyResult(_ok, _err) -> Bool")))
 	(type_decls
 		(nominal @3.1-3.40 (type "MyResult(ok, err)")
 			(ty-header @3.1-3.18 (name "MyResult")
@@ -191,5 +191,5 @@ is_ok = |result| match result {
 					(ty-var @3.14-3.17 (name "err"))))))
 	(expressions
 		(expr @6.6-6.24 (type "ok -> MyResult(ok, err)"))
-		(expr @9.9-12.2 (type "MyResult(ok, err) -> Bool"))))
+		(expr @9.9-12.2 (type "MyResult(_ok, _err) -> Bool"))))
 ~~~

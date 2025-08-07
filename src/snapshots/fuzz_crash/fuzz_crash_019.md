@@ -186,7 +186,7 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:119:2:119:5
 UNDEFINED VARIABLE - fuzz_crash_019.md:120:1:120:2
 UNDEFINED VARIABLE - fuzz_crash_019.md:120:6:120:9
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_019.md:52:2:52:2
-TYPE MISMATCH - fuzz_crash_019.md:84:2:84:4
+TYPE MISMATCH - fuzz_crash_019.md:84:2:86:3
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -868,17 +868,18 @@ All patterns in an `match` must have compatible types.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**fuzz_crash_019.md:84:2:84:4:**
+**fuzz_crash_019.md:84:2:86:3:**
 ```roc
 	me(
+		..., # r
+	)crash ke"Unr!" #)
 ```
- ^^
 
 It is of type:
-    _[Blue]_others, [Tb]_others2 -> Error_
+    __arg -> _ret_
 
 But you are trying to use it as:
-    __arg -> _ret_
+    _[Blue]_others, [Tb]_others2 -> Error_
 
 # TOKENS
 ~~~zig
@@ -1617,15 +1618,16 @@ expect {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @68.3-68.10)))
+									(p-nominal @68.3-68.10
+										(p-applied-tag @68.3-68.10))))
 							(value
 								(e-int @68.14-68.16 (value "12")))))))))
 	(d-let
 		(p-assign @75.1-75.3 (ident "ma"))
 		(e-closure @75.5-111.2
 			(captures
-				(capture @49.1-49.3 (ident "me"))
-				(capture @97.2-97.3 (ident "t")))
+				(capture @97.2-97.3 (ident "t"))
+				(capture @49.1-49.3 (ident "me")))
 			(e-lambda @75.5-111.2
 				(args
 					(p-underscore @75.6-75.7))
@@ -1681,9 +1683,10 @@ expect {
 								(field (name "baz")
 									(e-runtime-error (tag "ident_not_in_scope")))
 								(field (name "qux")
-									(e-tag @96.44-96.46 (name "Ok")
-										(args
-											(e-runtime-error (tag "ident_not_in_scope")))))
+									(e-nominal @96.44-96.53 (nominal "Result")
+										(e-tag @96.44-96.53 (name "Ok")
+											(args
+												(e-runtime-error (tag "ident_not_in_scope"))))))
 								(field (name "ned")
 									(e-runtime-error (tag "ident_not_in_scope"))))))
 					(s-let @97.2-97.48
@@ -1754,7 +1757,7 @@ expect {
 										(e-dot-access @105.55-105.72 (field "unknown")
 											(receiver
 												(e-runtime-error (tag "not_implemented")))))))))
-					(e-tag @106.2-106.7 (name "Stdo!")
+					(e-tag @106.2-110.3 (name "Stdo!")
 						(args
 							(e-string @107.3-109.6
 								(e-literal @107.4-107.6 (string "Ho"))
@@ -1838,7 +1841,7 @@ expect {
 	(defs
 		(patt @35.1-35.4 (type "Bool -> Num(_size)"))
 		(patt @38.1-38.4 (type "Bool -> Error"))
-		(patt @49.1-49.3 (type "Error"))
+		(patt @49.1-49.3 (type "[Blue]_others, [Tb]_others2 -> Error"))
 		(patt @75.1-75.3 (type "_arg -> [Stdo!(Str)]_others"))
 		(patt @114.1-114.2 (type "{}")))
 	(type_decls
@@ -1870,7 +1873,7 @@ expect {
 	(expressions
 		(expr @35.7-35.28 (type "Bool -> Num(_size)"))
 		(expr @38.7-47.2 (type "Bool -> Error"))
-		(expr @49.6-69.3 (type "Error"))
+		(expr @49.6-69.3 (type "[Blue]_others, [Tb]_others2 -> Error"))
 		(expr @75.5-111.2 (type "_arg -> [Stdo!(Str)]_others"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~

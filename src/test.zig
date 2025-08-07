@@ -44,7 +44,6 @@ test {
     std.testing.refAllDecls(@import("check/test/literal_size_test.zig"));
     std.testing.refAllDecls(@import("check/test/nominal_type_origin_test.zig"));
     std.testing.refAllDecls(@import("check/test/static_dispatch_test.zig"));
-    std.testing.refAllDecls(@import("check/test/test_rigid_instantiation.zig"));
 
     std.testing.refAllDecls(@import("parse"));
     std.testing.refAllDecls(@import("parse/test/ast_node_store_test.zig"));

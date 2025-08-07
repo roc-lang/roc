@@ -98,7 +98,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @7.1-7.13 (type "Error -> Error")))
+		(patt @7.1-7.13 (type "List(item) -> List(a)")))
 	(expressions
-		(expr @1.1-1.1 (type "Error -> Error"))))
+		(expr @1.1-1.1 (type "List(item) -> List(a)"))))
 ~~~

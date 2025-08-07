@@ -90,5 +90,5 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "(_field, _field2)"))
+(expr @1.1-6.2 (type "(Num(_size), Str)"))
 ~~~

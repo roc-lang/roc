@@ -250,8 +250,8 @@ main! = |_| {}
 				(p-assign @4.15-4.16 (ident "g")))
 			(e-closure @4.18-4.29
 				(captures
-					(capture @4.12-4.13 (ident "f"))
-					(capture @4.15-4.16 (ident "g")))
+					(capture @4.15-4.16 (ident "g"))
+					(capture @4.12-4.13 (ident "f")))
 				(e-lambda @4.18-4.29
 					(args
 						(p-assign @4.19-4.20 (ident "x")))

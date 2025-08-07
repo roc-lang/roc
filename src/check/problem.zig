@@ -33,6 +33,7 @@ const Content = types_mod.Content;
 /// The kind of problem we're dealing with
 pub const Problem = union(enum) {
     type_mismatch: TypeMismatch,
+    type_apply_mismatch_arities: TypeApplyArityMismatch,
     number_does_not_fit: NumberDoesNotFit,
     negative_unsigned_int: NegativeUnsignedInt,
     infinite_recursion: struct { var_: Var },
@@ -83,7 +84,7 @@ pub const TypePair = struct {
     actual_snapshot: SnapshotContentIdx,
 };
 
-/// More specific details about a particular type mismatch. k
+/// More specific details about a particular type mismatch.
 pub const TypeMismatchDetail = union(enum) {
     incompatible_list_elements: IncompatibleListElements,
     incompatible_if_cond,
@@ -93,6 +94,7 @@ pub const TypeMismatchDetail = union(enum) {
     invalid_bool_binop: InvalidBoolBinop,
     invalid_nominal_tag,
     cross_module_import: CrossModuleImport,
+    incompatible_fn_call_arg: IncompatibleFnCallArg,
 };
 
 /// Problem data for when list elements have incompatible types
@@ -106,6 +108,14 @@ pub const IncompatibleListElements = struct {
 pub const CrossModuleImport = struct {
     import_region: ModuleEnv.Expr.Idx,
     module_idx: ModuleEnv.Import.Idx,
+};
+
+/// Problem data when
+pub const IncompatibleFnCallArg = struct {
+    fn_name: ?Ident.Idx,
+    arg_var: Var,
+    incompatible_arg_index: u32, // 0-based index of the incompatible arg
+    num_args: u32, // Total number of fn args
 };
 
 /// Problem data for when if branches have incompatible types
@@ -137,6 +147,17 @@ pub const InvalidBoolBinop = struct {
     binop_expr: ModuleEnv.Expr.Idx,
     problem_side: enum { lhs, rhs },
     binop: enum { @"and", @"or" },
+};
+
+// bug //
+
+/// Error when you try to apply the wrong number of arguments to a type in
+/// an annotation
+pub const TypeApplyArityMismatch = struct {
+    type_name: base.Ident.Idx,
+    anno_var: Var,
+    num_expected_args: u32,
+    num_actual_args: u32,
 };
 
 // bug //
@@ -237,10 +258,16 @@ pub const ReportBuilder = struct {
                         .cross_module_import => |data| {
                             return self.buildCrossModuleImportError(&snapshot_writer, mismatch.types, data);
                         },
+                        .incompatible_fn_call_arg => |data| {
+                            return self.buildIncompatibleFnCallArg(&snapshot_writer, mismatch.types, data);
+                        },
                     }
                 } else {
                     return self.buildGenericTypeMismatchReport(&snapshot_writer, mismatch.types);
                 }
+            },
+            .type_apply_mismatch_arities => |data| {
+                return self.buildTypeApplyArityMismatchReport(&snapshot_writer, data);
             },
             .number_does_not_fit => |data| {
                 return self.buildNumberDoesNotFitReport(&snapshot_writer, data);
@@ -267,12 +294,13 @@ pub const ReportBuilder = struct {
     ) !Report {
         var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
 
-        try snapshot_writer.write(types.expected_snapshot);
-        const owned_expected = try report.addOwnedString(self.buf.items[0..]);
-
         self.buf.clearRetainingCapacity();
         try snapshot_writer.write(types.actual_snapshot);
         const owned_actual = try report.addOwnedString(self.buf.items[0..]);
+
+        self.buf.clearRetainingCapacity();
+        try snapshot_writer.write(types.expected_snapshot);
+        const owned_expected = try report.addOwnedString(self.buf.items[0..]);
 
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
 
@@ -1032,81 +1060,211 @@ pub const ReportBuilder = struct {
     ) !Report {
         var report = Report.init(self.gpa, "INVALID NOMINAL TAG", .runtime_error);
 
-        // Create owned strings
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.expected_snapshot);
-        const expected_type = try report.addOwnedString(self.buf.items);
-
+        // Create actual tag str
         const actual_content = self.snapshots.getContent(types.actual_snapshot);
         std.debug.assert(actual_content == .structure);
         std.debug.assert(actual_content.structure == .tag_union);
         std.debug.assert(actual_content.structure.tag_union.tags.len() == 1);
         const actual_tag = self.snapshots.tags.get(actual_content.structure.tag_union.tags.start);
-        const tag_name_bytes = self.can_ir.idents.getText(actual_tag.name);
-        const tag_name = try report.addOwnedString(tag_name_bytes);
+        self.buf.clearRetainingCapacity();
+        try snapshot_writer.writeTag(actual_tag, types.actual_snapshot);
+        const actual_tag_str = try report.addOwnedString(self.buf.items);
+
+        // Create expected tag str
+        const expected_content = self.snapshots.getContent(types.expected_snapshot);
+        std.debug.assert(expected_content == .structure);
+        std.debug.assert(expected_content.structure == .tag_union);
+        const expected_num_tags_str = expected_content.structure.tag_union.tags.len();
 
         // Add description
         try report.document.addText("I'm having trouble with this nominal tag:");
         try report.document.addLineBreak();
 
-        // Determine the overall region that encompasses both elements
-        const expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.expected_var)));
-        const problem_side_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
-
-        const overall_start_offset = expr_region.start.offset;
-        const overall_end_offset = problem_side_region.end.offset;
-
-        const overall_region_info = base.RegionInfo.position(
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
             self.source,
             self.module_env.line_starts.items.items,
-            overall_start_offset,
-            overall_end_offset,
-        ) catch return report;
-
-        // Create the display region
-        const display_region = SourceCodeDisplayRegion{
-            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.line_starts.items.items)) catch return report,
-            .start_line = overall_region_info.start_line_idx + 1,
-            .start_column = overall_region_info.start_col_idx + 1,
-            .end_line = overall_region_info.end_line_idx + 1,
-            .end_column = overall_region_info.end_col_idx + 1,
-            .region_annotation = .dimmed,
-            .filename = self.filename,
-        };
-
-        // Create underline regions
-        const this_branch_region_info = base.RegionInfo.position(
-            self.source,
-            self.module_env.line_starts.items.items,
-            problem_side_region.start.offset,
-            problem_side_region.end.offset,
-        ) catch return report;
-        const underline_regions = [_]UnderlineRegion{
-            .{
-                .start_line = this_branch_region_info.start_line_idx + 1,
-                .start_column = this_branch_region_info.start_col_idx + 1,
-                .end_line = this_branch_region_info.end_line_idx + 1,
-                .end_column = this_branch_region_info.end_col_idx + 1,
-                .annotation = .error_highlight,
-            },
-        };
-
-        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
+        );
         try report.document.addLineBreak();
 
         // Show the invalid tag
         try report.document.addText("The tag is:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
-        try report.document.addAnnotated(tag_name, .type_variable);
+        try report.document.addAnnotated(actual_tag_str, .type_variable);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
         // Show the expected tags
-        try report.document.addText("But it should be one of:");
+        if (expected_num_tags_str == 1) {
+            const expected_tag = self.snapshots.tags.get(expected_content.structure.tag_union.tags.start);
+            self.buf.clearRetainingCapacity();
+            try snapshot_writer.writeTag(expected_tag, types.expected_snapshot);
+            const expected_tag_str = try report.addOwnedString(self.buf.items);
+
+            try report.document.addText("But it should be:");
+            try report.document.addLineBreak();
+            try report.document.addText("    ");
+            try report.document.addAnnotated(expected_tag_str, .type_variable);
+        } else {
+            self.buf.clearRetainingCapacity();
+            try snapshot_writer.write(types.expected_snapshot);
+            const expected_type = try report.addOwnedString(self.buf.items);
+
+            try report.document.addText("But it should be one of:");
+            try report.document.addLineBreak();
+            try report.document.addText("    ");
+            try report.document.addAnnotated(expected_type, .type_variable);
+
+            // Check if there's a tag with the same name in the list of possible tags
+
+            const actual_tag_name_str = self.can_ir.idents.getText(actual_tag.name);
+            var iter = expected_content.structure.tag_union.tags.iterIndices();
+            while (iter.next()) |tag_index| {
+                const cur_expected_tag = self.snapshots.tags.get(tag_index);
+                const expected_tag_name_str = self.can_ir.idents.getText(cur_expected_tag.name);
+
+                if (std.mem.eql(u8, actual_tag_name_str, expected_tag_name_str)) {
+                    snapshot_writer.resetContext();
+
+                    self.buf.clearRetainingCapacity();
+                    try snapshot_writer.writeTag(cur_expected_tag, types.expected_snapshot);
+                    const cur_expected_tag_str = try report.addOwnedString(self.buf.items);
+
+                    try report.document.addLineBreak();
+                    try report.document.addLineBreak();
+                    try report.document.addAnnotated("Hint:", .emphasized);
+                    try report.document.addReflowingText(" The nominal type has a tag with the same name, but different args:");
+                    try report.document.addLineBreak();
+                    try report.document.addLineBreak();
+                    try report.document.addText("    ");
+                    try report.document.addAnnotated(cur_expected_tag_str, .type_variable);
+
+                    break;
+                }
+            }
+        }
+
+        return report;
+    }
+
+    /// Build a report for cross-module import type mismatch
+    fn buildIncompatibleFnCallArg(
+        self: *Self,
+        snapshot_writer: *snapshot.SnapshotWriter,
+        types: TypePair,
+        data: IncompatibleFnCallArg,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+
+        self.buf.clearRetainingCapacity();
+        try appendOrdinal(&self.buf, data.incompatible_arg_index + 1);
+        const arg_index = try report.addOwnedString(self.buf.items);
+
+        self.buf.clearRetainingCapacity();
+        try snapshot_writer.write(types.actual_snapshot);
+        const actual_type = try report.addOwnedString(self.buf.items);
+
+        self.buf.clearRetainingCapacity();
+        try snapshot_writer.write(types.expected_snapshot);
+        const expected_type = try report.addOwnedString(self.buf.items);
+
+        try report.document.addText("The ");
+        try report.document.addText(arg_index);
+        try report.document.addText(" argument to this function is not what I expect:");
+        try report.document.addLineBreak();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.arg_var)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.line_starts.items.items,
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("This argument is of type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("But ");
+        if (data.fn_name) |fn_name_ident| {
+            self.buf.clearRetainingCapacity();
+            const fn_name = try report.addOwnedString(self.can_ir.idents.getText(fn_name_ident));
+            try report.document.addAnnotated(fn_name, .inline_code);
+        } else {
+            try report.document.addReflowingText("the function");
+        }
+        try report.document.addReflowingText(" needs the ");
+        try report.document.addReflowingText(arg_index);
+        try report.document.addReflowingText(" argumument to be:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(expected_type, .type_variable);
+
+        return report;
+    }
+
+    // annotation problems //
+
+    /// Build a report for "number does not fit in type" diagnostic
+    fn buildTypeApplyArityMismatchReport(
+        self: *Self,
+        _: *snapshot.SnapshotWriter,
+        data: TypeApplyArityMismatch,
+    ) !Report {
+        const title = blk: {
+            if (data.num_expected_args > data.num_actual_args) {
+                break :blk "TOO FEW ARGS";
+            } else if (data.num_expected_args < data.num_actual_args) {
+                break :blk "TOO MANY ARGS";
+            } else {
+                break :blk "WRONG NUMBER OF ARGS";
+            }
+        };
+        var report = Report.init(self.gpa, title, .runtime_error);
+
+        const type_name = try report.addOwnedString(self.can_ir.idents.getText(data.type_name));
+
+        self.buf.clearRetainingCapacity();
+        try self.buf.writer().print("{d}", .{data.num_expected_args});
+        const num_expected_args = try report.addOwnedString(self.buf.items);
+
+        self.buf.clearRetainingCapacity();
+        try self.buf.writer().print("{d}", .{data.num_actual_args});
+        const num_actual_args = try report.addOwnedString(self.buf.items);
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.anno_var)));
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("The type ");
+        try report.document.addAnnotated(type_name, .type_variable);
+        try report.document.addReflowingText(" expects ");
+        try report.document.addReflowingText(num_expected_args);
+        try report.document.addReflowingText(" argument, but got ");
+        try report.document.addReflowingText(num_actual_args);
+        try report.document.addReflowingText(" instead.");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.line_starts.items.items,
+        );
+        try report.document.addLineBreak();
 
         return report;
     }
@@ -1288,8 +1446,6 @@ pub const ReportBuilder = struct {
 
         return report;
     }
-
-    // unimplemented //
 
     /// Build a report for "invalid number literal" diagnostic
     fn buildUnimplementedReport(self: *Self) !Report {

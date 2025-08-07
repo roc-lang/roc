@@ -21,9 +21,22 @@ composed = |n| get_value(make_record(n))
 answer = composed([42])
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - test_nested_instantiation_crash.md:11:12:11:26
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**test_nested_instantiation_crash.md:11:12:11:26:**
+```roc
+composed : List(a) -> Str
+```
+           ^^^^^^^^^^^^^^
+
+It is of type:
+    _List(a) -> Str_
+
+But you are trying to use it as:
+    _List(a) -> List(a)_
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),LowerIdent(1:14-1:16),OpColon(1:16-1:17),KwPlatform(1:18-1:26),StringStart(1:27-1:28),StringPart(1:28-1:53),StringEnd(1:53-1:54),CloseCurly(1:55-1:56),
@@ -172,8 +185,8 @@ answer = composed([42])
 		(p-assign @12.1-12.9 (ident "composed"))
 		(e-closure @12.12-12.41
 			(captures
-				(capture @9.1-9.10 (ident "get_value"))
-				(capture @6.1-6.12 (ident "make_record")))
+				(capture @6.1-6.12 (ident "make_record"))
+				(capture @9.1-9.10 (ident "get_value")))
 			(e-lambda @12.12-12.41
 				(args
 					(p-assign @12.13-12.14 (ident "n")))
@@ -206,11 +219,11 @@ answer = composed([42])
 	(defs
 		(patt @6.1-6.12 (type "a -> { tag: Str, value: a }"))
 		(patt @9.1-9.10 (type "{ tag: Str, value: a } -> a"))
-		(patt @12.1-12.9 (type "Error -> Str"))
-		(patt @14.1-14.7 (type "Str")))
+		(patt @12.1-12.9 (type "Error"))
+		(patt @14.1-14.7 (type "_b")))
 	(expressions
 		(expr @6.15-6.44 (type "a -> { tag: Str, value: a }"))
 		(expr @9.13-9.24 (type "{ tag: Str, value: a } -> a"))
-		(expr @12.12-12.41 (type "Error -> Str"))
-		(expr @14.10-14.24 (type "Str"))))
+		(expr @12.12-12.41 (type "Error"))
+		(expr @14.10-14.24 (type "_b"))))
 ~~~

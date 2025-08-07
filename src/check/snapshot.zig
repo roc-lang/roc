@@ -384,7 +384,7 @@ pub const Store = struct {
         return self.content_indexes.sliceRange(range);
     }
 
-    pub fn getRecordFieldsSlice(self: *const Self, range: SnapshotRecordFieldSafeList.Range) SnapshotRecordFieldSafeList.Slice {
+    pub fn sliceRecordFields(self: *const Self, range: SnapshotRecordFieldSafeList.Range) SnapshotRecordFieldSafeList.Slice {
         return self.record_fields.sliceRange(range);
     }
 
@@ -542,6 +542,11 @@ pub const SnapshotWriter = struct {
             .next_name_index = 0,
             .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
         };
+    }
+
+    pub fn resetContext(self: *Self) void {
+        self.next_name_index = 0;
+        self.name_counters = std.EnumMap(TypeContext, u32).init(.{});
     }
 
     fn generateNextName(self: *Self) !void {

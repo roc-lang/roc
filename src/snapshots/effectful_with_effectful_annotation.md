@@ -109,9 +109,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @7.1-7.11 (type "Str -> {  }"))
+		(patt @7.1-7.11 (type "Str => {  }"))
 		(patt @9.1-9.6 (type "{  }")))
 	(expressions
-		(expr @7.14-7.37 (type "Str -> {  }"))
+		(expr @7.14-7.37 (type "Str => {  }"))
 		(expr @9.9-9.36 (type "{  }"))))
 ~~~

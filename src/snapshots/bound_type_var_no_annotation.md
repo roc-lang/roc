@@ -33,6 +33,7 @@ main! = |_| {
 ~~~
 # EXPECTED
 UNUSED VARIABLE - bound_type_var_no_annotation.md:19:5:19:9
+TYPE MISMATCH - bound_type_var_no_annotation.md:22:21:22:22
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `pair` is not used anywhere in your code.
@@ -45,6 +46,20 @@ The unused variable is declared here:
 ```
     ^^^^
 
+
+**TYPE MISMATCH**
+The first argument to this function is not what I expect:
+**bound_type_var_no_annotation.md:22:21:22:22:**
+```roc
+    result = addOne(5)
+```
+                    ^
+
+This argument is of type:
+    _Num(_size)_
+
+But the function needs the first argumument to be:
+    _U64_
 
 # TOKENS
 ~~~zig
@@ -218,9 +233,9 @@ main! = |_| {
 		(p-assign @13.1-13.6 (ident "main!"))
 		(e-closure @13.9-25.2
 			(captures
-				(capture @7.1-7.8 (ident "combine"))
 				(capture @11.1-11.7 (ident "addOne"))
-				(capture @3.1-3.9 (ident "identity")))
+				(capture @3.1-3.9 (ident "identity"))
+				(capture @7.1-7.8 (ident "combine")))
 			(e-lambda @13.9-25.2
 				(args
 					(p-underscore @13.10-13.11))
@@ -263,10 +278,10 @@ main! = |_| {
 		(patt @3.1-3.9 (type "_arg -> _ret"))
 		(patt @7.1-7.8 (type "a, b -> (a, b)"))
 		(patt @11.1-11.7 (type "U64 -> U64"))
-		(patt @13.1-13.6 (type "_arg -> U64")))
+		(patt @13.1-13.6 (type "_arg -> Error")))
 	(expressions
 		(expr @3.12-3.17 (type "_arg -> _ret"))
 		(expr @7.11-7.42 (type "a, b -> (a, b)"))
 		(expr @11.10-11.19 (type "U64 -> U64"))
-		(expr @13.9-25.2 (type "_arg -> U64"))))
+		(expr @13.9-25.2 (type "_arg -> Error"))))
 ~~~

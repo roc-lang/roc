@@ -402,9 +402,9 @@ main = |_| {
 		(p-assign @23.1-23.5 (ident "main"))
 		(e-closure @23.8-29.2
 			(captures
-				(capture @12.1-12.13 (ident "all_int_list"))
+				(capture @13.1-13.13 (ident "all_str_list"))
 				(capture @14.1-14.15 (ident "all_float_list"))
-				(capture @13.1-13.13 (ident "all_str_list")))
+				(capture @12.1-12.13 (ident "all_int_list")))
 			(e-lambda @23.8-29.2
 				(args
 					(p-underscore @23.9-23.10))

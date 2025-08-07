@@ -30,8 +30,10 @@ UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:3:14:3:17
 UNDECLARED TYPE - fuzz_crash_032.md:3:21:3:24
 NOT IMPLEMENTED - :0:0:0:0
 UNDECLARED TYPE - fuzz_crash_032.md:6:25:6:30
+EXPECTED NOMINAL TYPE - fuzz_crash_032.md:8:26:8:37
 INVALID PATTERN - :0:0:0:0
 UNDECLARED TYPE - fuzz_crash_032.md:10:3:10:4
+EXPECTED NOMINAL TYPE - fuzz_crash_032.md:10:13:10:24
 EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:13:1:14
 EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:9:1:12
 # PROBLEMS
@@ -183,6 +185,19 @@ olor = |color| { import Color.RGB
                         ^^^^^
 
 
+**EXPECTED NOMINAL TYPE**
+You are using the type _LocalStatus_ like a nominal type, but it is an alias.
+
+This type is referenced here:
+**fuzz_crash_032.md:8:26:8:37:**
+```roc
+    match color { RGB => LocalStatus.Pending
+```
+                         ^^^^^^^^^^^
+
+
+**Hint:** You can declare this type with `:=` to make it nominal.
+
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
 
@@ -196,6 +211,19 @@ This type is referenced here:
 ```
   ^
 
+
+**EXPECTED NOMINAL TYPE**
+You are using the type _LocalStatus_ like a nominal type, but it is an alias.
+
+This type is referenced here:
+**fuzz_crash_032.md:10:13:10:24:**
+```roc
+  B.Blue => LocalStatus.Pending
+```
+            ^^^^^^^^^^^
+
+
+**Hint:** You can declare this type with `:=` to make it nominal.
 
 **EXPOSED BUT NOT DEFINED**
 The module header says that `r` is exposed, but it is not defined anywhere in this module.
@@ -320,8 +348,7 @@ olor = |color| {
 									(pattern (degenerate false)
 										(p-applied-tag @8.19-8.22)))
 								(value
-									(e-nominal @8.26-8.45 (nominal "<malformed>")
-										(e-tag @8.26-8.45 (name "Pending")))))
+									(e-runtime-error (tag "type_alias_but_needed_nominal"))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
@@ -339,8 +366,7 @@ olor = |color| {
 									(pattern (degenerate false)
 										(p-runtime-error @10.3-10.4 (tag "undeclared_type"))))
 								(value
-									(e-nominal @10.13-10.32 (nominal "<malformed>")
-										(e-tag @10.13-10.32 (name "Pending"))))))))))
+									(e-runtime-error (tag "type_alias_but_needed_nominal")))))))))
 		(annotation @6.1-6.5
 			(declared-type
 				(ty-fn @5.8-5.16 (effectful false)
@@ -358,7 +384,7 @@ olor = |color| {
 	(defs
 		(patt @6.1-6.5 (type "Error -> Error")))
 	(type_decls
-		(alias @3.1-3.24 (type "Error")
+		(alias @3.1-3.24 (type "LocalStatus")
 			(ty-header @3.1-3.12 (name "LocalStatus"))))
 	(expressions
 		(expr @6.8-12.2 (type "Error -> Error"))))

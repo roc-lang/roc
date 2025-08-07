@@ -24,9 +24,37 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - type_multiple_aliases.md:15:21:15:24
+TYPE MISMATCH - type_multiple_aliases.md:15:35:15:37
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+The first argument to this function is not what I expect:
+**type_multiple_aliases.md:15:21:15:24:**
+```roc
+	user = create_user(123, "Alice", 25)
+```
+                    ^^^
+
+This argument is of type:
+    _Num(_size)_
+
+But the function needs the first argumument to be:
+    _UserId_
+
+**TYPE MISMATCH**
+The third argument to this function is not what I expect:
+**type_multiple_aliases.md:15:35:15:37:**
+```roc
+	user = create_user(123, "Alice", 25)
+```
+                                  ^^
+
+This argument is of type:
+    _Num(_size)_
+
+But the function needs the third argumument to be:
+    _UserAge_
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),
@@ -221,8 +249,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @9.1-9.12 (type "UserId, UserName, UserAge -> { age: UserAge, id: UserId, name: UserName }"))
-		(patt @12.1-12.14 (type "{ age: UserAge, id: UserId, name: UserName } -> UserName"))
+		(patt @9.1-9.12 (type "UserId, UserName, UserAge -> User"))
+		(patt @12.1-12.14 (type "User -> UserName"))
 		(patt @14.1-14.6 (type "_arg -> UserName")))
 	(type_decls
 		(alias @3.1-3.13 (type "UserId")
@@ -234,7 +262,7 @@ NO CHANGE
 		(alias @6.1-6.55 (type "User")
 			(ty-header @6.1-6.5 (name "User"))))
 	(expressions
-		(expr @9.15-9.48 (type "UserId, UserName, UserAge -> { age: UserAge, id: UserId, name: UserName }"))
-		(expr @12.17-12.33 (type "{ age: UserAge, id: UserId, name: UserName } -> UserName"))
+		(expr @9.15-9.48 (type "UserId, UserName, UserAge -> User"))
+		(expr @12.17-12.33 (type "User -> UserName"))
 		(expr @14.9-17.2 (type "_arg -> UserName"))))
 ~~~

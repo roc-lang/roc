@@ -224,9 +224,10 @@ UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
 UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
 UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
-TYPE MISMATCH - fuzz_crash_027.md:47:11:47:14
+INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
-TYPE MISMATCH - fuzz_crash_027.md:111:2:111:12
+TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
+TYPE MISMATCH - fuzz_crash_027.md:99:9:99:38
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -841,19 +842,18 @@ tuple : Value((a, b, c))
         ^^^^^
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:47:11:47:14:**
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**fuzz_crash_027.md:50:5:**
 ```roc
-add_one : U64 -> U64
+	if num {
 ```
-          ^^^
+    ^^^
 
-It is of type:
+Right now, it has the type:
     _U64_
 
-But you are trying to use it as:
-    _Bool_
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the third branch of this `match` differs from previous ones:
@@ -905,17 +905,32 @@ All patterns in an `match` must have compatible types.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**fuzz_crash_027.md:111:2:111:12:**
+**fuzz_crash_027.md:111:2:113:3:**
 ```roc
 	match_time(
+		..., #
+	)
 ```
- ^^^^^^^^^^
 
 It is of type:
-    _[Red, Blue]_others, _arg2 -> Error_
+    __arg -> _ret_
 
 But you are trying to use it as:
-    __arg -> _ret_
+    _[Red, Blue]_others, _arg2 -> Error_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:99:9:99:38:**
+```roc
+main! : List(String) -> Result({}, _)
+```
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It is of type:
+    _List(Error) -> Result({  }, _d)_
+
+But you are trying to use it as:
+    _List(Error) -> [Stdoline!(Str)]_others_
 
 # TOKENS
 ~~~zig
@@ -1883,7 +1898,8 @@ expect {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @93.3-93.10)))
+									(p-nominal @93.3-93.10
+										(p-applied-tag @93.3-93.10))))
 							(value
 								(e-int @93.14-93.20 (value "121000")))))))))
 	(d-let
@@ -1928,10 +1944,11 @@ expect {
 					(s-crash @118.2-118.22 (msg "Unreachtement"))
 					(s-let @119.2-119.23
 						(p-assign @119.2-119.10 (ident "tag_with"))
-						(e-tag @119.13-119.15 (name "Ok")
-							(args
-								(e-lookup-local @119.16-119.22
-									(p-assign @102.2-102.18 (ident "number"))))))
+						(e-nominal @119.13-119.23 (nominal "Result")
+							(e-tag @119.13-119.23 (name "Ok")
+								(args
+									(e-lookup-local @119.16-119.22
+										(p-assign @102.2-102.18 (ident "number")))))))
 					(s-let @120.2-120.26
 						(p-assign @120.2-120.6 (ident "ited"))
 						(e-string @120.9-120.26
@@ -1957,10 +1974,11 @@ expect {
 									(e-lookup-local @131.42-131.45
 										(p-assign @104.2-104.5 (ident "tag"))))
 								(field (name "qux")
-									(e-tag @131.52-131.54 (name "Ok")
-										(args
-											(e-lookup-local @131.55-131.60
-												(p-assign @101.2-101.7 (ident "world"))))))
+									(e-nominal @131.52-131.61 (nominal "Result")
+										(e-tag @131.52-131.61 (name "Ok")
+											(args
+												(e-lookup-local @131.55-131.60
+													(p-assign @101.2-101.7 (ident "world")))))))
 								(field (name "punned")
 									(e-runtime-error (tag "ident_not_in_scope"))))))
 					(s-let @132.2-132.68
@@ -1972,10 +1990,11 @@ expect {
 									(e-literal @132.17-132.22 (string "World")))
 								(e-lookup-local @132.25-132.28
 									(p-assign @104.2-104.5 (ident "tag")))
-								(e-tag @132.30-132.32 (name "Ok")
-									(args
-										(e-lookup-local @132.33-132.38
-											(p-assign @101.2-101.7 (ident "world")))))
+								(e-nominal @132.30-132.39 (nominal "Result")
+									(e-tag @132.30-132.39 (name "Ok")
+										(args
+											(e-lookup-local @132.33-132.38
+												(p-assign @101.2-101.7 (ident "world"))))))
 								(e-tuple @132.41-132.56
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
@@ -1994,10 +2013,11 @@ expect {
 								(e-string @135.3-135.10
 									(e-literal @135.4-135.9 (string "World")))
 								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-tag @137.3-137.5 (name "Ok")
-									(args
-										(e-lookup-local @137.6-137.11
-											(p-assign @101.2-101.7 (ident "world")))))
+								(e-nominal @137.3-137.12 (nominal "Result")
+									(e-tag @137.3-137.12 (name "Ok")
+										(args
+											(e-lookup-local @137.6-137.11
+												(p-assign @101.2-101.7 (ident "world"))))))
 								(e-tuple @138.3-138.18
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
@@ -2013,9 +2033,10 @@ expect {
 						(e-binop @141.10-141.78 (op "or")
 							(e-binop @141.10-141.32 (op "gt")
 								(e-binop @141.10-141.24 (op "null_coalesce")
-									(e-tag @141.10-141.13 (name "Err")
-										(args
-											(e-runtime-error (tag "ident_not_in_scope"))))
+									(e-nominal @141.10-141.18 (nominal "Result")
+										(e-tag @141.10-141.18 (name "Err")
+											(args
+												(e-runtime-error (tag "ident_not_in_scope")))))
 									(e-int @141.22-141.24 (value "12")))
 								(e-binop @141.27-141.32 (op "mul")
 									(e-int @141.27-141.28 (value "5"))
@@ -2046,7 +2067,7 @@ expect {
 										(e-dot-access @142.10-142.34 (field "unknown")
 											(receiver
 												(e-runtime-error (tag "not_implemented")))))))))
-					(e-tag @143.2-143.11 (name "Stdoline!")
+					(e-tag @143.2-147.3 (name "Stdoline!")
 						(args
 							(e-string @144.3-146.10
 								(e-literal @144.4-144.14 (string "How about "))
@@ -2172,9 +2193,9 @@ expect {
 (inferred-types
 	(defs
 		(patt @45.1-45.4 (type "Bool -> Num(_size)"))
-		(patt @48.1-48.8 (type "Error -> U64"))
-		(patt @60.1-60.11 (type "Error"))
-		(patt @100.1-100.6 (type "Error -> Error"))
+		(patt @48.1-48.8 (type "Error -> Error"))
+		(patt @60.1-60.11 (type "[Red, Blue]_others, _arg -> Error"))
+		(patt @100.1-100.6 (type "Error"))
 		(patt @151.1-151.6 (type "{}")))
 	(type_decls
 		(alias @15.1-15.41 (type "Map(a, b)")
@@ -2207,8 +2228,8 @@ expect {
 					(ty-var @43.6-43.7 (name "a"))))))
 	(expressions
 		(expr @45.7-45.28 (type "Bool -> Num(_size)"))
-		(expr @48.11-58.2 (type "Error -> U64"))
-		(expr @60.14-94.3 (type "Error"))
-		(expr @100.9-148.2 (type "Error -> Error"))
+		(expr @48.11-58.2 (type "Error -> Error"))
+		(expr @60.14-94.3 (type "[Red, Blue]_others, _arg -> Error"))
+		(expr @100.9-148.2 (type "Error"))
 		(expr @151.9-151.11 (type "{}"))))
 ~~~

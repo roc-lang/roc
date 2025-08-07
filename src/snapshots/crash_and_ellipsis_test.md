@@ -35,7 +35,6 @@ UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
 TYPE MISMATCH - crash_and_ellipsis_test.md:8:20:8:23
-TYPE MISMATCH - crash_and_ellipsis_test.md:14:26:14:29
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `result1` is not used anywhere in your code.
@@ -80,20 +79,6 @@ This expression is used in an unexpected way:
 testCrash : U64 -> U64
 ```
                    ^^^
-
-It is of type:
-    _U64_
-
-But you are trying to use it as:
-    _{}_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**crash_and_ellipsis_test.md:14:26:14:29:**
-```roc
-testCrashSimple : U64 -> U64
-```
-                         ^^^
 
 It is of type:
     _U64_
@@ -300,13 +285,13 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.13 (type "U64 -> U64"))
-		(patt @9.1-9.10 (type "U64 -> Error"))
-		(patt @15.1-15.16 (type "U64 -> Error"))
+		(patt @5.1-5.13 (type "Error -> Error"))
+		(patt @9.1-9.10 (type "Error -> Error"))
+		(patt @15.1-15.16 (type "Error -> Error"))
 		(patt @19.1-19.6 (type "_arg -> List(_elem)")))
 	(expressions
-		(expr @5.16-5.23 (type "U64 -> U64"))
-		(expr @9.13-11.2 (type "U64 -> Error"))
-		(expr @15.19-17.2 (type "U64 -> Error"))
+		(expr @5.16-5.23 (type "Error -> Error"))
+		(expr @9.13-11.2 (type "Error -> Error"))
+		(expr @15.19-17.2 (type "Error -> Error"))
 		(expr @19.9-24.2 (type "_arg -> List(_elem)"))))
 ~~~

@@ -13,9 +13,22 @@ getName = |_person| "hello"
 main! = |_| getName({name: "luke", age:21})
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - type_record_basic.md:6:21:6:43
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+The first argument to this function is not what I expect:
+**type_record_basic.md:6:21:6:43:**
+```roc
+main! = |_| getName({name: "luke", age:21})
+```
+                    ^^^^^^^^^^^^^^^^^^^^^^
+
+This argument is of type:
+    _{ name: Str, age: Num(_size) }_
+
+But the function needs the first argumument to be:
+    _{ age: U64, name: Str }_
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),

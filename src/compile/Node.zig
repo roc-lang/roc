@@ -168,6 +168,7 @@ pub const Tag = enum {
     diag_type_redeclared,
     diag_undeclared_type,
     diag_undeclared_type_var,
+    diag_type_alias_but_needed_nominal,
     diag_type_alias_redeclared,
     diag_tuple_elem_not_canonicalized,
     diag_module_not_found,

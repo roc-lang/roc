@@ -589,8 +589,8 @@ transform = |result|
 				(ty-malformed @22.23-22.44))))
 	(d-let
 		(p-assign @27.1-27.11 (ident "resultType"))
-		(e-nominal @27.14-27.23 (nominal "<malformed>")
-			(e-tag @27.14-27.23 (name "Ok")
+		(e-nominal @27.14-27.27 (nominal "Result")
+			(e-tag @27.14-27.27 (name "Ok")
 				(args
 					(e-int @27.24-27.26 (value "42")))))
 		(annotation @27.1-27.11
@@ -681,7 +681,7 @@ transform = |result|
 		(expr @15.19-15.24 (type "Error"))
 		(expr @19.20-19.43 (type "Error"))
 		(expr @23.23-23.32 (type "Error"))
-		(expr @27.14-27.23 (type "Error"))
+		(expr @27.14-27.27 (type "Error"))
 		(expr @31.12-31.49 (type "{  } -> Error"))
 		(expr @35.16-36.22 (type "Error -> Str"))
 		(expr @40.13-44.6 (type "Error -> Error"))))

@@ -70,10 +70,10 @@ blue = CC.Color.RGB(0, 0, 255)
 (can-ir
 	(d-let
 		(p-assign @8.1-8.5 (ident "blue"))
-		(e-nominal-external @8.8-8.20
+		(e-nominal-external @8.8-8.29
 			(module-idx "0")
 			(target-node-idx "0")
-			(e-tag @8.8-8.20 (name "RGB")
+			(e-tag @8.8-8.29 (name "RGB")
 				(args
 					(e-int @8.21-8.22 (value "0"))
 					(e-int @8.23-8.24 (value "0"))
@@ -92,5 +92,5 @@ blue = CC.Color.RGB(0, 0, 255)
 	(defs
 		(patt @8.1-8.5 (type "Error")))
 	(expressions
-		(expr @8.8-8.20 (type "Error"))))
+		(expr @8.8-8.29 (type "Error"))))
 ~~~

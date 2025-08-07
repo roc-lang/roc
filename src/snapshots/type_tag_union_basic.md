@@ -26,6 +26,8 @@ main! = |_| {}
 ~~~
 # EXPECTED
 UNUSED VARIABLE - type_tag_union_basic.md:4:12:4:17
+INCOMPATIBLE MATCH PATTERNS - type_tag_union_basic.md:7:39:7:39
+INCOMPATIBLE MATCH PATTERNS - type_tag_union_basic.md:13:27:13:27
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `maybe` is not used anywhere in your code.
@@ -37,6 +39,48 @@ The unused variable is declared here:
 process = |maybe| "result"
 ```
            ^^^^^
+
+
+**INCOMPATIBLE MATCH PATTERNS**
+The pattern in the first branch of this `match` differs from previous ones:
+**type_tag_union_basic.md:7:39:**
+```roc
+is_ok_ret_unqualified_bool = |result| match result {
+    Ok(_) => True
+    Err(_) => False
+}
+```
+    ^^^^^
+
+The first pattern has this type:
+    _Result(ok, err)_
+
+But the other pattern has this type:
+    _[Err(_err), Ok(_ok)]_
+
+All patterns in an `match` must have compatible types.
+
+
+
+**INCOMPATIBLE MATCH PATTERNS**
+The pattern in the first branch of this `match` differs from previous ones:
+**type_tag_union_basic.md:13:27:**
+```roc
+is_ok_ret_bool = |result| match result {
+    Ok(_) => Bool.True
+    Err(_) => Bool.False
+}
+```
+    ^^^^^
+
+The first pattern has this type:
+    _Result(ok, err)_
+
+But the other pattern has this type:
+    _[Err(_err2), Ok(_ok2)]_
+
+All patterns in an `match` must have compatible types.
+
 
 
 # TOKENS
@@ -201,14 +245,16 @@ main! = |_| {}
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @8.5-8.10)))
+									(p-nominal @8.5-8.10
+										(p-applied-tag @8.5-8.10))))
 							(value
 								(e-nominal @8.14-8.18 (nominal "Bool")
 									(e-tag @8.14-8.18 (name "True")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @9.5-9.11)))
+									(p-nominal @9.5-9.11
+										(p-applied-tag @9.5-9.11))))
 							(value
 								(e-nominal @9.15-9.20 (nominal "Bool")
 									(e-tag @9.15-9.20 (name "False")))))))))
@@ -235,14 +281,16 @@ main! = |_| {}
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @14.5-14.10)))
+									(p-nominal @14.5-14.10
+										(p-applied-tag @14.5-14.10))))
 							(value
 								(e-nominal @14.14-14.23 (nominal "Bool")
 									(e-tag @14.14-14.23 (name "True")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @15.5-15.11)))
+									(p-nominal @15.5-15.11
+										(p-applied-tag @15.5-15.11))))
 							(value
 								(e-nominal @15.15-15.25 (nominal "Bool")
 									(e-tag @15.15-15.25 (name "False")))))))))

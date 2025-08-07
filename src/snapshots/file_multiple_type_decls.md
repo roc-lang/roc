@@ -70,7 +70,7 @@ NO CHANGE
 			(ty-header @3.1-3.10 (name "FirstType")))
 		(alias @4.1-4.17 (type "SecondType")
 			(ty-header @4.1-4.11 (name "SecondType")))
-		(alias @5.1-5.21 (type "Error")
+		(alias @5.1-5.21 (type "ThirdType")
 			(ty-header @5.1-5.10 (name "ThirdType"))))
 	(expressions))
 ~~~

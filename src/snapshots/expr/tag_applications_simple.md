@@ -19,23 +19,23 @@ type=expr
 ]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - tag_applications_simple.md:9:5:9:5
+INCOMPATIBLE LIST ELEMENTS - tag_applications_simple.md:3:5:3:5
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
-The eighth and ninth elements in this list have incompatible types:
-**tag_applications_simple.md:9:5:**
+The second and third elements in this list have incompatible types:
+**tag_applications_simple.md:3:5:**
 ```roc
-    Right(2),
-    Some(Ok(Just(42))),
+    None,
+    Ok("hello"),
 ```
-    ^^^^^
     ^^^^
+    ^^^^^^^^^^^
 
-The eighth element has this type:
-    _[Err(Str), Just(Num(_size)), Left(Num(_size2)), None, Nothing, Ok(Str), Some(Num(_size3)), Right(Num(_size4))]_others_
+The second element has this type:
+    _[Some(Num(_size)), None]_others_
 
-However, the ninth element has this type:
-    _[Some([Ok([Just(Num(_size5))]_others2)]_others3)][Err(Str), Just(Num(_size6)), Left(Num(_size7)), None, Nothing, Ok(Str), Right(Num(_size8))]_others4_
+However, the third element has this type:
+    _Result(Str, err)_
 
 All elements in a list must have compatible types.
 
@@ -116,43 +116,47 @@ CloseSquare(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~clojure
 (e-list @1.1-12.2
 	(elems
-		(e-tag @2.5-2.9 (name "Some")
+		(e-tag @2.5-2.13 (name "Some")
 			(args
 				(e-int @2.10-2.12 (value "42"))))
 		(e-tag @3.5-3.9 (name "None"))
-		(e-tag @4.5-4.7 (name "Ok")
-			(args
-				(e-string @4.8-4.15
-					(e-literal @4.9-4.14 (string "hello")))))
-		(e-tag @5.5-5.8 (name "Err")
-			(args
-				(e-string @5.9-5.15
-					(e-literal @5.10-5.14 (string "oops")))))
-		(e-tag @6.5-6.9 (name "Just")
+		(e-nominal @4.5-4.16 (nominal "Result")
+			(e-tag @4.5-4.16 (name "Ok")
+				(args
+					(e-string @4.8-4.15
+						(e-literal @4.9-4.14 (string "hello"))))))
+		(e-nominal @5.5-5.16 (nominal "Result")
+			(e-tag @5.5-5.16 (name "Err")
+				(args
+					(e-string @5.9-5.15
+						(e-literal @5.10-5.14 (string "oops"))))))
+		(e-tag @6.5-6.14 (name "Just")
 			(args
 				(e-int @6.10-6.13 (value "100"))))
 		(e-tag @7.5-7.12 (name "Nothing"))
-		(e-tag @8.5-8.9 (name "Left")
+		(e-tag @8.5-8.12 (name "Left")
 			(args
 				(e-int @8.10-8.11 (value "1"))))
-		(e-tag @9.5-9.10 (name "Right")
+		(e-tag @9.5-9.13 (name "Right")
 			(args
 				(e-int @9.11-9.12 (value "2"))))
-		(e-tag @10.5-10.9 (name "Some")
+		(e-tag @10.5-10.23 (name "Some")
 			(args
-				(e-tag @10.10-10.12 (name "Ok")
-					(args
-						(e-tag @10.13-10.17 (name "Just")
-							(args
-								(e-int @10.18-10.20 (value "42"))))))))
-		(e-tag @11.5-11.11 (name "Result")
+				(e-nominal @10.10-10.22 (nominal "Result")
+					(e-tag @10.10-10.22 (name "Ok")
+						(args
+							(e-tag @10.13-10.21 (name "Just")
+								(args
+									(e-int @10.18-10.20 (value "42")))))))))
+		(e-tag @11.5-11.27 (name "Result")
 			(args
-				(e-tag @11.12-11.14 (name "Ok")
-					(args
-						(e-tag @11.15-11.19 (name "Some")
-							(args
-								(e-nominal @11.20-11.24 (nominal "Bool")
-									(e-tag @11.20-11.24 (name "True")))))))))))
+				(e-nominal @11.12-11.26 (nominal "Result")
+					(e-tag @11.12-11.26 (name "Ok")
+						(args
+							(e-tag @11.15-11.25 (name "Some")
+								(args
+									(e-nominal @11.20-11.24 (nominal "Bool")
+										(e-tag @11.20-11.24 (name "True"))))))))))))
 ~~~
 # TYPES
 ~~~clojure

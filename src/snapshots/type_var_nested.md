@@ -235,24 +235,28 @@ main = |_| "done"
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-applied-tag @7.9-7.18)))
+											(p-nominal @7.9-7.18
+												(p-applied-tag @7.9-7.18))))
 									(value
-										(e-tag @7.22-7.24 (name "Ok")
-											(args
-												(e-call @7.25-7.41
-													(e-lookup-local @7.25-7.34
-														(p-assign @5.23-5.32 (ident "transform")))
-													(e-lookup-local @7.35-7.40
-														(p-assign @7.12-7.17 (ident "value"))))))))
+										(e-nominal @7.22-7.42 (nominal "Result")
+											(e-tag @7.22-7.42 (name "Ok")
+												(args
+													(e-call @7.25-7.41
+														(e-lookup-local @7.25-7.34
+															(p-assign @5.23-5.32 (ident "transform")))
+														(e-lookup-local @7.35-7.40
+															(p-assign @7.12-7.17 (ident "value")))))))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-applied-tag @8.9-8.19)))
+											(p-nominal @8.9-8.19
+												(p-applied-tag @8.9-8.19))))
 									(value
-										(e-tag @8.23-8.26 (name "Err")
-											(args
-												(e-lookup-local @8.27-8.32
-													(p-assign @8.13-8.18 (ident "error")))))))))))))
+										(e-nominal @8.23-8.33 (nominal "Result")
+											(e-tag @8.23-8.33 (name "Err")
+												(args
+													(e-lookup-local @8.27-8.32
+														(p-assign @8.13-8.18 (ident "error"))))))))))))))
 		(annotation @5.1-5.11
 			(declared-type
 				(ty-fn @4.14-4.52 (effectful false)
@@ -319,12 +323,14 @@ main = |_| "done"
 		(e-lambda @26.18-26.39
 			(args
 				(p-assign @26.19-26.24 (ident "value")))
-			(e-tag @26.26-26.28 (name "Ok")
-				(args
-					(e-tag @26.29-26.31 (name "Ok")
-						(args
-							(e-lookup-local @26.32-26.37
-								(p-assign @26.19-26.24 (ident "value"))))))))
+			(e-nominal @26.26-26.39 (nominal "Result")
+				(e-tag @26.26-26.39 (name "Ok")
+					(args
+						(e-nominal @26.29-26.38 (nominal "Result")
+							(e-tag @26.29-26.38 (name "Ok")
+								(args
+									(e-lookup-local @26.32-26.37
+										(p-assign @26.19-26.24 (ident "value"))))))))))
 		(annotation @26.1-26.15
 			(declared-type
 				(ty-fn @25.18-25.50 (effectful false)
@@ -346,17 +352,17 @@ main = |_| "done"
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.11 (type "Error, a -> b -> Error"))
+		(patt @5.1-5.11 (type "Result(ok, err), a -> b -> Result(ok, err)"))
 		(patt @14.1-14.9 (type "a -> a"))
 		(patt @18.1-18.10 (type "a, b -> { first: a, second: b }"))
-		(patt @22.1-22.12 (type "Error -> U64"))
-		(patt @26.1-26.15 (type "a -> Error"))
+		(patt @22.1-22.12 (type "List(_a) -> U64"))
+		(patt @26.1-26.15 (type "a -> Result(Error, err)"))
 		(patt @28.1-28.5 (type "_arg -> Str")))
 	(expressions
-		(expr @5.14-10.2 (type "Error, a -> b -> Error"))
+		(expr @5.14-10.2 (type "Result(ok, err), a -> b -> Result(ok, err)"))
 		(expr @14.12-14.17 (type "a -> a"))
 		(expr @18.13-18.43 (type "a, b -> { first: a, second: b }"))
-		(expr @22.15-22.24 (type "Error -> U64"))
-		(expr @26.18-26.39 (type "a -> Error"))
+		(expr @22.15-22.24 (type "List(_a) -> U64"))
+		(expr @26.18-26.39 (type "a -> Result(Error, err)"))
 		(expr @28.8-28.18 (type "_arg -> Str"))))
 ~~~
