@@ -303,6 +303,122 @@ pub const TupleAccessor = struct {
     }
 };
 
+/// Create a RecordAccessor for safe record field access
+pub fn asRecord(self: StackValue, layout_cache: *LayoutStore) !RecordAccessor {
+    std.debug.assert(self.is_initialized); // Record must be initialized before accessing
+    std.debug.assert(self.ptr != null);
+    std.debug.assert(self.layout.tag == .record);
+
+    const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
+    const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
+
+    return RecordAccessor{
+        .base_value = self,
+        .layout_cache = layout_cache,
+        .record_layout = self.layout,
+        .field_layouts = field_layouts,
+    };
+}
+
+/// Safe accessor for record fields with bounds checking and proper memory management
+pub const RecordAccessor = struct {
+    base_value: StackValue,
+    layout_cache: *LayoutStore,
+    record_layout: Layout,
+    field_layouts: layout_mod.RecordField.SafeMultiList.Slice,
+
+    /// Get a StackValue for the field at the given index
+    pub fn getFieldByIndex(self: RecordAccessor, index: usize) !StackValue {
+        if (index >= self.field_layouts.len) {
+            return error.RecordIndexOutOfBounds;
+        }
+
+        std.debug.assert(self.base_value.is_initialized);
+        std.debug.assert(self.base_value.ptr != null);
+
+        const field_layout_info = self.field_layouts.get(index);
+        const field_layout = self.layout_cache.getLayout(field_layout_info.layout);
+
+        // Get the offset for this field within the record
+        const field_offset = self.layout_cache.getRecordFieldOffset(self.record_layout.data.record.idx, @intCast(index));
+
+        // Calculate the field pointer with proper alignment
+        const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
+        const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
+
+        return StackValue{
+            .layout = field_layout,
+            .ptr = field_ptr,
+            .is_initialized = true, // Fields in existing records are initialized
+        };
+    }
+
+    /// Get a StackValue for the field with the given name
+    pub fn getFieldByName(self: RecordAccessor, field_name: []const u8) !?StackValue {
+        // Find the field index by name
+        const field_offset = self.layout_cache.getRecordFieldOffsetByName(
+            self.record_layout.data.record.idx,
+            field_name,
+        ) orelse return null;
+
+        // Find the field layout by name
+        var field_layout: ?Layout = null;
+        for (0..self.field_layouts.len) |i| {
+            const field_info = self.field_layouts.get(i);
+            // We need to get the field name from the layout cache's identifier store
+            // This is a limitation - we'd need access to the env to get the actual name
+            // For now, we'll use the offset-based approach
+            const this_field_offset = self.layout_cache.getRecordFieldOffset(self.record_layout.data.record.idx, @intCast(i));
+            if (this_field_offset == field_offset) {
+                field_layout = self.layout_cache.getLayout(field_info.layout);
+                break;
+            }
+        }
+
+        if (field_layout == null) return null;
+
+        const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
+        const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
+
+        return StackValue{
+            .layout = field_layout.?,
+            .ptr = field_ptr,
+            .is_initialized = true,
+        };
+    }
+
+    /// Set a field by copying from a source StackValue
+    pub fn setFieldByIndex(self: RecordAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
+        const dest_field = try self.getFieldByIndex(index);
+        source.copyToPtr(self.layout_cache, dest_field.ptr.?, ops);
+    }
+
+    /// Get the number of fields in this record
+    pub fn getFieldCount(self: RecordAccessor) usize {
+        return self.field_layouts.len;
+    }
+
+    /// Get the layout of the field at the given index
+    pub fn getFieldLayout(self: RecordAccessor, index: usize) !Layout {
+        if (index >= self.field_layouts.len) {
+            return error.RecordIndexOutOfBounds;
+        }
+        const field_layout_info = self.field_layouts.get(index);
+        return self.layout_cache.getLayout(field_layout_info.layout);
+    }
+
+    /// Find field index by comparing field names (requires env access for name comparison)
+    pub fn findFieldIndex(self: RecordAccessor, env: anytype, field_name: []const u8) ?usize {
+        for (0..self.field_layouts.len) |idx| {
+            const field = self.field_layouts.get(idx);
+            if (std.mem.eql(u8, env.idents.getText(field.name), field_name)) {
+                return idx;
+            }
+        }
+        return null;
+    }
+};
+
 /// Get this value as a string pointer
 pub fn asRocStr(self: StackValue) *RocStr {
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .str);

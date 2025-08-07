@@ -99,6 +99,7 @@ pub const EvalError = error{
     RuntimeCrash,
     InvalidBindingsState,
     TupleIndexOutOfBounds,
+    RecordIndexOutOfBounds,
 };
 
 /// Maximum number of capture fields allowed in a closure
@@ -348,20 +349,14 @@ pub const Interpreter = struct {
         const capture_name_text = self.env.idents.getText(ident_idx);
 
         if (captures_layout.tag == .record) {
-            const record_data = self.layout_cache.getRecordData(captures_layout.data.record.idx);
-            if (record_data.fields.count > 0) {
-                if (self.layout_cache.getRecordFieldOffsetByName(
-                    captures_layout.data.record.idx,
-                    capture_name_text,
-                )) |offset| {
-                    // Found it!
-                    self.traceInfo("Found capture '{s}' at offset {}", .{ capture_name_text, offset });
-                    const capture_layout_idx = try self.getLayoutIdx(pattern_idx);
-                    const capture_layout = self.layout_cache.getLayout(capture_layout_idx);
-
-                    const src_ptr = captures_ptr + offset;
-                    return StackValue.fromPtr(capture_layout, src_ptr);
-                }
+            // Use RecordAccessor for safe field access
+            const captures_value = StackValue.fromPtr(captures_layout, captures_ptr);
+            const record_accessor = try captures_value.asRecord(self.layout_cache);
+            
+            // Find the field by name using the helper function
+            if (record_accessor.findFieldIndex(self.env, capture_name_text)) |field_index| {
+                self.traceInfo("Found capture '{s}' at index {}", .{ capture_name_text, field_index });
+                return try record_accessor.getFieldByIndex(field_index);
             }
         }
         return null;
@@ -1631,18 +1626,20 @@ pub const Interpreter = struct {
 
             // The record itself is the value *under* the field value we just popped.
             const record_value_on_stack = try self.peekStackValue(1);
-            const record_base_ptr = @as([*]u8, @ptrCast(record_value_on_stack.ptr.?));
-
-            // Calculate the destination offset within the record.
-            const prev_field_offset = self.layout_cache.getRecordFieldOffset(record_layout.data.record.idx, @intCast(prev_field_index_in_sorted));
+            
+            // Use RecordAccessor for safe field access
+            const record_accessor = try record_value_on_stack.asRecord(self.layout_cache);
 
             if (prev_field_size > 0) {
-                const dest_ptr = record_base_ptr + prev_field_offset;
-                const src_value = StackValue.fromPtr(prev_field_layout, prev_field_value.ptr.?);
-                const dest_value = StackValue.fromPtr(prev_field_layout, dest_ptr);
-                src_value.copyWithoutRefcount(dest_value, self.layout_cache);
+                // Get the destination field using RecordAccessor
+                const dest_field = try record_accessor.getFieldByIndex(prev_field_index_in_sorted);
+                prev_field_value.copyWithoutRefcount(dest_field, self.layout_cache);
 
-                self.traceInfo("Copied field '{s}' (size={}) to offset {}", .{ self.env.idents.getText(prev_field_layout_info.name), prev_field_size, prev_field_offset });
+                self.traceInfo("Copied field '{s}' (size={}) to index {}", .{ 
+                    self.env.idents.getText(prev_field_layout_info.name), 
+                    prev_field_size, 
+                    prev_field_index_in_sorted 
+                });
             }
         }
 
@@ -1711,44 +1708,28 @@ pub const Interpreter = struct {
             return error.LayoutError;
         }
 
-        // Get the record data
-        const record_data = self.layout_cache.getRecordData(record_value.layout.data.record.idx);
-        const record_fields = self.layout_cache.record_fields.sliceRange(record_data.getFields());
-
-        // Find the field in the record layout by name
-        var field_index: ?usize = null;
-        for (0..record_fields.len) |idx| {
-            const field = record_fields.get(idx);
-            if (std.mem.eql(u8, self.env.idents.getText(field.name), field_name)) {
-                field_index = idx;
-                break;
-            }
-        }
-
-        const index = field_index orelse return error.LayoutError;
-
-        // Get the field offset and layout
-        const field_offset = self.layout_cache.getRecordFieldOffset(record_value.layout.data.record.idx, @intCast(index));
-        const field_layout = self.layout_cache.getLayout(record_fields.get(index).layout);
+        // Use RecordAccessor for safe field access
+        const record_accessor = try record_value.asRecord(self.layout_cache);
+        
+        // Find the field by name using the helper function
+        const field_index = record_accessor.findFieldIndex(self.env, field_name) orelse return error.LayoutError;
+        
+        // Get the field value using RecordAccessor
+        const field_value = try record_accessor.getFieldByIndex(field_index);
+        const field_layout = field_value.layout;
         const field_size = self.layout_cache.layoutSize(field_layout);
-
-        // Calculate the field pointer
-        const record_ptr = @as([*]const u8, @ptrCast(record_value.ptr.?));
-        const field_ptr = record_ptr + field_offset;
 
         // Push the field value onto the stack
         if (field_size > 0) {
             const result_value = try self.pushStackValue(field_layout);
-            const result_ptr = result_value.ptr.?;
-            const dest = @as([*]u8, @ptrCast(result_ptr));
-            std.mem.copyForwards(u8, dest[0..field_size], field_ptr[0..field_size]);
+            field_value.copyWithoutRefcount(StackValue.fromPtr(field_layout, result_value.ptr.?), self.layout_cache);
         } else {
             // Zero-sized field
             const result_value = try self.pushStackValue(field_layout);
             std.debug.assert(result_value.ptr == null);
         }
 
-        self.traceInfo("Accessed field '{s}' at offset {}, size {}", .{ field_name, field_offset, field_size });
+        self.traceInfo("Accessed field '{s}' at index {}, size {}", .{ field_name, field_index, field_size });
     }
 
     /// Start a debug trace session with a given name and writer
@@ -1981,42 +1962,31 @@ pub const Interpreter = struct {
             },
             .record_destructure => |record_destruct| {
                 const destructs = self.env.store.sliceRecordDestructs(record_destruct.destructs);
-                const record_ptr = @as([*]u8, @ptrCast(@alignCast(value.ptr.?)));
 
                 // Get the record layout
                 if (value.layout.tag != .record) {
                     return error.LayoutError;
                 }
-                const record_data = self.layout_cache.getRecordData(value.layout.data.record.idx);
-                const record_fields = self.layout_cache.record_fields.sliceRange(record_data.getFields());
+                
+                // Use RecordAccessor for safe field access
+                const record_accessor = try value.asRecord(self.layout_cache);
 
                 // For each field in the pattern
                 for (destructs) |destruct_idx| {
                     const destruct = self.env.store.getRecordDestruct(destruct_idx);
                     const field_name = self.env.idents.getText(destruct.label);
-                    // Find the field in the record layout by name
-                    var field_index: ?usize = null;
+                    
+                    // Find the field by name using RecordAccessor
+                    const field_index = record_accessor.findFieldIndex(self.env, field_name) orelse return error.LayoutError;
+                    
+                    // Get the field value using RecordAccessor
+                    const field_value = try record_accessor.getFieldByIndex(field_index);
 
-                    for (0..record_fields.len) |idx| {
-                        const field = record_fields.get(idx);
-                        if (std.mem.eql(u8, self.env.idents.getText(field.name), field_name)) {
-                            field_index = idx;
-                            break;
-                        }
-                    }
-                    const index = field_index orelse return error.LayoutError;
-
-                    // Get the field offset
-                    const field_offset = self.layout_cache.getRecordFieldOffset(value.layout.data.record.idx, @intCast(index));
-                    const field_layout = self.layout_cache.getLayout(record_fields.get(index).layout);
-                    const field_ptr = record_ptr + field_offset;
-
-                    // Recursively bind the sub-pattern using StackValue.fromPtr
+                    // Recursively bind the sub-pattern
                     const inner_pattern_idx = switch (destruct.kind) {
                         .Required => |p_idx| p_idx,
                         .SubPattern => |p_idx| p_idx,
                     };
-                    const field_value = StackValue.fromPtr(field_layout, field_ptr);
                     try self.bindPattern(inner_pattern_idx, field_value, roc_ops);
                 }
             },
@@ -2678,28 +2648,28 @@ pub const Interpreter = struct {
     ) EvalError!void {
         const binding_size = self.layout_cache.layoutSize(src_layout);
         if (binding_size > 0) {
-            const field_offset = self.layout_cache.getRecordFieldOffsetByName(
-                captures_record_layout.data.record.idx,
-                capture_name,
-            ) orelse return error.CaptureBindingFailed;
-
-            const dest_ptr = captures_ptr + field_offset;
+            // Use RecordAccessor for safe field access
+            const captures_value = StackValue.fromPtr(captures_record_layout, captures_ptr);
+            const record_accessor = try captures_value.asRecord(self.layout_cache);
+            
+            // Find the field by name
+            const field_index = record_accessor.findFieldIndex(self.env, capture_name) orelse return error.CaptureBindingFailed;
+            const dest_field = try record_accessor.getFieldByIndex(field_index);
 
             // Debug: Check what value is actually at the source address
             if (src_layout.tag == .scalar and src_layout.data.scalar.tag == .int) {
                 const src_int_ptr: *const i128 = @ptrCast(@alignCast(src_ptr));
-                self.traceInfo("Copying capture '{s}' ({} bytes) from {} to {} [SOURCE VALUE: {}]", .{ capture_name, binding_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr), src_int_ptr.* });
+                self.traceInfo("Copying capture '{s}' ({} bytes) to field index {} [SOURCE VALUE: {}]", .{ capture_name, binding_size, field_index, src_int_ptr.* });
             } else {
-                self.traceInfo("Copying capture '{s}' ({} bytes) from {} to {}", .{ capture_name, binding_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr) });
+                self.traceInfo("Copying capture '{s}' ({} bytes) to field index {}", .{ capture_name, binding_size, field_index });
             }
 
             const src_value = StackValue.fromPtr(src_layout, src_ptr);
-            const dest_value = StackValue.fromPtr(src_layout, dest_ptr);
-            src_value.copyWithoutRefcount(dest_value, self.layout_cache);
+            src_value.copyWithoutRefcount(dest_field, self.layout_cache);
             
             // Debug: Verify the value was copied correctly
             if (src_layout.tag == .scalar and src_layout.data.scalar.tag == .int) {
-                const dest_int_ptr: *const i128 = @ptrCast(@alignCast(dest_ptr));
+                const dest_int_ptr: *const i128 = @ptrCast(@alignCast(dest_field.ptr.?));
                 self.traceInfo("After copy, destination contains: {}", .{dest_int_ptr.*});
             }
         }
@@ -2729,45 +2699,41 @@ pub const Interpreter = struct {
                 const outer_captures_ptr = @as([*]u8, @ptrCast(outer_closure_ptr)) + aligned_captures_offset;
                 const capture_name_text = self.env.getIdentText(capture.name);
 
-                const record_data = self.layout_cache.getRecordData(outer_captures_layout.data.record.idx);
-                if (record_data.fields.count > 0) {
-                    const src_field_offset = self.layout_cache.getRecordFieldOffsetByName(
-                        outer_captures_layout.data.record.idx,
-                        capture_name_text,
-                    ) orelse continue; // Not in this closure's captures
+                // Use RecordAccessor for safe field access on the outer closure
+                const outer_captures_value = StackValue.fromPtr(outer_captures_layout, outer_captures_ptr);
+                const outer_accessor = outer_captures_value.asRecord(self.layout_cache) catch continue;
+                
+                // Try to find the capture in the outer closure
+                const src_field_index = outer_accessor.findFieldIndex(self.env, capture_name_text) orelse continue; // Not in this closure's captures
+                const src_field = outer_accessor.getFieldByIndex(src_field_index) catch continue;
+                
+                const capture_layout_idx = try self.getLayoutIdx(capture.pattern_idx);
+                const capture_layout = self.layout_cache.getLayout(capture_layout_idx);
+                const capture_size = self.layout_cache.layoutSize(capture_layout);
 
-                    const capture_layout_idx = try self.getLayoutIdx(capture.pattern_idx);
-                    const capture_layout = self.layout_cache.getLayout(capture_layout_idx);
-                    const capture_size = self.layout_cache.layoutSize(capture_layout);
+                if (capture_size > 0) {
+                    // Use RecordAccessor for the destination as well
+                    const dest_captures_value = StackValue.fromPtr(captures_record_layout, captures_ptr);
+                    const dest_accessor = try dest_captures_value.asRecord(self.layout_cache);
+                    const dest_field_index = dest_accessor.findFieldIndex(self.env, capture_name_text) orelse return error.CaptureBindingFailed;
+                    const dest_field = try dest_accessor.getFieldByIndex(dest_field_index);
 
-                    if (capture_size > 0) {
-                        const dest_field_offset = self.layout_cache.getRecordFieldOffsetByName(
-                            captures_record_layout.data.record.idx,
-                            capture_name_text,
-                        ) orelse return error.CaptureBindingFailed;
-
-                        const src_ptr = outer_captures_ptr + src_field_offset;
-                        const dest_ptr = captures_ptr + dest_field_offset;
-
-                        // Debug: Check what value is actually at the source address  
-                        if (capture_layout.tag == .scalar and capture_layout.data.scalar.tag == .int) {
-                            const src_int_ptr: *const i128 = @ptrCast(@alignCast(src_ptr));
-                            self.traceInfo("Copying capture-of-capture '{s}' ({} bytes) from {} to {} [SOURCE VALUE: {}]", .{ capture_name_text, capture_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr), src_int_ptr.* });
-                        } else {
-                            self.traceInfo("Copying capture-of-capture '{s}' ({} bytes) from {} to {}", .{ capture_name_text, capture_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr) });
-                        }
-
-                        const src_value = StackValue.fromPtr(capture_layout, src_ptr);
-                        const dest_value = StackValue.fromPtr(capture_layout, dest_ptr);
-                        src_value.copyWithoutRefcount(dest_value, self.layout_cache);
-                        
-                        // Debug: Verify the value was copied correctly
-                        if (capture_layout.tag == .scalar and capture_layout.data.scalar.tag == .int) {
-                            const dest_int_ptr: *const i128 = @ptrCast(@alignCast(dest_ptr));
-                            self.traceInfo("After copy, destination contains: {}", .{dest_int_ptr.*});
-                        }
-                        return true;
+                    // Debug: Check what value is actually at the source address  
+                    if (capture_layout.tag == .scalar and capture_layout.data.scalar.tag == .int) {
+                        const src_int_ptr: *const i128 = @ptrCast(@alignCast(src_field.ptr.?));
+                        self.traceInfo("Copying capture-of-capture '{s}' ({} bytes) from field {} to field {} [SOURCE VALUE: {}]", .{ capture_name_text, capture_size, src_field_index, dest_field_index, src_int_ptr.* });
+                    } else {
+                        self.traceInfo("Copying capture-of-capture '{s}' ({} bytes) from field {} to field {}", .{ capture_name_text, capture_size, src_field_index, dest_field_index });
                     }
+
+                    src_field.copyWithoutRefcount(dest_field, self.layout_cache);
+                    
+                    // Debug: Verify the value was copied correctly
+                    if (capture_layout.tag == .scalar and capture_layout.data.scalar.tag == .int) {
+                        const dest_int_ptr: *const i128 = @ptrCast(@alignCast(dest_field.ptr.?));
+                        self.traceInfo("After copy, destination contains: {}", .{dest_int_ptr.*});
+                    }
+                    return true;
                 }
             }
         }
