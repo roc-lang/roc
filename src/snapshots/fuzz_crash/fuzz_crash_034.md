@@ -8,13 +8,14 @@ type=file
 module[]0 f
 ~~~
 # EXPECTED
-INVALID STATEMENT - fuzz_crash_034.md:1:9:1:10
-INVALID STATEMENT - fuzz_crash_034.md:1:11:1:12
+PARSE ERROR - fuzz_crash_034.md:1:9:1:10
+PARSE ERROR - fuzz_crash_034.md:1:11:1:12
 # PROBLEMS
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
+Here is the problematic code:
 **fuzz_crash_034.md:1:9:1:10:**
 ```roc
 module[]0 f
@@ -22,10 +23,11 @@ module[]0 f
         ^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
+Here is the problematic code:
 **fuzz_crash_034.md:1:11:1:12:**
 ```roc
 module[]0 f
@@ -43,14 +45,13 @@ KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),Int(1:9-1:10),LowerId
 	(module @1.1-1.9
 		(exposes @1.7-1.9))
 	(statements
-		(e-int @1.9-1.10 (raw "0"))
-		(e-ident @1.11-1.12 (raw "f"))))
+		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
+		(s-malformed @1.11-1.12 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
 module []
-0
-f
+
 ~~~
 # CANONICALIZE
 ~~~clojure

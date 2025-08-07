@@ -13,15 +13,18 @@ curry = |fn| |x| |y| fn(x, y)
 main! = |_| {}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_function_multi_arg.md:3:24:3:26
+PARSE ERROR - type_function_multi_arg.md:3:24:3:26
+PARSE ERROR - type_function_multi_arg.md:3:27:3:28
+PARSE ERROR - type_function_multi_arg.md:3:28:3:30
+PARSE ERROR - type_function_multi_arg.md:3:31:3:33
 PARSE ERROR - type_function_multi_arg.md:3:34:3:36
+PARSE ERROR - type_function_multi_arg.md:3:37:3:39
+PARSE ERROR - type_function_multi_arg.md:3:40:3:42
 PARSE ERROR - type_function_multi_arg.md:3:42:3:43
-INVALID STATEMENT - type_function_multi_arg.md:3:24:3:26
-INVALID STATEMENT - type_function_multi_arg.md:3:27:3:43
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **->** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **type_function_multi_arg.md:3:24:3:26:**
@@ -32,7 +35,43 @@ curry : (_a, _b -> _c) -> (_a -> _b -> _c)
 
 
 **PARSE ERROR**
-A parsing error occurred: `expr_arrow_expects_ident`
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_function_multi_arg.md:3:27:3:28:**
+```roc
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+```
+                          ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_function_multi_arg.md:3:28:3:30:**
+```roc
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+```
+                           ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_function_multi_arg.md:3:31:3:33:**
+```roc
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+```
+                              ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
@@ -44,7 +83,31 @@ curry : (_a, _b -> _c) -> (_a -> _b -> _c)
 
 
 **PARSE ERROR**
-A parsing error occurred: `expected_expr_close_round_or_comma`
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_function_multi_arg.md:3:37:3:39:**
+```roc
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+```
+                                    ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_function_multi_arg.md:3:40:3:42:**
+```roc
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+```
+                                       ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
@@ -53,28 +116,6 @@ Here is the problematic code:
 curry : (_a, _b -> _c) -> (_a -> _b -> _c)
 ```
                                          ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_function_multi_arg.md:3:24:3:26:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                       ^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_function_multi_arg.md:3:27:3:43:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                          ^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -104,8 +145,14 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(underscore-ty-var @3.10-3.12 (raw "_a"))
 				(underscore-ty-var @3.14-3.16 (raw "_b"))
 				(underscore-ty-var @3.20-3.22 (raw "_c"))))
-		(e-malformed @3.24-3.26 (reason "expr_unexpected_token"))
-		(e-malformed @3.42-3.43 (reason "expected_expr_close_round_or_comma"))
+		(s-malformed @3.24-3.26 (tag "statement_unexpected_token"))
+		(s-malformed @3.27-3.28 (tag "statement_unexpected_token"))
+		(s-malformed @3.28-3.30 (tag "statement_unexpected_token"))
+		(s-malformed @3.31-3.33 (tag "statement_unexpected_token"))
+		(s-malformed @3.34-3.36 (tag "statement_unexpected_token"))
+		(s-malformed @3.37-3.39 (tag "statement_unexpected_token"))
+		(s-malformed @3.40-3.42 (tag "statement_unexpected_token"))
+		(s-malformed @3.42-3.43 (tag "statement_unexpected_token"))
 		(s-decl @4.1-4.30
 			(p-ident @4.1-4.6 (raw "curry"))
 			(e-lambda @4.9-4.30
@@ -154,8 +201,8 @@ main! = |_| {}
 						(p-assign @4.15-4.16 (ident "x")))
 					(e-closure @4.18-4.30
 						(captures
-							(capture @4.10-4.12 (ident "fn"))
-							(capture @4.15-4.16 (ident "x")))
+							(capture @4.15-4.16 (ident "x"))
+							(capture @4.10-4.12 (ident "fn")))
 						(e-lambda @4.18-4.30
 							(args
 								(p-assign @4.19-4.20 (ident "y")))

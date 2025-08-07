@@ -10,9 +10,72 @@ module []
 import json.Json [foo, BAR]
 ~~~
 # EXPECTED
+PARSE ERROR - stmt_import.md:3:18:3:19
+PARSE ERROR - stmt_import.md:3:19:3:22
+PARSE ERROR - stmt_import.md:3:22:3:23
+PARSE ERROR - stmt_import.md:3:27:3:28
 MODULE NOT FOUND - stmt_import.md:3:1:3:17
-INVALID STATEMENT - stmt_import.md:3:18:3:28
 # PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**stmt_import.md:3:18:3:19:**
+```roc
+import json.Json [foo, BAR]
+```
+                 ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**stmt_import.md:3:19:3:22:**
+```roc
+import json.Json [foo, BAR]
+```
+                  ^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**stmt_import.md:3:22:3:23:**
+```roc
+import json.Json [foo, BAR]
+```
+                     ^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+Here is the problematic code:
+**stmt_import.md:3:27:3:28:**
+```roc
+import json.Json [foo, BAR]
+```
+                          ^
+
+
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
 
@@ -22,17 +85,6 @@ You're attempting to use this module here:
 import json.Json [foo, BAR]
 ```
 ^^^^^^^^^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**stmt_import.md:3:18:3:28:**
-```roc
-import json.Json [foo, BAR]
-```
-                 ^^^^^^^^^^
 
 
 # TOKENS
@@ -47,16 +99,17 @@ KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),OpenSquar
 		(exposes @1.8-1.10))
 	(statements
 		(s-import @3.1-3.17 (raw "json.Json"))
-		(e-list @3.18-3.28
-			(e-ident @3.19-3.22 (raw "foo"))
-			(e-tag @3.24-3.27 (raw "BAR")))))
+		(s-malformed @3.18-3.19 (tag "statement_unexpected_token"))
+		(s-malformed @3.19-3.22 (tag "statement_unexpected_token"))
+		(s-malformed @3.22-3.23 (tag "statement_unexpected_token"))
+		(s-malformed @3.24-3.28 (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc
 module []
 
 import json.Json
-[foo, BAR]
+
 ~~~
 # CANONICALIZE
 ~~~clojure

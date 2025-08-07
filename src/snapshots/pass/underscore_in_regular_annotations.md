@@ -38,21 +38,24 @@ transform : _a -> _b -> _b
 transform = |_, b| b
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - underscore_in_regular_annotations.md:26:15:26:16
+PARSE ERROR - underscore_in_regular_annotations.md:26:15:26:16
 PARSE ERROR - underscore_in_regular_annotations.md:26:17:26:21
 PARSE ERROR - underscore_in_regular_annotations.md:26:28:26:32
-UNEXPECTED TOKEN IN EXPRESSION - underscore_in_regular_annotations.md:27:5:27:6
-UNEXPECTED TOKEN IN EXPRESSION - underscore_in_regular_annotations.md:30:22:30:24
+PARSE ERROR - underscore_in_regular_annotations.md:27:5:27:6
+PARSE ERROR - underscore_in_regular_annotations.md:27:7:27:8
+PARSE ERROR - underscore_in_regular_annotations.md:27:8:27:9
+PARSE ERROR - underscore_in_regular_annotations.md:27:9:27:10
+PARSE ERROR - underscore_in_regular_annotations.md:27:11:27:12
+PARSE ERROR - underscore_in_regular_annotations.md:27:12:27:13
+PARSE ERROR - underscore_in_regular_annotations.md:27:14:27:15
+PARSE ERROR - underscore_in_regular_annotations.md:27:15:27:16
+PARSE ERROR - underscore_in_regular_annotations.md:30:22:30:24
+PARSE ERROR - underscore_in_regular_annotations.md:30:25:30:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:11:12:11:16
-INVALID STATEMENT - underscore_in_regular_annotations.md:26:15:26:16
-INVALID STATEMENT - underscore_in_regular_annotations.md:27:5:27:6
-INVALID STATEMENT - underscore_in_regular_annotations.md:27:7:27:16
-INVALID STATEMENT - underscore_in_regular_annotations.md:30:22:30:24
-INVALID STATEMENT - underscore_in_regular_annotations.md:30:25:30:27
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **underscore_in_regular_annotations.md:26:15:26:16:**
@@ -110,9 +113,9 @@ map : (a -> b), List(a) -> List(b)
                            ^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **underscore_in_regular_annotations.md:27:5:27:6:**
@@ -122,9 +125,93 @@ map = |_, _| []
     ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **->** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_in_regular_annotations.md:27:7:27:8:**
+```roc
+map = |_, _| []
+```
+      ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_in_regular_annotations.md:27:8:27:9:**
+```roc
+map = |_, _| []
+```
+       ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_in_regular_annotations.md:27:9:27:10:**
+```roc
+map = |_, _| []
+```
+        ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_in_regular_annotations.md:27:11:27:12:**
+```roc
+map = |_, _| []
+```
+          ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_in_regular_annotations.md:27:12:27:13:**
+```roc
+map = |_, _| []
+```
+           ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_in_regular_annotations.md:27:14:27:15:**
+```roc
+map = |_, _| []
+```
+             ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_in_regular_annotations.md:27:15:27:16:**
+```roc
+map = |_, _| []
+```
+              ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **underscore_in_regular_annotations.md:30:22:30:24:**
@@ -132,6 +219,18 @@ Here is the problematic code:
 transform : _a -> _b -> _b
 ```
                      ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_in_regular_annotations.md:30:25:30:27:**
+```roc
+transform : _a -> _b -> _b
+```
+                        ^^
 
 
 **UNUSED VARIABLE**
@@ -144,61 +243,6 @@ The unused variable is declared here:
 process = |list| "processed"
 ```
            ^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_in_regular_annotations.md:26:15:26:16:**
-```roc
-map : (a -> b), List(a) -> List(b)
-```
-              ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_in_regular_annotations.md:27:5:27:6:**
-```roc
-map = |_, _| []
-```
-    ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_in_regular_annotations.md:27:7:27:16:**
-```roc
-map = |_, _| []
-```
-      ^^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_in_regular_annotations.md:30:22:30:24:**
-```roc
-transform : _a -> _b -> _b
-```
-                     ^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_in_regular_annotations.md:30:25:30:27:**
-```roc
-transform : _a -> _b -> _b
-```
-                        ^^
 
 
 # TOKENS
@@ -306,21 +350,23 @@ LowerIdent(31:1-31:10),OpAssign(31:11-31:12),OpBar(31:13-31:14),Underscore(31:14
 			(ty-fn @26.8-26.14
 				(ty-var @26.8-26.9 (raw "a"))
 				(ty-var @26.13-26.14 (raw "b"))))
-		(e-malformed @26.15-26.16 (reason "expr_unexpected_token"))
+		(s-malformed @26.15-26.16 (tag "statement_unexpected_token"))
 		(s-malformed @26.17-26.27 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @26.28-27.4 (tag "expected_colon_after_type_annotation"))
-		(e-malformed @27.5-27.6 (reason "expr_unexpected_token"))
-		(e-lambda @27.7-27.16
-			(args
-				(p-underscore)
-				(p-underscore))
-			(e-list @27.14-27.16))
+		(s-malformed @27.5-27.6 (tag "statement_unexpected_token"))
+		(s-malformed @27.7-27.8 (tag "statement_unexpected_token"))
+		(s-malformed @27.8-27.9 (tag "statement_unexpected_token"))
+		(s-malformed @27.9-27.10 (tag "statement_unexpected_token"))
+		(s-malformed @27.11-27.12 (tag "statement_unexpected_token"))
+		(s-malformed @27.12-27.13 (tag "statement_unexpected_token"))
+		(s-malformed @27.14-27.15 (tag "statement_unexpected_token"))
+		(s-malformed @27.15-27.16 (tag "statement_unexpected_token"))
 		(s-type-anno @30.1-30.21 (name "transform")
 			(ty-fn @30.13-30.21
 				(underscore-ty-var @30.13-30.15 (raw "_a"))
 				(underscore-ty-var @30.19-30.21 (raw "_b"))))
-		(e-malformed @30.22-30.24 (reason "expr_unexpected_token"))
-		(e-ident @30.25-30.27 (raw "_b"))
+		(s-malformed @30.22-30.24 (tag "statement_unexpected_token"))
+		(s-malformed @30.25-30.27 (tag "statement_unexpected_token"))
 		(s-decl @31.1-31.21
 			(p-ident @31.1-31.10 (raw "transform"))
 			(e-lambda @31.13-31.21
@@ -357,11 +403,11 @@ handle_result = |result|
 
 # Underscore in function arguments
 map : (a -> b)
-|_, _| []
+
 
 # Named underscore type variables
 transform : _a -> _b
-_b
+
 transform = |_, b| b
 ~~~
 # CANONICALIZE

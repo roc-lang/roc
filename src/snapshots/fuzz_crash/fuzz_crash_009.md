@@ -15,13 +15,11 @@ foo =
 # EXPECTED
 UNCLOSED STRING - :0:0:0:0
 MISSING HEADER - fuzz_crash_009.md:1:2:1:3
+PARSE ERROR - fuzz_crash_009.md:1:3:1:4
+PARSE ERROR - fuzz_crash_009.md:1:4:1:5
+PARSE ERROR - fuzz_crash_009.md:1:5:1:6
 PARSE ERROR - fuzz_crash_009.md:2:6:2:7
-PARSE ERROR - fuzz_crash_009.md:4:1:4:4
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_009.md:4:5:4:6
 PARSE ERROR - fuzz_crash_009.md:6:12:6:12
-INVALID STATEMENT - fuzz_crash_009.md:1:3:4:4
-INVALID STATEMENT - fuzz_crash_009.md:4:5:4:6
-INVALID STATEMENT - fuzz_crash_009.md:6:5:6:12
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -43,7 +41,43 @@ Here is the problematic code:
 
 
 **PARSE ERROR**
-A parsing error occurred: `expected_expr_record_field_name`
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_009.md:1:3:1:4:**
+```roc
+ f{o,
+```
+  ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_009.md:1:4:1:5:**
+```roc
+ f{o,
+```
+   ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_009.md:1:5:1:6:**
+```roc
+ f{o,
+```
+    ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
@@ -52,30 +86,6 @@ Here is the problematic code:
      ]
 ```
      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly_or_comma`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**fuzz_crash_009.md:4:1:4:4:**
-```roc
-foo =
-```
-^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_009.md:4:5:4:6:**
-```roc
-foo =
-```
-    ^
 
 
 **PARSE ERROR**
@@ -90,41 +100,6 @@ Here is the problematic code:
            
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_009.md:1:3:4:4:**
-```roc
- f{o,
-     ]
-
-foo =
-```
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_009.md:4:5:4:6:**
-```roc
-foo =
-```
-    ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_009.md:6:5:6:12:**
-```roc
-    "onmo %
-```
-    ^^^^^^^
-
-
 # TOKENS
 ~~~zig
 LowerIdent(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:4-1:5),Comma(1:5-1:6),
@@ -137,24 +112,37 @@ StringStart(6:5-6:6),StringPart(6:6-6:12),EndOfFile(6:12-6:12),
 (file @1.2-6.12
 	(malformed-header @1.2-1.3 (tag "missing_header"))
 	(statements
-		(e-malformed @4.1-4.4 (reason "expected_expr_close_curly_or_comma"))
-		(e-malformed @4.5-4.6 (reason "expr_unexpected_token"))
-		(e-string @6.5-6.12
-			(e-string-part @6.6-6.12 (raw "onmo %")))))
+		(s-malformed @1.3-1.4 (tag "statement_unexpected_token"))
+		(s-malformed @1.4-1.5 (tag "statement_unexpected_token"))
+		(s-malformed @1.5-1.6 (tag "statement_unexpected_token"))
+		(s-malformed @2.6-2.7 (tag "statement_unexpected_token"))
+		(s-decl @4.1-6.12
+			(p-ident @4.1-4.4 (raw "foo"))
+			(e-string @6.5-6.12
+				(e-string-part @6.6-6.12 (raw "onmo %"))))))
 ~~~
 # FORMATTED
 ~~~roc
 
 
-"onmo %"
+
+foo = 
+
+	"onmo %"
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(d-let
+		(p-assign @4.1-4.4 (ident "foo"))
+		(e-string @6.5-6.12
+			(e-literal @6.6-6.12 (string "onmo %")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt @4.1-4.4 (type "Str")))
+	(expressions
+		(expr @6.5-6.12 (type "Str"))))
 ~~~

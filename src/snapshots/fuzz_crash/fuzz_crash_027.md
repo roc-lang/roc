@@ -169,7 +169,9 @@ expect {
 LEADING ZERO - :0:0:0:0
 UNCLOSED STRING - :0:0:0:0
 PARSE ERROR - fuzz_crash_027.md:40:5:40:6
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:40:7:40:8
+PARSE ERROR - fuzz_crash_027.md:40:7:40:8
+PARSE ERROR - fuzz_crash_027.md:40:9:40:10
+PARSE ERROR - fuzz_crash_027.md:41:1:41:2
 PARSE ERROR - fuzz_crash_027.md:122:3:122:10
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:125:3:125:4
 UNDECLARED TYPE - fuzz_crash_027.md:26:8:26:11
@@ -187,8 +189,6 @@ MODULE NOT FOUND - fuzz_crash_027.md:12:1:12:19
 MODULE NOT FOUND - fuzz_crash_027.md:13:1:14:4
 UNDECLARED TYPE - fuzz_crash_027.md:29:2:29:5
 UNDECLARED TYPE - fuzz_crash_027.md:30:2:30:5
-INVALID STATEMENT - fuzz_crash_027.md:40:7:40:8
-INVALID STATEMENT - fuzz_crash_027.md:40:9:41:2
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_027.md:52:1:52:3
 UNDEFINED VARIABLE - fuzz_crash_027.md:65:4:65:5
 UNDEFINED VARIABLE - fuzz_crash_027.md:65:6:65:7
@@ -258,9 +258,9 @@ Maya) : [ #
     ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_027.md:40:7:40:8:**
@@ -268,6 +268,30 @@ Here is the problematic code:
 Maya) : [ #
 ```
       ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_027.md:40:9:40:10:**
+```roc
+Maya) : [ #
+```
+        ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_027.md:41:1:41:2:**
+```roc
+] #se
+```
+^
 
 
 **PARSE ERROR**
@@ -460,28 +484,6 @@ This type is referenced here:
 	Baz, #m
 ```
  ^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_027.md:40:7:40:8:**
-```roc
-Maya) : [ #
-```
-      ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_027.md:40:9:41:2:**
-```roc
-Maya) : [ #
-] #se
-```
 
 
 **EMPTY TUPLE NOT ALLOWED**
@@ -1150,8 +1152,9 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 				(anno-record-field @38.2-38.11 (name "bar")
 					(ty @38.8-38.11 (name "Som")))))
 		(s-malformed @40.1-40.6 (tag "expected_colon_after_type_annotation"))
-		(e-malformed @40.7-40.8 (reason "expr_unexpected_token"))
-		(e-list @40.9-41.2)
+		(s-malformed @40.7-40.8 (tag "statement_unexpected_token"))
+		(s-malformed @40.9-40.10 (tag "statement_unexpected_token"))
+		(s-malformed @41.1-41.2 (tag "statement_unexpected_token"))
 		(s-type-decl @43.1-43.34
 			(header @43.1-43.8 (name "Func")
 				(args
@@ -1554,7 +1557,8 @@ Ml(a) : { # d
 Soine(a) : { # d
 	bar : Som,
 }
-[] # se
+
+# se
 
 Func(a) : Maybe(a), a -> Maybe(a)
 

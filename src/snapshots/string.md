@@ -34,9 +34,8 @@ UNEXPECTED TOKEN IN STRING - string.md:7:6:7:6
 UNEXPECTED TOKEN IN STRING - string.md:8:6:8:6
 UNEXPECTED TOKEN IN STRING - string.md:9:7:9:7
 UNEXPECTED TOKEN IN STRING - string.md:10:8:10:8
-UNEXPECTED TOKEN IN STRING - string.md:15:3:15:3
-PARSE ERROR - string.md:15:3:15:3
-INVALID STATEMENT - string.md:15:1:15:3
+PARSE ERROR - string.md:15:1:15:2
+PARSE ERROR - string.md:15:2:15:3
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
@@ -119,39 +118,28 @@ Here is the problematic code:
        
 
 
-**UNEXPECTED TOKEN IN STRING**
-The token **<unknown>** is not expected in a string literal.
-String literals should be enclosed in double quotes.
-
-Here is the problematic code:
-**string.md:15:3:15:3:**
-```roc
-"\
-```
-  
-
-
 **PARSE ERROR**
-A parsing error occurred: `string_unclosed`
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**string.md:15:3:15:3:**
+**string.md:15:1:15:2:**
 ```roc
 "\
 ```
-  
+^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-**string.md:15:1:15:3:**
+Here is the problematic code:
+**string.md:15:2:15:3:**
 ```roc
 "\
 ```
-^^
+ ^
 
 
 # TOKENS
@@ -189,7 +177,8 @@ StringStart(15:1-15:2),MalformedStringPart(15:2-15:3),EndOfFile(15:3-15:3),
 				(e-string @10.2-10.9)
 				(e-string @11.2-11.13
 					(e-string-part @11.3-11.12 (raw "\u(1F680)")))))
-		(e-string @15.1-15.3)))
+		(s-malformed @15.1-15.2 (tag "statement_unexpected_token"))
+		(s-malformed @15.2-15.3 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -207,7 +196,7 @@ x = (
 )
 
 # Test backslash before EOF
-""
+
 ~~~
 # CANONICALIZE
 ~~~clojure

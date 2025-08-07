@@ -8,17 +8,122 @@ type=file
 app[]{f:platform""}|(0,)|||0
 ~~~
 # EXPECTED
-INVALID STATEMENT - fuzz_crash_041.md:1:20:1:29
+PARSE ERROR - fuzz_crash_041.md:1:20:1:21
+PARSE ERROR - fuzz_crash_041.md:1:21:1:22
+PARSE ERROR - fuzz_crash_041.md:1:22:1:23
+PARSE ERROR - fuzz_crash_041.md:1:23:1:24
+PARSE ERROR - fuzz_crash_041.md:1:24:1:25
+PARSE ERROR - fuzz_crash_041.md:1:25:1:26
+PARSE ERROR - fuzz_crash_041.md:1:26:1:27
+PARSE ERROR - fuzz_crash_041.md:1:27:1:28
+PARSE ERROR - fuzz_crash_041.md:1:28:1:29
 # PROBLEMS
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_041.md:1:20:1:29:**
+Here is the problematic code:
+**fuzz_crash_041.md:1:20:1:21:**
 ```roc
 app[]{f:platform""}|(0,)|||0
 ```
-                   ^^^^^^^^^
+                   ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_041.md:1:21:1:22:**
+```roc
+app[]{f:platform""}|(0,)|||0
+```
+                    ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_041.md:1:22:1:23:**
+```roc
+app[]{f:platform""}|(0,)|||0
+```
+                     ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_041.md:1:23:1:24:**
+```roc
+app[]{f:platform""}|(0,)|||0
+```
+                      ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_041.md:1:24:1:25:**
+```roc
+app[]{f:platform""}|(0,)|||0
+```
+                       ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_041.md:1:25:1:26:**
+```roc
+app[]{f:platform""}|(0,)|||0
+```
+                        ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_041.md:1:26:1:27:**
+```roc
+app[]{f:platform""}|(0,)|||0
+```
+                         ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_041.md:1:27:1:28:**
+```roc
+app[]{f:platform""}|(0,)|||0
+```
+                          ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_041.md:1:28:1:29:**
+```roc
+app[]{f:platform""}|(0,)|||0
+```
+                           ^
 
 
 # TOKENS
@@ -38,22 +143,20 @@ KwApp(1:1-1:4),OpenSquare(1:4-1:5),CloseSquare(1:5-1:6),OpenCurly(1:6-1:7),Lower
 				(e-string @1.17-1.19
 					(e-string-part @1.18-1.18 (raw ""))))))
 	(statements
-		(e-lambda @1.20-1.29
-			(args
-				(p-tuple @1.21-1.25
-					(p-int @1.22-1.23 (raw "0"))))
-			(e-lambda @1.26-1.29
-				(args)
-				(e-int @1.28-1.29 (raw "0"))))))
+		(s-malformed @1.20-1.21 (tag "statement_unexpected_token"))
+		(s-malformed @1.21-1.22 (tag "statement_unexpected_token"))
+		(s-malformed @1.22-1.23 (tag "statement_unexpected_token"))
+		(s-malformed @1.23-1.24 (tag "statement_unexpected_token"))
+		(s-malformed @1.24-1.25 (tag "statement_unexpected_token"))
+		(s-malformed @1.25-1.26 (tag "statement_unexpected_token"))
+		(s-malformed @1.26-1.27 (tag "statement_unexpected_token"))
+		(s-malformed @1.27-1.28 (tag "statement_unexpected_token"))
+		(s-malformed @1.28-1.29 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
 app [] { f: platform "" }
-|
-	(
-		0,
-	),
-| || 0
+
 ~~~
 # CANONICALIZE
 ~~~clojure

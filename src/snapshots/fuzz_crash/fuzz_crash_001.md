@@ -9,9 +9,8 @@ mo|%
 ~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_001.md:1:1:1:3
-UNEXPECTED TOKEN IN PATTERN - fuzz_crash_001.md:1:4:1:5
-PARSE ERROR - fuzz_crash_001.md:1:5:1:5
-INVALID STATEMENT - fuzz_crash_001.md:1:3:1:5
+PARSE ERROR - fuzz_crash_001.md:1:3:1:4
+PARSE ERROR - fuzz_crash_001.md:1:4:1:5
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -29,9 +28,21 @@ mo|%
 ^^
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **%** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_001.md:1:3:1:4:**
+```roc
+mo|%
+```
+  ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_001.md:1:4:1:5:**
@@ -39,29 +50,6 @@ Here is the problematic code:
 mo|%
 ```
    ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_bar`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**fuzz_crash_001.md:1:5:1:5:**
-```roc
-mo|%
-```
-    
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_001.md:1:3:1:5:**
-```roc
-mo|%
-```
-  ^^
 
 
 # TOKENS
@@ -73,7 +61,8 @@ LowerIdent(1:1-1:3),OpBar(1:3-1:4),OpPercent(1:4-1:5),EndOfFile(1:5-1:5),
 (file @1.1-1.5
 	(malformed-header @1.1-1.3 (tag "missing_header"))
 	(statements
-		(e-malformed @1.5-1.5 (reason "expected_expr_bar"))))
+		(s-malformed @1.3-1.4 (tag "statement_unexpected_token"))
+		(s-malformed @1.4-1.5 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

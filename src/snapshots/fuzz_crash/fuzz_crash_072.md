@@ -8,17 +8,135 @@ type=file
 module[]({})(!{0})
 ~~~
 # EXPECTED
-INVALID STATEMENT - fuzz_crash_072.md:1:9:1:19
+PARSE ERROR - fuzz_crash_072.md:1:9:1:10
+PARSE ERROR - fuzz_crash_072.md:1:10:1:11
+PARSE ERROR - fuzz_crash_072.md:1:11:1:12
+PARSE ERROR - fuzz_crash_072.md:1:12:1:13
+PARSE ERROR - fuzz_crash_072.md:1:13:1:14
+PARSE ERROR - fuzz_crash_072.md:1:14:1:15
+PARSE ERROR - fuzz_crash_072.md:1:15:1:16
+PARSE ERROR - fuzz_crash_072.md:1:16:1:17
+PARSE ERROR - fuzz_crash_072.md:1:17:1:18
+PARSE ERROR - fuzz_crash_072.md:1:18:1:19
 # PROBLEMS
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_072.md:1:9:1:19:**
+Here is the problematic code:
+**fuzz_crash_072.md:1:9:1:10:**
 ```roc
 module[]({})(!{0})
 ```
-        ^^^^^^^^^^
+        ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_072.md:1:10:1:11:**
+```roc
+module[]({})(!{0})
+```
+         ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_072.md:1:11:1:12:**
+```roc
+module[]({})(!{0})
+```
+          ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_072.md:1:12:1:13:**
+```roc
+module[]({})(!{0})
+```
+           ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_072.md:1:13:1:14:**
+```roc
+module[]({})(!{0})
+```
+            ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_072.md:1:14:1:15:**
+```roc
+module[]({})(!{0})
+```
+             ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_072.md:1:15:1:16:**
+```roc
+module[]({})(!{0})
+```
+              ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_072.md:1:16:1:17:**
+```roc
+module[]({})(!{0})
+```
+               ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_072.md:1:17:1:18:**
+```roc
+module[]({})(!{0})
+```
+                ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_072.md:1:18:1:19:**
+```roc
+module[]({})(!{0})
+```
+                 ^
 
 
 # TOKENS
@@ -31,22 +149,21 @@ KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),NoSpaceOpenRound(1:9-
 	(module @1.1-1.9
 		(exposes @1.7-1.9))
 	(statements
-		(e-apply @1.9-1.19
-			(e-tuple @1.9-1.13
-				(e-record @1.10-1.12))
-			(unary "!"
-				(e-block @1.15-1.18
-					(statements
-						(e-int @1.16-1.17 (raw "0"))))))))
+		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
+		(s-malformed @1.10-1.11 (tag "statement_unexpected_token"))
+		(s-malformed @1.11-1.12 (tag "statement_unexpected_token"))
+		(s-malformed @1.12-1.13 (tag "statement_unexpected_token"))
+		(s-malformed @1.13-1.14 (tag "statement_unexpected_token"))
+		(s-malformed @1.14-1.15 (tag "statement_unexpected_token"))
+		(s-malformed @1.15-1.16 (tag "statement_unexpected_token"))
+		(s-malformed @1.16-1.17 (tag "statement_unexpected_token"))
+		(s-malformed @1.17-1.18 (tag "statement_unexpected_token"))
+		(s-malformed @1.18-1.19 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
 module []
-({})(
-	!{
-		0
-	},
-)
+
 ~~~
 # CANONICALIZE
 ~~~clojure

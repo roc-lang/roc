@@ -13,19 +13,22 @@ compose = |f, g| |x| f(g(x))
 main! = |_| {}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:3:22:3:24
+PARSE ERROR - type_higher_order_multiple_vars.md:3:22:3:24
+PARSE ERROR - type_higher_order_multiple_vars.md:3:25:3:26
+PARSE ERROR - type_higher_order_multiple_vars.md:3:26:3:28
+PARSE ERROR - type_higher_order_multiple_vars.md:3:29:3:31
 PARSE ERROR - type_higher_order_multiple_vars.md:3:32:3:34
+PARSE ERROR - type_higher_order_multiple_vars.md:3:34:3:35
+PARSE ERROR - type_higher_order_multiple_vars.md:3:36:3:38
 PARSE ERROR - type_higher_order_multiple_vars.md:3:39:3:40
+PARSE ERROR - type_higher_order_multiple_vars.md:3:40:3:42
+PARSE ERROR - type_higher_order_multiple_vars.md:3:43:3:45
 PARSE ERROR - type_higher_order_multiple_vars.md:3:46:3:48
-UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:3:48:3:49
-INVALID STATEMENT - type_higher_order_multiple_vars.md:3:22:3:24
-INVALID STATEMENT - type_higher_order_multiple_vars.md:3:25:3:40
-INVALID STATEMENT - type_higher_order_multiple_vars.md:3:40:3:48
-INVALID STATEMENT - type_higher_order_multiple_vars.md:3:48:3:49
+PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **->** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **type_higher_order_multiple_vars.md:3:22:3:24:**
@@ -36,7 +39,43 @@ compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
 
 
 **PARSE ERROR**
-A parsing error occurred: `expr_arrow_expects_ident`
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:25:3:26:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                        ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:26:3:28:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                         ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:29:3:31:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                            ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
@@ -48,7 +87,31 @@ compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
 
 
 **PARSE ERROR**
-A parsing error occurred: `expr_arrow_expects_ident`
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:34:3:35:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                                 ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:36:3:38:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                                   ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
@@ -60,7 +123,31 @@ compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
 
 
 **PARSE ERROR**
-A parsing error occurred: `expr_arrow_expects_ident`
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:40:3:42:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                                       ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:43:3:45:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                                          ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
@@ -71,55 +158,11 @@ compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
                                              ^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **)** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**type_higher_order_multiple_vars.md:3:48:3:49:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-                                               ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_higher_order_multiple_vars.md:3:22:3:24:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-                     ^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_higher_order_multiple_vars.md:3:25:3:40:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-                        ^^^^^^^^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_higher_order_multiple_vars.md:3:40:3:48:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-                                       ^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 **type_higher_order_multiple_vars.md:3:48:3:49:**
 ```roc
 compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
@@ -153,10 +196,18 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 			(ty-fn @3.12-3.20
 				(underscore-ty-var @3.12-3.14 (raw "_b"))
 				(underscore-ty-var @3.18-3.20 (raw "_c"))))
-		(e-malformed @3.22-3.24 (reason "expr_unexpected_token"))
-		(e-malformed @3.39-3.40 (reason "expr_arrow_expects_ident"))
-		(e-malformed @3.46-3.48 (reason "expr_arrow_expects_ident"))
-		(e-malformed @3.48-3.49 (reason "expr_unexpected_token"))
+		(s-malformed @3.22-3.24 (tag "statement_unexpected_token"))
+		(s-malformed @3.25-3.26 (tag "statement_unexpected_token"))
+		(s-malformed @3.26-3.28 (tag "statement_unexpected_token"))
+		(s-malformed @3.29-3.31 (tag "statement_unexpected_token"))
+		(s-malformed @3.32-3.34 (tag "statement_unexpected_token"))
+		(s-malformed @3.34-3.35 (tag "statement_unexpected_token"))
+		(s-malformed @3.36-3.38 (tag "statement_unexpected_token"))
+		(s-malformed @3.39-3.40 (tag "statement_unexpected_token"))
+		(s-malformed @3.40-3.42 (tag "statement_unexpected_token"))
+		(s-malformed @3.43-3.45 (tag "statement_unexpected_token"))
+		(s-malformed @3.46-3.48 (tag "statement_unexpected_token"))
+		(s-malformed @3.48-3.49 (tag "statement_unexpected_token"))
 		(s-decl @4.1-4.29
 			(p-ident @4.1-4.8 (raw "compose"))
 			(e-lambda @4.11-4.29
@@ -199,8 +250,8 @@ main! = |_| {}
 				(p-assign @4.15-4.16 (ident "g")))
 			(e-closure @4.18-4.29
 				(captures
-					(capture @4.15-4.16 (ident "g"))
-					(capture @4.12-4.13 (ident "f")))
+					(capture @4.12-4.13 (ident "f"))
+					(capture @4.15-4.16 (ident "g")))
 				(e-lambda @4.18-4.29
 					(args
 						(p-assign @4.19-4.20 (ident "x")))

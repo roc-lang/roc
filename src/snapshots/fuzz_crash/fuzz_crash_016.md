@@ -9,8 +9,7 @@ type=file
 ~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_016.md:1:1:1:2
-PARSE ERROR - fuzz_crash_016.md:1:3:1:3
-INVALID STATEMENT - fuzz_crash_016.md:1:2:1:3
+PARSE ERROR - fuzz_crash_016.md:1:2:1:3
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -29,21 +28,10 @@ Here is the problematic code:
 
 
 **PARSE ERROR**
-A parsing error occurred: `expected_expr_bar`
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_016.md:1:3:1:3:**
-```roc
-0|
-```
-  
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 **fuzz_crash_016.md:1:2:1:3:**
 ```roc
 0|
@@ -60,7 +48,7 @@ Int(1:1-1:2),OpBar(1:2-1:3),EndOfFile(1:3-1:3),
 (file @1.1-1.3
 	(malformed-header @1.1-1.2 (tag "missing_header"))
 	(statements
-		(e-malformed @1.3-1.3 (reason "expected_expr_bar"))))
+		(s-malformed @1.2-1.3 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

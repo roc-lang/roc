@@ -13,14 +13,14 @@ apply = |fn, x| fn(x)
 main! = |_| {}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_function_simple.md:3:20:3:22
+PARSE ERROR - type_function_simple.md:3:20:3:22
+PARSE ERROR - type_function_simple.md:3:23:3:25
+PARSE ERROR - type_function_simple.md:3:26:3:28
 PARSE ERROR - type_function_simple.md:3:29:3:31
-INVALID STATEMENT - type_function_simple.md:3:20:3:22
-INVALID STATEMENT - type_function_simple.md:3:23:3:31
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **->** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **type_function_simple.md:3:20:3:22:**
@@ -31,7 +31,31 @@ apply : (_a -> _b) -> _a -> _b
 
 
 **PARSE ERROR**
-A parsing error occurred: `expr_arrow_expects_ident`
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_function_simple.md:3:23:3:25:**
+```roc
+apply : (_a -> _b) -> _a -> _b
+```
+                      ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_function_simple.md:3:26:3:28:**
+```roc
+apply : (_a -> _b) -> _a -> _b
+```
+                         ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
@@ -40,28 +64,6 @@ Here is the problematic code:
 apply : (_a -> _b) -> _a -> _b
 ```
                             ^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_function_simple.md:3:20:3:22:**
-```roc
-apply : (_a -> _b) -> _a -> _b
-```
-                   ^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**type_function_simple.md:3:23:3:31:**
-```roc
-apply : (_a -> _b) -> _a -> _b
-```
-                      ^^^^^^^^
 
 
 # TOKENS
@@ -90,8 +92,10 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 			(ty-fn @3.10-3.18
 				(underscore-ty-var @3.10-3.12 (raw "_a"))
 				(underscore-ty-var @3.16-3.18 (raw "_b"))))
-		(e-malformed @3.20-3.22 (reason "expr_unexpected_token"))
-		(e-malformed @3.29-3.31 (reason "expr_arrow_expects_ident"))
+		(s-malformed @3.20-3.22 (tag "statement_unexpected_token"))
+		(s-malformed @3.23-3.25 (tag "statement_unexpected_token"))
+		(s-malformed @3.26-3.28 (tag "statement_unexpected_token"))
+		(s-malformed @3.29-3.31 (tag "statement_unexpected_token"))
 		(s-decl @4.1-4.22
 			(p-ident @4.1-4.6 (raw "apply"))
 			(e-lambda @4.9-4.22

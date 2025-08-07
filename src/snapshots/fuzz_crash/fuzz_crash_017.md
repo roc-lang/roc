@@ -10,10 +10,11 @@ foo = "hello ${namF
 ~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_017.md:1:1:1:3
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_017.md:1:4:1:5
+PARSE ERROR - fuzz_crash_017.md:1:4:1:5
+PARSE ERROR - fuzz_crash_017.md:1:6:1:7
+PARSE ERROR - fuzz_crash_017.md:1:7:1:10
+PARSE ERROR - fuzz_crash_017.md:1:10:1:11
 PARSE ERROR - fuzz_crash_017.md:2:7:2:8
-INVALID STATEMENT - fuzz_crash_017.md:1:4:1:5
-INVALID STATEMENT - fuzz_crash_017.md:1:6:1:11
 UNKNOWN OPERATOR - fuzz_crash_017.md:2:7:2:20
 # PROBLEMS
 **MISSING HEADER**
@@ -32,9 +33,9 @@ me = "luc"
 ^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_017.md:1:4:1:5:**
@@ -42,6 +43,42 @@ Here is the problematic code:
 me = "luc"
 ```
    ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_017.md:1:6:1:7:**
+```roc
+me = "luc"
+```
+     ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_017.md:1:7:1:10:**
+```roc
+me = "luc"
+```
+      ^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_017.md:1:10:1:11:**
+```roc
+me = "luc"
+```
+         ^
 
 
 **PARSE ERROR**
@@ -54,28 +91,6 @@ Here is the problematic code:
 foo = "hello ${namF
 ```
       ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_017.md:1:4:1:5:**
-```roc
-me = "luc"
-```
-   ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_017.md:1:6:1:11:**
-```roc
-me = "luc"
-```
-     ^^^^^
 
 
 **UNKNOWN OPERATOR**
@@ -99,16 +114,17 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),StringStart(2:7-2:8),StringPart(2:8-2:14),
 (file @1.1-2.20
 	(malformed-header @1.1-1.3 (tag "missing_header"))
 	(statements
-		(e-malformed @1.4-1.5 (reason "expr_unexpected_token"))
-		(e-string @1.6-1.11
-			(e-string-part @1.7-1.10 (raw "luc")))
+		(s-malformed @1.4-1.5 (tag "statement_unexpected_token"))
+		(s-malformed @1.6-1.7 (tag "statement_unexpected_token"))
+		(s-malformed @1.7-1.10 (tag "statement_unexpected_token"))
+		(s-malformed @1.10-1.11 (tag "statement_unexpected_token"))
 		(s-decl @2.1-2.20
 			(p-ident @2.1-2.4 (raw "foo"))
 			(e-malformed @2.7-2.20 (reason "string_expected_close_interpolation")))))
 ~~~
 # FORMATTED
 ~~~roc
-"luc"
+
 foo = 
 ~~~
 # CANONICALIZE

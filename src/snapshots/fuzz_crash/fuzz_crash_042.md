@@ -8,14 +8,13 @@ type=file
 module[]import u.R}g:r->R.a.E
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_042.md:1:19:1:20
+PARSE ERROR - fuzz_crash_042.md:1:19:1:20
 MODULE NOT FOUND - fuzz_crash_042.md:1:9:1:19
-INVALID STATEMENT - fuzz_crash_042.md:1:19:1:20
 MODULE NOT IMPORTED - fuzz_crash_042.md:1:25:1:30
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_042.md:1:19:1:20:**
@@ -34,17 +33,6 @@ You're attempting to use this module here:
 module[]import u.R}g:r->R.a.E
 ```
         ^^^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_042.md:1:19:1:20:**
-```roc
-module[]import u.R}g:r->R.a.E
-```
-                  ^
 
 
 **MODULE NOT IMPORTED**
@@ -69,7 +57,7 @@ KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),KwImport(1:9-1:15),Lo
 		(exposes @1.7-1.9))
 	(statements
 		(s-import @1.9-1.19 (raw "u.R"))
-		(e-malformed @1.19-1.20 (reason "expr_unexpected_token"))
+		(s-malformed @1.19-1.20 (tag "statement_unexpected_token"))
 		(s-type-anno @1.20-1.30 (name "g")
 			(ty-fn @1.22-1.30
 				(ty-var @1.22-1.23 (raw "r"))

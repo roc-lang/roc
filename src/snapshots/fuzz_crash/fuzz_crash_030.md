@@ -25,18 +25,16 @@ ar,
 # EXPECTED
 PARSE ERROR - fuzz_crash_030.md:8:5:8:6
 PARSE ERROR - fuzz_crash_030.md:12:8:12:9
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:9:12:12
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:12:12:13
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:13:12:14
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:17:12:18
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:13:2:13:10
-INVALID STATEMENT - fuzz_crash_030.md:12:9:12:12
-INVALID STATEMENT - fuzz_crash_030.md:12:12:12:13
-INVALID STATEMENT - fuzz_crash_030.md:12:13:12:14
-INVALID STATEMENT - fuzz_crash_030.md:12:15:12:17
-INVALID STATEMENT - fuzz_crash_030.md:12:17:12:18
-INVALID STATEMENT - fuzz_crash_030.md:13:2:13:10
-INVALID STATEMENT - fuzz_crash_030.md:14:3:16:4
+PARSE ERROR - fuzz_crash_030.md:12:9:12:12
+PARSE ERROR - fuzz_crash_030.md:12:12:12:13
+PARSE ERROR - fuzz_crash_030.md:12:13:12:14
+PARSE ERROR - fuzz_crash_030.md:12:15:12:17
+PARSE ERROR - fuzz_crash_030.md:12:17:12:18
+PARSE ERROR - fuzz_crash_030.md:13:2:13:10
+PARSE ERROR - fuzz_crash_030.md:14:3:14:4
+PARSE ERROR - fuzz_crash_030.md:15:1:15:3
+PARSE ERROR - fuzz_crash_030.md:15:3:15:4
+PARSE ERROR - fuzz_crash_030.md:16:3:16:4
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `exposed_item_unexpected_token`
@@ -62,9 +60,9 @@ pkg: 77"..c", mm} #
        ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **..c** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_030.md:12:9:12:12:**
@@ -74,9 +72,9 @@ pkg: 77"..c", mm} #
         ^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **"** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_030.md:12:12:12:13:**
@@ -86,9 +84,9 @@ pkg: 77"..c", mm} #
            ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_030.md:12:13:12:14:**
@@ -98,67 +96,11 @@ pkg: 77"..c", mm} #
             ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_030.md:12:17:12:18:**
-```roc
-pkg: 77"..c", mm} #
-```
-                ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **provides** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_030.md:13:2:13:10:**
-```roc
-	provides # Cd
-```
- ^^^^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_030.md:12:9:12:12:**
-```roc
-pkg: 77"..c", mm} #
-```
-        ^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_030.md:12:12:12:13:**
-```roc
-pkg: 77"..c", mm} #
-```
-           ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_030.md:12:13:12:14:**
-```roc
-pkg: 77"..c", mm} #
-```
-            ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 **fuzz_crash_030.md:12:15:12:17:**
 ```roc
 pkg: 77"..c", mm} #
@@ -166,10 +108,11 @@ pkg: 77"..c", mm} #
               ^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
+Here is the problematic code:
 **fuzz_crash_030.md:12:17:12:18:**
 ```roc
 pkg: 77"..c", mm} #
@@ -177,10 +120,11 @@ pkg: 77"..c", mm} #
                 ^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
+Here is the problematic code:
 **fuzz_crash_030.md:13:2:13:10:**
 ```roc
 	provides # Cd
@@ -188,16 +132,52 @@ Only definitions, type annotations, and imports are allowed at the top level.
  ^^^^^^^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_030.md:14:3:16:4:**
+Here is the problematic code:
+**fuzz_crash_030.md:14:3:14:4:**
 ```roc
 		[ # pen
+```
+  ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_030.md:15:1:15:3:**
+```roc
 ar,
+```
+^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_030.md:15:3:15:4:**
+```roc
+ar,
+```
+  ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_030.md:16:3:16:4:**
+```roc
 		]
 ```
+  ^
 
 
 # TOKENS
@@ -224,23 +204,24 @@ CloseSquare(16:3-16:4),EndOfFile(16:4-16:4),
 (file @1.1-16.4
 	(malformed-header @12.8-12.9 (tag "expected_packages_close_curly"))
 	(statements
-		(e-malformed @12.9-12.12 (reason "expr_unexpected_token"))
-		(e-malformed @12.12-12.13 (reason "expr_unexpected_token"))
-		(e-malformed @12.13-12.14 (reason "expr_unexpected_token"))
-		(e-ident @12.15-12.17 (raw "mm"))
-		(e-malformed @12.17-12.18 (reason "expr_unexpected_token"))
-		(e-malformed @13.2-13.10 (reason "expr_unexpected_token"))
-		(e-list @14.3-16.4
-			(e-ident @15.1-15.3 (raw "ar")))))
+		(s-malformed @12.9-12.12 (tag "statement_unexpected_token"))
+		(s-malformed @12.12-12.13 (tag "statement_unexpected_token"))
+		(s-malformed @12.13-12.14 (tag "statement_unexpected_token"))
+		(s-malformed @12.15-12.17 (tag "statement_unexpected_token"))
+		(s-malformed @12.17-12.18 (tag "statement_unexpected_token"))
+		(s-malformed @13.2-13.10 (tag "statement_unexpected_token"))
+		(s-malformed @14.3-14.4 (tag "statement_unexpected_token"))
+		(s-malformed @15.1-15.3 (tag "statement_unexpected_token"))
+		(s-malformed @15.3-15.4 (tag "statement_unexpected_token"))
+		(s-malformed @16.3-16.4 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-mm
 
 # Cd
-[ # pen
-	ar,
-]
+# pen
+
+
 ~~~
 # CANONICALIZE
 ~~~clojure

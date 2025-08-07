@@ -10,9 +10,8 @@ type=file
 ~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_018.md:1:1:1:2
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_018.md:2:1:2:3
+PARSE ERROR - fuzz_crash_018.md:2:1:2:3
 UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
-INVALID STATEMENT - fuzz_crash_018.md:2:1:2:3
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -30,9 +29,9 @@ Here is the problematic code:
 ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.R** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_018.md:2:1:2:3:**
@@ -53,17 +52,6 @@ This type is referenced here:
     ^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_018.md:2:1:2:3:**
-```roc
-.R
-```
-^^
-
-
 # TOKENS
 ~~~zig
 Int(1:1-1:2),LowerIdent(1:3-1:4),OpColon(1:4-1:5),UpperIdent(1:5-1:6),
@@ -76,7 +64,7 @@ DotUpperIdent(2:1-2:3),EndOfFile(2:3-2:3),
 	(statements
 		(s-type-anno @1.3-1.6 (name "b")
 			(ty @1.5-1.6 (name "S")))
-		(e-malformed @2.1-2.3 (reason "expr_unexpected_token"))))
+		(s-malformed @2.1-2.3 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

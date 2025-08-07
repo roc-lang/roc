@@ -11,12 +11,9 @@ type=file
 ~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_014.md:1:1:1:3
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:1:3:1:5
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:2:1:2:6
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:3:1:3:5
-INVALID STATEMENT - fuzz_crash_014.md:1:3:1:5
-INVALID STATEMENT - fuzz_crash_014.md:2:1:2:6
-INVALID STATEMENT - fuzz_crash_014.md:3:1:3:5
+PARSE ERROR - fuzz_crash_014.md:1:3:1:5
+PARSE ERROR - fuzz_crash_014.md:2:1:2:6
+PARSE ERROR - fuzz_crash_014.md:3:1:3:5
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -34,9 +31,9 @@ Here is the problematic code:
 ^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.0** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_014.md:1:3:1:5:**
@@ -46,9 +43,9 @@ Here is the problematic code:
   ^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **0bu22** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_014.md:2:1:2:6:**
@@ -58,44 +55,11 @@ Here is the problematic code:
 ^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **0u22** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_014.md:3:1:3:5:**
-```roc
-0u22
-```
-^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_014.md:1:3:1:5:**
-```roc
-0b.0
-```
-  ^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_014.md:2:1:2:6:**
-```roc
-0bu22
-```
-^^^^^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 **fuzz_crash_014.md:3:1:3:5:**
 ```roc
 0u22
@@ -114,9 +78,9 @@ MalformedNumberBadSuffix(3:1-3:5),EndOfFile(3:5-3:5),
 (file @1.1-3.5
 	(malformed-header @1.1-1.3 (tag "missing_header"))
 	(statements
-		(e-malformed @1.3-1.5 (reason "expr_unexpected_token"))
-		(e-malformed @2.1-2.6 (reason "expr_unexpected_token"))
-		(e-malformed @3.1-3.5 (reason "expr_unexpected_token"))))
+		(s-malformed @1.3-1.5 (tag "statement_unexpected_token"))
+		(s-malformed @2.1-2.6 (tag "statement_unexpected_token"))
+		(s-malformed @3.1-3.5 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

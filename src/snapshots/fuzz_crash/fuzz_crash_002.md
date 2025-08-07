@@ -9,42 +9,25 @@ modu:;::::::::::::::le[%
 ~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_002.md:1:1:1:5
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:5:1:6
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:6:1:7
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:7:1:8
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:8:1:9
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:9:1:10
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:10:1:11
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:11:1:12
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:12:1:13
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:13:1:14
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:14:1:15
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:15:1:16
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:16:1:17
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:17:1:18
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:18:1:19
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:19:1:20
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:20:1:21
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:24:1:25
-LIST NOT CLOSED - fuzz_crash_002.md:1:25:1:25
-INVALID STATEMENT - fuzz_crash_002.md:1:5:1:6
-INVALID STATEMENT - fuzz_crash_002.md:1:6:1:7
-INVALID STATEMENT - fuzz_crash_002.md:1:7:1:8
-INVALID STATEMENT - fuzz_crash_002.md:1:8:1:9
-INVALID STATEMENT - fuzz_crash_002.md:1:9:1:10
-INVALID STATEMENT - fuzz_crash_002.md:1:10:1:11
-INVALID STATEMENT - fuzz_crash_002.md:1:11:1:12
-INVALID STATEMENT - fuzz_crash_002.md:1:12:1:13
-INVALID STATEMENT - fuzz_crash_002.md:1:13:1:14
-INVALID STATEMENT - fuzz_crash_002.md:1:14:1:15
-INVALID STATEMENT - fuzz_crash_002.md:1:15:1:16
-INVALID STATEMENT - fuzz_crash_002.md:1:16:1:17
-INVALID STATEMENT - fuzz_crash_002.md:1:17:1:18
-INVALID STATEMENT - fuzz_crash_002.md:1:18:1:19
-INVALID STATEMENT - fuzz_crash_002.md:1:19:1:20
-INVALID STATEMENT - fuzz_crash_002.md:1:20:1:21
-INVALID STATEMENT - fuzz_crash_002.md:1:21:1:23
-INVALID STATEMENT - fuzz_crash_002.md:1:23:1:25
+PARSE ERROR - fuzz_crash_002.md:1:5:1:6
+PARSE ERROR - fuzz_crash_002.md:1:6:1:7
+PARSE ERROR - fuzz_crash_002.md:1:7:1:8
+PARSE ERROR - fuzz_crash_002.md:1:8:1:9
+PARSE ERROR - fuzz_crash_002.md:1:9:1:10
+PARSE ERROR - fuzz_crash_002.md:1:10:1:11
+PARSE ERROR - fuzz_crash_002.md:1:11:1:12
+PARSE ERROR - fuzz_crash_002.md:1:12:1:13
+PARSE ERROR - fuzz_crash_002.md:1:13:1:14
+PARSE ERROR - fuzz_crash_002.md:1:14:1:15
+PARSE ERROR - fuzz_crash_002.md:1:15:1:16
+PARSE ERROR - fuzz_crash_002.md:1:16:1:17
+PARSE ERROR - fuzz_crash_002.md:1:17:1:18
+PARSE ERROR - fuzz_crash_002.md:1:18:1:19
+PARSE ERROR - fuzz_crash_002.md:1:19:1:20
+PARSE ERROR - fuzz_crash_002.md:1:20:1:21
+PARSE ERROR - fuzz_crash_002.md:1:21:1:23
+PARSE ERROR - fuzz_crash_002.md:1:23:1:24
+PARSE ERROR - fuzz_crash_002.md:1:24:1:25
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -62,9 +45,9 @@ modu:;::::::::::::::le[%
 ^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_002.md:1:5:1:6:**
@@ -74,9 +57,9 @@ modu:;::::::::::::::le[%
     ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **;** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_002.md:1:6:1:7:**
@@ -86,9 +69,9 @@ modu:;::::::::::::::le[%
      ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_002.md:1:7:1:8:**
@@ -98,9 +81,9 @@ modu:;::::::::::::::le[%
       ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_002.md:1:8:1:9:**
@@ -110,9 +93,9 @@ modu:;::::::::::::::le[%
        ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_002.md:1:9:1:10:**
@@ -122,9 +105,9 @@ modu:;::::::::::::::le[%
         ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_002.md:1:10:1:11:**
@@ -134,9 +117,9 @@ modu:;::::::::::::::le[%
          ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_002.md:1:11:1:12:**
@@ -146,9 +129,9 @@ modu:;::::::::::::::le[%
           ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_002.md:1:12:1:13:**
@@ -158,9 +141,9 @@ modu:;::::::::::::::le[%
            ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_002.md:1:13:1:14:**
@@ -170,9 +153,9 @@ modu:;::::::::::::::le[%
             ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_002.md:1:14:1:15:**
@@ -182,9 +165,9 @@ modu:;::::::::::::::le[%
              ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_002.md:1:15:1:16:**
@@ -194,9 +177,9 @@ modu:;::::::::::::::le[%
               ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_002.md:1:16:1:17:**
@@ -206,9 +189,9 @@ modu:;::::::::::::::le[%
                ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_002.md:1:17:1:18:**
@@ -218,9 +201,9 @@ modu:;::::::::::::::le[%
                 ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_002.md:1:18:1:19:**
@@ -230,9 +213,9 @@ modu:;::::::::::::::le[%
                  ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_002.md:1:19:1:20:**
@@ -242,9 +225,9 @@ modu:;::::::::::::::le[%
                   ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
 **fuzz_crash_002.md:1:20:1:21:**
@@ -254,211 +237,11 @@ modu:;::::::::::::::le[%
                    ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **%** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_002.md:1:24:1:25:**
-```roc
-modu:;::::::::::::::le[%
-```
-                       ^
-
-
-**LIST NOT CLOSED**
-This list is missing a closing bracket or has a syntax error.
-Lists must be closed with **]** and list items must be separated by commas.
-For example:     [1, 2, 3]
-
-Here is the problematic code:
-**fuzz_crash_002.md:1:25:1:25:**
-```roc
-modu:;::::::::::::::le[%
-```
-                        
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:5:1:6:**
-```roc
-modu:;::::::::::::::le[%
-```
-    ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:6:1:7:**
-```roc
-modu:;::::::::::::::le[%
-```
-     ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:7:1:8:**
-```roc
-modu:;::::::::::::::le[%
-```
-      ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:8:1:9:**
-```roc
-modu:;::::::::::::::le[%
-```
-       ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:9:1:10:**
-```roc
-modu:;::::::::::::::le[%
-```
-        ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:10:1:11:**
-```roc
-modu:;::::::::::::::le[%
-```
-         ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:11:1:12:**
-```roc
-modu:;::::::::::::::le[%
-```
-          ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:12:1:13:**
-```roc
-modu:;::::::::::::::le[%
-```
-           ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:13:1:14:**
-```roc
-modu:;::::::::::::::le[%
-```
-            ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:14:1:15:**
-```roc
-modu:;::::::::::::::le[%
-```
-             ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:15:1:16:**
-```roc
-modu:;::::::::::::::le[%
-```
-              ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:16:1:17:**
-```roc
-modu:;::::::::::::::le[%
-```
-               ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:17:1:18:**
-```roc
-modu:;::::::::::::::le[%
-```
-                ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:18:1:19:**
-```roc
-modu:;::::::::::::::le[%
-```
-                 ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:19:1:20:**
-```roc
-modu:;::::::::::::::le[%
-```
-                  ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_002.md:1:20:1:21:**
-```roc
-modu:;::::::::::::::le[%
-```
-                   ^
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 **fuzz_crash_002.md:1:21:1:23:**
 ```roc
 modu:;::::::::::::::le[%
@@ -466,15 +249,28 @@ modu:;::::::::::::::le[%
                     ^^
 
 
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_002.md:1:23:1:25:**
+Here is the problematic code:
+**fuzz_crash_002.md:1:23:1:24:**
 ```roc
 modu:;::::::::::::::le[%
 ```
-                      ^^
+                      ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_002.md:1:24:1:25:**
+```roc
+modu:;::::::::::::::le[%
+```
+                       ^
 
 
 # TOKENS
@@ -486,28 +282,28 @@ LowerIdent(1:1-1:5),OpColon(1:5-1:6),MalformedUnknownToken(1:6-1:7),OpColon(1:7-
 (file @1.1-1.25
 	(malformed-header @1.1-1.5 (tag "missing_header"))
 	(statements
-		(e-malformed @1.5-1.6 (reason "expr_unexpected_token"))
-		(e-malformed @1.6-1.7 (reason "expr_unexpected_token"))
-		(e-malformed @1.7-1.8 (reason "expr_unexpected_token"))
-		(e-malformed @1.8-1.9 (reason "expr_unexpected_token"))
-		(e-malformed @1.9-1.10 (reason "expr_unexpected_token"))
-		(e-malformed @1.10-1.11 (reason "expr_unexpected_token"))
-		(e-malformed @1.11-1.12 (reason "expr_unexpected_token"))
-		(e-malformed @1.12-1.13 (reason "expr_unexpected_token"))
-		(e-malformed @1.13-1.14 (reason "expr_unexpected_token"))
-		(e-malformed @1.14-1.15 (reason "expr_unexpected_token"))
-		(e-malformed @1.15-1.16 (reason "expr_unexpected_token"))
-		(e-malformed @1.16-1.17 (reason "expr_unexpected_token"))
-		(e-malformed @1.17-1.18 (reason "expr_unexpected_token"))
-		(e-malformed @1.18-1.19 (reason "expr_unexpected_token"))
-		(e-malformed @1.19-1.20 (reason "expr_unexpected_token"))
-		(e-malformed @1.20-1.21 (reason "expr_unexpected_token"))
-		(e-ident @1.21-1.23 (raw "le"))
-		(e-malformed @1.25-1.25 (reason "expected_expr_close_square_or_comma"))))
+		(s-malformed @1.5-1.6 (tag "statement_unexpected_token"))
+		(s-malformed @1.6-1.7 (tag "statement_unexpected_token"))
+		(s-malformed @1.7-1.8 (tag "statement_unexpected_token"))
+		(s-malformed @1.8-1.9 (tag "statement_unexpected_token"))
+		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
+		(s-malformed @1.10-1.11 (tag "statement_unexpected_token"))
+		(s-malformed @1.11-1.12 (tag "statement_unexpected_token"))
+		(s-malformed @1.12-1.13 (tag "statement_unexpected_token"))
+		(s-malformed @1.13-1.14 (tag "statement_unexpected_token"))
+		(s-malformed @1.14-1.15 (tag "statement_unexpected_token"))
+		(s-malformed @1.15-1.16 (tag "statement_unexpected_token"))
+		(s-malformed @1.16-1.17 (tag "statement_unexpected_token"))
+		(s-malformed @1.17-1.18 (tag "statement_unexpected_token"))
+		(s-malformed @1.18-1.19 (tag "statement_unexpected_token"))
+		(s-malformed @1.19-1.20 (tag "statement_unexpected_token"))
+		(s-malformed @1.20-1.21 (tag "statement_unexpected_token"))
+		(s-malformed @1.21-1.23 (tag "statement_unexpected_token"))
+		(s-malformed @1.23-1.24 (tag "statement_unexpected_token"))
+		(s-malformed @1.24-1.25 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-le
 
 ~~~
 # CANONICALIZE

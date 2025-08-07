@@ -603,6 +603,7 @@ pub const Diagnostic = struct {
         expected_ty_anno_close_round_or_comma,
         expected_expr_comma,
         expected_expr_close_curly,
+        expr_dot_suffix_not_allowed,
     };
 };
 

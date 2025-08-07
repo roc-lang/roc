@@ -10,9 +10,21 @@ S
 0
 ~~~
 # EXPECTED
+PARSE ERROR - fuzz_crash_052.md:3:1:3:2
 MODULE NOT FOUND - fuzz_crash_052.md:1:9:2:2
-INVALID STATEMENT - fuzz_crash_052.md:3:1:3:2
 # PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_052.md:3:1:3:2:**
+```roc
+0
+```
+^
+
+
 **MODULE NOT FOUND**
 The module `S` was not found in this Roc project.
 
@@ -22,17 +34,6 @@ You're attempting to use this module here:
 module[]import
 S
 ```
-
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**fuzz_crash_052.md:3:1:3:2:**
-```roc
-0
-```
-^
 
 
 # TOKENS
@@ -48,14 +49,14 @@ Int(3:1-3:2),EndOfFile(3:2-3:2),
 		(exposes @1.7-1.9))
 	(statements
 		(s-import @1.9-2.2 (raw "S"))
-		(e-int @3.1-3.2 (raw "0"))))
+		(s-malformed @3.1-3.2 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
 module []
 import
 	S
-0
+
 ~~~
 # CANONICALIZE
 ~~~clojure

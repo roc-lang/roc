@@ -23,9 +23,9 @@ broken_fn3 : a -> b
 ~~~
 # EXPECTED
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:6:5:6:11
+PARSE ERROR - where_clauses_error_cases.md:6:25:6:26
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:10:8
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:6:5:6:24
-INVALID STATEMENT - where_clauses_error_cases.md:6:25:6:26
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:10:3:10:8
 EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:9:1:19
 EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:21:1:31
@@ -42,6 +42,18 @@ Here is the problematic code:
     module(a).method -> b
 ```
     ^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**where_clauses_error_cases.md:6:25:6:26:**
+```roc
+    module(a).method -> b
+```
+                        ^
 
 
 **WHERE CLAUSE ERROR**
@@ -68,17 +80,6 @@ This where clause could not be parsed correctly.
     ^^^^^^^^^^^^^^^^^^^
 
 Check the syntax of your where clause.
-
-**INVALID STATEMENT**
-The statement `expression` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**where_clauses_error_cases.md:6:25:6:26:**
-```roc
-    module(a).method -> b
-```
-                        ^
-
 
 **MALFORMED WHERE CLAUSE**
 This where clause could not be parsed correctly.
@@ -151,7 +152,7 @@ KwModule(15:5-15:11),NoSpaceOpenRound(15:11-15:12),LowerIdent(15:12-15:13),Close
 				(ty-var @4.19-4.20 (raw "b")))
 			(where
 				(malformed @6.5-6.24 (reason "where_expected_colon"))))
-		(e-ident @6.25-6.26 (raw "b"))
+		(s-malformed @6.25-6.26 (tag "statement_unexpected_token"))
 		(s-type-anno @9.1-10.8 (name "broken_fn2")
 			(ty-fn @9.14-9.20
 				(ty-var @9.14-9.15 (raw "a"))
@@ -176,7 +177,7 @@ module [broken_fn1, broken_fn2, broken_fn3]
 broken_fn1 : a -> b
 	where
 		
-b
+
 
 # Empty where clause
 broken_fn2 : a -> b
