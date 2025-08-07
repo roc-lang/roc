@@ -107,6 +107,10 @@ jobs:
           ./zig-out/bin/roc --no-cache test/str/app.roc
           ./zig-out/bin/roc --no-cache test/int/app.roc
 
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Run Test Platforms (Windows)
         if: runner.os == 'Windows'
         run: |
