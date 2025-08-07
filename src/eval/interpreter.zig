@@ -475,17 +475,8 @@ pub const Interpreter = struct {
                     // The block's result is on top of the stack. We need to preserve it.
                     const result_val = try self.popStackValue();
 
-                    var result_size: u32 = 0;
+                    const result_size = result_val.getTotalSize(self.layout_cache);
                     const result_alignment = result_val.layout.alignment(target_usize);
-                    if (result_val.layout.tag == .closure and result_val.ptr != null) {
-                        std.debug.assert(result_val.ptr != null);
-                        const closure: *const Closure = @ptrCast(@alignCast(result_val.ptr.?));
-                        const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
-                        const captures_size = self.layout_cache.layoutSize(captures_layout);
-                        result_size = @sizeOf(Closure) + captures_size;
-                    } else {
-                        result_size = self.layout_cache.layoutSize(result_val.layout);
-                    }
 
                     // Copy to a temp buffer
                     const temp_buffer = try self.allocator.alloc(u8, result_size);
@@ -1518,16 +1509,8 @@ pub const Interpreter = struct {
         const return_value = try self.peekStackValue(1);
 
         // Determine the full size of the return value. If it's a closure, we must include the captures.
-        var return_size: u32 = 0;
+        const return_size = return_value.getTotalSize(self.layout_cache);
         const return_alignment = return_value.layout.alignment(target_usize);
-        if (return_value.layout.tag == .closure and return_value.ptr != null) {
-            const closure: *const Closure = @ptrCast(@alignCast(return_value.ptr.?));
-            const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
-            const captures_size = self.layout_cache.layoutSize(captures_layout);
-            return_size = @sizeOf(Closure) + captures_size;
-        } else {
-            return_size = self.layout_cache.layoutSize(return_value.layout);
-        }
 
         // Copy the return value to a temporary buffer before we wipe the stack.
         // We allocate this on the heap because return values can be large.
@@ -2129,16 +2112,8 @@ pub const Interpreter = struct {
         // The block's result is on top of the stack. We need to preserve it.
         const result_val = try self.popStackValue();
 
-        var result_size: u32 = 0;
+        const result_size = result_val.getTotalSize(self.layout_cache);
         _ = result_val.layout.alignment(target_usize); // Used for memory alignment
-        if (result_val.layout.tag == .closure and result_val.ptr != null) {
-            const closure: *const Closure = @ptrCast(@alignCast(result_val.ptr.?));
-            const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
-            const captures_size = self.layout_cache.layoutSize(captures_layout);
-            result_size = @sizeOf(Closure) + captures_size;
-        } else {
-            result_size = self.layout_cache.layoutSize(result_val.layout);
-        }
 
         // Copy to a temp buffer
         const temp_buffer = try self.allocator.alloc(u8, result_size);

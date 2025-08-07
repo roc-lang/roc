@@ -381,20 +381,39 @@ pub fn copyWithoutRefcount(self: StackValue, dest: StackValue, layout_cache: *La
     }
 }
 
-/// Increment reference count for refcounted types (no-op for others)
+/// Increment reference count for refcounted types
 pub fn incref(self: StackValue) void {
     if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
         const roc_str = self.asRocStr();
         roc_str.incref(1);
+        return;
     }
-    std.debug.panic("called incref on a non-refcounted value {}", .{self.layout});
+    // TODO: Add support for other refcounted types (lists, boxes) when implemented
+    std.debug.panic("called incref on a non-refcounted value: {}", .{self.layout.tag});
 }
 
-/// Decrement reference count for refcounted types (no-op for others)
+/// Decrement reference count for refcounted types
 pub fn decref(self: StackValue, ops: *RocOps) void {
     if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
         const roc_str = self.asRocStr();
         roc_str.decref(ops);
+        return;
     }
-    std.debug.panic("called decref on a non-refcounted value {}", .{self.layout});
+    // TODO: Add support for other refcounted types (lists, boxes) when implemented
+    std.debug.panic("called decref on a non-refcounted value: {}", .{self.layout.tag});
+}
+
+/// Calculate total memory footprint for a value.
+///
+/// - For closures, this includes both the Closure header and captured data
+/// - For all other types, this is just the layout size
+pub fn getTotalSize(self: StackValue, layout_cache: *LayoutStore) u32 {
+    if (self.layout.tag == .closure and self.ptr != null) {
+        const closure = self.asClosure();
+        const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
+        const captures_size = layout_cache.layoutSize(captures_layout);
+        return @sizeOf(Closure) + captures_size;
+    } else {
+        return layout_cache.layoutSize(self.layout);
+    }
 }
