@@ -202,6 +202,10 @@ pub const CallFrame = struct {
     ///
     /// Bindings map from a pattern_idx to the actual value in our stack_memory.
     bindings_base: u32,
+    /// Offset in stack_memory to the pre-allocated return slot
+    return_slot_offset: u32,
+    /// Layout index of the expected return value  
+    return_layout_idx: layout.Idx,
     /// (future enhancement) for tail-call optimisation
     is_tail_call: bool = false,
 };
@@ -545,10 +549,16 @@ pub const Interpreter = struct {
             return EvalError.Crash;
         }
 
-        // With proper calling convention, after cleanup the result is at the start of the stack
-        const result_ptr = @as([*]u8, @ptrCast(self.stack_memory.start));
+        // The result is at the offset specified in final_value, not necessarily at the start
+        const result_ptr = self.stack_memory.start + final_value.offset;
 
-        self.traceInfo("Final result at stack pos 0 (calling convention)", .{});
+        self.traceInfo("Final result at offset {} in stack memory", .{final_value.offset});
+        
+        // Debug: check what's actually at the result location
+        if (final_value.layout.tag == .scalar and self.layout_cache.layoutSize(final_value.layout) > 0) {
+            const debug_byte = result_ptr[0];
+            self.traceInfo("Byte at final result location: {}", .{debug_byte});
+        }
 
         return StackValue{
             .layout = final_value.layout,
@@ -1430,9 +1440,21 @@ pub const Interpreter = struct {
         self.traceEnter("handleLambdaCall {}", .{expr_idx});
         defer self.traceExit("", .{});
 
-        // The arguments are on the stack, followed by the closure.
-        const closure_value = try self.peekStackValue(1);
-        const value_base: usize = self.value_stack.items.len - @as(usize, arg_count) - 1;
+        // Get the return layout from the call expression type (not the lambda body)
+        const return_layout_idx = try self.getLayoutIdx(expr_idx);
+        const return_layout = self.layout_cache.getLayout(return_layout_idx);
+        
+        // Current stack layout: [args..., closure] (return slot not yet allocated)
+        const closure_value = try self.peekStackValue(1); // closure is at top
+        
+        // Calculate value_base before allocating return slot  
+        const value_base: usize = self.value_stack.items.len - @as(usize, arg_count) - 1; // -1 for closure
+        
+        // Pre-allocate return slot AFTER getting closure but before setting up the frame
+        const return_slot_offset = self.stack_memory.used;
+        _ = try self.pushStackValue(return_layout);
+        
+        // Final stack layout: [args..., closure, return_slot]
         const stack_base = self.value_stack.items[value_base].offset;
 
         if (closure_value.layout.tag != LayoutTag.closure) {
@@ -1442,7 +1464,7 @@ pub const Interpreter = struct {
 
         const closure: *const Closure = @ptrCast(@alignCast(closure_value.ptr.?));
 
-        // Create a new call frame
+        // Create a new call frame with return slot info
         const frame: *CallFrame = try self.frame_stack.addOne();
         frame.* = CallFrame{
             .body_idx = closure.body_idx,
@@ -1451,6 +1473,8 @@ pub const Interpreter = struct {
             .arg_count = arg_count,
             .work_base = @intCast(self.work_stack.items.len),
             .bindings_base = @intCast(self.bindings_stack.items.len),
+            .return_slot_offset = return_slot_offset,
+            .return_layout_idx = return_layout_idx,
             .is_tail_call = false,
         };
 
@@ -1473,15 +1497,16 @@ pub const Interpreter = struct {
         const param_ids = self.env.store.slicePatterns(closure.params);
         std.debug.assert(param_ids.len == arg_count);
 
-        // Arguments are on the stack in evaluation order, so the last argument is at the top.
-        // We need to bind them to parameters in the correct order.
-        // The stack layout is: `..., arg1, ..., argN, closure, captures_view`
-        // peek(1) is captures_view
-        // peek(2) is closure
-        // peek(3) is argN
-        // peek(arg_count + 2) is arg1
+        // Current stack layout: `[arg1, ..., argN, closure, return_slot, captures_view]`
+        // peek(1) is captures_view  
+        // peek(2) is return_slot
+        // peek(3) is closure
+        // peek(4) is argN (last argument)  
+        // peek(3 + arg_count) is arg1 (first argument)
         for (param_ids, 0..) |param_idx, i| {
-            const arg_index_from_top = arg_count - i + 2;
+            // For parameter i, we want argument i (0-indexed)
+            // arg0 is at peek(3 + arg_count), arg1 is at peek(3 + arg_count - 1), etc.
+            const arg_index_from_top = 3 + arg_count - i;
             const arg = try self.peekStackValue(arg_index_from_top);
 
             try self.bindPattern(param_idx, arg, roc_ops);
@@ -1507,20 +1532,24 @@ pub const Interpreter = struct {
 
         // The return value is on top of the stack.
         const return_value = try self.peekStackValue(1);
-
-        // Determine the full size of the return value. If it's a closure, we must include the captures.
-        const return_size = return_value.getTotalSize(self.layout_cache);
-        const return_alignment = return_value.layout.alignment(target_usize);
-
-        // Copy the return value to a temporary buffer before we wipe the stack.
-        // We allocate this on the heap because return values can be large.
-        const temp_buffer = try self.allocator.alloc(u8, return_size);
-        defer self.allocator.free(temp_buffer);
-        if (return_size > 0) {
-            std.mem.copyForwards(u8, temp_buffer, @as([*]const u8, @ptrCast(return_value.ptr.?))[0..return_size]);
+        
+        // Get the pre-allocated return slot
+        const return_slot_ptr = self.stack_memory.start + frame.return_slot_offset;
+        const return_layout = self.layout_cache.getLayout(frame.return_layout_idx);
+        
+        // Copy the return value directly to the pre-allocated slot using StackValue helpers
+        const return_slot_size = self.layout_cache.layoutSize(return_layout);
+        self.traceInfo("handleLambdaReturn: copy check - size={}, ptr_null={}", .{return_slot_size, return_value.ptr == null});
+        if (return_slot_size > 0 and return_value.ptr != null) {
+            const src_byte = @as([*]const u8, @ptrCast(return_value.ptr.?))[0];
+            self.traceInfo("Copying return byte {} to return slot", .{src_byte});
+            
+            // Use StackValue helpers for proper alignment and copying
+            const return_slot_value = StackValue.fromPtr(return_layout, return_slot_ptr);
+            return_value.copyTo(return_slot_value, self.layout_cache);
         }
 
-        // Now that we've saved the return value, pop it from the stack.
+        // Now that we've copied the return value, pop it from the stack.
         _ = try self.popStackValue();
 
         // A capture record view is always pushed by handleLambdaCall, so we always pop it.
@@ -1532,24 +1561,31 @@ pub const Interpreter = struct {
             binding.cleanup(roc_ops);
         }
 
-        // reset the stacks
+        // We need to move the return slot to where the caller expects the result
+        // The caller expects the result at frame.value_base (where the first argument was)
+        const result_position_offset = self.value_stack.items[frame.value_base].offset;
+        
+        // Copy return slot data to the result position using StackValue helpers
+        if (return_slot_size > 0) {
+            const result_position_ptr = self.stack_memory.start + result_position_offset;
+            const return_slot_value = StackValue.fromPtr(return_layout, return_slot_ptr);
+            const result_position_value = StackValue.fromPtr(return_layout, result_position_ptr);
+            return_slot_value.copyTo(result_position_value, self.layout_cache);
+        }
+        
+        // Reset the stacks, keeping only the result at the original argument position
         self.work_stack.items.len = frame.work_base;
         self.bindings_stack.items.len = frame.bindings_base;
-        self.value_stack.items.len = frame.value_base;
-        self.stack_memory.used = frame.stack_base;
+        self.value_stack.items.len = frame.value_base + 1; // Keep one slot for the result
+        self.stack_memory.used = result_position_offset + return_slot_size;
+        
+        // Update the value stack entry to point to the result
+        self.value_stack.items[frame.value_base] = .{
+            .layout = return_layout,
+            .offset = result_position_offset,
+        };
 
-        // Push the return value back onto the now-clean stack from the temporary buffer.
-        if (return_size > 0) {
-            const new_ptr = try self.stack_memory.alloca(return_size, return_alignment);
-            std.mem.copyForwards(u8, @as([*]u8, @ptrCast(new_ptr))[0..return_size], temp_buffer);
-            const new_offset: u32 = @truncate(@intFromPtr(new_ptr) - @intFromPtr(@as(*const u8, @ptrCast(self.stack_memory.start))));
-            try self.value_stack.append(.{ .layout = return_value.layout, .offset = new_offset });
-        } else {
-            // Handle zero-sized types by just pushing the layout
-            try self.value_stack.append(.{ .layout = return_value.layout, .offset = self.stack_memory.used });
-        }
-
-        self.traceInfo("Lambda return: stack cleaned and return value pushed", .{});
+        self.traceInfo("Lambda return: stack cleaned with pre-allocated return slot", .{});
     }
 
     fn handleRecordFields(self: *Interpreter, record_expr_idx: ModuleEnv.Expr.Idx, current_field_idx: usize) EvalError!void {

@@ -22,6 +22,7 @@ const test_allocator = testing.allocator;
 
 const EvalError = eval.EvalError;
 const runExpectInt = helpers.runExpectInt;
+const runExpectBool = helpers.runExpectBool;
 const runExpectError = helpers.runExpectError;
 const runExpectStr = helpers.runExpectStr;
 
@@ -53,12 +54,12 @@ test "eval double negation" {
 }
 
 test "eval boolean in lambda expressions" {
-    try runExpectInt("(|x| !x)(True)", 0, .no_trace);
-    try runExpectInt("(|x| !x)(False)", 1, .no_trace);
-    try runExpectInt("(|x, y| x and y)(True, False)", 0, .no_trace);
-    try runExpectInt("(|x, y| x or y)(False, True)", 1, .no_trace);
-    try runExpectInt("(|x| x and !x)(True)", 0, .no_trace);
-    try runExpectInt("(|x| x or !x)(False)", 1, .no_trace);
+    try runExpectBool("(|x| !x)(True)", false, .no_trace);
+    try runExpectBool("(|x| !x)(False)", true, .no_trace);
+    try runExpectBool("(|x, y| x and y)(True, False)", false, .no_trace);
+    try runExpectBool("(|x, y| x or y)(False, True)", true, .no_trace);
+    try runExpectBool("(|x| x and !x)(True)", false, .no_trace);
+    try runExpectBool("(|x| x or !x)(False)", true, .no_trace);
 }
 
 test "eval unary not in conditional expressions" {
