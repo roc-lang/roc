@@ -961,6 +961,9 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!?AST.State
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    try self.nest();
+    defer self.unnest();
+
     switch (self.peek()) {
         .KwImport => {
             if (statementType != .top_level) {
@@ -1346,6 +1349,9 @@ const Alternatives = enum {
 pub fn parsePattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    try self.nest();
+    defer self.unnest();
 
     const outer_start = self.pos;
     const patterns_scratch_top = self.store.scratchPatternTop();
@@ -2444,6 +2450,9 @@ const TyFnArgs = enum {
 pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    try self.nest();
+    defer self.unnest();
 
     const start = self.pos;
     var anno: ?AST.TypeAnno.Idx = null;
