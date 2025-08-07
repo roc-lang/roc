@@ -2453,6 +2453,7 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
     success = try generateReplOutputSection(&output, output_path, &content, config) and success;
     try generateReplProblemsSection(&output, &content);
     try generateReplCanonicalizeSection(&output, &content);
+    try generateReplTypesSection(&output, &content);
 
     try generateHtmlClosing(&output);
 
@@ -2745,6 +2746,114 @@ fn generateReplCanonicalizeSection(output: *DualOutput, content: *const Content)
                     try writer.writeAll("                <hr>\n");
                 }
                 try writer.writeAll("                <div class=\"repl-canonical\">Failed to canonicalize</div>\n");
+            }
+        }
+    }
+
+    try output.end_code_block();
+    try output.end_section();
+}
+
+fn generateReplTypesSection(output: *DualOutput, content: *const Content) !void {
+    // Parse REPL inputs from the source
+    var lines = std.mem.tokenizeScalar(u8, content.source, '\n');
+    var inputs = std.ArrayList([]const u8).init(output.gpa);
+    defer inputs.deinit();
+
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len > 2 and std.mem.startsWith(u8, trimmed, "» ")) {
+            try inputs.append(trimmed[2..]);
+        }
+    }
+
+    try output.begin_section("TYPES");
+    try output.begin_code_block("clojure");
+
+    // Generate types for each input
+    for (inputs.items, 0..) |input, i| {
+        if (i > 0) {
+            try output.md_writer.writeAll("---\n");
+        }
+
+        // Create a temporary ModuleEnv for this input
+        var module_env = ModuleEnv.init(output.gpa, input) catch |err| {
+            try output.md_writer.print("Error creating module env: {s}\n", .{@errorName(err)});
+            continue;
+        };
+        defer module_env.deinit();
+
+        // Parse the input as an expression
+        var parse_ast = parse.parseExpr(&module_env) catch |err| {
+            try output.md_writer.print("Parse error: {s}\n", .{@errorName(err)});
+            continue;
+        };
+        defer parse_ast.deinit(output.gpa);
+
+        // Initialize canonicalization
+        try module_env.initCIRFields(output.gpa, "repl");
+        var can = Can.init(&module_env, &parse_ast, null) catch |err| {
+            try output.md_writer.print("Can init error: {s}\n", .{@errorName(err)});
+            continue;
+        };
+        defer can.deinit();
+
+        // Canonicalize the expression
+        const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+        const maybe_canonical_expr = can.canonicalizeExpr(expr_idx) catch |err| {
+            try output.md_writer.print("Canonicalize error: {s}\n", .{@errorName(err)});
+            continue;
+        };
+
+        if (maybe_canonical_expr) |canonical_expr| {
+            // Initialize type checking
+            const empty_modules: []const *ModuleEnv = &.{};
+            var solver = Check.init(output.gpa, &module_env.types, &module_env, empty_modules, &module_env.store.regions) catch |err| {
+                try output.md_writer.print("Type checker init error: {s}\n", .{@errorName(err)});
+                continue;
+            };
+            defer solver.deinit();
+
+            // Check the expression
+            _ = solver.checkExpr(canonical_expr.idx) catch |err| {
+                try output.md_writer.print("Type check error: {s}\n", .{@errorName(err)});
+                continue;
+            };
+
+            // Generate S-expression tree for the types
+            var tree = SExprTree.init(output.gpa);
+            defer tree.deinit();
+
+            module_env.pushTypesToSExprTree(canonical_expr.idx, &tree) catch |err| {
+                try output.md_writer.print("Types S-expr tree error: {s}\n", .{@errorName(err)});
+                continue;
+            };
+
+            tree.toStringPretty(output.md_writer.any()) catch |err| {
+                try output.md_writer.print("Types S-expr format error: {s}\n", .{@errorName(err)});
+                continue;
+            };
+            try output.md_writer.writeAll("\n");
+
+            // HTML output
+            if (output.html_writer) |writer| {
+                if (i > 0) {
+                    try writer.writeAll("                <hr>\n");
+                }
+                try writer.writeAll("                <div class=\"repl-types\">");
+                tree.toHtml(writer.any()) catch |err| {
+                    try writer.print("Types S-expr HTML error: {s}", .{@errorName(err)});
+                };
+                try writer.writeAll("</div>\n");
+            }
+        } else {
+            try output.md_writer.writeAll("Failed to canonicalize\n");
+
+            if (output.html_writer) |writer| {
+                if (i > 0) {
+                    try writer.writeAll("                <hr>\n");
+                }
+                try writer.writeAll("                <div class=\"repl-types\">Failed to canonicalize</div>\n");
             }
         }
     }
