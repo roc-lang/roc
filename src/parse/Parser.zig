@@ -961,6 +961,9 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!?AST.State
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    try self.nest();
+    defer self.unnest();
+
     switch (self.peek()) {
         .KwImport => {
             if (statementType != .top_level) {
