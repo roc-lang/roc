@@ -349,7 +349,7 @@ pub const Store = struct {
         return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_element_alignment.toByteUnits()))));
     }
 
-    fn targetUsize(_: *const Self) target.TargetUsize {
+    pub fn targetUsize(_: *const Self) target.TargetUsize {
         return target.TargetUsize.native;
     }
 
@@ -394,11 +394,13 @@ pub const Store = struct {
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
             .closure => {
-                // Closure layout: header + capture data  
+                // Closure layout: header + aligned capture data
                 const header_size = @sizeOf(layout_.Closure);
                 const captures_layout = self.getLayout(layout.data.closure.captures_layout_idx);
+                const captures_alignment = captures_layout.alignment(self.targetUsize());
+                const aligned_captures_offset = std.mem.alignForward(u32, header_size, @intCast(captures_alignment.toByteUnits()));
                 const captures_size = self.layoutSize(captures_layout);
-                return header_size + captures_size;
+                return aligned_captures_offset + captures_size;
             },
         };
     }

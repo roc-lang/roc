@@ -334,7 +334,11 @@ pub const Interpreter = struct {
         const closure_stack_val = StackValue.fromPtr(closure_val.layout, &self.stack_memory.start[closure_val.offset]);
         const closure = closure_stack_val.asClosure();
         const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
-        const captures_ptr = @as([*]u8, @ptrCast(&self.stack_memory.start[closure_val.offset])) + @sizeOf(Closure);
+        // Calculate properly aligned offset for captures after Closure header
+        const closure_size = @sizeOf(Closure);
+        const captures_alignment = captures_layout.alignment(target_usize);
+        const aligned_captures_offset = std.mem.alignForward(usize, closure_size, @intCast(captures_alignment.toByteUnits()));
+        const captures_ptr = @as([*]u8, @ptrCast(&self.stack_memory.start[closure_val.offset])) + aligned_captures_offset;
 
         const pattern = self.env.store.getPattern(pattern_idx);
         const ident_idx = switch (pattern) {
@@ -1482,8 +1486,11 @@ pub const Interpreter = struct {
         //    StackValue that points to it and push that to the value_stack.
         const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
 
-        // The captures are stored immediately after the Closure header.
-        const captures_ptr = @as([*]u8, @ptrCast(closure_value.ptr.?)) + @sizeOf(Closure);
+        // Calculate properly aligned offset for captures after Closure header
+        const closure_size = @sizeOf(Closure);
+        const captures_alignment = captures_layout.alignment(target_usize);
+        const aligned_captures_offset = std.mem.alignForward(usize, closure_size, @intCast(captures_alignment.toByteUnits()));
+        const captures_ptr = @as([*]u8, @ptrCast(closure_value.ptr.?)) + aligned_captures_offset;
 
         // Push the captures record as an implicit first argument.
         // We need to manually create the Value and push it.
@@ -2616,7 +2623,11 @@ pub const Interpreter = struct {
         captures: *const std.ArrayList(ModuleEnv.Expr.Capture),
         captures_record_layout: Layout,
     ) EvalError!void {
-        const captures_ptr = @as([*]u8, @ptrCast(closure_ptr)) + @sizeOf(Closure);
+        // Calculate properly aligned offset for captures after Closure header
+        const closure_size = @sizeOf(Closure);
+        const captures_alignment = captures_record_layout.alignment(target_usize);
+        const aligned_captures_offset = std.mem.alignForward(usize, closure_size, @intCast(captures_alignment.toByteUnits()));
+        const captures_ptr = @as([*]u8, @ptrCast(closure_ptr)) + aligned_captures_offset;
 
         // Add bounds checking in debug mode
         if (DEBUG_ENABLED) {
@@ -2674,11 +2685,23 @@ pub const Interpreter = struct {
 
             const dest_ptr = captures_ptr + field_offset;
 
-            self.traceInfo("Copying capture '{s}' ({} bytes) from {} to {}", .{ capture_name, binding_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr) });
+            // Debug: Check what value is actually at the source address
+            if (src_layout.tag == .scalar and src_layout.data.scalar.tag == .int) {
+                const src_int_ptr: *const i128 = @ptrCast(@alignCast(src_ptr));
+                self.traceInfo("Copying capture '{s}' ({} bytes) from {} to {} [SOURCE VALUE: {}]", .{ capture_name, binding_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr), src_int_ptr.* });
+            } else {
+                self.traceInfo("Copying capture '{s}' ({} bytes) from {} to {}", .{ capture_name, binding_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr) });
+            }
 
             const src_value = StackValue.fromPtr(src_layout, src_ptr);
             const dest_value = StackValue.fromPtr(src_layout, dest_ptr);
             src_value.copyWithoutRefcount(dest_value, self.layout_cache);
+            
+            // Debug: Verify the value was copied correctly
+            if (src_layout.tag == .scalar and src_layout.data.scalar.tag == .int) {
+                const dest_int_ptr: *const i128 = @ptrCast(@alignCast(dest_ptr));
+                self.traceInfo("After copy, destination contains: {}", .{dest_int_ptr.*});
+            }
         }
     }
 
@@ -2699,7 +2722,11 @@ pub const Interpreter = struct {
                 const outer_closure_ptr = &self.stack_memory.start[outer_closure_val.offset];
                 const outer_closure: *const Closure = @ptrCast(@alignCast(outer_closure_ptr));
                 const outer_captures_layout = self.layout_cache.getLayout(outer_closure.captures_layout_idx);
-                const outer_captures_ptr = @as([*]u8, @ptrCast(outer_closure_ptr)) + @sizeOf(Closure);
+                // Calculate properly aligned offset for captures after Closure header
+                const closure_size = @sizeOf(Closure);
+                const outer_captures_alignment = outer_captures_layout.alignment(target_usize);
+                const aligned_captures_offset = std.mem.alignForward(usize, closure_size, @intCast(outer_captures_alignment.toByteUnits()));
+                const outer_captures_ptr = @as([*]u8, @ptrCast(outer_closure_ptr)) + aligned_captures_offset;
                 const capture_name_text = self.env.getIdentText(capture.name);
 
                 const record_data = self.layout_cache.getRecordData(outer_captures_layout.data.record.idx);
@@ -2722,11 +2749,23 @@ pub const Interpreter = struct {
                         const src_ptr = outer_captures_ptr + src_field_offset;
                         const dest_ptr = captures_ptr + dest_field_offset;
 
-                        self.traceInfo("Copying capture-of-capture '{s}' ({} bytes) from {} to {}", .{ capture_name_text, capture_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr) });
+                        // Debug: Check what value is actually at the source address  
+                        if (capture_layout.tag == .scalar and capture_layout.data.scalar.tag == .int) {
+                            const src_int_ptr: *const i128 = @ptrCast(@alignCast(src_ptr));
+                            self.traceInfo("Copying capture-of-capture '{s}' ({} bytes) from {} to {} [SOURCE VALUE: {}]", .{ capture_name_text, capture_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr), src_int_ptr.* });
+                        } else {
+                            self.traceInfo("Copying capture-of-capture '{s}' ({} bytes) from {} to {}", .{ capture_name_text, capture_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr) });
+                        }
 
                         const src_value = StackValue.fromPtr(capture_layout, src_ptr);
                         const dest_value = StackValue.fromPtr(capture_layout, dest_ptr);
                         src_value.copyWithoutRefcount(dest_value, self.layout_cache);
+                        
+                        // Debug: Verify the value was copied correctly
+                        if (capture_layout.tag == .scalar and capture_layout.data.scalar.tag == .int) {
+                            const dest_int_ptr: *const i128 = @ptrCast(@alignCast(dest_ptr));
+                            self.traceInfo("After copy, destination contains: {}", .{dest_int_ptr.*});
+                        }
                         return true;
                     }
                 }

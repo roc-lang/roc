@@ -43,7 +43,8 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         return;
     }
 
-    const result_size = layout_cache.layoutSize(self.layout);
+    // For closures, use getTotalSize to include capture data; for others use layoutSize
+    const result_size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache) else layout_cache.layoutSize(self.layout);
     if (result_size == 0) {
         return;
     }
@@ -364,7 +365,8 @@ pub fn copyWithoutRefcount(self: StackValue, dest: StackValue, layout_cache: *La
     std.debug.assert(self.is_initialized);
     std.debug.assert(dest.ptr != null);
 
-    const size = layout_cache.layoutSize(self.layout);
+    // For closures, use getTotalSize to include capture data; for others use layoutSize
+    const size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache) else layout_cache.layoutSize(self.layout);
     if (size == 0) return;
 
     if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
@@ -412,8 +414,11 @@ pub fn getTotalSize(self: StackValue, layout_cache: *LayoutStore) u32 {
     if (self.layout.tag == .closure and self.ptr != null) {
         const closure = self.asClosure();
         const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
+        const captures_alignment = captures_layout.alignment(layout_cache.targetUsize());
+        const header_size = @sizeOf(Closure);
+        const aligned_captures_offset = std.mem.alignForward(u32, header_size, @intCast(captures_alignment.toByteUnits()));
         const captures_size = layout_cache.layoutSize(captures_layout);
-        return @sizeOf(Closure) + captures_size;
+        return aligned_captures_offset + captures_size;
     } else {
         return layout_cache.layoutSize(self.layout);
     }

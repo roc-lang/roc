@@ -375,7 +375,7 @@ test "lambdas with unary minus" {
 
 test "lambdas closures" {
     try runExpectInt("(|a| |b| a * b)(5)(10)", 50, .trace);
-    try runExpectInt("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
+    try runExpectInt("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .trace);
     try runExpectInt("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
     try runExpectInt("(|y| (|x| (|z| x + y + z)(3))(2))(1)", 6, .no_trace);
 }
