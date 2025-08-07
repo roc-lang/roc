@@ -110,6 +110,8 @@ jobs:
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.os == 'windows-11-arm' && 'arm64' || 'x64' }}
 
       - name: Run Test Platforms (Windows)
         if: runner.os == 'Windows'
