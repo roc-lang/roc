@@ -1347,6 +1347,9 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    try self.nest();
+    defer self.unnest();
+
     const outer_start = self.pos;
     const patterns_scratch_top = self.store.scratchPatternTop();
     errdefer self.store.clearScratchPatternsFrom(patterns_scratch_top);
