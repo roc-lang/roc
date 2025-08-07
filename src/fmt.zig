@@ -2028,6 +2028,17 @@ const Formatter = struct {
 
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, f.right);
                     },
+                    .lambda => |l| {
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, l.body)) {
+                            return true;
+                        }
+
+                        if (fmt.nodesWillBeMultiline(AST.Pattern.Idx, fmt.ast.store.patternSlice(l.args))) {
+                            return true;
+                        }
+
+                        return false;
+                    },
                     else => return false,
                 }
             },
