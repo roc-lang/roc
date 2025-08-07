@@ -519,6 +519,13 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(ModuleEnv.Diagnostic{
+        .type_alias_but_needed_nominal = .{
+            .name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(ModuleEnv.Diagnostic{
         .malformed_type_annotation = .{
             .region = rand_region(),
         },

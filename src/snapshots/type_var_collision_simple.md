@@ -203,12 +203,12 @@ main! = |_| {
 		(p-assign @17.1-17.6 (ident "main!"))
 		(e-closure @17.9-23.2
 			(captures
-				(capture @12.1-12.10 (ident "identity2"))
-				(capture @5.1-5.2 (ident "b"))
+				(capture @9.1-9.9 (ident "identity"))
 				(capture @4.1-4.2 (ident "a"))
+				(capture @5.1-5.2 (ident "b"))
+				(capture @12.1-12.10 (ident "identity2"))
 				(capture @15.1-15.5 (ident "pair"))
-				(capture @6.1-6.2 (ident "c"))
-				(capture @9.1-9.9 (ident "identity")))
+				(capture @6.1-6.2 (ident "c")))
 			(e-lambda @17.9-23.2
 				(args
 					(p-underscore @17.10-17.11))

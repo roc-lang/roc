@@ -104,7 +104,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 45;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 46;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 33;
 /// Count of the statement nodes in the ModuleEnv
@@ -2531,6 +2531,11 @@ pub fn addDiagnostic(store: *NodeStore, reason: ModuleEnv.Diagnostic) std.mem.Al
             region = r.region;
             node.data_1 = @bitCast(r.name);
         },
+        .type_alias_but_needed_nominal => |r| {
+            node.tag = .diag_type_alias_but_needed_nominal;
+            region = r.region;
+            node.data_1 = @bitCast(r.name);
+        },
         .undeclared_type_var => |r| {
             node.tag = .diag_undeclared_type_var;
             region = r.region;
@@ -2788,6 +2793,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: ModuleEnv.Diagnostic.I
             },
         } },
         .diag_undeclared_type => return ModuleEnv.Diagnostic{ .undeclared_type = .{
+            .name = @bitCast(node.data_1),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_type_alias_but_needed_nominal => return ModuleEnv.Diagnostic{ .type_alias_but_needed_nominal = .{
             .name = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },

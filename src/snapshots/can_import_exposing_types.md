@@ -644,8 +644,8 @@ combineResults = |jsonResult, httpStatus|
 		(p-assign @13.1-13.14 (ident "handleRequest"))
 		(e-closure @13.17-19.2
 			(captures
-				(capture @17.13-17.18 (ident "error"))
-				(capture @16.12-16.17 (ident "value")))
+				(capture @16.12-16.17 (ident "value"))
+				(capture @17.13-17.18 (ident "error")))
 			(e-lambda @13.17-19.2
 				(args
 					(p-assign @13.18-13.21 (ident "req")))
@@ -669,7 +669,8 @@ combineResults = |jsonResult, httpStatus|
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-applied-tag @16.9-16.18)))
+											(p-nominal @16.9-16.18
+												(p-applied-tag @16.9-16.18))))
 									(value
 										(e-call @16.22-16.36
 											(e-lookup-external @16.22-16.29
@@ -680,7 +681,8 @@ combineResults = |jsonResult, httpStatus|
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-applied-tag @17.9-17.19)))
+											(p-nominal @17.9-17.19
+												(p-applied-tag @17.9-17.19))))
 									(value
 										(e-call @17.23-17.45
 											(e-lookup-external @17.23-17.38
@@ -765,7 +767,8 @@ combineResults = |jsonResult, httpStatus|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @44.9-44.19)))
+										(p-nominal @44.9-44.19
+											(p-applied-tag @44.9-44.19))))
 								(value
 									(e-call @44.23-44.50
 										(e-lookup-external @44.23-44.42
@@ -776,7 +779,8 @@ combineResults = |jsonResult, httpStatus|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @45.9-45.19)))
+										(p-nominal @45.9-45.19
+											(p-applied-tag @45.9-45.19))))
 								(value
 									(e-call @45.23-45.44
 										(e-runtime-error (tag "ident_not_in_scope"))
@@ -806,31 +810,35 @@ combineResults = |jsonResult, httpStatus|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @52.9-52.18)))
+										(p-nominal @52.9-52.18
+											(p-applied-tag @52.9-52.18))))
 								(value
-									(e-tag @52.22-52.24 (name "Ok")
-										(args
-											(e-record @52.25-52.73
-												(fields
-													(field (name "body")
-														(e-call @52.33-52.51
-															(e-lookup-external @52.33-52.44
-																(module-idx "0")
-																(target-node-idx "0"))
-															(e-lookup-local @52.45-52.50
-																(p-assign @52.12-52.17 (ident "value")))))
-													(field (name "status")
-														(e-lookup-local @52.61-52.71
-															(p-assign @50.31-50.41 (ident "httpStatus"))))))))))
+									(e-nominal @52.22-52.74 (nominal "Result")
+										(e-tag @52.22-52.74 (name "Ok")
+											(args
+												(e-record @52.25-52.73
+													(fields
+														(field (name "body")
+															(e-call @52.33-52.51
+																(e-lookup-external @52.33-52.44
+																	(module-idx "0")
+																	(target-node-idx "0"))
+																(e-lookup-local @52.45-52.50
+																	(p-assign @52.12-52.17 (ident "value")))))
+														(field (name "status")
+															(e-lookup-local @52.61-52.71
+																(p-assign @50.31-50.41 (ident "httpStatus")))))))))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @53.9-53.19)))
+										(p-nominal @53.9-53.19
+											(p-applied-tag @53.9-53.19))))
 								(value
-									(e-tag @53.23-53.26 (name "Err")
-										(args
-											(e-lookup-local @53.27-53.32
-												(p-assign @53.13-53.18 (ident "error"))))))))))))
+									(e-nominal @53.23-53.33 (nominal "Result")
+										(e-tag @53.23-53.33 (name "Err")
+											(args
+												(e-lookup-local @53.27-53.32
+													(p-assign @53.13-53.18 (ident "error")))))))))))))
 		(annotation @50.1-50.15
 			(declared-type
 				(ty-fn @49.18-49.73 (effectful false)
@@ -868,20 +876,20 @@ combineResults = |jsonResult, httpStatus|
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @9.1-9.10 (type "Str -> Error"))
+		(patt @9.1-9.10 (type "Str -> Result(Error, Error)"))
 		(patt @13.1-13.14 (type "Error -> Error"))
-		(patt @23.1-23.12 (type "Error, Error -> Error"))
+		(patt @23.1-23.12 (type "Error, List(Error) -> Result(List(item), Error)"))
 		(patt @38.1-38.13 (type "Error -> Error"))
 		(patt @42.1-42.15 (type "Error -> Str"))
-		(patt @50.1-50.15 (type "Error, Error -> Error")))
+		(patt @50.1-50.15 (type "Result(Error, Error), Error -> Result(Error, Error)")))
 	(type_decls
 		(alias @30.1-34.2 (type "ServerConfig")
 			(ty-header @30.1-30.13 (name "ServerConfig"))))
 	(expressions
-		(expr @9.13-9.38 (type "Str -> Error"))
+		(expr @9.13-9.38 (type "Str -> Result(Error, Error)"))
 		(expr @13.17-19.2 (type "Error -> Error"))
-		(expr @23.15-27.6 (type "Error, Error -> Error"))
+		(expr @23.15-27.6 (type "Error, List(Error) -> Result(List(item), Error)"))
 		(expr @38.16-38.48 (type "Error -> Error"))
 		(expr @42.18-46.6 (type "Error -> Str"))
-		(expr @50.18-54.6 (type "Error, Error -> Error"))))
+		(expr @50.18-54.6 (type "Result(Error, Error), Error -> Result(Error, Error)"))))
 ~~~

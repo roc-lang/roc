@@ -112,21 +112,23 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 (e-record @1.1-10.2
 	(fields
 		(field (name "someTag")
-			(e-tag @2.14-2.18 (name "Some")
+			(e-tag @2.14-2.22 (name "Some")
 				(args
 					(e-int @2.19-2.21 (value "42")))))
 		(field (name "noneTag")
 			(e-tag @3.14-3.18 (name "None")))
 		(field (name "okTag")
-			(e-tag @4.12-4.14 (name "Ok")
-				(args
-					(e-string @4.15-4.22
-						(e-literal @4.16-4.21 (string "hello"))))))
+			(e-nominal @4.12-4.23 (nominal "Result")
+				(e-tag @4.12-4.23 (name "Ok")
+					(args
+						(e-string @4.15-4.22
+							(e-literal @4.16-4.21 (string "hello")))))))
 		(field (name "errTag")
-			(e-tag @5.13-5.16 (name "Err")
-				(args
-					(e-string @5.17-5.23
-						(e-literal @5.18-5.22 (string "oops"))))))
+			(e-nominal @5.13-5.24 (nominal "Result")
+				(e-tag @5.13-5.24 (name "Err")
+					(args
+						(e-string @5.17-5.23
+							(e-literal @5.18-5.22 (string "oops")))))))
 		(field (name "addOne")
 			(e-lambda @6.13-6.22
 				(args
@@ -140,28 +142,29 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-int @7.20-7.21 (value "5"))))
 		(field (name "nested")
-			(e-tag @8.13-8.17 (name "Some")
+			(e-tag @8.13-8.31 (name "Some")
 				(args
-					(e-tag @8.18-8.20 (name "Ok")
-						(args
-							(e-tag @8.21-8.25 (name "Just")
-								(args
-									(e-int @8.26-8.28 (value "42")))))))))
+					(e-nominal @8.18-8.30 (nominal "Result")
+						(e-tag @8.18-8.30 (name "Ok")
+							(args
+								(e-tag @8.21-8.29 (name "Just")
+									(args
+										(e-int @8.26-8.28 (value "42"))))))))))
 		(field (name "tagList")
 			(e-list @9.14-9.47
 				(elems
-					(e-tag @9.15-9.19 (name "Some")
+					(e-tag @9.15-9.22 (name "Some")
 						(args
 							(e-int @9.20-9.21 (value "1"))))
-					(e-tag @9.24-9.28 (name "Some")
+					(e-tag @9.24-9.31 (name "Some")
 						(args
 							(e-int @9.29-9.30 (value "2"))))
 					(e-tag @9.33-9.37 (name "None"))
-					(e-tag @9.39-9.43 (name "Some")
+					(e-tag @9.39-9.46 (name "Some")
 						(args
 							(e-int @9.44-9.45 (value "3")))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-10.2 (type "{ someTag: [Some(Num(_size))]_others, noneTag: [None]_others2, okTag: [Ok(Str)]_others3, errTag: [Err(Str)]_others4, addOne: Num(_size2) -> Num(_size3), result: _field, nested: [Some([Ok([Just(Num(_size4))]_others5)]_others6)]_others7, tagList: List([Some(Num(_size5))][None]_others8) }"))
+(expr @1.1-10.2 (type "{ someTag: [Some(Num(_size))]_others, noneTag: [None]_others2, okTag: Result(Str, err), errTag: Result(ok, Str), addOne: Num(_size2) -> Num(_size3), result: _field, nested: [Some(Error)]_others3, tagList: List([Some(Num(_size4))][None]_others4) }"))
 ~~~

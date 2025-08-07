@@ -637,13 +637,13 @@ validateAuth = |creds| HttpAuth.validate(creds)
 	(defs
 		(patt @9.1-9.12 (type "Error -> Str"))
 		(patt @13.1-13.13 (type "Str, Str -> Error"))
-		(patt @17.1-17.12 (type "Error, Str -> Error"))
+		(patt @17.1-17.12 (type "Error, Str -> Result(Str, Error)"))
 		(patt @22.1-22.13 (type "Str -> Str"))
-		(patt @26.1-26.13 (type "Error -> Error")))
+		(patt @26.1-26.13 (type "Error -> Result(Error, Error)")))
 	(expressions
 		(expr @9.15-9.51 (type "Error -> Str"))
 		(expr @13.16-13.55 (type "Str, Str -> Error"))
-		(expr @17.15-18.60 (type "Error, Str -> Error"))
+		(expr @17.15-18.60 (type "Error, Str -> Result(Str, Error)"))
 		(expr @22.16-22.59 (type "Str -> Str"))
-		(expr @26.16-26.48 (type "Error -> Error"))))
+		(expr @26.16-26.48 (type "Error -> Result(Error, Error)"))))
 ~~~

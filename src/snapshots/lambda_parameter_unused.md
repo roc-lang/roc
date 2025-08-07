@@ -34,6 +34,10 @@ main! = |_| {
 # EXPECTED
 UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
 UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
+TYPE MISMATCH - lambda_parameter_unused.md:20:19:20:20
+TYPE MISMATCH - lambda_parameter_unused.md:21:24:21:25
+TYPE MISMATCH - lambda_parameter_unused.md:22:23:22:24
+TYPE MISMATCH - lambda_parameter_unused.md:23:22:23:23
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `unused` is not used anywhere in your code.
@@ -58,6 +62,62 @@ multiply = |_factor| _factor * 2
 ```
                      ^^^^^^^
 
+
+**TYPE MISMATCH**
+The first argument to this function is not what I expect:
+**lambda_parameter_unused.md:20:19:20:20:**
+```roc
+    result1 = add(5)
+```
+                  ^
+
+This argument is of type:
+    _Num(_size)_
+
+But the function needs the first argumument to be:
+    _U64_
+
+**TYPE MISMATCH**
+The first argument to this function is not what I expect:
+**lambda_parameter_unused.md:21:24:21:25:**
+```roc
+    result2 = multiply(3)
+```
+                       ^
+
+This argument is of type:
+    _Num(_size)_
+
+But the function needs the first argumument to be:
+    _U64_
+
+**TYPE MISMATCH**
+The first argument to this function is not what I expect:
+**lambda_parameter_unused.md:22:23:22:24:**
+```roc
+    result3 = process(7)
+```
+                      ^
+
+This argument is of type:
+    _Num(_size)_
+
+But the function needs the first argumument to be:
+    _U64_
+
+**TYPE MISMATCH**
+The first argument to this function is not what I expect:
+**lambda_parameter_unused.md:23:22:23:23:**
+```roc
+    result4 = double(4)
+```
+                     ^
+
+This argument is of type:
+    _Num(_size)_
+
+But the function needs the first argumument to be:
+    _U64_
 
 # TOKENS
 ~~~zig
@@ -257,10 +317,10 @@ main! = |_| {
 		(p-assign @19.1-19.6 (ident "main!"))
 		(e-closure @19.9-25.2
 			(captures
-				(capture @13.1-13.8 (ident "process"))
-				(capture @9.1-9.9 (ident "multiply"))
 				(capture @5.1-5.4 (ident "add"))
-				(capture @17.1-17.7 (ident "double")))
+				(capture @17.1-17.7 (ident "double"))
+				(capture @13.1-13.8 (ident "process"))
+				(capture @9.1-9.9 (ident "multiply")))
 			(e-lambda @19.9-25.2
 				(args
 					(p-underscore @19.10-19.11))

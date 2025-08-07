@@ -179,12 +179,30 @@ pub const Store = struct {
     // make builtin types //
 
     pub fn mkBool(self: *Self, gpa: Allocator, idents: *base.Ident.Store, ext_var: Var) std.mem.Allocator.Error!Content {
+        // TODO: Hardcode idents once in store, do no create fn anno
         const true_ident = try idents.insert(gpa, base.Ident.for_text("True"));
         const false_ident = try idents.insert(gpa, base.Ident.for_text("False"));
 
         const true_tag = try self.mkTag(true_ident, &[_]Var{});
         const false_tag = try self.mkTag(false_ident, &[_]Var{});
         return try self.mkTagUnion(&[_]Tag{ true_tag, false_tag }, ext_var);
+    }
+
+    pub fn mkResult(
+        self: *Self,
+        gpa: Allocator,
+        idents: *base.Ident.Store,
+        ok_var: Var,
+        err_var: Var,
+        ext_var: Var,
+    ) std.mem.Allocator.Error!Content {
+        // TODO: Hardcode idents once in store, do no create every fn call
+        const true_ident = try idents.insert(gpa, base.Ident.for_text("Ok"));
+        const false_ident = try idents.insert(gpa, base.Ident.for_text("Err"));
+
+        const ok_tag = try self.mkTag(true_ident, &[_]Var{ok_var});
+        const err_tag = try self.mkTag(false_ident, &[_]Var{err_var});
+        return try self.mkTagUnion(&[_]Tag{ ok_tag, err_tag }, ext_var);
     }
 
     // make content types //

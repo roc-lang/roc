@@ -34,6 +34,7 @@ UNUSED VARIABLE - type_var_underscore_conventions.md:9:22:9:26
 UNUSED VARIABLE - type_var_underscore_conventions.md:13:17:13:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
+TYPE MISMATCH - type_var_underscore_conventions.md:8:36:8:41
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.
@@ -94,6 +95,20 @@ main = |x| "done"
 ```
         ^
 
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_var_underscore_conventions.md:8:36:8:41:**
+```roc
+ending_underscore : List(elem_) -> elem_
+```
+                                   ^^^^^
+
+It is of type:
+    _elem__
+
+But you are trying to use it as:
+    _Str_
 
 # TOKENS
 ~~~zig
@@ -284,17 +299,17 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.11 (type "Error -> Str"))
-		(patt @9.1-9.18 (type "Error -> Str"))
-		(patt @13.1-13.13 (type "Error -> Str"))
-		(patt @17.1-17.13 (type "Error -> Str"))
-		(patt @20.1-20.12 (type "elem -> Error"))
+		(patt @5.1-5.11 (type "List(elem) -> Str"))
+		(patt @9.1-9.18 (type "List(elem_) -> Error"))
+		(patt @13.1-13.13 (type "List(bad_) -> Str"))
+		(patt @17.1-17.13 (type "List(_elem) -> Str"))
+		(patt @20.1-20.12 (type "elem -> List(elem)"))
 		(patt @22.1-22.5 (type "_arg -> Str")))
 	(expressions
-		(expr @5.14-5.25 (type "Error -> Str"))
-		(expr @9.21-9.37 (type "Error -> Str"))
-		(expr @13.16-13.27 (type "Error -> Str"))
-		(expr @17.16-17.27 (type "Error -> Str"))
-		(expr @20.15-20.22 (type "elem -> Error"))
+		(expr @5.14-5.25 (type "List(elem) -> Str"))
+		(expr @9.21-9.37 (type "List(elem_) -> Error"))
+		(expr @13.16-13.27 (type "List(bad_) -> Str"))
+		(expr @17.16-17.27 (type "List(_elem) -> Str"))
+		(expr @20.15-20.22 (type "elem -> List(elem)"))
 		(expr @22.8-22.18 (type "_arg -> Str"))))
 ~~~

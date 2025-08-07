@@ -3,6 +3,7 @@
 //! This module implements constraint-based type inference.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
@@ -23,10 +24,10 @@ pub const problem = @import("problem.zig");
 
 const ModuleEnv = compile.ModuleEnv;
 const testing = std.testing;
-const instantiate = types_mod.instantiate;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const Region = base.Region;
+const Instantiate = types_mod.instantiate.Instantiate;
 const Func = types_mod.Func;
 const Var = types_mod.Var;
 const Content = types_mod.Content;
@@ -36,7 +37,7 @@ const Self = @This();
 /// Key for the import cache: module index + expression index in that module
 const ImportCacheKey = struct {
     module_idx: ModuleEnv.Import.Idx,
-    expr_idx: ModuleEnv.Expr.Idx,
+    node_idx: ModuleEnv.Node.Idx,
 };
 
 /// Cache for imported types to avoid repeated copying
@@ -59,12 +60,12 @@ const ImportCache = std.HashMapUnmanaged(ImportCacheKey, Var, struct {
     pub fn hash(_: @This(), key: ImportCacheKey) u64 {
         var hasher = std.hash.Wyhash.init(0);
         hasher.update(std.mem.asBytes(&key.module_idx));
-        hasher.update(std.mem.asBytes(&key.expr_idx));
+        hasher.update(std.mem.asBytes(&key.node_idx));
         return hasher.final();
     }
 
     pub fn eql(_: @This(), a: ImportCacheKey, b: ImportCacheKey) bool {
-        return a.module_idx == b.module_idx and a.expr_idx == b.expr_idx;
+        return a.module_idx == b.module_idx and a.node_idx == b.node_idx;
     }
 }, 80);
 
@@ -79,8 +80,9 @@ snapshots: snapshot.Store,
 problems: problem.Store,
 unify_scratch: unifier.Scratch,
 occurs_scratch: occurs.Scratch,
-var_map: instantiate.VarSubstitution,
-rigid_var_map: instantiate.RigidVarSubstitution,
+var_map: std.AutoHashMap(Var, Var),
+annotation_rigid_var_subs: Instantiate.RigidToFlexSubs,
+anonymous_rigid_var_subs: Instantiate.RigidToFlexSubs,
 /// Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
@@ -104,8 +106,9 @@ pub fn init(
         .problems = try problem.Store.initCapacity(gpa, 64),
         .unify_scratch = try unifier.Scratch.init(gpa),
         .occurs_scratch = try occurs.Scratch.init(gpa),
-        .var_map = instantiate.VarSubstitution.init(gpa),
-        .rigid_var_map = instantiate.RigidVarSubstitution.init(gpa),
+        .var_map = std.AutoHashMap(Var, Var).init(gpa),
+        .annotation_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
+        .anonymous_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
         .import_cache = ImportCache{},
     };
 }
@@ -117,13 +120,14 @@ pub fn deinit(self: *Self) void {
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
     self.var_map.deinit();
-    self.rigid_var_map.deinit();
+    self.annotation_rigid_var_subs.deinit(self.gpa);
+    self.anonymous_rigid_var_subs.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
 }
 
 /// Assert that type vars and regions in sync
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
-    if (std.debug.runtime_safety) {
+    if (builtin.mode == .Debug) {
         const region_nodes = self.regions.len();
         const type_nodes = self.types.len();
         if (!(region_nodes == type_nodes)) {
@@ -162,27 +166,29 @@ const InstantiateRegionBehavior = union(enum) {
     use_last_var,
 };
 
+const RigidVarBehavior = union(enum) {
+    use_cached_rigid_vars,
+    rollback_rigid_vars,
+};
+
 /// Instantiate a variable
 fn instantiateVar(
     self: *Self,
     var_to_instantiate: Var,
+    rigid_to_flex_subs: *Instantiate.RigidToFlexSubs,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
     self.var_map.clearRetainingCapacity();
-    self.rigid_var_map.clearRetainingCapacity();
 
-    const instantiated_var = try instantiate.instantiateVar(
-        self.types,
-        var_to_instantiate,
-        &self.cir.idents,
-        &self.var_map,
-        .{ .generalize_rigid_to_flex = &self.rigid_var_map },
-    );
-
-    const root_instantiated_region = self.regions.get(@enumFromInt(@intFromEnum(var_to_instantiate))).*;
+    var instantiate = Instantiate.init(self.types, &self.cir.idents, &self.var_map);
+    var instantiate_ctx = Instantiate.Ctx{
+        .rigid_var_subs = rigid_to_flex_subs,
+    };
+    const instantiated_var = try instantiate.instantiateVar(var_to_instantiate, &instantiate_ctx);
 
     // If we had to insert any new type variables, ensure that we have
     // corresponding regions for them. This is essential for error reporting.
+    const root_instantiated_region = self.regions.get(@enumFromInt(@intFromEnum(var_to_instantiate))).*;
     if (self.var_map.count() > 0) {
         var iterator = self.var_map.iterator();
         while (iterator.next()) |x| {
@@ -212,7 +218,18 @@ fn instantiateVar(
     return instantiated_var;
 }
 
-// copy from import //
+/// Instantiate a variable
+fn instantiateVarAnon(
+    self: *Self,
+    var_to_instantiate: Var,
+    region_behavior: InstantiateRegionBehavior,
+) std.mem.Allocator.Error!Var {
+    self.anonymous_rigid_var_subs.items.clearRetainingCapacity();
+    const var_ = self.instantiateVar(var_to_instantiate, &self.anonymous_rigid_var_subs, region_behavior);
+    return var_;
+}
+
+// copy type from other module //
 
 /// Instantiate a variable, writing su
 fn copyVar(
@@ -289,7 +306,60 @@ fn freshFromContent(self: *Self, content: Content, new_region: Region) Allocator
     return var_;
 }
 
-// check types //
+// external types //
+
+const ExternalType = struct {
+    local_var: Var,
+    other_cir_node_idx: ModuleEnv.Node.Idx,
+    other_cir: *ModuleEnv,
+};
+
+/// Copy a variable from a different module into this module's types store.
+///
+/// IMPORTANT: The caller must instantiate this variable before unifing
+/// against it. This avoid poisoning the copied variable in the types store if
+/// unification fails.
+fn resolveVarFromExternal(
+    self: *Self,
+    module_idx: ModuleEnv.Import.Idx,
+    node_idx: u16,
+) std.mem.Allocator.Error!?ExternalType {
+    const module_idx_int = @intFromEnum(module_idx);
+    if (module_idx_int < self.other_modules.len) {
+        const other_module_cir = self.other_modules[module_idx_int];
+        const other_module_env = other_module_cir;
+
+        // The idx of the expression in the other module
+        const target_node_idx = @as(ModuleEnv.Node.Idx, @enumFromInt(node_idx));
+
+        // Check if we've already copied this import
+        const cache_key = ImportCacheKey{
+            .module_idx = module_idx,
+            .node_idx = target_node_idx,
+        };
+
+        const copied_var = if (self.import_cache.get(cache_key)) |cached_var|
+            // Reuse the previously copied type.
+            cached_var
+        else blk: {
+            // First time importing this type - copy it and cache the result
+            const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
+            const new_copy = try self.copyVar(imported_var, other_module_env);
+            try self.import_cache.put(self.gpa, cache_key, new_copy);
+            break :blk new_copy;
+        };
+
+        return .{
+            .local_var = copied_var,
+            .other_cir_node_idx = target_node_idx,
+            .other_cir = other_module_env,
+        };
+    } else {
+        return null;
+    }
+}
+
+// defs //
 
 /// Check the types for all defs
 pub fn checkDefs(self: *Self) std.mem.Allocator.Error!void {
@@ -311,34 +381,39 @@ fn checkDef(self: *Self, def_idx: ModuleEnv.Def.Idx) std.mem.Allocator.Error!voi
     const expr_var: Var = ModuleEnv.varFrom(def.expr);
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.expr));
 
+    // Check the pattern
     try self.checkPattern(def.pattern);
-    _ = try self.checkExpr(def.expr);
 
-    // Ensure the def has a type variable slot
+    // Get the defs var slot
     const def_var = ModuleEnv.varFrom(def_idx);
 
-    // Special handling for lambda expressions with annotations
+    // Handle if there's an annotation associated with this def
     if (def.annotation) |anno_idx| {
         const annotation = self.cir.store.getAnnotation(anno_idx);
         const expr = self.cir.store.getExpr(def.expr);
 
         const anno_var = ModuleEnv.varFrom(annotation.type_anno);
-        const anno_instantiated_var = try self.instantiateVar(anno_var, .use_last_var);
+        self.annotation_rigid_var_subs.items.clearRetainingCapacity();
+        try self.checkAnnotation(annotation.type_anno);
 
-        // If the expression is a lambda and we have an annotation, pass the expected type
         if (expr == .e_lambda) {
-            _ = try self.checkLambdaWithExpected(
+            // Special handling for lambda expressions with annotations
+            _ = try self.checkLambdaWithAnno(
                 def.expr,
                 expr_region,
                 expr.e_lambda,
-                anno_instantiated_var,
+                anno_var,
             );
         } else {
+            // Check the expr
+            _ = try self.checkExpr(def.expr);
+
             // Unify the expression with its annotation
-            // This is where numeric literal constraints should be checked against
-            // the annotation type (e.g., 500 against U8)
-            _ = try self.unify(expr_var, anno_instantiated_var);
+            _ = try self.unify(expr_var, anno_var);
         }
+    } else {
+        // Check the expr
+        _ = try self.checkExpr(def.expr);
     }
 
     // Unify the def with its expression
@@ -349,6 +424,205 @@ fn checkDef(self: *Self, def_idx: ModuleEnv.Def.Idx) std.mem.Allocator.Error!voi
     _ = try self.unify(ModuleEnv.varFrom(def.pattern), def_var);
 }
 
+// annotations //
+
+/// Check the types for the provided pattern
+pub fn checkAnnotation(self: *Self, anno_idx: ModuleEnv.TypeAnno.Idx) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const anno = self.cir.store.getTypeAnno(anno_idx);
+    const anno_var = ModuleEnv.varFrom(anno_idx);
+    const anno_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(anno_idx));
+
+    switch (anno) {
+        .ty_lookup_external => |a| {
+            const resolved_external = try self.resolveVarFromExternal(a.module_idx, a.target_node_idx) orelse {
+                // If we could not copy the type, set error and continue
+                try self.types.setVarContent(ModuleEnv.varFrom(anno_idx), .err);
+                return;
+            };
+
+            self.annotation_rigid_var_subs.items.clearRetainingCapacity();
+            const instantatied_var = try self.instantiateVar(
+                resolved_external.local_var,
+                &self.annotation_rigid_var_subs,
+                .{ .explicit = anno_region },
+            );
+            try self.types.setVarRedirect(anno_var, instantatied_var);
+        },
+        .apply => |a| {
+            // For apply annotation, the root anno's var is intitally set to be
+            // a redirect to backing type declaration.
+            try self.checkApplyAnno(anno_var, anno_region, a.args);
+        },
+        .apply_external => |a| {
+            const resolved_external = try self.resolveVarFromExternal(a.module_idx, a.target_node_idx) orelse {
+                // If we could not copy the type, set error and continue
+                try self.types.setVarContent(ModuleEnv.varFrom(anno_idx), .err);
+                return;
+            };
+
+            try self.checkApplyAnno(resolved_external.local_var, anno_region, a.args);
+        },
+        .tag_union => |tag_union| {
+            const args_anno_slice = self.cir.store.sliceTypeAnnos(tag_union.tags);
+            for (args_anno_slice) |arg_anno_idx| {
+                try self.checkAnnotation(arg_anno_idx);
+            }
+        },
+        .tuple => |tuple| {
+            const args_anno_slice = self.cir.store.sliceTypeAnnos(tuple.elems);
+            for (args_anno_slice) |arg_anno_idx| {
+                try self.checkAnnotation(arg_anno_idx);
+            }
+        },
+        .record => |rec| {
+            const recs_anno_slice = self.cir.store.sliceAnnoRecordFields(rec.fields);
+            for (recs_anno_slice) |rec_anno_idx| {
+                const rec_field = self.cir.store.getAnnoRecordField(rec_anno_idx);
+                try self.checkAnnotation(rec_field.ty);
+            }
+        },
+        .@"fn" => |func| {
+            const args_anno_slice = self.cir.store.sliceTypeAnnos(func.args);
+            for (args_anno_slice) |arg_anno_idx| {
+                try self.checkAnnotation(arg_anno_idx);
+            }
+            try self.checkAnnotation(func.ret);
+        },
+        .parens => |parens| {
+            try self.checkAnnotation(parens.anno);
+        },
+        else => {},
+    }
+}
+
+/// Check and process a type application annotation (e.g., Maybe(x), List(String)).
+///
+/// This function handles annotations where a polymorphic type is applied with specific
+/// type arguments. It creates a mapping from the type definition's rigid variables
+/// to the annotation's rigid variables, preserving rigid constraints.
+///
+/// Example:
+///   Type definition: Maybe(a) := [Some(a), None]
+///   Annotation:      Maybe(x)
+///   Result:          Creates mapping a[rigid] → x[rigid], then applies it
+///                    to get [Some(x[rigid]), None] where x stays rigid
+///
+/// Parameters:
+/// * `anno_var` - Variable for the annotation (initially points to the type definition)
+/// * `anno_region` - Source region for error reporting
+/// * `anno_args_span` - The type arguments in the annotation (e.g., 'x' in Maybe(x))
+pub fn checkApplyAnno(
+    self: *Self,
+    anno_var: Var,
+    anno_region: Region,
+    anno_args_span: ModuleEnv.TypeAnno.Span,
+) std.mem.Allocator.Error!void {
+    // Clear any previous rigid variable mappings
+    self.annotation_rigid_var_subs.items.clearRetainingCapacity();
+
+    // Get the base type definition that this annotation references
+    const type_base = self.types.resolveVar(anno_var).desc.content;
+
+    const anno_args = self.cir.store.sliceTypeAnnos(anno_args_span);
+
+    switch (type_base) {
+        .alias => |alias| {
+            const base_arg_vars = self.types.sliceAliasArgs(alias);
+            try self.buildRigidVarMapping(alias.ident.ident_idx, base_arg_vars, anno_args, anno_var);
+        },
+        .structure => |flat_type| switch (flat_type) {
+            .nominal_type => |nominal| {
+                const base_arg_vars = self.types.sliceNominalArgs(nominal);
+                try self.buildRigidVarMapping(nominal.ident.ident_idx, base_arg_vars, anno_args, anno_var);
+            },
+            else => {
+                // Do we need to handle cases like `List` or `Box` here? They
+                // have args, but it depends how they're added to scope in
+                // canonicalize. If they're added as aliases, then we don't, but
+                // if when we lookup `List` in scope, for example, we use the
+                // primitive directly, then we do
+
+            },
+        },
+        else => {
+            // Non-parameterized types don't need rigid variable mapping
+        },
+    }
+
+    // Apply the rigid variable substitution to the type definition
+    // This converts the base type (e.g., Maybe(a)) to use the annotation's
+    // rigid variables (e.g., Maybe(x)) while preserving rigidity
+    const instantiated_var = try self.instantiateVar(
+        anno_var,
+        &self.annotation_rigid_var_subs,
+        .{ .explicit = anno_region },
+    );
+
+    // Redirect the annotation variable to point to the substituted type
+    try self.types.setVarRedirect(anno_var, instantiated_var);
+}
+
+/// Build the mapping from base type rigid variables to annotation rigid variables
+///
+/// For each parameter in the base type definition, if it's a rigid variable,
+/// map it to the corresponding argument in the annotation.
+///
+/// Example: Maybe(a) + annotation args [x] → mapping["a"] = x[rigid]
+fn buildRigidVarMapping(
+    self: *Self,
+    base_name: Ident.Idx,
+    base_arg_vars: []const types_mod.Var,
+    anno_args: []const ModuleEnv.TypeAnno.Idx,
+    anno_var: types_mod.Var,
+) std.mem.Allocator.Error!void {
+    // Ensure we have the same number of parameters and arguments
+    if (base_arg_vars.len != anno_args.len) {
+        _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+            .type_name = base_name,
+            .anno_var = anno_var,
+            .num_expected_args = @intCast(base_arg_vars.len),
+            .num_actual_args = @intCast(anno_args.len),
+        } });
+        // Base type parameter is in error state - propagate error
+        try self.types.setVarContent(anno_var, .err);
+        return;
+    }
+
+    for (base_arg_vars, anno_args) |base_arg_var, anno_arg_idx| {
+        const base_arg_resolved = self.types.resolveVar(base_arg_var).desc.content;
+
+        switch (base_arg_resolved) {
+            .rigid_var => |ident| {
+                // Found a rigid variable in the base type - map it to the annotation argument
+                const ident_text = self.cir.idents.getText(ident);
+
+                const anno_arg_var = ModuleEnv.varFrom(anno_arg_idx);
+                const anno_arg_var_inst = try self.instantiateVar(anno_arg_var, &self.annotation_rigid_var_subs, .use_last_var);
+
+                try self.annotation_rigid_var_subs.append(self.gpa, .{
+                    .ident = ident_text,
+                    .var_ = anno_arg_var_inst,
+                });
+            },
+            .err => {
+                // Base type parameter is in error state - propagate error
+                try self.types.setVarContent(anno_var, .err);
+                return;
+            },
+            else => {
+                // Base type parameter is not a rigid variable (unexpected)
+                // This should only happen for rigid variables in well-formed type definitions
+                std.debug.assert(base_arg_resolved != .flex_var);
+            },
+        }
+    }
+}
+
+// pattern //
+
 /// Check the types for the provided pattern
 pub fn checkPattern(self: *Self, pattern_idx: ModuleEnv.Pattern.Idx) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
@@ -357,73 +631,31 @@ pub fn checkPattern(self: *Self, pattern_idx: ModuleEnv.Pattern.Idx) std.mem.All
     const pattern = self.cir.store.getPattern(pattern_idx);
     const pattern_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx));
     switch (pattern) {
-        .nominal => |nominal| {
-            // We are unifying against a nominal type. The way this works is:
-            // 1. First, get the `NominalType` out of the types store
-            // 2. Then, instantiate it's backing var
-            // 3. Next, unify that instantiated var against the CIR backing var
-            // 4. If successful, instantiate the root nominal var, then unify it
-            //    against the root pattern var. (the root pattern var should be flex)
-            //
-            // We have to do all this instantiating to avoid propagating `.err`
-            // types across the module in the event of failure
-
-            const pattern_var = ModuleEnv.varFrom(pattern_idx);
-            const pattern_backing_var = ModuleEnv.varFrom(nominal.backing_pattern);
-
-            // First, get the qualified variable and check if it's a nominal type
-            const nominal_var = ModuleEnv.varFrom(nominal.nominal_type_decl);
-            const nominal_content = self.types.resolveVar(nominal_var).desc.content;
-
-            // Handle cases where the nominal type is malformed or in an error state
-            const nominal_type = switch (nominal_content) {
-                .structure => |structure| switch (structure) {
-                    .nominal_type => |nt| nt,
-                    else => {
-                        // Nominal type is not actually a nominal type - set pattern to error and continue
-                        try self.types.setVarContent(pattern_var, .err);
-                        return;
-                    },
-                },
-                else => {
-                    // Nominal type is in an error state - set pattern to error and continue
-                    try self.types.setVarContent(pattern_var, .err);
-                    return;
-                },
+        .nominal => |p| {
+            const real_nominal_var = ModuleEnv.varFrom(p.nominal_type_decl);
+            const pattern_backing_var = ModuleEnv.varFrom(p.backing_pattern);
+            try self.checkNominal(
+                ModuleEnv.varFrom(pattern_idx),
+                pattern_region,
+                pattern_backing_var,
+                p.backing_type,
+                real_nominal_var,
+            );
+        },
+        .nominal_external => |p| {
+            const resolved_external = try self.resolveVarFromExternal(p.module_idx, p.target_node_idx) orelse {
+                // If we could not copy the type, set error and continue
+                try self.types.setVarContent(ModuleEnv.varFrom(pattern_idx), .err);
+                return;
             };
-
-            // Then, instantiate the nominal types backing var, for unification
-            const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
-            const instantiated_backing_var = try self.instantiateVar(nominal_backing_var, .{ .explicit = pattern_region });
-
-            // Then, unify the nominal type's backing var against the CIR backing var
-            const result = try self.unify(instantiated_backing_var, pattern_backing_var);
-
-            // Handle the result
-            switch (result) {
-                .ok => {
-                    // Then, instantiate the nominal type
-                    const instantiated_qualified_var = try self.instantiateVar(nominal_var, .{ .explicit = pattern_region });
-
-                    // Unify - this should always succeed pattern_var should be flex var
-                    _ = try self.unify(pattern_var, instantiated_qualified_var);
-                },
-                .problem => |problem_idx| {
-                    // Depending on the type of the backing variable, set the type
-                    // mismatch detail so the user gets a better error message
-                    switch (nominal.backing_type) {
-                        .tag => {
-                            self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
-                        },
-                        else => {
-                            // TODO: Add special-case problems for other nominal types
-                        },
-                    }
-
-                    // Then, set the root pattern to be an err
-                    try self.types.setVarContent(pattern_var, .err);
-                },
-            }
+            const pattern_backing_var = ModuleEnv.varFrom(p.backing_pattern);
+            try self.checkNominal(
+                ModuleEnv.varFrom(pattern_idx),
+                pattern_region,
+                pattern_backing_var,
+                p.backing_type,
+                resolved_external.local_var,
+            );
         },
         .int_literal => |_| {
             // Integer literal patterns have their type constraints (bits_needed, sign_needed)
@@ -433,9 +665,33 @@ pub fn checkPattern(self: *Self, pattern_idx: ModuleEnv.Pattern.Idx) std.mem.All
             // will be checked and produce NumberDoesNotFit or NegativeUnsignedInt errors
             // if there's a mismatch.
         },
+        .as => |p| {
+            try self.checkPattern(p.pattern);
+        },
+        .applied_tag => |p| {
+            const args_slice = self.cir.store.slicePatterns(p.args);
+            for (args_slice) |pat_idx| {
+                try self.checkPattern(pat_idx);
+            }
+        },
+        .tuple => |p| {
+            const args_slice = self.cir.store.slicePatterns(p.patterns);
+            for (args_slice) |pat_idx| {
+                try self.checkPattern(pat_idx);
+            }
+        },
+        .record_destructure => |p| {
+            const destructs_slice = self.cir.store.sliceRecordDestructs(p.destructs);
+            for (destructs_slice) |destruct_idx| {
+                const destruct = self.cir.store.getRecordDestruct(destruct_idx);
+                try self.checkPattern(destruct.kind.toPatternIdx());
+            }
+        },
         else => {},
     }
 }
+
+// expr //
 
 /// Check the types for an exprexpression. Returns whether evaluating the expr might perform side effects.
 pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Error!bool {
@@ -485,12 +741,12 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                 const other_module_env = other_module_cir;
 
                 // The idx of the expression in the other module
-                const target_expr_idx = @as(ModuleEnv.Expr.Idx, @enumFromInt(e.target_node_idx));
+                const target_node_idx = @as(ModuleEnv.Node.Idx, @enumFromInt(e.target_node_idx));
 
                 // Check if we've already copied this import
                 const cache_key = ImportCacheKey{
                     .module_idx = e.module_idx,
-                    .expr_idx = target_expr_idx,
+                    .node_idx = target_node_idx,
                 };
 
                 const copied_var = if (self.import_cache.get(cache_key)) |cached_var|
@@ -498,12 +754,12 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                     cached_var
                 else blk: {
                     // First time importing this type - copy it and cache the result
-                    const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
+                    const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
                     const new_copy = try self.copyVar(imported_var, other_module_env);
                     try self.import_cache.put(self.gpa, cache_key, new_copy);
                     break :blk new_copy;
                 };
-                const instantiated_copy = try self.instantiateVar(copied_var, .use_last_var);
+                const instantiated_copy = try self.instantiateVarAnon(copied_var, .use_last_var);
 
                 // Unify our expression with the copied type
                 const result = try self.unify(expr_var, instantiated_copy);
@@ -574,6 +830,8 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
             // First expression is the function being called; the rest are args.
             const func_expr_idx = all_exprs[0];
             does_fx = try self.checkExpr(func_expr_idx) or does_fx; // func_expr could be effectful, e.g. `(mk_fn!())(arg)`
+
+            // Then, check all the arguments
             const call_args = all_exprs[1..];
             for (call_args) |arg_expr_idx| {
                 // Each arg could also be effectful, e.g. `fn(mk_arg!(), mk_arg!())`
@@ -586,48 +844,55 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                 const func_expr_region = self.cir.store.getRegionAt(ModuleEnv.nodeIdxFrom(func_expr_idx));
 
                 const call_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-                const func_var = @as(Var, @enumFromInt(@intFromEnum(func_expr_idx)));
-                const resolved_func = self.types.resolveVar(func_var);
+                const call_func_var = @as(Var, @enumFromInt(@intFromEnum(func_expr_idx)));
+                const resolved_func = self.types.resolveVar(call_func_var);
 
                 // Check if this is an annotated function that needs instantiation
                 // We only instantiate if the function actually contains type variables
-                var current_func_var = func_var;
+                var cur_call_func_var = call_func_var;
                 var current_content = resolved_func.desc.content;
 
                 content_switch: switch (current_content) {
                     .structure => |flat_type| switch (flat_type) {
                         .fn_effectful => |_| {
                             does_fx = true;
-                            if (self.types.needsInstantiation(current_func_var)) {
-                                const instantiated_var = try self.instantiateVar(current_func_var, .{ .explicit = expr_region });
-                                const resolved_inst = self.types.resolveVar(instantiated_var);
-                                std.debug.assert(resolved_inst.desc.content == .structure);
-                                std.debug.assert(resolved_inst.desc.content.structure == .fn_effectful);
-                                const inst_func = resolved_inst.desc.content.structure.fn_effectful;
-                                try self.unifyCallWithFunc(call_var, inst_func, call_args, func_var, expr_region);
+                            if (self.types.needsInstantiation(cur_call_func_var)) {
+                                const expected_func_var = try self.instantiateVarAnon(cur_call_func_var, .{ .explicit = expr_region });
+                                const resolved_expected_func = self.types.resolveVar(expected_func_var);
+
+                                std.debug.assert(resolved_expected_func.desc.content == .structure);
+                                std.debug.assert(resolved_expected_func.desc.content.structure == .fn_effectful);
+                                const expected_func = resolved_expected_func.desc.content.structure.fn_effectful;
+
+                                try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region);
+
                                 return does_fx;
                             }
                         },
                         .fn_pure => |_| {
-                            if (self.types.needsInstantiation(current_func_var)) {
-                                const instantiated_var = try self.instantiateVar(current_func_var, .{ .explicit = expr_region });
-                                const resolved_inst = self.types.resolveVar(instantiated_var);
-                                std.debug.assert(resolved_inst.desc.content == .structure);
-                                std.debug.assert(resolved_inst.desc.content.structure == .fn_pure);
-                                const inst_func = resolved_inst.desc.content.structure.fn_pure;
-                                try self.unifyCallWithFunc(call_var, inst_func, call_args, func_var, func_expr_region);
+                            if (self.types.needsInstantiation(cur_call_func_var)) {
+                                const expected_func_var = try self.instantiateVarAnon(cur_call_func_var, .{ .explicit = expr_region });
+                                const resolved_expected_func = self.types.resolveVar(expected_func_var);
+
+                                std.debug.assert(resolved_expected_func.desc.content == .structure);
+                                std.debug.assert(resolved_expected_func.desc.content.structure == .fn_pure);
+                                const expected_func = resolved_expected_func.desc.content.structure.fn_pure;
+
+                                try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, func_expr_region);
                                 return does_fx;
                             }
                         },
                         .fn_unbound => |_| {
                             // Create TypeWriter for converting types to strings
-                            if (self.types.needsInstantiation(current_func_var)) {
-                                const instantiated_var = try self.instantiateVar(current_func_var, .{ .explicit = expr_region });
-                                const resolved_inst = self.types.resolveVar(instantiated_var);
-                                std.debug.assert(resolved_inst.desc.content == .structure);
-                                std.debug.assert(resolved_inst.desc.content.structure == .fn_unbound);
-                                const inst_func = resolved_inst.desc.content.structure.fn_unbound;
-                                try self.unifyCallWithFunc(call_var, inst_func, call_args, func_var, expr_region);
+                            if (self.types.needsInstantiation(cur_call_func_var)) {
+                                const expected_func_var = try self.instantiateVarAnon(cur_call_func_var, .{ .explicit = expr_region });
+                                const resolved_expected_func = self.types.resolveVar(expected_func_var);
+
+                                std.debug.assert(resolved_expected_func.desc.content == .structure);
+                                std.debug.assert(resolved_expected_func.desc.content.structure == .fn_unbound);
+                                const expected_func = resolved_expected_func.desc.content.structure.fn_unbound;
+
+                                try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region);
                                 return does_fx;
                             }
                         },
@@ -639,7 +904,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                         // Resolve the alias, then continue on to the appropriate branch.
                         // (It might be another alias, or we might be done and ready to proceed.)
                         const backing_var = self.types.getAliasBackingVar(alias);
-                        current_func_var = backing_var;
+                        cur_call_func_var = backing_var;
                         current_content = self.types.resolveVar(backing_var).desc.content;
                         continue :content_switch current_content;
                     },
@@ -660,7 +925,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                 // try to look up its region in CIR?
                 const func_content = try self.types.mkFuncUnbound(arg_vars, call_var);
                 const expected_func_var = try self.freshFromContent(func_content, expr_region);
-                _ = try self.unify(expected_func_var, current_func_var);
+                _ = try self.unify(expected_func_var, cur_call_func_var);
             }
         },
         .e_record => |e| {
@@ -712,77 +977,32 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
         },
         .e_empty_record => |_| {},
         .e_tag => |_| {},
-        .e_nominal => |nominal| {
-            // We are unifying against a nominal type. The way this works is:
-            // 1. First, get the `NominalType` out of the types store
-            // 2. Then, instantiate it's backing var
-            // 3. Next, unify that instantiated var against the CIR backing var
-            // 4. If successful, instantiate the root nominal var, then unify it
-            //    against the root expr var. (the root expr var should be flex)
-            //
-            // We have to do all this instantiating to avoid propagating `.err`
-            // types across the module in the event of failure
+        .e_nominal => |e| {
+            const real_nominal_var = ModuleEnv.varFrom(e.nominal_type_decl);
+            const expr_backing_var = ModuleEnv.varFrom(e.backing_expr);
 
-            const expr_var = ModuleEnv.varFrom(expr_idx);
-            const expr_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
-
-            // First, get the qualified variable and check if it's a nominal type
-            const nominal_var = ModuleEnv.varFrom(nominal.nominal_type_decl);
-            const nominal_content = self.types.resolveVar(nominal_var).desc.content;
-
-            // Handle cases where the nominal type is malformed or in an error state
-            const nominal_type = switch (nominal_content) {
-                .structure => |structure| switch (structure) {
-                    .nominal_type => |nt| nt,
-                    else => {
-                        // Nominal type is not actually a nominal type - set expr to error and continue
-                        try self.types.setVarContent(expr_var, .err);
-                        return false;
-                    },
-                },
-                else => {
-                    // Nominal type is in an error state - set expr to error and continue
-                    try self.types.setVarContent(expr_var, .err);
-                    return false;
-                },
-            };
-
-            // Then, instantiate the nominal types backing var, for unification
-            const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
-            const instantiated_backing_var = try self.instantiateVar(nominal_backing_var, .{ .explicit = expr_region });
-
-            // Then, unify the nominal type's backing var against the CIR backing var
-            const result = try self.unify(instantiated_backing_var, expr_backing_var);
-
-            // Handle the result
-            switch (result) {
-                .ok => {
-                    // Then, instantiate the nominal type
-                    const instantiated_qualified_var = try self.instantiateVar(nominal_var, .{ .explicit = expr_region });
-
-                    // Unify - this should always succeed expr_var should be flex var
-                    _ = try self.unify(expr_var, instantiated_qualified_var);
-                },
-                .problem => |problem_idx| {
-                    // Depending on the type of the backing variable, set the type
-                    // mismatch detail so the user gets a better error message
-                    switch (nominal.backing_type) {
-                        .tag => {
-                            self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
-                        },
-                        else => {
-                            // TODO: Add special-case problems for other nominal types
-                        },
-                    }
-
-                    // Then, set the root expr to be an err
-                    try self.types.setVarContent(expr_var, .err);
-                },
-            }
+            try self.checkNominal(
+                ModuleEnv.varFrom(expr_idx),
+                expr_region,
+                expr_backing_var,
+                e.backing_type,
+                real_nominal_var,
+            );
         },
-        .e_nominal_external => |_| {
-            // TODO: Copy type from other module, then do same logic as regular
-            // nominal type checking
+        .e_nominal_external => |e| {
+            const resolved_external = try self.resolveVarFromExternal(e.module_idx, e.target_node_idx) orelse {
+                // If we could not copy the type, set error and continue
+                try self.types.setVarContent(ModuleEnv.varFrom(expr_idx), .err);
+                return false;
+            };
+            const expr_backing_var = ModuleEnv.varFrom(e.backing_expr);
+            try self.checkNominal(
+                ModuleEnv.varFrom(expr_idx),
+                expr_region,
+                expr_backing_var,
+                e.backing_type,
+                resolved_external.local_var,
+            );
         },
         .e_zero_argument_tag => |_| {},
         .e_binop => |binop| {
@@ -841,7 +1061,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
             _ = try self.unify(closure_var, lambda_var);
         },
         .e_lambda => |lambda| {
-            does_fx = try self.checkLambdaWithExpected(expr_idx, expr_region, lambda, null);
+            does_fx = try self.checkLambdaWithAnno(expr_idx, expr_region, lambda, null);
         },
         .e_tuple => |tuple| {
             // Check tuple elements
@@ -902,24 +1122,24 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
 
                                 if (node_idx_opt) |node_idx| {
                                     // Found the method!
-                                    const target_expr_idx = @as(ModuleEnv.Expr.Idx, @enumFromInt(node_idx));
+                                    const target_node_idx = @as(ModuleEnv.Node.Idx, @enumFromInt(node_idx));
 
                                     // Check if we've already copied this import
                                     const cache_key = ImportCacheKey{
                                         .module_idx = origin_module_idx orelse @enumFromInt(0), // Current module
-                                        .expr_idx = target_expr_idx,
+                                        .node_idx = target_node_idx,
                                     };
 
                                     const method_var = if (self.import_cache.get(cache_key)) |cached_var|
                                         cached_var
                                     else blk: {
                                         // Copy the method's type from the origin module to our type store
-                                        const source_var = @as(Var, @enumFromInt(@intFromEnum(target_expr_idx)));
+                                        const source_var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
                                         const new_copy = try self.copyVar(source_var, module);
                                         try self.import_cache.put(self.gpa, cache_key, new_copy);
                                         break :blk new_copy;
                                     };
-                                    const method_instantiated = try self.instantiateVar(method_var, .use_last_var);
+                                    const method_instantiated = try self.instantiateVarAnon(method_var, .use_last_var);
 
                                     // Check all arguments
                                     var i: u32 = 0;
@@ -1051,101 +1271,138 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
     return does_fx;
 }
 
+// func //
+
 /// Helper function to unify a call expression with a function type
-fn unifyCallWithFunc(
+fn unifyFunctionCall(
     self: *Self,
-    call_var: Var,
-    func: types_mod.Func,
-    call_args: []const ModuleEnv.Expr.Idx,
-    original_func_var: Var,
+    call_var: Var, // var for the entire call expr
+    call_func_var: Var, // var for the fn itself
+    call_args: []const ModuleEnv.Expr.Idx, // var for the fn args
+    expected_func: types_mod.Func, // the expected type of the fn (must be instantiated)
     region: Region,
 ) std.mem.Allocator.Error!void {
     // Unify instantiated argument types with actual arguments
-    const inst_args = self.types.sliceVars(func.args);
-    const arg_vars: []Var = @constCast(@ptrCast(@alignCast(call_args)));
+    const expected_args = self.types.sliceVars(expected_func.args);
+    const actual_arg_vars: []Var = @constCast(@ptrCast(@alignCast(call_args)));
 
     // Only unify arguments if counts match - otherwise let the normal
     // unification process handle the arity mismatch error
-    if (inst_args.len == arg_vars.len) {
-        for (inst_args, arg_vars) |inst_arg, actual_arg| {
-            _ = try self.unify(actual_arg, inst_arg);
+    if (expected_args.len == actual_arg_vars.len) {
+        var arg_index: u32 = 0;
+        for (expected_args, actual_arg_vars) |expected_arg, actual_arg| {
+            const arg_result = try self.unify(expected_arg, actual_arg);
+            self.setDetailIfTypeMismatch(arg_result, .{
+                .incompatible_fn_call_arg = .{
+                    .fn_name = null, // Get function name for better error message
+                    .arg_var = actual_arg,
+                    .incompatible_arg_index = arg_index,
+                    .num_args = @intCast(actual_arg_vars.len),
+                },
+            });
+            arg_index += 1;
         }
         // The call's type is the instantiated return type
-        _ = try self.unify(call_var, func.ret);
+        _ = try self.unify(call_var, expected_func.ret);
     } else {
         // Fall back to normal unification to get proper error message
         // Use the original func_var to avoid issues with instantiated variables in error reporting
-        const func_content = try self.types.mkFuncUnbound(arg_vars, call_var);
+        const func_content = try self.types.mkFuncUnbound(actual_arg_vars, call_var);
         const expected_func_var = try self.freshFromContent(func_content, region);
-        _ = try self.unify(expected_func_var, original_func_var);
+        _ = try self.unify(call_func_var, expected_func_var);
     }
 }
 
-/// Check a lambda expression with an optional expected type
-fn checkLambdaWithExpected(
+/// Performs bidirectional type checking for lambda expressions with optional type annotations.
+///
+/// ## Constraint Ordering
+///
+/// Parameter constraints from annotations are applied BEFORE checking the lambda body.
+/// This ensures rigid variables are properly constrained during body analysis, causing
+/// type errors to surface at their actual source rather than during later unification.
+///
+/// **Why this ordering matters:**
+/// ```
+/// Pair(a) := [Pair(a, a)]
+/// mkPairInvalid : a, b -> Pair(a)
+/// mkPairInvalid = |x, y| Pair.Pair(x, y)
+///
+/// // Step 1: Constrain parameters from annotation first
+/// x := a[rigid], y := b[rigid]
+///
+/// // Step 2: Check body - error detected immediately at constructor
+/// Pair.Pair(x, y)  // ERROR: Pair requires same type, but x=a[rigid], y=b[rigid]
+/// ```
+///
+/// Without upfront constraints, the error would only surface during final annotation
+/// validation, making it harder to locate the actual problem in the source code.
+fn checkLambdaWithAnno(
     self: *Self,
     expr_idx: ModuleEnv.Expr.Idx,
     _: Region,
     lambda: std.meta.FieldType(ModuleEnv.Expr, .e_lambda),
-    expected_type: ?Var,
+    anno_type: ?Var,
 ) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // The function is effectful iff the body of the lambda is effectful
-    const is_effectful = try self.checkExpr(lambda.body);
-
     // Get the actual lambda arguments
     const arg_patterns = self.cir.store.slicePatterns(lambda.args);
-
-    // Create type variables for each argument pattern
-    // Since pattern idx map 1-to-1 to variables, we can get cast the slice to vars
     const arg_vars: []Var = @ptrCast(@alignCast(arg_patterns));
 
-    // The root expr will be the entire functions var
-    const fn_var = ModuleEnv.varFrom(expr_idx);
+    var mb_expected_var: ?Var = null;
+    var mb_expected_func: ?types_mod.Func = null;
 
-    // The return type var is just the body's var
+    // STEP 1: Apply annotation constraints to parameters FIRST
+    if (anno_type) |anno_var| {
+        mb_expected_var = anno_var;
+
+        const expected_resolved = self.types.resolveVar(anno_var);
+        mb_expected_func = switch (expected_resolved.desc.content) {
+            .structure => |s| switch (s) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| func,
+                else => null,
+            },
+            else => null,
+        };
+
+        if (mb_expected_func) |func| {
+            const expected_args = self.types.sliceVars(func.args);
+            if (expected_args.len == arg_patterns.len) {
+                // Constrain parameters with annotation types
+                for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
+                    // Check the pattern
+                    try self.checkPattern(pattern_idx);
+
+                    // Unify against the annotation
+                    const pattern_var = ModuleEnv.varFrom(pattern_idx);
+                    _ = try self.unify(pattern_var, expected_arg);
+                }
+            }
+        }
+    }
+
+    // STEP 2: NOW check the body (with constrained parameters)
+    const is_effectful = try self.checkExpr(lambda.body);
+
+    // STEP 3: Build the function type
+    const fn_var = ModuleEnv.varFrom(expr_idx);
     const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
 
     if (is_effectful) {
-        // If the function body does effects, create an effectful function.
         _ = try self.types.setVarContent(fn_var, try self.types.mkFuncEffectful(arg_vars, return_var));
     } else {
-        // If the function body does *not* do effects, create an unbound function.
-        // (Pure would mean it's *annotated* as pure, but we aren't claiming that here!)
         _ = try self.types.setVarContent(fn_var, try self.types.mkFuncUnbound(arg_vars, return_var));
     }
 
-    // If the expected type is a function, then check the args and return type
-    // directly. This results in better error messages!
-    //
-    // If the expected type is *not* a function, unify like normal (which will be a mismatch)
-    if (expected_type) |expected_var| {
-        const expected_content = self.types.resolveVar(expected_var).desc.content;
-        if (expected_content == .structure) {
-            switch (expected_content.structure) {
-                .fn_pure, .fn_effectful, .fn_unbound => |expected_func| {
-                    const expected_args = self.types.sliceVars(expected_func.args);
-                    // Unify each pattern with its expected type before checking body
-                    if (expected_args.len == arg_patterns.len) {
-                        for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
-                            const pattern_var = ModuleEnv.varFrom(pattern_idx);
-                            _ = try self.unify(pattern_var, expected_arg);
-                        }
+    // STEP 4: Validate the function body against the annotation return type
+    if (mb_expected_func) |func| {
+        _ = try self.unify(return_var, func.ret);
+    }
 
-                        _ = try self.unify(return_var, expected_func.ret);
-                    } else {
-                        _ = try self.unify(fn_var, expected_var);
-                    }
-                },
-                else => {
-                    _ = try self.unify(fn_var, expected_var);
-                },
-            }
-        } else {
-            _ = try self.unify(fn_var, expected_var);
-        }
+    // STEP 5: Validate then entire function against the annotation
+    if (mb_expected_var) |expected_var| {
+        _ = try self.unify(fn_var, expected_var);
     }
 
     return is_effectful;
@@ -1183,11 +1440,11 @@ fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region
         .lt, .gt, .le, .ge, .eq, .ne => {
             // Comparison operators always return Bool
             const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-            const fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+            const fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             _ = try self.unify(expr_var, fresh_bool);
         },
         .@"and" => {
-            const lhs_fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+            const lhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -1196,7 +1453,7 @@ fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region
             } });
 
             if (lhs_result.isOk()) {
-                const rhs_fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+                const rhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
                 const rhs_result = try self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
@@ -1206,7 +1463,7 @@ fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region
             }
         },
         .@"or" => {
-            const lhs_fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+            const lhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -1215,7 +1472,7 @@ fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region
             } });
 
             if (lhs_result.isOk()) {
-                const rhs_fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+                const rhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
                 const rhs_result = try self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
@@ -1265,13 +1522,126 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Reg
     const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
 
     // Create a fresh boolean variable for the operation
-    const bool_var = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+    const bool_var = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
 
     // Unify operand and result with the boolean type
     _ = try self.unify(operand_var, bool_var);
     _ = try self.unify(result_var, bool_var);
 
     return does_fx;
+}
+
+// nominal //
+
+// nominal //
+
+/// Check that a nominal type constructor usage is valid and perform type inference.
+///
+/// This function validates that a user's constructor application (like `Maybe.Just(1)`)
+/// is compatible with the nominal type's definition and infers the concrete types.
+///
+/// Example:
+///   Maybe a := [Just(a), None]
+///   val = Maybe.Just(1)  // This call validates Just(1) against Maybe's definition
+///
+/// Parameters:
+/// * `node_var` - Variable representing the entire expression (initially a placeholder).
+///                This will be redirected to the final inferred type.
+/// * `node_region` - Source region of the entire expression for error reporting
+/// * `node_backing_var` - Variable for the constructor application's internal type (e.g., `Just(1)`)
+/// * `node_backing_type` - Kind of nominal backing (tag, record, tuple, or val)
+/// * `real_nominal_var` - Variable of the nominal type declaration (e.g., `Maybe a`)
+fn checkNominal(
+    self: *Self,
+    node_var: Var,
+    node_region: Region,
+    node_backing_var: Var,
+    node_backing_type: ModuleEnv.Expr.NominalBackingType,
+    real_nominal_var: Var,
+) Allocator.Error!void {
+    // Clear the rigid variable substitution map to ensure fresh instantiation
+    self.anonymous_rigid_var_subs.items.clearRetainingCapacity();
+
+    // Algorithm overview:
+    // 1. Validate that the nominal type exists and is well-formed
+    // 2. Instantiate the nominal type's backing type with fresh variables
+    // 3. Unify the instantiated backing type against the user's constructor
+    // 4. If unification succeeds, instantiate the nominal type and assign to node_var
+    // 5. If unification fails, report appropriate error and mark node_var as error
+    //
+    // The key insight is using a shared rigid variable map so that type parameters
+    // in the backing type and nominal type get the same substitutions.
+
+    // Step 1: Extract and validate the nominal type
+    const nominal_content = self.types.resolveVar(real_nominal_var).desc.content;
+    const nominal_type = switch (nominal_content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nt| nt,
+            else => {
+                // The supposed nominal type is actually some other structure
+                try self.types.setVarContent(node_var, .err);
+                return;
+            },
+        },
+        else => {
+            // The nominal type is in an error state or unresolved
+            try self.types.setVarContent(node_var, .err);
+            return;
+        },
+    };
+
+    // Step 2: Instantiate the nominal type's backing type
+    // This converts rigid type variables (like `a[r]`) to fresh flexible variables
+    // that can be unified. The backing type defines the structure (e.g., [Just(a), None])
+    const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
+    const instantiated_backing_var = try self.instantiateVar(
+        nominal_backing_var,
+        &self.anonymous_rigid_var_subs,
+        .{ .explicit = node_region },
+    );
+
+    // TODO: If we can, unify arguments directly to get better error messages
+    // Unifying by the whole thing works, but doesn't have great error messages
+    // always
+
+    // Step 3: Unify the instantiated backing type with the user's constructor
+    // This checks if `Just(1)` is compatible with `[Just(a), None]` and if so,
+    // unifies `a` with the type of `1` (e.g., Num(_size))
+    const result = try self.unify(instantiated_backing_var, node_backing_var);
+
+    // Step 4: Handle the unification result
+    switch (result) {
+        .ok => {
+            // Unification succeeded - the constructor is valid for this nominal type
+            // Now instantiate the full nominal type using the same rigid variable map
+            // so it gets the same type substitutions as the backing type
+            const instantiated_qualified_var = try self.instantiateVar(
+                real_nominal_var,
+                &self.anonymous_rigid_var_subs,
+                .{ .explicit = node_region },
+            );
+
+            // Assign the inferred concrete type to the expression variable
+            // After this, `node_var` will resolve to something like `Maybe(Num(_size))`
+            try self.types.setVarRedirect(node_var, instantiated_qualified_var);
+        },
+        .problem => |problem_idx| {
+            // Unification failed - the constructor is incompatible with the nominal type
+            // Set a specific error message based on the backing type kind
+            switch (node_backing_type) {
+                .tag => {
+                    // Constructor doesn't exist or has wrong arity/types
+                    self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
+                },
+                else => {
+                    // TODO: Add specific error messages for records, tuples, etc.
+                },
+            }
+
+            // Mark the entire expression as having a type error
+            try self.types.setVarContent(node_var, .err);
+        },
+    }
 }
 
 // if-else //
@@ -1298,7 +1668,7 @@ fn checkIfElseExpr(
     // Check the condition of the 1st branch
     var does_fx = try self.checkExpr(first_branch.cond);
     const first_cond_var: Var = @enumFromInt(@intFromEnum(first_branch.cond));
-    const bool_var = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+    const bool_var = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
     const first_cond_result = try self.unify(bool_var, first_cond_var);
     self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
 
@@ -1318,7 +1688,7 @@ fn checkIfElseExpr(
         // Check the branches condition
         does_fx = try self.checkExpr(branch.cond) or does_fx;
         const cond_var: Var = @enumFromInt(@intFromEnum(branch.cond));
-        const branch_bool_var = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+        const branch_bool_var = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
         const cond_result = try self.unify(branch_bool_var, cond_var);
         self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
 
@@ -1341,7 +1711,7 @@ fn checkIfElseExpr(
                 does_fx = try self.checkExpr(remaining_branch.cond) or does_fx;
                 const remaining_cond_var: Var = @enumFromInt(@intFromEnum(remaining_branch.cond));
 
-                const fresh_bool = try self.instantiateVar(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+                const fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
                 const remaining_cond_result = try self.unify(fresh_bool, remaining_cond_var);
                 self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
 

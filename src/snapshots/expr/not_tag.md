@@ -43,7 +43,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-unary-not @1.1-1.8
-	(e-tag @1.3-1.4 (name "C")
+	(e-tag @1.3-1.7 (name "C")
 		(args
 			(e-int @1.5-1.6 (value "2")))))
 ~~~

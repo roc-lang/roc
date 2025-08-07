@@ -247,6 +247,9 @@ pub fn init(env: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHash
     // Add built-in types to the type scope
     // TODO: These should ultimately come from the platform/builtin files rather than being hardcoded
     try result.addBuiltinTypeBool(env);
+    try result.addBuiltinTypeList(env);
+    try result.addBuiltinTypeBox(env);
+    try result.addBuiltinTypeResult(env);
 
     _ = try result.addBuiltinType(env, "Str", .{ .structure = .str });
     _ = try result.addBuiltinType(env, "U8", .{ .structure = .{ .num = types.Num.int_u8 } });
@@ -262,14 +265,13 @@ pub fn init(env: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHash
     _ = try result.addBuiltinType(env, "F32", .{ .structure = .{ .num = types.Num.frac_f32 } });
     _ = try result.addBuiltinType(env, "F64", .{ .structure = .{ .num = types.Num.frac_f64 } });
     _ = try result.addBuiltinType(env, "Dec", .{ .structure = .{ .num = types.Num.frac_dec } });
-    _ = try result.addBuiltinType(env, "Result", .{ .flex_var = null });
-    _ = try result.addBuiltinType(env, "List", .{ .flex_var = null });
     _ = try result.addBuiltinType(env, "Dict", .{ .flex_var = null });
     _ = try result.addBuiltinType(env, "Set", .{ .flex_var = null });
-    _ = try result.addBuiltinType(env, "Box", .{ .flex_var = null });
 
     return result;
 }
+
+// builtins //
 
 fn addBuiltin(self: *Self, ir: *ModuleEnv, ident_text: []const u8, idx: Pattern.Idx) std.mem.Allocator.Error!void {
     const gpa = ir.gpa;
@@ -299,7 +301,7 @@ fn addBuiltinType(self: *Self, ir: *ModuleEnv, type_name: []const u8, content: t
 
     // Create the type declaration statement
     const type_decl_stmt = Statement{
-        .s_alias_decl = .{ .header = header_idx, .anno = anno_idx },
+        .s_nominal_decl = .{ .header = header_idx, .anno = anno_idx },
     };
 
     const type_decl_idx = try ir.addStatementAndTypeVar(
@@ -315,8 +317,167 @@ fn addBuiltinType(self: *Self, ir: *ModuleEnv, type_name: []const u8, content: t
     return type_decl_idx;
 }
 
-/// Stub builtin types. Currently sets every type to be a nominal type
-/// This should be replaced by real builtins eventually
+/// Creates `Result(ok, err) := [Ok(ok), Err(err)]`
+fn addBuiltinTypeResult(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void {
+    const gpa = ir.gpa;
+    const type_ident = try ir.idents.insert(gpa, base.Ident.for_text("Result"));
+    const a_ident = try ir.idents.insert(gpa, base.Ident.for_text("ok"));
+    const b_ident = try ir.idents.insert(gpa, base.Ident.for_text("err"));
+
+    // Create a type header for the built-in type
+    const header_idx = try ir.addTypeHeaderAndTypeVar(.{
+        .name = type_ident,
+        .args = .{ .span = .{ .start = 0, .len = 0 } }, // No type parameters for built-ins
+    }, .{ .flex_var = null }, Region.zero());
+    const header_node_idx = ModuleEnv.nodeIdxFrom(header_idx);
+
+    // Create a type annotation that refers to itself (built-in types are primitive)
+    const ext_var = try ir.addTypeSlotAndTypeVar(
+        header_node_idx,
+        Content{ .structure = .empty_tag_union },
+        Region.zero(),
+        TypeVar,
+    );
+    const a_rigid = try ir.addTypeSlotAndTypeVar(
+        header_node_idx,
+        .{ .rigid_var = a_ident },
+        Region.zero(),
+        TypeVar,
+    );
+    const b_rigid = try ir.addTypeSlotAndTypeVar(
+        header_node_idx,
+        .{ .rigid_var = b_ident },
+        Region.zero(),
+        TypeVar,
+    );
+    const anno_idx = try ir.addTypeAnnoAndTypeVar(.{ .ty = .{
+        .symbol = type_ident,
+    } }, try ir.types.mkResult(gpa, &ir.idents, a_rigid, b_rigid, ext_var), Region.zero());
+    const anno_var = ModuleEnv.castIdx(TypeAnno.Idx, TypeVar, anno_idx);
+
+    // Create the type declaration statement
+    const type_decl_stmt = Statement{
+        .s_nominal_decl = .{ .header = header_idx, .anno = anno_idx },
+    };
+
+    const type_decl_idx = try ir.addStatementAndTypeVar(
+        type_decl_stmt,
+        try ir.types.mkNominal(
+            types.TypeIdent{ .ident_idx = type_ident },
+            anno_var,
+            &.{ a_rigid, b_rigid },
+            try ir.idents.insert(gpa, base.Ident.for_text(ir.module_name)),
+        ),
+        Region.zero(),
+    );
+
+    // Add to scope without any error checking (built-ins are always valid)
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    try current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
+
+    try ir.redirectTypeTo(Pattern.Idx, BUILTIN_RESULT, ModuleEnv.varFrom(type_decl_idx));
+
+    // Add True and False to unqualified_nominal_tags
+    // TODO: in the future, we should have hardcoded constants for these.
+    try self.unqualified_nominal_tags.put(gpa, "Ok", type_decl_idx);
+    try self.unqualified_nominal_tags.put(gpa, "Err", type_decl_idx);
+}
+
+/// Creates `List(a) : <List Primitive>(a)`
+fn addBuiltinTypeList(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void {
+    const gpa = ir.gpa;
+    const type_ident = try ir.idents.insert(gpa, base.Ident.for_text("List"));
+    const elem_ident = try ir.idents.insert(gpa, base.Ident.for_text("item"));
+
+    // Create a type header for the built-in type
+    const header_idx = try ir.addTypeHeaderAndTypeVar(.{
+        .name = type_ident,
+        .args = .{ .span = .{ .start = 0, .len = 0 } }, // No type parameters for built-ins
+    }, .{ .flex_var = null }, Region.zero());
+    const header_node_idx = ModuleEnv.nodeIdxFrom(header_idx);
+
+    // Create a type annotation that refers to itself (built-in types are primitive)
+    const elem_var = try ir.addTypeSlotAndTypeVar(
+        header_node_idx,
+        Content{ .rigid_var = elem_ident },
+        Region.zero(),
+        TypeVar,
+    );
+    const anno_idx = try ir.addTypeAnnoAndTypeVar(.{ .ty = .{
+        .symbol = type_ident,
+    } }, .{ .structure = .{ .list = elem_var } }, Region.zero());
+    const anno_var = ModuleEnv.castIdx(TypeAnno.Idx, TypeVar, anno_idx);
+
+    // Create the type declaration statement
+    const type_decl_stmt = Statement{
+        .s_alias_decl = .{ .header = header_idx, .anno = anno_idx },
+    };
+
+    const type_decl_idx = try ir.addStatementAndTypeVar(
+        type_decl_stmt,
+        try ir.types.mkAlias(
+            types.TypeIdent{ .ident_idx = type_ident },
+            anno_var,
+            &.{elem_var},
+        ),
+        Region.zero(),
+    );
+
+    // Add to scope without any error checking (built-ins are always valid)
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    try current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
+
+    try ir.redirectTypeTo(Pattern.Idx, BUILTIN_LIST, ModuleEnv.varFrom(type_decl_idx));
+}
+
+/// Creates `Box(a) : <Box Primitive>(a)`
+fn addBuiltinTypeBox(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void {
+    const gpa = ir.gpa;
+    const type_ident = try ir.idents.insert(gpa, base.Ident.for_text("Box"));
+    const elem_ident = try ir.idents.insert(gpa, base.Ident.for_text("item"));
+
+    // Create a type header for the built-in type
+    const header_idx = try ir.addTypeHeaderAndTypeVar(.{
+        .name = type_ident,
+        .args = .{ .span = .{ .start = 0, .len = 0 } }, // No type parameters for built-ins
+    }, .{ .flex_var = null }, Region.zero());
+    const header_node_idx = ModuleEnv.nodeIdxFrom(header_idx);
+
+    // Create a type annotation that refers to itself (built-in types are primitive)
+    const elem_var = try ir.addTypeSlotAndTypeVar(
+        header_node_idx,
+        Content{ .rigid_var = elem_ident },
+        Region.zero(),
+        TypeVar,
+    );
+    const anno_idx = try ir.addTypeAnnoAndTypeVar(.{ .ty = .{
+        .symbol = type_ident,
+    } }, .{ .structure = .{ .box = elem_var } }, Region.zero());
+    const anno_var = ModuleEnv.castIdx(TypeAnno.Idx, TypeVar, anno_idx);
+
+    // Create the type declaration statement
+    const type_decl_stmt = Statement{
+        .s_alias_decl = .{ .header = header_idx, .anno = anno_idx },
+    };
+
+    const type_decl_idx = try ir.addStatementAndTypeVar(
+        type_decl_stmt,
+        try ir.types.mkAlias(
+            types.TypeIdent{ .ident_idx = type_ident },
+            anno_var,
+            &.{elem_var},
+        ),
+        Region.zero(),
+    );
+
+    // Add to scope without any error checking (built-ins are always valid)
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    try current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
+
+    try ir.redirectTypeTo(Pattern.Idx, BUILTIN_BOX, ModuleEnv.varFrom(type_decl_idx));
+}
+
+/// Creates `Bool := [True, False]`
 fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void {
     const gpa = ir.gpa;
     const type_ident = try ir.idents.insert(gpa, base.Ident.for_text("Bool"));
@@ -367,6 +528,8 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void 
     try self.unqualified_nominal_tags.put(gpa, "True", type_decl_idx);
     try self.unqualified_nominal_tags.put(gpa, "False", type_decl_idx);
 }
+
+// canonicalize //
 
 const Self = @This();
 
@@ -1628,12 +1791,14 @@ pub fn canonicalizeExpr(
     const expr = self.parse_ir.store.getExpr(ast_expr_idx);
     switch (expr) {
         .apply => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
             // Check if the function being applied is a tag
             const ast_fn = self.parse_ir.store.getExpr(e.@"fn");
             if (ast_fn == .tag) {
                 // This is a tag application, not a function call
                 const tag_expr = ast_fn.tag;
-                const can_expr = try self.canonicalizeTagExpr(tag_expr, e.args);
+                const can_expr = try self.canonicalizeTagExpr(tag_expr, e.args, region);
                 return can_expr;
             }
 
@@ -1659,8 +1824,6 @@ pub fn canonicalizeExpr(
 
             // Create span from scratch expressions
             const args_span = try self.env.store.exprSpanFrom(scratch_top);
-
-            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
             const expr_idx = try self.env.addExprAndTypeVar(ModuleEnv.Expr{
                 .e_call = .{
@@ -1736,9 +1899,9 @@ pub fn canonicalizeExpr(
                         try self.checkUsedUnderscoreVariable(ident, region);
 
                         // We found the ident in scope, lookup to reference the pattern
-                        const expr_idx = try self.env.addExprAndTypeVar(ModuleEnv.Expr{ .e_lookup_local = .{
+                        const expr_idx = try self.env.addExprAndTypeVarRedirect(ModuleEnv.Expr{ .e_lookup_local = .{
                             .pattern_idx = pattern_idx,
-                        } }, Content{ .flex_var = null }, region);
+                        } }, ModuleEnv.varFrom(pattern_idx), region);
 
                         const free_vars_start = self.scratch_free_vars.top();
                         try self.scratch_free_vars.append(self.env.gpa, pattern_idx);
@@ -2137,7 +2300,8 @@ pub fn canonicalizeExpr(
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
         },
         .tag => |e| {
-            return self.canonicalizeTagExpr(e, null);
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+            return self.canonicalizeTagExpr(e, null, region);
         },
         .string_part => |_| {
             const feature = try self.env.strings.insert(self.env.gpa, "canonicalize string_part expression");
@@ -2945,9 +3109,7 @@ pub fn canonicalizeExpr(
 }
 
 // Canonicalize a tag expr
-fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std.mem.Allocator.Error!?CanonicalizedExpr {
-    const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-
+fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, region: base.Region) std.mem.Allocator.Error!?CanonicalizedExpr {
     const tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse @panic("tag token is not an ident");
     const tag_name_text = self.parse_ir.env.idents.getText(tag_name);
 
@@ -2990,15 +3152,13 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
         // Check if this is an unqualified nominal tag (e.g. True or False are in scope unqualified by default)
         if (self.unqualified_nominal_tags.get(tag_name_text)) |nominal_type_decl| {
             // Get the type variable for the nominal type declaration (e.g., Bool type)
-            const nominal_type_var = ModuleEnv.castIdx(Statement.Idx, TypeVar, nominal_type_decl);
-            const resolved = self.env.types.resolveVar(nominal_type_var);
             const expr_idx = try self.env.addExprAndTypeVar(ModuleEnv.Expr{
                 .e_nominal = .{
                     .nominal_type_decl = nominal_type_decl,
                     .backing_expr = tag_expr_idx,
                     .backing_type = .tag,
                 },
-            }, resolved.desc.content, region);
+            }, .err, region);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
         }
 
@@ -3016,7 +3176,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
         const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
 
         // Lookup the type ident in scope
-        const nominal_type_decl = self.scopeLookupTypeDecl(type_tok_ident) orelse
+        const nominal_type_decl_stmt_idx = self.scopeLookupTypeDecl(type_tok_ident) orelse
             return CanonicalizedExpr{
                 .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
                     .name = type_tok_ident,
@@ -3024,21 +3184,43 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span) std
                 } }),
                 .free_vars = null,
             };
-        const nominal_type_var = ModuleEnv.castIdx(Statement.Idx, TypeVar, nominal_type_decl);
+        switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
+            .s_nominal_decl => {
+                const expr_idx = try self.env.addExprAndTypeVar(ModuleEnv.Expr{
+                    .e_nominal = .{
+                        .nominal_type_decl = nominal_type_decl_stmt_idx,
+                        .backing_expr = tag_expr_idx,
+                        .backing_type = .tag,
+                    },
+                }, .err, region);
 
-        const expr_idx = try self.env.addExprAndTypeVarRedirect(ModuleEnv.Expr{
-            .e_nominal = .{
-                .nominal_type_decl = nominal_type_decl,
-                .backing_expr = tag_expr_idx,
-                .backing_type = .tag,
+                const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+                return CanonicalizedExpr{
+                    .idx = expr_idx,
+                    .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null,
+                };
             },
-        }, nominal_type_var, region);
-
-        const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
-        return CanonicalizedExpr{
-            .idx = expr_idx,
-            .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null,
-        };
+            .s_alias_decl => {
+                return CanonicalizedExpr{
+                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
+                        .name = type_tok_ident,
+                        .region = type_tok_region,
+                    } }),
+                    .free_vars = null,
+                };
+            },
+            else => {
+                const feature = try self.env.strings.insert(self.env.gpa, "report an error resolved type decl in scope wasn't actually a type decl");
+                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = Region.zero(),
+                } });
+                return CanonicalizedExpr{
+                    .idx = malformed_idx,
+                    .free_vars = null,
+                };
+            },
+        }
     } else {
         // If this is a tag with more than 1 qualifier, then it is an imported
         // nominal type where the last qualifier is the type name, then the other
@@ -3577,22 +3759,39 @@ fn canonicalizePattern(
                 const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
 
                 // Lookup the type ident in scope
-                const nominal_type_decl = self.scopeLookupTypeDecl(type_tok_ident) orelse
+                const nominal_type_decl_stmt_idx = self.scopeLookupTypeDecl(type_tok_ident) orelse
                     return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .undeclared_type = .{
                         .name = type_tok_ident,
                         .region = type_tok_region,
                     } });
-                const nominal_type_var = ModuleEnv.castIdx(Statement.Idx, TypeVar, nominal_type_decl);
 
-                const pattern_idx = try self.env.addPatternAndTypeVarRedirect(ModuleEnv.Pattern{
-                    .nominal = .{
-                        .nominal_type_decl = nominal_type_decl,
-                        .backing_pattern = tag_pattern_idx,
-                        .backing_type = .tag,
+                switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
+                    .s_nominal_decl => {
+                        const nominal_type_var = ModuleEnv.castIdx(Statement.Idx, TypeVar, nominal_type_decl_stmt_idx);
+                        const pattern_idx = try self.env.addPatternAndTypeVarRedirect(ModuleEnv.Pattern{
+                            .nominal = .{
+                                .nominal_type_decl = nominal_type_decl_stmt_idx,
+                                .backing_pattern = tag_pattern_idx,
+                                .backing_type = .tag,
+                            },
+                        }, nominal_type_var, region);
+
+                        return pattern_idx;
                     },
-                }, nominal_type_var, region);
-
-                return pattern_idx;
+                    .s_alias_decl => {
+                        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
+                            .name = type_tok_ident,
+                            .region = type_tok_region,
+                        } });
+                    },
+                    else => {
+                        const feature = try self.env.strings.insert(self.env.gpa, "report an error resolved type decl in scope wasn't actually a type decl");
+                        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
+                            .feature = feature,
+                            .region = Region.zero(),
+                        } });
+                    },
+                }
             } else {
                 // If this is a tag with more than 1 qualifier, then it is an imported
                 // nominal type where the last qualifier is the type name, then the other
@@ -4733,10 +4932,7 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
 
 const CanonicalizedTypeAnnoBasicType = struct {
     anno_idx: TypeAnno.Idx,
-    mb_local_decl: ?union(enum) {
-        alias: @TypeOf(@as(ModuleEnv.Statement, undefined).s_alias_decl),
-        nominal: @TypeOf(@as(ModuleEnv.Statement, undefined).s_nominal_decl),
-    },
+    mb_local_decl_idx: ?Statement.Idx,
 };
 
 /// Handle basic type lookup (Bool, Str, Num, etc.)
@@ -4759,6 +4955,8 @@ fn canonicalizeTypeAnnoBasicType(
     if (qualifier_toks.len == 0) {
         // Unqualified type
 
+        // TODO: Check for List, Box, and Str here (since they are primitives)
+
         const type_decl_idx = self.scopeLookupTypeDecl(type_name_ident) orelse {
             // Type not found in scope - issue diagnostic
             try self.env.pushDiagnostic(Diagnostic{ .undeclared_type = .{
@@ -4767,25 +4965,25 @@ fn canonicalizeTypeAnnoBasicType(
             } });
             return .{ .anno_idx = try self.env.addTypeAnnoAndTypeVar(.{ .ty = .{
                 .symbol = type_name_ident,
-            } }, .err, region), .mb_local_decl = null };
+            } }, .err, region), .mb_local_decl_idx = null };
         };
 
         const type_decl = self.env.store.getStatement(type_decl_idx);
         switch (type_decl) {
-            .s_alias_decl => |decl| {
+            .s_alias_decl => |_| {
                 return .{
                     .anno_idx = try self.env.addTypeAnnoAndTypeVarRedirect(ModuleEnv.TypeAnno{ .ty = .{
                         .symbol = type_name_ident,
                     } }, ModuleEnv.varFrom(type_decl_idx), region),
-                    .mb_local_decl = .{ .alias = decl },
+                    .mb_local_decl_idx = type_decl_idx,
                 };
             },
-            .s_nominal_decl => |decl| {
+            .s_nominal_decl => |_| {
                 return .{
                     .anno_idx = try self.env.addTypeAnnoAndTypeVarRedirect(ModuleEnv.TypeAnno{ .ty = .{
                         .symbol = type_name_ident,
                     } }, ModuleEnv.varFrom(type_decl_idx), region),
-                    .mb_local_decl = .{ .nominal = decl },
+                    .mb_local_decl_idx = type_decl_idx,
                 };
             },
             else => {
@@ -4812,7 +5010,7 @@ fn canonicalizeTypeAnnoBasicType(
             return .{ .anno_idx = try self.env.pushMalformed(TypeAnno.Idx, ModuleEnv.Diagnostic{ .module_not_imported = .{
                 .module_name = module_alias,
                 .region = region,
-            } }), .mb_local_decl = null };
+            } }), .mb_local_decl_idx = null };
         };
         const module_name_text = self.env.idents.getText(module_name);
 
@@ -4821,7 +5019,7 @@ fn canonicalizeTypeAnnoBasicType(
             return .{ .anno_idx = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .module_not_imported = .{
                 .module_name = module_name,
                 .region = region,
-            } }), .mb_local_decl = null };
+            } }), .mb_local_decl_idx = null };
         };
 
         // Look up the target node index in the module's exposed_nodes
@@ -4841,7 +5039,7 @@ fn canonicalizeTypeAnnoBasicType(
                     .module_name = module_name,
                     .type_name = type_name_ident,
                     .region = type_name_region,
-                } }), .mb_local_decl = null };
+                } }), .mb_local_decl_idx = null };
             };
 
             const other_module_node_id = module_env.exposed_items.getNodeIndexById(self.env.gpa, @bitCast(target_ident)) orelse {
@@ -4850,7 +5048,7 @@ fn canonicalizeTypeAnnoBasicType(
                     .module_name = module_name,
                     .type_name = type_name_ident,
                     .region = type_name_region,
-                } }), .mb_local_decl = null };
+                } }), .mb_local_decl_idx = null };
             };
 
             // Successfully found the target node
@@ -4865,7 +5063,7 @@ fn canonicalizeTypeAnnoBasicType(
                 .module_idx = import_idx,
                 .target_node_idx = target_node_idx,
             } }, type_content, region),
-            .mb_local_decl = null,
+            .mb_local_decl_idx = null,
         };
     }
 }
@@ -4923,141 +5121,17 @@ fn canonicalizeTypeAnnoTypeApplication(
                 } }, .err, region);
             }
 
-            const local_decl = base_canonicalized.mb_local_decl orelse {
+            const local_decl_idx = base_canonicalized.mb_local_decl_idx orelse {
                 return try self.env.addTypeAnnoAndTypeVar(.{ .apply = .{
                     .symbol = ty.symbol,
                     .args = args_span,
                 } }, .err, region);
             };
 
-            const type_content = blk: {
-                switch (local_decl) {
-                    .alias => |d| {
-                        // Create a substitution map from the alias parameters to the applied arguments
-                        const decl_header = self.env.store.getTypeHeader(d.header);
-                        const decl_params = self.env.store.sliceTypeAnnos(decl_header.args);
-                        const applied_args = self.env.store.sliceTypeAnnos(args_span);
-
-                        // Verify arity matches
-                        if (decl_params.len != applied_args.len) {
-                            // TODO: Return malformed/diagnostic
-                            return try self.env.addTypeAnnoAndTypeVar(.{ .apply = .{
-                                .symbol = ty.symbol,
-                                .args = args_span,
-                            } }, .err, region);
-                        }
-
-                        // Setup instantiation
-                        var substitution = types.instantiate.VarSubstitution.init(self.env.gpa);
-                        defer substitution.deinit();
-
-                        // Create substitution map: original param vars -> applied arg vars
-                        var rigid_substitution = types.instantiate.RigidVarSubstitution.init(self.env.gpa);
-                        defer rigid_substitution.deinit();
-
-                        // Create a mapping from rigid vars in the type declaration
-                        // to arguments provided in this type annotation
-                        for (decl_params, applied_args) |decl_arg_anno_idx, arg_anno_idx| {
-                            const decl_anno = self.env.store.getTypeAnno(decl_arg_anno_idx);
-                            switch (decl_anno) {
-                                .ty_var => |decl_ty| {
-                                    const arg_var = ModuleEnv.varFrom(arg_anno_idx);
-                                    try rigid_substitution.put(self.env.idents.getText(decl_ty.name), arg_var);
-                                },
-                                // TODO(jared): Don't throw on underscore/malformed
-                                else => unreachable,
-                            }
-                        }
-
-                        // Instantiate the backing type with the substitution
-                        const decl_backing_var = ModuleEnv.varFrom(d.anno);
-                        const instantiated_decl_backing = try types.instantiate.instantiateVar(
-                            &self.env.types,
-                            decl_backing_var,
-                            &self.env.idents,
-                            &substitution,
-                            .{ .apply_rigid_substitution = &rigid_substitution },
-                        );
-
-                        // Ensure CIR slot exists for any instantiated vars
-                        for (0..(self.env.types.len() - self.env.store.nodes.len())) |_| {
-                            _ = try self.env.store.addTypeVarSlot(@enumFromInt(0), region);
-                        }
-
-                        // Create the type
-                        break :blk try self.env.types.mkAlias(
-                            .{ .ident_idx = ty.symbol },
-                            instantiated_decl_backing,
-                            @ptrCast(self.env.store.sliceTypeAnnos(args_span)),
-                        );
-                    },
-                    .nominal => |d| {
-                        // Create a substitution map from the alias parameters to the applied arguments
-                        const decl_header = self.env.store.getTypeHeader(d.header);
-                        const decl_params = self.env.store.sliceTypeAnnos(decl_header.args);
-                        const applied_args = self.env.store.sliceTypeAnnos(args_span);
-
-                        // Verify arity matches
-                        if (decl_params.len != applied_args.len) {
-                            // TODO: Return malformed/diagnostic
-                            return try self.env.addTypeAnnoAndTypeVar(.{ .apply = .{
-                                .symbol = ty.symbol,
-                                .args = args_span,
-                            } }, .err, region);
-                        }
-
-                        // Setup instantiation
-                        var substitution = types.instantiate.VarSubstitution.init(self.env.gpa);
-                        defer substitution.deinit();
-
-                        // Create substitution map: original param vars -> applied arg vars
-                        var rigid_substitution = types.instantiate.RigidVarSubstitution.init(self.env.gpa);
-                        defer rigid_substitution.deinit();
-
-                        // Create a mapping from rigid vars in the type declaration
-                        // to arguments provided in this type annotation
-                        for (decl_params, applied_args) |decl_arg_anno_idx, arg_anno_idx| {
-                            const decl_anno = self.env.store.getTypeAnno(decl_arg_anno_idx);
-                            switch (decl_anno) {
-                                .ty_var => |decl_ty| {
-                                    const arg_var = ModuleEnv.varFrom(arg_anno_idx);
-                                    try rigid_substitution.put(self.env.idents.getText(decl_ty.name), arg_var);
-                                },
-                                // TODO(jared): Don't throw on underscore/malformed
-                                else => unreachable,
-                            }
-                        }
-
-                        // Instantiate the backing type with the substitution
-                        const decl_backing_var = ModuleEnv.varFrom(d.anno);
-                        const instantiated_decl_backing = try types.instantiate.instantiateVar(
-                            &self.env.types,
-                            decl_backing_var,
-                            &self.env.idents,
-                            &substitution,
-                            .{ .apply_rigid_substitution = &rigid_substitution },
-                        );
-
-                        // Ensure CIR slot exists for any instantiated vars
-                        for (0..(self.env.types.len() - self.env.store.nodes.len())) |_| {
-                            _ = try self.env.store.addTypeVarSlot(@enumFromInt(0), region);
-                        }
-
-                        // Create the type
-                        break :blk try self.env.types.mkNominal(
-                            .{ .ident_idx = ty.symbol },
-                            instantiated_decl_backing,
-                            @ptrCast(self.env.store.sliceTypeAnnos(args_span)),
-                            try self.env.idents.insert(self.env.gpa, base.Ident.for_text(self.env.module_name)),
-                        );
-                    },
-                }
-            };
-
-            return try self.env.addTypeAnnoAndTypeVar(.{ .apply = .{
+            return try self.env.addTypeAnnoAndTypeVarRedirect(.{ .apply = .{
                 .symbol = ty.symbol,
                 .args = args_span,
-            } }, type_content, region);
+            } }, ModuleEnv.varFrom(local_decl_idx), region);
         },
         .ty_lookup_external => |tle| {
             if (type_anno_ctx.isTypeDeclAndHasUnderscore()) {
@@ -6732,11 +6806,11 @@ fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: TypeAnno.Idx, _: Typ
     // TODO: Remove signature field from Annotation
     const annotation = ModuleEnv.Annotation{
         .type_anno = type_anno_idx,
-        .signature = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar),
+        .signature = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .err, region, TypeVar),
     };
 
     // Add to NodeStore and return the index
-    const annotation_idx = try self.env.addAnnotationAndTypeVar(annotation, .{ .flex_var = null }, region);
+    const annotation_idx = try self.env.addAnnotationAndTypeVar(annotation, .err, region);
 
     return annotation_idx;
 }

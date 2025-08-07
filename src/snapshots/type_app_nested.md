@@ -127,9 +127,9 @@ main! = |_| processNested([])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.14 (type "Error -> Error"))
-		(patt @6.1-6.6 (type "_arg -> Error")))
+		(patt @4.1-4.14 (type "List(Result(ok, err)) -> List(Str)"))
+		(patt @6.1-6.6 (type "_arg -> List(Str)")))
 	(expressions
-		(expr @4.17-4.38 (type "Error -> Error"))
-		(expr @6.9-6.30 (type "_arg -> Error"))))
+		(expr @4.17-4.38 (type "List(Result(ok, err)) -> List(Str)"))
+		(expr @6.9-6.30 (type "_arg -> List(Str)"))))
 ~~~

@@ -33,6 +33,7 @@ UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
 UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
+TYPE MISMATCH - type_app_complex_nested.md:12:55:12:56
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Maybe_ is not declared in this scope.
@@ -100,6 +101,20 @@ deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
 ```
              ^^^^^
 
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_app_complex_nested.md:12:55:12:56:**
+```roc
+deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
+```
+                                                      ^
+
+It is of type:
+    _a_
+
+But you are trying to use it as:
+    _{}_
 
 # TOKENS
 ~~~zig
@@ -263,13 +278,15 @@ main! = |_| processComplex(Ok([Some(42), None]))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @7.9-7.22)))
+									(p-nominal @7.9-7.22
+										(p-applied-tag @7.9-7.22))))
 							(value
 								(e-empty_list @7.26-7.28)))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-applied-tag @8.9-8.15)))
+									(p-nominal @8.9-8.15
+										(p-applied-tag @8.9-8.15))))
 							(value
 								(e-empty_list @8.19-8.21)))))))
 		(annotation @5.1-5.15
@@ -315,14 +332,15 @@ main! = |_| processComplex(Ok([Some(42), None]))
 				(e-call @20.13-20.49
 					(e-lookup-local @20.13-20.27
 						(p-assign @5.1-5.15 (ident "processComplex")))
-					(e-tag @20.28-20.30 (name "Ok")
-						(args
-							(e-list @20.31-20.47
-								(elems
-									(e-tag @20.32-20.36 (name "Some")
-										(args
-											(e-int @20.37-20.39 (value "42"))))
-									(e-tag @20.42-20.46 (name "None"))))))))))
+					(e-nominal @20.28-20.48 (nominal "Result")
+						(e-tag @20.28-20.48 (name "Ok")
+							(args
+								(e-list @20.31-20.47
+									(elems
+										(e-tag @20.32-20.40 (name "Some")
+											(args
+												(e-int @20.37-20.39 (value "42"))))
+										(e-tag @20.42-20.46 (name "None")))))))))))
 	(s-alias-decl @18.1-18.64
 		(ty-header @18.1-18.18 (name "ComplexType")
 			(ty-args
@@ -341,17 +359,17 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.15 (type "Error -> Error"))
-		(patt @13.1-13.11 (type "Error -> {}"))
-		(patt @20.1-20.6 (type "_arg -> Error")))
+		(patt @5.1-5.15 (type "Result(List(item), Dict) -> List(a)"))
+		(patt @13.1-13.11 (type "Error -> Error"))
+		(patt @20.1-20.6 (type "_arg -> List(a)")))
 	(type_decls
-		(alias @18.1-18.64 (type "Error")
+		(alias @18.1-18.64 (type "ComplexType(a, b)")
 			(ty-header @18.1-18.18 (name "ComplexType")
 				(ty-args
 					(ty-var @18.13-18.14 (name "a"))
 					(ty-var @18.16-18.17 (name "b"))))))
 	(expressions
-		(expr @5.18-9.6 (type "Error -> Error"))
-		(expr @13.14-15.2 (type "Error -> {}"))
-		(expr @20.9-20.49 (type "_arg -> Error"))))
+		(expr @5.18-9.6 (type "Result(List(item), Dict) -> List(a)"))
+		(expr @13.14-15.2 (type "Error -> Error"))
+		(expr @20.9-20.49 (type "_arg -> List(a)"))))
 ~~~

@@ -130,6 +130,10 @@ pub const Diagnostic = union(enum) {
         name: Ident.Idx,
         region: Region,
     },
+    type_alias_but_needed_nominal: struct {
+        name: Ident.Idx,
+        region: Region,
+    },
     crash_expects_string: struct {
         region: Region,
     },
@@ -227,6 +231,7 @@ pub const Diagnostic = union(enum) {
             .too_many_exports => |d| d.region,
             .undeclared_type => |d| d.region,
             .undeclared_type_var => |d| d.region,
+            .type_alias_but_needed_nominal => |d| d.region,
             .crash_expects_string => |d| d.region,
             .type_alias_redeclared => |d| d.redeclared_region,
             .nominal_type_redeclared => |d| d.redeclared_region,

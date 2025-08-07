@@ -5,7 +5,7 @@ type=expr
 ~~~
 # SOURCE
 ~~~roc
-Ok
+MyTag
 ~~~
 # EXPECTED
 NIL
@@ -13,11 +13,11 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:3),EndOfFile(1:3-1:3),
+UpperIdent(1:1-1:6),EndOfFile(1:6-1:6),
 ~~~
 # PARSE
 ~~~clojure
-(e-tag @1.1-1.3 (raw "Ok"))
+(e-tag @1.1-1.6 (raw "MyTag"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -25,9 +25,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.3 (name "Ok"))
+(e-tag @1.1-1.6 (name "MyTag"))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.3 (type "[Ok]_others"))
+(expr @1.1-1.6 (type "[MyTag]_others"))
 ~~~
