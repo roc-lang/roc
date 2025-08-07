@@ -2151,7 +2151,12 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
         std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
     }
 
-    const formatted = try parseAndFmt(gpa, input, debug);
+    const formatted = parseAndFmt(gpa, input, debug) catch |err| {
+        switch (err) {
+            error.TooNested => return error.ParseFailed,
+            else => return err,
+        }
+    };
     defer gpa.free(formatted);
 
     const formatted_twice = parseAndFmt(gpa, formatted, debug) catch {
