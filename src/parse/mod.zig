@@ -39,16 +39,19 @@ fn runParse(env: *ModuleEnv, parserCall: *const fn (*Parser) Parser.Error!u32) P
     const msg_slice = messages[0..];
     var tokenizer = try tokenize.Tokenizer.init(env, env.source, msg_slice);
     try tokenizer.tokenize();
-    const result = tokenizer.finishAndDeinit();
+    var result = tokenizer.finishAndDeinit();
 
     var parser = try Parser.init(result.tokens);
     defer parser.deinit();
+
+    errdefer result.tokens.deinit();
+    errdefer parser.store.deinit();
+    errdefer parser.diagnostics.deinit(env.gpa);
 
     const idx = try parserCall(&parser);
 
     const tokenize_diagnostics_slice = try env.gpa.dupe(tokenize.Diagnostic, result.messages);
     const tokenize_diagnostics = std.ArrayListUnmanaged(tokenize.Diagnostic).fromOwnedSlice(tokenize_diagnostics_slice);
-    const parse_diagnostics = parser.diagnostics;
 
     return .{
         .env = env,
@@ -56,7 +59,7 @@ fn runParse(env: *ModuleEnv, parserCall: *const fn (*Parser) Parser.Error!u32) P
         .store = parser.store,
         .root_node_idx = idx,
         .tokenize_diagnostics = tokenize_diagnostics,
-        .parse_diagnostics = parse_diagnostics,
+        .parse_diagnostics = parser.diagnostics,
     };
 }
 
