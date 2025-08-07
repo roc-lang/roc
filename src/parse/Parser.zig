@@ -2445,6 +2445,9 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    try self.nest();
+    defer self.unnest();
+
     const start = self.pos;
     var anno: ?AST.TypeAnno.Idx = null;
 
