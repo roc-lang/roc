@@ -308,15 +308,6 @@ fn addMainExe(
     // Force bundle compiler-rt to resolve runtime symbols like __main
     test_platform_host_lib.bundle_compiler_rt = true;
 
-    // Add Windows system libraries for the host library
-    if (target.result.os.tag == .windows) {
-        // Add Windows __main stub for MinGW-style initialization
-        test_platform_host_lib.addCSourceFile(.{
-            .file = b.path("src/windows_main_stub.c"),
-            .flags = &.{"-std=c99"},
-        });
-    }
-
     // Copy the test platform host library to the source directory
     const copy_test_host = b.addUpdateSourceFiles();
     const test_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
@@ -334,14 +325,6 @@ fn addMainExe(
     });
     test_platform_int_host_lib.linkLibC();
     test_platform_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
-
-    // Add Windows __main stub for MinGW-style initialization
-    if (target.result.os.tag == .windows) {
-        test_platform_int_host_lib.addCSourceFile(.{
-            .file = b.path("src/windows_main_stub.c"),
-            .flags = &.{"-std=c99"},
-        });
-    }
 
     // Copy the int test platform host library to the source directory
     const copy_test_int_host = b.addUpdateSourceFiles();
