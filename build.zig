@@ -115,7 +115,7 @@ pub fn build(b: *std.Build) void {
     const playground_test_install = if (optimize == .Debug) blk: {
         const playground_integration_test_exe = b.addExecutable(.{
             .name = "playground_integration_test",
-            .root_source_file = b.path("test/playground-intergration/main.zig"),
+            .root_source_file = b.path("test/playground-integration/main.zig"),
             .target = target,
             .optimize = optimize,
         });
@@ -294,26 +294,10 @@ fn addMainExe(
         .link_libc = true,
     });
 
-    // Create host.a static library at build time
-    const host_lib = b.addStaticLibrary(.{
-        .name = "platform_host_str_simple",
-        .root_source_file = b.path("src/platform_host_str_simple.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = strip,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
-    });
-    host_lib.linkLibC();
-    host_lib.root_module.addImport("builtins", roc_modules.builtins);
-
-    // Install host.a to the output directory
-    const install_host = b.addInstallArtifact(host_lib, .{});
-    b.getInstallStep().dependOn(&install_host.step);
-
     // Create test platform host static library (str)
     const test_platform_host_lib = b.addStaticLibrary(.{
         .name = "test_platform_str_host",
-        .root_source_file = b.path("test/platform/str/host.zig"),
+        .root_source_file = b.path("test/str/platform/host.zig"),
         .target = target,
         .optimize = optimize,
         .strip = true,
@@ -324,29 +308,16 @@ fn addMainExe(
     // Force bundle compiler-rt to resolve runtime symbols like __main
     test_platform_host_lib.bundle_compiler_rt = true;
 
-    // Add Windows system libraries for the host library
-    if (target.result.os.tag == .windows) {
-        test_platform_host_lib.linkSystemLibrary("kernel32");
-        test_platform_host_lib.linkSystemLibrary("ntdll");
-        test_platform_host_lib.linkSystemLibrary("psapi");
-        test_platform_host_lib.linkSystemLibrary("user32");
-        test_platform_host_lib.linkSystemLibrary("advapi32");
-        // Add Windows __main stub for MinGW-style initialization
-        test_platform_host_lib.addCSourceFile(.{
-            .file = b.path("src/windows_main_stub.c"),
-            .flags = &.{"-std=c99"},
-        });
-    }
-
     // Copy the test platform host library to the source directory
     const copy_test_host = b.addUpdateSourceFiles();
-    copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), "test/platform/str/libhost.a");
+    const test_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+    copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform", test_host_filename }));
     b.getInstallStep().dependOn(&copy_test_host.step);
 
     // Create test platform host static library (int)
     const test_platform_int_host_lib = b.addStaticLibrary(.{
         .name = "test_platform_int_host",
-        .root_source_file = b.path("test/platform/int/host.zig"),
+        .root_source_file = b.path("test/int/platform/host.zig"),
         .target = target,
         .optimize = optimize,
         .strip = true,
@@ -355,17 +326,10 @@ fn addMainExe(
     test_platform_int_host_lib.linkLibC();
     test_platform_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
 
-    // Add Windows __main stub for MinGW-style initialization
-    if (target.result.os.tag == .windows) {
-        test_platform_int_host_lib.addCSourceFile(.{
-            .file = b.path("src/windows_main_stub.c"),
-            .flags = &.{"-std=c99"},
-        });
-    }
-
     // Copy the int test platform host library to the source directory
     const copy_test_int_host = b.addUpdateSourceFiles();
-    copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), "test/platform/int/libhost.a");
+    const test_int_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+    copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform", test_int_host_filename }));
     b.getInstallStep().dependOn(&copy_test_int_host.step);
 
     // Create builtins static library at build time with minimal dependencies
@@ -384,8 +348,8 @@ fn addMainExe(
 
     // Create shim static library at build time
     const shim_lib = b.addStaticLibrary(.{
-        .name = "read_roc_file_path_shim",
-        .root_source_file = b.path("src/read_roc_file_path_shim.zig"),
+        .name = "roc_shim",
+        .root_source_file = b.path("src/roc_shim.zig"),
         .target = target,
         .optimize = optimize,
         .strip = strip,
@@ -399,22 +363,16 @@ fn addMainExe(
     // Force bundle compiler-rt to resolve math symbols
     shim_lib.bundle_compiler_rt = true;
 
-    // Add Windows system libraries for the shim library
-    if (target.result.os.tag == .windows) {
-        shim_lib.linkSystemLibrary("kernel32");
-        shim_lib.linkSystemLibrary("ntdll");
-        shim_lib.linkSystemLibrary("psapi");
-        shim_lib.linkSystemLibrary("user32");
-        shim_lib.linkSystemLibrary("advapi32");
-    }
-
-    // Install shim.a to the output directory
+    // Install shim library to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});
     b.getInstallStep().dependOn(&install_shim.step);
 
-    // Copy shim library to source directory for embedding
+    // We need to copy the shim library to the src/ directory for embedding as binary data
+    // This is because @embedFile happens at compile time and needs the file to exist already
+    // and zig doesn't permit embedding files from directories outside the source tree.
     const copy_shim = b.addUpdateSourceFiles();
-    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), "src/libread_roc_file_path_shim.a");
+    const shim_filename = if (target.result.os.tag == .windows) "roc_shim.lib" else "libroc_shim.a";
+    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src", shim_filename }));
     exe.step.dependOn(&copy_shim.step);
 
     const config = b.addOptions();

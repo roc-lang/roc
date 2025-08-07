@@ -104,14 +104,20 @@ jobs:
       - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'
         run: |
-          ./zig-out/bin/roc --no-cache test/platform/str/app.roc
-          ./zig-out/bin/roc --no-cache test/platform/int/app.roc
+          ./zig-out/bin/roc --no-cache test/str/app.roc
+          ./zig-out/bin/roc --no-cache test/int/app.roc
+
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.os == 'windows-11-arm' && 'arm64' || 'x64' }}
 
       - name: Run Test Platforms (Windows)
         if: runner.os == 'Windows'
         run: |
-          # zig-out\bin\roc.exe --no-cache test/platform/str/app.roc
-          # zig-out\bin\roc.exe --no-cache test/platform/int/app.roc
+          zig-out\bin\roc.exe --no-cache test/str/app.roc
+          zig-out\bin\roc.exe --no-cache test/int/app.roc
 
       - name: roc executable minimal check (Unix)
         if: runner.os != 'Windows'

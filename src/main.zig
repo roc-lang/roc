@@ -30,7 +30,7 @@ const CacheManager = cache_mod.CacheManager;
 const CacheConfig = cache_mod.CacheConfig;
 const tokenize = parse.tokenize;
 
-const read_roc_file_path_shim_lib = if (builtin.is_test) &[_]u8{} else @embedFile("libread_roc_file_path_shim.a");
+const roc_shim_lib = if (builtin.is_test) &[_]u8{} else if (builtin.target.os.tag == .windows) @embedFile("roc_shim.lib") else @embedFile("libroc_shim.a");
 
 // Workaround for Zig standard library compilation issue on macOS ARM64.
 //
@@ -446,7 +446,8 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         defer gpa.free(host_path);
 
         // Check for cached shim library, extract if not present
-        const shim_path = std.fs.path.join(gpa, &.{ exe_cache_dir, "libread_roc_file_path_shim.a" }) catch |err| {
+        const shim_filename = if (builtin.target.os.tag == .windows) "roc_shim.lib" else "libroc_shim.a";
+        const shim_path = std.fs.path.join(gpa, &.{ exe_cache_dir, shim_filename }) catch |err| {
             std.log.err("Failed to create shim library path: {}\n", .{err});
             std.process.exit(1);
         };
@@ -935,7 +936,8 @@ pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (s
 
                             // Look for host library near the platform file
                             const platform_dir = std.fs.path.dirname(platform_path) orelse ".";
-                            const host_path = try std.fs.path.join(gpa, &.{ platform_dir, "libhost.a" });
+                            const host_filename = if (comptime builtin.target.os.tag == .windows) "host.lib" else "libhost.a";
+                            const host_path = try std.fs.path.join(gpa, &.{ platform_dir, host_filename });
                             defer gpa.free(host_path);
 
                             std.fs.cwd().access(host_path, .{}) catch {
@@ -958,34 +960,22 @@ pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (s
 
 /// Resolve a platform specification to a local host library path
 fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})![]u8 {
-    // Handle empty platform spec (common in test platforms)
-    if (platform_spec.len == 0) {
-        // Look for libhost.a in common test locations
-        const test_paths = [_][]const u8{
-            "test/platform/str/libhost.a",
-            "libhost.a",
-            "host.a",
-        };
-
-        for (test_paths) |path| {
-            std.fs.cwd().access(path, .{}) catch continue;
-            return try gpa.dupe(u8, path);
-        }
-    }
-
-    // TEMPORARY: For testing the interpreter, use our test host library
-    if (std.mem.eql(u8, platform_spec, "test")) {
-        return gpa.dupe(u8, "libtest_host.a");
-    }
 
     // Check for common platform names and map them to host libraries
     if (std.mem.eql(u8, platform_spec, "cli")) {
         // Try to find CLI platform host library
-        const cli_paths = [_][]const u8{
-            "zig-out/lib/libplatform_host_cli.a",
-            "platform/cli/host.a",
-            "platforms/cli/host.a",
-        };
+        const cli_paths = if (comptime builtin.target.os.tag == .windows)
+            [_][]const u8{
+                "zig-out/lib/platform_host_cli.lib",
+                "platform/cli/host.lib",
+                "platforms/cli/host.lib",
+            }
+        else
+            [_][]const u8{
+                "zig-out/lib/libplatform_host_cli.a",
+                "platform/cli/host.a",
+                "platforms/cli/host.a",
+            };
 
         for (cli_paths) |path| {
             std.fs.cwd().access(path, .{}) catch continue;
@@ -993,11 +983,18 @@ fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u
         }
     } else if (std.mem.eql(u8, platform_spec, "basic-cli")) {
         // Try to find basic-cli platform host library
-        const basic_cli_paths = [_][]const u8{
-            "zig-out/lib/libplatform_host_basic_cli.a",
-            "platform/basic-cli/host.a",
-            "platforms/basic-cli/host.a",
-        };
+        const basic_cli_paths = if (comptime builtin.target.os.tag == .windows)
+            [_][]const u8{
+                "zig-out/lib/platform_host_basic_cli.lib",
+                "platform/basic-cli/host.lib",
+                "platforms/basic-cli/host.lib",
+            }
+        else
+            [_][]const u8{
+                "zig-out/lib/libplatform_host_basic_cli.a",
+                "platform/basic-cli/host.a",
+                "platforms/basic-cli/host.a",
+            };
 
         for (basic_cli_paths) |path| {
             std.fs.cwd().access(path, .{}) catch continue;
@@ -1017,7 +1014,7 @@ fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u
     return try gpa.dupe(u8, platform_spec);
 }
 
-/// Extract the embedded read_roc_file_path_shim library to the specified path
+/// Extract the embedded roc_shim library to the specified path
 /// This library contains the shim code that runs in child processes to read ModuleEnv from shared memory
 pub fn extractReadRocFilePathShimLibrary(gpa: Allocator, output_path: []const u8) !void {
     _ = gpa; // unused but kept for consistency
@@ -1033,7 +1030,7 @@ pub fn extractReadRocFilePathShimLibrary(gpa: Allocator, output_path: []const u8
     const shim_file = try std.fs.cwd().createFile(output_path, .{});
     defer shim_file.close();
 
-    try shim_file.writeAll(read_roc_file_path_shim_lib);
+    try shim_file.writeAll(roc_shim_lib);
 }
 
 fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {

@@ -82,6 +82,9 @@ fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.C) no
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
 extern fn roc_entrypoint(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
 
+// Windows __main stub for MinGW-style initialization
+pub export fn __main() void {}
+
 /// Platform host entrypoint -- this is where the roc application starts and does platform things
 /// before the platform calls into Roc to do application-specific things.
 pub export fn main() void {

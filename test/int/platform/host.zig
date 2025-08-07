@@ -62,6 +62,9 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaqu
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
 extern fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
 
+// Windows __main stub for MinGW-style initialization
+pub export fn __main() void {}
+
 /// Arguments struct for passing two integers to Roc as a tuple
 const Args = struct {
     a: i64,
