@@ -330,7 +330,8 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) vo
     std.debug.assert(self.is_initialized);
     std.debug.assert(dest.ptr != null);
 
-    const size = layout_cache.layoutSize(self.layout);
+    // For closures, use getTotalSize to include capture data; for others use layoutSize
+    const size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache) else layout_cache.layoutSize(self.layout);
     if (size == 0) return;
 
     if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {

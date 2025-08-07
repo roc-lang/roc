@@ -353,6 +353,27 @@ pub const Store = struct {
         return target.TargetUsize.native;
     }
 
+    /// Get or create an empty record layout (for closures with no captures)
+    fn getEmptyRecordLayout(self: *Self) !Idx {
+        // Check if we already have an empty record layout
+        for (self.record_data.items.items, 0..) |record_data, i| {
+            if (record_data.size == 0 and record_data.fields.count == 0) {
+                const record_idx = RecordIdx{ .int_idx = @intCast(i) };
+                const empty_record_layout = Layout.record(std.mem.Alignment.@"1", record_idx);
+                return try self.insertLayout(empty_record_layout);
+            }
+        }
+        
+        // Create new empty record layout
+        const record_idx = RecordIdx{ .int_idx = @intCast(self.record_data.len()) };
+        _ = try self.record_data.append(self.env.gpa, .{
+            .size = 0,
+            .fields = collections.NonEmptyRange{ .start = 0, .count = 0 },
+        });
+        const empty_record_layout = Layout.record(std.mem.Alignment.@"1", record_idx);
+        return try self.insertLayout(empty_record_layout);
+    }
+
     /// Get the size in bytes of a layout, given the store's target usize.
     pub fn layoutSize(self: *const Self, layout: Layout) u32 {
         // TODO change this to SizeAlign (just return both since they're packed into 4B anyway)
@@ -372,7 +393,13 @@ pub const Store = struct {
             .list_of_zst => target_usize.size(), // Zero-sized lists might be different
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
-            .closure => @sizeOf(layout_.Closure),
+            .closure => {
+                // Closure layout: header + capture data  
+                const header_size = @sizeOf(layout_.Closure);
+                const captures_layout = self.getLayout(layout.data.closure.captures_layout_idx);
+                const captures_size = self.layoutSize(captures_layout);
+                return header_size + captures_size;
+            },
         };
     }
 
@@ -789,15 +816,21 @@ pub const Store = struct {
                     },
                     .fn_pure => |func| {
                         _ = func;
-                        break :flat_type Layout.closure();
+                        // Create empty captures layout for generic function type
+                        const empty_captures_idx = try self.getEmptyRecordLayout();
+                        break :flat_type Layout.closure(empty_captures_idx);
                     },
                     .fn_effectful => |func| {
                         _ = func;
-                        break :flat_type Layout.closure();
+                        // Create empty captures layout for generic function type
+                        const empty_captures_idx = try self.getEmptyRecordLayout();
+                        break :flat_type Layout.closure(empty_captures_idx);
                     },
                     .fn_unbound => |func| {
                         _ = func;
-                        break :flat_type Layout.closure();
+                        // Create empty captures layout for generic function type
+                        const empty_captures_idx = try self.getEmptyRecordLayout();
+                        break :flat_type Layout.closure(empty_captures_idx);
                     },
                     .record => |record_type| {
                         const num_fields = try self.gatherRecordFields(record_type);

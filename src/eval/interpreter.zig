@@ -1147,7 +1147,7 @@ pub const Interpreter = struct {
                 // This is a pure lambda with no captures. We still create a closure
                 // structure for it on the stack so that the calling convention is uniform.
                 const captures_layout_idx = try self.createClosureLayout(&.{});
-                const closure_layout = Layout.closure();
+                const closure_layout = Layout.closure(captures_layout_idx);
                 const total_size = @sizeOf(Closure);
                 const closure_alignment = closure_layout.alignment(target_usize);
                 const closure_ptr = try self.stack_memory.alloca(total_size, closure_alignment);
@@ -1540,6 +1540,13 @@ pub const Interpreter = struct {
         // Copy the return value directly to the pre-allocated slot using StackValue helpers
         const return_slot_size = self.layout_cache.layoutSize(return_layout);
         self.traceInfo("handleLambdaReturn: copy check - size={}, ptr_null={}", .{return_slot_size, return_value.ptr == null});
+        
+        // Debug: Check if we're copying a closure and what sizes we're dealing with
+        if (return_layout.tag == .closure) {
+            const total_size_needed = return_value.getTotalSize(self.layout_cache);
+            self.traceInfo("CLOSURE DEBUG: layout_size={}, total_size_needed={}", .{return_slot_size, total_size_needed});
+        }
+        
         if (return_slot_size > 0 and return_value.ptr != null) {
             const src_byte = @as([*]const u8, @ptrCast(return_value.ptr.?))[0];
             self.traceInfo("Copying return byte {} to return slot", .{src_byte});
@@ -2486,7 +2493,7 @@ pub const Interpreter = struct {
         const captures_layout_idx = try self.createClosureLayout(final_captures.items);
 
         // Allocate and initialize closure
-        const closure_layout = Layout.closure();
+        const closure_layout = Layout.closure(captures_layout_idx);
         const captures_record_layout = self.layout_cache.getLayout(captures_layout_idx);
         const captures_size = self.layout_cache.layoutSize(captures_record_layout);
 

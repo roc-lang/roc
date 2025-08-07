@@ -130,7 +130,7 @@ pub const LayoutUnion = packed union {
     list_of_zst: void,
     record: RecordLayout,
     tuple: TupleLayout,
-    closure: void,
+    closure: ClosureLayout,
 };
 
 /// Record field layout
@@ -184,6 +184,12 @@ pub const TupleField = struct {
 
     /// A SafeMultiList for storing tuple fields
     pub const SafeMultiList = collections.SafeMultiList(TupleField);
+};
+
+/// Closure layout - stores captures layout index
+pub const ClosureLayout = packed struct {
+    /// Layout index of the captured environment  
+    captures_layout_idx: Idx,
 };
 
 /// Tuple field layout type alias for compatibility
@@ -370,9 +376,9 @@ pub const Layout = packed struct {
         return Layout{ .data = .{ .tuple = .{ .alignment = tuple_alignment, .idx = tuple_idx } }, .tag = .tuple };
     }
 
-    pub fn closure() Layout {
+    pub fn closure(captures_layout_idx: Idx) Layout {
         return Layout{
-            .data = .{ .closure = {} },
+            .data = .{ .closure = .{ .captures_layout_idx = captures_layout_idx } },
             .tag = .closure,
         };
     }
