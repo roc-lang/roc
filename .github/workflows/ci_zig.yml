@@ -209,6 +209,7 @@ jobs:
           - x86_64-linux-musl
           - x86_64-macos-none
           - x86_64-windows-gnu
+          - wasm32-wasi
 
     steps:
       - name: Checkout
