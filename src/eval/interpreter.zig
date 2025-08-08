@@ -669,7 +669,8 @@ pub const Interpreter = struct {
                     result_value.setInt(int_lit.value.toI128());
                     self.traceInfo("Pushed integer literal {d}", .{int_lit.value.toI128()});
                 } else {
-                    return error.LayoutError;
+                    self.traceError("Integer literal: expected integer layout, got {}", .{expr_layout.tag});
+                    return error.TypeMismatch;
                 }
             },
 
@@ -930,7 +931,8 @@ pub const Interpreter = struct {
                 const all_exprs = self.env.store.sliceExpr(call.args);
 
                 if (all_exprs.len == 0) {
-                    return error.LayoutError; // No function to call
+                    self.traceError("Function call: no function expression found", .{});
+                    return error.TypeMismatch; // No function to call
                 }
 
                 const function_expr = all_exprs[0];
@@ -1391,14 +1393,16 @@ pub const Interpreter = struct {
         var operand_value = try self.peekStackValue(1);
         const operand_layout = operand_value.layout;
 
-        // For now, only support integer operations
+        // For unary minus, we expect an integer type
         if (operand_layout.tag != .scalar) {
-            return error.LayoutError;
+            self.traceError("Unary minus: expected scalar layout, got {}", .{operand_layout.tag});
+            return error.TypeMismatch;
         }
 
         const operand_scalar = operand_layout.data.scalar;
         if (operand_scalar.tag != .int) {
-            return error.LayoutError;
+            self.traceError("Unary minus: expected integer type, got {}", .{operand_scalar.tag});
+            return error.TypeMismatch;
         }
 
         // Read the value and negate it in-place
@@ -1415,8 +1419,8 @@ pub const Interpreter = struct {
 
         // For boolean operations, we expect a scalar type
         if (operand_layout.tag != .scalar) {
-            self.traceInfo("Unary not operation failed: expected scalar layout, got {}", .{operand_layout.tag});
-            return error.LayoutError;
+            self.traceError("Unary not: expected scalar layout, got {}", .{operand_layout.tag});
+            return error.TypeMismatch;
         }
 
         const operand_scalar = operand_layout.data.scalar;
@@ -1807,14 +1811,18 @@ pub const Interpreter = struct {
 
         // The record must have a record layout
         if (record_value.layout.tag != .record) {
-            return error.LayoutError;
+            self.traceError("Record field access: expected record layout, got {}", .{record_value.layout.tag});
+            return error.TypeMismatch;
         }
 
         // Use RecordAccessor for safe field access
         const record_accessor = try record_value.asRecord(self.layout_cache);
 
         // Find the field by name using the helper function
-        const field_index = record_accessor.findFieldIndex(self.env, field_name) orelse return error.LayoutError;
+        const field_index = record_accessor.findFieldIndex(self.env, field_name) orelse {
+            self.traceError("Record field access: field '{s}' not found", .{field_name});
+            return error.TypeMismatch;
+        };
 
         // Get the field value using RecordAccessor
         const field_value = try record_accessor.getFieldByIndex(field_index);
@@ -2578,7 +2586,10 @@ pub const Interpreter = struct {
         // Get the underlying lambda expression
         const lambda_expr = switch (self.env.store.getExpr(closure_expr.lambda_idx)) {
             .e_lambda => |l| l,
-            else => return error.LayoutError, // Should always be a lambda
+            else => {
+                self.traceError("Closure creation: expected lambda expression, got different expression type", .{});
+                return error.TypeMismatch; // Should always be a lambda
+            },
         };
 
         // Collect and filter captures
@@ -2655,7 +2666,8 @@ pub const Interpreter = struct {
     /// Creates the layout for closure captures
     fn createClosureLayout(self: *Interpreter, captures: []const ModuleEnv.Expr.Capture) EvalError!layout.Idx {
         if (captures.len > MAX_CAPTURE_FIELDS) {
-            return error.LayoutError;
+            self.traceError("Closure layout: too many captures ({}, max {})", .{captures.len, MAX_CAPTURE_FIELDS});
+            return error.TypeMismatch;
         }
 
         // Use dynamic allocation for field layouts and names
