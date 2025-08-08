@@ -107,8 +107,8 @@ const MAX_CAPTURE_FIELDS = 256;
 
 // Work item for the iterative evaluation stack
 const WorkKind = enum {
-    w_eval_expr,
-    w_eval_expr_with_layout,
+    w_eval_expr_structural,         // Structural: evaluate expression using its own type
+    w_eval_expr_nominal,           // Nominal: evaluate backing expression using nominal type's layout
     w_binop_add,
     w_binop_sub,
     w_binop_mul,
@@ -171,7 +171,7 @@ pub const WorkItem = struct {
         current_element_idx: usize,
         crash_msg: StringLiteral.Idx,
         segment_count: usize,
-        /// pre-determined layout for expression evaluation
+        /// pre-determined layout for expression evaluation (when not nothing)
         layout_idx: layout.Idx,
     },
 };
@@ -410,7 +410,7 @@ pub const Interpreter = struct {
         self.traceExpression(expr_idx);
 
         self.schedule_work(WorkItem{
-            .kind = .w_eval_expr,
+            .kind = .w_eval_expr_structural,
             .expr_idx = expr_idx,
             .extra = .{ .nothing = {} },
         });
@@ -418,8 +418,14 @@ pub const Interpreter = struct {
         // Main evaluation loop
         while (self.take_work()) |work| {
             switch (work.kind) {
-                .w_eval_expr => try self.evalExpr(work.expr_idx, roc_ops),
-                .w_eval_expr_with_layout => try self.processWorkItem(work, roc_ops),
+                .w_eval_expr_structural => {
+                    // For regular eval_expr calls, we don't have a predetermined layout
+                    try self.evalExpr(work.expr_idx, roc_ops, null);
+                },
+                .w_eval_expr_nominal => {
+                    // For nominal backing expressions, use the predetermined layout
+                    try self.evalExpr(work.expr_idx, roc_ops, work.extra.layout_idx);
+                },
                 .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
                     try self.completeBinop(work.kind);
                 },
@@ -636,7 +642,7 @@ pub const Interpreter = struct {
     /// # Error Handling
     /// Malformed expressions result in runtime error placeholders rather
     /// than evaluation failure.
-    fn evalExpr(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, roc_ops: *RocOps) EvalError!void {
+    fn evalExpr(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, roc_ops: *RocOps, layout_idx: ?layout.Idx) EvalError!void {
         const expr = self.env.store.getExpr(expr_idx);
 
         self.traceEnter("evalExpr {s}", .{@tagName(expr)});
@@ -655,8 +661,8 @@ pub const Interpreter = struct {
 
             // Numeric literals - push directly to stack
             .e_int => |int_lit| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 var result_value = try self.pushStackValue(expr_layout);
 
                 if (expr_layout.tag == .scalar and expr_layout.data.scalar.tag == .int) {
@@ -668,8 +674,8 @@ pub const Interpreter = struct {
             },
 
             .e_frac_f32 => |float_lit| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
 
                 std.debug.assert(result_value.ptr != null);
@@ -680,8 +686,8 @@ pub const Interpreter = struct {
             },
 
             .e_frac_f64 => |float_lit| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
 
                 std.debug.assert(result_value.ptr != null);
@@ -693,8 +699,8 @@ pub const Interpreter = struct {
 
             // Zero-argument tags (e.g., True, False)
             .e_zero_argument_tag => |tag| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
 
                 std.debug.assert(result_value.ptr != null);
@@ -711,8 +717,8 @@ pub const Interpreter = struct {
 
             // Empty record
             .e_empty_record => {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
 
                 // Empty record is zero-sized and has no bytes
@@ -721,8 +727,8 @@ pub const Interpreter = struct {
 
             // Empty list
             .e_empty_list => {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
 
                 // Initialize empty list
@@ -761,12 +767,12 @@ pub const Interpreter = struct {
                 // Push operands in order - note that this results in the results being pushed to the stack in reverse order
                 // We do this so that `dbg` statements are printed in the expected order
                 self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = binop.rhs,
                     .extra = .{ .nothing = {} },
                 });
                 self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = binop.lhs,
                     .extra = .{ .nothing = {} },
                 });
@@ -788,14 +794,14 @@ pub const Interpreter = struct {
                     const branch = self.env.store.getIfBranch(branches[0]);
 
                     self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr,
+                        .kind = .w_eval_expr_structural,
                         .expr_idx = branch.cond,
                         .extra = .{ .nothing = {} },
                     });
                 } else {
                     // No branches, evaluate final_else directly
                     self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr,
+                        .kind = .w_eval_expr_structural,
                         .expr_idx = if_expr.final_else,
                         .extra = .{ .nothing = {} },
                     });
@@ -826,7 +832,7 @@ pub const Interpreter = struct {
                 // 3. Fall back to global definitions
                 if (self.lookupGlobal(lookup.pattern_idx)) |def_expr| {
                     self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr,
+                        .kind = .w_eval_expr_structural,
                         .expr_idx = def_expr,
                         .extra = .{ .nothing = {} },
                     });
@@ -888,7 +894,7 @@ pub const Interpreter = struct {
 
                 // Evaluate backing expression but preserve nominal layout context
                 try self.work_stack.append(.{
-                    .kind = .w_eval_expr_with_layout,
+                    .kind = .w_eval_expr_nominal,
                     .expr_idx = nominal.backing_expr,
                     .extra = .{ .layout_idx = nominal_layout_idx },
                 });
@@ -900,8 +906,8 @@ pub const Interpreter = struct {
 
             // Tags with arguments
             .e_tag => |tag| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
                 const result_ptr = result_value.ptr.?;
 
@@ -945,7 +951,7 @@ pub const Interpreter = struct {
 
                 // 2. Function (executed second, pushes closure to stack)
                 self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = function_expr,
                     .extra = .{ .nothing = {} },
                 });
@@ -955,7 +961,7 @@ pub const Interpreter = struct {
                 while (i > 0) {
                     i -= 1;
                     self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr,
+                        .kind = .w_eval_expr_structural,
                         .expr_idx = arg_exprs[i],
                         .extra = .{ .nothing = {} },
                     });
@@ -973,7 +979,7 @@ pub const Interpreter = struct {
 
                 // Evaluate the operand expression
                 try self.work_stack.append(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = unary.expr,
                     .extra = .{ .nothing = {} },
                 });
@@ -990,7 +996,7 @@ pub const Interpreter = struct {
 
                 // Evaluate the operand expression
                 try self.work_stack.append(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = unary.expr,
                     .extra = .{ .nothing = {} },
                 });
@@ -1006,7 +1012,7 @@ pub const Interpreter = struct {
 
                 // Schedule evaluation of the final expression.
                 self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = block.final_expr,
                     .extra = .{ .nothing = {} },
                 });
@@ -1028,7 +1034,7 @@ pub const Interpreter = struct {
                             });
                             // Schedule evaluation of the expression.
                             self.schedule_work(WorkItem{
-                                .kind = .w_eval_expr,
+                                .kind = .w_eval_expr_structural,
                                 .expr_idx = decl.expr,
                                 .extra = .{ .nothing = {} },
                             });
@@ -1050,8 +1056,8 @@ pub const Interpreter = struct {
             },
 
             .e_frac_dec => |dec_lit| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
                 const result_ptr = result_value.ptr.?;
 
@@ -1066,8 +1072,8 @@ pub const Interpreter = struct {
             },
 
             .e_dec_small => |small_dec| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
                 const result_ptr = result_value.ptr.?;
 
@@ -1097,7 +1103,7 @@ pub const Interpreter = struct {
 
                 // Evaluate the receiver expression
                 try self.work_stack.append(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = dot_access.receiver,
                     .extra = .{ .nothing = {} },
                 });
@@ -1158,7 +1164,7 @@ pub const Interpreter = struct {
                 var i = segments.len;
                 while (i > 0) : (i -= 1) {
                     self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr,
+                        .kind = .w_eval_expr_structural,
                         .expr_idx = segments[i - 1],
                         .extra = .{ .none = {} },
                     });
@@ -1170,8 +1176,8 @@ pub const Interpreter = struct {
             },
 
             .e_record => |record_expr| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const fields = self.env.store.sliceRecordFields(record_expr.fields);
                 if (fields.len == 0) {
                     // Per the test, `{}` should be a zero-sized type error.
@@ -1218,8 +1224,8 @@ pub const Interpreter = struct {
             },
 
             .e_tuple => |tuple_expr| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const elements = self.env.store.sliceExpr(tuple_expr.elems);
                 if (elements.len == 0) {
                     // Empty tuple has no bytes, but we still need to push its layout.
@@ -1476,7 +1482,7 @@ pub const Interpreter = struct {
         if (cond_val == 1) {
             // Condition is true, evaluate this branch's body
             self.schedule_work(WorkItem{
-                .kind = .w_eval_expr,
+                .kind = .w_eval_expr_structural,
                 .expr_idx = branch.body,
                 .extra = .{ .nothing = {} },
             });
@@ -1499,14 +1505,14 @@ pub const Interpreter = struct {
 
                 // Push work to evaluate the next condition
                 self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = next_branch.cond,
                     .extra = .{ .nothing = {} },
                 });
             } else {
                 // No more branches, evaluate final_else
                 self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = if_expr.final_else,
                     .extra = .{ .nothing = {} },
                 });
@@ -1603,7 +1609,7 @@ pub const Interpreter = struct {
 
         // 5. Schedule body evaluation.
         self.schedule_work(WorkItem{
-            .kind = .w_eval_expr,
+            .kind = .w_eval_expr_structural,
             .expr_idx = closure.body_idx,
             .extra = .{ .nothing = {} },
         });
@@ -1779,7 +1785,7 @@ pub const Interpreter = struct {
             // Schedule the evaluation of the current field's value expression.
             // Its result will be pushed onto the stack, ready for the next `handleRecordFields` call.
             self.schedule_work(WorkItem{
-                .kind = .w_eval_expr,
+                .kind = .w_eval_expr_structural,
                 .expr_idx = current_field_value_expr_idx,
                 .extra = .{ .nothing = {} },
             });
@@ -2127,7 +2133,7 @@ pub const Interpreter = struct {
 
         // 2. Closure evaluation (executed second, pushes closure to stack)
         self.schedule_work(WorkItem{
-            .kind = .w_eval_expr,
+            .kind = .w_eval_expr_structural,
             .expr_idx = closure_expr_idx,
             .extra = .{ .nothing = {} },
         });
@@ -2138,7 +2144,7 @@ pub const Interpreter = struct {
         while (self.take_work()) |work| {
             self.traceInfo("callClosureWithStackArgs: processing work item {s}", .{@tagName(work.kind)});
             switch (work.kind) {
-                .w_eval_expr => try self.evalExpr(work.expr_idx, roc_ops),
+                .w_eval_expr_structural => try self.evalExpr(work.expr_idx, roc_ops, null),
                 .w_lambda_call => try self.handleLambdaCall(
                     work.expr_idx,
                     work.extra.arg_count,
@@ -2210,56 +2216,9 @@ pub const Interpreter = struct {
             },
 
             // These should be handled by the caller
-            .w_eval_expr, .w_lambda_call => {
+            .w_eval_expr_structural, .w_lambda_call => {
                 std.log.err("Unexpected work item in processWorkItem: {s}", .{@tagName(work.kind)});
                 return error.UnexpectedWorkItem;
-            },
-
-            // New: Evaluate expression with predetermined layout (for nominal types)
-            .w_eval_expr_with_layout => {
-                // Evaluate the expression but use the predetermined layout instead of computing it
-                const predetermined_layout = self.layout_cache.getLayout(work.extra.layout_idx);
-
-                // Get the expression and evaluate it
-                const expr = self.env.store.getExpr(work.expr_idx);
-
-                // Handle the expression based on its type, but use the predetermined layout
-                switch (expr) {
-                    .e_tag => |tag| {
-                        // Use predetermined layout for tag evaluation
-                        const result_value = try self.pushStackValue(predetermined_layout);
-                        const result_ptr = result_value.ptr.?;
-
-                        // Handle boolean tags with the correct layout
-                        const tag_name = self.env.idents.getText(tag.name);
-                        if (std.mem.eql(u8, tag_name, "True") or std.mem.eql(u8, tag_name, "False")) {
-                            if (predetermined_layout.tag == .scalar and predetermined_layout.data.scalar.tag == .bool) {
-                                self.traceInfo("Boolean tag with correct bool layout (nominal context)", .{});
-                            } else {
-                                self.traceInfo("Boolean tag with incorrect layout in nominal context: tag={}, scalar_tag={}", .{ predetermined_layout.tag, predetermined_layout.data.scalar.tag });
-                                return error.TypeMismatch;
-                            }
-                        }
-
-                        // Set the tag value using the predetermined layout
-                        const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
-                        if (std.mem.eql(u8, tag_name, "True")) {
-                            tag_ptr.* = 1;
-                        } else if (std.mem.eql(u8, tag_name, "False")) {
-                            tag_ptr.* = 0;
-                        } else {
-                            tag_ptr.* = 0; // TODO: get actual tag discriminant
-                        }
-
-                        self.traceInfo("PUSH e_tag (with nominal layout)", .{});
-                    },
-                    else => {
-                        // For other expression types, fall back to normal evaluation
-                        // but this shouldn't happen for nominal types with tag backing
-                        self.traceError("Unexpected expression type in nominal context: {s}", .{@tagName(expr)});
-                        return error.TypeMismatch;
-                    },
-                }
             },
         }
     }
@@ -3110,7 +3069,7 @@ pub const Interpreter = struct {
             const current_element_expr_idx = cir_elements[@intCast(current_element_idx)];
 
             self.schedule_work(WorkItem{
-                .kind = .w_eval_expr,
+                .kind = .w_eval_expr_structural,
                 .expr_idx = current_element_expr_idx,
                 .extra = .{ .nothing = {} },
             });
