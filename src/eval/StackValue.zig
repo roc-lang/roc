@@ -232,6 +232,24 @@ pub fn setInt(self: *StackValue, value: i128) void {
     }
 }
 
+/// Initialise the StackValue boolean value
+pub fn setBool(self: *StackValue, value: u8) void {
+    // Assert this is pointing to a valid memory location
+    std.debug.assert(self.ptr != null);
+
+    // Assert this is a boolean
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .bool);
+
+    // Assert this is uninitialised memory
+    //
+    // Avoid accidental overwrite, manually toggle this if updating an already initialized value
+    std.debug.assert(!self.is_initialized);
+
+    // Write the boolean value as a byte
+    const typed_ptr: *u8 = @ptrCast(@alignCast(self.ptr.?));
+    typed_ptr.* = value;
+}
+
 /// Create a TupleAccessor for safe tuple element access
 pub fn asTuple(self: StackValue, layout_cache: *LayoutStore) !TupleAccessor {
     std.debug.assert(self.is_initialized); // Tuple must be initialized before accessing

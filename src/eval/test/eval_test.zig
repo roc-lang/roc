@@ -33,24 +33,24 @@ test "eval simple number" {
 }
 
 test "eval boolean literals" {
-    try runExpectInt("True", 1, .no_trace);
-    try runExpectInt("False", 0, .no_trace);
-    try runExpectInt("Bool.True", 1, .no_trace);
-    try runExpectInt("Bool.False", 0, .no_trace);
+    try runExpectBool("True", true, .no_trace);
+    try runExpectBool("False", false, .no_trace);
+    try runExpectBool("Bool.True", true, .no_trace);
+    try runExpectBool("Bool.False", false, .no_trace);
 }
 
 test "eval unary not operator" {
-    try runExpectInt("!True", 0, .no_trace);
-    try runExpectInt("!False", 1, .no_trace);
-    try runExpectInt("!Bool.True", 0, .no_trace);
-    try runExpectInt("!Bool.False", 1, .no_trace);
+    try runExpectBool("!True", false, .no_trace);
+    try runExpectBool("!False", true, .no_trace);
+    try runExpectBool("!Bool.True", false, .no_trace);
+    try runExpectBool("!Bool.False", true, .no_trace);
 }
 
 test "eval double negation" {
-    try runExpectInt("!!True", 1, .no_trace);
-    try runExpectInt("!!False", 0, .no_trace);
-    try runExpectInt("!!!True", 0, .no_trace);
-    try runExpectInt("!!!False", 1, .no_trace);
+    try runExpectBool("!!True", true, .no_trace);
+    try runExpectBool("!!False", false, .no_trace);
+    try runExpectBool("!!!True", false, .no_trace);
+    try runExpectBool("!!!False", true, .no_trace);
 }
 
 test "eval boolean in lambda expressions" {
@@ -236,10 +236,10 @@ test "operator associativity - edge cases" {
 test "comparison operators - non-associative" {
     // Comparison operators should be non-associative
     // These should work with parentheses
-    try runExpectInt("(5 > 3) == 1", 1, .no_trace); // true == true
-    try runExpectInt("(10 < 20) == 1", 1, .no_trace); // true == true
-    try runExpectInt("(5 >= 5) == 1", 1, .no_trace); // true == true
-    try runExpectInt("(10 <= 9) == 0", 1, .no_trace); // false == false
+    try runExpectBool("(5 > 3)", true, .no_trace); // true
+    try runExpectBool("(10 < 20)", true, .no_trace); // true
+    try runExpectBool("(5 >= 5)", true, .no_trace); // true
+    try runExpectBool("(10 <= 9)", false, .no_trace); // false
 
     // But chaining without parentheses should fail to parse
     // We can't test parse errors in eval tests, so we just verify the operators work
@@ -255,7 +255,7 @@ test "operator associativity - documentation" {
 
     // NON-ASSOCIATIVE (comparison operators)
     // Can't chain without parentheses
-    try runExpectInt("(5 > 3) && (3 > 1)", 1, .no_trace); // Must use parentheses
+    try runExpectBool("(5 > 3) and (3 > 1)", true, .no_trace); // Must use parentheses
 
     // RIGHT ASSOCIATIVE (logical operators)
     // a op b op c = a op (b op c)

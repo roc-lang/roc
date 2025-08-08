@@ -107,8 +107,8 @@ const MAX_CAPTURE_FIELDS = 256;
 
 // Work item for the iterative evaluation stack
 const WorkKind = enum {
-    w_eval_expr_structural,         // Structural: evaluate expression using its own type
-    w_eval_expr_nominal,           // Nominal: evaluate backing expression using nominal type's layout
+    w_eval_expr_structural, // Structural: evaluate expression using its own type
+    w_eval_expr_nominal, // Nominal: evaluate backing expression using nominal type's layout
     w_binop_add,
     w_binop_sub,
     w_binop_mul,
@@ -1250,141 +1250,113 @@ pub const Interpreter = struct {
     }
 
     fn completeBinop(self: *Interpreter, kind: WorkKind) EvalError!void {
-        self.traceEnter("completeBinop {s}", .{@tagName(kind)});
-        defer self.traceExit("", .{});
+        const rhs = try self.popStackValue();
+        const lhs = try self.popStackValue();
 
-        const lhs = try self.peekStackValue(2);
-        const rhs = try self.peekStackValue(1);
-        try self.traceValue("lhs", lhs);
-        try self.traceValue("rhs", rhs);
-
-        // For now, only support integer operations
+        // For now, only support scalar operations
         if (lhs.layout.tag != .scalar or rhs.layout.tag != .scalar) {
-            self.traceError("expected scaler tags to eval binop", .{});
-            return error.LayoutError;
+            self.traceError("expected scalar tags to eval binop", .{});
+            return error.TypeMismatch;
         }
 
-        if (lhs.layout.data.scalar.tag != .int or rhs.layout.data.scalar.tag != .int) {
-            return error.LayoutError;
-        }
-
-        // Read the values
-        const lhs_val = lhs.asI128();
-        const rhs_val = rhs.asI128();
-
-        // Pop the operands from the stack, which we can safely do after reading their values
-        _ = try self.popStackValue();
-        _ = try self.popStackValue();
-
-        // Debug: Values read from memory
-        self.traceInfo("\tRead values - left = {}, right = {}", .{ lhs_val, rhs_val });
-
-        // Determine result layout
-        const result_layout = switch (kind) {
-            .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem => lhs.layout, // Numeric result
-            .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => blk: {
-                // Boolean result
-                const bool_layout = Layout{
-                    .tag = .scalar,
-                    .data = .{ .scalar = .{
-                        .tag = .int,
-                        .data = .{ .int = .u8 },
-                    } },
-                };
-                break :blk bool_layout;
-            },
-            else => unreachable,
-        };
-
-        var result_value = try self.pushStackValue(result_layout);
+        // Handle different scalar types
+        const lhs_scalar = lhs.layout.data.scalar;
+        const rhs_scalar = rhs.layout.data.scalar;
 
         // Perform the operation and write to our result_value
         switch (kind) {
-            .w_binop_add => {
-                const result_val: i128 = lhs_val + rhs_val;
-                self.traceInfo("Addition operation: {} + {} = {}", .{ lhs_val, rhs_val, result_val });
-                result_value.setInt(result_val);
-            },
-            .w_binop_sub => {
-                const result_val: i128 = lhs_val - rhs_val;
-                result_value.setInt(result_val);
-            },
-            .w_binop_mul => {
-                const result_val: i128 = lhs_val * rhs_val;
-                result_value.setInt(result_val);
-            },
-            .w_binop_div => {
-                if (rhs_val == 0) {
-                    return error.DivisionByZero;
-                }
-                const result_val: i128 = @divTrunc(lhs_val, rhs_val);
-                result_value.setInt(result_val);
-            },
-            .w_binop_div_trunc => {
-                if (rhs_val == 0) {
-                    return error.DivisionByZero;
-                }
-                const result_val: i128 = @divTrunc(lhs_val, rhs_val);
-                result_value.setInt(result_val);
-            },
-            .w_binop_rem => {
-                if (rhs_val == 0) {
-                    return error.DivisionByZero;
-                }
-                const result_val: i128 = @rem(lhs_val, rhs_val);
-                result_value.setInt(result_val);
-            },
-            .w_binop_eq => {
-                const bool_result: i128 = if (lhs_val == rhs_val) 1 else 0;
-                result_value.setInt(bool_result);
-            },
-            .w_binop_ne => {
-                const bool_result: i128 = if (lhs_val != rhs_val) 1 else 0;
-                result_value.setInt(bool_result);
-            },
-            .w_binop_gt => {
-                const bool_result: i128 = if (lhs_val > rhs_val) 1 else 0;
-                result_value.setInt(bool_result);
-            },
-            .w_binop_lt => {
-                const bool_result: i128 = if (lhs_val < rhs_val) 1 else 0;
-                result_value.setInt(bool_result);
-            },
-            .w_binop_ge => {
-                const bool_result: i128 = if (lhs_val >= rhs_val) 1 else 0;
-                result_value.setInt(bool_result);
-            },
-            .w_binop_le => {
-                const bool_result: i128 = if (lhs_val <= rhs_val) 1 else 0;
-                result_value.setInt(bool_result);
-            },
-            .w_binop_and => {
-                // Boolean AND: both operands must be actual boolean values (0 or 1)
-                if (lhs_val != 0 and lhs_val != 1) {
-                    self.traceError("Boolean AND: left operand is not a boolean value: {}", .{lhs_val});
+            // Arithmetic operations - require integer operands
+            .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem => {
+                if (lhs_scalar.tag != .int or rhs_scalar.tag != .int) {
+                    self.traceError("arithmetic operations require integer operands", .{});
                     return error.TypeMismatch;
                 }
-                if (rhs_val != 0 and rhs_val != 1) {
-                    self.traceError("Boolean AND: right operand is not a boolean value: {}", .{rhs_val});
-                    return error.TypeMismatch;
-                }
-                const bool_result: i128 = if (lhs_val == 1 and rhs_val == 1) 1 else 0;
-                result_value.setInt(bool_result);
+
+                const lhs_val = lhs.asI128();
+                const rhs_val = rhs.asI128();
+
+                const result_layout = lhs.layout;
+                var result_value = try self.pushStackValue(result_layout);
+
+                const result_val: i128 = result_val: switch (kind) {
+                    .w_binop_add => {
+                        self.traceInfo("Addition operation: {} + {} = {}", .{ lhs_val, rhs_val, lhs_val + rhs_val });
+                        break :result_val lhs_val + rhs_val;
+                    },
+                    .w_binop_sub => break :result_val lhs_val - rhs_val,
+                    .w_binop_mul => break :result_val lhs_val * rhs_val,
+                    .w_binop_div => {
+                        if (rhs_val == 0) return error.DivisionByZero;
+                        break :result_val @divTrunc(lhs_val, rhs_val);
+                    },
+                    .w_binop_div_trunc => {
+                        if (rhs_val == 0) return error.DivisionByZero;
+                        break :result_val @divTrunc(lhs_val, rhs_val);
+                    },
+                    .w_binop_rem => {
+                        if (rhs_val == 0) return error.DivisionByZero;
+                        break :result_val @rem(lhs_val, rhs_val);
+                    },
+                    else => unreachable,
+                };
+
+                result_value.setInt(result_val);
             },
-            .w_binop_or => {
-                // Boolean OR: both operands must be actual boolean values (0 or 1)
-                if (lhs_val != 0 and lhs_val != 1) {
-                    self.traceError("Boolean OR: left operand is not a boolean value: {}", .{lhs_val});
+
+            // Comparison operations - require integer operands
+            .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le => {
+                if (lhs_scalar.tag != .int or rhs_scalar.tag != .int) {
+                    self.traceError("comparison operations require integer operands", .{});
                     return error.TypeMismatch;
                 }
-                if (rhs_val != 0 and rhs_val != 1) {
-                    self.traceError("Boolean OR: right operand is not a boolean value: {}", .{rhs_val});
-                    return error.TypeMismatch;
-                }
-                const bool_result: i128 = if (lhs_val == 1 or rhs_val == 1) 1 else 0;
-                result_value.setInt(bool_result);
+
+                const lhs_val = lhs.asI128();
+                const rhs_val = rhs.asI128();
+
+                const result_layout = Layout.boolType();
+                var result_value = try self.pushStackValue(result_layout);
+
+                const bool_result: u8 = switch (kind) {
+                    .w_binop_eq => if (lhs_val == rhs_val) 1 else 0,
+                    .w_binop_ne => if (lhs_val != rhs_val) 1 else 0,
+                    .w_binop_gt => if (lhs_val > rhs_val) 1 else 0,
+                    .w_binop_lt => if (lhs_val < rhs_val) 1 else 0,
+                    .w_binop_ge => if (lhs_val >= rhs_val) 1 else 0,
+                    .w_binop_le => if (lhs_val <= rhs_val) 1 else 0,
+                    else => unreachable,
+                };
+
+                result_value.setBool(bool_result);
             },
-            else => unreachable,
+
+            // Logical operations - require boolean operands
+            .w_binop_and, .w_binop_or => {
+                if (lhs_scalar.tag != .bool or rhs_scalar.tag != .bool) {
+                    self.traceError("logical operations require boolean operands", .{});
+                    return error.TypeMismatch;
+                }
+
+                const lhs_ptr = @as(*const u8, @ptrCast(lhs.ptr.?));
+                const rhs_ptr = @as(*const u8, @ptrCast(rhs.ptr.?));
+                const lhs_val = lhs_ptr.*;
+                const rhs_val = rhs_ptr.*;
+
+                const result_layout = Layout.boolType();
+                var result_value = try self.pushStackValue(result_layout);
+
+                const bool_result: u8 = switch (kind) {
+                    .w_binop_and => if (lhs_val != 0 and rhs_val != 0) 1 else 0,
+                    .w_binop_or => if (lhs_val != 0 or rhs_val != 0) 1 else 0,
+                    else => unreachable,
+                };
+
+                result_value.setBool(bool_result);
+            },
+
+            else => {
+                self.traceError("completeBinop called with non-binary operation: {s}", .{@tagName(kind)});
+                return error.TypeMismatch;
+            },
         }
     }
 
@@ -1548,7 +1520,7 @@ pub const Interpreter = struct {
         const placeholder_layout = Layout.boolType(); // Minimal placeholder
         const return_layout_idx = try self.layout_cache.insertLayout(placeholder_layout);
         const return_slot_offset = self.stack_memory.used;
-        _ = try self.pushStackValue(placeholder_layout);
+        _ = try self.pushStackValue(body_layout);
 
         // Final stack layout: [args..., closure, return_slot]
         const stack_base = self.value_stack.items[value_base].offset;
@@ -2224,7 +2196,7 @@ pub const Interpreter = struct {
             },
 
             // These should be handled by the caller
-            .w_eval_expr_structural, .w_lambda_call => {
+            .w_eval_expr_structural, .w_eval_expr_nominal, .w_lambda_call => {
                 std.log.err("Unexpected work item in processWorkItem: {s}", .{@tagName(work.kind)});
                 return error.UnexpectedWorkItem;
             },
@@ -2666,7 +2638,7 @@ pub const Interpreter = struct {
     /// Creates the layout for closure captures
     fn createClosureLayout(self: *Interpreter, captures: []const ModuleEnv.Expr.Capture) EvalError!layout.Idx {
         if (captures.len > MAX_CAPTURE_FIELDS) {
-            self.traceError("Closure layout: too many captures ({}, max {})", .{captures.len, MAX_CAPTURE_FIELDS});
+            self.traceError("Closure layout: too many captures ({}, max {})", .{ captures.len, MAX_CAPTURE_FIELDS });
             return error.TypeMismatch;
         }
 
@@ -3174,8 +3146,7 @@ test "stack-based comparisons" {
         try std.testing.expectEqual(@as(u8, 1), result);
         const bool_layout = interpreter.value_stack.items[0].layout;
         try std.testing.expect(bool_layout.tag == .scalar);
-        try std.testing.expect(bool_layout.data.scalar.tag == .int);
-        try std.testing.expect(bool_layout.data.scalar.data.int == .u8);
+        try std.testing.expect(bool_layout.data.scalar.tag == .bool);
     }
 }
 
