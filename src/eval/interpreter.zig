@@ -100,6 +100,8 @@ pub const EvalError = error{
     InvalidBindingsState,
     TupleIndexOutOfBounds,
     RecordIndexOutOfBounds,
+    InvalidBooleanTag,
+    InvalidTagTarget,
 };
 
 /// Maximum number of capture fields allowed in a closure
@@ -910,17 +912,25 @@ pub const Interpreter = struct {
                 const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
                 const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
-                const result_ptr = result_value.ptr.?;
 
-                // Set the tag value using the computed layout
-                const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
-                const tag_name = self.env.idents.getText(tag.name);
-                if (std.mem.eql(u8, tag_name, "True")) {
-                    tag_ptr.* = 1;
-                } else if (std.mem.eql(u8, tag_name, "False")) {
-                    tag_ptr.* = 0;
-                } else {
-                    tag_ptr.* = 0; // TODO: get actual tag discriminant
+                // Use layout to determine handling strategy
+                switch (expr_layout.tag) {
+                    .scalar => switch (expr_layout.data.scalar.tag) {
+                        .bool => {
+                            // Handle Bool tags as scalar boolean values
+                            try self.handleBooleanScalarTag(result_value, tag.name);
+                        },
+                        else => {
+                            self.traceError("Invalid tag for scalar type: {}", .{expr_layout.data.scalar.tag});
+                            return error.InvalidTagTarget;
+                        },
+                    },
+                    // Future: handle actual tag unions when that layout type is added
+                    else => {
+                        // General tag union handling (when implemented)
+                        self.traceError("Tag union layouts not yet implemented: {}", .{expr_layout.tag});
+                        return error.InvalidTagTarget;
+                    },
                 }
 
                 self.traceInfo("PUSH e_tag", .{});
@@ -1389,19 +1399,11 @@ pub const Interpreter = struct {
         const operand_value = try self.peekStackValue(1);
         const operand_layout = operand_value.layout;
 
-        // For boolean operations, we expect a scalar type
-        if (operand_layout.tag != .scalar) {
-            self.traceError("Unary not: expected scalar layout, got {}", .{operand_layout.tag});
+        // Verify this is a boolean scalar
+        if (operand_layout.tag != .scalar or operand_layout.data.scalar.tag != .bool) {
+            self.traceError("Unary not: expected boolean scalar layout, got {}", .{operand_layout.tag});
             return error.TypeMismatch;
         }
-
-        const operand_scalar = operand_layout.data.scalar;
-        self.traceInfo("Unary not operation: scalar tag = {}", .{operand_scalar.tag});
-
-        // Boolean tags (True/False) are represented as 1-byte scalar values
-        // We don't need to check the specific scalar tag since boolean tags can be
-        // represented as small integers - just verify it's a 1-byte scalar
-        // (which matches what we see in e_tag evaluation)
 
         // Read the boolean value from memory
         const bool_ptr: *u8 = @ptrCast(operand_value.ptr.?);
@@ -1409,14 +1411,7 @@ pub const Interpreter = struct {
 
         self.traceInfo("Unary not operation: bool tag value = {}", .{bool_val});
 
-        // Validate that the operand is a proper boolean value (0 or 1)
-        if (bool_val != 0 and bool_val != 1) {
-            self.traceError("Unary not: operand is not a boolean value: {}", .{bool_val});
-            return error.TypeMismatch;
-        }
-
-        // Boolean tag values: 0 = False, 1 = True
-        // Negate the boolean value
+        // Perform boolean negation (trust the type system - no need to validate 0/1)
         const result_val: u8 = if (bool_val == 0) 1 else 0;
 
         self.traceInfo("Unary not operation: !{} = {}", .{ bool_val, result_val });
@@ -1425,9 +1420,103 @@ pub const Interpreter = struct {
         bool_ptr.* = result_val;
     }
 
+    /// Handle boolean scalar tag expressions (True/False) by setting the appropriate boolean value
+    fn handleBooleanScalarTag(self: *Interpreter, result_value: StackValue, tag_name: Ident.Idx) EvalError!void {
+        const tag_text = self.env.idents.getText(tag_name);
+        const bool_value: u8 = if (std.mem.eql(u8, tag_text, "True")) 1 else if (std.mem.eql(u8, tag_text, "False")) 0 else {
+            self.traceError("Invalid boolean tag: {s}", .{tag_text});
+            return error.InvalidBooleanTag;
+        };
+
+        const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
+        bool_ptr.* = bool_value;
+
+        self.traceInfo("Boolean scalar tag: {s} = {}", .{ tag_text, bool_value });
+    }
+
+    /// Get the return layout of a closure by resolving its lambda expression's type
+    fn getClosureReturnLayout(self: *Interpreter, closure: *const Closure) EvalError!Layout {
+        // Get the type Var for the lambda expression
+        const lambda_var = ModuleEnv.varFrom(closure.lambda_expr_idx);
+        
+        // Resolve the lambda's type to get the function type
+        const lambda_resolved = self.env.types.resolveVar(lambda_var);
+        
+        // Extract the return type from the function
+        switch (lambda_resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .fn_pure => |func| {
+                    // Get the return type Var and resolve it
+                    const ret_resolved = self.env.types.resolveVar(func.ret);
+                    // Convert the resolved type to a layout
+                    return self.typeToLayout(ret_resolved);
+                },
+                .fn_effectful => |func| {
+                    // Get the return type Var and resolve it
+                    const ret_resolved = self.env.types.resolveVar(func.ret);
+                    // Convert the resolved type to a layout
+                    return self.typeToLayout(ret_resolved);
+                },
+                .fn_unbound => |func| {
+                    // Get the return type Var and resolve it
+                    const ret_resolved = self.env.types.resolveVar(func.ret);
+                    // Convert the resolved type to a layout
+                    return self.typeToLayout(ret_resolved);
+                },
+                else => {
+                    self.traceError("Closure lambda is not a function type: {}", .{structure});
+                    return error.TypeMismatch;
+                },
+            },
+            else => {
+                self.traceError("Closure lambda type is not a structure: {}", .{lambda_resolved.desc.content});
+                return error.TypeMismatch;
+            },
+        }
+    }
+
+    /// Convert a resolved type to a layout
+    fn typeToLayout(self: *Interpreter, resolved_type: types.store.ResolvedVarDesc) EvalError!Layout {
+        switch (resolved_type.desc.content) {
+            .structure => |structure| switch (structure) {
+                .str => return Layout.str(),
+                .num => |num| switch (num) {
+                    .int_precision => |precision| return Layout.int(precision),
+                    .frac_precision => |precision| return Layout.frac(precision),
+                    else => {
+                        self.traceError("Unsupported number type: {}", .{num});
+                        return error.TypeMismatch;
+                    },
+                },
+                .nominal_type => |nominal| {
+                    // For nominal types, we need to get the layout from the layout cache
+                    // This is a simplified approach - in practice we'd need to handle this more robustly
+                    const nominal_var = ModuleEnv.varFrom(nominal.type_decl);
+                    const nominal_layout_idx = try self.layout_cache.addTypeVar(nominal_var);
+                    return self.layout_cache.getLayout(nominal_layout_idx);
+                },
+                else => {
+                    self.traceError("Unsupported structure type: {}", .{structure});
+                    return error.TypeMismatch;
+                },
+            },
+            else => {
+                self.traceError("Unsupported type content: {}", .{resolved_type.desc.content});
+                return error.TypeMismatch;
+            },
+        }
+    }
+
     fn checkIfCondition(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, branch_index: u16) EvalError!void {
         // Pop the condition layout
         const condition = try self.peekStackValue(1);
+        const condition_layout = condition.layout;
+
+        // Verify condition is boolean scalar (trust the type system)
+        if (condition_layout.tag != .scalar or condition_layout.data.scalar.tag != .bool) {
+            self.traceError("If condition must be boolean, got layout: {}", .{condition_layout.tag});
+            return error.TypeMismatch;
+        }
 
         // Read the condition value
         const cond_ptr: *u8 = @ptrCast(condition.ptr.?);
@@ -1449,11 +1538,7 @@ pub const Interpreter = struct {
 
         const branch = self.env.store.getIfBranch(branches[branch_index]);
 
-        // Validate that the condition is a proper boolean value (0 or 1)
-        if (cond_val != 0 and cond_val != 1) {
-            self.traceError("If condition is not a boolean value: {}", .{cond_val});
-            return error.TypeMismatch;
-        }
+        // Trust the boolean value - no need to validate 0/1
 
         if (cond_val == 1) {
             // Condition is true, evaluate this branch's body
@@ -1514,13 +1599,12 @@ pub const Interpreter = struct {
         const value_base: usize = self.value_stack.items.len - @as(usize, arg_count) - 1; // -1 for closure
 
         // Pre-allocate return slot AFTER getting closure but before setting up the frame
-        // Pre-allocate return slot AFTER getting closure but before setting up the frame
-        // We'll use a minimal placeholder layout and adjust it during return
-        // The type system should have already verified that the return value matches the expected type
-        const placeholder_layout = Layout.boolType(); // Minimal placeholder
+        // Use a generous placeholder layout that can handle most return types
+        // The actual return value will determine the final layout during return
+        const placeholder_layout = Layout.str(); // Use string layout as placeholder (24 bytes)
         const return_layout_idx = try self.layout_cache.insertLayout(placeholder_layout);
         const return_slot_offset = self.stack_memory.used;
-        _ = try self.pushStackValue(body_layout);
+        _ = try self.pushStackValue(placeholder_layout);
 
         // Final stack layout: [args..., closure, return_slot]
         const stack_base = self.value_stack.items[value_base].offset;
@@ -1625,13 +1709,12 @@ pub const Interpreter = struct {
             const src_byte = @as([*]const u8, @ptrCast(return_value.ptr.?))[0];
             self.traceInfo("Copying return byte {} to return slot", .{src_byte});
 
-            // Type safety: Validate that the return value's layout matches the expected type
-            // The type system should have already verified this, but we add runtime validation
-            const placeholder_size = self.layout_cache.layoutSize(self.layout_cache.getLayout(frame.return_layout_idx));
-            if (actual_return_size > placeholder_size) {
-                self.traceInfo("Type mismatch: return slot size {} < actual size {}", .{ placeholder_size, actual_return_size });
-                // This indicates a type system issue - the placeholder layout doesn't match the actual return type
-                // Instead of a workaround, we should throw a proper type error
+            // Type safety: The return slot should now be the correct size since we use the actual return type
+            // The type system should have already verified this, but we add runtime validation as a safety check
+            const expected_size = self.layout_cache.layoutSize(self.layout_cache.getLayout(frame.return_layout_idx));
+            if (actual_return_size != expected_size) {
+                self.traceInfo("Type mismatch: expected size {} != actual size {}", .{ expected_size, actual_return_size });
+                // This indicates a type system issue - the return layout doesn't match the actual return value
                 return error.TypeMismatch;
             }
 

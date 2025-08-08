@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Debug boolean with trace
+description=Simple boolean closure
 type=repl
 ~~~
 # SOURCE
