@@ -134,12 +134,17 @@ pub const Repl = struct {
 
     /// Add or replace a definition in the REPL context
     fn addOrReplaceDefinition(self: *Repl, source: []const u8, var_name: []const u8) !void {
-        if (self.definitions.get(var_name)) |existing_source| {
-            // Replace existing definition
-            self.allocator.free(existing_source);
+        // Check if we're replacing an existing definition
+        if (self.definitions.fetchRemove(var_name)) |kv| {
+            // Free both the old key and value
+            self.allocator.free(kv.key);
+            self.allocator.free(kv.value);
         }
 
-        try self.definitions.put(var_name, source);
+        // Duplicate both key and value since they're borrowed from input
+        const owned_key = try self.allocator.dupe(u8, var_name);
+        const owned_source = try self.allocator.dupe(u8, source);
+        try self.definitions.put(owned_key, owned_source);
     }
 
     pub fn deinit(self: *Repl) void {
