@@ -9,9 +9,9 @@ type=repl
 » False
 ~~~
 # OUTPUT
-1
+True
 ---
-0
+False
 # PROBLEMS
 NIL
 # CANONICALIZE
@@ -21,4 +21,10 @@ NIL
 ---
 (e-nominal @1.2-1.7 (nominal "Bool")
 	(e-tag @1.2-1.7 (name "False")))
+~~~
+# TYPES
+~~~clojure
+(expr @1.2-1.6 (type "Bool"))
+---
+(expr @1.2-1.7 (type "Bool"))
 ~~~

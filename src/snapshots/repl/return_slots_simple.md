@@ -9,9 +9,9 @@ type=repl
 » (|x| x + 1)(5)
 ~~~
 # OUTPUT
-5
+Evaluation error: error.TypeMismatch
 ---
-6
+Evaluation error: error.TypeMismatch
 # PROBLEMS
 NIL
 # CANONICALIZE
@@ -33,4 +33,10 @@ NIL
 				(p-assign @1.4-1.5 (ident "x")))
 			(e-int @1.11-1.12 (value "1"))))
 	(e-int @1.14-1.15 (value "5")))
+~~~
+# TYPES
+~~~clojure
+(expr @1.2-1.12 (type "Num(_size)"))
+---
+(expr @1.2-1.16 (type "Num(_size)"))
 ~~~

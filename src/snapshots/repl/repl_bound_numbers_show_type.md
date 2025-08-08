@@ -30,3 +30,13 @@ NIL
 ---
 (e-int @1.2-1.7 (value "255"))
 ~~~
+# TYPES
+~~~clojure
+(expr @1.2-1.7 (type "I32"))
+---
+(expr @1.2-1.9 (type "F64"))
+---
+(expr @1.2-1.8 (type "Dec"))
+---
+(expr @1.2-1.7 (type "U8"))
+~~~

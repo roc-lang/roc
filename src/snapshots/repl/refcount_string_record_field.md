@@ -44,3 +44,13 @@ NIL
 					(e-string @1.9-1.130
 						(e-literal @1.10-1.129 (string "This is a very long string that definitely exceeds the small string optimization limit and will require heap allocation"))))))))
 ~~~
+# TYPES
+~~~clojure
+(expr @1.2-1.9 (type "Str"))
+---
+(expr @1.2-1.123 (type "Str"))
+---
+(expr @1.2-1.22 (type "Str"))
+---
+(expr @1.2-1.136 (type "Str"))
+~~~

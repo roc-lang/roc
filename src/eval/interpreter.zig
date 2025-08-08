@@ -108,6 +108,7 @@ const MAX_CAPTURE_FIELDS = 256;
 // Work item for the iterative evaluation stack
 const WorkKind = enum {
     w_eval_expr,
+    w_eval_expr_with_layout,
     w_binop_add,
     w_binop_sub,
     w_binop_mul,
@@ -170,6 +171,8 @@ pub const WorkItem = struct {
         current_element_idx: usize,
         crash_msg: StringLiteral.Idx,
         segment_count: usize,
+        /// pre-determined layout for expression evaluation
+        layout_idx: layout.Idx,
     },
 };
 
@@ -205,7 +208,7 @@ pub const CallFrame = struct {
     bindings_base: u32,
     /// Offset in stack_memory to the pre-allocated return slot
     return_slot_offset: u32,
-    /// Layout index of the expected return value  
+    /// Layout index of the expected return value
     return_layout_idx: layout.Idx,
     /// (future enhancement) for tail-call optimisation
     is_tail_call: bool = false,
@@ -352,7 +355,7 @@ pub const Interpreter = struct {
             // Use RecordAccessor for safe field access
             const captures_value = StackValue.fromPtr(captures_layout, captures_ptr);
             const record_accessor = try captures_value.asRecord(self.layout_cache);
-            
+
             // Find the field by name using the helper function
             if (record_accessor.findFieldIndex(self.env, capture_name_text)) |field_index| {
                 self.traceInfo("Found capture '{s}' at index {}", .{ capture_name_text, field_index });
@@ -416,6 +419,7 @@ pub const Interpreter = struct {
         while (self.take_work()) |work| {
             switch (work.kind) {
                 .w_eval_expr => try self.evalExpr(work.expr_idx, roc_ops),
+                .w_eval_expr_with_layout => try self.processWorkItem(work, roc_ops),
                 .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
                     try self.completeBinop(work.kind);
                 },
@@ -552,7 +556,7 @@ pub const Interpreter = struct {
         const result_ptr = self.stack_memory.start + final_value.offset;
 
         self.traceInfo("Final result at offset {} in stack memory", .{final_value.offset});
-        
+
         // Debug: check what's actually at the result location
         if (final_value.layout.tag == .scalar and self.layout_cache.layoutSize(final_value.layout) > 0) {
             const debug_byte = result_ptr[0];
@@ -835,11 +839,58 @@ pub const Interpreter = struct {
 
             // Nominal expressions
             .e_nominal => |nominal| {
-                // Evaluate the backing expression
+                // CRITICAL: Use the nominal type for layout, not the backing expression's type
+                // Get the nominal type's layout directly
+                const nominal_var: types.Var = @enumFromInt(@intFromEnum(expr_idx));
+                const nominal_layout_idx = self.layout_cache.addTypeVar(nominal_var) catch |err| switch (err) {
+                    error.ZeroSizedType => return error.ZeroSizedType,
+                    error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
+                    else => |e| return e,
+                };
+
+                // Debug assertions to catch regressions
+                if (std.debug.runtime_safety) {
+                    // Verify we have a nominal type
+                    const resolved = self.layout_cache.types_store.resolveVar(nominal_var);
+                    switch (resolved.desc.content) {
+                        .structure => |flat_type| switch (flat_type) {
+                            .nominal_type => {
+                                // Good - we have a nominal type
+                                const nominal_ident = self.env.idents.getText(flat_type.nominal_type.ident.ident_idx);
+                                if (std.mem.eql(u8, nominal_ident, "Bool")) {
+                                    // For Bool nominal types, verify we get boolean layout
+                                    const nominal_layout = self.layout_cache.getLayout(nominal_layout_idx);
+                                    if (!(nominal_layout.tag == .scalar and nominal_layout.data.scalar.tag == .bool)) {
+                                        std.debug.panic("REGRESSION: Bool nominal type should have boolean layout, got: {}\n", .{nominal_layout.tag});
+                                    }
+                                }
+                            },
+                            else => {
+                                std.debug.panic("REGRESSION: e_nominal should have nominal_type, got: {}\n", .{flat_type});
+                            },
+                        },
+                        else => {
+                            std.debug.panic("REGRESSION: e_nominal should have structure content, got: {}\n", .{resolved.desc.content});
+                        },
+                    }
+                }
+
+                // Trace nominal type evaluation
+                const resolved = self.layout_cache.types_store.resolveVar(nominal_var);
+                const nominal_ident = switch (resolved.desc.content) {
+                    .structure => |flat_type| switch (flat_type) {
+                        .nominal_type => |nt| self.env.idents.getText(nt.ident.ident_idx),
+                        else => "unknown",
+                    },
+                    else => "unknown",
+                };
+                self.traceInfo("e_nominal: type={s}, layout_idx={}", .{ nominal_ident, nominal_layout_idx });
+
+                // Evaluate backing expression but preserve nominal layout context
                 try self.work_stack.append(.{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_with_layout,
                     .expr_idx = nominal.backing_expr,
-                    .extra = .{ .nothing = {} },
+                    .extra = .{ .layout_idx = nominal_layout_idx },
                 });
             },
             .e_nominal_external => |_| {
@@ -854,7 +905,7 @@ pub const Interpreter = struct {
                 const result_value = try self.pushStackValue(expr_layout);
                 const result_ptr = result_value.ptr.?;
 
-                // For now, handle boolean tags (True/False) as u8
+                // Set the tag value using the computed layout
                 const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
                 const tag_name = self.env.idents.getText(tag.name);
                 if (std.mem.eql(u8, tag_name, "True")) {
@@ -1421,7 +1472,7 @@ pub const Interpreter = struct {
             self.traceError("If condition is not a boolean value: {}", .{cond_val});
             return error.TypeMismatch;
         }
-        
+
         if (cond_val == 1) {
             // Condition is true, evaluate this branch's body
             self.schedule_work(WorkItem{
@@ -1469,7 +1520,7 @@ pub const Interpreter = struct {
 
         // Current stack layout: [args..., closure] (return slot not yet allocated)
         const closure_value = try self.peekStackValue(1); // closure is at top
-        
+
         if (closure_value.layout.tag != LayoutTag.closure) {
             self.traceError("Expected closure, got {}", .{closure_value.layout.tag});
             return error.InvalidStackState;
@@ -1477,9 +1528,9 @@ pub const Interpreter = struct {
 
         const closure: *const Closure = @ptrCast(@alignCast(closure_value.ptr.?));
 
-        // Calculate value_base before allocating return slot  
+        // Calculate value_base before allocating return slot
         const value_base: usize = self.value_stack.items.len - @as(usize, arg_count) - 1; // -1 for closure
-        
+
         // Pre-allocate return slot AFTER getting closure but before setting up the frame
         // Pre-allocate return slot AFTER getting closure but before setting up the frame
         // We'll use a minimal placeholder layout and adjust it during return
@@ -1488,7 +1539,7 @@ pub const Interpreter = struct {
         const return_layout_idx = try self.layout_cache.insertLayout(placeholder_layout);
         const return_slot_offset = self.stack_memory.used;
         _ = try self.pushStackValue(placeholder_layout);
-        
+
         // Final stack layout: [args..., closure, return_slot]
         const stack_base = self.value_stack.items[value_base].offset;
 
@@ -1529,10 +1580,10 @@ pub const Interpreter = struct {
         std.debug.assert(param_ids.len == arg_count);
 
         // Current stack layout: `[arg1, ..., argN, closure, return_slot, captures_view]`
-        // peek(1) is captures_view  
+        // peek(1) is captures_view
         // peek(2) is return_slot
         // peek(3) is closure
-        // peek(4) is argN (last argument)  
+        // peek(4) is argN (last argument)
         // peek(3 + arg_count) is arg1 (first argument)
         for (param_ids, 0..) |param_idx, i| {
             // For parameter i, we want argument i (0-indexed)
@@ -1563,13 +1614,13 @@ pub const Interpreter = struct {
 
         // The return value is on top of the stack.
         const return_value = try self.peekStackValue(1);
-        
+
         // Use the actual return value's layout instead of the placeholder
         const actual_return_layout = return_value.layout;
         const actual_return_size = return_value.getTotalSize(self.layout_cache);
-            
-        self.traceInfo("handleLambdaReturn: actual_size={}, ptr_null={}", .{actual_return_size, return_value.ptr == null});
-        
+
+        self.traceInfo("handleLambdaReturn: actual_size={}, ptr_null={}", .{ actual_return_size, return_value.ptr == null });
+
         // Debug: Check if we're copying a closure and what sizes we're dealing with
         if (actual_return_layout.tag == .closure) {
             // Since we fixed pushStackValue, the return slot should now be the right size
@@ -1581,27 +1632,27 @@ pub const Interpreter = struct {
                 const aligned_captures_offset = std.mem.alignForward(u32, closure_header_size, @intCast(captures_alignment.toByteUnits()));
                 break :blk aligned_captures_offset + captures_size;
             } else self.layout_cache.layoutSize(actual_return_layout);
-            
-            self.traceInfo("CLOSURE DEBUG: slot_size={}, actual_size={}", .{slot_size, actual_return_size});
+
+            self.traceInfo("CLOSURE DEBUG: slot_size={}, actual_size={}", .{ slot_size, actual_return_size });
         }
-        
+
         // Get the pre-allocated return slot
         const return_slot_ptr = self.stack_memory.start + frame.return_slot_offset;
-        
+
         if (actual_return_size > 0 and return_value.ptr != null) {
             const src_byte = @as([*]const u8, @ptrCast(return_value.ptr.?))[0];
             self.traceInfo("Copying return byte {} to return slot", .{src_byte});
-            
+
             // Type safety: Validate that the return value's layout matches the expected type
             // The type system should have already verified this, but we add runtime validation
             const placeholder_size = self.layout_cache.layoutSize(self.layout_cache.getLayout(frame.return_layout_idx));
             if (actual_return_size > placeholder_size) {
-                self.traceInfo("Type mismatch: return slot size {} < actual size {}", .{placeholder_size, actual_return_size});
+                self.traceInfo("Type mismatch: return slot size {} < actual size {}", .{ placeholder_size, actual_return_size });
                 // This indicates a type system issue - the placeholder layout doesn't match the actual return type
                 // Instead of a workaround, we should throw a proper type error
                 return error.TypeMismatch;
             }
-            
+
             // Use StackValue helpers for proper alignment and copying
             const return_slot_value = StackValue.fromPtr(actual_return_layout, return_slot_ptr);
             return_value.copyTo(return_slot_value, self.layout_cache);
@@ -1622,7 +1673,7 @@ pub const Interpreter = struct {
         // We need to move the return slot to where the caller expects the result
         // The caller expects the result at frame.value_base (where the first argument was)
         const result_position_offset = self.value_stack.items[frame.value_base].offset;
-        
+
         // Copy return slot data to the result position using StackValue helpers
         if (actual_return_size > 0) {
             const result_position_ptr = self.stack_memory.start + result_position_offset;
@@ -1630,13 +1681,13 @@ pub const Interpreter = struct {
             const result_position_value = StackValue.fromPtr(actual_return_layout, result_position_ptr);
             return_slot_value.copyTo(result_position_value, self.layout_cache);
         }
-        
+
         // Reset the stacks, keeping only the result at the original argument position
         self.work_stack.items.len = frame.work_base;
         self.bindings_stack.items.len = frame.bindings_base;
         self.value_stack.items.len = frame.value_base + 1; // Keep one slot for the result
         self.stack_memory.used = result_position_offset + actual_return_size;
-        
+
         // Update the value stack entry to point to the result
         self.value_stack.items[frame.value_base] = .{
             .layout = actual_return_layout,
@@ -1675,7 +1726,7 @@ pub const Interpreter = struct {
 
             // The record itself is the value *under* the field value we just popped.
             const record_value_on_stack = try self.peekStackValue(1);
-            
+
             // Use RecordAccessor for safe field access
             const record_accessor = try record_value_on_stack.asRecord(self.layout_cache);
 
@@ -1684,11 +1735,7 @@ pub const Interpreter = struct {
                 const dest_field = try record_accessor.getFieldByIndex(prev_field_index_in_sorted);
                 prev_field_value.copyWithoutRefcount(dest_field, self.layout_cache);
 
-                self.traceInfo("Copied field '{s}' (size={}) to index {}", .{ 
-                    self.env.idents.getText(prev_field_layout_info.name), 
-                    prev_field_size, 
-                    prev_field_index_in_sorted 
-                });
+                self.traceInfo("Copied field '{s}' (size={}) to index {}", .{ self.env.idents.getText(prev_field_layout_info.name), prev_field_size, prev_field_index_in_sorted });
             }
         }
 
@@ -1759,10 +1806,10 @@ pub const Interpreter = struct {
 
         // Use RecordAccessor for safe field access
         const record_accessor = try record_value.asRecord(self.layout_cache);
-        
+
         // Find the field by name using the helper function
         const field_index = record_accessor.findFieldIndex(self.env, field_name) orelse return error.LayoutError;
-        
+
         // Get the field value using RecordAccessor
         const field_value = try record_accessor.getFieldByIndex(field_index);
         const field_layout = field_value.layout;
@@ -2016,7 +2063,7 @@ pub const Interpreter = struct {
                 if (value.layout.tag != .record) {
                     return error.LayoutError;
                 }
-                
+
                 // Use RecordAccessor for safe field access
                 const record_accessor = try value.asRecord(self.layout_cache);
 
@@ -2024,10 +2071,10 @@ pub const Interpreter = struct {
                 for (destructs) |destruct_idx| {
                     const destruct = self.env.store.getRecordDestruct(destruct_idx);
                     const field_name = self.env.idents.getText(destruct.label);
-                    
+
                     // Find the field by name using RecordAccessor
                     const field_index = record_accessor.findFieldIndex(self.env, field_name) orelse return error.LayoutError;
-                    
+
                     // Get the field value using RecordAccessor
                     const field_value = try record_accessor.getFieldByIndex(field_index);
 
@@ -2167,6 +2214,53 @@ pub const Interpreter = struct {
                 std.log.err("Unexpected work item in processWorkItem: {s}", .{@tagName(work.kind)});
                 return error.UnexpectedWorkItem;
             },
+
+            // New: Evaluate expression with predetermined layout (for nominal types)
+            .w_eval_expr_with_layout => {
+                // Evaluate the expression but use the predetermined layout instead of computing it
+                const predetermined_layout = self.layout_cache.getLayout(work.extra.layout_idx);
+
+                // Get the expression and evaluate it
+                const expr = self.env.store.getExpr(work.expr_idx);
+
+                // Handle the expression based on its type, but use the predetermined layout
+                switch (expr) {
+                    .e_tag => |tag| {
+                        // Use predetermined layout for tag evaluation
+                        const result_value = try self.pushStackValue(predetermined_layout);
+                        const result_ptr = result_value.ptr.?;
+
+                        // Handle boolean tags with the correct layout
+                        const tag_name = self.env.idents.getText(tag.name);
+                        if (std.mem.eql(u8, tag_name, "True") or std.mem.eql(u8, tag_name, "False")) {
+                            if (predetermined_layout.tag == .scalar and predetermined_layout.data.scalar.tag == .bool) {
+                                self.traceInfo("Boolean tag with correct bool layout (nominal context)", .{});
+                            } else {
+                                self.traceInfo("Boolean tag with incorrect layout in nominal context: tag={}, scalar_tag={}", .{ predetermined_layout.tag, predetermined_layout.data.scalar.tag });
+                                return error.TypeMismatch;
+                            }
+                        }
+
+                        // Set the tag value using the predetermined layout
+                        const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
+                        if (std.mem.eql(u8, tag_name, "True")) {
+                            tag_ptr.* = 1;
+                        } else if (std.mem.eql(u8, tag_name, "False")) {
+                            tag_ptr.* = 0;
+                        } else {
+                            tag_ptr.* = 0; // TODO: get actual tag discriminant
+                        }
+
+                        self.traceInfo("PUSH e_tag (with nominal layout)", .{});
+                    },
+                    else => {
+                        // For other expression types, fall back to normal evaluation
+                        // but this shouldn't happen for nominal types with tag backing
+                        self.traceError("Unexpected expression type in nominal context: {s}", .{@tagName(expr)});
+                        return error.TypeMismatch;
+                    },
+                }
+            },
         }
     }
 
@@ -2223,23 +2317,21 @@ pub const Interpreter = struct {
             // The layout should contain the captures layout information
             // We need to calculate the total size: Closure header + aligned captures
             const closure_header_size = @sizeOf(Closure);
-            
+
             // Get the captures layout from the closure layout
             const captures_layout = self.layout_cache.getLayout(value_layout.data.closure.captures_layout_idx);
             const captures_size = self.layout_cache.layoutSize(captures_layout);
             const captures_alignment = captures_layout.alignment(target_usize);
-            
+
             // Calculate aligned offset for captures after header
             const aligned_captures_offset = std.mem.alignForward(u32, closure_header_size, @intCast(captures_alignment.toByteUnits()));
             const total_size = aligned_captures_offset + captures_size;
-            
-            self.traceInfo("Closure allocation: header={}, captures={}, aligned_offset={}, total={}", .{
-                closure_header_size, captures_size, aligned_captures_offset, total_size
-            });
-            
+
+            self.traceInfo("Closure allocation: header={}, captures={}, aligned_offset={}, total={}", .{ closure_header_size, captures_size, aligned_captures_offset, total_size });
+
             break :blk total_size;
         } else self.layout_cache.layoutSize(value_layout);
-        
+
         const old_stack_used = self.stack_memory.used;
         var value_ptr: ?*anyopaque = null;
         var offset: u32 = self.stack_memory.used;
@@ -2721,7 +2813,7 @@ pub const Interpreter = struct {
             // Use RecordAccessor for safe field access
             const captures_value = StackValue.fromPtr(captures_record_layout, captures_ptr);
             const record_accessor = try captures_value.asRecord(self.layout_cache);
-            
+
             // Find the field by name
             const field_index = record_accessor.findFieldIndex(self.env, capture_name) orelse return error.CaptureBindingFailed;
             const dest_field = try record_accessor.getFieldByIndex(field_index);
@@ -2736,7 +2828,7 @@ pub const Interpreter = struct {
 
             const src_value = StackValue.fromPtr(src_layout, src_ptr);
             src_value.copyWithoutRefcount(dest_field, self.layout_cache);
-            
+
             // Debug: Verify the value was copied correctly
             if (src_layout.tag == .scalar and src_layout.data.scalar.tag == .int) {
                 const dest_int_ptr: *const i128 = @ptrCast(@alignCast(dest_field.ptr.?));
@@ -2772,11 +2864,11 @@ pub const Interpreter = struct {
                 // Use RecordAccessor for safe field access on the outer closure
                 const outer_captures_value = StackValue.fromPtr(outer_captures_layout, outer_captures_ptr);
                 const outer_accessor = outer_captures_value.asRecord(self.layout_cache) catch continue;
-                
+
                 // Try to find the capture in the outer closure
                 const src_field_index = outer_accessor.findFieldIndex(self.env, capture_name_text) orelse continue; // Not in this closure's captures
                 const src_field = outer_accessor.getFieldByIndex(src_field_index) catch continue;
-                
+
                 const capture_layout_idx = try self.getLayoutIdx(capture.pattern_idx);
                 const capture_layout = self.layout_cache.getLayout(capture_layout_idx);
                 const capture_size = self.layout_cache.layoutSize(capture_layout);
@@ -2788,7 +2880,7 @@ pub const Interpreter = struct {
                     const dest_field_index = dest_accessor.findFieldIndex(self.env, capture_name_text) orelse return error.CaptureBindingFailed;
                     const dest_field = try dest_accessor.getFieldByIndex(dest_field_index);
 
-                    // Debug: Check what value is actually at the source address  
+                    // Debug: Check what value is actually at the source address
                     if (capture_layout.tag == .scalar and capture_layout.data.scalar.tag == .int) {
                         const src_int_ptr: *const i128 = @ptrCast(@alignCast(src_field.ptr.?));
                         self.traceInfo("Copying capture-of-capture '{s}' ({} bytes) from field {} to field {} [SOURCE VALUE: {}]", .{ capture_name_text, capture_size, src_field_index, dest_field_index, src_int_ptr.* });
@@ -2797,7 +2889,7 @@ pub const Interpreter = struct {
                     }
 
                     src_field.copyWithoutRefcount(dest_field, self.layout_cache);
-                    
+
                     // Debug: Verify the value was copied correctly
                     if (capture_layout.tag == .scalar and capture_layout.data.scalar.tag == .int) {
                         const dest_int_ptr: *const i128 = @ptrCast(@alignCast(dest_field.ptr.?));

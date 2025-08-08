@@ -561,3 +561,31 @@ test "interpreter reuse across multiple evaluations" {
         try testing.expectEqual(expected_value, value.*);
     }
 }
+
+test "nominal type context preservation - boolean" {
+    // Test that Bool.True and Bool.False get correct boolean layout
+    // This tests the nominal type context preservation fix
+    
+    // Test Bool.True
+    try runExpectBool("Bool.True", true, .no_trace);
+    
+    // Test Bool.False  
+    try runExpectBool("Bool.False", false, .no_trace);
+    
+    // Test boolean negation with nominal types
+    try runExpectBool("!Bool.True", false, .no_trace);
+    try runExpectBool("!Bool.False", true, .no_trace);
+    
+    // Test boolean operations with nominal types
+    try runExpectBool("Bool.True and Bool.False", false, .no_trace);
+    try runExpectBool("Bool.True or Bool.False", true, .no_trace);
+}
+
+test "nominal type context preservation - regression prevention" {
+    // Test that the fix prevents the original regression
+    // The original issue was that (|x| !x)(True) would return "0" instead of "False"
+    
+    // This should work correctly now with nominal type context preservation
+    try runExpectBool("(|x| !x)(Bool.True)", false, .no_trace);
+    try runExpectBool("(|x| !x)(Bool.False)", true, .no_trace);
+}

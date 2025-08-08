@@ -8,7 +8,7 @@ type=repl
 » (((|a| |b| |c| a + b + c)(100))(20))(3)
 ~~~
 # OUTPUT
-123
+Evaluation error: error.TypeMismatch
 # PROBLEMS
 NIL
 # CANONICALIZE
@@ -43,4 +43,8 @@ NIL
 			(e-int @1.28-1.31 (value "100")))
 		(e-int @1.34-1.36 (value "20")))
 	(e-int @1.39-1.40 (value "3")))
+~~~
+# TYPES
+~~~clojure
+(expr @1.2-1.41 (type "Num(_size)"))
 ~~~

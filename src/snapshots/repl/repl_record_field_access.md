@@ -42,3 +42,11 @@ NIL
 					(e-string @1.22-1.29
 						(e-literal @1.23-1.28 (string "World"))))))))
 ~~~
+# TYPES
+~~~clojure
+(expr @1.2-1.8 (type "_a"))
+---
+(expr @1.2-1.20 (type "Str"))
+---
+(expr @1.2-1.34 (type "Str"))
+~~~

@@ -35,3 +35,13 @@ NIL
 ---
 (e-empty_list @1.2-1.4)
 ~~~
+# TYPES
+~~~clojure
+(expr @1.2-1.7 (type "Num(_size)"))
+---
+(expr @1.2-1.11 (type "Num(_size)"))
+---
+(expr @1.2-1.17 (type "Str"))
+---
+(expr @1.2-1.4 (type "List(_elem)"))
+~~~

@@ -363,7 +363,7 @@ pub const Store = struct {
                 return try self.insertLayout(empty_record_layout);
             }
         }
-        
+
         // Create new empty record layout
         const record_idx = RecordIdx{ .int_idx = @intCast(self.record_data.len()) };
         _ = try self.record_data.append(self.env.gpa, .{
@@ -774,7 +774,9 @@ pub const Store = struct {
                         // From a layout perspective, nominal types are identical to type aliases:
                         // all we care about is what's inside, so just unroll it.
                         const backing_var = self.types_store.getNominalBackingVar(nominal_type);
-                        current = self.types_store.resolveVar(backing_var);
+                        const resolved = self.types_store.resolveVar(backing_var);
+
+                        current = resolved;
                         continue;
                     },
                     .num => |num| switch (num) {
@@ -865,6 +867,7 @@ pub const Store = struct {
                         const tags = self.types_store.getTagsSlice(tag_union.tags);
 
                         // Check if this is a Bool (2 tags with no payload) as a special case
+                        // This is a legitimate layout optimization for boolean tag unions
                         if (tags.len == 2) {
                             var is_bool = true;
                             for (tags.items(.args)) |tag_args| {
