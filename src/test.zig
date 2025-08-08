@@ -58,6 +58,9 @@ test {
     std.testing.refAllDeclsRecursive(@import("cache/mod.zig"));
     std.testing.refAllDeclsRecursive(@import("cache/CacheModule.zig"));
 
+    std.testing.refAllDeclsRecursive(@import("repl/eval.zig"));
+    std.testing.refAllDecls(@import("repl/repl_test.zig"));
+
     // TODO: Remove after hooking up
     std.testing.refAllDeclsRecursive(@import("reporting"));
     std.testing.refAllDeclsRecursive(@import("reporting/test.zig"));
@@ -65,5 +68,4 @@ test {
     std.testing.refAllDeclsRecursive(@import("layout/layout.zig"));
     std.testing.refAllDeclsRecursive(@import("layout/store.zig"));
     std.testing.refAllDeclsRecursive(@import("layout/store_test.zig"));
-    std.testing.refAllDeclsRecursive(@import("repl/eval.zig"));
 }
