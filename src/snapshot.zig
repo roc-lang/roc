@@ -2678,7 +2678,8 @@ fn generateReplCanonicalizeSection(output: *DualOutput, content: *const Content)
 
     // Process all inputs to build cumulative state and generate debug HTML
     for (inputs.items) |input| {
-        _ = try repl_instance.step(input);
+        const result = try repl_instance.step(input);
+        output.gpa.free(result);
     }
 
     // Get the stored CAN HTML
@@ -2733,7 +2734,8 @@ fn generateReplTypesSection(output: *DualOutput, content: *const Content) !void 
 
     // Process all inputs to build cumulative state and generate debug HTML
     for (inputs.items) |input| {
-        _ = try repl_instance.step(input);
+        const result = try repl_instance.step(input);
+        output.gpa.free(result);
     }
 
     // Get the stored TYPES HTML

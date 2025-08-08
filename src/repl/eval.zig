@@ -27,7 +27,7 @@ const target = base.target;
 /// REPL state that tracks past definitions and evaluates expressions
 pub const Repl = struct {
     allocator: Allocator,
-    /// Map from variable name to source string for definitions  
+    /// Map from variable name to source string for definitions
     definitions: std.StringHashMap([]const u8),
     /// Stack for evaluation
     eval_stack: stack.Stack,
@@ -84,34 +84,35 @@ pub const Repl = struct {
         return self.debug_types_html.items;
     }
 
-    /// Save ModuleEnv 
-    fn saveModuleEnv(self: *Repl, module_env: *ModuleEnv) !void {
+    /// Allocate a new ModuleEnv and save it
+    fn allocateModuleEnv(self: *Repl, source: []const u8) !*ModuleEnv {
         // Clean up previous ModuleEnv if it exists
         if (self.last_module_env) |old_env| {
             old_env.deinit();
             self.allocator.destroy(old_env);
         }
 
-        // Move the ModuleEnv to heap and save pointer (don't clone, just transfer ownership)
+        // Allocate new ModuleEnv on heap
         const new_env = try self.allocator.create(ModuleEnv);
-        new_env.* = module_env.*; // Transfer ownership
+        new_env.* = try ModuleEnv.init(self.allocator, source);
         self.last_module_env = new_env;
+        return new_env;
     }
 
     /// Generate and store CAN and TYPES HTML for debugging
     fn generateAndStoreDebugHtml(self: *Repl, module_env: *ModuleEnv, expr_idx: ModuleEnv.Expr.Idx) !void {
         const SExprTree = @import("base").SExprTree;
-        
+
         // Generate CAN HTML
         {
             var tree = SExprTree.init(self.allocator);
             defer tree.deinit();
             try module_env.pushToSExprTree(expr_idx, &tree);
-            
+
             var can_buffer = std.ArrayList(u8).init(self.allocator);
             defer can_buffer.deinit();
             try tree.toStringPretty(can_buffer.writer().any());
-            
+
             const can_html = try self.allocator.dupe(u8, can_buffer.items);
             try self.debug_can_html.append(can_html);
         }
@@ -121,11 +122,11 @@ pub const Repl = struct {
             var tree = SExprTree.init(self.allocator);
             defer tree.deinit();
             try module_env.pushTypesToSExprTree(expr_idx, &tree);
-            
+
             var types_buffer = std.ArrayList(u8).init(self.allocator);
             defer types_buffer.deinit();
             try tree.toStringPretty(types_buffer.writer().any());
-            
+
             const types_html = try self.allocator.dupe(u8, types_buffer.items);
             try self.debug_types_html.append(types_html);
         }
@@ -137,9 +138,8 @@ pub const Repl = struct {
             // Replace existing definition
             self.allocator.free(existing_source);
         }
-        
-        // Store the new definition (no need to dupe var_name, it's already duped)
-        try self.definitions.put(var_name, try self.allocator.dupe(u8, source));
+
+        try self.definitions.put(var_name, source);
     }
 
     pub fn deinit(self: *Repl) void {
@@ -150,24 +150,24 @@ pub const Repl = struct {
             self.allocator.free(kv.value_ptr.*); // Free the source string
         }
         self.definitions.deinit();
-        
+
         // Clean up debug HTML storage
         for (self.debug_can_html.items) |html| {
             self.allocator.free(html);
         }
         self.debug_can_html.deinit();
-        
+
         for (self.debug_types_html.items) |html| {
             self.allocator.free(html);
         }
         self.debug_types_html.deinit();
-        
+
         // Clean up last ModuleEnv if it exists
         if (self.last_module_env) |module_env| {
             module_env.deinit();
             self.allocator.destroy(module_env);
         }
-        
+
         self.eval_stack.deinit();
     }
 
@@ -211,10 +211,7 @@ pub const Repl = struct {
 
         switch (parse_result) {
             .assignment => |info| {
-                defer self.allocator.free(info.source);
-                defer self.allocator.free(info.var_name);
-
-                // Add or replace definition
+                // Add or replace definition (duplicates the strings for ownership)
                 try self.addOrReplaceDefinition(info.source, info.var_name);
 
                 // Return descriptive output for assignments
@@ -243,9 +240,9 @@ pub const Repl = struct {
     }
 
     const ParseResult = union(enum) {
-        assignment: struct { 
-            source: []const u8,      // Must be allocator.dupe'd
-            var_name: []const u8,    // Must be allocator.dupe'd - the variable name
+        assignment: struct {
+            source: []const u8, // Borrowed from input
+            var_name: []const u8, // Borrowed from input
         },
         import,
         expression,
@@ -275,14 +272,12 @@ pub const Repl = struct {
                             const ident_tok = pattern.ident.ident_tok;
                             const token_region = ast.tokens.resolve(ident_tok);
                             const ident_name = module_env.source[token_region.start.offset..token_region.end.offset];
-                            
-                            // Make copies since ast will be freed
-                            const source_copy = try self.allocator.dupe(u8, input);
-                            const var_name_copy = try self.allocator.dupe(u8, ident_name);
-                            return ParseResult{ .assignment = .{ 
-                                .source = source_copy,
-                                .var_name = var_name_copy,
-                            }};
+
+                            // Return borrowed strings (no duplication needed)
+                            return ParseResult{ .assignment = .{
+                                .source = input,
+                                .var_name = ident_name,
+                            } };
                         }
                         return ParseResult.expression;
                     },
@@ -345,28 +340,25 @@ pub const Repl = struct {
 
     /// Evaluate source code
     fn evaluateSource(self: *Repl, source: []const u8) ![]const u8 {
-        return try self.evaluatePureExpression(source);
+        const module_env = try self.allocateModuleEnv(source);
+        return try self.evaluatePureExpression(module_env);
     }
 
     /// Evaluate a program (which may contain definitions)
-    fn evaluatePureExpression(self: *Repl, program_source: []const u8) ![]const u8 {
-
-        // Create module environment for the program
-        var module_env = try ModuleEnv.init(self.allocator, program_source);
-        errdefer module_env.deinit();
+    fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
 
         // Determine if we have definitions (which means we built a block expression)
         const has_definitions = self.definitions.count() > 0;
-        
+
         // Parse appropriately based on whether we have definitions
-        var parse_ast = if (has_definitions) 
+        var parse_ast = if (has_definitions)
             // Has definitions - we built a block expression, parse as expression
-            parse.parseExpr(&module_env) catch |err| {
+            parse.parseExpr(module_env) catch |err| {
                 return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
             }
         else
             // No definitions - simple expression, parse as expression
-            parse.parseExpr(&module_env) catch |err| {
+            parse.parseExpr(module_env) catch |err| {
                 return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
             };
         defer parse_ast.deinit(self.allocator);
@@ -375,7 +367,7 @@ pub const Repl = struct {
         parse_ast.store.emptyScratch();
 
         // Create CIR
-        const cir = &module_env; // CIR is now just ModuleEnv
+        const cir = module_env; // CIR is now just ModuleEnv
         try cir.initCIRFields(self.allocator, "repl");
 
         // Create canonicalizer
@@ -386,7 +378,7 @@ pub const Repl = struct {
 
         // Since we're always parsing as expressions now, handle them the same way
         const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-        
+
         const canonical_expr = try can.canonicalizeExpr(expr_idx) orelse {
             return try self.allocator.dupe(u8, "Canonicalize expr error: expression returned null");
         };
@@ -404,7 +396,7 @@ pub const Repl = struct {
         };
 
         // Create layout cache
-        var layout_cache = layout_store.Store.init(&module_env, &module_env.types) catch |err| {
+        var layout_cache = layout_store.Store.init(module_env, &module_env.types) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Layout cache error: {}", .{err});
         };
         defer layout_cache.deinit();
@@ -434,12 +426,9 @@ pub const Repl = struct {
             interpreter.endTrace();
         }
 
-        // Save ModuleEnv after successful evaluation (transfer ownership)
-        try self.saveModuleEnv(&module_env);
-
         // Generate debug HTML if enabled
         if (self.debug_store_snapshots) {
-            try self.generateAndStoreDebugHtml(&module_env, final_expr_idx);
+            try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
         }
 
         // Format the result immediately while memory is still valid
@@ -561,10 +550,10 @@ test "Repl - silent assignments" {
     var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
     defer repl.deinit();
 
-    // Assignment should be silent (return empty string)
+    // Assignment should return descriptive output
     const result1 = try repl.step("x = 5");
     defer std.testing.allocator.free(result1);
-    try testing.expectEqualStrings("", result1);
+    try testing.expectEqualStrings("assigned `x`", result1);
 
     // Expression should evaluate with context
     const result2 = try repl.step("x");
@@ -582,12 +571,12 @@ test "Repl - variable redefinition" {
     // First definition
     const result1 = try repl.step("x = 5");
     defer std.testing.allocator.free(result1);
-    try testing.expectEqualStrings("", result1);
+    try testing.expectEqualStrings("assigned `x`", result1);
 
     // Define y in terms of x
     const result2 = try repl.step("y = x + 1");
     defer std.testing.allocator.free(result2);
-    try testing.expectEqualStrings("", result2);
+    try testing.expectEqualStrings("assigned `y`", result2);
 
     // Evaluate y
     const result3 = try repl.step("y");
@@ -597,7 +586,7 @@ test "Repl - variable redefinition" {
     // Redefine x
     const result4 = try repl.step("x = 3");
     defer std.testing.allocator.free(result4);
-    try testing.expectEqualStrings("", result4);
+    try testing.expectEqualStrings("assigned `x`", result4);
 
     // Evaluate y again (should reflect new x value)
     const result5 = try repl.step("y");
@@ -719,4 +708,3 @@ test "Repl - minimal interpreter integration" {
 
     try testing.expectEqual(@as(i128, 42), value);
 }
-
