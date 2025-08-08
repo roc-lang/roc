@@ -2050,6 +2050,13 @@ const Formatter = struct {
 
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, i.@"else");
                     },
+                    .local_dispatch => |l| {
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, l.left)) {
+                            return true;
+                        }
+
+                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, l.right);
+                    },
                     else => return false,
                 }
             },
