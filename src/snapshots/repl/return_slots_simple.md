@@ -9,9 +9,9 @@ type=repl
 » (|x| x + 1)(5)
 ~~~
 # OUTPUT
-Evaluation error: error.TypeMismatch
+Evaluation error: error.NotImplemented
 ---
-Evaluation error: error.TypeMismatch
+6
 # PROBLEMS
 NIL
 # CANONICALIZE

@@ -188,7 +188,7 @@ pub const TupleField = struct {
 
 /// Closure layout - stores captures layout index
 pub const ClosureLayout = packed struct {
-    /// Layout index of the captured environment  
+    /// Layout index of the captured environment
     captures_layout_idx: Idx,
 };
 

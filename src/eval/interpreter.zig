@@ -1439,17 +1439,17 @@ pub const Interpreter = struct {
     fn getClosureReturnLayout(self: *Interpreter, closure: *const Closure) EvalError!Layout {
         // Get the type Var for the lambda expression
         const lambda_var = ModuleEnv.varFrom(closure.lambda_expr_idx);
-        
+
         // Resolve the lambda's type to get the function type
         const lambda_resolved = self.env.types.resolveVar(lambda_var);
-        
+
         // Extract the return type from the function
         switch (lambda_resolved.desc.content) {
             .structure => |structure| switch (structure) {
                 .fn_pure => |func| {
                     // Ensure the return type variable is fully resolved before getting layout
                     const ret_resolved = self.env.types.resolveVar(func.ret);
-                    
+
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
                         .flex_var, .rigid_var => {
@@ -1473,7 +1473,7 @@ pub const Interpreter = struct {
                 .fn_effectful => |func| {
                     // Ensure the return type variable is fully resolved before getting layout
                     const ret_resolved = self.env.types.resolveVar(func.ret);
-                    
+
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
                         .flex_var, .rigid_var => {
@@ -1497,7 +1497,7 @@ pub const Interpreter = struct {
                 .fn_unbound => |func| {
                     // Ensure the return type variable is fully resolved before getting layout
                     const ret_resolved = self.env.types.resolveVar(func.ret);
-                    
+
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
                         .flex_var, .rigid_var => {
@@ -1529,7 +1529,6 @@ pub const Interpreter = struct {
             },
         }
     }
-
 
     fn checkIfCondition(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, branch_index: u16) EvalError!void {
         // Pop the condition layout

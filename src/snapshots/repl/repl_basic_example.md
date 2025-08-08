@@ -13,7 +13,7 @@ type=repl
 # OUTPUT
 2
 ---
-Evaluation error: error.LayoutError
+Evaluation error: error.TypeMismatch
 ---
 "Hello, World!"
 ---
