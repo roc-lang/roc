@@ -217,8 +217,8 @@ pub const Repl = struct {
                 // Add or replace definition
                 try self.addOrReplaceDefinition(info.source, info.var_name);
 
-                // Return empty string for silent assignments (per design document)
-                return try self.allocator.dupe(u8, "");
+                // Return descriptive output for assignments
+                return try std.fmt.allocPrint(self.allocator, "assigned `{s}`", .{info.var_name});
             },
             .import => {
                 // Imports are not supported in this implementation
@@ -436,6 +436,11 @@ pub const Repl = struct {
 
         // Save ModuleEnv after successful evaluation (transfer ownership)
         try self.saveModuleEnv(&module_env);
+
+        // Generate debug HTML if enabled
+        if (self.debug_store_snapshots) {
+            try self.generateAndStoreDebugHtml(&module_env, final_expr_idx);
+        }
 
         // Format the result immediately while memory is still valid
         if (result.layout.tag == .scalar) {
