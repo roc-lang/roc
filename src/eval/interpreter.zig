@@ -102,6 +102,7 @@ pub const EvalError = error{
     RecordIndexOutOfBounds,
     InvalidBooleanTag,
     InvalidTagTarget,
+    NotImplemented,
 };
 
 /// Maximum number of capture fields allowed in a closure
@@ -1446,22 +1447,76 @@ pub const Interpreter = struct {
         switch (lambda_resolved.desc.content) {
             .structure => |structure| switch (structure) {
                 .fn_pure => |func| {
-                    // Get the return type Var and resolve it
+                    // Ensure the return type variable is fully resolved before getting layout
                     const ret_resolved = self.env.types.resolveVar(func.ret);
-                    // Convert the resolved type to a layout
-                    return self.typeToLayout(ret_resolved);
+                    
+                    // Check if it's still unresolved (flex_var/rigid_var)
+                    switch (ret_resolved.desc.content) {
+                        .flex_var, .rigid_var => {
+                            self.traceInfo("LAYOUT SYSTEM NOT READY: Lambda return type is still unresolved ({}).", .{ret_resolved.desc.content});
+                            self.traceInfo("This means the type system hasn't finished constraint solving before layout computation.", .{});
+                            self.traceInfo("The type system shows the correct type in TYPES section, but the type variables", .{});
+                            self.traceInfo("passed to layout computation are still flex_var/rigid_var instead of concrete types.", .{});
+                            self.traceInfo("This will be fixed when the type system implementation is completed.", .{});
+                            return error.NotImplemented;
+                        },
+                        else => {
+                            // Type is resolved to a concrete type, use layout cache
+                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret) catch |err| {
+                                self.traceError("Failed to get layout for closure return type: {}", .{err});
+                                return error.TypeMismatch;
+                            };
+                            return self.layout_cache.getLayout(ret_layout_idx);
+                        },
+                    }
                 },
                 .fn_effectful => |func| {
-                    // Get the return type Var and resolve it
+                    // Ensure the return type variable is fully resolved before getting layout
                     const ret_resolved = self.env.types.resolveVar(func.ret);
-                    // Convert the resolved type to a layout
-                    return self.typeToLayout(ret_resolved);
+                    
+                    // Check if it's still unresolved (flex_var/rigid_var)
+                    switch (ret_resolved.desc.content) {
+                        .flex_var, .rigid_var => {
+                            self.traceInfo("LAYOUT SYSTEM NOT READY: Lambda return type is still unresolved ({}).", .{ret_resolved.desc.content});
+                            self.traceInfo("This means the type system hasn't finished constraint solving before layout computation.", .{});
+                            self.traceInfo("The type system shows the correct type in TYPES section, but the type variables", .{});
+                            self.traceInfo("passed to layout computation are still flex_var/rigid_var instead of concrete types.", .{});
+                            self.traceInfo("This will be fixed when the type system implementation is completed.", .{});
+                            return error.NotImplemented;
+                        },
+                        else => {
+                            // Type is resolved to a concrete type, use layout cache
+                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret) catch |err| {
+                                self.traceError("Failed to get layout for closure return type: {}", .{err});
+                                return error.TypeMismatch;
+                            };
+                            return self.layout_cache.getLayout(ret_layout_idx);
+                        },
+                    }
                 },
                 .fn_unbound => |func| {
-                    // Get the return type Var and resolve it
+                    // Ensure the return type variable is fully resolved before getting layout
                     const ret_resolved = self.env.types.resolveVar(func.ret);
-                    // Convert the resolved type to a layout
-                    return self.typeToLayout(ret_resolved);
+                    
+                    // Check if it's still unresolved (flex_var/rigid_var)
+                    switch (ret_resolved.desc.content) {
+                        .flex_var, .rigid_var => {
+                            self.traceInfo("LAYOUT SYSTEM NOT READY: Lambda return type is still unresolved ({}).", .{ret_resolved.desc.content});
+                            self.traceInfo("This means the type system hasn't finished constraint solving before layout computation.", .{});
+                            self.traceInfo("The type system shows the correct type in TYPES section, but the type variables", .{});
+                            self.traceInfo("passed to layout computation are still flex_var/rigid_var instead of concrete types.", .{});
+                            self.traceInfo("This will be fixed when the type system implementation is completed.", .{});
+                            return error.NotImplemented;
+                        },
+                        else => {
+                            // Type is resolved to a concrete type, use layout cache
+                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret) catch |err| {
+                                self.traceError("Failed to get layout for closure return type: {}", .{err});
+                                return error.TypeMismatch;
+                            };
+                            return self.layout_cache.getLayout(ret_layout_idx);
+                        },
+                    }
                 },
                 else => {
                     self.traceError("Closure lambda is not a function type: {}", .{structure});
@@ -1475,37 +1530,6 @@ pub const Interpreter = struct {
         }
     }
 
-    /// Convert a resolved type to a layout
-    fn typeToLayout(self: *Interpreter, resolved_type: types.store.ResolvedVarDesc) EvalError!Layout {
-        switch (resolved_type.desc.content) {
-            .structure => |structure| switch (structure) {
-                .str => return Layout.str(),
-                .num => |num| switch (num) {
-                    .int_precision => |precision| return Layout.int(precision),
-                    .frac_precision => |precision| return Layout.frac(precision),
-                    else => {
-                        self.traceError("Unsupported number type: {}", .{num});
-                        return error.TypeMismatch;
-                    },
-                },
-                .nominal_type => |nominal| {
-                    // For nominal types, we need to get the layout from the layout cache
-                    // This is a simplified approach - in practice we'd need to handle this more robustly
-                    const nominal_var = ModuleEnv.varFrom(nominal.type_decl);
-                    const nominal_layout_idx = try self.layout_cache.addTypeVar(nominal_var);
-                    return self.layout_cache.getLayout(nominal_layout_idx);
-                },
-                else => {
-                    self.traceError("Unsupported structure type: {}", .{structure});
-                    return error.TypeMismatch;
-                },
-            },
-            else => {
-                self.traceError("Unsupported type content: {}", .{resolved_type.desc.content});
-                return error.TypeMismatch;
-            },
-        }
-    }
 
     fn checkIfCondition(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, branch_index: u16) EvalError!void {
         // Pop the condition layout
@@ -1598,13 +1622,12 @@ pub const Interpreter = struct {
         // Calculate value_base before allocating return slot
         const value_base: usize = self.value_stack.items.len - @as(usize, arg_count) - 1; // -1 for closure
 
-        // Pre-allocate return slot AFTER getting closure but before setting up the frame
-        // Use a generous placeholder layout that can handle most return types
-        // The actual return value will determine the final layout during return
-        const placeholder_layout = Layout.str(); // Use string layout as placeholder (24 bytes)
-        const return_layout_idx = try self.layout_cache.insertLayout(placeholder_layout);
+        // Pre-allocate return slot with the correct return type layout
+        const return_layout = try self.getClosureReturnLayout(closure);
+        self.traceInfo("getClosureReturnLayout returned: {}", .{return_layout});
+        const return_layout_idx = try self.layout_cache.insertLayout(return_layout);
         const return_slot_offset = self.stack_memory.used;
-        _ = try self.pushStackValue(placeholder_layout);
+        _ = try self.pushStackValue(return_layout);
 
         // Final stack layout: [args..., closure, return_slot]
         const stack_base = self.value_stack.items[value_base].offset;
