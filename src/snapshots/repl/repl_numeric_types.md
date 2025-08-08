@@ -145,3 +145,59 @@ NIL
 ---
 (e-frac-dec @1.2-1.9 (value "-0.002"))
 ~~~
+# TYPES
+~~~clojure
+(expr @1.2-1.5 (type "U8"))
+---
+(expr @1.2-1.5 (type "I8"))
+---
+(expr @1.2-1.6 (type "U16"))
+---
+(expr @1.2-1.6 (type "I16"))
+---
+(expr @1.2-1.6 (type "U32"))
+---
+(expr @1.2-1.6 (type "I32"))
+---
+(expr @1.2-1.6 (type "U64"))
+---
+(expr @1.2-1.6 (type "I64"))
+---
+(expr @1.2-1.7 (type "U128"))
+---
+(expr @1.2-1.8 (type "I128"))
+---
+(expr @1.2-1.9 (type "F32"))
+---
+(expr @1.2-1.9 (type "F64"))
+---
+(expr @1.2-1.9 (type "Dec"))
+---
+(expr @1.2-1.5 (type "Int(_size)"))
+---
+(expr @1.2-1.5 (type "Int(_size)"))
+---
+(expr @1.2-1.6 (type "Int(_size)"))
+---
+(expr @1.2-1.9 (type "Int(_size)"))
+---
+(expr @1.2-1.10 (type "Int(_size)"))
+---
+(expr @1.2-1.4 (type "Num(_size)"))
+---
+(expr @1.2-1.6 (type "Frac(_size)"))
+---
+(expr @1.2-1.8 (type "Num(_size)"))
+---
+(expr @1.2-1.12 (type "Num(_size)"))
+---
+(expr @1.2-1.5 (type "Frac(_size)"))
+---
+(expr @1.2-1.6 (type "Frac(_size)"))
+---
+(expr @1.2-1.5 (type "Frac(_size)"))
+---
+(expr @1.2-1.5 (type "Frac(_size)"))
+---
+(expr @1.2-1.9 (type "Frac(_size)"))
+~~~

@@ -31,3 +31,7 @@ NIL
 	(if-else
 		(e-int @1.36-1.37 (value "5"))))
 ~~~
+# TYPES
+~~~clojure
+(expr @1.2-1.37 (type "Num(_size)"))
+~~~

@@ -43,7 +43,8 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         return;
     }
 
-    const result_size = layout_cache.layoutSize(self.layout);
+    // For closures, use getTotalSize to include capture data; for others use layoutSize
+    const result_size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache) else layout_cache.layoutSize(self.layout);
     if (result_size == 0) {
         return;
     }
@@ -231,6 +232,24 @@ pub fn setInt(self: *StackValue, value: i128) void {
     }
 }
 
+/// Initialise the StackValue boolean value
+pub fn setBool(self: *StackValue, value: u8) void {
+    // Assert this is pointing to a valid memory location
+    std.debug.assert(self.ptr != null);
+
+    // Assert this is a boolean
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .bool);
+
+    // Assert this is uninitialised memory
+    //
+    // Avoid accidental overwrite, manually toggle this if updating an already initialized value
+    std.debug.assert(!self.is_initialized);
+
+    // Write the boolean value as a byte
+    const typed_ptr: *u8 = @ptrCast(@alignCast(self.ptr.?));
+    typed_ptr.* = value;
+}
+
 /// Create a TupleAccessor for safe tuple element access
 pub fn asTuple(self: StackValue, layout_cache: *LayoutStore) !TupleAccessor {
     std.debug.assert(self.is_initialized); // Tuple must be initialized before accessing
@@ -302,6 +321,122 @@ pub const TupleAccessor = struct {
     }
 };
 
+/// Create a RecordAccessor for safe record field access
+pub fn asRecord(self: StackValue, layout_cache: *LayoutStore) !RecordAccessor {
+    std.debug.assert(self.is_initialized); // Record must be initialized before accessing
+    std.debug.assert(self.ptr != null);
+    std.debug.assert(self.layout.tag == .record);
+
+    const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
+    const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
+
+    return RecordAccessor{
+        .base_value = self,
+        .layout_cache = layout_cache,
+        .record_layout = self.layout,
+        .field_layouts = field_layouts,
+    };
+}
+
+/// Safe accessor for record fields with bounds checking and proper memory management
+pub const RecordAccessor = struct {
+    base_value: StackValue,
+    layout_cache: *LayoutStore,
+    record_layout: Layout,
+    field_layouts: layout_mod.RecordField.SafeMultiList.Slice,
+
+    /// Get a StackValue for the field at the given index
+    pub fn getFieldByIndex(self: RecordAccessor, index: usize) !StackValue {
+        if (index >= self.field_layouts.len) {
+            return error.RecordIndexOutOfBounds;
+        }
+
+        std.debug.assert(self.base_value.is_initialized);
+        std.debug.assert(self.base_value.ptr != null);
+
+        const field_layout_info = self.field_layouts.get(index);
+        const field_layout = self.layout_cache.getLayout(field_layout_info.layout);
+
+        // Get the offset for this field within the record
+        const field_offset = self.layout_cache.getRecordFieldOffset(self.record_layout.data.record.idx, @intCast(index));
+
+        // Calculate the field pointer with proper alignment
+        const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
+        const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
+
+        return StackValue{
+            .layout = field_layout,
+            .ptr = field_ptr,
+            .is_initialized = true, // Fields in existing records are initialized
+        };
+    }
+
+    /// Get a StackValue for the field with the given name
+    pub fn getFieldByName(self: RecordAccessor, field_name: []const u8) !?StackValue {
+        // Find the field index by name
+        const field_offset = self.layout_cache.getRecordFieldOffsetByName(
+            self.record_layout.data.record.idx,
+            field_name,
+        ) orelse return null;
+
+        // Find the field layout by name
+        var field_layout: ?Layout = null;
+        for (0..self.field_layouts.len) |i| {
+            const field_info = self.field_layouts.get(i);
+            // We need to get the field name from the layout cache's identifier store
+            // This is a limitation - we'd need access to the env to get the actual name
+            // For now, we'll use the offset-based approach
+            const this_field_offset = self.layout_cache.getRecordFieldOffset(self.record_layout.data.record.idx, @intCast(i));
+            if (this_field_offset == field_offset) {
+                field_layout = self.layout_cache.getLayout(field_info.layout);
+                break;
+            }
+        }
+
+        if (field_layout == null) return null;
+
+        const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
+        const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
+
+        return StackValue{
+            .layout = field_layout.?,
+            .ptr = field_ptr,
+            .is_initialized = true,
+        };
+    }
+
+    /// Set a field by copying from a source StackValue
+    pub fn setFieldByIndex(self: RecordAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
+        const dest_field = try self.getFieldByIndex(index);
+        source.copyToPtr(self.layout_cache, dest_field.ptr.?, ops);
+    }
+
+    /// Get the number of fields in this record
+    pub fn getFieldCount(self: RecordAccessor) usize {
+        return self.field_layouts.len;
+    }
+
+    /// Get the layout of the field at the given index
+    pub fn getFieldLayout(self: RecordAccessor, index: usize) !Layout {
+        if (index >= self.field_layouts.len) {
+            return error.RecordIndexOutOfBounds;
+        }
+        const field_layout_info = self.field_layouts.get(index);
+        return self.layout_cache.getLayout(field_layout_info.layout);
+    }
+
+    /// Find field index by comparing field names (requires env access for name comparison)
+    pub fn findFieldIndex(self: RecordAccessor, env: anytype, field_name: []const u8) ?usize {
+        for (0..self.field_layouts.len) |idx| {
+            const field = self.field_layouts.get(idx);
+            if (std.mem.eql(u8, env.idents.getText(field.name), field_name)) {
+                return idx;
+            }
+        }
+        return null;
+    }
+};
+
 /// Get this value as a string pointer
 pub fn asRocStr(self: StackValue) *RocStr {
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .str);
@@ -330,7 +465,8 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) vo
     std.debug.assert(self.is_initialized);
     std.debug.assert(dest.ptr != null);
 
-    const size = layout_cache.layoutSize(self.layout);
+    // For closures, use getTotalSize to include capture data; for others use layoutSize
+    const size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache) else layout_cache.layoutSize(self.layout);
     if (size == 0) return;
 
     if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
@@ -356,4 +492,68 @@ pub fn fromPtr(layout: Layout, ptr: *anyopaque) StackValue {
         .ptr = ptr,
         .is_initialized = true,
     };
+}
+
+/// Copy value data to another StackValue WITHOUT incrementing refcounts (move semantics)
+pub fn copyWithoutRefcount(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) void {
+    std.debug.assert(self.is_initialized);
+    std.debug.assert(dest.ptr != null);
+
+    // For closures, use getTotalSize to include capture data; for others use layoutSize
+    const size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache) else layout_cache.layoutSize(self.layout);
+    if (size == 0) return;
+
+    if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
+        // String: use proper struct copy WITHOUT incrementing ref count (move semantics)
+        const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
+        const dest_str: *RocStr = @ptrCast(@alignCast(dest.ptr.?));
+        dest_str.* = src_str.*; // Just copy the struct, no refcount change
+    } else {
+        // Everything else just copy the bytes
+        std.mem.copyForwards(
+            u8,
+            @as([*]u8, @ptrCast(dest.ptr.?))[0..size],
+            @as([*]const u8, @ptrCast(self.ptr.?))[0..size],
+        );
+    }
+}
+
+/// Increment reference count for refcounted types
+pub fn incref(self: StackValue) void {
+    if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
+        const roc_str = self.asRocStr();
+        roc_str.incref(1);
+        return;
+    }
+    // TODO: Add support for other refcounted types (lists, boxes) when implemented
+    std.debug.panic("called incref on a non-refcounted value: {}", .{self.layout.tag});
+}
+
+/// Decrement reference count for refcounted types
+pub fn decref(self: StackValue, ops: *RocOps) void {
+    if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
+        const roc_str = self.asRocStr();
+        roc_str.decref(ops);
+        return;
+    }
+    // TODO: Add support for other refcounted types (lists, boxes) when implemented
+    std.debug.panic("called decref on a non-refcounted value: {}", .{self.layout.tag});
+}
+
+/// Calculate total memory footprint for a value.
+///
+/// - For closures, this includes both the Closure header and captured data
+/// - For all other types, this is just the layout size
+pub fn getTotalSize(self: StackValue, layout_cache: *LayoutStore) u32 {
+    if (self.layout.tag == .closure and self.ptr != null) {
+        const closure = self.asClosure();
+        const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
+        const captures_alignment = captures_layout.alignment(layout_cache.targetUsize());
+        const header_size = @sizeOf(Closure);
+        const aligned_captures_offset = std.mem.alignForward(u32, header_size, @intCast(captures_alignment.toByteUnits()));
+        const captures_size = layout_cache.layoutSize(captures_layout);
+        return aligned_captures_offset + captures_size;
+    } else {
+        return layout_cache.layoutSize(self.layout);
+    }
 }

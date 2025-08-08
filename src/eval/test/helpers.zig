@@ -95,6 +95,58 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     try testing.expectEqual(expected_int, result.asI128());
 }
 
+/// Helper function to run an expression and expect a boolean result.
+pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { trace, no_trace }) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+    defer eval_stack.deinit();
+
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+    defer layout_cache.deinit();
+
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
+    var interpreter = try eval.Interpreter.init(
+        test_allocator,
+        resources.module_env,
+        &eval_stack,
+        &layout_cache,
+        &resources.module_env.types,
+    );
+    const roc_ops_ptr = test_env_instance.get_ops();
+    defer interpreter.deinit(roc_ops_ptr);
+
+    if (should_trace == .trace) {
+        interpreter.startTrace(std.io.getStdErr().writer().any());
+    }
+
+    const result = interpreter.eval(resources.expr_idx, roc_ops_ptr) catch |err| {
+        std.debug.print("Evaluation failed: {}\n", .{err});
+        return err;
+    };
+
+    if (should_trace == .trace) {
+        interpreter.endTrace();
+    }
+
+    // For boolean results, we can read the underlying byte value
+    if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
+        // Boolean represented as integer
+        const int_val = result.asI128();
+        const bool_val = int_val != 0;
+        try testing.expectEqual(expected_bool, bool_val);
+    } else {
+        // Try reading as raw byte (for boolean tag values)
+        std.debug.assert(result.ptr != null);
+        const bool_ptr = @as(*const u8, @ptrCast(result.ptr.?));
+        const bool_val = bool_ptr.* != 0;
+        try testing.expectEqual(expected_bool, bool_val);
+    }
+}
+
 /// Helpers to setup and run an interpreter expecting a string result.
 pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
@@ -508,4 +560,32 @@ test "interpreter reuse across multiple evaluations" {
         const value: *i128 = @ptrCast(@alignCast(result.ptr.?));
         try testing.expectEqual(expected_value, value.*);
     }
+}
+
+test "nominal type context preservation - boolean" {
+    // Test that Bool.True and Bool.False get correct boolean layout
+    // This tests the nominal type context preservation fix
+
+    // Test Bool.True
+    try runExpectBool("Bool.True", true, .no_trace);
+
+    // Test Bool.False
+    try runExpectBool("Bool.False", false, .no_trace);
+
+    // Test boolean negation with nominal types
+    try runExpectBool("!Bool.True", false, .no_trace);
+    try runExpectBool("!Bool.False", true, .no_trace);
+
+    // Test boolean operations with nominal types
+    try runExpectBool("Bool.True and Bool.False", false, .no_trace);
+    try runExpectBool("Bool.True or Bool.False", true, .no_trace);
+}
+
+test "nominal type context preservation - regression prevention" {
+    // Test that the fix prevents the original regression
+    // The original issue was that (|x| !x)(True) would return "0" instead of "False"
+
+    // This should work correctly now with nominal type context preservation
+    try runExpectBool("(|x| !x)(Bool.True)", false, .no_trace);
+    try runExpectBool("(|x| !x)(Bool.False)", true, .no_trace);
 }

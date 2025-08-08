@@ -99,6 +99,10 @@ pub const EvalError = error{
     RuntimeCrash,
     InvalidBindingsState,
     TupleIndexOutOfBounds,
+    RecordIndexOutOfBounds,
+    InvalidBooleanTag,
+    InvalidTagTarget,
+    NotImplemented,
 };
 
 /// Maximum number of capture fields allowed in a closure
@@ -106,7 +110,8 @@ const MAX_CAPTURE_FIELDS = 256;
 
 // Work item for the iterative evaluation stack
 const WorkKind = enum {
-    w_eval_expr,
+    w_eval_expr_structural, // Structural: evaluate expression using its own type
+    w_eval_expr_nominal, // Nominal: evaluate backing expression using nominal type's layout
     w_binop_add,
     w_binop_sub,
     w_binop_mul,
@@ -169,6 +174,8 @@ pub const WorkItem = struct {
         current_element_idx: usize,
         crash_msg: StringLiteral.Idx,
         segment_count: usize,
+        /// pre-determined layout for expression evaluation (when not nothing)
+        layout_idx: layout.Idx,
     },
 };
 
@@ -202,6 +209,10 @@ pub const CallFrame = struct {
     ///
     /// Bindings map from a pattern_idx to the actual value in our stack_memory.
     bindings_base: u32,
+    /// Offset in stack_memory to the pre-allocated return slot
+    return_slot_offset: u32,
+    /// Layout index of the expected return value
+    return_layout_idx: layout.Idx,
     /// (future enhancement) for tail-call optimisation
     is_tail_call: bool = false,
 };
@@ -330,7 +341,11 @@ pub const Interpreter = struct {
         const closure_stack_val = StackValue.fromPtr(closure_val.layout, &self.stack_memory.start[closure_val.offset]);
         const closure = closure_stack_val.asClosure();
         const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
-        const captures_ptr = @as([*]u8, @ptrCast(&self.stack_memory.start[closure_val.offset])) + @sizeOf(Closure);
+        // Calculate properly aligned offset for captures after Closure header
+        const closure_size = @sizeOf(Closure);
+        const captures_alignment = captures_layout.alignment(target_usize);
+        const aligned_captures_offset = std.mem.alignForward(usize, closure_size, @intCast(captures_alignment.toByteUnits()));
+        const captures_ptr = @as([*]u8, @ptrCast(&self.stack_memory.start[closure_val.offset])) + aligned_captures_offset;
 
         const pattern = self.env.store.getPattern(pattern_idx);
         const ident_idx = switch (pattern) {
@@ -340,20 +355,14 @@ pub const Interpreter = struct {
         const capture_name_text = self.env.idents.getText(ident_idx);
 
         if (captures_layout.tag == .record) {
-            const record_data = self.layout_cache.getRecordData(captures_layout.data.record.idx);
-            if (record_data.fields.count > 0) {
-                if (self.layout_cache.getRecordFieldOffsetByName(
-                    captures_layout.data.record.idx,
-                    capture_name_text,
-                )) |offset| {
-                    // Found it!
-                    self.traceInfo("Found capture '{s}' at offset {}", .{ capture_name_text, offset });
-                    const capture_layout_idx = try self.getLayoutIdx(pattern_idx);
-                    const capture_layout = self.layout_cache.getLayout(capture_layout_idx);
+            // Use RecordAccessor for safe field access
+            const captures_value = StackValue.fromPtr(captures_layout, captures_ptr);
+            const record_accessor = try captures_value.asRecord(self.layout_cache);
 
-                    const src_ptr = captures_ptr + offset;
-                    return StackValue.fromPtr(capture_layout, src_ptr);
-                }
+            // Find the field by name using the helper function
+            if (record_accessor.findFieldIndex(self.env, capture_name_text)) |field_index| {
+                self.traceInfo("Found capture '{s}' at index {}", .{ capture_name_text, field_index });
+                return try record_accessor.getFieldByIndex(field_index);
             }
         }
         return null;
@@ -404,7 +413,7 @@ pub const Interpreter = struct {
         self.traceExpression(expr_idx);
 
         self.schedule_work(WorkItem{
-            .kind = .w_eval_expr,
+            .kind = .w_eval_expr_structural,
             .expr_idx = expr_idx,
             .extra = .{ .nothing = {} },
         });
@@ -412,7 +421,14 @@ pub const Interpreter = struct {
         // Main evaluation loop
         while (self.take_work()) |work| {
             switch (work.kind) {
-                .w_eval_expr => try self.evalExpr(work.expr_idx, roc_ops),
+                .w_eval_expr_structural => {
+                    // For regular eval_expr calls, we don't have a predetermined layout
+                    try self.evalExpr(work.expr_idx, roc_ops, null);
+                },
+                .w_eval_expr_nominal => {
+                    // For nominal backing expressions, use the predetermined layout
+                    try self.evalExpr(work.expr_idx, roc_ops, work.extra.layout_idx);
+                },
                 .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
                     try self.completeBinop(work.kind);
                 },
@@ -475,17 +491,8 @@ pub const Interpreter = struct {
                     // The block's result is on top of the stack. We need to preserve it.
                     const result_val = try self.popStackValue();
 
-                    var result_size: u32 = 0;
+                    const result_size = result_val.getTotalSize(self.layout_cache);
                     const result_alignment = result_val.layout.alignment(target_usize);
-                    if (result_val.layout.tag == .closure and result_val.ptr != null) {
-                        std.debug.assert(result_val.ptr != null);
-                        const closure: *const Closure = @ptrCast(@alignCast(result_val.ptr.?));
-                        const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
-                        const captures_size = self.layout_cache.layoutSize(captures_layout);
-                        result_size = @sizeOf(Closure) + captures_size;
-                    } else {
-                        result_size = self.layout_cache.layoutSize(result_val.layout);
-                    }
 
                     // Copy to a temp buffer
                     const temp_buffer = try self.allocator.alloc(u8, result_size);
@@ -554,10 +561,16 @@ pub const Interpreter = struct {
             return EvalError.Crash;
         }
 
-        // With proper calling convention, after cleanup the result is at the start of the stack
-        const result_ptr = @as([*]u8, @ptrCast(self.stack_memory.start));
+        // The result is at the offset specified in final_value, not necessarily at the start
+        const result_ptr = self.stack_memory.start + final_value.offset;
 
-        self.traceInfo("Final result at stack pos 0 (calling convention)", .{});
+        self.traceInfo("Final result at offset {} in stack memory", .{final_value.offset});
+
+        // Debug: check what's actually at the result location
+        if (final_value.layout.tag == .scalar and self.layout_cache.layoutSize(final_value.layout) > 0) {
+            const debug_byte = result_ptr[0];
+            self.traceInfo("Byte at final result location: {}", .{debug_byte});
+        }
 
         return StackValue{
             .layout = final_value.layout,
@@ -632,7 +645,7 @@ pub const Interpreter = struct {
     /// # Error Handling
     /// Malformed expressions result in runtime error placeholders rather
     /// than evaluation failure.
-    fn evalExpr(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, roc_ops: *RocOps) EvalError!void {
+    fn evalExpr(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, roc_ops: *RocOps, layout_idx: ?layout.Idx) EvalError!void {
         const expr = self.env.store.getExpr(expr_idx);
 
         self.traceEnter("evalExpr {s}", .{@tagName(expr)});
@@ -651,21 +664,22 @@ pub const Interpreter = struct {
 
             // Numeric literals - push directly to stack
             .e_int => |int_lit| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 var result_value = try self.pushStackValue(expr_layout);
 
                 if (expr_layout.tag == .scalar and expr_layout.data.scalar.tag == .int) {
                     result_value.setInt(int_lit.value.toI128());
                     self.traceInfo("Pushed integer literal {d}", .{int_lit.value.toI128()});
                 } else {
-                    return error.LayoutError;
+                    self.traceError("Integer literal: expected integer layout, got {}", .{expr_layout.tag});
+                    return error.TypeMismatch;
                 }
             },
 
             .e_frac_f32 => |float_lit| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
 
                 std.debug.assert(result_value.ptr != null);
@@ -676,8 +690,8 @@ pub const Interpreter = struct {
             },
 
             .e_frac_f64 => |float_lit| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
 
                 std.debug.assert(result_value.ptr != null);
@@ -689,8 +703,8 @@ pub const Interpreter = struct {
 
             // Zero-argument tags (e.g., True, False)
             .e_zero_argument_tag => |tag| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
 
                 std.debug.assert(result_value.ptr != null);
@@ -707,8 +721,8 @@ pub const Interpreter = struct {
 
             // Empty record
             .e_empty_record => {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
 
                 // Empty record is zero-sized and has no bytes
@@ -717,8 +731,8 @@ pub const Interpreter = struct {
 
             // Empty list
             .e_empty_list => {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
 
                 // Initialize empty list
@@ -757,12 +771,12 @@ pub const Interpreter = struct {
                 // Push operands in order - note that this results in the results being pushed to the stack in reverse order
                 // We do this so that `dbg` statements are printed in the expected order
                 self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = binop.rhs,
                     .extra = .{ .nothing = {} },
                 });
                 self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = binop.lhs,
                     .extra = .{ .nothing = {} },
                 });
@@ -784,14 +798,14 @@ pub const Interpreter = struct {
                     const branch = self.env.store.getIfBranch(branches[0]);
 
                     self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr,
+                        .kind = .w_eval_expr_structural,
                         .expr_idx = branch.cond,
                         .extra = .{ .nothing = {} },
                     });
                 } else {
                     // No branches, evaluate final_else directly
                     self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr,
+                        .kind = .w_eval_expr_structural,
                         .expr_idx = if_expr.final_else,
                         .extra = .{ .nothing = {} },
                     });
@@ -822,7 +836,7 @@ pub const Interpreter = struct {
                 // 3. Fall back to global definitions
                 if (self.lookupGlobal(lookup.pattern_idx)) |def_expr| {
                     self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr,
+                        .kind = .w_eval_expr_structural,
                         .expr_idx = def_expr,
                         .extra = .{ .nothing = {} },
                     });
@@ -835,11 +849,58 @@ pub const Interpreter = struct {
 
             // Nominal expressions
             .e_nominal => |nominal| {
-                // Evaluate the backing expression
+                // CRITICAL: Use the nominal type for layout, not the backing expression's type
+                // Get the nominal type's layout directly
+                const nominal_var: types.Var = @enumFromInt(@intFromEnum(expr_idx));
+                const nominal_layout_idx = self.layout_cache.addTypeVar(nominal_var) catch |err| switch (err) {
+                    error.ZeroSizedType => return error.ZeroSizedType,
+                    error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
+                    else => |e| return e,
+                };
+
+                // Debug assertions to catch regressions
+                if (std.debug.runtime_safety) {
+                    // Verify we have a nominal type
+                    const resolved = self.layout_cache.types_store.resolveVar(nominal_var);
+                    switch (resolved.desc.content) {
+                        .structure => |flat_type| switch (flat_type) {
+                            .nominal_type => {
+                                // Good - we have a nominal type
+                                const nominal_ident = self.env.idents.getText(flat_type.nominal_type.ident.ident_idx);
+                                if (std.mem.eql(u8, nominal_ident, "Bool")) {
+                                    // For Bool nominal types, verify we get boolean layout
+                                    const nominal_layout = self.layout_cache.getLayout(nominal_layout_idx);
+                                    if (!(nominal_layout.tag == .scalar and nominal_layout.data.scalar.tag == .bool)) {
+                                        std.debug.panic("REGRESSION: Bool nominal type should have boolean layout, got: {}\n", .{nominal_layout.tag});
+                                    }
+                                }
+                            },
+                            else => {
+                                std.debug.panic("REGRESSION: e_nominal should have nominal_type, got: {}\n", .{flat_type});
+                            },
+                        },
+                        else => {
+                            std.debug.panic("REGRESSION: e_nominal should have structure content, got: {}\n", .{resolved.desc.content});
+                        },
+                    }
+                }
+
+                // Trace nominal type evaluation
+                const resolved = self.layout_cache.types_store.resolveVar(nominal_var);
+                const nominal_ident = switch (resolved.desc.content) {
+                    .structure => |flat_type| switch (flat_type) {
+                        .nominal_type => |nt| self.env.idents.getText(nt.ident.ident_idx),
+                        else => "unknown",
+                    },
+                    else => "unknown",
+                };
+                self.traceInfo("e_nominal: type={s}, layout_idx={}", .{ nominal_ident, nominal_layout_idx });
+
+                // Evaluate backing expression but preserve nominal layout context
                 try self.work_stack.append(.{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_nominal,
                     .expr_idx = nominal.backing_expr,
-                    .extra = .{ .nothing = {} },
+                    .extra = .{ .layout_idx = nominal_layout_idx },
                 });
             },
             .e_nominal_external => |_| {
@@ -849,20 +910,28 @@ pub const Interpreter = struct {
 
             // Tags with arguments
             .e_tag => |tag| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
-                const result_ptr = result_value.ptr.?;
 
-                // For now, handle boolean tags (True/False) as u8
-                const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_ptr)));
-                const tag_name = self.env.idents.getText(tag.name);
-                if (std.mem.eql(u8, tag_name, "True")) {
-                    tag_ptr.* = 1;
-                } else if (std.mem.eql(u8, tag_name, "False")) {
-                    tag_ptr.* = 0;
-                } else {
-                    tag_ptr.* = 0; // TODO: get actual tag discriminant
+                // Use layout to determine handling strategy
+                switch (expr_layout.tag) {
+                    .scalar => switch (expr_layout.data.scalar.tag) {
+                        .bool => {
+                            // Handle Bool tags as scalar boolean values
+                            try self.handleBooleanScalarTag(result_value, tag.name);
+                        },
+                        else => {
+                            self.traceError("Invalid tag for scalar type: {}", .{expr_layout.data.scalar.tag});
+                            return error.InvalidTagTarget;
+                        },
+                    },
+                    // Future: handle actual tag unions when that layout type is added
+                    else => {
+                        // General tag union handling (when implemented)
+                        self.traceError("Tag union layouts not yet implemented: {}", .{expr_layout.tag});
+                        return error.InvalidTagTarget;
+                    },
                 }
 
                 self.traceInfo("PUSH e_tag", .{});
@@ -873,7 +942,8 @@ pub const Interpreter = struct {
                 const all_exprs = self.env.store.sliceExpr(call.args);
 
                 if (all_exprs.len == 0) {
-                    return error.LayoutError; // No function to call
+                    self.traceError("Function call: no function expression found", .{});
+                    return error.TypeMismatch; // No function to call
                 }
 
                 const function_expr = all_exprs[0];
@@ -894,7 +964,7 @@ pub const Interpreter = struct {
 
                 // 2. Function (executed second, pushes closure to stack)
                 self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = function_expr,
                     .extra = .{ .nothing = {} },
                 });
@@ -904,7 +974,7 @@ pub const Interpreter = struct {
                 while (i > 0) {
                     i -= 1;
                     self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr,
+                        .kind = .w_eval_expr_structural,
                         .expr_idx = arg_exprs[i],
                         .extra = .{ .nothing = {} },
                     });
@@ -922,7 +992,7 @@ pub const Interpreter = struct {
 
                 // Evaluate the operand expression
                 try self.work_stack.append(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = unary.expr,
                     .extra = .{ .nothing = {} },
                 });
@@ -939,7 +1009,7 @@ pub const Interpreter = struct {
 
                 // Evaluate the operand expression
                 try self.work_stack.append(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = unary.expr,
                     .extra = .{ .nothing = {} },
                 });
@@ -955,7 +1025,7 @@ pub const Interpreter = struct {
 
                 // Schedule evaluation of the final expression.
                 self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = block.final_expr,
                     .extra = .{ .nothing = {} },
                 });
@@ -977,7 +1047,7 @@ pub const Interpreter = struct {
                             });
                             // Schedule evaluation of the expression.
                             self.schedule_work(WorkItem{
-                                .kind = .w_eval_expr,
+                                .kind = .w_eval_expr_structural,
                                 .expr_idx = decl.expr,
                                 .extra = .{ .nothing = {} },
                             });
@@ -999,8 +1069,8 @@ pub const Interpreter = struct {
             },
 
             .e_frac_dec => |dec_lit| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
                 const result_ptr = result_value.ptr.?;
 
@@ -1015,8 +1085,8 @@ pub const Interpreter = struct {
             },
 
             .e_dec_small => |small_dec| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
                 const result_ptr = result_value.ptr.?;
 
@@ -1046,7 +1116,7 @@ pub const Interpreter = struct {
 
                 // Evaluate the receiver expression
                 try self.work_stack.append(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = dot_access.receiver,
                     .extra = .{ .nothing = {} },
                 });
@@ -1107,7 +1177,7 @@ pub const Interpreter = struct {
                 var i = segments.len;
                 while (i > 0) : (i -= 1) {
                     self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr,
+                        .kind = .w_eval_expr_structural,
                         .expr_idx = segments[i - 1],
                         .extra = .{ .none = {} },
                     });
@@ -1119,8 +1189,8 @@ pub const Interpreter = struct {
             },
 
             .e_record => |record_expr| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const fields = self.env.store.sliceRecordFields(record_expr.fields);
                 if (fields.len == 0) {
                     // Per the test, `{}` should be a zero-sized type error.
@@ -1146,7 +1216,7 @@ pub const Interpreter = struct {
                 // This is a pure lambda with no captures. We still create a closure
                 // structure for it on the stack so that the calling convention is uniform.
                 const captures_layout_idx = try self.createClosureLayout(&.{});
-                const closure_layout = Layout.closure();
+                const closure_layout = Layout.closure(captures_layout_idx);
                 const total_size = @sizeOf(Closure);
                 const closure_alignment = closure_layout.alignment(target_usize);
                 const closure_ptr = try self.stack_memory.alloca(total_size, closure_alignment);
@@ -1167,8 +1237,8 @@ pub const Interpreter = struct {
             },
 
             .e_tuple => |tuple_expr| {
-                const layout_idx = try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(layout_idx);
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const elements = self.env.store.sliceExpr(tuple_expr.elems);
                 if (elements.len == 0) {
                     // Empty tuple has no bytes, but we still need to push its layout.
@@ -1191,125 +1261,113 @@ pub const Interpreter = struct {
     }
 
     fn completeBinop(self: *Interpreter, kind: WorkKind) EvalError!void {
-        self.traceEnter("completeBinop {s}", .{@tagName(kind)});
-        defer self.traceExit("", .{});
+        const rhs = try self.popStackValue();
+        const lhs = try self.popStackValue();
 
-        const lhs = try self.peekStackValue(2);
-        const rhs = try self.peekStackValue(1);
-        try self.traceValue("lhs", lhs);
-        try self.traceValue("rhs", rhs);
-
-        // For now, only support integer operations
+        // For now, only support scalar operations
         if (lhs.layout.tag != .scalar or rhs.layout.tag != .scalar) {
-            self.traceError("expected scaler tags to eval binop", .{});
-            return error.LayoutError;
+            self.traceError("expected scalar tags to eval binop", .{});
+            return error.TypeMismatch;
         }
 
-        if (lhs.layout.data.scalar.tag != .int or rhs.layout.data.scalar.tag != .int) {
-            return error.LayoutError;
-        }
-
-        // Read the values
-        const lhs_val = lhs.asI128();
-        const rhs_val = rhs.asI128();
-
-        // Pop the operands from the stack, which we can safely do after reading their values
-        _ = try self.popStackValue();
-        _ = try self.popStackValue();
-
-        // Debug: Values read from memory
-        self.traceInfo("\tRead values - left = {}, right = {}", .{ lhs_val, rhs_val });
-
-        // Determine result layout
-        const result_layout = switch (kind) {
-            .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem => lhs.layout, // Numeric result
-            .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => blk: {
-                // Boolean result
-                const bool_layout = Layout{
-                    .tag = .scalar,
-                    .data = .{ .scalar = .{
-                        .tag = .int,
-                        .data = .{ .int = .u8 },
-                    } },
-                };
-                break :blk bool_layout;
-            },
-            else => unreachable,
-        };
-
-        var result_value = try self.pushStackValue(result_layout);
+        // Handle different scalar types
+        const lhs_scalar = lhs.layout.data.scalar;
+        const rhs_scalar = rhs.layout.data.scalar;
 
         // Perform the operation and write to our result_value
         switch (kind) {
-            .w_binop_add => {
-                const result_val: i128 = lhs_val + rhs_val;
-                self.traceInfo("Addition operation: {} + {} = {}", .{ lhs_val, rhs_val, result_val });
-                result_value.setInt(result_val);
-            },
-            .w_binop_sub => {
-                const result_val: i128 = lhs_val - rhs_val;
-                result_value.setInt(result_val);
-            },
-            .w_binop_mul => {
-                const result_val: i128 = lhs_val * rhs_val;
-                result_value.setInt(result_val);
-            },
-            .w_binop_div => {
-                if (rhs_val == 0) {
-                    return error.DivisionByZero;
+            // Arithmetic operations - require integer operands
+            .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem => {
+                if (lhs_scalar.tag != .int or rhs_scalar.tag != .int) {
+                    self.traceError("arithmetic operations require integer operands", .{});
+                    return error.TypeMismatch;
                 }
-                const result_val: i128 = @divTrunc(lhs_val, rhs_val);
+
+                const lhs_val = lhs.asI128();
+                const rhs_val = rhs.asI128();
+
+                const result_layout = lhs.layout;
+                var result_value = try self.pushStackValue(result_layout);
+
+                const result_val: i128 = result_val: switch (kind) {
+                    .w_binop_add => {
+                        self.traceInfo("Addition operation: {} + {} = {}", .{ lhs_val, rhs_val, lhs_val + rhs_val });
+                        break :result_val lhs_val + rhs_val;
+                    },
+                    .w_binop_sub => break :result_val lhs_val - rhs_val,
+                    .w_binop_mul => break :result_val lhs_val * rhs_val,
+                    .w_binop_div => {
+                        if (rhs_val == 0) return error.DivisionByZero;
+                        break :result_val @divTrunc(lhs_val, rhs_val);
+                    },
+                    .w_binop_div_trunc => {
+                        if (rhs_val == 0) return error.DivisionByZero;
+                        break :result_val @divTrunc(lhs_val, rhs_val);
+                    },
+                    .w_binop_rem => {
+                        if (rhs_val == 0) return error.DivisionByZero;
+                        break :result_val @rem(lhs_val, rhs_val);
+                    },
+                    else => unreachable,
+                };
+
                 result_value.setInt(result_val);
             },
-            .w_binop_div_trunc => {
-                if (rhs_val == 0) {
-                    return error.DivisionByZero;
+
+            // Comparison operations - require integer operands
+            .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le => {
+                if (lhs_scalar.tag != .int or rhs_scalar.tag != .int) {
+                    self.traceError("comparison operations require integer operands", .{});
+                    return error.TypeMismatch;
                 }
-                const result_val: i128 = @divTrunc(lhs_val, rhs_val);
-                result_value.setInt(result_val);
+
+                const lhs_val = lhs.asI128();
+                const rhs_val = rhs.asI128();
+
+                const result_layout = Layout.boolType();
+                var result_value = try self.pushStackValue(result_layout);
+
+                const bool_result: u8 = switch (kind) {
+                    .w_binop_eq => if (lhs_val == rhs_val) 1 else 0,
+                    .w_binop_ne => if (lhs_val != rhs_val) 1 else 0,
+                    .w_binop_gt => if (lhs_val > rhs_val) 1 else 0,
+                    .w_binop_lt => if (lhs_val < rhs_val) 1 else 0,
+                    .w_binop_ge => if (lhs_val >= rhs_val) 1 else 0,
+                    .w_binop_le => if (lhs_val <= rhs_val) 1 else 0,
+                    else => unreachable,
+                };
+
+                result_value.setBool(bool_result);
             },
-            .w_binop_rem => {
-                if (rhs_val == 0) {
-                    return error.DivisionByZero;
+
+            // Logical operations - require boolean operands
+            .w_binop_and, .w_binop_or => {
+                if (lhs_scalar.tag != .bool or rhs_scalar.tag != .bool) {
+                    self.traceError("logical operations require boolean operands", .{});
+                    return error.TypeMismatch;
                 }
-                const result_val: i128 = @rem(lhs_val, rhs_val);
-                result_value.setInt(result_val);
+
+                const lhs_ptr = @as(*const u8, @ptrCast(lhs.ptr.?));
+                const rhs_ptr = @as(*const u8, @ptrCast(rhs.ptr.?));
+                const lhs_val = lhs_ptr.*;
+                const rhs_val = rhs_ptr.*;
+
+                const result_layout = Layout.boolType();
+                var result_value = try self.pushStackValue(result_layout);
+
+                const bool_result: u8 = switch (kind) {
+                    .w_binop_and => if (lhs_val != 0 and rhs_val != 0) 1 else 0,
+                    .w_binop_or => if (lhs_val != 0 or rhs_val != 0) 1 else 0,
+                    else => unreachable,
+                };
+
+                result_value.setBool(bool_result);
             },
-            .w_binop_eq => {
-                const bool_result: i128 = if (lhs_val == rhs_val) 1 else 0;
-                result_value.setInt(bool_result);
+
+            else => {
+                self.traceError("completeBinop called with non-binary operation: {s}", .{@tagName(kind)});
+                return error.TypeMismatch;
             },
-            .w_binop_ne => {
-                const bool_result: i128 = if (lhs_val != rhs_val) 1 else 0;
-                result_value.setInt(bool_result);
-            },
-            .w_binop_gt => {
-                const bool_result: i128 = if (lhs_val > rhs_val) 1 else 0;
-                result_value.setInt(bool_result);
-            },
-            .w_binop_lt => {
-                const bool_result: i128 = if (lhs_val < rhs_val) 1 else 0;
-                result_value.setInt(bool_result);
-            },
-            .w_binop_ge => {
-                const bool_result: i128 = if (lhs_val >= rhs_val) 1 else 0;
-                result_value.setInt(bool_result);
-            },
-            .w_binop_le => {
-                const bool_result: i128 = if (lhs_val <= rhs_val) 1 else 0;
-                result_value.setInt(bool_result);
-            },
-            .w_binop_and => {
-                // Boolean AND: both operands must be truthy (non-zero)
-                const bool_result: i128 = if (lhs_val != 0 and rhs_val != 0) 1 else 0;
-                result_value.setInt(bool_result);
-            },
-            .w_binop_or => {
-                // Boolean OR: at least one operand must be truthy (non-zero)
-                const bool_result: i128 = if (lhs_val != 0 or rhs_val != 0) 1 else 0;
-                result_value.setInt(bool_result);
-            },
-            else => unreachable,
         }
     }
 
@@ -1318,14 +1376,16 @@ pub const Interpreter = struct {
         var operand_value = try self.peekStackValue(1);
         const operand_layout = operand_value.layout;
 
-        // For now, only support integer operations
+        // For unary minus, we expect an integer type
         if (operand_layout.tag != .scalar) {
-            return error.LayoutError;
+            self.traceError("Unary minus: expected scalar layout, got {}", .{operand_layout.tag});
+            return error.TypeMismatch;
         }
 
         const operand_scalar = operand_layout.data.scalar;
         if (operand_scalar.tag != .int) {
-            return error.LayoutError;
+            self.traceError("Unary minus: expected integer type, got {}", .{operand_scalar.tag});
+            return error.TypeMismatch;
         }
 
         // Read the value and negate it in-place
@@ -1340,19 +1400,11 @@ pub const Interpreter = struct {
         const operand_value = try self.peekStackValue(1);
         const operand_layout = operand_value.layout;
 
-        // For boolean operations, we expect a scalar type
-        if (operand_layout.tag != .scalar) {
-            self.traceInfo("Unary not operation failed: expected scalar layout, got {}", .{operand_layout.tag});
-            return error.LayoutError;
+        // Verify this is a boolean scalar
+        if (operand_layout.tag != .scalar or operand_layout.data.scalar.tag != .bool) {
+            self.traceError("Unary not: expected boolean scalar layout, got {}", .{operand_layout.tag});
+            return error.TypeMismatch;
         }
-
-        const operand_scalar = operand_layout.data.scalar;
-        self.traceInfo("Unary not operation: scalar tag = {}", .{operand_scalar.tag});
-
-        // Boolean tags (True/False) are represented as 1-byte scalar values
-        // We don't need to check the specific scalar tag since boolean tags can be
-        // represented as small integers - just verify it's a 1-byte scalar
-        // (which matches what we see in e_tag evaluation)
 
         // Read the boolean value from memory
         const bool_ptr: *u8 = @ptrCast(operand_value.ptr.?);
@@ -1360,8 +1412,7 @@ pub const Interpreter = struct {
 
         self.traceInfo("Unary not operation: bool tag value = {}", .{bool_val});
 
-        // Boolean tag values: 0 = False, 1 = True
-        // Negate the boolean value
+        // Perform boolean negation (trust the type system - no need to validate 0/1)
         const result_val: u8 = if (bool_val == 0) 1 else 0;
 
         self.traceInfo("Unary not operation: !{} = {}", .{ bool_val, result_val });
@@ -1370,9 +1421,125 @@ pub const Interpreter = struct {
         bool_ptr.* = result_val;
     }
 
+    /// Handle boolean scalar tag expressions (True/False) by setting the appropriate boolean value
+    fn handleBooleanScalarTag(self: *Interpreter, result_value: StackValue, tag_name: Ident.Idx) EvalError!void {
+        const tag_text = self.env.idents.getText(tag_name);
+        const bool_value: u8 = if (std.mem.eql(u8, tag_text, "True")) 1 else if (std.mem.eql(u8, tag_text, "False")) 0 else {
+            self.traceError("Invalid boolean tag: {s}", .{tag_text});
+            return error.InvalidBooleanTag;
+        };
+
+        const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
+        bool_ptr.* = bool_value;
+
+        self.traceInfo("Boolean scalar tag: {s} = {}", .{ tag_text, bool_value });
+    }
+
+    /// Get the return layout of a closure by resolving its lambda expression's type
+    fn getClosureReturnLayout(self: *Interpreter, closure: *const Closure) EvalError!Layout {
+        // Get the type Var for the lambda expression
+        const lambda_var = ModuleEnv.varFrom(closure.lambda_expr_idx);
+
+        // Resolve the lambda's type to get the function type
+        const lambda_resolved = self.env.types.resolveVar(lambda_var);
+
+        // Extract the return type from the function
+        switch (lambda_resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .fn_pure => |func| {
+                    // Ensure the return type variable is fully resolved before getting layout
+                    const ret_resolved = self.env.types.resolveVar(func.ret);
+
+                    // Check if it's still unresolved (flex_var/rigid_var)
+                    switch (ret_resolved.desc.content) {
+                        .flex_var, .rigid_var => {
+                            self.traceInfo("LAYOUT SYSTEM NOT READY: Lambda return type is still unresolved ({}).", .{ret_resolved.desc.content});
+                            self.traceInfo("This means the type system hasn't finished constraint solving before layout computation.", .{});
+                            self.traceInfo("The type system shows the correct type in TYPES section, but the type variables", .{});
+                            self.traceInfo("passed to layout computation are still flex_var/rigid_var instead of concrete types.", .{});
+                            self.traceInfo("This will be fixed when the type system implementation is completed.", .{});
+                            return error.NotImplemented;
+                        },
+                        else => {
+                            // Type is resolved to a concrete type, use layout cache
+                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret) catch |err| {
+                                self.traceError("Failed to get layout for closure return type: {}", .{err});
+                                return error.TypeMismatch;
+                            };
+                            return self.layout_cache.getLayout(ret_layout_idx);
+                        },
+                    }
+                },
+                .fn_effectful => |func| {
+                    // Ensure the return type variable is fully resolved before getting layout
+                    const ret_resolved = self.env.types.resolveVar(func.ret);
+
+                    // Check if it's still unresolved (flex_var/rigid_var)
+                    switch (ret_resolved.desc.content) {
+                        .flex_var, .rigid_var => {
+                            self.traceInfo("LAYOUT SYSTEM NOT READY: Lambda return type is still unresolved ({}).", .{ret_resolved.desc.content});
+                            self.traceInfo("This means the type system hasn't finished constraint solving before layout computation.", .{});
+                            self.traceInfo("The type system shows the correct type in TYPES section, but the type variables", .{});
+                            self.traceInfo("passed to layout computation are still flex_var/rigid_var instead of concrete types.", .{});
+                            self.traceInfo("This will be fixed when the type system implementation is completed.", .{});
+                            return error.NotImplemented;
+                        },
+                        else => {
+                            // Type is resolved to a concrete type, use layout cache
+                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret) catch |err| {
+                                self.traceError("Failed to get layout for closure return type: {}", .{err});
+                                return error.TypeMismatch;
+                            };
+                            return self.layout_cache.getLayout(ret_layout_idx);
+                        },
+                    }
+                },
+                .fn_unbound => |func| {
+                    // Ensure the return type variable is fully resolved before getting layout
+                    const ret_resolved = self.env.types.resolveVar(func.ret);
+
+                    // Check if it's still unresolved (flex_var/rigid_var)
+                    switch (ret_resolved.desc.content) {
+                        .flex_var, .rigid_var => {
+                            self.traceInfo("LAYOUT SYSTEM NOT READY: Lambda return type is still unresolved ({}).", .{ret_resolved.desc.content});
+                            self.traceInfo("This means the type system hasn't finished constraint solving before layout computation.", .{});
+                            self.traceInfo("The type system shows the correct type in TYPES section, but the type variables", .{});
+                            self.traceInfo("passed to layout computation are still flex_var/rigid_var instead of concrete types.", .{});
+                            self.traceInfo("This will be fixed when the type system implementation is completed.", .{});
+                            return error.NotImplemented;
+                        },
+                        else => {
+                            // Type is resolved to a concrete type, use layout cache
+                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret) catch |err| {
+                                self.traceError("Failed to get layout for closure return type: {}", .{err});
+                                return error.TypeMismatch;
+                            };
+                            return self.layout_cache.getLayout(ret_layout_idx);
+                        },
+                    }
+                },
+                else => {
+                    self.traceError("Closure lambda is not a function type: {}", .{structure});
+                    return error.TypeMismatch;
+                },
+            },
+            else => {
+                self.traceError("Closure lambda type is not a structure: {}", .{lambda_resolved.desc.content});
+                return error.TypeMismatch;
+            },
+        }
+    }
+
     fn checkIfCondition(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, branch_index: u16) EvalError!void {
         // Pop the condition layout
         const condition = try self.peekStackValue(1);
+        const condition_layout = condition.layout;
+
+        // Verify condition is boolean scalar (trust the type system)
+        if (condition_layout.tag != .scalar or condition_layout.data.scalar.tag != .bool) {
+            self.traceError("If condition must be boolean, got layout: {}", .{condition_layout.tag});
+            return error.TypeMismatch;
+        }
 
         // Read the condition value
         const cond_ptr: *u8 = @ptrCast(condition.ptr.?);
@@ -1394,10 +1561,12 @@ pub const Interpreter = struct {
 
         const branch = self.env.store.getIfBranch(branches[branch_index]);
 
+        // Trust the boolean value - no need to validate 0/1
+
         if (cond_val == 1) {
             // Condition is true, evaluate this branch's body
             self.schedule_work(WorkItem{
-                .kind = .w_eval_expr,
+                .kind = .w_eval_expr_structural,
                 .expr_idx = branch.body,
                 .extra = .{ .nothing = {} },
             });
@@ -1420,14 +1589,14 @@ pub const Interpreter = struct {
 
                 // Push work to evaluate the next condition
                 self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = next_branch.cond,
                     .extra = .{ .nothing = {} },
                 });
             } else {
                 // No more branches, evaluate final_else
                 self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr,
+                    .kind = .w_eval_expr_structural,
                     .expr_idx = if_expr.final_else,
                     .extra = .{ .nothing = {} },
                 });
@@ -1439,10 +1608,8 @@ pub const Interpreter = struct {
         self.traceEnter("handleLambdaCall {}", .{expr_idx});
         defer self.traceExit("", .{});
 
-        // The arguments are on the stack, followed by the closure.
-        const closure_value = try self.peekStackValue(1);
-        const value_base: usize = self.value_stack.items.len - @as(usize, arg_count) - 1;
-        const stack_base = self.value_stack.items[value_base].offset;
+        // Current stack layout: [args..., closure] (return slot not yet allocated)
+        const closure_value = try self.peekStackValue(1); // closure is at top
 
         if (closure_value.layout.tag != LayoutTag.closure) {
             self.traceError("Expected closure, got {}", .{closure_value.layout.tag});
@@ -1451,7 +1618,20 @@ pub const Interpreter = struct {
 
         const closure: *const Closure = @ptrCast(@alignCast(closure_value.ptr.?));
 
-        // Create a new call frame
+        // Calculate value_base before allocating return slot
+        const value_base: usize = self.value_stack.items.len - @as(usize, arg_count) - 1; // -1 for closure
+
+        // Pre-allocate return slot with the correct return type layout
+        const return_layout = try self.getClosureReturnLayout(closure);
+        self.traceInfo("getClosureReturnLayout returned: {}", .{return_layout});
+        const return_layout_idx = try self.layout_cache.insertLayout(return_layout);
+        const return_slot_offset = self.stack_memory.used;
+        _ = try self.pushStackValue(return_layout);
+
+        // Final stack layout: [args..., closure, return_slot]
+        const stack_base = self.value_stack.items[value_base].offset;
+
+        // Create a new call frame with return slot info
         const frame: *CallFrame = try self.frame_stack.addOne();
         frame.* = CallFrame{
             .body_idx = closure.body_idx,
@@ -1460,6 +1640,8 @@ pub const Interpreter = struct {
             .arg_count = arg_count,
             .work_base = @intCast(self.work_stack.items.len),
             .bindings_base = @intCast(self.bindings_stack.items.len),
+            .return_slot_offset = return_slot_offset,
+            .return_layout_idx = return_layout_idx,
             .is_tail_call = false,
         };
 
@@ -1467,8 +1649,11 @@ pub const Interpreter = struct {
         //    StackValue that points to it and push that to the value_stack.
         const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
 
-        // The captures are stored immediately after the Closure header.
-        const captures_ptr = @as([*]u8, @ptrCast(closure_value.ptr.?)) + @sizeOf(Closure);
+        // Calculate properly aligned offset for captures after Closure header
+        const closure_size = @sizeOf(Closure);
+        const captures_alignment = captures_layout.alignment(target_usize);
+        const aligned_captures_offset = std.mem.alignForward(usize, closure_size, @intCast(captures_alignment.toByteUnits()));
+        const captures_ptr = @as([*]u8, @ptrCast(closure_value.ptr.?)) + aligned_captures_offset;
 
         // Push the captures record as an implicit first argument.
         // We need to manually create the Value and push it.
@@ -1482,15 +1667,16 @@ pub const Interpreter = struct {
         const param_ids = self.env.store.slicePatterns(closure.params);
         std.debug.assert(param_ids.len == arg_count);
 
-        // Arguments are on the stack in evaluation order, so the last argument is at the top.
-        // We need to bind them to parameters in the correct order.
-        // The stack layout is: `..., arg1, ..., argN, closure, captures_view`
+        // Current stack layout: `[arg1, ..., argN, closure, return_slot, captures_view]`
         // peek(1) is captures_view
-        // peek(2) is closure
-        // peek(3) is argN
-        // peek(arg_count + 2) is arg1
+        // peek(2) is return_slot
+        // peek(3) is closure
+        // peek(4) is argN (last argument)
+        // peek(3 + arg_count) is arg1 (first argument)
         for (param_ids, 0..) |param_idx, i| {
-            const arg_index_from_top = arg_count - i + 2;
+            // For parameter i, we want argument i (0-indexed)
+            // arg0 is at peek(3 + arg_count), arg1 is at peek(3 + arg_count - 1), etc.
+            const arg_index_from_top = 3 + arg_count - i;
             const arg = try self.peekStackValue(arg_index_from_top);
 
             try self.bindPattern(param_idx, arg, roc_ops);
@@ -1505,7 +1691,7 @@ pub const Interpreter = struct {
 
         // 5. Schedule body evaluation.
         self.schedule_work(WorkItem{
-            .kind = .w_eval_expr,
+            .kind = .w_eval_expr_structural,
             .expr_idx = closure.body_idx,
             .extra = .{ .nothing = {} },
         });
@@ -1517,27 +1703,49 @@ pub const Interpreter = struct {
         // The return value is on top of the stack.
         const return_value = try self.peekStackValue(1);
 
-        // Determine the full size of the return value. If it's a closure, we must include the captures.
-        var return_size: u32 = 0;
-        const return_alignment = return_value.layout.alignment(target_usize);
-        if (return_value.layout.tag == .closure and return_value.ptr != null) {
-            const closure: *const Closure = @ptrCast(@alignCast(return_value.ptr.?));
-            const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
-            const captures_size = self.layout_cache.layoutSize(captures_layout);
-            return_size = @sizeOf(Closure) + captures_size;
-        } else {
-            return_size = self.layout_cache.layoutSize(return_value.layout);
+        // Use the actual return value's layout instead of the placeholder
+        const actual_return_layout = return_value.layout;
+        const actual_return_size = return_value.getTotalSize(self.layout_cache);
+
+        self.traceInfo("handleLambdaReturn: actual_size={}, ptr_null={}", .{ actual_return_size, return_value.ptr == null });
+
+        // Debug: Check if we're copying a closure and what sizes we're dealing with
+        if (actual_return_layout.tag == .closure) {
+            // Since we fixed pushStackValue, the return slot should now be the right size
+            const slot_size = if (actual_return_layout.tag == .closure) blk: {
+                const closure_header_size = @sizeOf(Closure);
+                const captures_layout = self.layout_cache.getLayout(actual_return_layout.data.closure.captures_layout_idx);
+                const captures_size = self.layout_cache.layoutSize(captures_layout);
+                const captures_alignment = captures_layout.alignment(target_usize);
+                const aligned_captures_offset = std.mem.alignForward(u32, closure_header_size, @intCast(captures_alignment.toByteUnits()));
+                break :blk aligned_captures_offset + captures_size;
+            } else self.layout_cache.layoutSize(actual_return_layout);
+
+            self.traceInfo("CLOSURE DEBUG: slot_size={}, actual_size={}", .{ slot_size, actual_return_size });
         }
 
-        // Copy the return value to a temporary buffer before we wipe the stack.
-        // We allocate this on the heap because return values can be large.
-        const temp_buffer = try self.allocator.alloc(u8, return_size);
-        defer self.allocator.free(temp_buffer);
-        if (return_size > 0) {
-            std.mem.copyForwards(u8, temp_buffer, @as([*]const u8, @ptrCast(return_value.ptr.?))[0..return_size]);
+        // Get the pre-allocated return slot
+        const return_slot_ptr = self.stack_memory.start + frame.return_slot_offset;
+
+        if (actual_return_size > 0 and return_value.ptr != null) {
+            const src_byte = @as([*]const u8, @ptrCast(return_value.ptr.?))[0];
+            self.traceInfo("Copying return byte {} to return slot", .{src_byte});
+
+            // Type safety: The return slot should now be the correct size since we use the actual return type
+            // The type system should have already verified this, but we add runtime validation as a safety check
+            const expected_size = self.layout_cache.layoutSize(self.layout_cache.getLayout(frame.return_layout_idx));
+            if (actual_return_size != expected_size) {
+                self.traceInfo("Type mismatch: expected size {} != actual size {}", .{ expected_size, actual_return_size });
+                // This indicates a type system issue - the return layout doesn't match the actual return value
+                return error.TypeMismatch;
+            }
+
+            // Use StackValue helpers for proper alignment and copying
+            const return_slot_value = StackValue.fromPtr(actual_return_layout, return_slot_ptr);
+            return_value.copyTo(return_slot_value, self.layout_cache);
         }
 
-        // Now that we've saved the return value, pop it from the stack.
+        // Now that we've copied the return value, pop it from the stack.
         _ = try self.popStackValue();
 
         // A capture record view is always pushed by handleLambdaCall, so we always pop it.
@@ -1549,24 +1757,31 @@ pub const Interpreter = struct {
             binding.cleanup(roc_ops);
         }
 
-        // reset the stacks
-        self.work_stack.items.len = frame.work_base;
-        self.bindings_stack.items.len = frame.bindings_base;
-        self.value_stack.items.len = frame.value_base;
-        self.stack_memory.used = frame.stack_base;
+        // We need to move the return slot to where the caller expects the result
+        // The caller expects the result at frame.value_base (where the first argument was)
+        const result_position_offset = self.value_stack.items[frame.value_base].offset;
 
-        // Push the return value back onto the now-clean stack from the temporary buffer.
-        if (return_size > 0) {
-            const new_ptr = try self.stack_memory.alloca(return_size, return_alignment);
-            std.mem.copyForwards(u8, @as([*]u8, @ptrCast(new_ptr))[0..return_size], temp_buffer);
-            const new_offset: u32 = @truncate(@intFromPtr(new_ptr) - @intFromPtr(@as(*const u8, @ptrCast(self.stack_memory.start))));
-            try self.value_stack.append(.{ .layout = return_value.layout, .offset = new_offset });
-        } else {
-            // Handle zero-sized types by just pushing the layout
-            try self.value_stack.append(.{ .layout = return_value.layout, .offset = self.stack_memory.used });
+        // Copy return slot data to the result position using StackValue helpers
+        if (actual_return_size > 0) {
+            const result_position_ptr = self.stack_memory.start + result_position_offset;
+            const return_slot_value = StackValue.fromPtr(actual_return_layout, return_slot_ptr);
+            const result_position_value = StackValue.fromPtr(actual_return_layout, result_position_ptr);
+            return_slot_value.copyTo(result_position_value, self.layout_cache);
         }
 
-        self.traceInfo("Lambda return: stack cleaned and return value pushed", .{});
+        // Reset the stacks, keeping only the result at the original argument position
+        self.work_stack.items.len = frame.work_base;
+        self.bindings_stack.items.len = frame.bindings_base;
+        self.value_stack.items.len = frame.value_base + 1; // Keep one slot for the result
+        self.stack_memory.used = result_position_offset + actual_return_size;
+
+        // Update the value stack entry to point to the result
+        self.value_stack.items[frame.value_base] = .{
+            .layout = actual_return_layout,
+            .offset = result_position_offset,
+        };
+
+        self.traceInfo("Lambda return: stack cleaned with pre-allocated return slot", .{});
     }
 
     fn handleRecordFields(self: *Interpreter, record_expr_idx: ModuleEnv.Expr.Idx, current_field_idx: usize) EvalError!void {
@@ -1598,25 +1813,16 @@ pub const Interpreter = struct {
 
             // The record itself is the value *under* the field value we just popped.
             const record_value_on_stack = try self.peekStackValue(1);
-            const record_base_ptr = @as([*]u8, @ptrCast(record_value_on_stack.ptr.?));
 
-            // Calculate the destination offset within the record.
-            const prev_field_offset = self.layout_cache.getRecordFieldOffset(record_layout.data.record.idx, @intCast(prev_field_index_in_sorted));
+            // Use RecordAccessor for safe field access
+            const record_accessor = try record_value_on_stack.asRecord(self.layout_cache);
 
             if (prev_field_size > 0) {
-                const dest_ptr = record_base_ptr + prev_field_offset;
-                const src_ptr = @as([*]const u8, @ptrCast(prev_field_value.ptr.?));
+                // Get the destination field using RecordAccessor
+                const dest_field = try record_accessor.getFieldByIndex(prev_field_index_in_sorted);
+                prev_field_value.copyWithoutRefcount(dest_field, self.layout_cache);
 
-                // Special handling for string fields - copy as proper RocStr struct instead of bytes
-                if (prev_field_layout.tag == .scalar and prev_field_layout.data.scalar.tag == .str) {
-                    const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(src_ptr));
-                    const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(dest_ptr));
-                    dest_str.* = src_str.*; // Proper struct assignment
-                } else {
-                    std.mem.copyForwards(u8, dest_ptr[0..prev_field_size], src_ptr[0..prev_field_size]);
-                }
-
-                self.traceInfo("Copied field '{s}' (size={}) to offset {}", .{ self.env.idents.getText(prev_field_layout_info.name), prev_field_size, prev_field_offset });
+                self.traceInfo("Copied field '{s}' (size={}) to index {}", .{ self.env.idents.getText(prev_field_layout_info.name), prev_field_size, prev_field_index_in_sorted });
             }
         }
 
@@ -1660,7 +1866,7 @@ pub const Interpreter = struct {
             // Schedule the evaluation of the current field's value expression.
             // Its result will be pushed onto the stack, ready for the next `handleRecordFields` call.
             self.schedule_work(WorkItem{
-                .kind = .w_eval_expr,
+                .kind = .w_eval_expr_structural,
                 .expr_idx = current_field_value_expr_idx,
                 .extra = .{ .nothing = {} },
             });
@@ -1682,47 +1888,35 @@ pub const Interpreter = struct {
 
         // The record must have a record layout
         if (record_value.layout.tag != .record) {
-            return error.LayoutError;
+            self.traceError("Record field access: expected record layout, got {}", .{record_value.layout.tag});
+            return error.TypeMismatch;
         }
 
-        // Get the record data
-        const record_data = self.layout_cache.getRecordData(record_value.layout.data.record.idx);
-        const record_fields = self.layout_cache.record_fields.sliceRange(record_data.getFields());
+        // Use RecordAccessor for safe field access
+        const record_accessor = try record_value.asRecord(self.layout_cache);
 
-        // Find the field in the record layout by name
-        var field_index: ?usize = null;
-        for (0..record_fields.len) |idx| {
-            const field = record_fields.get(idx);
-            if (std.mem.eql(u8, self.env.idents.getText(field.name), field_name)) {
-                field_index = idx;
-                break;
-            }
-        }
+        // Find the field by name using the helper function
+        const field_index = record_accessor.findFieldIndex(self.env, field_name) orelse {
+            self.traceError("Record field access: field '{s}' not found", .{field_name});
+            return error.TypeMismatch;
+        };
 
-        const index = field_index orelse return error.LayoutError;
-
-        // Get the field offset and layout
-        const field_offset = self.layout_cache.getRecordFieldOffset(record_value.layout.data.record.idx, @intCast(index));
-        const field_layout = self.layout_cache.getLayout(record_fields.get(index).layout);
+        // Get the field value using RecordAccessor
+        const field_value = try record_accessor.getFieldByIndex(field_index);
+        const field_layout = field_value.layout;
         const field_size = self.layout_cache.layoutSize(field_layout);
-
-        // Calculate the field pointer
-        const record_ptr = @as([*]const u8, @ptrCast(record_value.ptr.?));
-        const field_ptr = record_ptr + field_offset;
 
         // Push the field value onto the stack
         if (field_size > 0) {
             const result_value = try self.pushStackValue(field_layout);
-            const result_ptr = result_value.ptr.?;
-            const dest = @as([*]u8, @ptrCast(result_ptr));
-            std.mem.copyForwards(u8, dest[0..field_size], field_ptr[0..field_size]);
+            field_value.copyWithoutRefcount(StackValue.fromPtr(field_layout, result_value.ptr.?), self.layout_cache);
         } else {
             // Zero-sized field
             const result_value = try self.pushStackValue(field_layout);
             std.debug.assert(result_value.ptr == null);
         }
 
-        self.traceInfo("Accessed field '{s}' at offset {}, size {}", .{ field_name, field_offset, field_size });
+        self.traceInfo("Accessed field '{s}' at index {}, size {}", .{ field_name, field_index, field_size });
     }
 
     /// Start a debug trace session with a given name and writer
@@ -1955,42 +2149,31 @@ pub const Interpreter = struct {
             },
             .record_destructure => |record_destruct| {
                 const destructs = self.env.store.sliceRecordDestructs(record_destruct.destructs);
-                const record_ptr = @as([*]u8, @ptrCast(@alignCast(value.ptr.?)));
 
                 // Get the record layout
                 if (value.layout.tag != .record) {
                     return error.LayoutError;
                 }
-                const record_data = self.layout_cache.getRecordData(value.layout.data.record.idx);
-                const record_fields = self.layout_cache.record_fields.sliceRange(record_data.getFields());
+
+                // Use RecordAccessor for safe field access
+                const record_accessor = try value.asRecord(self.layout_cache);
 
                 // For each field in the pattern
                 for (destructs) |destruct_idx| {
                     const destruct = self.env.store.getRecordDestruct(destruct_idx);
                     const field_name = self.env.idents.getText(destruct.label);
-                    // Find the field in the record layout by name
-                    var field_index: ?usize = null;
 
-                    for (0..record_fields.len) |idx| {
-                        const field = record_fields.get(idx);
-                        if (std.mem.eql(u8, self.env.idents.getText(field.name), field_name)) {
-                            field_index = idx;
-                            break;
-                        }
-                    }
-                    const index = field_index orelse return error.LayoutError;
+                    // Find the field by name using RecordAccessor
+                    const field_index = record_accessor.findFieldIndex(self.env, field_name) orelse return error.LayoutError;
 
-                    // Get the field offset
-                    const field_offset = self.layout_cache.getRecordFieldOffset(value.layout.data.record.idx, @intCast(index));
-                    const field_layout = self.layout_cache.getLayout(record_fields.get(index).layout);
-                    const field_ptr = record_ptr + field_offset;
+                    // Get the field value using RecordAccessor
+                    const field_value = try record_accessor.getFieldByIndex(field_index);
 
-                    // Recursively bind the sub-pattern using StackValue.fromPtr
+                    // Recursively bind the sub-pattern
                     const inner_pattern_idx = switch (destruct.kind) {
                         .Required => |p_idx| p_idx,
                         .SubPattern => |p_idx| p_idx,
                     };
-                    const field_value = StackValue.fromPtr(field_layout, field_ptr);
                     try self.bindPattern(inner_pattern_idx, field_value, roc_ops);
                 }
             },
@@ -2035,7 +2218,7 @@ pub const Interpreter = struct {
 
         // 2. Closure evaluation (executed second, pushes closure to stack)
         self.schedule_work(WorkItem{
-            .kind = .w_eval_expr,
+            .kind = .w_eval_expr_structural,
             .expr_idx = closure_expr_idx,
             .extra = .{ .nothing = {} },
         });
@@ -2046,7 +2229,7 @@ pub const Interpreter = struct {
         while (self.take_work()) |work| {
             self.traceInfo("callClosureWithStackArgs: processing work item {s}", .{@tagName(work.kind)});
             switch (work.kind) {
-                .w_eval_expr => try self.evalExpr(work.expr_idx, roc_ops),
+                .w_eval_expr_structural => try self.evalExpr(work.expr_idx, roc_ops, null),
                 .w_lambda_call => try self.handleLambdaCall(
                     work.expr_idx,
                     work.extra.arg_count,
@@ -2118,7 +2301,7 @@ pub const Interpreter = struct {
             },
 
             // These should be handled by the caller
-            .w_eval_expr, .w_lambda_call => {
+            .w_eval_expr_structural, .w_eval_expr_nominal, .w_lambda_call => {
                 std.log.err("Unexpected work item in processWorkItem: {s}", .{@tagName(work.kind)});
                 return error.UnexpectedWorkItem;
             },
@@ -2136,16 +2319,8 @@ pub const Interpreter = struct {
         // The block's result is on top of the stack. We need to preserve it.
         const result_val = try self.popStackValue();
 
-        var result_size: u32 = 0;
+        const result_size = result_val.getTotalSize(self.layout_cache);
         _ = result_val.layout.alignment(target_usize); // Used for memory alignment
-        if (result_val.layout.tag == .closure and result_val.ptr != null) {
-            const closure: *const Closure = @ptrCast(@alignCast(result_val.ptr.?));
-            const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
-            const captures_size = self.layout_cache.layoutSize(captures_layout);
-            result_size = @sizeOf(Closure) + captures_size;
-        } else {
-            result_size = self.layout_cache.layoutSize(result_val.layout);
-        }
 
         // Copy to a temp buffer
         const temp_buffer = try self.allocator.alloc(u8, result_size);
@@ -2181,7 +2356,26 @@ pub const Interpreter = struct {
         self.tracePrint("pushStackValue {s}", .{@tagName(value_layout.tag)});
         self.traceStackState();
 
-        const value_size = self.layout_cache.layoutSize(value_layout);
+        // For closures, we need to calculate the total size including captures
+        const value_size = if (value_layout.tag == .closure) blk: {
+            // The layout should contain the captures layout information
+            // We need to calculate the total size: Closure header + aligned captures
+            const closure_header_size = @sizeOf(Closure);
+
+            // Get the captures layout from the closure layout
+            const captures_layout = self.layout_cache.getLayout(value_layout.data.closure.captures_layout_idx);
+            const captures_size = self.layout_cache.layoutSize(captures_layout);
+            const captures_alignment = captures_layout.alignment(target_usize);
+
+            // Calculate aligned offset for captures after header
+            const aligned_captures_offset = std.mem.alignForward(u32, closure_header_size, @intCast(captures_alignment.toByteUnits()));
+            const total_size = aligned_captures_offset + captures_size;
+
+            self.traceInfo("Closure allocation: header={}, captures={}, aligned_offset={}, total={}", .{ closure_header_size, captures_size, aligned_captures_offset, total_size });
+
+            break :blk total_size;
+        } else self.layout_cache.layoutSize(value_layout);
+
         const old_stack_used = self.stack_memory.used;
         var value_ptr: ?*anyopaque = null;
         var offset: u32 = self.stack_memory.used;
@@ -2469,7 +2663,10 @@ pub const Interpreter = struct {
         // Get the underlying lambda expression
         const lambda_expr = switch (self.env.store.getExpr(closure_expr.lambda_idx)) {
             .e_lambda => |l| l,
-            else => return error.LayoutError, // Should always be a lambda
+            else => {
+                self.traceError("Closure creation: expected lambda expression, got different expression type", .{});
+                return error.TypeMismatch; // Should always be a lambda
+            },
         };
 
         // Collect and filter captures
@@ -2482,7 +2679,7 @@ pub const Interpreter = struct {
         const captures_layout_idx = try self.createClosureLayout(final_captures.items);
 
         // Allocate and initialize closure
-        const closure_layout = Layout.closure();
+        const closure_layout = Layout.closure(captures_layout_idx);
         const captures_record_layout = self.layout_cache.getLayout(captures_layout_idx);
         const captures_size = self.layout_cache.layoutSize(captures_record_layout);
 
@@ -2546,7 +2743,8 @@ pub const Interpreter = struct {
     /// Creates the layout for closure captures
     fn createClosureLayout(self: *Interpreter, captures: []const ModuleEnv.Expr.Capture) EvalError!layout.Idx {
         if (captures.len > MAX_CAPTURE_FIELDS) {
-            return error.LayoutError;
+            self.traceError("Closure layout: too many captures ({}, max {})", .{ captures.len, MAX_CAPTURE_FIELDS });
+            return error.TypeMismatch;
         }
 
         // Use dynamic allocation for field layouts and names
@@ -2605,7 +2803,11 @@ pub const Interpreter = struct {
         captures: *const std.ArrayList(ModuleEnv.Expr.Capture),
         captures_record_layout: Layout,
     ) EvalError!void {
-        const captures_ptr = @as([*]u8, @ptrCast(closure_ptr)) + @sizeOf(Closure);
+        // Calculate properly aligned offset for captures after Closure header
+        const closure_size = @sizeOf(Closure);
+        const captures_alignment = captures_record_layout.alignment(target_usize);
+        const aligned_captures_offset = std.mem.alignForward(usize, closure_size, @intCast(captures_alignment.toByteUnits()));
+        const captures_ptr = @as([*]u8, @ptrCast(closure_ptr)) + aligned_captures_offset;
 
         // Add bounds checking in debug mode
         if (DEBUG_ENABLED) {
@@ -2656,23 +2858,29 @@ pub const Interpreter = struct {
     ) EvalError!void {
         const binding_size = self.layout_cache.layoutSize(src_layout);
         if (binding_size > 0) {
-            const field_offset = self.layout_cache.getRecordFieldOffsetByName(
-                captures_record_layout.data.record.idx,
-                capture_name,
-            ) orelse return error.CaptureBindingFailed;
+            // Use RecordAccessor for safe field access
+            const captures_value = StackValue.fromPtr(captures_record_layout, captures_ptr);
+            const record_accessor = try captures_value.asRecord(self.layout_cache);
 
-            const dest_ptr = captures_ptr + field_offset;
-            const src_bytes = @as([*]const u8, @ptrCast(src_ptr));
+            // Find the field by name
+            const field_index = record_accessor.findFieldIndex(self.env, capture_name) orelse return error.CaptureBindingFailed;
+            const dest_field = try record_accessor.getFieldByIndex(field_index);
 
-            self.traceInfo("Copying capture '{s}' ({} bytes) from {} to {}", .{ capture_name, binding_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr) });
-
-            // Special handling for string captures - copy as proper RocStr struct instead of bytes
-            if (src_layout.tag == .scalar and src_layout.data.scalar.tag == .str) {
-                const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(src_ptr));
-                const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(dest_ptr));
-                dest_str.* = src_str.*; // Proper struct assignment
+            // Debug: Check what value is actually at the source address
+            if (src_layout.tag == .scalar and src_layout.data.scalar.tag == .int) {
+                const src_int_ptr: *const i128 = @ptrCast(@alignCast(src_ptr));
+                self.traceInfo("Copying capture '{s}' ({} bytes) to field index {} [SOURCE VALUE: {}]", .{ capture_name, binding_size, field_index, src_int_ptr.* });
             } else {
-                std.mem.copyForwards(u8, dest_ptr[0..binding_size], src_bytes[0..binding_size]);
+                self.traceInfo("Copying capture '{s}' ({} bytes) to field index {}", .{ capture_name, binding_size, field_index });
+            }
+
+            const src_value = StackValue.fromPtr(src_layout, src_ptr);
+            src_value.copyWithoutRefcount(dest_field, self.layout_cache);
+
+            // Debug: Verify the value was copied correctly
+            if (src_layout.tag == .scalar and src_layout.data.scalar.tag == .int) {
+                const dest_int_ptr: *const i128 = @ptrCast(@alignCast(dest_field.ptr.?));
+                self.traceInfo("After copy, destination contains: {}", .{dest_int_ptr.*});
             }
         }
     }
@@ -2694,41 +2902,48 @@ pub const Interpreter = struct {
                 const outer_closure_ptr = &self.stack_memory.start[outer_closure_val.offset];
                 const outer_closure: *const Closure = @ptrCast(@alignCast(outer_closure_ptr));
                 const outer_captures_layout = self.layout_cache.getLayout(outer_closure.captures_layout_idx);
-                const outer_captures_ptr = @as([*]u8, @ptrCast(outer_closure_ptr)) + @sizeOf(Closure);
+                // Calculate properly aligned offset for captures after Closure header
+                const closure_size = @sizeOf(Closure);
+                const outer_captures_alignment = outer_captures_layout.alignment(target_usize);
+                const aligned_captures_offset = std.mem.alignForward(usize, closure_size, @intCast(outer_captures_alignment.toByteUnits()));
+                const outer_captures_ptr = @as([*]u8, @ptrCast(outer_closure_ptr)) + aligned_captures_offset;
                 const capture_name_text = self.env.getIdentText(capture.name);
 
-                const record_data = self.layout_cache.getRecordData(outer_captures_layout.data.record.idx);
-                if (record_data.fields.count > 0) {
-                    const src_field_offset = self.layout_cache.getRecordFieldOffsetByName(
-                        outer_captures_layout.data.record.idx,
-                        capture_name_text,
-                    ) orelse continue; // Not in this closure's captures
+                // Use RecordAccessor for safe field access on the outer closure
+                const outer_captures_value = StackValue.fromPtr(outer_captures_layout, outer_captures_ptr);
+                const outer_accessor = outer_captures_value.asRecord(self.layout_cache) catch continue;
 
-                    const capture_layout_idx = try self.getLayoutIdx(capture.pattern_idx);
-                    const capture_layout = self.layout_cache.getLayout(capture_layout_idx);
-                    const capture_size = self.layout_cache.layoutSize(capture_layout);
+                // Try to find the capture in the outer closure
+                const src_field_index = outer_accessor.findFieldIndex(self.env, capture_name_text) orelse continue; // Not in this closure's captures
+                const src_field = outer_accessor.getFieldByIndex(src_field_index) catch continue;
 
-                    if (capture_size > 0) {
-                        const dest_field_offset = self.layout_cache.getRecordFieldOffsetByName(
-                            captures_record_layout.data.record.idx,
-                            capture_name_text,
-                        ) orelse return error.CaptureBindingFailed;
+                const capture_layout_idx = try self.getLayoutIdx(capture.pattern_idx);
+                const capture_layout = self.layout_cache.getLayout(capture_layout_idx);
+                const capture_size = self.layout_cache.layoutSize(capture_layout);
 
-                        const src_ptr = outer_captures_ptr + src_field_offset;
-                        const dest_ptr = captures_ptr + dest_field_offset;
+                if (capture_size > 0) {
+                    // Use RecordAccessor for the destination as well
+                    const dest_captures_value = StackValue.fromPtr(captures_record_layout, captures_ptr);
+                    const dest_accessor = try dest_captures_value.asRecord(self.layout_cache);
+                    const dest_field_index = dest_accessor.findFieldIndex(self.env, capture_name_text) orelse return error.CaptureBindingFailed;
+                    const dest_field = try dest_accessor.getFieldByIndex(dest_field_index);
 
-                        self.traceInfo("Copying capture-of-capture '{s}' ({} bytes) from {} to {}", .{ capture_name_text, capture_size, @intFromPtr(src_ptr), @intFromPtr(dest_ptr) });
-
-                        // Special handling for string captures - copy as proper RocStr struct instead of bytes
-                        if (capture_layout.tag == .scalar and capture_layout.data.scalar.tag == .str) {
-                            const src_str: *const builtins.str.RocStr = @ptrCast(@alignCast(src_ptr));
-                            const dest_str: *builtins.str.RocStr = @ptrCast(@alignCast(dest_ptr));
-                            dest_str.* = src_str.*; // Proper struct assignment
-                        } else {
-                            std.mem.copyForwards(u8, dest_ptr[0..capture_size], src_ptr[0..capture_size]);
-                        }
-                        return true;
+                    // Debug: Check what value is actually at the source address
+                    if (capture_layout.tag == .scalar and capture_layout.data.scalar.tag == .int) {
+                        const src_int_ptr: *const i128 = @ptrCast(@alignCast(src_field.ptr.?));
+                        self.traceInfo("Copying capture-of-capture '{s}' ({} bytes) from field {} to field {} [SOURCE VALUE: {}]", .{ capture_name_text, capture_size, src_field_index, dest_field_index, src_int_ptr.* });
+                    } else {
+                        self.traceInfo("Copying capture-of-capture '{s}' ({} bytes) from field {} to field {}", .{ capture_name_text, capture_size, src_field_index, dest_field_index });
                     }
+
+                    src_field.copyWithoutRefcount(dest_field, self.layout_cache);
+
+                    // Debug: Verify the value was copied correctly
+                    if (capture_layout.tag == .scalar and capture_layout.data.scalar.tag == .int) {
+                        const dest_int_ptr: *const i128 = @ptrCast(@alignCast(dest_field.ptr.?));
+                        self.traceInfo("After copy, destination contains: {}", .{dest_int_ptr.*});
+                    }
+                    return true;
                 }
             }
         }
@@ -2943,7 +3158,7 @@ pub const Interpreter = struct {
             const current_element_expr_idx = cir_elements[@intCast(current_element_idx)];
 
             self.schedule_work(WorkItem{
-                .kind = .w_eval_expr,
+                .kind = .w_eval_expr_structural,
                 .expr_idx = current_element_expr_idx,
                 .extra = .{ .nothing = {} },
             });
@@ -3036,8 +3251,7 @@ test "stack-based comparisons" {
         try std.testing.expectEqual(@as(u8, 1), result);
         const bool_layout = interpreter.value_stack.items[0].layout;
         try std.testing.expect(bool_layout.tag == .scalar);
-        try std.testing.expect(bool_layout.data.scalar.tag == .int);
-        try std.testing.expect(bool_layout.data.scalar.data.int == .u8);
+        try std.testing.expect(bool_layout.data.scalar.tag == .bool);
     }
 }
 

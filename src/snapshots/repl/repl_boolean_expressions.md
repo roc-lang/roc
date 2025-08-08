@@ -19,17 +19,17 @@ Evaluation error: error.Crash
 ---
 Evaluation error: error.Crash
 ---
-1
+True
 ---
-0
+False
 ---
-0
+False
 ---
-1
+True
 ---
-1
+True
 ---
-0
+False
 # PROBLEMS
 NIL
 # CANONICALIZE
@@ -58,4 +58,22 @@ NIL
 (e-unary-not @1.2-1.12
 	(e-nominal @1.3-1.12 (nominal "Bool")
 		(e-tag @1.3-1.12 (name "True"))))
+~~~
+# TYPES
+~~~clojure
+(expr @1.2-1.11 (type "Error"))
+---
+(expr @1.2-1.12 (type "Error"))
+---
+(expr @1.2-1.11 (type "Bool"))
+---
+(expr @1.2-1.12 (type "Bool"))
+---
+(expr @1.2-1.12 (type "Bool"))
+---
+(expr @1.2-1.13 (type "Bool"))
+---
+(expr @1.2-1.11 (type "Bool"))
+---
+(expr @1.2-1.12 (type "Bool"))
 ~~~

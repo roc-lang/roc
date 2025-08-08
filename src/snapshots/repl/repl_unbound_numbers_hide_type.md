@@ -27,3 +27,11 @@ NIL
 	(e-int @1.2-1.3 (value "1"))
 	(e-int @1.6-1.7 (value "2")))
 ~~~
+# TYPES
+~~~clojure
+(expr @1.2-1.4 (type "Num(_size)"))
+---
+(expr @1.2-1.6 (type "Frac(_size)"))
+---
+(expr @1.2-1.7 (type "Num(_size)"))
+~~~

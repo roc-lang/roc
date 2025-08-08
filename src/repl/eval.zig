@@ -377,7 +377,10 @@ pub const Repl = struct {
                     // Handle RocStr values
                     const roc_str: *builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
                     const str_slice = roc_str.asSlice();
-                    return try std.fmt.allocPrint(self.allocator, "\"{s}\"", .{str_slice});
+                    const formatted = try std.fmt.allocPrint(self.allocator, "\"{s}\"", .{str_slice});
+                    // Clean up the RocStr to prevent memory leak
+                    roc_str.decref(self.roc_ops);
+                    return formatted;
                 },
                 else => {},
             }
