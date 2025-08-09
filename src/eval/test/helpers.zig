@@ -278,6 +278,9 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
     var interpreter = try eval.Interpreter.init(
         test_allocator,
         resources.module_env,
@@ -285,10 +288,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
         &layout_cache,
         &resources.module_env.types,
     );
-    defer interpreter.deinit();
-
-    var test_env_instance = test_env.TestEnv.init(test_allocator);
-    defer test_env_instance.deinit();
+    defer interpreter.deinit(test_env_instance.get_ops());
     test_env_instance.setInterpreter(&interpreter);
 
     if (should_trace == .trace) {
@@ -468,8 +468,31 @@ test "eval runtime error - returns crash error" {
         const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
         try testing.expectError(eval.EvalError.Crash, result);
     } else {
-        // If crash syntax is not supported in canonicalization, skip
-        return error.SkipZigTest;
+        // If crash syntax is not supported in canonicalization, try anyway
+        var test_env_instance = test_env.TestEnv.init(testing.allocator);
+        defer test_env_instance.deinit();
+
+        const crash_resources = try parseAndCanonicalizeExpr(std.testing.allocator, source);
+        defer cleanupParseAndCanonical(std.testing.allocator, crash_resources);
+
+        var eval_stack_inner = try stack.Stack.initCapacity(std.testing.allocator, 1024);
+        defer eval_stack_inner.deinit();
+
+        var layout_cache_inner = try layout_store.Store.init(crash_resources.module_env, &crash_resources.module_env.types);
+        defer layout_cache_inner.deinit();
+
+        var interpreter = try eval.Interpreter.init(
+            std.testing.allocator,
+            crash_resources.module_env,
+            &eval_stack_inner,
+            &layout_cache_inner,
+            &crash_resources.module_env.types,
+        );
+        defer interpreter.deinit(test_env_instance.get_ops());
+        test_env_instance.setInterpreter(&interpreter);
+
+        const result = interpreter.eval(crash_resources.expr_idx, test_env_instance.get_ops());
+        try testing.expectError(eval.EvalError.Crash, result);
     }
 }
 
@@ -503,11 +526,7 @@ test "eval tag - already primitive" {
     test_env_instance.setInterpreter(&interpreter);
 
     // Try to evaluate - if tag_union layout is not implemented, this might fail
-    const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops()) catch |err| {
-        std.debug.print("Tag evaluation failed with error: {}\n", .{err});
-        // If evaluation fails for any reason, skip for now
-        return error.SkipZigTest;
-    };
+    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
     // If we get here, check if we have a valid result
     // True/False are optimized to scalar values in the current implementation
