@@ -1283,7 +1283,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
     var timer = try std.time.Timer.start();
 
-    // TODO: Integrate caching with BuildEnv
+    // TODO: Integrate caching at a higher level
     _ = args.no_cache;
     _ = args.verbose;
 
@@ -1299,8 +1299,6 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     defer check_result.deinit(gpa);
 
     const elapsed = timer.read();
-
-    // TODO: Print cache statistics when integrated with BuildEnv
 
     // Handle cached results vs fresh compilation results differently
     if (check_result.was_cached) {

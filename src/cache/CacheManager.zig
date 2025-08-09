@@ -14,10 +14,19 @@ const SERIALIZATION_ALIGNMENT = 16;
 const Allocator = std.mem.Allocator;
 const compile = @import("compile");
 const ModuleEnv = compile.ModuleEnv;
-const BuildModule = compile.BuildModule;
 
-/// Re-export CacheResult from BuildModule to avoid duplication
-pub const CacheResult = BuildModule.CacheResult;
+/// Result of a cache lookup operation
+pub const CacheResult = union(enum) {
+    hit: struct {
+        module_env: *ModuleEnv,
+        error_count: u32,
+        warning_count: u32,
+    },
+    miss: struct {
+        key: [32]u8,
+    },
+    not_enabled,
+};
 
 /// Cache manager using BLAKE3-based keys.
 ///
@@ -39,25 +48,6 @@ pub const CacheManager = struct {
             .allocator = allocator,
             .stats = CacheStats{},
         };
-    }
-
-    /// Create a cache interface for use with BuildModule
-    pub fn createInterface(self: *Self) BuildModule.CacheInterface {
-        return .{
-            .loadFromCache = loadFromCacheWrapper,
-            .store = storeWrapper,
-            .context = self,
-        };
-    }
-
-    fn loadFromCacheWrapper(ctx: *anyopaque, compiler_version: []const u8, source: []const u8, module_name: []const u8) CacheResult {
-        const self: *CacheManager = @ptrCast(@alignCast(ctx));
-        return self.loadFromCache(compiler_version, source, module_name);
-    }
-
-    fn storeWrapper(ctx: *anyopaque, cache_key: [32]u8, module_env: *const ModuleEnv, error_count: u32, warning_count: u32) anyerror!void {
-        const self: *CacheManager = @ptrCast(@alignCast(ctx));
-        return self.store(cache_key, module_env, error_count, warning_count);
     }
 
     /// Load a cached module based on its content and compiler version.
@@ -192,7 +182,7 @@ pub const CacheManager = struct {
     }
 
     /// Generate a BLAKE3-based cache key from source and compiler version.
-    fn generateCacheKey(source: []const u8, compiler_version: []const u8) [32]u8 {
+    pub fn generateCacheKey(source: []const u8, compiler_version: []const u8) [32]u8 {
         var hasher = std.crypto.hash.Blake3.init(.{});
         hasher.update(std.mem.asBytes(&compiler_version.len));
         hasher.update(compiler_version);
