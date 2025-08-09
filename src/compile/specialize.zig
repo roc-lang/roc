@@ -287,7 +287,7 @@ fn createRecordDestructSpan(context: *SpecializationContext, destructs: []const 
 fn createRecordFieldSpan(context: *SpecializationContext, fields: []const ModuleEnv.RecordField.Idx) !ModuleEnv.RecordField.Span {
     const start = context.target_env.store.scratch_record_fields.items.items.len;
     for (fields) |field| {
-        try context.target_env.store.addScratchRecordField(field);
+        try context.target_env.store.addScratch("scratch_record_fields", field);
     }
     return context.target_env.store.recordFieldSpanFrom(@intCast(start));
 }
