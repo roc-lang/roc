@@ -14,7 +14,7 @@ fn writeFile(dir: std.fs.Dir, rel: []const u8, contents: []const u8) !void {
     try f.writeAll(contents);
 }
 
-fn cleanupReports(gpa: std.mem.Allocator, drained: []BuildEnv.DrainedReport) void {
+fn cleanupReports(gpa: std.mem.Allocator, drained: []BuildEnv.DrainedModuleReports) void {
     var i: usize = 0;
     while (i < drained.len) : (i += 1) {
         for (drained[i].reports) |*rep| rep.deinit();
@@ -43,7 +43,7 @@ fn expectErrorCount(ws: *BuildEnv, expected_count: usize) !void {
     try std.testing.expectEqual(expected_count, total_reports);
 }
 
-fn expectSpecificError(ws: *BuildEnv, comptime error_type: Report.Tag, module_substring: []const u8) !void {
+fn expectSpecificError(ws: *BuildEnv, comptime error_severity: reporting.Severity, module_substring: []const u8) !void {
     const gpa = std.testing.allocator;
     const drained = try ws.drainReports();
     defer cleanupReports(gpa, drained);
@@ -52,7 +52,7 @@ fn expectSpecificError(ws: *BuildEnv, comptime error_type: Report.Tag, module_su
     for (drained) |entry| {
         if (std.mem.indexOf(u8, entry.abs_path, module_substring) != null) {
             for (entry.reports) |report| {
-                if (report.tag == error_type) {
+                if (report.severity == error_severity) {
                     found = true;
                     break;
                 }
@@ -221,7 +221,7 @@ test "BuildEnv: drainReports returns abs paths and aggregates multi-report modul
 
             // Count specific error types
             for (entry.reports) |report| {
-                if (report.tag == .type_error) {
+                if (report.severity == .runtime_error) {
                     total_errors_in_a += 1;
                 }
             }
@@ -383,9 +383,9 @@ test "BuildEnv: same-depth alphabetical ordering across packages via drainReport
     var idx_b: ?usize = null;
     var i: usize = 0;
     while (i < drained.len) : (i += 1) {
-        const fq = drained[i].fq_name;
-        if (std.mem.startsWith(u8, fq, "A:")) idx_a = i;
-        if (std.mem.startsWith(u8, fq, "B:")) idx_b = i;
+        const path = drained[i].abs_path;
+        if (std.mem.indexOf(u8, path, "A.") != null) idx_a = i;
+        if (std.mem.indexOf(u8, path, "B.") != null) idx_b = i;
     }
 
     try std.testing.expect(idx_a != null);
@@ -473,15 +473,18 @@ test "BuildEnv: multi-threaded global queue drives all phases" {
     try ws.buildApp(app_path);
 
     // Verify all modules reached Done phase
-    const app_build = ws.packages.get("app").?;
-    const main_sched = app_build.schedulers.get("app").?;
+    const main_sched = ws.schedulers.get("app").?;
 
     main_sched.lock.lock();
     defer main_sched.lock.unlock();
 
-    const main_state = main_sched.modules.get("Main").?;
-    const helper_state = main_sched.modules.get("Helper").?;
-    const utils_state = main_sched.modules.get("Utils").?;
+    const main_id = main_sched.module_names.get("Main").?;
+    const helper_id = main_sched.module_names.get("Helper").?;
+    const utils_id = main_sched.module_names.get("Utils").?;
+    
+    const main_state = main_sched.modules.items[main_id];
+    const helper_state = main_sched.modules.items[helper_id];
+    const utils_state = main_sched.modules.items[utils_id];
 
     const Phase = PackageEnv.Phase;
     try std.testing.expectEqual(Phase.Done, main_state.phase);
@@ -562,16 +565,13 @@ test "BuildEnv: multi-threaded concurrency stress test" {
     try ws.buildApp(app_path);
 
     // Verify no duplicate processing occurred by checking phase progression
-    const app_build = ws.packages.get("app").?;
-    const main_sched = app_build.schedulers.get("app").?;
+    const main_sched = ws.schedulers.get("app").?;
 
     main_sched.lock.lock();
     defer main_sched.lock.unlock();
 
     // All modules should reach Done phase exactly once
-    var it = main_sched.modules.iterator();
-    while (it.next()) |entry| {
-        const state = entry.value_ptr.*;
+    for (main_sched.modules.items) |state| {
         try std.testing.expectEqual(PackageEnv.Phase.Done, state.phase);
         const working_val = if (@import("builtin").target.cpu.arch != .wasm32) state.working.load(.seq_cst) else state.working;
         try std.testing.expectEqual(@as(u8, 0), working_val);
@@ -709,7 +709,7 @@ test "BuildEnv: enforce rules (only apps -> platforms, no package -> app)" {
     // Building should fail the dependency validation (invalid dependency)
     const res = ws.buildApp(app_path);
     try std.testing.expectError(error.InvalidDependency, res);
-    try expectSpecificError(&ws, .parse_error, "PkgMain.roc");
+    try expectSpecificError(&ws, .runtime_error, "PkgMain.roc");
 }
 
 test "BuildEnv: app header can reference absolute paths; package/platform sandboxed" {
@@ -882,7 +882,7 @@ test "BuildEnv: deterministic error ordering across packages" {
     // Verify each has a type error
     for (drained) |entry| {
         try std.testing.expect(entry.reports.len > 0);
-        try std.testing.expectEqual(Report.Tag.type_error, entry.reports[0].tag);
+        try std.testing.expectEqual(reporting.Severity.runtime_error, entry.reports[0].severity);
     }
 }
 
@@ -1045,7 +1045,7 @@ test "BuildEnv: CacheManager integration - cached modules not rebuilt" {
     defer gpa.free(cache_dir);
     const cache_config = cache.CacheConfig{
         .enabled = true,
-        .dir = cache_dir,
+        .cache_dir = cache_dir,
     };
     const cache_manager = try gpa.create(cache.CacheManager);
     defer gpa.destroy(cache_manager);
@@ -1128,7 +1128,7 @@ test "BuildEnv: CacheManager integration - cache invalidated on file change" {
     defer gpa.free(cache_dir);
     const cache_config = cache.CacheConfig{
         .enabled = true,
-        .dir = cache_dir,
+        .cache_dir = cache_dir,
     };
     const cache_manager = try gpa.create(cache.CacheManager);
     defer gpa.destroy(cache_manager);

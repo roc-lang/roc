@@ -429,6 +429,21 @@ pub const BuildEnv = struct {
         self.cache_manager = cache_manager;
     }
 
+    /// Build an app file specifically (validates it's an app)
+    pub fn buildApp(self: *BuildEnv, app_file: []const u8) !void {
+        // Build and let the main function handle everything
+        // The build function accepts both apps and modules
+        try self.build(app_file);
+        
+        // After building, verify it was actually an app
+        // Check the package we just created
+        const pkg = self.packages.get("app");
+        if (pkg == null or pkg.?.kind != .app) {
+            // If it wasn't an app, return an error
+            return error.NotAnApp;
+        }
+    }
+
     // Build the workspace starting from an app root file path.
     // Assumptions:
     // - All header-declared paths are local filesystem paths (no URLs).
@@ -1074,7 +1089,7 @@ pub const BuildEnv = struct {
         return error.InvalidPackageName;
     }
 
-    const DrainedModuleReports = struct {
+    pub const DrainedModuleReports = struct {
         abs_path: []const u8,
         reports: []Report,
     };
