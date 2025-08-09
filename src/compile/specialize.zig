@@ -1,9 +1,9 @@
-/// Specialization system for monomorphizing generic CIR functions.
-///
-/// This module provides functionality to create specialized versions of generic functions
-/// by copying their CIR representation and unifying type variables with concrete types.
-/// The specialization process preserves type relationships and creates independent copies
-/// of all AST nodes while maintaining proper type variable mappings.
+//! Specialization system for monomorphizing generic CIR functions.
+//!
+//! This module provides functionality to create specialized versions of generic functions
+//! by copying their CIR representation and unifying type variables with concrete types.
+//! The specialization process preserves type relationships and creates independent copies
+//! of all AST nodes while maintaining proper type variable mappings.
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
@@ -25,6 +25,7 @@ const FlatType = types.FlatType;
 const Ident = base.Ident;
 const Region = base.Region;
 
+/// Error types that can occur during function specialization.
 pub const SpecializeError = error{
     OutOfMemory,
     UnificationFailed,
@@ -34,6 +35,7 @@ pub const SpecializeError = error{
 };
 
 /// Context for managing the specialization process
+/// Context for specializing CIR functions, maintaining mappings between source and target environments.
 pub const SpecializationContext = struct {
     allocator: Allocator,
     type_store: *Store,
@@ -211,6 +213,9 @@ pub const SpecializationContext = struct {
 ///   - InvalidArgument: If function_expr is not a lambda/closure or arg count mismatch
 ///   - UnificationFailed: If argument types cannot be unified with function parameters
 ///   - OutOfMemory: If allocation fails during copying process
+/// Specializes a CIR function expression for specific argument types.
+/// Creates a deep copy of the function with type variables mapped to concrete types.
+/// Returns the specialized expression index and its type variable.
 pub fn specializeFunctionExpr(
     allocator: Allocator,
     type_store: *Store,
