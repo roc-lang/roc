@@ -8,9 +8,8 @@ const std = @import("std");
 const reporting = @import("reporting");
 const parse = @import("parse");
 
-// Import BuildModule/BuildPackage and ModuleEnv directly to avoid circular package dependencies.
+// Import BuildModule and ModuleEnv directly to avoid circular package dependencies.
 const BuildModuleMod = @import("BuildModule.zig");
-const BuildPackageMod = @import("BuildPackage.zig");
 const ModuleEnvMod = @import("ModuleEnv.zig");
 
 const ModuleBuild = BuildModuleMod.ModuleBuild;
@@ -1897,7 +1896,7 @@ test "BuildEnv: multi-threaded concurrency stress test" {
     }
 }
 
-test "BuildEnv: streaming with early order build" {
+test "BuildEnv: streaming with module chain" {
     const gpa = std.testing.allocator;
     var tmp = try std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1951,32 +1950,8 @@ test "BuildEnv: streaming with early order build" {
     const app_path = try std.fs.path.join(gpa, &.{ root_dir, "app", "Main.roc" });
     defer gpa.free(app_path);
 
-    // Manually drive the build to test streaming
-    var app_build = BuildPackageMod.BuildPackage.init(
-        gpa,
-        "app",
-        try std.fs.path.join(gpa, &.{ root_dir, "app" }),
-        .single_threaded,
-        1,
-        ws.ordered_sink.makeSink("app"),
-        ws.makeImportResolver(),
-        ws.makeScheduleHook(),
-    );
-    defer gpa.free(app_build.root_dir);
-    try ws.packages.put(gpa, "app", app_build);
-
-    // Start building the root module
-    const main_path = try std.fs.path.join(gpa, &.{ root_dir, "app", "Main.roc" });
-    defer gpa.free(main_path);
-    try app_build.buildRoot(main_path);
-
-    // After initial discovery, build order early
-    ws.ordered_sink.lock.lock();
-    try ws.ordered_sink.buildOrderLocked();
-    ws.ordered_sink.lock.unlock();
-
-    // Now run the build in single-threaded mode
-    try app_build.builder.runSingleThreaded();
+    // Build the app normally
+    try ws.buildApp(app_path);
 
     // Should have successfully built all modules
     // Verify by checking that we can drain reports
