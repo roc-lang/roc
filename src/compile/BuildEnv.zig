@@ -11,17 +11,14 @@
 const std = @import("std");
 const reporting = @import("reporting");
 const parse = @import("parse");
-
-// Import BuildModule and ModuleEnv directly to avoid circular package dependencies.
-const BuildModuleMod = @import("BuildModule.zig");
-const ModuleEnvMod = @import("ModuleEnv.zig");
-
-const ModuleBuild = BuildModuleMod.ModuleBuild;
-const Mode = BuildModuleMod.Mode;
-const Report = reporting.Report;
-
-const Allocator = std.mem.Allocator;
+const BuildModule = @import("BuildModule.zig");
+const ModuleEnv = @import("ModuleEnv.zig");
 const builtin = @import("builtin");
+
+const ModuleBuild = BuildModule.ModuleBuild;
+const Mode = BuildModule.Mode;
+const Report = reporting.Report;
+const Allocator = std.mem.Allocator;
 
 // Compile-time feature flags and thread/cond wrappers for targets without threads (e.g. wasm32)
 const threads_available = builtin.target.cpu.arch != .wasm32;
@@ -569,7 +566,7 @@ pub const BuildEnv = struct {
         return sched.*.getEnvIfDone(rest) != null;
     }
 
-    fn resolverGetEnv(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) ?*ModuleEnvMod {
+    fn resolverGetEnv(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) ?*ModuleEnv {
         var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
         const cur_pkg = self.ws.packages.get(current_package) orelse return null;
 
@@ -589,7 +586,7 @@ pub const BuildEnv = struct {
         return self.ws.dottedToPath(root_dir, import_name) catch import_name;
     }
 
-    fn makeResolver(self: *BuildEnv) BuildModuleMod.ImportResolver {
+    fn makeResolver(self: *BuildEnv) BuildModule.ImportResolver {
         const ctx = self.gpa.create(ResolverCtx) catch |err| {
             self.config.logger.log(.err, "Critical: Failed to allocate resolver context: {}", .{err});
             @panic("Cannot continue without resolver context");
@@ -698,7 +695,7 @@ pub const BuildEnv = struct {
         // Read source; ModuleEnv takes ownership of source
         const file_abs = try std.fs.path.resolve(self.gpa, &.{file_path});
         const src = try std.fs.cwd().readFileAlloc(self.gpa, file_abs, std.math.maxInt(usize));
-        var env = try ModuleEnvMod.init(self.gpa, src);
+        var env = try ModuleEnv.init(self.gpa, src);
         defer env.deinit();
         try env.calcLineStarts();
 
@@ -1237,7 +1234,7 @@ const OrderedSink = struct {
     }
 
     // Package sink wrapper that adds package context
-    fn makePkgSink(_: *OrderedSink, _: []const u8) BuildModuleMod.ReportSink {
+    fn makePkgSink(_: *OrderedSink, _: []const u8) BuildModule.ReportSink {
         // This will be set up by PkgSinkCtx
         return .{ .ctx = undefined, .emitFn = undefined };
     }
@@ -1786,7 +1783,7 @@ test "BuildEnv: multi-threaded global queue drives all phases" {
     const helper_state = main_sched.modules.get("Helper").?;
     const utils_state = main_sched.modules.get("Utils").?;
 
-    const Phase = BuildModuleMod.Phase;
+    const Phase = BuildModule.Phase;
     try std.testing.expectEqual(Phase.Done, main_state.phase);
     try std.testing.expectEqual(Phase.Done, helper_state.phase);
     try std.testing.expectEqual(Phase.Done, utils_state.phase);
@@ -1882,7 +1879,7 @@ test "BuildEnv: multi-threaded concurrency stress test" {
     var it = main_sched.modules.iterator();
     while (it.next()) |entry| {
         const state = entry.value_ptr.*;
-        try std.testing.expectEqual(BuildModuleMod.Phase.Done, state.phase);
+        try std.testing.expectEqual(BuildModule.Phase.Done, state.phase);
         const working_val = if (@import("builtin").target.cpu.arch != .wasm32) state.working.load(.seq_cst) else state.working;
         try std.testing.expectEqual(@as(u8, 0), working_val);
     }
