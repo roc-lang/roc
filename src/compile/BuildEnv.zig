@@ -24,14 +24,6 @@ const Allocator = std.mem.Allocator;
 // so we disable them at comptime to prevent builds from failing.
 const threads_available = builtin.target.cpu.arch != .wasm32;
 
-/// Errors that can occur during build operations
-pub const BuildError = error{
-    OutOfMemory,
-    ModuleProcessingFailed,
-    SchedulingFailed,
-    InvalidPath,
-};
-
 /// Configuration options for build system behavior
 pub const Config = struct {
     /// Timeout for waiting on module processing (microseconds)
