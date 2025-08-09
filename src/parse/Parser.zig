@@ -256,7 +256,7 @@ fn debugToken(self: *Parser, window: usize) void {
             const e = tok_extra[i];
             extra = self.tok_buf.env.idents.getText(e.interned);
         }
-        // std.debug.print("{s}{d}: {s} \"{s}\"\n", .{ if (i == current) "-->" else "   ", i, @tagName(tag), extra });
+        std.debug.print("{s}{d}: {s} \"{s}\"\n", .{ if (i == current) "-->" else "   ", i, @tagName(tag), extra });
     }
 }
 

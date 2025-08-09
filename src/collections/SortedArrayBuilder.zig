@@ -424,8 +424,7 @@ test "SortedArrayBuilder detectDuplicates example usage" {
     for (duplicates) |duplicate_key| {
         // In a real compiler, you'd push a diagnostic here:
         // try cir.pushDiagnostic(CIR.Diagnostic{ .duplicate_exposed_item = ... });
-        // std.debug.print("Found duplicate key: {d}\n", .{duplicate_key});
-        _ = duplicate_key;
+        std.debug.print("Found duplicate key: {d}\n", .{duplicate_key});
     }
 
     // Verify we found the expected duplicates

@@ -82,8 +82,7 @@ pub const CacheManager = struct {
         // Read cache data using memory mapping for better performance
         const mapped_cache = cache_mod.CacheModule.readFromFileMapped(self.allocator, cache_path, self.filesystem) catch |err| {
             if (self.config.verbose) {
-                _ = err;
-                // std.log.debug("Failed to read cache file {s}: {}", .{ cache_path, err });
+                std.log.debug("Failed to read cache file {s}: {}", .{ cache_path, err });
             }
             self.stats.recordMiss();
             return CacheResult{ .miss = .{

@@ -1590,16 +1590,16 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     defer output.tokens.deinit();
 
     if (debug) {
-        // std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
+        std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
     }
 
     if (debug) {
-        // std.debug.print("Before:\n", .{});
-        // for (0..output.tokens.tokens.len) |token_index| {
-        // const token = output.tokens.tokens.get(token_index);
-        // std.debug.print("\t{any}\n", .{token});
-        // }
-        // std.debug.print("\n\n", .{});
+        std.debug.print("Before:\n", .{});
+        for (0..output.tokens.tokens.len) |token_index| {
+            const token = output.tokens.tokens.get(token_index);
+            std.debug.print("\t{any}\n", .{token});
+        }
+        std.debug.print("\n\n", .{});
     }
 
     // TODO: apply errors from messages to buffer below.
@@ -1615,7 +1615,7 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     defer buf2.deinit(gpa);
 
     if (debug) {
-        // std.debug.print("Intermediate:\n==========\n{s}\n==========\n\n", .{buf2.items});
+        std.debug.print("Intermediate:\n==========\n{s}\n==========\n\n", .{buf2.items});
     }
 
     // Second tokenization.
@@ -1625,12 +1625,12 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     defer output2.tokens.deinit();
 
     if (debug) {
-        // std.debug.print("After:\n", .{});
-        // for (0..output2.tokens.tokens.len) |token_index| {
-        //     const token = output2.tokens.tokens.get(token_index);
-        //     std.debug.print("\t{any}\n", .{token});
-        // }
-        // std.debug.print("\n\n", .{});
+        std.debug.print("After:\n", .{});
+        for (0..output2.tokens.tokens.len) |token_index| {
+            const token = output2.tokens.tokens.get(token_index);
+            std.debug.print("\t{any}\n", .{token});
+        }
+        std.debug.print("\n\n", .{});
     }
     // Assert same.
     var same = output.tokens.tokens.len == output2.tokens.tokens.len;
@@ -1674,18 +1674,18 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
             }
         }
 
-        // std.debug.print("...\n", .{});
-        // for (prefix_len..output.tokens.tokens.len - suffix_len) |token_index| {
-        //     const region = output.tokens.resolve(token_index);
-        //     const token = output.tokens.tokens.get(token_index);
-        //     std.debug.print("\x1b[31m\t- {any}\x1b[0m: {s}\n", .{ token, input[region.start.offset..region.end.offset] });
-        // }
-        // for (prefix_len..output2.tokens.tokens.len - suffix_len) |token_index| {
-        //     const region = output2.tokens.resolve(token_index);
-        //     const token = output2.tokens.tokens.get(token_index);
-        //     std.debug.print("\x1b[32m\t+ {any}\x1b[0m: {s}\n", .{ token, buf2.items[region.start.offset..region.end.offset] });
-        // }
-        // std.debug.print("...\n", .{});
+        std.debug.print("...\n", .{});
+        for (prefix_len..output.tokens.tokens.len - suffix_len) |token_index| {
+            const region = output.tokens.resolve(token_index);
+            const token = output.tokens.tokens.get(token_index);
+            std.debug.print("\x1b[31m\t- {any}\x1b[0m: {s}\n", .{ token, input[region.start.offset..region.end.offset] });
+        }
+        for (prefix_len..output2.tokens.tokens.len - suffix_len) |token_index| {
+            const region = output2.tokens.resolve(token_index);
+            const token = output2.tokens.tokens.get(token_index);
+            std.debug.print("\x1b[32m\t+ {any}\x1b[0m: {s}\n", .{ token, buf2.items[region.start.offset..region.end.offset] });
+        }
+        std.debug.print("...\n", .{});
 
         std.debug.assert(same);
     }

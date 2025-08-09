@@ -54,13 +54,13 @@ pub fn parseHandle(handle_str: []const u8) CoordinationError!platform.Handle {
 /// Windows: Read handle and size from command line arguments
 fn readFdInfoFromCommandLine(allocator: std.mem.Allocator) CoordinationError!FdInfo {
     const args = std.process.argsAlloc(allocator) catch {
-        // std.log.err("Failed to allocate memory for command line arguments", .{});
+        std.log.err("Failed to allocate memory for command line arguments", .{});
         return error.AllocationFailed;
     };
     defer std.process.argsFree(allocator, args);
 
     if (args.len < 3) {
-        // std.log.err("Invalid command line arguments: expected at least 3 arguments, got {}", .{args.len});
+        std.log.err("Invalid command line arguments: expected at least 3 arguments, got {}", .{args.len});
         return error.ArgumentsInvalid;
     }
 
@@ -68,12 +68,12 @@ fn readFdInfoFromCommandLine(allocator: std.mem.Allocator) CoordinationError!FdI
     const size_str = args[2];
 
     const fd_str = allocator.dupe(u8, handle_str) catch {
-        // std.log.err("Failed to duplicate handle string", .{});
+        std.log.err("Failed to duplicate handle string", .{});
         return error.AllocationFailed;
     };
 
     const size = std.fmt.parseInt(usize, size_str, 10) catch {
-        // std.log.err("Failed to parse size from '{s}'", .{size_str});
+        std.log.err("Failed to parse size from '{s}'", .{size_str});
         allocator.free(fd_str);
         return error.ArgumentsInvalid;
     };
@@ -88,21 +88,21 @@ fn readFdInfoFromCommandLine(allocator: std.mem.Allocator) CoordinationError!FdI
 fn readFdInfoFromFile(allocator: std.mem.Allocator) CoordinationError!FdInfo {
     // Get our own executable path
     const exe_path = std.fs.selfExePathAlloc(allocator) catch {
-        // std.log.err("Failed to get executable path", .{});
+        std.log.err("Failed to get executable path", .{});
         return error.FdInfoReadFailed;
     };
     defer allocator.free(exe_path);
 
     // Get the directory containing our executable (should be "roc-tmp-<random>")
     const exe_dir = std.fs.path.dirname(exe_path) orelse {
-        // std.log.err("Invalid executable path: no directory component", .{});
+        std.log.err("Invalid executable path: no directory component", .{});
         return error.FdInfoReadFailed;
     };
     const dir_basename = std.fs.path.basename(exe_dir);
 
     // Verify it has the expected prefix
     if (!std.mem.startsWith(u8, dir_basename, "roc-tmp-")) {
-        // std.log.err("Unexpected directory name: expected 'roc-tmp-*', got '{s}'", .{dir_basename});
+        std.log.err("Unexpected directory name: expected 'roc-tmp-*', got '{s}'", .{dir_basename});
         return error.FdInfoReadFailed;
     }
 
@@ -113,21 +113,21 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator) CoordinationError!FdInfo {
     }
 
     const fd_file_path = std.fmt.allocPrint(allocator, "{s}.txt", .{dir_path}) catch {
-        // std.log.err("Failed to format fd file path", .{});
+        std.log.err("Failed to format fd file path", .{});
         return error.AllocationFailed;
     };
     defer allocator.free(fd_file_path);
 
     // Read the file
     const file = std.fs.cwd().openFile(fd_file_path, .{}) catch {
-        // std.log.err("Failed to open fd file at '{s}'", .{fd_file_path});
+        std.log.err("Failed to open fd file at '{s}'", .{fd_file_path});
         return error.FileNotFound;
     };
     defer file.close();
 
     var buffer: [128]u8 = undefined;
     const bytes_read = file.readAll(&buffer) catch {
-        // std.log.err("Failed to read fd file", .{});
+        std.log.err("Failed to read fd file", .{});
         return error.FileReadFailed;
     };
 
@@ -136,21 +136,21 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator) CoordinationError!FdInfo {
     // Parse the content: first line is fd, second line is size
     var lines = std.mem.tokenizeScalar(u8, content, '\n');
     const fd_line = lines.next() orelse {
-        // std.log.err("Invalid fd file format: missing fd line", .{});
+        std.log.err("Invalid fd file format: missing fd line", .{});
         return error.FdInfoReadFailed;
     };
     const size_line = lines.next() orelse {
-        // std.log.err("Invalid fd file format: missing size line", .{});
+        std.log.err("Invalid fd file format: missing size line", .{});
         return error.FdInfoReadFailed;
     };
 
     const fd_str = allocator.dupe(u8, std.mem.trim(u8, fd_line, " \r\t")) catch {
-        // std.log.err("Failed to duplicate fd string", .{});
+        std.log.err("Failed to duplicate fd string", .{});
         return error.AllocationFailed;
     };
 
     const size = std.fmt.parseInt(usize, std.mem.trim(u8, size_line, " \r\t"), 10) catch {
-        // std.log.err("Failed to parse size from '{s}'", .{size_line});
+        std.log.err("Failed to parse size from '{s}'", .{size_line});
         allocator.free(fd_str);
         return error.FdInfoReadFailed;
     };
@@ -191,7 +191,7 @@ pub fn writeFdInfo(
 
         // Write the coordination file
         const file = std.fs.cwd().createFile(coord_file_path, .{}) catch |err| {
-            // std.log.err("Failed to create coordination file at '{s}': {}", .{ coord_file_path, err });
+            std.log.err("Failed to create coordination file at '{s}': {}", .{ coord_file_path, err });
             return err;
         };
         defer file.close();
@@ -202,7 +202,7 @@ pub fn writeFdInfo(
         defer allocator.free(content);
 
         file.writeAll(content) catch |err| {
-            // std.log.err("Failed to write coordination file: {}", .{err});
+            std.log.err("Failed to write coordination file: {}", .{err});
             return err;
         };
 

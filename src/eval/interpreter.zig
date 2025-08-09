@@ -96,6 +96,7 @@ pub const EvalError = error{
     BugUnboxedFlexVar,
     DivisionByZero,
     InvalidStackState,
+    NullStackPointer,
     NoCapturesProvided,
     CaptureBindingFailed,
     CaptureNotFound,

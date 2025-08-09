@@ -1822,8 +1822,8 @@ fn generateExpectedSection(
 
             if (!std.mem.eql(u8, new_content, expected_content.?)) {
                 // If the new content differs,
-                // std.debug.print("Warning: Mismatch in EXPECTED section for {s}\n", .{snapshot_path});
-                // std.debug.print("Hint: use `--check-expected` to give a more detailed report", .{});
+                std.debug.print("Warning: Mismatch in EXPECTED section for {s}\n", .{snapshot_path});
+                std.debug.print("Hint: use `--check-expected` to give a more detailed report", .{});
             }
         },
     }
@@ -2566,22 +2566,22 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
 
                 // Verify the outputs match
                 if (actual_outputs.items.len != expected_outputs.items.len) {
-                    // std.debug.print("REPL output count mismatch: got {} outputs, expected {} in {s}\n", .{
-                    //     actual_outputs.items.len,
-                    //     expected_outputs.items.len,
-                    //     snapshot_path,
-                    // });
+                    std.debug.print("REPL output count mismatch: got {} outputs, expected {} in {s}\n", .{
+                        actual_outputs.items.len,
+                        expected_outputs.items.len,
+                        snapshot_path,
+                    });
                     success = success and !emit_error;
                 } else {
                     for (actual_outputs.items, expected_outputs.items, 0..) |actual, expected_output, i| {
                         if (!std.mem.eql(u8, actual, expected_output)) {
                             success = success and !emit_error;
-                            // if (comptime builtin.target.os.tag != .freestanding) {
-                            //     std.debug.print(
-                            //         "REPL output mismatch at index {}: got '{s}', expected '{s}' in {s}\n",
-                            //         .{ i, actual, expected_output, snapshot_path },
-                            //     );
-                            // }
+                            if (comptime builtin.target.os.tag != .freestanding) {
+                                std.debug.print(
+                                    "REPL output mismatch at index {}: got '{s}', expected '{s}' in {s}\n",
+                                    .{ i, actual, expected_output, snapshot_path },
+                                );
+                            }
                         }
                     }
                 }
