@@ -6,7 +6,8 @@ const parse = @import("parse");
 const collections = @import("collections");
 const compile = @import("compile");
 
-const Filesystem = @import("fs/Filesystem.zig");
+const fs_mod = @import("fs");
+const Filesystem = fs_mod.Filesystem;
 const tracy = @import("tracy");
 
 const ModuleEnv = compile.ModuleEnv;

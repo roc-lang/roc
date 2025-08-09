@@ -1,7 +1,6 @@
 //! Cache key generation and management for uniquely identifying cached compilation results.
 
 const std = @import("std");
-const Filesystem = @import("../fs/Filesystem.zig");
 
 const Allocator = std.mem.Allocator;
 

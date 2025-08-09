@@ -14,9 +14,10 @@ const tracy = @import("tracy");
 const SharedMemoryAllocator = @import("./SharedMemoryAllocator.zig");
 const platform = @import("ipc/platform.zig");
 const fmt = @import("fmt.zig");
-const Filesystem = @import("fs/Filesystem.zig");
+const fs_mod = @import("fs");
+const Filesystem = fs_mod.Filesystem;
 const cli_args = @import("cli_args.zig");
-const cache_mod = @import("cache/mod.zig");
+const cache_mod = @import("cache");
 const bench = @import("bench.zig");
 const linker = @import("linker.zig");
 const compile = @import("compile");
@@ -1283,7 +1284,8 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
     var timer = try std.time.Timer.start();
 
-    // TODO: Integrate caching at a higher level
+    // TODO: Implement caching at this level
+    // For now, caching is disabled due to module dependency constraints
     _ = args.no_cache;
     _ = args.verbose;
 

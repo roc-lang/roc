@@ -16,6 +16,8 @@ pub const RocModules = struct {
     can: *Module,
     check: *Module,
     tracy: *Module,
+    cache: *Module,
+    fs: *Module,
     build_options: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options) RocModules {
@@ -31,6 +33,8 @@ pub const RocModules = struct {
             .can = b.addModule("can", .{ .root_source_file = b.path("src/canonicalize/Mod.zig") }),
             .check = b.addModule("check", .{ .root_source_file = b.path("src/check/Mod.zig") }),
             .tracy = b.addModule("tracy", .{ .root_source_file = b.path("src/tracy.zig") }),
+            .cache = b.addModule("cache", .{ .root_source_file = b.path("src/cache/mod.zig") }),
+            .fs = b.addModule("fs", .{ .root_source_file = b.path("src/fs/mod.zig") }),
             .build_options = b.addModule("build_options", .{ .root_source_file = build_options_step.getOutput() }),
         };
 
@@ -58,6 +62,7 @@ pub const RocModules = struct {
         self.compile.addImport("parse", self.parse);
         self.compile.addImport("can", self.can);
         self.compile.addImport("check", self.check);
+        self.compile.addImport("cache", self.cache);
 
         self.reporting.addImport("reporting", self.reporting);
         self.reporting.addImport("base", self.base);
@@ -91,6 +96,14 @@ pub const RocModules = struct {
         self.check.addImport("builtins", self.builtins);
         self.check.addImport("reporting", self.reporting);
 
+        self.cache.addImport("compile", self.compile);
+        self.cache.addImport("base", self.base);
+        self.cache.addImport("collections", self.collections);
+        self.cache.addImport("serialization", self.serialization);
+        self.cache.addImport("reporting", self.reporting);
+        self.cache.addImport("fs", self.fs);
+        self.cache.addImport("build_options", self.build_options);
+
         return self;
     }
 
@@ -106,6 +119,8 @@ pub const RocModules = struct {
         step.root_module.addImport("check", self.check);
         step.root_module.addImport("tracy", self.tracy);
         step.root_module.addImport("builtins", self.builtins);
+        step.root_module.addImport("cache", self.cache);
+        step.root_module.addImport("fs", self.fs);
         step.root_module.addImport("build_options", self.build_options);
     }
 
@@ -121,6 +136,8 @@ pub const RocModules = struct {
         step.root_module.addImport("check", self.check);
         step.root_module.addImport("tracy", self.tracy);
         step.root_module.addImport("builtins", self.builtins);
+        step.root_module.addImport("cache", self.cache);
+        step.root_module.addImport("fs", self.fs);
         step.root_module.addImport("build_options", self.build_options);
     }
 };

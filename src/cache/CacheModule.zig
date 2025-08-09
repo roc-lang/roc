@@ -12,7 +12,8 @@ const parse = @import("parse");
 const compile = @import("compile");
 const serialization = @import("serialization");
 const SExprTree = base.SExprTree;
-const Filesystem = @import("../fs/Filesystem.zig");
+const fs_mod = @import("fs");
+const Filesystem = fs_mod.Filesystem;
 
 const SERIALIZATION_ALIGNMENT = 16;
 
@@ -388,7 +389,7 @@ test "create and restore cache" {
 
     // Parse the source
     var module_env = try ModuleEnv.init(gpa, source);
-    defer module_env.deinit();
+    // commented out: defer module_env.deinit();
 
     try module_env.initCIRFields(gpa, "TestModule");
     // CIR is now just an alias for ModuleEnv, so use module_env directly

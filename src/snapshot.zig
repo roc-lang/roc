@@ -16,7 +16,7 @@ const Can = @import("can");
 const Check = @import("check");
 const builtins = @import("builtins");
 
-const cache = @import("cache/mod.zig");
+const cache = @import("cache");
 const fmt = @import("fmt.zig");
 const repl = @import("repl/eval.zig");
 

@@ -3,7 +3,9 @@
 const std = @import("std");
 const base = @import("base");
 const reporting = @import("reporting");
-const Filesystem = @import("../fs/Filesystem.zig");
+const compile = @import("compile");
+const fs_mod = @import("fs");
+const Filesystem = fs_mod.Filesystem;
 const cache_mod = @import("mod.zig");
 const Cache = cache_mod.CacheModule;
 const CacheConfig = cache_mod.CacheConfig;
@@ -12,7 +14,6 @@ const CacheReporting = @import("CacheReporting.zig");
 const SERIALIZATION_ALIGNMENT = 16;
 
 const Allocator = std.mem.Allocator;
-const compile = @import("compile");
 const ModuleEnv = compile.ModuleEnv;
 
 /// Result of a cache lookup operation
@@ -48,6 +49,12 @@ pub const CacheManager = struct {
             .allocator = allocator,
             .stats = CacheStats{},
         };
+    }
+
+    /// Deinitialize the cache manager.
+    pub fn deinit(self: *Self) void {
+        _ = self;
+        // Nothing to deinit currently
     }
 
     /// Load a cached module based on its content and compiler version.
@@ -289,10 +296,10 @@ test "CacheManager generateCacheKey" {
     const content = "module [test]\n\ntest = 42";
     const compiler_version = "roc-zig-0.11.0-debug";
 
-    const key1 = CacheManager.generateCacheKey(compiler_version, content);
-    const key2 = CacheManager.generateCacheKey(compiler_version, content);
+    const key1 = CacheManager.generateCacheKey(content, compiler_version);
+    const key2 = CacheManager.generateCacheKey(content, compiler_version);
 
-    // Same input should produce same key
+    // Same content should produce same key
     try testing.expectEqualSlices(u8, &key1, &key2);
 
     // Should be 32 bytes

@@ -14,6 +14,7 @@ const parse = @import("parse");
 const BuildModule = @import("BuildModule.zig");
 const ModuleEnv = @import("ModuleEnv.zig");
 const builtin = @import("builtin");
+const cache = @import("cache");
 
 const ModuleBuild = BuildModule.ModuleBuild;
 const Mode = BuildModule.Mode;
@@ -182,9 +183,78 @@ const GlobalQueue = struct {
                                 defer self.inflight.dec();
                             }
 
+                            // Check cache before processing
+                            if (be.cache_manager) |cm| {
+                                // Get module state to check path
+                                const module_state = sched.modules.getPtr(task.module_name).?;
+
+                                // Read the source file
+                                const source = std.fs.cwd().readFileAlloc(be.gpa, module_state.path, 10 * 1024 * 1024) catch {
+                                    // If we can't read the file, continue with normal processing
+                                    sched.process(.{ .module_name = task.module_name }) catch {
+                                        // Continue processing other modules despite this error
+                                    };
+
+                                    freeSlice(self.gpa, task.pkg);
+                                    freeSlice(self.gpa, task.module_name);
+                                    continue;
+                                };
+                                defer be.gpa.free(source);
+
+                                const cache_result = cm.loadFromCache("roc-zig-dev", source, task.module_name);
+                                switch (cache_result) {
+                                    .hit => |hit| {
+                                        // Cache hit! Update the module state with cached data
+                                        module_state.*.phase = .Done;
+                                        module_state.*.env = hit.module_env.*;
+
+                                        // Skip normal processing since we loaded from cache
+                                        freeSlice(self.gpa, task.pkg);
+                                        freeSlice(self.gpa, task.module_name);
+                                        continue;
+                                    },
+                                    .miss => {
+                                        // Continue with normal processing
+                                    },
+                                    .not_enabled => {
+                                        // Continue with normal processing
+                                    },
+                                }
+                            }
+
                             sched.process(.{ .module_name = task.module_name }) catch {
                                 // Continue processing other modules despite this error
                             };
+
+                            // After successful processing, store in cache
+                            if (be.cache_manager) |cm| {
+                                const module_state = sched.modules.get(task.module_name).?;
+                                if (module_state.phase == .Done and module_state.env != null) {
+                                    // Read the source file again to generate the cache key
+                                    const source = std.fs.cwd().readFileAlloc(be.gpa, module_state.path, 10 * 1024 * 1024) catch {
+                                        // If we can't read the file, skip caching
+                                        freeSlice(self.gpa, task.pkg);
+                                        freeSlice(self.gpa, task.module_name);
+                                        continue;
+                                    };
+                                    defer be.gpa.free(source);
+
+                                    const cache_key = cache.CacheManager.generateCacheKey(source, "roc-zig-dev");
+                                    // For now, just pass 0 for error and warning counts
+                                    // TODO: Extract actual error/warning counts from reports
+                                    const error_count: u32 = 0;
+                                    const warning_count: u32 = 0;
+
+                                    cm.store(
+                                        cache_key,
+                                        &module_state.env.?,
+                                        error_count,
+                                        warning_count,
+                                    ) catch {
+                                        // Cache store failed, but continue
+                                    };
+                                }
+                            }
                         }
                     }
                 }
@@ -278,6 +348,9 @@ pub const BuildEnv = struct {
     // Unified global work-stealing queue (WSQ)
     global_queue: GlobalQueue,
 
+    // Cache manager for compiled modules
+    cache_manager: ?*cache.CacheManager = null,
+
     // Owned resolver ctx pointers for cleanup (typed)
     resolver_ctxs: std.ArrayList(*ResolverCtx),
     // Owned per-package sink contexts for fully-qualified emission
@@ -302,6 +375,13 @@ pub const BuildEnv = struct {
     pub fn deinit(self: *BuildEnv) void {
         // Stop global queue workers
         self.global_queue.deinit(self.gpa);
+
+        // Deinit cache manager if present
+        if (self.cache_manager) |cm| {
+            cm.deinit();
+            self.gpa.destroy(cm);
+        }
+
         // Free resolver ctxs owned by this BuildEnv (if any)
         for (self.resolver_ctxs.items) |ctx_ptr| {
             self.gpa.destroy(ctx_ptr);
@@ -344,6 +424,11 @@ pub const BuildEnv = struct {
         self.workspace_roots.deinit();
 
         self.sink.deinit();
+    }
+
+    /// Set the cache manager for this build environment
+    pub fn setCacheManager(self: *BuildEnv, cache_manager: *cache.CacheManager) void {
+        self.cache_manager = cache_manager;
     }
 
     // Build the workspace starting from an app root file path.
@@ -850,7 +935,7 @@ pub const BuildEnv = struct {
                 .sink = .{ .ctx = ps, .emitFn = PkgSinkCtx.emit },
                 .resolver = resolver,
                 .schedule_hook = if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded)
-                    .{ .ctx = sc, .onSchedule = ScheduleCtx.onSchedule }
+                    .{ .ctx = &self.global_queue, .onSchedule = GlobalQueue.hookOnSchedule }
                 else
                     .{ .ctx = sc, .onSchedule = ScheduleCtx.onSchedule },
                 .compiler_version = self.compiler_version,
