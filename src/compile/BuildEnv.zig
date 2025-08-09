@@ -24,23 +24,8 @@ const Allocator = std.mem.Allocator;
 // so we disable them at comptime to prevent builds from failing.
 const threads_available = builtin.target.cpu.arch != .wasm32;
 
-/// Configuration options for build system behavior
-pub const Config = struct {
-    /// Timeout for waiting on module processing (microseconds)
-    module_wait_timeout_us: u64 = 1_000_000, // 1 second default
-
-    /// Maximum depth for module dependencies (prevent infinite recursion)
-    max_module_depth: u32 = 1000,
-
-    /// Sleep time for idle waiting (microseconds)
-    idle_sleep_us: u64 = 1_000_000, // 1 ms default
-
-    /// Maximum inflight tasks for global queue
-    max_inflight_tasks: usize = 1000,
-};
-
-const StdThread = if (threads_available) std.Thread else struct {};
-const StdMutex = if (threads_available) std.Thread.Mutex else struct {
+const Thread = if (threads_available) std.Thread else struct {};
+const Mutex = if (threads_available) std.Thread.Mutex else struct {
     pub fn lock(self: *@This()) void {
         _ = self;
     }
@@ -48,8 +33,8 @@ const StdMutex = if (threads_available) std.Thread.Mutex else struct {
         _ = self;
     }
 };
-const StdCondition = if (threads_available) std.Thread.Condition else struct {
-    pub fn wait(self: *@This(), _: *StdMutex) void {
+const ThreadCondition = if (threads_available) std.Thread.Condition else struct {
+    pub fn wait(self: *@This(), _: *Mutex) void {
         _ = self;
     }
     pub fn signal(self: *@This()) void {
@@ -102,9 +87,9 @@ const GlobalQueue = struct {
 
     gpa: Allocator,
     tasks: std.ArrayList(Task),
-    lock: StdMutex = .{},
-    cond: StdCondition = .{},
-    workers: std.ArrayList(StdThread),
+    lock: Mutex = .{},
+    cond: ThreadCondition = .{},
+    workers: std.ArrayList(Thread),
     running: bool = false,
     sink_ptr: ?*OrderedSink = null,
     // Pointer back to BuildEnv for dispatch
@@ -179,8 +164,6 @@ const GlobalQueue = struct {
             self.lock.unlock();
             const inflight_zero = self.inflight.load() == 0;
             if (no_tasks and inflight_zero) break;
-            const sleep_us = if (self.build_env) |be| be.config.idle_sleep_us else 1_000_000;
-            std.time.sleep(sleep_us);
         }
     }
 
@@ -294,7 +277,6 @@ pub const BuildEnv = struct {
     gpa: Allocator,
     mode: Mode,
     max_threads: usize,
-    config: Config = .{},
 
     // Workspace roots for sandboxing (absolute, canonical)
     workspace_roots: std.ArrayList([]const u8),
@@ -318,15 +300,10 @@ pub const BuildEnv = struct {
     schedule_ctxs: std.ArrayList(*ScheduleCtx),
 
     pub fn init(gpa: Allocator, mode: Mode, max_threads: usize) BuildEnv {
-        return initWithConfig(gpa, mode, max_threads, .{});
-    }
-
-    pub fn initWithConfig(gpa: Allocator, mode: Mode, max_threads: usize, config: Config) BuildEnv {
         return .{
             .gpa = gpa,
             .mode = mode,
             .max_threads = max_threads,
-            .config = config,
             .workspace_roots = std.ArrayList([]const u8).init(gpa),
             .sink = OrderedSink.init(gpa),
             .global_queue = GlobalQueue.init(gpa),
@@ -1076,8 +1053,8 @@ const OrderedSink = struct {
     };
 
     gpa: Allocator,
-    lock: StdMutex = .{},
-    cond: StdCondition = .{},
+    lock: Mutex = .{},
+    cond: ThreadCondition = .{},
 
     // Ordered buffer and index
     entries: std.ArrayList(Entry),
