@@ -1,3 +1,4 @@
+//! Test environment for the builtins tests.
 const std = @import("std");
 const builtins = @import("builtins");
 const RocOps = builtins.host_abi.RocOps;

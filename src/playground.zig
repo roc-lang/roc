@@ -186,6 +186,7 @@ var compiler_data: ?CompilerStageData = null;
 
 /// REPL state management
 var repl_instance: ?*Repl = null;
+var repl_roc_ops: ?*RocOps = null;
 
 /// Host-managed buffers for better memory management
 var host_message_buffer: ?[]u8 = null;
@@ -280,16 +281,25 @@ const ResponseWriteError = error{
     OutOfBufferSpace,
 };
 
-/// Clean up REPL state
+/// Clean up REPL state and free associated memory.
+/// This function safely deallocates the REPL instance and RocOps, then sets them to null.
+/// It's called during RESET operations and module initialization.
 fn cleanupReplState() void {
     if (repl_instance) |repl_ptr| {
         repl_ptr.deinit();
         allocator.destroy(repl_ptr);
         repl_instance = null;
     }
+    if (repl_roc_ops) |roc_ops| {
+        allocator.destroy(roc_ops);
+        repl_roc_ops = null;
+    }
 }
 
-/// Create WASM-compatible RocOps for REPL initialization
+/// Create WASM-compatible RocOps for REPL initialization.
+/// This function allocates and initializes a RocOps structure with WASM-specific
+/// memory management functions. The returned pointer must be freed by the caller.
+/// Returns an error if allocation fails.
 fn createWasmRocOps() !*RocOps {
     const roc_ops = try allocator.create(RocOps);
     roc_ops.* = RocOps{
@@ -529,14 +539,19 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             };
 
             repl_instance = allocator.create(Repl) catch |err| {
+                allocator.destroy(roc_ops);
                 try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
                 return;
             };
             repl_instance.?.* = Repl.init(allocator, roc_ops) catch |err| {
+                allocator.destroy(roc_ops);
+                allocator.destroy(repl_instance.?);
+                repl_instance = null;
                 try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
                 return;
             };
 
+            repl_roc_ops = roc_ops;
             current_state = .REPL_ACTIVE;
 
             // Return success with REPL info
@@ -630,7 +645,11 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
     }
 }
 
-/// Handle messages in REPL_ACTIVE state
+/// Handle messages in REPL_ACTIVE state.
+/// This function processes REPL-specific messages including REPL_STEP, CLEAR_REPL,
+/// RESET, and compiler queries (QUERY_CIR, QUERY_TYPES, GET_HOVER_INFO).
+/// The REPL instance must be initialized before calling this function.
+/// Returns an error if the response buffer is too small or if internal errors occur.
 fn handleReplState(message_type: MessageType, root: std.json.Value, response_buffer: []u8) ResponseWriteError!void {
     const repl_ptr = repl_instance orelse {
         try writeErrorResponse(response_buffer, .ERROR, "REPL not initialized");

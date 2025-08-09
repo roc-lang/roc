@@ -3001,7 +3001,7 @@ pub const Interpreter = struct {
                 return error.EvaluationFailed;
             };
 
-            result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
+            try result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
         }
     }
 
@@ -3125,7 +3125,7 @@ pub const Interpreter = struct {
         const result_value = try self.callClosureWithStackArgs(expr_idx, arg_count, ops);
 
         // Copy the result
-        result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
+        try result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
     }
 
     /// This function handles the incremental construction of tuples by processing one element at a time using a work queue to avoid recursion.

@@ -734,6 +734,11 @@ fn runTestSteps(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, te
         } else {
             logDebug("  Step {}: {s} successful. Status: {s}, Message: {?s}\n", .{ i + 1, step.message.type, response.status, response.message });
         }
+
+        // Clean up owned_source if present
+        if (step.owned_source) |owned| {
+            allocator.free(owned);
+        }
     }
 
     return StepExecutionResult{ .result = .passed };

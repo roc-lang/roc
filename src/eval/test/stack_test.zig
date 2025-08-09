@@ -1,3 +1,4 @@
+//! Tests for the stack implementation.
 const std = @import("std");
 const collections = @import("collections");
 const Stack = @import("../stack.zig").Stack;
