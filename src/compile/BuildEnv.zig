@@ -1423,7 +1423,7 @@ fn expectErrorCount(ws: *BuildEnv, expected_count: usize) !void {
     const gpa = std.testing.allocator;
     const drained = try ws.drainReports();
     defer cleanupReports(gpa, drained);
-    
+
     var total_reports: usize = 0;
     for (drained) |entry| {
         total_reports += entry.reports.len;
@@ -1435,7 +1435,7 @@ fn expectSpecificError(ws: *BuildEnv, comptime error_type: Report.Tag, module_su
     const gpa = std.testing.allocator;
     const drained = try ws.drainReports();
     defer cleanupReports(gpa, drained);
-    
+
     var found = false;
     for (drained) |entry| {
         if (std.mem.indexOf(u8, entry.abs_path, module_substring) != null) {
@@ -1599,12 +1599,12 @@ test "BuildEnv: drainReports returns abs paths and aggregates multi-report modul
     // Find the A.roc module which should have exactly 2 type errors
     var found_a = false;
     var total_errors_in_a: usize = 0;
-    
+
     for (drained) |entry| {
         if (std.mem.endsWith(u8, entry.abs_path, "A.roc")) {
             found_a = true;
             try std.testing.expect(std.fs.path.isAbsolute(entry.abs_path));
-            
+
             // Count specific error types
             for (entry.reports) |report| {
                 if (report.tag == .type_error) {
@@ -1613,7 +1613,7 @@ test "BuildEnv: drainReports returns abs paths and aggregates multi-report modul
             }
         }
     }
-    
+
     try std.testing.expect(found_a);
     try std.testing.expectEqual(@as(usize, 2), total_errors_in_a);
 }
@@ -2038,7 +2038,6 @@ test "BuildEnv: streaming with module chain" {
     try std.testing.expectEqual(@as(usize, 0), drained.len);
 }
 
-
 test "BuildEnv: enforce rules (only apps -> platforms, no package -> app)" {
     const gpa = std.testing.allocator;
     var tmp = try std.testing.tmpDir(.{});
@@ -2244,19 +2243,19 @@ test "BuildEnv: deterministic error ordering across packages" {
     // Drain reports to check ordering
     const drained = try ws.drainReports();
     defer cleanupReports(gpa, drained);
-    
+
     // We should have exactly 2 modules with errors
     try std.testing.expectEqual(@as(usize, 2), drained.len);
-    
+
     // First error should be from A/Bad.roc (depth 1)
     try std.testing.expect(std.mem.endsWith(u8, drained[0].abs_path, "Bad.roc"));
     try std.testing.expect(std.mem.indexOf(u8, drained[0].abs_path, "pkgA") != null);
-    
+
     // Second error should be from B/Deep/Bad.roc (depth 2)
     try std.testing.expect(std.mem.endsWith(u8, drained[1].abs_path, "Bad.roc"));
     try std.testing.expect(std.mem.indexOf(u8, drained[1].abs_path, "pkgB") != null);
     try std.testing.expect(std.mem.indexOf(u8, drained[1].abs_path, "Deep") != null);
-    
+
     // Verify each has a type error
     for (drained) |entry| {
         try std.testing.expect(entry.reports.len > 0);
@@ -2389,21 +2388,21 @@ test "BuildEnv: CacheManager integration - cached modules not rebuilt" {
     const gpa = std.testing.allocator;
     const fs_mod = @import("fs");
     const Filesystem = fs_mod.Filesystem;
-    
+
     var tmp = try std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    
+
     const root_dir = tmp.dir.path;
     try tmp.dir.makePath("app");
     try tmp.dir.makePath("cache");
-    
+
     // Create test modules
     try writeFile(tmp.dir, "app/Utils.roc",
         \\module [double]
         \\
         \\double = \n -> n * 2
     );
-    
+
     try writeFile(tmp.dir, "app/Main.roc",
         \\app [main!] {}
         \\
@@ -2411,11 +2410,11 @@ test "BuildEnv: CacheManager integration - cached modules not rebuilt" {
         \\
         \\main! = |_| Utils.double 21
     );
-    
+
     // First build with caching enabled
     var ws1 = BuildEnv.init(gpa, .single_threaded, 1);
     defer ws1.deinit();
-    
+
     // Set up cache
     const cache_dir = try std.fs.path.join(gpa, &.{ root_dir, "cache" });
     defer gpa.free(cache_dir);
@@ -2427,43 +2426,43 @@ test "BuildEnv: CacheManager integration - cached modules not rebuilt" {
     defer gpa.destroy(cache_manager);
     cache_manager.* = cache.CacheManager.init(gpa, cache_config, Filesystem.default());
     defer cache_manager.deinit();
-    
+
     ws1.setCacheManager(cache_manager);
-    
+
     const app_path = try std.fs.path.join(gpa, &.{ root_dir, "app", "Main.roc" });
     defer gpa.free(app_path);
-    
+
     // First build - modules should be compiled and cached
     try ws1.buildApp(app_path);
     try expectNoErrors(&ws1);
-    
+
     // Verify cache was populated by checking phase progression
     const app_build1 = ws1.packages.get("app").?;
     const main_sched1 = app_build1.schedulers.get("app").?;
-    
+
     main_sched1.lock.lock();
     const utils_state1 = main_sched1.modules.get("Utils").?;
     const main_state1 = main_sched1.modules.get("Main").?;
     try std.testing.expectEqual(BuildModule.Phase.Done, utils_state1.phase);
     try std.testing.expectEqual(BuildModule.Phase.Done, main_state1.phase);
     main_sched1.lock.unlock();
-    
+
     // Second build with same cache - modules should be loaded from cache
     var ws2 = BuildEnv.init(gpa, .single_threaded, 1);
     defer ws2.deinit();
-    
+
     // Use the same cache manager
     const cache_manager2 = try gpa.create(cache.CacheManager);
     defer gpa.destroy(cache_manager2);
     cache_manager2.* = cache.CacheManager.init(gpa, cache_config, Filesystem.default());
     defer cache_manager2.deinit();
-    
+
     ws2.setCacheManager(cache_manager2);
-    
+
     // Second build - should use cached modules
     try ws2.buildApp(app_path);
     try expectNoErrors(&ws2);
-    
+
     // TODO: Once we have proper cache hit tracking, verify that modules were loaded from cache
     // For now, just verify the build succeeded
 }
@@ -2472,21 +2471,21 @@ test "BuildEnv: CacheManager integration - cache invalidated on file change" {
     const gpa = std.testing.allocator;
     const fs_mod = @import("fs");
     const Filesystem = fs_mod.Filesystem;
-    
+
     var tmp = try std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    
+
     const root_dir = tmp.dir.path;
     try tmp.dir.makePath("app");
     try tmp.dir.makePath("cache");
-    
+
     // Create initial module
     try writeFile(tmp.dir, "app/Math.roc",
         \\module [add]
         \\
         \\add = \a, b -> a + b
     );
-    
+
     try writeFile(tmp.dir, "app/Main.roc",
         \\app [main!] {}
         \\
@@ -2494,11 +2493,11 @@ test "BuildEnv: CacheManager integration - cache invalidated on file change" {
         \\
         \\main! = |_| Math.add 1 2
     );
-    
+
     // First build with caching
     var ws1 = BuildEnv.init(gpa, .single_threaded, 1);
     defer ws1.deinit();
-    
+
     const cache_dir = try std.fs.path.join(gpa, &.{ root_dir, "cache" });
     defer gpa.free(cache_dir);
     const cache_config = cache.CacheConfig{
@@ -2509,15 +2508,15 @@ test "BuildEnv: CacheManager integration - cache invalidated on file change" {
     defer gpa.destroy(cache_manager);
     cache_manager.* = cache.CacheManager.init(gpa, cache_config, Filesystem.default());
     defer cache_manager.deinit();
-    
+
     ws1.setCacheManager(cache_manager);
-    
+
     const app_path = try std.fs.path.join(gpa, &.{ root_dir, "app", "Main.roc" });
     defer gpa.free(app_path);
-    
+
     try ws1.buildApp(app_path);
     try expectNoErrors(&ws1);
-    
+
     // Modify the Math module
     try writeFile(tmp.dir, "app/Math.roc",
         \\module [add, multiply]
@@ -2525,29 +2524,29 @@ test "BuildEnv: CacheManager integration - cache invalidated on file change" {
         \\add = \a, b -> a + b
         \\multiply = \a, b -> a * b
     );
-    
+
     // Second build - cache should be invalidated for Math.roc
     var ws2 = BuildEnv.init(gpa, .single_threaded, 1);
     defer ws2.deinit();
-    
+
     const cache_manager2 = try gpa.create(cache.CacheManager);
     defer gpa.destroy(cache_manager2);
     cache_manager2.* = cache.CacheManager.init(gpa, cache_config, Filesystem.default());
     defer cache_manager2.deinit();
-    
+
     ws2.setCacheManager(cache_manager2);
-    
+
     // Build should succeed with the modified module
     try ws2.buildApp(app_path);
     try expectNoErrors(&ws2);
-    
+
     // Verify the module was rebuilt (has the new export)
     const app_build = ws2.packages.get("app").?;
     const main_sched = app_build.schedulers.get("app").?;
-    
+
     main_sched.lock.lock();
     defer main_sched.lock.unlock();
-    
+
     const math_state = main_sched.modules.get("Math").?;
     try std.testing.expectEqual(BuildModule.Phase.Done, math_state.phase);
     // TODO: Once we track exports properly, verify that 'multiply' is now exported
@@ -2557,10 +2556,10 @@ test "BuildEnv: cyclic dependency detection" {
     const gpa = std.testing.allocator;
     var tmp = try std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    
+
     const root_dir = tmp.dir.path;
     try tmp.dir.makePath("app");
-    
+
     // Create modules with a direct cycle: A -> B -> A
     try writeFile(tmp.dir, "app/A.roc",
         \\module [valueA]
@@ -2569,7 +2568,7 @@ test "BuildEnv: cyclic dependency detection" {
         \\
         \\valueA = B.valueB + 1
     );
-    
+
     try writeFile(tmp.dir, "app/B.roc",
         \\module [valueB]
         \\
@@ -2577,7 +2576,7 @@ test "BuildEnv: cyclic dependency detection" {
         \\
         \\valueB = A.valueA + 2
     );
-    
+
     try writeFile(tmp.dir, "app/Main.roc",
         \\app [main!] {}
         \\
@@ -2585,13 +2584,13 @@ test "BuildEnv: cyclic dependency detection" {
         \\
         \\main! = |_| A.valueA
     );
-    
+
     var ws = BuildEnv.init(gpa, .single_threaded, 1);
     defer ws.deinit();
-    
+
     const app_path = try std.fs.path.join(gpa, &.{ root_dir, "app", "Main.roc" });
     defer gpa.free(app_path);
-    
+
     // Building should fail due to cyclic dependency
     const res = ws.buildApp(app_path);
     try std.testing.expectError(error.CyclicImport, res);
@@ -2601,10 +2600,10 @@ test "BuildEnv: cyclic dependency detection - indirect cycle" {
     const gpa = std.testing.allocator;
     var tmp = try std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    
+
     const root_dir = tmp.dir.path;
     try tmp.dir.makePath("app");
-    
+
     // Create modules with an indirect cycle: A -> B -> C -> A
     try writeFile(tmp.dir, "app/A.roc",
         \\module [valueA]
@@ -2613,7 +2612,7 @@ test "BuildEnv: cyclic dependency detection - indirect cycle" {
         \\
         \\valueA = B.valueB + 1
     );
-    
+
     try writeFile(tmp.dir, "app/B.roc",
         \\module [valueB]
         \\
@@ -2621,7 +2620,7 @@ test "BuildEnv: cyclic dependency detection - indirect cycle" {
         \\
         \\valueB = C.valueC + 2
     );
-    
+
     try writeFile(tmp.dir, "app/C.roc",
         \\module [valueC]
         \\
@@ -2629,7 +2628,7 @@ test "BuildEnv: cyclic dependency detection - indirect cycle" {
         \\
         \\valueC = A.valueA + 3
     );
-    
+
     try writeFile(tmp.dir, "app/Main.roc",
         \\app [main!] {}
         \\
@@ -2637,13 +2636,13 @@ test "BuildEnv: cyclic dependency detection - indirect cycle" {
         \\
         \\main! = |_| A.valueA
     );
-    
+
     var ws = BuildEnv.init(gpa, .single_threaded, 1);
     defer ws.deinit();
-    
+
     const app_path = try std.fs.path.join(gpa, &.{ root_dir, "app", "Main.roc" });
     defer gpa.free(app_path);
-    
+
     // Building should fail due to cyclic dependency
     const res = ws.buildApp(app_path);
     try std.testing.expectError(error.CyclicImport, res);
@@ -2653,10 +2652,10 @@ test "BuildEnv: no false positive cycle detection" {
     const gpa = std.testing.allocator;
     var tmp = try std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    
+
     const root_dir = tmp.dir.path;
     try tmp.dir.makePath("app");
-    
+
     // Create modules with shared dependencies but no cycle
     // Main -> A -> C
     //      -> B -> C
@@ -2665,7 +2664,7 @@ test "BuildEnv: no false positive cycle detection" {
         \\
         \\valueC = 42
     );
-    
+
     try writeFile(tmp.dir, "app/A.roc",
         \\module [valueA]
         \\
@@ -2673,7 +2672,7 @@ test "BuildEnv: no false positive cycle detection" {
         \\
         \\valueA = C.valueC + 1
     );
-    
+
     try writeFile(tmp.dir, "app/B.roc",
         \\module [valueB]
         \\
@@ -2681,7 +2680,7 @@ test "BuildEnv: no false positive cycle detection" {
         \\
         \\valueB = C.valueC + 2
     );
-    
+
     try writeFile(tmp.dir, "app/Main.roc",
         \\app [main!] {}
         \\
@@ -2690,13 +2689,13 @@ test "BuildEnv: no false positive cycle detection" {
         \\
         \\main! = |_| A.valueA + B.valueB
     );
-    
+
     var ws = BuildEnv.init(gpa, .multi_threaded, 4);
     defer ws.deinit();
-    
+
     const app_path = try std.fs.path.join(gpa, &.{ root_dir, "app", "Main.roc" });
     defer gpa.free(app_path);
-    
+
     // Building should succeed - no cycle exists
     try ws.buildApp(app_path);
     try expectNoErrors(&ws);

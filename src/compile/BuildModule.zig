@@ -2,7 +2,7 @@
 //!
 //! This component manages the concurrent compilation of all modules within a single package,
 //! orchestrating the build phases for each module:
-//! 
+//!
 //! - Parsing modules to discover their import dependencies
 //! - Canonicalizing parsed modules into an intermediate representation
 //! - Type-checking modules once their dependencies are ready
@@ -10,7 +10,7 @@
 //! - Reporting diagnostics through a deterministic sink
 //!
 //! The scheduler tracks each module's progress through build phases and ensures proper
-//! ordering based on import dependencies. It supports both single-threaded and 
+//! ordering based on import dependencies. It supports both single-threaded and
 //! multi-threaded execution modes.
 
 const std = @import("std");
