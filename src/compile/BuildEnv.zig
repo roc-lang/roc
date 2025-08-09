@@ -11,14 +11,14 @@
 const std = @import("std");
 const reporting = @import("reporting");
 const parse = @import("parse");
-const BuildModule = @import("BuildModule.zig");
+const PackageEnv = @import("PackageEnv.zig");
 const ModuleEnv = @import("ModuleEnv.zig");
 const builtin = @import("builtin");
 const cache = @import("cache");
 
-const ModuleBuild = BuildModule.ModuleBuild;
-const Mode = BuildModule.Mode;
-const ModuleTimingInfo = BuildModule.TimingInfo;
+const PackageEnvType = PackageEnv.PackageEnv;
+const Mode = PackageEnv.Mode;
+const ModuleTimingInfo = PackageEnv.TimingInfo;
 const Report = reporting.Report;
 const Allocator = std.mem.Allocator;
 
@@ -340,7 +340,7 @@ pub const BuildEnv = struct {
     // Map of package name (alias) -> Package
     packages: std.StringHashMapUnmanaged(Package) = .{},
     // Schedulers per package name
-    schedulers: std.StringHashMapUnmanaged(*ModuleBuild) = .{},
+    schedulers: std.StringHashMapUnmanaged(*PackageEnvType) = .{},
 
     // Ordered sink over all packages (thread-safe, deterministic emission)
     sink: OrderedSink,
@@ -398,7 +398,7 @@ pub const BuildEnv = struct {
         // Deinit schedulers
         var sit = self.schedulers.iterator();
         while (sit.next()) |e| {
-            const mb_ptr: *ModuleBuild = e.value_ptr.*;
+            const mb_ptr: *PackageEnvType = e.value_ptr.*;
             mb_ptr.deinit();
             self.gpa.destroy(mb_ptr);
             freeSlice(self.gpa, e.key_ptr.*);
@@ -598,7 +598,7 @@ pub const BuildEnv = struct {
         return self.ws.dottedToPath(root_dir, import_name) catch import_name;
     }
 
-    fn makeResolver(self: *BuildEnv) BuildModule.ImportResolver {
+    fn makeResolver(self: *BuildEnv) PackageEnv.ImportResolver {
         const ctx = self.gpa.create(ResolverCtx) catch {
             @panic("Cannot continue without resolver context");
         };
@@ -922,8 +922,8 @@ pub const BuildEnv = struct {
             sc.* = .{ .gpa = self.gpa, .sink = &self.sink, .pkg = name, .ws = self };
             try self.schedule_ctxs.append(sc);
 
-            const sched = try self.gpa.create(ModuleBuild);
-            sched.* = ModuleBuild{
+            const sched = try self.gpa.create(PackageEnvType);
+            sched.* = PackageEnvType{
                 .gpa = self.gpa,
                 .package_name = name,
                 .root_dir = pkg.root_dir,
@@ -1274,7 +1274,7 @@ const OrderedSink = struct {
     }
 
     // Package sink wrapper that adds package context
-    fn makePkgSink(_: *OrderedSink, _: []const u8) BuildModule.ReportSink {
+    fn makePkgSink(_: *OrderedSink, _: []const u8) PackageEnv.ReportSink {
         // This will be set up by PkgSinkCtx
         return .{ .ctx = undefined, .emitFn = undefined };
     }
@@ -1866,7 +1866,7 @@ test "BuildEnv: multi-threaded global queue drives all phases" {
     const helper_state = main_sched.modules.get("Helper").?;
     const utils_state = main_sched.modules.get("Utils").?;
 
-    const Phase = BuildModule.Phase;
+    const Phase = PackageEnv.Phase;
     try std.testing.expectEqual(Phase.Done, main_state.phase);
     try std.testing.expectEqual(Phase.Done, helper_state.phase);
     try std.testing.expectEqual(Phase.Done, utils_state.phase);
@@ -1954,7 +1954,7 @@ test "BuildEnv: multi-threaded concurrency stress test" {
     var it = main_sched.modules.iterator();
     while (it.next()) |entry| {
         const state = entry.value_ptr.*;
-        try std.testing.expectEqual(BuildModule.Phase.Done, state.phase);
+        try std.testing.expectEqual(PackageEnv.Phase.Done, state.phase);
         const working_val = if (@import("builtin").target.cpu.arch != .wasm32) state.working.load(.seq_cst) else state.working;
         try std.testing.expectEqual(@as(u8, 0), working_val);
     }
@@ -2443,8 +2443,8 @@ test "BuildEnv: CacheManager integration - cached modules not rebuilt" {
     main_sched1.lock.lock();
     const utils_state1 = main_sched1.modules.get("Utils").?;
     const main_state1 = main_sched1.modules.get("Main").?;
-    try std.testing.expectEqual(BuildModule.Phase.Done, utils_state1.phase);
-    try std.testing.expectEqual(BuildModule.Phase.Done, main_state1.phase);
+    try std.testing.expectEqual(PackageEnv.Phase.Done, utils_state1.phase);
+    try std.testing.expectEqual(PackageEnv.Phase.Done, main_state1.phase);
     main_sched1.lock.unlock();
 
     // Second build with same cache - modules should be loaded from cache
@@ -2548,7 +2548,7 @@ test "BuildEnv: CacheManager integration - cache invalidated on file change" {
     defer main_sched.lock.unlock();
 
     const math_state = main_sched.modules.get("Math").?;
-    try std.testing.expectEqual(BuildModule.Phase.Done, math_state.phase);
+    try std.testing.expectEqual(PackageEnv.Phase.Done, math_state.phase);
     // TODO: Once we track exports properly, verify that 'multiply' is now exported
 }
 

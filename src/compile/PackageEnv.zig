@@ -100,7 +100,7 @@ const ModuleState = struct {
 };
 
 /// Per-package module build orchestrator
-pub const ModuleBuild = struct {
+pub const PackageEnv = struct {
     gpa: Allocator,
     /// Name of the current package (used for shorthand resolution)
     package_name: []const u8 = "",
@@ -138,7 +138,7 @@ pub const ModuleBuild = struct {
     total_type_checking_ns: u64 = 0,
     total_check_diagnostics_ns: u64 = 0,
 
-    pub fn init(gpa: Allocator, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink) ModuleBuild {
+    pub fn init(gpa: Allocator, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink) PackageEnv {
         return .{ .gpa = gpa, .root_dir = root_dir, .mode = mode, .max_threads = max_threads, .sink = sink };
     }
 
@@ -150,7 +150,7 @@ pub const ModuleBuild = struct {
         max_threads: usize,
         sink: ReportSink,
         resolver: ImportResolver,
-    ) ModuleBuild {
+    ) PackageEnv {
         return .{
             .gpa = gpa,
             .package_name = package_name,
@@ -162,7 +162,7 @@ pub const ModuleBuild = struct {
         };
     }
 
-    pub fn deinit(self: *ModuleBuild) void {
+    pub fn deinit(self: *PackageEnv) void {
         // Deinit modules
         var it = self.modules.iterator();
         while (it.next()) |e| {
@@ -175,7 +175,7 @@ pub const ModuleBuild = struct {
         self.emitted.deinit(self.gpa);
     }
 
-    pub fn buildRoot(self: *ModuleBuild, root_file_path: []const u8) !void {
+    pub fn buildRoot(self: *PackageEnv, root_file_path: []const u8) !void {
         const name = moduleNameFromPath(root_file_path);
         try self.ensureModule(name, root_file_path);
         // root depth = 0
@@ -206,7 +206,7 @@ pub const ModuleBuild = struct {
         try self.tryEmitReady();
     }
 
-    fn runSingleThread(self: *ModuleBuild) !void {
+    fn runSingleThread(self: *PackageEnv) !void {
         while (true) {
             if (self.injector.items.len > 0) {
                 const idx = self.injector.items.len - 1;
@@ -218,7 +218,7 @@ pub const ModuleBuild = struct {
         }
     }
 
-    fn runMultiThread(self: *ModuleBuild) !void {
+    fn runMultiThread(self: *PackageEnv) !void {
         const options = parallel.ProcessOptions{
             .max_threads = if (self.max_threads == 0) (std.Thread.getCpuCount() catch 1) else self.max_threads,
             .use_per_thread_arenas = false,
@@ -243,7 +243,7 @@ pub const ModuleBuild = struct {
         }
     }
 
-    const WorkerCtx = struct { sched: *ModuleBuild, index: *AtomicUsize, work_len: usize };
+    const WorkerCtx = struct { sched: *PackageEnv, index: *AtomicUsize, work_len: usize };
 
     fn workerFn(_: Allocator, ctx: *WorkerCtx, _: usize) void {
         while (true) {
@@ -262,7 +262,7 @@ pub const ModuleBuild = struct {
         } else ctx.sched.injector.items.len = 0;
     }
 
-    fn ensureModule(self: *ModuleBuild, name: []const u8, path: []const u8) !void {
+    fn ensureModule(self: *PackageEnv, name: []const u8, path: []const u8) !void {
         const gop = try self.modules.getOrPut(self.gpa, name);
         if (!gop.found_existing) {
             // Own the name and path
@@ -280,7 +280,7 @@ pub const ModuleBuild = struct {
     }
 
     /// Public API for cross-package schedulers: ensure a module exists, set its depth, and enqueue it
-    pub fn scheduleModule(self: *ModuleBuild, name: []const u8, path: []const u8, depth: u32) !void {
+    pub fn scheduleModule(self: *PackageEnv, name: []const u8, path: []const u8, depth: u32) !void {
         const existed = self.modules.contains(name);
         try self.ensureModule(name, path);
         try self.setDepthIfSmaller(name, depth);
@@ -294,17 +294,17 @@ pub const ModuleBuild = struct {
         try self.enqueue(name);
     }
 
-    fn setDepthIfSmaller(self: *ModuleBuild, name: []const u8, depth: u32) !void {
+    fn setDepthIfSmaller(self: *PackageEnv, name: []const u8, depth: u32) !void {
         const st = self.modules.getPtr(name).?;
         if (depth < st.depth) st.depth = depth;
     }
 
     /// Public API to adjust a module's depth from an external coordinator
-    pub fn setModuleDepthIfSmaller(self: *ModuleBuild, name: []const u8, depth: u32) !void {
+    pub fn setModuleDepthIfSmaller(self: *PackageEnv, name: []const u8, depth: u32) !void {
         try self.setDepthIfSmaller(name, depth);
     }
 
-    fn enqueue(self: *ModuleBuild, name: []const u8) !void {
+    fn enqueue(self: *PackageEnv, name: []const u8) !void {
         // In multi_threaded mode with a schedule_hook, forward to the global queue
         if (self.mode == .multi_threaded and self.schedule_hook != null) {
             // Look up the module to get its path and depth for the hook
@@ -323,7 +323,7 @@ pub const ModuleBuild = struct {
     }
 
     /// Public API to obtain a module's environment if it has completed type-checking
-    pub fn getEnvIfDone(self: *ModuleBuild, name: []const u8) ?*ModuleEnv {
+    pub fn getEnvIfDone(self: *PackageEnv, name: []const u8) ?*ModuleEnv {
         if (self.modules.getPtr(name)) |st| {
             if (st.phase == .Done) {
                 if (st.env) |*e| {
@@ -335,7 +335,7 @@ pub const ModuleBuild = struct {
     }
 
     /// Get accumulated timing information
-    pub fn getTimingInfo(self: *ModuleBuild) TimingInfo {
+    pub fn getTimingInfo(self: *PackageEnv) TimingInfo {
         return TimingInfo{
             .tokenize_parse_ns = self.total_tokenize_parse_ns,
             .canonicalize_ns = self.total_canonicalize_ns,
@@ -346,14 +346,14 @@ pub const ModuleBuild = struct {
     }
 
     /// Public API to read a module's current recorded dependency depth
-    pub fn getModuleDepth(self: *ModuleBuild, name: []const u8) ?u32 {
+    pub fn getModuleDepth(self: *PackageEnv, name: []const u8) ?u32 {
         if (self.modules.getPtr(name)) |st| {
             return st.depth;
         }
         return null;
     }
 
-    pub fn process(self: *ModuleBuild, task: Task) !void {
+    pub fn process(self: *PackageEnv, task: Task) !void {
         // In dispatch-only mode, this method is invoked by the global scheduler.
         // In local mode, it's invoked by the internal run* loops.
 
@@ -409,7 +409,7 @@ pub const ModuleBuild = struct {
         try self.tryEmitReady();
     }
 
-    fn doParse(self: *ModuleBuild, name: []const u8) !void {
+    fn doParse(self: *PackageEnv, name: []const u8) !void {
         // Load source and init ModuleEnv
         var st = self.modules.getPtr(name).?;
         const src = try std.fs.cwd().readFileAlloc(self.gpa, st.path, std.math.maxInt(usize));
@@ -428,7 +428,7 @@ pub const ModuleBuild = struct {
         try self.enqueue(name);
     }
 
-    fn doCanonicalize(self: *ModuleBuild, name: []const u8) !void {
+    fn doCanonicalize(self: *PackageEnv, name: []const u8) !void {
         var st = self.modules.getPtr(name).?;
         var env = st.env.?;
 
@@ -571,7 +571,7 @@ pub const ModuleBuild = struct {
         try self.enqueue(name);
     }
 
-    fn tryUnblock(self: *ModuleBuild, name: []const u8) !void {
+    fn tryUnblock(self: *PackageEnv, name: []const u8) !void {
         var st = self.modules.getPtr(name).?;
         // If all imports are Done, move to TypeCheck
         var ready = true;
@@ -609,7 +609,7 @@ pub const ModuleBuild = struct {
         }
     }
 
-    fn doTypeCheck(self: *ModuleBuild, name: []const u8) !void {
+    fn doTypeCheck(self: *PackageEnv, name: []const u8) !void {
         var st = self.modules.getPtr(name).?;
         var env = st.env.?;
 
@@ -677,7 +677,7 @@ pub const ModuleBuild = struct {
         if (@import("builtin").target.cpu.arch != .wasm32) self.cond.broadcast();
     }
 
-    fn resolveModulePath(self: *ModuleBuild, mod_name: []const u8) ![]const u8 {
+    fn resolveModulePath(self: *PackageEnv, mod_name: []const u8) ![]const u8 {
         // Allow resolver to provide local path resolution if present
         if (self.resolver) |r| {
             return r.resolveLocalPath(r.ctx, self.package_name, self.root_dir, mod_name);
@@ -721,7 +721,7 @@ pub const ModuleBuild = struct {
     // On-demand DFS to find a path from start -> target along import edges.
     // Returns an owned slice of module names (not owning the names themselves).
     // NOTE: This returns strings that live in ModuleEnv.strings; do not free them.
-    fn findPath(self: *ModuleBuild, start: []const u8, target: []const u8) !?[]const []const u8 {
+    fn findPath(self: *PackageEnv, start: []const u8, target: []const u8) !?[]const []const u8 {
         var visited = std.StringHashMapUnmanaged(void){};
         defer visited.deinit(self.gpa);
 
@@ -770,14 +770,14 @@ pub const ModuleBuild = struct {
         return base_name;
     }
 
-    pub fn tryEmitReady(self: *ModuleBuild) !void {
+    pub fn tryEmitReady(self: *PackageEnv) !void {
         // Sort discovered modules by (depth, name) each time; emit in prefix order
         if (self.discovered.items.len == 0) return;
         const names = try self.gpa.alloc([]const u8, self.discovered.items.len);
         defer self.gpa.free(names);
         std.mem.copyForwards([]const u8, names, self.discovered.items);
         std.sort.block([]const u8, names, self, struct {
-            fn lessThan(ctx: *ModuleBuild, a: []const u8, b: []const u8) bool {
+            fn lessThan(ctx: *PackageEnv, a: []const u8, b: []const u8) bool {
                 const sa = ctx.modules.getPtr(a).?.depth;
                 const sb = ctx.modules.getPtr(b).?.depth;
                 if (sa == sb) return std.mem.lessThan(u8, a, b);
@@ -801,7 +801,7 @@ pub const ModuleBuild = struct {
 // Tests using tempdirs
 // =========================
 
-test "ModuleBuild: parallel success across modules" {
+test "PackageEnv: parallel success across modules" {
     const gpa = std.testing.allocator;
 
     var tmp = try std.testing.tmpDir(.{});
@@ -822,7 +822,7 @@ test "ModuleBuild: parallel success across modules" {
     var sink = TestSink.init(gpa);
     defer sink.deinit();
 
-    var sched = ModuleBuild.init(gpa, root_dir, .multi_threaded, 4, sink.sink());
+    var sched = PackageEnv.init(gpa, root_dir, .multi_threaded, 4, sink.sink());
     defer sched.deinit();
 
     const main_path = try std.fs.path.join(gpa, &.{ root_dir, "Main.roc" });
@@ -834,7 +834,7 @@ test "ModuleBuild: parallel success across modules" {
     try std.testing.expectEqual(@as(usize, 0), sink.reports.items.len);
 }
 
-test "ModuleBuild: deterministic error ordering by depth then name" {
+test "PackageEnv: deterministic error ordering by depth then name" {
     const gpa = std.testing.allocator;
 
     var tmp = try std.testing.tmpDir(.{});
@@ -858,7 +858,7 @@ test "ModuleBuild: deterministic error ordering by depth then name" {
     var sink = TestSink.init(gpa);
     defer sink.deinit();
 
-    var sched = ModuleBuild.init(gpa, root_dir, .multi_threaded, 4, sink.sink());
+    var sched = PackageEnv.init(gpa, root_dir, .multi_threaded, 4, sink.sink());
     defer sched.deinit();
 
     const main_path = try std.fs.path.join(gpa, &.{ root_dir, "Main.roc" });
@@ -881,7 +881,7 @@ test "ModuleBuild: deterministic error ordering by depth then name" {
 }
 
 // Simple sink collecting reports and module names in order of emission
-test "ModuleBuild: single-threaded success across modules" {
+test "PackageEnv: single-threaded success across modules" {
     const gpa = std.testing.allocator;
 
     var tmp = try std.testing.tmpDir(.{});
@@ -896,7 +896,7 @@ test "ModuleBuild: single-threaded success across modules" {
     var sink = TestSink.init(gpa);
     defer sink.deinit();
 
-    var sched = ModuleBuild.init(gpa, root_dir, .single_threaded, 1, sink.sink());
+    var sched = PackageEnv.init(gpa, root_dir, .single_threaded, 1, sink.sink());
     defer sched.deinit();
 
     const main_path = try std.fs.path.join(gpa, &.{ root_dir, "Main.roc" });
@@ -908,7 +908,7 @@ test "ModuleBuild: single-threaded success across modules" {
     try std.testing.expectEqual(@as(usize, 0), sink.reports.items.len);
 }
 
-test "ModuleBuild: same-depth alphabetical order" {
+test "PackageEnv: same-depth alphabetical order" {
     const gpa = std.testing.allocator;
 
     var tmp = try std.testing.tmpDir(.{});
@@ -926,7 +926,7 @@ test "ModuleBuild: same-depth alphabetical order" {
     var sink = TestSink.init(gpa);
     defer sink.deinit();
 
-    var sched = ModuleBuild.init(gpa, root_dir, .multi_threaded, 4, sink.sink());
+    var sched = PackageEnv.init(gpa, root_dir, .multi_threaded, 4, sink.sink());
     defer sched.deinit();
 
     const main_path = try std.fs.path.join(gpa, &.{ root_dir, "Main.roc" });
@@ -948,7 +948,7 @@ test "ModuleBuild: same-depth alphabetical order" {
     try std.testing.expect(saw_b);
 }
 
-test "ModuleBuild: detect import cycle and fail fast" {
+test "PackageEnv: detect import cycle and fail fast" {
     const gpa = std.testing.allocator;
 
     var tmp = try std.testing.tmpDir(.{});
@@ -964,7 +964,7 @@ test "ModuleBuild: detect import cycle and fail fast" {
     defer sink.deinit();
 
     // Use multi-threaded to ensure we detect cycles under concurrency
-    var sched = ModuleBuild.init(gpa, root_dir, .multi_threaded, 4, sink.sink());
+    var sched = PackageEnv.init(gpa, root_dir, .multi_threaded, 4, sink.sink());
     defer sched.deinit();
 
     const main_path = try std.fs.path.join(gpa, &.{ root_dir, "Main.roc" });

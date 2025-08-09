@@ -1192,7 +1192,7 @@ const DrainedReport = struct {
 };
 
 /// Timing information for check phases
-const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else compile.BuildModule.TimingInfo;
+const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else compile.PackageEnv.TimingInfo;
 
 /// Error set for BuildEnv.build operations
 const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs.File.ReadError || std.fs.File.WriteError || std.Thread.SpawnError || error{
