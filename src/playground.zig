@@ -1070,6 +1070,7 @@ fn writeReplClearResponse(response_buffer: []u8) ResponseWriteError!void {
     const w = resp_writer.writer();
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"message\":\"REPL cleared\",\"repl_info\":{");
+    try w.print("\"compiler_version\":\"{s}\",", .{build_options.compiler_version});
     try w.writeAll("\"state\":\"REPL_ACTIVE\"");
     try w.writeAll("}}");
 
