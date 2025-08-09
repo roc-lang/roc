@@ -22,8 +22,6 @@ const problem = Check.problem;
 const compile = @import("compile");
 pub const ModuleEnv = compile.ModuleEnv;
 const Report = @import("reporting").Report;
-const collections = @import("collections");
-const SafeList = collections.SafeList;
 
 /// Timing information for different phases
 pub const TimingInfo = struct {
@@ -74,33 +72,21 @@ const Task = struct { module_name: []const u8 };
 
 const Phase = enum { Parse, Canonicalize, WaitingOnImports, TypeCheck, Done };
 
-/// DFS visitation state for cycle detection
-const VisitState = enum {
-    /// Module has not been visited yet
-    unvisited,
-    /// Module is currently being visited (potential cycle)
-    visiting,
-    /// Module has been fully processed
-    finished,
-};
-
 const ModuleState = struct {
     name: []const u8,
     path: []const u8,
     env: ?ModuleEnv = null,
     phase: Phase = .Parse,
-    imports: SafeList([]const u8) = .{},
+    imports: std.ArrayListUnmanaged([]const u8) = .{},
     /// External imports qualified via package shorthand (e.g. "cli.Stdout")
-    external_imports: SafeList([]const u8) = .{},
-    dependents: SafeList([]const u8) = .{},
-    reports: SafeList(Report) = .{},
-    /// Minimum depth from root module - used for deterministic error ordering.
-    /// Modules closer to root (lower depth) report errors first.
-    depth: u32 = std.math.maxInt(u32),
-    /// DFS visitation state for cycle detection
-    visit_state: VisitState = .unvisited,
-    /// Atomic flag to prevent concurrent processing of the same module
-    working: if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(bool) else bool = if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(bool).init(false) else false,
+    external_imports: std.ArrayListUnmanaged([]const u8) = .{},
+    dependents: std.ArrayListUnmanaged([]const u8) = .{},
+    reports: std.ArrayListUnmanaged(Report) = .{},
+    depth: u32 = std.math.maxInt(u32), // min depth from root
+    /// DFS visitation color for cycle detection: 0=white (unvisited), 1=gray (visiting), 2=black (finished)
+    visit_color: u8 = 0,
+    /// Atomic flag to prevent concurrent processing of the same module (0=free, 1=working)
+    working: if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(u8) else u8 = if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(u8).init(0) else 0,
 
     fn deinit(self: *ModuleState, gpa: Allocator) void {
         if (self.env) |*e| e.deinit();
@@ -108,7 +94,7 @@ const ModuleState = struct {
         self.external_imports.deinit(gpa);
         self.dependents.deinit(gpa);
         // Free reports
-        for (self.reports.items.items) |*r| r.deinit();
+        for (self.reports.items) |*r| r.deinit();
         self.reports.deinit(gpa);
     }
 };
@@ -133,7 +119,7 @@ pub const PackageEnv = struct {
     cond: Condition = .{},
 
     // Work queue
-    injector: SafeList(Task) = .{},
+    injector: std.ArrayListUnmanaged(Task) = .{},
 
     // Modules by name
     modules: std.StringHashMapUnmanaged(ModuleState) = .{},
@@ -142,7 +128,7 @@ pub const PackageEnv = struct {
     remaining_modules: usize = 0,
 
     // Deterministic emission
-    discovered: SafeList([]const u8) = .{},
+    discovered: std.ArrayListUnmanaged([]const u8) = .{},
     emitted: std.StringHashMapUnmanaged(void) = .{},
 
     // Timing collection (accumulated across all modules)
@@ -222,10 +208,10 @@ pub const PackageEnv = struct {
 
     fn runSingleThread(self: *PackageEnv) !void {
         while (true) {
-            if (self.injector.items.items.len > 0) {
-                const idx = self.injector.items.items.len - 1;
-                const task = self.injector.items.items[idx];
-                self.injector.items.items.len = idx;
+            if (self.injector.items.len > 0) {
+                const idx = self.injector.items.len - 1;
+                const task = self.injector.items[idx];
+                self.injector.items.len = idx;
                 try self.process(task);
                 try self.tryEmitReady();
             } else if (self.remaining_modules == 0) break;
@@ -240,12 +226,12 @@ pub const PackageEnv = struct {
 
         var index = AtomicUsize.init(0);
         while (true) {
-            const work_len = self.injector.items.items.len;
+            const work_len = self.injector.items.len;
             if (work_len == 0) {
                 if (self.remaining_modules == 0) break;
                 self.lock.lock();
                 defer self.lock.unlock();
-                if (self.remaining_modules == 0 and self.injector.items.items.len == 0) break;
+                if (self.remaining_modules == 0 and self.injector.items.len == 0) break;
                 _ = self.cond.timedWait(&self.lock, 1_000_000) catch {};
                 continue;
             }
@@ -263,17 +249,17 @@ pub const PackageEnv = struct {
         while (true) {
             const i = ctx.index.fetchAdd(1, .monotonic);
             if (i >= ctx.work_len) break;
-            const task = ctx.sched.injector.items.items[i];
+            const task = ctx.sched.injector.items[i];
             _ = ctx.sched.process(task) catch {};
         }
         // Compact processed prefix once under lock
         ctx.sched.lock.lock();
         defer ctx.sched.lock.unlock();
-        const len = ctx.sched.injector.items.items.len;
+        const len = ctx.sched.injector.items.len;
         if (ctx.work_len <= len) {
-            std.mem.copyBackwards(Task, ctx.sched.injector.items.items[0 .. len - ctx.work_len], ctx.sched.injector.items.items[ctx.work_len..len]);
-            ctx.sched.injector.items.items.len = len - ctx.work_len;
-        } else ctx.sched.injector.items.items.len = 0;
+            std.mem.copyBackwards(Task, ctx.sched.injector.items[0 .. len - ctx.work_len], ctx.sched.injector.items[ctx.work_len..len]);
+            ctx.sched.injector.items.len = len - ctx.work_len;
+        } else ctx.sched.injector.items.len = 0;
     }
 
     fn ensureModule(self: *PackageEnv, name: []const u8, path: []const u8) !void {
@@ -284,7 +270,7 @@ pub const PackageEnv = struct {
             const owned_path = try self.gpa.dupe(u8, path);
             gop.key_ptr.* = owned_name;
             gop.value_ptr.* = .{ .name = owned_name, .path = owned_path };
-            _ = try self.discovered.append(self.gpa, owned_name);
+            try self.discovered.append(self.gpa, owned_name);
 
             // Invoke optional scheduling hook for new module discovery/scheduling
             if (self.schedule_hook) |hook| {
@@ -331,7 +317,7 @@ pub const PackageEnv = struct {
             }
         } else {
             // Default behavior: use internal injector
-            _ = try self.injector.append(self.gpa, .{ .module_name = name });
+            try self.injector.append(self.gpa, .{ .module_name = name });
             if (@import("builtin").target.cpu.arch != .wasm32) self.cond.signal();
         }
     }
@@ -377,13 +363,13 @@ pub const PackageEnv = struct {
 
         // Atomic compare-and-swap to claim work on this module
         const already_working = if (@import("builtin").target.cpu.arch != .wasm32) blk: {
-            // For multi-threaded: use atomic CAS to claim the module (false -> true)
-            const result = st.working.cmpxchgWeak(false, true, .seq_cst, .seq_cst);
+            // For multi-threaded: use atomic CAS to claim the module (0 -> 1)
+            const result = st.working.cmpxchgWeak(0, 1, .seq_cst, .seq_cst);
             break :blk result != null; // null means swap succeeded
         } else blk: {
             // For single-threaded/wasm: simple check and set
-            const was_working = st.working;
-            if (!was_working) st.working = true;
+            const was_working = st.working != 0;
+            if (!was_working) st.working = 1;
             break :blk was_working;
         };
 
@@ -402,13 +388,13 @@ pub const PackageEnv = struct {
             if (@import("builtin").target.cpu.arch != .wasm32) {
                 self.lock.lock();
                 if (self.modules.getPtr(task.module_name)) |state| {
-                    _ = state.working.store(false, .seq_cst);
+                    _ = state.working.store(0, .seq_cst);
                 }
                 self.lock.unlock();
             } else {
                 // Single-threaded: simple clear
                 if (self.modules.getPtr(task.module_name)) |state| {
-                    state.working = false;
+                    state.working = 0;
                 }
             }
         }
@@ -472,7 +458,7 @@ pub const PackageEnv = struct {
         defer self.gpa.free(diags);
         for (diags) |d| {
             const report = try env.diagnosticToReport(d, self.gpa, st.path);
-            _ = try st.reports.append(self.gpa, report);
+            try st.reports.append(self.gpa, report);
         }
         const canon_diag_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {
@@ -482,8 +468,8 @@ pub const PackageEnv = struct {
         // Discover imports from env.imports
         const import_count = env.imports.imports.items.items.len;
         var any_new: bool = false;
-        // Mark current node as visiting before exploring imports
-        st.visit_state = .visiting;
+        // Mark current node as visiting (gray) before exploring imports
+        st.visit_color = 1;
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
             const mod_name = env.strings.get(str_idx);
 
@@ -492,14 +478,14 @@ pub const PackageEnv = struct {
 
             if (qualified) {
                 // Qualified imports refer to external packages; track and schedule externally
-                _ = try st.external_imports.append(self.gpa, mod_name);
+                try st.external_imports.append(self.gpa, mod_name);
                 if (self.resolver) |r| r.scheduleExternal(r.ctx, self.package_name, mod_name);
                 // External dependencies are resolved by the workspace; skip local scheduling/cycle detection
                 continue;
             }
 
             // Local import - schedule in this package
-            _ = try st.imports.append(self.gpa, mod_name);
+            try st.imports.append(self.gpa, mod_name);
             const import_path = try self.resolveModulePath(mod_name);
             const existed = self.modules.contains(mod_name);
             try self.ensureModule(mod_name, import_path);
@@ -508,9 +494,9 @@ pub const PackageEnv = struct {
 
             // Cycle detection for local deps
             var child = self.modules.getPtr(mod_name).?;
-            _ = try child.dependents.append(self.gpa, name);
+            try child.dependents.append(self.gpa, name);
 
-            if (child.visit_state == .visiting or std.mem.eql(u8, mod_name, name)) {
+            if (child.visit_color == 1 or std.mem.eql(u8, mod_name, name)) {
                 // Build a report on the current module describing the cycle
                 var rep = Report.init(self.gpa, "Import cycle detected", .runtime_error);
                 const msg = try rep.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
@@ -540,7 +526,7 @@ pub const PackageEnv = struct {
                 }
 
                 // Store the report on both modules for clarity
-                _ = try st.reports.append(self.gpa, rep);
+                try st.reports.append(self.gpa, rep);
                 // Duplicate for child as well so it gets emitted too
                 var rep_child = Report.init(self.gpa, "Import cycle detected", .runtime_error);
                 const child_msg = try rep_child.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
@@ -551,7 +537,7 @@ pub const PackageEnv = struct {
                 try rep_child.document.addText(" -> ");
                 try rep_child.document.addAnnotated(mod_name, .emphasized);
                 try rep_child.document.addLineBreak();
-                _ = try child.reports.append(self.gpa, rep_child);
+                try child.reports.append(self.gpa, rep_child);
 
                 // Mark both Done and adjust counters
                 if (st.phase != .Done) {
@@ -564,8 +550,8 @@ pub const PackageEnv = struct {
                 }
 
                 // Wake dependents and stop
-                for (st.dependents.items.items) |dep| try self.enqueue(dep);
-                for (child.dependents.items.items) |dep| try self.enqueue(dep);
+                for (st.dependents.items) |dep| try self.enqueue(dep);
+                for (child.dependents.items) |dep| try self.enqueue(dep);
                 if (@import("builtin").target.cpu.arch != .wasm32) self.cond.broadcast();
                 return;
             }
@@ -579,7 +565,7 @@ pub const PackageEnv = struct {
         st.phase = .WaitingOnImports;
         // Kick off imports if any (locals only)
         if (any_new) {
-            for (st.imports.items.items) |imp| try self.enqueue(imp);
+            for (st.imports.items) |imp| try self.enqueue(imp);
         }
         // Also re-enqueue self to check for unblocking
         try self.enqueue(name);
@@ -591,7 +577,7 @@ pub const PackageEnv = struct {
         var ready = true;
 
         // Local imports must be done
-        for (st.imports.items.items) |imp| {
+        for (st.imports.items) |imp| {
             const child = self.modules.getPtr(imp).?;
             if (child.phase != .Done) {
                 ready = false;
@@ -600,11 +586,11 @@ pub const PackageEnv = struct {
         }
 
         // External imports must be ready in the workspace (if resolver is provided)
-        if (ready and st.external_imports.items.items.len > 0) {
+        if (ready and st.external_imports.items.len > 0) {
             if (self.resolver) |r| {
                 var k: usize = 0;
-                while (k < st.external_imports.items.items.len) : (k += 1) {
-                    if (!r.isReady(r.ctx, self.package_name, st.external_imports.items.items[k])) {
+                while (k < st.external_imports.items.len) : (k += 1) {
+                    if (!r.isReady(r.ctx, self.package_name, st.external_imports.items[k])) {
                         ready = false;
                         break;
                     }
@@ -617,8 +603,8 @@ pub const PackageEnv = struct {
 
         if (ready) {
             st.phase = .TypeCheck;
-            // Mark as finished when all children done
-            st.visit_state = .finished;
+            // Mark as finished (black) when all children done
+            st.visit_color = 2;
             try self.enqueue(name);
         }
     }
@@ -687,7 +673,7 @@ pub const PackageEnv = struct {
         self.remaining_modules -= 1;
 
         // Wake dependents to re-check unblock
-        for (st.dependents.items.items) |dep| try self.enqueue(dep);
+        for (st.dependents.items) |dep| try self.enqueue(dep);
         if (@import("builtin").target.cpu.arch != .wasm32) self.cond.broadcast();
     }
 
@@ -786,10 +772,10 @@ pub const PackageEnv = struct {
 
     pub fn tryEmitReady(self: *PackageEnv) !void {
         // Sort discovered modules by (depth, name) each time; emit in prefix order
-        if (self.discovered.items.items.len == 0) return;
-        const names = try self.gpa.alloc([]const u8, self.discovered.items.items.len);
+        if (self.discovered.items.len == 0) return;
+        const names = try self.gpa.alloc([]const u8, self.discovered.items.len);
         defer self.gpa.free(names);
-        std.mem.copyForwards([]const u8, names, self.discovered.items.items);
+        std.mem.copyForwards([]const u8, names, self.discovered.items);
         std.sort.block([]const u8, names, self, struct {
             fn lessThan(ctx: *PackageEnv, a: []const u8, b: []const u8) bool {
                 const sa = ctx.modules.getPtr(a).?.depth;
@@ -804,7 +790,7 @@ pub const PackageEnv = struct {
             const st = self.modules.getPtr(n).?;
             if (st.phase != .Done) break; // can't emit beyond an unfinished module in order
             // Emit all reports for this module
-            for (st.reports.items.items) |rep| self.sink.emitFn(self.sink.ctx, n, rep);
+            for (st.reports.items) |rep| self.sink.emitFn(self.sink.ctx, n, rep);
             // Mark emitted
             try self.emitted.put(self.gpa, n, {});
         }
