@@ -2057,7 +2057,7 @@ test "BuildEnv: app header can reference absolute paths; package/platform sandbo
     defer gpa.free(external_platform);
 
     // Write platform file outside workspace
-    try std.fs.cwd().writeFile(external_platform, "platform \"X\"\\nrequires {} {}\\nexposes []\\npackages {}\\nprovides []\\n");
+    try std.fs.cwd().writeFile(.{ .sub_path = external_platform, .data = "platform \"X\"\\nrequires {} {}\\nexposes []\\npackages {}\\nprovides []\\n" });
 
     // App can reference absolute external path for platform (should be allowed by policy)
     const app_header = try std.fmt.allocPrint(gpa,
@@ -2092,7 +2092,7 @@ test "BuildEnv: package header cannot reference paths outside workspace" {
     defer ext_dir.close();
     const ext_pkg = try std.fs.path.join(gpa, &.{ "pkg_external_dir", "Pkg.roc" });
     defer gpa.free(ext_pkg);
-    try std.fs.cwd().writeFile(ext_pkg, "package []\\n{ }\\n");
+    try std.fs.cwd().writeFile(.{ .sub_path = ext_pkg, .data = "package []\\n{ }\\n" });
 
     try tmp.dir.makePath("app");
     // App points to a local platform so sandbox roots are the app dir

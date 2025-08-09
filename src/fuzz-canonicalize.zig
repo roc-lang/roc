@@ -66,15 +66,15 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     }
 
     // Write input to a temporary file
-    const tmp_dir = std.testing.tmpDir(.{});
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const tmp_file_path = "fuzz_input.roc";
-    try tmp_dir.dir.writeFile(tmp_file_path, input);
+    tmp_dir.dir.writeFile(.{ .sub_path = tmp_file_path, .data = input }) catch return;
 
     // Get absolute path
-    var path_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-    const abs_path = try tmp_dir.dir.realpath(tmp_file_path, &path_buf);
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const abs_path = tmp_dir.dir.realpath(tmp_file_path, &path_buf) catch return;
 
     // Process the input through BuildEnv
     var build_env = BuildEnv.init(gpa, .single_threaded, 1);
@@ -90,7 +90,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     };
 
     // Drain reports
-    const drained = try build_env.drainReports();
+    const drained = build_env.drainReports() catch return;
     defer {
         for (drained) |mod| {
             gpa.free(mod.abs_path);
