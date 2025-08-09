@@ -1137,53 +1137,7 @@ fn formatElapsedTime(writer: anytype, elapsed_ns: u64) !void {
 fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) noreturn {
     stderr.print("Failed to check {s}: ", .{path}) catch {};
     switch (err) {
-        // Memory allocation
-        error.OutOfMemory => stderr.print("Out of memory\n", .{}) catch {},
-
-        // File system errors
-        error.FileNotFound => stderr.print("File not found\n", .{}) catch {},
-        error.AccessDenied => stderr.print("Access denied\n", .{}) catch {},
-        error.IsDir => stderr.print("Path is a directory\n", .{}) catch {},
-        error.NotDir => stderr.print("Path is not a directory\n", .{}) catch {},
-        error.NameTooLong => stderr.print("File name too long\n", .{}) catch {},
-        error.InvalidUtf8 => stderr.print("Invalid UTF-8 in path\n", .{}) catch {},
-        error.BadPathName => stderr.print("Bad path name\n", .{}) catch {},
-        error.FileTooBig => stderr.print("File too big\n", .{}) catch {},
-        error.InputOutput => stderr.print("I/O error\n", .{}) catch {},
-        error.SystemResources => stderr.print("System resources exhausted\n", .{}) catch {},
-        error.FileBusy => stderr.print("File is busy\n", .{}) catch {},
-        error.DeviceBusy => stderr.print("Device is busy\n", .{}) catch {},
-        error.SymLinkLoop => stderr.print("Symbolic link loop detected\n", .{}) catch {},
-        error.ProcessFdQuotaExceeded => stderr.print("Process file descriptor quota exceeded\n", .{}) catch {},
-        error.SystemFdQuotaExceeded => stderr.print("System file descriptor quota exceeded\n", .{}) catch {},
-        error.NoSpaceLeft => stderr.print("No space left on device\n", .{}) catch {},
-        error.FileLocksNotSupported => stderr.print("File locks not supported\n", .{}) catch {},
-        error.Unexpected => stderr.print("Unexpected error\n", .{}) catch {},
-        error.SharingViolation => stderr.print("Sharing violation\n", .{}) catch {},
-        error.PathAlreadyExists => stderr.print("Path already exists\n", .{}) catch {},
-        error.PipeBusy => stderr.print("Pipe busy\n", .{}) catch {},
-        error.NoDevice => stderr.print("No device\n", .{}) catch {},
-        error.InvalidWtf8 => stderr.print("Invalid WTF-8 encoding\n", .{}) catch {},
-        error.NetworkNotFound => stderr.print("Network not found\n", .{}) catch {},
-        error.AntivirusInterference => stderr.print("Antivirus interference detected\n", .{}) catch {},
-        error.WouldBlock => stderr.print("Operation would block\n", .{}) catch {},
-        error.OperationAborted => stderr.print("Operation aborted\n", .{}) catch {},
-        error.BrokenPipe => stderr.print("Broken pipe\n", .{}) catch {},
-        error.ConnectionResetByPeer => stderr.print("Connection reset by peer\n", .{}) catch {},
-        error.ConnectionTimedOut => stderr.print("Connection timed out\n", .{}) catch {},
-        error.NotOpenForReading => stderr.print("File not open for reading\n", .{}) catch {},
-        error.SocketNotConnected => stderr.print("Socket not connected\n", .{}) catch {},
-        error.Canceled => stderr.print("Operation canceled\n", .{}) catch {},
-        error.ProcessNotFound => stderr.print("Process not found\n", .{}) catch {},
-        error.LockViolation => stderr.print("Lock violation\n", .{}) catch {},
-        error.Unseekable => stderr.print("File is unseekable\n", .{}) catch {},
-        error.LockedMemoryLimitExceeded => stderr.print("Locked memory limit exceeded\n", .{}) catch {},
-        error.CurrentWorkingDirectoryUnlinked => stderr.print("Current working directory unlinked\n", .{}) catch {},
-
-        // Threading errors
-        error.ThreadQuotaExceeded => stderr.print("Thread quota exceeded\n", .{}) catch {},
-
-        // Custom BuildEnv errors
+        // Custom BuildEnv errors - these need special messages
         error.ExpectedAppHeader => stderr.print("Expected app header but found different header type\n", .{}) catch {},
         error.ExpectedPlatformString => stderr.print("Expected platform string in header\n", .{}) catch {},
         error.PathOutsideWorkspace => stderr.print("Dependency path outside workspace not allowed\n", .{}) catch {},
@@ -1192,27 +1146,26 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) noret
         error.Internal => stderr.print("Internal compiler error\n", .{}) catch {},
         error.InvalidDependency => stderr.print("Invalid dependency relationship\n", .{}) catch {},
         error.TooNested => stderr.print("Too deeply nested\n", .{}) catch {},
+        error.InvalidPackageName => stderr.print("Invalid package name\n", .{}) catch {},
 
-        // Timer errors
-        error.TimerUnsupported => stderr.print("Timer not supported on this platform\n", .{}) catch {},
+        // Catch-all for any other errors
+        else => stderr.print("{s}\n", .{@errorName(err)}) catch {},
     }
     std.process.exit(1);
 }
 
 /// Result from checking a file using BuildEnv
 const CheckResult = struct {
-    reports: []const DrainedReport,
-    timing: ?CheckTimingInfo = null,
+    reports: []DrainedReport,
+    timing: if (builtin.target.cpu.arch == .wasm32) void else ?CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) {} else null,
     was_cached: bool = false,
     error_count: u32 = 0,
     warning_count: u32 = 0,
 
     /// Free allocated memory
     pub fn deinit(self: *CheckResult, gpa: Allocator) void {
-        for (self.reports) |report| {
-            // Cast to mutable to call deinit
-            var mut_report = report;
-            mut_report.deinit(gpa);
+        for (self.reports) |*report| {
+            report.deinit(gpa);
         }
         gpa.free(self.reports);
     }
@@ -1226,67 +1179,20 @@ const DrainedReport = struct {
     pub fn deinit(self: *DrainedReport, gpa: Allocator) void {
         gpa.free(self.file_path);
         for (self.reports) |*report| {
-            var mut_report = report;
-            mut_report.deinit();
+            report.deinit();
         }
         gpa.free(self.reports);
     }
 };
 
 /// Timing information for check phases
-const CheckTimingInfo = struct {
+const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) void else struct {
     total_ns: u64,
     module_count: usize,
 };
 
-/// Comprehensive error set for BuildEnv.buildApp operations
-const BuildAppError = error{
-    // Memory allocation
-    OutOfMemory,
-
-    // File system errors
-    AccessDenied,
-    FileNotFound,
-    IsDir,
-    NotDir,
-    NameTooLong,
-    InvalidUtf8,
-    BadPathName,
-    FileTooBig,
-    InputOutput,
-    SystemResources,
-    FileBusy,
-    DeviceBusy,
-    SymLinkLoop,
-    ProcessFdQuotaExceeded,
-    SystemFdQuotaExceeded,
-    NoSpaceLeft,
-    FileLocksNotSupported,
-    Unexpected,
-    SharingViolation,
-    PathAlreadyExists,
-    PipeBusy,
-    NoDevice,
-    InvalidWtf8,
-    NetworkNotFound,
-    AntivirusInterference,
-    WouldBlock,
-    OperationAborted,
-    BrokenPipe,
-    ConnectionResetByPeer,
-    ConnectionTimedOut,
-    NotOpenForReading,
-    SocketNotConnected,
-    Canceled,
-    ProcessNotFound,
-    LockViolation,
-    Unseekable,
-    LockedMemoryLimitExceeded,
-    CurrentWorkingDirectoryUnlinked,
-
-    // Threading errors
-    ThreadQuotaExceeded,
-
+/// Error set for BuildEnv.buildApp operations
+const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs.File.ReadError || std.fs.File.WriteError || std.Thread.SpawnError || error{
     // Custom BuildEnv errors
     ExpectedAppHeader,
     ExpectedPlatformString,
@@ -1296,9 +1202,10 @@ const BuildAppError = error{
     Internal,
     InvalidDependency,
     TooNested,
-
-    // Timer errors
-    TimerUnsupported,
+    InvalidPackageName,
+    // Additional errors from std library that might be missing
+    Unseekable,
+    CurrentWorkingDirectoryUnlinked,
 };
 
 /// Check a Roc file using the BuildEnv system
@@ -1310,13 +1217,10 @@ fn checkFileWithBuildEnv(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var timer: ?std.time.Timer = null;
-    if (collect_timing and builtin.target.cpu.arch != .wasm32) {
-        timer = std.time.Timer.start() catch |err| switch (err) {
-            error.TimerUnsupported => null,
-            else => return err,
-        };
-    }
+    var timer = if (collect_timing and builtin.target.cpu.arch != .wasm32)
+        std.time.Timer.start() catch null
+    else
+        null;
 
     // Initialize BuildEnv in single-threaded mode for checking
     var build_env = BuildEnv.init(gpa, .single_threaded, 1);
@@ -1355,10 +1259,13 @@ fn checkFileWithBuildEnv(
     // Note: abs_path is owned by BuildEnv, reports are moved to our array
     gpa.free(drained);
 
-    const timing = if (timer) |*t| CheckTimingInfo{
-        .total_ns = t.read(),
-        .module_count = reports.len,
-    } else null;
+    const timing = if (builtin.target.cpu.arch == .wasm32) {} else if (timer) |*t|
+        CheckTimingInfo{
+            .total_ns = t.read(),
+            .module_count = reports.len,
+        }
+    else
+        null;
 
     return CheckResult{
         .reports = reports,
@@ -1468,12 +1375,14 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     }
 
     // Print timing breakdown if requested
-    if (args.time and check_result.timing != null) {
-        stdout.print("\nTiming breakdown:\n", .{}) catch {};
-        stdout.print("  total check time:             ", .{}) catch {};
-        formatElapsedTime(stdout, check_result.timing.?.total_ns) catch {};
-        stdout.print("  ({} ns)\n", .{check_result.timing.?.total_ns}) catch {};
-        stdout.print("  modules processed:            {}\n", .{check_result.timing.?.module_count}) catch {};
+    if (builtin.target.cpu.arch != .wasm32) {
+        if (args.time and check_result.timing != null) {
+            stdout.print("\nTiming breakdown:\n", .{}) catch {};
+            stdout.print("  total check time:             ", .{}) catch {};
+            formatElapsedTime(stdout, check_result.timing.?.total_ns) catch {};
+            stdout.print("  ({} ns)\n", .{check_result.timing.?.total_ns}) catch {};
+            stdout.print("  modules processed:            {}\n", .{check_result.timing.?.module_count}) catch {};
+        }
     }
 }
 
