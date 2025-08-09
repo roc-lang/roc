@@ -2284,7 +2284,7 @@ pub const Interpreter = struct {
             .w_if_check_condition => {
                 // Extract branch index from extra data - this is a simplified handler
                 // The actual implementation would need more context about branches
-                // std.log.warn("if_check_condition work item not fully implemented in processWorkItem", .{});
+                std.log.warn("if_check_condition work item not fully implemented in processWorkItem", .{});
                 return error.UnsupportedWorkItem;
             },
 
@@ -2298,7 +2298,7 @@ pub const Interpreter = struct {
             // Let bindings
             .w_let_bind => {
                 // Let bindings require more complex state management that's handled in the main eval loop
-                // std.log.warn("Complex work item {s} not supported in processWorkItem", .{@tagName(work.kind)});
+                std.log.warn("Complex work item {s} not supported in processWorkItem", .{@tagName(work.kind)});
                 return error.UnsupportedWorkItem;
             },
 
@@ -2313,14 +2313,14 @@ pub const Interpreter = struct {
 
             // Runtime errors
             .w_crash => {
-                // const msg = self.env.strings.get(work.extra.crash_msg);
-                // std.log.err("Runtime crash: {s}", .{msg});
+                const msg = self.env.strings.get(work.extra.crash_msg);
+                std.log.err("Runtime crash: {s}", .{msg});
                 return error.RuntimeCrash;
             },
 
             // These should be handled by the caller
             .w_eval_expr_structural, .w_eval_expr_nominal, .w_lambda_call => {
-                // std.log.err("Unexpected work item in processWorkItem: {s}", .{@tagName(work.kind)});
+                std.log.err("Unexpected work item in processWorkItem: {s}", .{@tagName(work.kind)});
                 return error.UnexpectedWorkItem;
             },
         }
@@ -2997,8 +2997,7 @@ pub const Interpreter = struct {
         } else {
             // Regular expression evaluation
             const result_value = self.eval(expr_idx, ops) catch |err| {
-                _ = err;
-                // std.log.err("Expression evaluation failed: {s}", .{@errorName(err)});
+                std.log.err("Expression evaluation failed: {s}", .{@errorName(err)});
                 return error.EvaluationFailed;
             };
 
@@ -3011,7 +3010,7 @@ pub const Interpreter = struct {
 
         // Get closure parameter patterns from the expression
         const param_patterns = getClosureParameterPatterns(self.env, expr_idx) catch {
-            // std.log.err("Failed to get closure parameter patterns for expr={}", .{expr_idx});
+            std.log.err("Failed to get closure parameter patterns for expr={}", .{expr_idx});
             return error.UnexpectedClosureStructure;
         };
 
@@ -3038,7 +3037,7 @@ pub const Interpreter = struct {
 
             // Push space for this parameter on the stack
             const dest_value = self.pushStackValue(param_layout) catch {
-                // std.log.err("Stack overflow while pushing argument {}", .{i});
+                std.log.err("Stack overflow while pushing argument {}", .{i});
                 return error.StackOverflow;
             };
 

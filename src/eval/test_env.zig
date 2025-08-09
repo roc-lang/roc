@@ -158,8 +158,7 @@ fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C)
         interp.has_crashed = true;
         // Store the crash message - we need to allocate and copy it since the original may be temporary
         const owned_msg = test_env.allocator.dupe(u8, msg_slice) catch |err| {
-            _ = err;
-            // std.log.err("Failed to allocate crash message: {}", .{err});
+            std.log.err("Failed to allocate crash message: {}", .{err});
             interp.crash_message = "Failed to store crash message";
             return;
         };

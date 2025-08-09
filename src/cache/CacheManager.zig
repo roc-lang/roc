@@ -98,8 +98,7 @@ pub const CacheManager = struct {
             source,
         ) catch |err| {
             if (self.config.verbose) {
-                _ = err;
-                // std.log.debug("Failed to restore from cache {s}: {}", .{ cache_path, err });
+                std.log.debug("Failed to restore from cache {s}: {}", .{ cache_path, err });
             }
             self.stats.recordInvalidation();
             return CacheResult{ .miss = .{
@@ -124,8 +123,7 @@ pub const CacheManager = struct {
         // Ensure cache subdirectory exists
         self.ensureCacheSubdir(cache_key) catch |err| {
             if (self.config.verbose) {
-                _ = err;
-                // std.log.debug("Failed to create cache subdirectory: {}", .{err});
+                std.log.debug("Failed to create cache subdirectory: {}", .{err});
             }
             self.stats.recordStoreFailure();
             return;
@@ -137,8 +135,7 @@ pub const CacheManager = struct {
 
         const cache_data = Cache.create(self.allocator, arena.allocator(), process_result.cir, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
             if (self.config.verbose) {
-                _ = err;
-                // std.log.debug("Failed to serialize cache data: {}", .{err});
+                std.log.debug("Failed to serialize cache data: {}", .{err});
             }
             self.stats.recordStoreFailure();
             return;
@@ -162,8 +159,7 @@ pub const CacheManager = struct {
         // Write to temp file
         self.filesystem.writeFile(temp_path, cache_data) catch |err| {
             if (self.config.verbose) {
-                _ = err;
-                // std.log.debug("Failed to write cache temp file {s}: {}", .{ temp_path, err });
+                std.log.debug("Failed to write cache temp file {s}: {}", .{ temp_path, err });
             }
             self.stats.recordStoreFailure();
             return;
@@ -172,8 +168,7 @@ pub const CacheManager = struct {
         // Move temp file to final location (atomic operation)
         self.filesystem.rename(temp_path, cache_path) catch |err| {
             if (self.config.verbose) {
-                _ = err;
-                // std.log.debug("Failed to rename cache file {s} -> {s}: {}", .{ temp_path, cache_path, err });
+                std.log.debug("Failed to rename cache file {s} -> {s}: {}", .{ temp_path, cache_path, err });
             }
             self.stats.recordStoreFailure();
             return;

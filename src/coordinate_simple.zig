@@ -121,8 +121,7 @@ pub fn processFile(
 
                 // Store in cache (don't fail compilation if cache store fails)
                 cache.store(returned.key, &process_result) catch |err| {
-                    _ = err;
-                    // std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
+                    std.log.debug("Failed to store cache for {s}: {}", .{ filepath, err });
                 };
 
                 return process_result;

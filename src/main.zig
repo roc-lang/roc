@@ -396,14 +396,12 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
     // Create cache directory for linked interpreter executables
     const cache_dir = cache_manager.config.getCacheEntriesDir(gpa) catch |err| {
-        _ = err;
-        // std.log.err("Failed to get cache directory: {}\n", .{err});
+        std.log.err("Failed to get cache directory: {}\n", .{err});
         std.process.exit(1);
     };
     defer gpa.free(cache_dir);
     const exe_cache_dir = std.fs.path.join(gpa, &.{ cache_dir, "executables" }) catch |err| {
-        _ = err;
-        // std.log.err("Failed to create executable cache path: {}\n", .{err});
+        std.log.err("Failed to create executable cache path: {}\n", .{err});
         std.process.exit(1);
     };
     defer gpa.free(exe_cache_dir);
@@ -411,7 +409,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     std.fs.cwd().makePath(exe_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => {
-            // std.log.err("Failed to create cache directory: {}\n", .{err});
+            std.log.err("Failed to create cache directory: {}\n", .{err});
             std.process.exit(1);
         },
     };
@@ -419,15 +417,13 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     // Generate executable name based on the roc file path
     // TODO use something more interesting like a hash from the platform.main or platform/host.a etc
     const exe_name = std.fmt.allocPrint(gpa, "roc_run_{}", .{std.hash.crc.Crc32.hash(args.path)}) catch |err| {
-        _ = err;
-        // std.log.err("Failed to generate executable name: {}\n", .{err});
+        std.log.err("Failed to generate executable name: {}\n", .{err});
         std.process.exit(1);
     };
     defer gpa.free(exe_name);
 
     const exe_path = std.fs.path.join(gpa, &.{ exe_cache_dir, exe_name }) catch |err| {
-        _ = err;
-        // std.log.err("Failed to create executable path: {}\n", .{err});
+        std.log.err("Failed to create executable path: {}\n", .{err});
         std.process.exit(1);
     };
     defer gpa.free(exe_path);

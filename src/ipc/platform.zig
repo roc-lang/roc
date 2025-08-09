@@ -167,8 +167,8 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
             );
 
             if (handle == null) {
-                // const error_code = windows.GetLastError();
-                // std.log.err("Windows: Failed to create shared memory mapping (size: {}, high: {}, low: {}, error: {})", .{ size, size_high, size_low, error_code });
+                const error_code = windows.GetLastError();
+                std.log.err("Windows: Failed to create shared memory mapping (size: {}, high: {}, low: {}, error: {})", .{ size, size_high, size_low, error_code });
                 return error.CreateFileMappingFailed;
             }
 
@@ -303,8 +303,8 @@ pub fn mapMemory(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemo
                 );
 
             if (ptr == null) {
-                // const error_code = windows.GetLastError();
-                // std.log.err("Windows: Failed to map shared memory view (size: {}, error: {})", .{ size, error_code });
+                const error_code = windows.GetLastError();
+                std.log.err("Windows: Failed to map shared memory view (size: {}, error: {})", .{ size, error_code });
                 return error.MapViewOfFileFailed;
             }
 
@@ -319,7 +319,7 @@ pub fn mapMemory(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemo
                 handle,
                 0,
             ) orelse {
-                // std.log.err("POSIX: Failed to map shared memory (size: {})", .{size});
+                std.log.err("POSIX: Failed to map shared memory (size: {})", .{size});
                 return error.MmapFailed;
             };
             return ptr;
