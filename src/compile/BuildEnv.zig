@@ -175,7 +175,7 @@ const GlobalQueue = struct {
                 if (self.build_env) |be| {
                     if (be.schedulers.get(task.pkg)) |sched| {
                         // Process module task if present in scheduler
-                        const exists = sched.modules.getPtr(task.module_name) != null;
+                        const exists = sched.hasModule(task.module_name);
                         if (exists) {
                             // Mark inflight before processing and decrement after
                             if (threads_available) {
@@ -186,12 +186,12 @@ const GlobalQueue = struct {
                             // Check cache before processing
                             if (be.cache_manager) |cm| {
                                 // Get module state to check path
-                                const module_state = sched.modules.getPtr(task.module_name).?;
+                                const module_state = sched.getModuleState(task.module_name).?;
 
                                 // Read the source file
                                 const source = std.fs.cwd().readFileAlloc(be.gpa, module_state.path, 10 * 1024 * 1024) catch {
                                     // If we can't read the file, continue with normal processing
-                                    sched.process(.{ .module_name = task.module_name }) catch {
+                                    sched.processModuleByName(task.module_name) catch {
                                         // Continue processing other modules despite this error
                                     };
 
@@ -222,13 +222,13 @@ const GlobalQueue = struct {
                                 }
                             }
 
-                            sched.process(.{ .module_name = task.module_name }) catch {
+                            sched.processModuleByName(task.module_name) catch {
                                 // Continue processing other modules despite this error
                             };
 
                             // After successful processing, store in cache
                             if (be.cache_manager) |cm| {
-                                const module_state = sched.modules.get(task.module_name).?;
+                                const module_state = sched.getModuleState(task.module_name).?;
                                 if (module_state.phase == .Done and module_state.env != null) {
                                     // Read the source file again to generate the cache key
                                     const source = std.fs.cwd().readFileAlloc(be.gpa, module_state.path, 10 * 1024 * 1024) catch {
@@ -1044,7 +1044,7 @@ pub const BuildEnv = struct {
             const pkg_name = e.key_ptr.*;
             const sched = e.value_ptr.*;
             _ = self.packages.get(pkg_name).?;
-            var mi = sched.modules.iterator();
+            var mi = sched.moduleNamesIterator();
             while (mi.next()) |me| {
                 const mod = me.key_ptr.*;
                 const depth = sched.getModuleDepth(mod) orelse @as(u32, std.math.maxInt(u32));
