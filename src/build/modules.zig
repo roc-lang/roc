@@ -55,6 +55,9 @@ pub const RocModules = struct {
         self.compile.addImport("builtins", self.builtins);
         self.compile.addImport("reporting", self.reporting);
         self.compile.addImport("serialization", self.serialization);
+        self.compile.addImport("parse", self.parse);
+        self.compile.addImport("can", self.can);
+        self.compile.addImport("check", self.check);
 
         self.reporting.addImport("reporting", self.reporting);
         self.reporting.addImport("base", self.base);

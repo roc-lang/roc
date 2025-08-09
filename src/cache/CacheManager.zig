@@ -10,15 +10,18 @@ const CacheConfig = cache_mod.CacheConfig;
 const CacheStats = cache_mod.CacheStats;
 const CacheReporting = @import("CacheReporting.zig");
 const SERIALIZATION_ALIGNMENT = 16;
-const coordinate_simple = @import("../coordinate_simple.zig");
 
 const Allocator = std.mem.Allocator;
-const ModuleEnv = @import("compile").ModuleEnv;
+const compile = @import("compile");
+const ModuleEnv = compile.ModuleEnv;
 
-/// Cache hit result containing the process result and diagnostic counts
-/// Result of a cache load operation
+/// Result of a cache lookup operation
 pub const CacheResult = union(enum) {
-    hit: coordinate_simple.ProcessResult,
+    hit: struct {
+        module_env: *ModuleEnv,
+        error_count: u32,
+        warning_count: u32,
+    },
     miss: struct {
         key: [32]u8,
     },
@@ -56,6 +59,7 @@ pub const CacheManager = struct {
         self: *Self,
         compiler_version: []const u8,
         source: []const u8,
+        module_name: []const u8,
     ) CacheResult {
         if (!self.config.enabled) {
             return .not_enabled;
@@ -94,8 +98,9 @@ pub const CacheManager = struct {
         // Validate and restore from cache
         // restoreFromCache takes ownership of content
         const result = self.restoreFromCache(
-            mapped_cache.data(),
+            mapped_cache,
             source,
+            module_name,
         ) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to restore from cache {s}: {}", .{ cache_path, err });
@@ -107,15 +112,14 @@ pub const CacheManager = struct {
         };
 
         self.stats.recordHit(mapped_cache.data().len);
-
-        return CacheResult{ .hit = result.result };
+        return result;
     }
 
     /// Store a cache entry.
     ///
-    /// Serializes the ProcessResult and stores it in the cache using BLAKE3-based
+    /// Serializes the ModuleEnv and stores it in the cache using BLAKE3-based
     /// filenames with subdirectory splitting.
-    pub fn store(self: *Self, cache_key: [32]u8, process_result: *const coordinate_simple.ProcessResult) !void {
+    pub fn store(self: *Self, cache_key: [32]u8, module_env: *const ModuleEnv, error_count: u32, warning_count: u32) !void {
         if (!self.config.enabled) {
             return;
         }
@@ -133,7 +137,7 @@ pub const CacheManager = struct {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
 
-        const cache_data = Cache.create(self.allocator, arena.allocator(), process_result.cir, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
+        const cache_data = Cache.create(self.allocator, arena.allocator(), module_env, module_env, error_count, warning_count) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to serialize cache data: {}", .{err});
             }
@@ -178,7 +182,7 @@ pub const CacheManager = struct {
     }
 
     /// Generate a BLAKE3-based cache key from source and compiler version.
-    fn generateCacheKey(source: []const u8, compiler_version: []const u8) [32]u8 {
+    pub fn generateCacheKey(source: []const u8, compiler_version: []const u8) [32]u8 {
         var hasher = std.crypto.hash.Blake3.init(.{});
         hasher.update(std.mem.asBytes(&compiler_version.len));
         hasher.update(compiler_version);
@@ -249,48 +253,21 @@ pub const CacheManager = struct {
     /// The caller must not free it after calling this function.
     fn restoreFromCache(
         self: *Self,
-        cache_data: []align(SERIALIZATION_ALIGNMENT) const u8,
+        mapped_cache: cache_mod.CacheModule.CacheData,
         source: []const u8,
-    ) !struct {
-        result: coordinate_simple.ProcessResult,
-        error_count: u32,
-        warning_count: u32,
-    } {
-        // Load cache using existing Cache functionality
-        var cache = cache_mod.CacheModule.fromMappedMemory(cache_data) catch return error.InvalidCache;
+        module_name: []const u8,
+    ) !CacheResult {
+        // Validate cache format
+        const cache = try Cache.fromMappedMemory(mapped_cache.data());
 
-        // Validate cache
-        cache.validate() catch return error.InvalidCache;
+        // Restore the ModuleEnv from cache
+        const module_env = try cache.restore(self.allocator, module_name, source);
 
-        // Restore the data
-        // Use a default module name when restoring from cache
-        // since we don't have access to the original source path
-        const module_name = "cached_module";
-        // Transfer ownership of source to the restored ModuleEnv
-        const module_env = cache.restore(self.allocator, module_name, source) catch return error.RestoreError;
-
-        // Reports are not cached - they need to be recomputed if needed
-        // Users can use --no-cache to see diagnostic reports
-        const reports = try self.allocator.alloc(reporting.Report, 0);
-
-        // CIR is now just an alias for ModuleEnv
-        const cir = module_env;
-
-        // Create ProcessResult with proper ownership
-        const process_result = coordinate_simple.ProcessResult{
-            .cir = cir,
-            .source = source,
-            .own_source = true,
-            .reports = reports,
-            .was_cached = true,
-        };
-
-        // Return both the process result and diagnostic counts from cache header
-        return .{
-            .result = process_result,
+        return CacheResult{ .hit = .{
+            .module_env = module_env,
             .error_count = cache.header.error_count,
             .warning_count = cache.header.warning_count,
-        };
+        } };
     }
 };
 
@@ -361,7 +338,7 @@ test "CacheManager loadFromCache miss" {
 
     const source = "module [test]\n\ntest = 42";
 
-    const result = manager.loadFromCache(source, "roc-zig-0.11.0-debug");
+    const result = manager.loadFromCache("roc-zig-0.11.0-debug", source, "test");
     switch (result) {
         .miss => |_| {
             try testing.expect(manager.stats.misses == 1);
@@ -379,7 +356,7 @@ test "CacheManager disabled" {
 
     const source = "module [test]\n\ntest = 42";
 
-    const result = manager.loadFromCache(source, "roc-zig-0.11.0-debug");
+    const result = manager.loadFromCache("roc-zig-0.11.0-debug", source, "test");
     switch (result) {
         .not_enabled => |_| {},
         else => return error.TestUnexpectedResult,
