@@ -103,7 +103,7 @@ const ModuleState = struct {
 pub const PackageEnv = struct {
     gpa: Allocator,
     /// Name of the current package (used for shorthand resolution)
-    package_name: []const u8 = "",
+    package_name: []const u8,
     root_dir: []const u8,
     mode: Mode,
     max_threads: usize,
@@ -113,7 +113,7 @@ pub const PackageEnv = struct {
     /// Optional scheduling hook to observe/enqueue scheduled modules in a global orchestrator
     schedule_hook: ?ScheduleHook = null,
     /// Compiler version for cache invalidation
-    compiler_version: []const u8 = "roc-zig-dev",
+    compiler_version: []const u8,
 
     lock: Mutex = .{},
     cond: Condition = .{},
@@ -138,8 +138,8 @@ pub const PackageEnv = struct {
     total_type_checking_ns: u64 = 0,
     total_check_diagnostics_ns: u64 = 0,
 
-    pub fn init(gpa: Allocator, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink) PackageEnv {
-        return .{ .gpa = gpa, .root_dir = root_dir, .mode = mode, .max_threads = max_threads, .sink = sink };
+    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink, compiler_version: []const u8) PackageEnv {
+        return .{ .gpa = gpa, .package_name = package_name, .root_dir = root_dir, .mode = mode, .max_threads = max_threads, .sink = sink, .compiler_version = compiler_version };
     }
 
     pub fn initWithResolver(
@@ -150,6 +150,7 @@ pub const PackageEnv = struct {
         max_threads: usize,
         sink: ReportSink,
         resolver: ImportResolver,
+        compiler_version: []const u8,
     ) PackageEnv {
         return .{
             .gpa = gpa,
@@ -159,6 +160,7 @@ pub const PackageEnv = struct {
             .max_threads = max_threads,
             .sink = sink,
             .resolver = resolver,
+            .compiler_version = compiler_version,
         };
     }
 
@@ -822,7 +824,8 @@ test "PackageEnv: parallel success across modules" {
     var sink = TestSink.init(gpa);
     defer sink.deinit();
 
-    var sched = PackageEnv.init(gpa, root_dir, .multi_threaded, 4, sink.sink());
+    // Use empty package name for root modules (app/platform/package being checked)
+    var sched = PackageEnv.init(gpa, "", root_dir, .multi_threaded, 4, sink.sink(), "test");
     defer sched.deinit();
 
     const main_path = try std.fs.path.join(gpa, &.{ root_dir, "Main.roc" });
@@ -858,7 +861,8 @@ test "PackageEnv: deterministic error ordering by depth then name" {
     var sink = TestSink.init(gpa);
     defer sink.deinit();
 
-    var sched = PackageEnv.init(gpa, root_dir, .multi_threaded, 4, sink.sink());
+    // Use empty package name for root modules (app/platform/package being checked)
+    var sched = PackageEnv.init(gpa, "", root_dir, .multi_threaded, 4, sink.sink(), "test");
     defer sched.deinit();
 
     const main_path = try std.fs.path.join(gpa, &.{ root_dir, "Main.roc" });
@@ -896,7 +900,8 @@ test "PackageEnv: single-threaded success across modules" {
     var sink = TestSink.init(gpa);
     defer sink.deinit();
 
-    var sched = PackageEnv.init(gpa, root_dir, .single_threaded, 1, sink.sink());
+    // Use empty package name for root modules (app/platform/package being checked)
+    var sched = PackageEnv.init(gpa, "", root_dir, .single_threaded, 1, sink.sink(), "test");
     defer sched.deinit();
 
     const main_path = try std.fs.path.join(gpa, &.{ root_dir, "Main.roc" });
@@ -926,7 +931,8 @@ test "PackageEnv: same-depth alphabetical order" {
     var sink = TestSink.init(gpa);
     defer sink.deinit();
 
-    var sched = PackageEnv.init(gpa, root_dir, .multi_threaded, 4, sink.sink());
+    // Use empty package name for root modules (app/platform/package being checked)
+    var sched = PackageEnv.init(gpa, "", root_dir, .multi_threaded, 4, sink.sink(), "test");
     defer sched.deinit();
 
     const main_path = try std.fs.path.join(gpa, &.{ root_dir, "Main.roc" });
@@ -964,7 +970,8 @@ test "PackageEnv: detect import cycle and fail fast" {
     defer sink.deinit();
 
     // Use multi-threaded to ensure we detect cycles under concurrency
-    var sched = PackageEnv.init(gpa, root_dir, .multi_threaded, 4, sink.sink());
+    // Use empty package name for root modules (app/platform/package being checked)
+    var sched = PackageEnv.init(gpa, "", root_dir, .multi_threaded, 4, sink.sink(), "test");
     defer sched.deinit();
 
     const main_path = try std.fs.path.join(gpa, &.{ root_dir, "Main.roc" });
