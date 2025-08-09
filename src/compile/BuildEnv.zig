@@ -335,7 +335,7 @@ pub const BuildEnv = struct {
     compiler_version: []const u8 = "roc-zig-dev",
 
     // Workspace roots for sandboxing (absolute, canonical)
-    workspace_roots: std.ArrayList([]u8),
+    workspace_roots: std.ArrayList([]const u8),
 
     // Map of package name (alias) -> Package
     packages: std.StringHashMapUnmanaged(Package) = .{},
@@ -363,7 +363,7 @@ pub const BuildEnv = struct {
             .gpa = gpa,
             .mode = mode,
             .max_threads = max_threads,
-            .workspace_roots = std.ArrayList([]u8).init(gpa),
+            .workspace_roots = std.ArrayList([]const u8).init(gpa),
             .sink = OrderedSink.init(gpa),
             .global_queue = GlobalQueue.init(gpa),
             .resolver_ctxs = std.ArrayList(*ResolverCtx).init(gpa),
@@ -417,10 +417,7 @@ pub const BuildEnv = struct {
         // Clear back-pointer
         self.global_queue.build_env = null;
 
-        // Deinit roots
-        for (self.workspace_roots.items) |r| {
-            self.gpa.free(r);
-        }
+        // Deinit roots (just the array, not the items - they're owned by packages)
         self.workspace_roots.deinit();
 
         self.sink.deinit();
