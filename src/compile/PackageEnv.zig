@@ -51,6 +51,17 @@ pub const ReportSink = struct {
 pub const ScheduleHook = struct {
     ctx: ?*anyopaque,
     onSchedule: *const fn (ctx: ?*anyopaque, package_name: []const u8, module_name: []const u8, path: []const u8, depth: u32) void,
+
+    /// A no-op hook for testing or when no external scheduling is needed
+    pub fn noOp() ScheduleHook {
+        return .{ .ctx = null, .onSchedule = noOpSchedule };
+    }
+
+    fn noOpSchedule(_: ?*anyopaque, _: []const u8, _: []const u8, _: []const u8, _: u32) void {}
+
+    pub fn isNoOp(self: ScheduleHook) bool {
+        return self.onSchedule == noOpSchedule;
+    }
 };
 
 /// Resolver for handling imports across package boundaries
@@ -110,8 +121,8 @@ pub const PackageEnv = struct {
     sink: ReportSink,
     /// Optional resolver for cross-package imports; when null, all imports are treated as local
     resolver: ?ImportResolver = null,
-    /// Optional scheduling hook to observe/enqueue scheduled modules in a global orchestrator
-    schedule_hook: ?ScheduleHook = null,
+    /// Scheduling hook to observe/enqueue scheduled modules in a global orchestrator
+    schedule_hook: ScheduleHook,
     /// Compiler version for cache invalidation
     compiler_version: []const u8,
 
@@ -138,8 +149,8 @@ pub const PackageEnv = struct {
     total_type_checking_ns: u64 = 0,
     total_check_diagnostics_ns: u64 = 0,
 
-    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink, compiler_version: []const u8) PackageEnv {
-        return .{ .gpa = gpa, .package_name = package_name, .root_dir = root_dir, .mode = mode, .max_threads = max_threads, .sink = sink, .compiler_version = compiler_version };
+    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8) PackageEnv {
+        return .{ .gpa = gpa, .package_name = package_name, .root_dir = root_dir, .mode = mode, .max_threads = max_threads, .sink = sink, .schedule_hook = schedule_hook, .compiler_version = compiler_version };
     }
 
     pub fn initWithResolver(
@@ -150,6 +161,7 @@ pub const PackageEnv = struct {
         max_threads: usize,
         sink: ReportSink,
         resolver: ImportResolver,
+        schedule_hook: ScheduleHook,
         compiler_version: []const u8,
     ) PackageEnv {
         return .{
@@ -160,6 +172,7 @@ pub const PackageEnv = struct {
             .max_threads = max_threads,
             .sink = sink,
             .resolver = resolver,
+            .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
         };
     }
@@ -186,13 +199,11 @@ pub const PackageEnv = struct {
         try self.enqueue(name);
 
         // Notify schedule hook so a global queue can pick this up
-        if (self.schedule_hook) |hook| {
-            hook.onSchedule(hook.ctx, self.package_name, name, root_file_path, 0);
-        }
+        self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, name, root_file_path, 0);
 
         // If a global schedule_hook is installed, do not start internal scheduling loops.
         // In dispatch-only mode, the unified global queue will drive processing via process().
-        if (self.schedule_hook == null) {
+        if (self.schedule_hook.isNoOp()) {
             if (@import("builtin").target.cpu.arch == .wasm32) {
                 // On wasm32, always run single-threaded at comptime
                 try self.runSingleThread();
@@ -274,10 +285,8 @@ pub const PackageEnv = struct {
             gop.value_ptr.* = .{ .name = owned_name, .path = owned_path };
             try self.discovered.append(self.gpa, owned_name);
 
-            // Invoke optional scheduling hook for new module discovery/scheduling
-            if (self.schedule_hook) |hook| {
-                hook.onSchedule(hook.ctx, self.package_name, owned_name, owned_path, 0);
-            }
+            // Invoke scheduling hook for new module discovery/scheduling
+            self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, owned_name, owned_path, 0);
         }
     }
 
@@ -288,10 +297,8 @@ pub const PackageEnv = struct {
         try self.setDepthIfSmaller(name, depth);
         if (!existed) {
             self.remaining_modules += 1;
-            // Invoke optional scheduling hook for external scheduling
-            if (self.schedule_hook) |hook| {
-                hook.onSchedule(hook.ctx, self.package_name, name, path, depth);
-            }
+            // Invoke scheduling hook for external scheduling
+            self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, name, path, depth);
         }
         try self.enqueue(name);
     }
@@ -307,15 +314,14 @@ pub const PackageEnv = struct {
     }
 
     fn enqueue(self: *PackageEnv, name: []const u8) !void {
-        // In multi_threaded mode with a schedule_hook, forward to the global queue
-        if (self.mode == .multi_threaded and self.schedule_hook != null) {
+        // In multi_threaded mode with a non-noop schedule_hook, forward to the global queue
+        if (self.mode == .multi_threaded and !self.schedule_hook.isNoOp()) {
             // Look up the module to get its path and depth for the hook
             self.lock.lock();
             defer self.lock.unlock();
 
             if (self.modules.get(name)) |st| {
-                const hook = self.schedule_hook.?;
-                hook.onSchedule(hook.ctx, self.package_name, name, st.path, st.depth);
+                self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, name, st.path, st.depth);
             }
         } else {
             // Default behavior: use internal injector
@@ -825,7 +831,7 @@ test "PackageEnv: parallel success across modules" {
     defer sink.deinit();
 
     // Use empty package name for root modules (app/platform/package being checked)
-    var sched = PackageEnv.init(gpa, "", root_dir, .multi_threaded, 4, sink.sink(), "test");
+    var sched = PackageEnv.init(gpa, "", root_dir, .multi_threaded, 4, sink.sink(), ScheduleHook.noOp(), "test");
     defer sched.deinit();
 
     const main_path = try std.fs.path.join(gpa, &.{ root_dir, "Main.roc" });
@@ -862,7 +868,7 @@ test "PackageEnv: deterministic error ordering by depth then name" {
     defer sink.deinit();
 
     // Use empty package name for root modules (app/platform/package being checked)
-    var sched = PackageEnv.init(gpa, "", root_dir, .multi_threaded, 4, sink.sink(), "test");
+    var sched = PackageEnv.init(gpa, "", root_dir, .multi_threaded, 4, sink.sink(), ScheduleHook.noOp(), "test");
     defer sched.deinit();
 
     const main_path = try std.fs.path.join(gpa, &.{ root_dir, "Main.roc" });
@@ -901,7 +907,7 @@ test "PackageEnv: single-threaded success across modules" {
     defer sink.deinit();
 
     // Use empty package name for root modules (app/platform/package being checked)
-    var sched = PackageEnv.init(gpa, "", root_dir, .single_threaded, 1, sink.sink(), "test");
+    var sched = PackageEnv.init(gpa, "", root_dir, .single_threaded, 1, sink.sink(), ScheduleHook.noOp(), "test");
     defer sched.deinit();
 
     const main_path = try std.fs.path.join(gpa, &.{ root_dir, "Main.roc" });
@@ -932,7 +938,7 @@ test "PackageEnv: same-depth alphabetical order" {
     defer sink.deinit();
 
     // Use empty package name for root modules (app/platform/package being checked)
-    var sched = PackageEnv.init(gpa, "", root_dir, .multi_threaded, 4, sink.sink(), "test");
+    var sched = PackageEnv.init(gpa, "", root_dir, .multi_threaded, 4, sink.sink(), ScheduleHook.noOp(), "test");
     defer sched.deinit();
 
     const main_path = try std.fs.path.join(gpa, &.{ root_dir, "Main.roc" });
@@ -971,7 +977,7 @@ test "PackageEnv: detect import cycle and fail fast" {
 
     // Use multi-threaded to ensure we detect cycles under concurrency
     // Use empty package name for root modules (app/platform/package being checked)
-    var sched = PackageEnv.init(gpa, "", root_dir, .multi_threaded, 4, sink.sink(), "test");
+    var sched = PackageEnv.init(gpa, "", root_dir, .multi_threaded, 4, sink.sink(), ScheduleHook.noOp(), "test");
     defer sched.deinit();
 
     const main_path = try std.fs.path.join(gpa, &.{ root_dir, "Main.roc" });
