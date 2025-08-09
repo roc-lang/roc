@@ -45,7 +45,7 @@ pub const FormattingResult = struct {
 pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8, check: bool) !FormattingResult {
     // TODO: update this to use the filesystem abstraction
     // When doing so, add a mock filesystem and some tests.
-    const stderr = std.io.getStdErr().writer();
+    // const stderr = std.io.getStdErr().writer();
 
     var success_count: usize = 0;
     var failed_count: usize = 0;
@@ -65,7 +65,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
                     success_count += 1;
                 } else |err| {
                     if (err != error.NotRocFile) {
-                        try stderr.print("Failed to format {s}: {any}\n", .{ entry.path, err });
+                        // try stderr.print("Failed to format {s}: {any}\n", .{ entry.path, err });
                         failed_count += 1;
                     }
                 }
@@ -76,7 +76,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
             success_count += 1;
         } else |err| {
             if (err != error.NotRocFile) {
-                try stderr.print("Failed to format {s}: {any}\n", .{ path, err });
+                // try stderr.print("Failed to format {s}: {any}\n", .{ path, err });
                 failed_count += 1;
             }
         }
@@ -169,7 +169,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        // parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.source, parse_ast);
         return error.ParsingFailed;
     }
@@ -202,7 +202,7 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        // parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.source, parse_ast);
         return error.ParsingFailed;
     }
@@ -221,15 +221,16 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) 
         }
     }
 
-    const stderr = std.io.getStdErr().writer();
-    try stderr.print("Errors:\n", .{});
+    // const stderr = std.io.getStdErr().writer();
+    // try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
-        const region = parse_ast.tokens.resolve(@intCast(err.region.start));
-        const line = binarySearch(line_offsets.items.items, region.start.offset) orelse unreachable;
-        const column = region.start.offset - line_offsets.items.items[line];
-        const token = parse_ast.tokens.tokens.items(.tag)[err.region.start];
+        _ = err;
+        // const region = parse_ast.tokens.resolve(@intCast(err.region.start));
+        // const line = binarySearch(line_offsets.items.items, region.start.offset) orelse unreachable;
+        // const column = region.start.offset - line_offsets.items.items[line];
+        // const token = parse_ast.tokens.tokens.items(.tag)[err.region.start];
         // TODO: pretty print the parse failures.
-        try stderr.print("\t{s}, at token {s} at {d}:{d}\n", .{ @tagName(err.tag), @tagName(token), line + 1, column });
+        // try stderr.print("\t{s}, at token {s} at {d}:{d}\n", .{ @tagName(err.tag), @tagName(token), line + 1, column });
     }
 }
 
@@ -1975,8 +1976,11 @@ const Formatter = struct {
     }
 
     fn displayRegion(fmt: *Formatter, region: AST.TokenizedRegion) void {
-        const tags = fmt.ast.tokens.tokens.items(.tag);
-        return std.debug.print("[{s}@{d}...{s}@{d}]\n", .{ @tagName(tags[region.start]), region.start, @tagName(tags[region.end - 1]), region.end - 1 });
+        _ = fmt;
+        _ = region;
+        // const tags = fmt.ast.tokens.tokens.items(.tag);
+        // std.debug.print("[{s}@{d}...{s}@{d}]\n", .{ @tagName(tags[region.start]), region.start, @tagName(tags[region.end - 1]), region.end - 1 });
+        return;
     }
 
     fn nodeWillBeMultiline(fmt: *Formatter, comptime T: type, item: T) bool {
@@ -2176,9 +2180,9 @@ const Formatter = struct {
 /// Asserts a module when formatted twice in a row results in the same final output.
 /// Returns that final output.
 pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    if (debug) {
-        std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
-    }
+    // if (debug) {
+    //     std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
+    // }
 
     const formatted = parseAndFmt(gpa, input, debug) catch |err| {
         switch (err) {
@@ -2211,9 +2215,9 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         // shouldn't be required in future
         parse_ast.store.emptyScratch();
 
-        std.debug.print("Parsed SExpr:\n==========\n", .{});
-        parse_ast.toSExprStr(module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
-        std.debug.print("\n==========\n\n", .{});
+        // std.debug.print("Parsed SExpr:\n==========\n", .{});
+        // parse_ast.toSExprStr(module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        // std.debug.print("\n==========\n\n", .{});
     }
 
     std.testing.expectEqualSlices(AST.Diagnostic, &[_]AST.Diagnostic{}, parse_ast.parse_diagnostics.items) catch {
@@ -2223,8 +2227,8 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
     var result = std.ArrayList(u8).init(gpa);
     try formatAst(parse_ast, result.writer().any());
 
-    if (debug) {
-        std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.items});
-    }
+    // if (debug) {
+    //     std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.items});
+    // }
     return try result.toOwnedSlice();
 }

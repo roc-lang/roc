@@ -36,17 +36,17 @@ pub fn fuzz_main() !void {
     const len = data.len / @sizeOf(i64);
     const arr_ptr: [*]i64 = @alignCast(@ptrCast(data.ptr));
 
-    if (DEBUG) {
-        std.debug.print("Input: [{d}]{d}\n", .{ len, arr_ptr[0..len] });
-    }
+    // if (DEBUG) {
+    //     std.debug.print("Input: [{d}]{d}\n", .{ len, arr_ptr[0..len] });
+    // }
 
     var test_count: i64 = 0;
     sort.fluxsort(@ptrCast(arr_ptr), len, &test_i64_compare_refcounted, @ptrCast(&test_count), true, &test_inc_n_data, @sizeOf(i64), @alignOf(i64), &test_i64_copy);
 
     const sorted = std.sort.isSorted(i64, arr_ptr[0..len], {}, std.sort.asc(i64));
-    if (DEBUG) {
-        std.debug.print("Output: [{d}]{d}\nSorted: {}\nFinal RC: {}\n", .{ len, arr_ptr[0..len], sorted, test_count });
-    }
+    // if (DEBUG) {
+    //     std.debug.print("Output: [{d}]{d}\nSorted: {}\nFinal RC: {}\n", .{ len, arr_ptr[0..len], sorted, test_count });
+    // }
     std.debug.assert(sorted);
     std.debug.assert(test_count == 0);
 }

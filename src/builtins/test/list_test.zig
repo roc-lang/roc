@@ -3,7 +3,7 @@
 const std = @import("std");
 const builtins = @import("builtins");
 
-const TestEnv = builtins.utils.TestEnv;
+const TestEnv = @import("test_env.zig").TestEnv;
 const RocList = builtins.list.RocList;
 const RocStr = builtins.str.RocStr;
 const listConcatUtf8 = builtins.list.listConcatUtf8;
@@ -1346,7 +1346,7 @@ test "listAllocationPtr basic functionality" {
 }
 
 test "listAllocationPtr empty list" {
-    var test_env = builtins.utils.TestEnv.init(std.testing.allocator);
+    var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
     const empty_list = RocList.empty();

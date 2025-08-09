@@ -53,6 +53,7 @@ test {
 
     std.testing.refAllDeclsRecursive(@import("eval/interpreter.zig"));
     std.testing.refAllDeclsRecursive(@import("eval/test/eval_test.zig"));
+    std.testing.refAllDecls(@import("eval/test/stack_test.zig"));
 
     std.testing.refAllDeclsRecursive(@import("main.zig"));
     std.testing.refAllDeclsRecursive(@import("cache/mod.zig"));

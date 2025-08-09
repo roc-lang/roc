@@ -82,7 +82,8 @@ pub const CacheManager = struct {
         // Read cache data using memory mapping for better performance
         const mapped_cache = cache_mod.CacheModule.readFromFileMapped(self.allocator, cache_path, self.filesystem) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to read cache file {s}: {}", .{ cache_path, err });
+                _ = err;
+                // std.log.debug("Failed to read cache file {s}: {}", .{ cache_path, err });
             }
             self.stats.recordMiss();
             return CacheResult{ .miss = .{
@@ -98,7 +99,8 @@ pub const CacheManager = struct {
             source,
         ) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to restore from cache {s}: {}", .{ cache_path, err });
+                _ = err;
+                // std.log.debug("Failed to restore from cache {s}: {}", .{ cache_path, err });
             }
             self.stats.recordInvalidation();
             return CacheResult{ .miss = .{
@@ -123,7 +125,8 @@ pub const CacheManager = struct {
         // Ensure cache subdirectory exists
         self.ensureCacheSubdir(cache_key) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to create cache subdirectory: {}", .{err});
+                _ = err;
+                // std.log.debug("Failed to create cache subdirectory: {}", .{err});
             }
             self.stats.recordStoreFailure();
             return;
@@ -135,7 +138,8 @@ pub const CacheManager = struct {
 
         const cache_data = Cache.create(self.allocator, arena.allocator(), process_result.cir, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to serialize cache data: {}", .{err});
+                _ = err;
+                // std.log.debug("Failed to serialize cache data: {}", .{err});
             }
             self.stats.recordStoreFailure();
             return;
@@ -159,7 +163,8 @@ pub const CacheManager = struct {
         // Write to temp file
         self.filesystem.writeFile(temp_path, cache_data) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to write cache temp file {s}: {}", .{ temp_path, err });
+                _ = err;
+                // std.log.debug("Failed to write cache temp file {s}: {}", .{ temp_path, err });
             }
             self.stats.recordStoreFailure();
             return;
@@ -168,7 +173,8 @@ pub const CacheManager = struct {
         // Move temp file to final location (atomic operation)
         self.filesystem.rename(temp_path, cache_path) catch |err| {
             if (self.config.verbose) {
-                std.log.debug("Failed to rename cache file {s} -> {s}: {}", .{ temp_path, cache_path, err });
+                _ = err;
+                // std.log.debug("Failed to rename cache file {s} -> {s}: {}", .{ temp_path, cache_path, err });
             }
             self.stats.recordStoreFailure();
             return;
@@ -238,8 +244,8 @@ pub const CacheManager = struct {
     pub fn printStats(self: *const Self, allocator: Allocator) void {
         if (!self.config.verbose) return;
 
-        const stderr = std.io.getStdErr().writer();
-        CacheReporting.renderCacheStatsToTerminal(allocator, self.stats, stderr) catch {
+        // const stderr = std.io.getStdErr().writer();
+        CacheReporting.renderCacheStatsToTerminal(allocator, self.stats, undefined) catch {
             // If we can't print stats, just continue
         };
     }

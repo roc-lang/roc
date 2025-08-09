@@ -28,6 +28,7 @@
 //! 5. **Clean up / copy**: After the function is evaluated, we need to copy the result and clean up the stack.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const types = @import("types");
 const compile = @import("compile");
@@ -38,6 +39,19 @@ const layout = @import("../layout/layout.zig");
 const build_options = @import("build_options");
 const stack = @import("stack.zig");
 const StackValue = @import("StackValue.zig");
+
+// Helper for assertions that works in freestanding environments
+// In freestanding (WASM), we can't use assert because it tries to write to stderr
+fn assert(condition: bool) void {
+    if (builtin.os.tag == .freestanding) {
+        // In freestanding, if assertion fails, just trigger undefined behavior
+        // This avoids trying to write to stderr which doesn't exist
+        if (!condition) unreachable;
+    } else {
+        // In normal environments, use standard debug assert
+        std.debug.assert(condition);
+    }
+}
 
 const StringLiteral = base.StringLiteral;
 const RocOps = builtins.host_abi.RocOps;
@@ -403,8 +417,8 @@ pub const Interpreter = struct {
     /// work queue approach to evaluate complex expressions without recursion.
     pub fn eval(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, roc_ops: *RocOps) EvalError!StackValue {
         // Ensure work_stack and value_stack are empty before we start. (stack_memory might not be, and that's fine!)
-        std.debug.assert(self.work_stack.items.len == 0);
-        std.debug.assert(self.value_stack.items.len == 0);
+        assert(self.work_stack.items.len == 0);
+        assert(self.value_stack.items.len == 0);
         errdefer self.value_stack.clearRetainingCapacity();
 
         // We'll calculate the result pointer at the end based on the final layout
@@ -498,7 +512,7 @@ pub const Interpreter = struct {
                     const temp_buffer = try self.allocator.alloc(u8, result_size);
                     defer self.allocator.free(temp_buffer);
                     if (result_size > 0) {
-                        std.debug.assert(result_val.ptr != null);
+                        assert(result_val.ptr != null);
                         std.mem.copyForwards(u8, temp_buffer, @as([*]const u8, @ptrCast(result_val.ptr.?))[0..result_size]);
                     }
 
@@ -553,8 +567,8 @@ pub const Interpreter = struct {
         }
 
         // Ensure both stacks are empty at the end - if not, it's a bug!
-        std.debug.assert(self.work_stack.items.len == 0);
-        std.debug.assert(self.value_stack.items.len == 0);
+        assert(self.work_stack.items.len == 0);
+        assert(self.value_stack.items.len == 0);
 
         // Final check for crashes before returning
         if (self.has_crashed) {
@@ -682,7 +696,7 @@ pub const Interpreter = struct {
                 const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
 
-                std.debug.assert(result_value.ptr != null);
+                assert(result_value.ptr != null);
                 const typed_ptr = @as(*f32, @ptrCast(@alignCast(result_value.ptr.?)));
                 typed_ptr.* = float_lit.value;
 
@@ -694,7 +708,7 @@ pub const Interpreter = struct {
                 const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
 
-                std.debug.assert(result_value.ptr != null);
+                assert(result_value.ptr != null);
                 const typed_ptr = @as(*f64, @ptrCast(@alignCast(result_value.ptr.?)));
                 typed_ptr.* = float_lit.value;
 
@@ -707,7 +721,7 @@ pub const Interpreter = struct {
                 const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
                 const result_value = try self.pushStackValue(expr_layout);
 
-                std.debug.assert(result_value.ptr != null);
+                assert(result_value.ptr != null);
                 const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
                 const tag_name = self.env.idents.getText(tag.name);
                 if (std.mem.eql(u8, tag_name, "True")) {
@@ -726,7 +740,7 @@ pub const Interpreter = struct {
                 const result_value = try self.pushStackValue(expr_layout);
 
                 // Empty record is zero-sized and has no bytes
-                std.debug.assert(result_value.ptr == null);
+                assert(result_value.ptr == null);
             },
 
             // Empty list
@@ -736,7 +750,7 @@ pub const Interpreter = struct {
                 const result_value = try self.pushStackValue(expr_layout);
 
                 // Initialize empty list
-                std.debug.assert(result_value.ptr != null);
+                assert(result_value.ptr != null);
                 const list: *RocList = @ptrCast(@alignCast(result_value.ptr.?));
                 list.* = RocList.empty();
             },
@@ -859,7 +873,7 @@ pub const Interpreter = struct {
                 };
 
                 // Debug assertions to catch regressions
-                if (std.debug.runtime_safety) {
+                if (std.debug.runtime_safety and builtin.target.os.tag != .freestanding) {
                     // Verify we have a nominal type
                     const resolved = self.layout_cache.types_store.resolveVar(nominal_var);
                     switch (resolved.desc.content) {
@@ -871,16 +885,19 @@ pub const Interpreter = struct {
                                     // For Bool nominal types, verify we get boolean layout
                                     const nominal_layout = self.layout_cache.getLayout(nominal_layout_idx);
                                     if (!(nominal_layout.tag == .scalar and nominal_layout.data.scalar.tag == .bool)) {
-                                        std.debug.panic("REGRESSION: Bool nominal type should have boolean layout, got: {}\n", .{nominal_layout.tag});
+                                        // REGRESSION: Bool nominal type should have boolean layout
+                                        unreachable;
                                     }
                                 }
                             },
                             else => {
-                                std.debug.panic("REGRESSION: e_nominal should have nominal_type, got: {}\n", .{flat_type});
+                                // REGRESSION: e_nominal should have nominal_type
+                                unreachable;
                             },
                         },
                         else => {
-                            std.debug.panic("REGRESSION: e_nominal should have structure content, got: {}\n", .{resolved.desc.content});
+                            // REGRESSION: e_nominal should have structure content
+                            unreachable;
                         },
                     }
                 }
@@ -1140,7 +1157,7 @@ pub const Interpreter = struct {
                 try self.traceValue("e_str_segment", result_value);
 
                 // Initialize the RocStr
-                std.debug.assert(result_value.ptr != null);
+                assert(result_value.ptr != null);
                 const roc_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
                 self.traceInfo("e_str_segment: About to call RocStr.fromSlice with content: \"{s}\"", .{literal_content});
                 roc_str.* = builtins.str.RocStr.fromSlice(literal_content, roc_ops);
@@ -1665,7 +1682,7 @@ pub const Interpreter = struct {
 
         // 2. Bind the explicit parameters to their arguments.
         const param_ids = self.env.store.slicePatterns(closure.params);
-        std.debug.assert(param_ids.len == arg_count);
+        assert(param_ids.len == arg_count);
 
         // Current stack layout: `[arg1, ..., argN, closure, return_slot, captures_view]`
         // peek(1) is captures_view
@@ -1913,7 +1930,7 @@ pub const Interpreter = struct {
         } else {
             // Zero-sized field
             const result_value = try self.pushStackValue(field_layout);
-            std.debug.assert(result_value.ptr == null);
+            assert(result_value.ptr == null);
         }
 
         self.traceInfo("Accessed field '{s}' at index {}, size {}", .{ field_name, field_index, field_size });
@@ -2094,7 +2111,7 @@ pub const Interpreter = struct {
             switch (value.layout.tag) {
                 .scalar => switch (value.layout.data.scalar.tag) {
                     .int => {
-                        std.debug.assert(value.ptr != null);
+                        assert(value.ptr != null);
                         const int_val = value.asI128();
                         writer.print("int({s}) {}\n", .{
                             @tagName(value.layout.data.scalar.data.int),
@@ -2102,17 +2119,17 @@ pub const Interpreter = struct {
                         }) catch {};
                     },
                     .frac => {
-                        std.debug.assert(value.ptr != null);
+                        assert(value.ptr != null);
                         const float_val = @as(*f64, @ptrCast(@alignCast(value.ptr.?))).*;
                         writer.print("float {d}\n", .{float_val}) catch {};
                     },
                     .bool => {
-                        std.debug.assert(value.ptr != null);
+                        assert(value.ptr != null);
                         const bool_val = @as(*u8, @ptrCast(@alignCast(value.ptr.?))).*;
                         writer.print("bool {}\n", .{bool_val != 0}) catch {};
                     },
                     .str => {
-                        std.debug.assert(value.ptr != null);
+                        assert(value.ptr != null);
                         _ = @as(*const builtins.str.RocStr, @ptrCast(@alignCast(value.ptr.?)));
                         // Don't try to read the string content yet - it might not be initialized
                         writer.print("str(uninitialized)\n", .{}) catch {};
@@ -2120,7 +2137,7 @@ pub const Interpreter = struct {
                     else => writer.print("scalar({s})\n", .{@tagName(value.layout.data.scalar.tag)}) catch {},
                 },
                 .closure => {
-                    std.debug.assert(value.ptr != null);
+                    assert(value.ptr != null);
                     const closure: *const Closure = @ptrCast(@alignCast(value.ptr.?));
                     writer.print("closure(body_idx={}, captures_layout_idx={})\n", .{
                         closure.body_idx,
@@ -2266,7 +2283,7 @@ pub const Interpreter = struct {
             .w_if_check_condition => {
                 // Extract branch index from extra data - this is a simplified handler
                 // The actual implementation would need more context about branches
-                std.log.warn("if_check_condition work item not fully implemented in processWorkItem", .{});
+                // std.log.warn("if_check_condition work item not fully implemented in processWorkItem", .{});
                 return error.UnsupportedWorkItem;
             },
 
@@ -2280,7 +2297,7 @@ pub const Interpreter = struct {
             // Let bindings
             .w_let_bind => {
                 // Let bindings require more complex state management that's handled in the main eval loop
-                std.log.warn("Complex work item {s} not supported in processWorkItem", .{@tagName(work.kind)});
+                // std.log.warn("Complex work item {s} not supported in processWorkItem", .{@tagName(work.kind)});
                 return error.UnsupportedWorkItem;
             },
 
@@ -2295,14 +2312,14 @@ pub const Interpreter = struct {
 
             // Runtime errors
             .w_crash => {
-                const msg = self.env.strings.get(work.extra.crash_msg);
-                std.log.err("Runtime crash: {s}", .{msg});
+                // const msg = self.env.strings.get(work.extra.crash_msg);
+                // std.log.err("Runtime crash: {s}", .{msg});
                 return error.RuntimeCrash;
             },
 
             // These should be handled by the caller
             .w_eval_expr_structural, .w_eval_expr_nominal, .w_lambda_call => {
-                std.log.err("Unexpected work item in processWorkItem: {s}", .{@tagName(work.kind)});
+                // std.log.err("Unexpected work item in processWorkItem: {s}", .{@tagName(work.kind)});
                 return error.UnexpectedWorkItem;
             },
         }
@@ -2979,7 +2996,8 @@ pub const Interpreter = struct {
         } else {
             // Regular expression evaluation
             const result_value = self.eval(expr_idx, ops) catch |err| {
-                std.log.err("Expression evaluation failed: {s}", .{@errorName(err)});
+                _ = err;
+                // std.log.err("Expression evaluation failed: {s}", .{@errorName(err)});
                 return error.EvaluationFailed;
             };
 
@@ -2992,7 +3010,7 @@ pub const Interpreter = struct {
 
         // Get closure parameter patterns from the expression
         const param_patterns = getClosureParameterPatterns(self.env, expr_idx) catch {
-            std.log.err("Failed to get closure parameter patterns for expr={}", .{expr_idx});
+            // std.log.err("Failed to get closure parameter patterns for expr={}", .{expr_idx});
             return error.UnexpectedClosureStructure;
         };
 
@@ -3019,13 +3037,13 @@ pub const Interpreter = struct {
 
             // Push space for this parameter on the stack
             const dest_value = self.pushStackValue(param_layout) catch {
-                std.log.err("Stack overflow while pushing argument {}", .{i});
+                // std.log.err("Stack overflow while pushing argument {}", .{i});
                 return error.StackOverflow;
             };
 
             // Transfer the argument data to the stack
             if (param_size > 0 and dest_value.ptr != null) {
-                std.debug.assert(dest_value.ptr != null);
+                assert(dest_value.ptr != null);
 
                 // For heap-allocated types like RocStr, we need to incref
                 // instead of just copying to avoid double-frees

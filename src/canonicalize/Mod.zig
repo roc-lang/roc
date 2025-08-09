@@ -4,6 +4,7 @@
 //! constructs into a simplified, normalized form suitable for type inference.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const base = @import("base");
 const parse = @import("parse");
@@ -7339,7 +7340,7 @@ test "hexadecimal integer literals" {
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
         const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-            std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
+            // std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
             try std.testing.expect(false);
             continue;
         };
@@ -7428,7 +7429,7 @@ test "binary integer literals" {
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
         const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-            std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
+            // std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
             try std.testing.expect(false);
             continue;
         };
@@ -7517,7 +7518,7 @@ test "octal integer literals" {
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
         const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-            std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
+            // std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
             try std.testing.expect(false);
             continue;
         };
@@ -7606,7 +7607,7 @@ test "integer literals with uppercase base prefixes" {
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
         const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-            std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
+            // std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
             try std.testing.expect(false);
             continue;
         };
@@ -8637,13 +8638,15 @@ test "parseIntWithUnderscores function" {
 
     for (test_cases) |tc| {
         const result = parseIntWithUnderscores(u128, tc.text, tc.base) catch |err| {
-            std.debug.print("ERROR parsing '{s}' base {}: {}\n", .{ tc.text, tc.base, err });
+            if (comptime builtin.target.os.tag != .freestanding) {
+                std.debug.print("ERROR parsing '{s}' base {}: {}\n", .{ tc.text, tc.base, err });
+            }
             try std.testing.expect(false);
             continue;
         };
 
         if (result != tc.expected) {
-            std.debug.print("MISMATCH: parseIntWithUnderscores('{s}', {}) = {} (expected {})\n", .{ tc.text, tc.base, result, tc.expected });
+            // std.debug.print("MISMATCH: parseIntWithUnderscores('{s}', {}) = {} (expected {})\n", .{ tc.text, tc.base, result, tc.expected });
         }
 
         try std.testing.expectEqual(tc.expected, result);
@@ -8692,7 +8695,7 @@ test "parseNumLiteralWithSuffix function" {
         const result = types.Num.parseNumLiteralWithSuffix(tc.input);
 
         if (!std.mem.eql(u8, result.num_text, tc.expected_num_text)) {
-            std.debug.print("MISMATCH num_text: parseNumLiteralWithSuffix('{}').num_text = '{}' (expected '{}')\n", .{ tc.input, result.num_text, tc.expected_num_text });
+            // std.debug.print("MISMATCH num_text: parseNumLiteralWithSuffix('{}').num_text = '{}' (expected '{}')\n", .{ tc.input, result.num_text, tc.expected_num_text });
         }
         try std.testing.expectEqualSlices(u8, tc.expected_num_text, result.num_text);
 
@@ -8760,17 +8763,18 @@ test "hex literal parsing logic integration" {
 
         // Debug print to see what's happening
         if (tc.literal[0] == '0' and (tc.literal[1] == 'x' or tc.literal[1] == 'b')) {
-            std.debug.print("Parsing '{}': num_text='{}', digit_part='{}', base={}, expected={}\n", .{ tc.literal, parsed.num_text, digit_part, int_base, tc.expected_value });
+            // std.debug.print("Parsing '{}': num_text='{}', digit_part='{}', base={}, expected={}\n", .{ tc.literal, parsed.num_text, digit_part, int_base, tc.expected_value });
         }
 
         const u128_val = parseIntWithUnderscores(u128, digit_part, int_base) catch |err| {
-            std.debug.print("ERROR parsing digit_part '{}' with base {}: {}\n", .{ digit_part, int_base, err });
+            _ = err;
+            // std.debug.print("ERROR parsing digit_part '{}' with base {}: {}\n", .{ digit_part, int_base, err });
             try std.testing.expect(false);
             continue;
         };
 
         if (u128_val != tc.expected_value) {
-            std.debug.print("MISMATCH for '{}': got {}, expected {}\n", .{ tc.literal, u128_val, tc.expected_value });
+            // std.debug.print("MISMATCH for '{}': got {}, expected {}\n", .{ tc.literal, u128_val, tc.expected_value });
         }
 
         try std.testing.expectEqual(tc.expected_value, u128_val);
@@ -8786,7 +8790,7 @@ test "unused variables are sorted by region" {
         \\
         \\func = |_| {
         \\    zebra = 5    # Line 3 - should be reported first
-        \\    apple = 10   # Line 4 - should be reported second  
+        \\    apple = 10   # Line 4 - should be reported second
         \\    monkey = 15  # Line 5 - should be reported third
         \\    used = 20    # Line 6 - this one is used
         \\    used

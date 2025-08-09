@@ -3,7 +3,7 @@
 const std = @import("std");
 const builtins = @import("builtins");
 
-const TestEnv = builtins.utils.TestEnv;
+const TestEnv = @import("test_env.zig").TestEnv;
 const calculateCapacity = builtins.utils.calculateCapacity;
 const allocateWithRefcount = builtins.utils.allocateWithRefcount;
 

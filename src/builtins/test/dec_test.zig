@@ -3,7 +3,7 @@
 const std = @import("std");
 const builtins = @import("builtins");
 
-const TestEnv = builtins.utils.TestEnv;
+const TestEnv = @import("test_env.zig").TestEnv;
 const RocDec = builtins.dec.RocDec;
 const RocStr = builtins.str.RocStr;
 

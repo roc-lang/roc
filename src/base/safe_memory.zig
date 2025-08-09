@@ -51,7 +51,7 @@ pub fn safeCopyArgument(
     }
 
     if (elem_offset + elem_size > max_arg_size) {
-        std.log.err("Argument copy would overflow: offset={}, size={}, max={}", .{ elem_offset, elem_size, max_arg_size });
+        // std.log.err("Argument copy would overflow: offset={}, size={}, max={}", .{ elem_offset, elem_size, max_arg_size });
         return error.BufferOverflow;
     }
 
