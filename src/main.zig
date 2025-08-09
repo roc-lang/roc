@@ -14,7 +14,6 @@ const tracy = @import("tracy");
 const SharedMemoryAllocator = @import("./SharedMemoryAllocator.zig");
 const platform = @import("ipc/platform.zig");
 const fmt = @import("fmt.zig");
-const coordinate_simple = @import("coordinate_simple.zig");
 const Filesystem = @import("fs/Filesystem.zig");
 const cli_args = @import("cli_args.zig");
 const cache_mod = @import("cache/mod.zig");
@@ -1194,7 +1193,7 @@ const DrainedReport = struct {
 /// Timing information for check phases
 const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else compile.BuildModule.TimingInfo;
 
-/// Error set for BuildEnv.buildApp operations
+/// Error set for BuildEnv.build operations
 const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs.File.ReadError || std.fs.File.WriteError || std.Thread.SpawnError || error{
     // Custom BuildEnv errors
     ExpectedAppHeader,
@@ -1217,17 +1216,17 @@ fn checkFileWithBuildEnv(
     filepath: []const u8,
     collect_timing: bool,
 ) BuildAppError!CheckResult {
+    _ = collect_timing; // Timing is always collected by BuildEnv
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    _ = collect_timing; // Timing is now collected by BuildEnv itself
-
     // Initialize BuildEnv in single-threaded mode for checking
     var build_env = BuildEnv.init(gpa, .single_threaded, 1);
+    build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
-    // Build the app
-    try build_env.buildApp(filepath);
+    // Build the file (works for both app and module files)
+    try build_env.build(filepath);
 
     // Drain all reports
     const drained = try build_env.drainReports();
@@ -1284,16 +1283,9 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
     var timer = try std.time.Timer.start();
 
-    // Initialize cache if enabled
-    const cache_config = CacheConfig{
-        .enabled = !args.no_cache,
-        .verbose = args.verbose,
-    };
-
-    var cache_manager = if (cache_config.enabled) blk: {
-        const manager = CacheManager.init(gpa, cache_config, Filesystem.default());
-        break :blk manager;
-    } else null;
+    // TODO: Integrate caching with BuildEnv
+    _ = args.no_cache;
+    _ = args.verbose;
 
     // Use BuildEnv to check the file
     var check_result = checkFileWithBuildEnv(
@@ -1308,12 +1300,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
     const elapsed = timer.read();
 
-    // Print cache statistics if verbose
-    if (cache_manager) |*cm| {
-        if (args.verbose) {
-            cm.printStats(gpa);
-        }
-    }
+    // TODO: Print cache statistics when integrated with BuildEnv
 
     // Handle cached results vs fresh compilation results differently
     if (check_result.was_cached) {

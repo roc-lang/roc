@@ -37,7 +37,9 @@
 //! Other afl commands also available in `./zig-out/AFLplusplus/bin`
 
 const std = @import("std");
-const coordinate_simple = @import("coordinate_simple.zig");
+const compile = @import("compile");
+const BuildEnv = compile.BuildEnv;
+const reporting = @import("reporting");
 
 /// Hook for AFL++ to initialize the fuzz test environment.
 pub export fn zig_fuzz_init() void {}
@@ -63,30 +65,56 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
         std.debug.print("Input:\n==========\n{s}\n==========\n\n", .{input});
     }
 
-    // Process the input through the full compiler pipeline
-    var result = coordinate_simple.processSource(gpa, input, "<fuzz>") catch |err| {
+    // Write input to a temporary file
+    const tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_file_path = "fuzz_input.roc";
+    try tmp_dir.dir.writeFile(tmp_file_path, input);
+
+    // Get absolute path
+    var path_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const abs_path = try tmp_dir.dir.realpath(tmp_file_path, &path_buf);
+
+    // Process the input through BuildEnv
+    var build_env = BuildEnv.init(gpa, .single_threaded, 1);
+    defer build_env.deinit();
+
+    build_env.build(abs_path) catch |err| {
         switch (err) {
-            error.OutOfMemory => {
-                // The small inputs used for fuzzing should never OOM.
-                // Any OOM here is definitely a bug.
-                @panic("OOM");
-            },
-            error.NoSpaceLeft => {
-                @panic("No Space Left");
-            },
-            error.TooNested => {
-                @panic("Too much nesting");
-            },
+            error.OutOfMemory => @panic("OOM"),
+            error.NoSpaceLeft => @panic("No Space Left"),
+            error.TooNested => @panic("Too much nesting"),
+            else => {},
         }
     };
-    defer result.deinit(gpa);
+
+    // Drain reports
+    const drained = try build_env.drainReports();
+    defer {
+        for (drained) |mod| {
+            gpa.free(mod.abs_path);
+            for (mod.reports) |*report| {
+                var mut_report = report;
+                mut_report.deinit();
+            }
+            gpa.free(mod.reports);
+        }
+        gpa.free(drained);
+    }
 
     if (debug) {
-        std.debug.print("Processing completed with {} reports\n", .{result.reports.len});
-        if (result.reports.len > 0) {
+        var total_reports: usize = 0;
+        for (drained) |mod| {
+            total_reports += mod.reports.len;
+        }
+        std.debug.print("Processing completed with {} reports\n", .{total_reports});
+        if (total_reports > 0) {
             std.debug.print("Reports:\n", .{});
-            for (result.reports) |report| {
-                std.debug.print("  - {s}\n", .{report.title});
+            for (drained) |mod| {
+                for (mod.reports) |report| {
+                    std.debug.print("  - {s}\n", .{report.title});
+                }
             }
         }
     }

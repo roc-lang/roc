@@ -15,6 +15,28 @@ const Can = @import("can");
 const Check = @import("check");
 const problem = Check.problem;
 const compile = @import("compile");
+/// Cache interface to avoid circular dependencies
+pub const CacheInterface = struct {
+    /// Load from cache returns module_env if hit
+    loadFromCache: *const fn (self: *anyopaque, compiler_version: []const u8, source: []const u8, module_name: []const u8) CacheResult,
+    /// Store to cache
+    store: *const fn (self: *anyopaque, cache_key: [32]u8, module_env: *const ModuleEnv, error_count: u32, warning_count: u32) anyerror!void,
+    /// Context pointer
+    context: *anyopaque,
+};
+
+/// Result of a cache lookup operation
+pub const CacheResult = union(enum) {
+    hit: struct {
+        module_env: *ModuleEnv,
+        error_count: u32,
+        warning_count: u32,
+    },
+    miss: struct {
+        key: [32]u8,
+    },
+    not_enabled,
+};
 
 pub const ModuleEnv = compile.ModuleEnv;
 const Report = @import("reporting").Report;
@@ -83,6 +105,8 @@ const ModuleState = struct {
     visit_color: u8 = 0,
     /// Atomic flag to prevent concurrent processing of the same module (0=free, 1=working)
     working: if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(u8) else u8 = if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(u8).init(0) else 0,
+    /// Cache key for this module (set when cache miss occurs)
+    cache_key: ?[32]u8 = null,
 
     fn deinit(self: *ModuleState, gpa: Allocator) void {
         if (self.env) |*e| e.deinit();
@@ -108,6 +132,10 @@ pub const ModuleBuild = struct {
     resolver: ?ImportResolver = null,
     /// Optional scheduling hook to observe/enqueue scheduled modules in a global orchestrator
     schedule_hook: ?ScheduleHook = null,
+    /// Optional cache interface for module caching
+    cache_interface: ?CacheInterface = null,
+    /// Compiler version for cache invalidation
+    compiler_version: []const u8 = "roc-zig-dev",
 
     lock: Mutex = .{},
     cond: Condition = .{},
@@ -407,6 +435,40 @@ pub const ModuleBuild = struct {
         // Load source and init ModuleEnv
         var st = self.modules.getPtr(name).?;
         const src = try std.fs.cwd().readFileAlloc(self.gpa, st.path, std.math.maxInt(usize));
+
+        // Check cache if available
+        if (self.cache_interface) |cache| {
+            const compiler_version = self.compiler_version;
+            const cache_result = cache.loadFromCache(cache.context, compiler_version, src, name);
+
+            switch (cache_result) {
+                .hit => |hit| {
+                    // Use cached ModuleEnv
+                    if (st.env) |*old| old.deinit();
+                    st.env = hit.module_env.*;
+                    self.gpa.destroy(hit.module_env);
+
+                    // Regenerate reports from cached ModuleEnv's diagnostics
+                    const diags = try st.env.?.getDiagnostics();
+                    defer self.gpa.free(diags);
+                    for (diags) |d| {
+                        const report = try st.env.?.diagnosticToReport(d, self.gpa, st.path);
+                        try st.reports.append(self.gpa, report);
+                    }
+
+                    // Skip to WaitingOnImports phase since parsing/canonicalization was cached
+                    st.phase = .WaitingOnImports;
+                    try self.enqueue(name);
+                    return;
+                },
+                .miss => |miss| {
+                    // Store the cache key for later when we finish processing
+                    st.cache_key = miss.key;
+                },
+                .not_enabled => {},
+            }
+        }
+
         var env = try ModuleEnv.init(self.gpa, src);
         // line starts for diagnostics and consistent positions
         try env.calcLineStarts();
@@ -664,6 +726,30 @@ pub const ModuleBuild = struct {
         // Done
         st.phase = .Done;
         self.remaining_modules -= 1;
+
+        // Store to cache if we have a cache key from earlier miss
+        if (self.cache_interface) |cache| {
+            if (st.cache_key) |cache_key| {
+                // Count errors and warnings
+                var error_count: u32 = 0;
+                var warning_count: u32 = 0;
+                for (st.reports.items) |report| {
+                    switch (report.severity) {
+                        .runtime_error, .fatal => error_count += 1,
+                        .warning => warning_count += 1,
+                        .info => {},
+                    }
+                }
+
+                // Store to cache
+                cache.store(cache.context, cache_key, &env, error_count, warning_count) catch |err| {
+                    // Don't fail the build on cache store failures
+                    if (std.debug.runtime_safety) {
+                        std.log.debug("Failed to store module '{s}' to cache: {}", .{ name, err });
+                    }
+                };
+            }
+        }
 
         // Wake dependents to re-check unblock
         for (st.dependents.items) |dep| try self.enqueue(dep);

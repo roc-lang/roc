@@ -262,6 +262,7 @@ pub const BuildEnv = struct {
     gpa: Allocator,
     mode: Mode,
     max_threads: usize,
+    compiler_version: []const u8 = "roc-zig-dev",
 
     // Workspace roots for sandboxing (absolute, canonical)
     workspace_roots: std.ArrayList([]const u8),
@@ -347,9 +348,9 @@ pub const BuildEnv = struct {
     // Assumptions:
     // - All header-declared paths are local filesystem paths (no URLs).
     // - Shorthand aliases uniquely identify packages within this workspace.
-    pub fn buildApp(self: *BuildEnv, root_app_file: []const u8) !void {
+    pub fn build(self: *BuildEnv, root_file: []const u8) !void {
         // Workspace root is directory containing the app header; normalize/sandbox
-        const root_abs = try self.makeAbsolute(root_app_file);
+        const root_abs = try self.makeAbsolute(root_file);
         const root_dir = if (std.fs.path.dirname(root_abs)) |d| try std.fs.path.resolve(self.gpa, &.{d}) else try self.gpa.dupe(u8, ".");
         // NOTE: Do not sandbox the app header; the app may reference arbitrary paths.
         // We still record the root_dir for convenience in later checks.
@@ -358,23 +359,28 @@ pub const BuildEnv = struct {
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
 
-        if (header_info.kind != .app) return error.ExpectedAppHeader;
+        // Allow both app and module files
+        if (header_info.kind != .app and header_info.kind != .module) {
+            return error.UnsupportedHeader;
+        }
 
-        // Create app package entry
-        const app_name = try self.gpa.dupe(u8, "app");
-        const key_app = try self.gpa.dupe(u8, app_name);
-        const app_root_file = try self.gpa.dupe(u8, root_abs);
-        const app_root_dir = root_dir;
+        // Create package entry (for both app and module)
+        const pkg_name = if (header_info.kind == .module) "module" else "app";
+        const key_pkg = try self.gpa.dupe(u8, pkg_name);
+        const pkg_root_file = try self.gpa.dupe(u8, root_abs);
+        const pkg_root_dir = root_dir;
 
-        try self.packages.put(self.gpa, key_app, .{
-            .name = app_name,
-            .kind = .app,
-            .root_file = app_root_file,
-            .root_dir = app_root_dir,
+        try self.packages.put(self.gpa, key_pkg, .{
+            .name = try self.gpa.dupe(u8, pkg_name),
+            .kind = header_info.kind,
+            .root_file = pkg_root_file,
+            .root_dir = pkg_root_dir,
         });
 
-        // Populate package graph and shorthand maps recursively
-        try self.populatePackageShorthands("app", &header_info);
+        // Populate package graph and shorthand maps recursively (only for apps)
+        if (header_info.kind == .app) {
+            try self.populatePackageShorthands(pkg_name, &header_info);
+        }
 
         // Create per-package schedulers wired with a shared resolver and global queue hook
         try self.createSchedulers();
@@ -387,15 +393,15 @@ pub const BuildEnv = struct {
             try self.global_queue.start(self.gpa, self.max_threads, &self.sink);
         }
 
-        // Seed root app module into global queue via schedule hook (ModuleBuild will call back)
-        const app_sched = self.schedulers.getPtr("app").?;
-        try app_sched.*.buildRoot(app_root_file);
+        // Seed root module into global queue via schedule hook (ModuleBuild will call back)
+        const root_sched = self.schedulers.getPtr(pkg_name).?;
+        try root_sched.*.buildRoot(pkg_root_file);
 
         // Kick remaining packages by seeding their root files too
         var it = self.schedulers.iterator();
         while (it.next()) |e| {
             const name = e.key_ptr.*;
-            if (std.mem.eql(u8, name, "app")) continue;
+            if (std.mem.eql(u8, name, pkg_name)) continue;
             const pkg = self.packages.get(name).?;
             try e.value_ptr.*.buildRoot(pkg.root_file);
         }
@@ -526,7 +532,7 @@ pub const BuildEnv = struct {
     // Package graph construction
     // ------------------------
 
-    const PackageKind = enum { app, package, platform };
+    const PackageKind = enum { app, package, platform, module, hosted };
 
     const PackageRef = struct {
         name: []const u8, // Package name (alias in workspace)
@@ -696,6 +702,15 @@ pub const BuildEnv = struct {
                     try info.shorthands.put(self.gpa, try self.gpa.dupe(u8, k), v);
                 }
             },
+            .module => {
+                info.kind = .module;
+                // Module headers don't have package dependencies, just exports/imports
+                // We'll handle imports during the module build process
+            },
+            .hosted => {
+                info.kind = .hosted;
+                // Hosted headers are like modules but for platform-specific code
+            },
             else => return error.UnsupportedHeader,
         }
 
@@ -706,14 +721,12 @@ pub const BuildEnv = struct {
         const e = ast.store.getExpr(expr_idx);
         return switch (e) {
             .string => |s| blk: {
-                const span = s.parts.span;
                 var buf = std.ArrayList(u8).init(self.gpa);
                 errdefer buf.deinit();
 
-                var i: usize = 0;
-                while (i < span.len) : (i += 1) {
-                    const sub_idx: parse.AST.Expr.Idx = @enumFromInt(span.start + i);
-                    const part = ast.store.getExpr(sub_idx);
+                // Use exprSlice to properly iterate through string parts
+                for (ast.store.exprSlice(s.parts)) |part_idx| {
+                    const part = ast.store.getExpr(part_idx);
                     if (part == .string_part) {
                         const tok = part.string_part.token;
                         const slice = ast.resolve(tok);
@@ -837,6 +850,7 @@ pub const BuildEnv = struct {
                     .{ .ctx = sc, .onSchedule = ScheduleCtx.onSchedule }
                 else
                     .{ .ctx = sc, .onSchedule = ScheduleCtx.onSchedule },
+                .compiler_version = self.compiler_version,
             };
 
             const key = try self.gpa.dupe(u8, name);
