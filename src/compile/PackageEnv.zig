@@ -87,7 +87,7 @@ const Task = struct { module_id: ModuleId };
 const Phase = enum { Parse, Canonicalize, WaitingOnImports, TypeCheck, Done };
 
 const ModuleState = struct {
-    name: []const u8, // Still store name for diagnostics/debugging
+    name: []const u8, // Module name is needed for error reporting and the schedule hook
     path: []const u8,
     env: ?ModuleEnv = null,
     phase: Phase = .Parse,
