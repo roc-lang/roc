@@ -1,12 +1,17 @@
-//! Concurrent module-level build orchestrator for a single package directory.
+//! Module build scheduler for a single package.
 //!
-//! - Parses modules to discover imports
-//! - Canonicalizes modules
-//! - Waits for imported modules to finish type-checking
-//! - Type-checks modules with access to imported modules' types
-//! - Collects diagnostics (canonicalization + type-checking) and emits them
-//!   deterministically by (min dependency depth, then module name)
-//! - Supports single-threaded and multi-threaded execution
+//! This component manages the concurrent compilation of all modules within a single package,
+//! orchestrating the build phases for each module:
+//! 
+//! - Parsing modules to discover their import dependencies
+//! - Canonicalizing parsed modules into an intermediate representation
+//! - Type-checking modules once their dependencies are ready
+//! - Coordinating with BuildEnv's global work queue for cross-package dependencies
+//! - Reporting diagnostics through a deterministic sink
+//!
+//! The scheduler tracks each module's progress through build phases and ensures proper
+//! ordering based on import dependencies. It supports both single-threaded and 
+//! multi-threaded execution modes.
 
 const std = @import("std");
 const base = @import("base");
