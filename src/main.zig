@@ -1157,7 +1157,13 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) noret
 /// Result from checking a file using BuildEnv
 const CheckResult = struct {
     reports: []DrainedReport,
-    timing: CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) .{} else .{ .total_ns = 0, .module_count = 0 },
+    timing: CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) .{} else .{
+        .tokenize_parse_ns = 0,
+        .canonicalize_ns = 0,
+        .canonicalize_diagnostics_ns = 0,
+        .type_checking_ns = 0,
+        .check_diagnostics_ns = 0,
+    },
     was_cached: bool = false,
     error_count: u32 = 0,
     warning_count: u32 = 0,
@@ -1186,10 +1192,7 @@ const DrainedReport = struct {
 };
 
 /// Timing information for check phases
-const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else struct {
-    total_ns: u64,
-    module_count: usize,
-};
+const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else compile.BuildModule.TimingInfo;
 
 /// Error set for BuildEnv.buildApp operations
 const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs.File.ReadError || std.fs.File.WriteError || std.Thread.SpawnError || error{
@@ -1217,10 +1220,7 @@ fn checkFileWithBuildEnv(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var timer = if (collect_timing and builtin.target.cpu.arch != .wasm32)
-        std.time.Timer.start() catch null
-    else
-        null;
+    _ = collect_timing; // Timing is now collected by BuildEnv itself
 
     // Initialize BuildEnv in single-threaded mode for checking
     var build_env = BuildEnv.init(gpa, .single_threaded, 1);
@@ -1259,13 +1259,11 @@ fn checkFileWithBuildEnv(
     // Note: abs_path is owned by BuildEnv, reports are moved to our array
     gpa.free(drained);
 
+    // Get timing information from BuildEnv
     const timing = if (builtin.target.cpu.arch == .wasm32)
         CheckTimingInfo{}
     else
-        CheckTimingInfo{
-            .total_ns = if (timer) |*t| t.read() else 0,
-            .module_count = reports.len,
-        };
+        build_env.getTimingInfo();
 
     return CheckResult{
         .reports = reports,
@@ -1375,18 +1373,29 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     }
 
     // Print timing breakdown if requested
-    if (args.time and builtin.target.cpu.arch != .wasm32) {
-        printTimingBreakdown(stdout, check_result.timing);
+    if (args.time) {
+        printTimingBreakdown(stdout, if (builtin.target.cpu.arch == .wasm32) null else check_result.timing);
     }
 }
 
-fn printTimingBreakdown(stdout: anytype, timing: CheckTimingInfo) void {
-    if (builtin.target.cpu.arch != .wasm32) {
-        stdout.print("\nTiming breakdown:\n", .{}) catch {};
-        stdout.print("  total check time:             ", .{}) catch {};
-        formatElapsedTime(stdout, timing.total_ns) catch {};
-        stdout.print("  ({} ns)\n", .{timing.total_ns}) catch {};
-        stdout.print("  modules processed:            {}\n", .{timing.module_count}) catch {};
+fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
+    if (timing) |t| {
+        writer.print("\nTiming breakdown:\n", .{}) catch {};
+        writer.print("  tokenize + parse:             ", .{}) catch {};
+        formatElapsedTime(writer, t.tokenize_parse_ns) catch {};
+        writer.print("  ({} ns)\n", .{t.tokenize_parse_ns}) catch {};
+        writer.print("  canonicalize:                 ", .{}) catch {};
+        formatElapsedTime(writer, t.canonicalize_ns) catch {};
+        writer.print("  ({} ns)\n", .{t.canonicalize_ns}) catch {};
+        writer.print("  can diagnostics:              ", .{}) catch {};
+        formatElapsedTime(writer, t.canonicalize_diagnostics_ns) catch {};
+        writer.print("  ({} ns)\n", .{t.canonicalize_diagnostics_ns}) catch {};
+        writer.print("  type checking:                ", .{}) catch {};
+        formatElapsedTime(writer, t.type_checking_ns) catch {};
+        writer.print("  ({} ns)\n", .{t.type_checking_ns}) catch {};
+        writer.print("  type checking diagnostics:    ", .{}) catch {};
+        formatElapsedTime(writer, t.check_diagnostics_ns) catch {};
+        writer.print("  ({} ns)\n", .{t.check_diagnostics_ns}) catch {};
     }
 }
 

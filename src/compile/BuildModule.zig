@@ -18,6 +18,15 @@ const compile = @import("compile");
 
 pub const ModuleEnv = compile.ModuleEnv;
 const Report = @import("reporting").Report;
+
+/// Timing information for different phases
+pub const TimingInfo = struct {
+    tokenize_parse_ns: u64,
+    canonicalize_ns: u64,
+    canonicalize_diagnostics_ns: u64,
+    type_checking_ns: u64,
+    check_diagnostics_ns: u64,
+};
 const Allocator = std.mem.Allocator;
 
 const parallel = base.parallel;
@@ -115,6 +124,13 @@ pub const ModuleBuild = struct {
     // Deterministic emission
     discovered: std.ArrayListUnmanaged([]const u8) = .{},
     emitted: std.StringHashMapUnmanaged(void) = .{},
+
+    // Timing collection (accumulated across all modules)
+    total_tokenize_parse_ns: u64 = 0,
+    total_canonicalize_ns: u64 = 0,
+    total_canonicalize_diagnostics_ns: u64 = 0,
+    total_type_checking_ns: u64 = 0,
+    total_check_diagnostics_ns: u64 = 0,
 
     pub fn init(gpa: Allocator, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink) ModuleBuild {
         return .{ .gpa = gpa, .root_dir = root_dir, .mode = mode, .max_threads = max_threads, .sink = sink };
@@ -312,6 +328,17 @@ pub const ModuleBuild = struct {
         return null;
     }
 
+    /// Get accumulated timing information
+    pub fn getTimingInfo(self: *ModuleBuild) TimingInfo {
+        return TimingInfo{
+            .tokenize_parse_ns = self.total_tokenize_parse_ns,
+            .canonicalize_ns = self.total_canonicalize_ns,
+            .canonicalize_diagnostics_ns = self.total_canonicalize_diagnostics_ns,
+            .type_checking_ns = self.total_type_checking_ns,
+            .check_diagnostics_ns = self.total_check_diagnostics_ns,
+        };
+    }
+
     /// Public API to read a module's current recorded dependency depth
     pub fn getModuleDepth(self: *ModuleBuild, name: []const u8) ?u32 {
         if (self.modules.getPtr(name)) |st| {
@@ -399,21 +426,36 @@ pub const ModuleBuild = struct {
         var env = st.env.?;
 
         // Parse and canonicalize in one step to avoid double parsing
+        const parse_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         var parse_ast = try parse.parse(&env);
         defer parse_ast.deinit(self.gpa);
         parse_ast.store.emptyScratch();
+        const parse_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
+        if (@import("builtin").target.cpu.arch != .wasm32) {
+            self.total_tokenize_parse_ns += @intCast(parse_end - parse_start);
+        }
 
         // canonicalize using the AST
+        const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         var can = try Can.init(&env, &parse_ast, null);
         try can.canonicalizeFile();
         can.deinit();
+        const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
+        if (@import("builtin").target.cpu.arch != .wasm32) {
+            self.total_canonicalize_ns += @intCast(canon_end - canon_start);
+        }
 
         // Collect canonicalization diagnostics
+        const canon_diag_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         const diags = try env.getDiagnostics();
         defer self.gpa.free(diags);
         for (diags) |d| {
             const report = try env.diagnosticToReport(d, self.gpa, st.path);
             try st.reports.append(self.gpa, report);
+        }
+        const canon_diag_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
+        if (@import("builtin").target.cpu.arch != .wasm32) {
+            self.total_canonicalize_diagnostics_ns += @intCast(canon_diag_end - canon_diag_start);
         }
 
         // Discover imports from env.imports
@@ -596,14 +638,24 @@ pub const ModuleBuild = struct {
         var checker = try Check.init(self.gpa, &env.types, &env, others.items, &env.store.regions);
         defer checker.deinit();
         // Note: checkDefs runs type checking for module
+        const check_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         try checker.checkDefs();
+        const check_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
+        if (@import("builtin").target.cpu.arch != .wasm32) {
+            self.total_type_checking_ns += @intCast(check_end - check_start);
+        }
 
         // Build reports from problems
+        const check_diag_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         var rb = problem.ReportBuilder.init(self.gpa, &env, &env, &checker.snapshots, st.path, others.items);
         defer rb.deinit();
         for (checker.problems.problems.items) |prob| {
             const rep = rb.build(prob) catch continue;
             try st.reports.append(self.gpa, rep);
+        }
+        const check_diag_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
+        if (@import("builtin").target.cpu.arch != .wasm32) {
+            self.total_check_diagnostics_ns += @intCast(check_diag_end - check_diag_start);
         }
 
         // Free temporary ModuleEnv copies created for others

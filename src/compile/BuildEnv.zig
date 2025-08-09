@@ -17,6 +17,7 @@ const builtin = @import("builtin");
 
 const ModuleBuild = BuildModule.ModuleBuild;
 const Mode = BuildModule.Mode;
+const ModuleTimingInfo = BuildModule.TimingInfo;
 const Report = reporting.Report;
 const Allocator = std.mem.Allocator;
 
@@ -992,6 +993,30 @@ pub const BuildEnv = struct {
             };
         }
         return out;
+    }
+
+    /// Get accumulated timing information from all ModuleBuild instances
+    pub fn getTimingInfo(self: *BuildEnv) ModuleTimingInfo {
+        var total = ModuleTimingInfo{
+            .tokenize_parse_ns = 0,
+            .canonicalize_ns = 0,
+            .canonicalize_diagnostics_ns = 0,
+            .type_checking_ns = 0,
+            .check_diagnostics_ns = 0,
+        };
+
+        var it = self.schedulers.iterator();
+        while (it.next()) |entry| {
+            const scheduler = entry.value_ptr.*;
+            const timing = scheduler.getTimingInfo();
+            total.tokenize_parse_ns += timing.tokenize_parse_ns;
+            total.canonicalize_ns += timing.canonicalize_ns;
+            total.canonicalize_diagnostics_ns += timing.canonicalize_diagnostics_ns;
+            total.type_checking_ns += timing.type_checking_ns;
+            total.check_diagnostics_ns += timing.check_diagnostics_ns;
+        }
+
+        return total;
     }
 };
 
