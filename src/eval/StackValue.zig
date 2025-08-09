@@ -5,12 +5,22 @@
 //! It provides methods for working with the value safely using the layout.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const types = @import("types");
 const compile = @import("compile");
 const builtins = @import("builtins");
 const collections = @import("collections");
 const layout_mod = @import("../layout/layout.zig");
+
+// Helper for assertions that works in freestanding environments
+fn assert(condition: bool) void {
+    if (builtin.os.tag == .freestanding) {
+        if (!condition) unreachable;
+    } else {
+        std.debug.assert(condition);
+    }
+}
 
 const LayoutStore = layout_mod.store.Store;
 const Layout = layout_mod.Layout;
@@ -36,11 +46,10 @@ ptr: ?*anyopaque,
 is_initialized: bool = false,
 
 /// Copy this stack value to a destination pointer with bounds checking
-pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, ops: *RocOps) void {
-    std.debug.assert(self.is_initialized); // Source must be initialized before copying
+pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, ops: *RocOps) !void {
+    assert(self.is_initialized); // Source must be initialized before copying
     if (self.ptr == null) {
-        std.log.err("Stack result pointer is null, cannot copy result", .{});
-        return;
+        return error.NullStackPointer;
     }
 
     // For closures, use getTotalSize to include capture data; for others use layoutSize
@@ -53,7 +62,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         switch (self.layout.data.scalar.tag) {
             .str => {
                 // Clone the RocStr into the interpreter's heap
-                std.debug.assert(self.ptr != null);
+                assert(self.ptr != null);
                 const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
                 const dest_str: *RocStr = @ptrCast(@alignCast(dest_ptr));
                 dest_str.* = src_str.clone(ops);
@@ -61,7 +70,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
             },
             .int => {
                 // Use type-specific integer copying with precision
-                std.debug.assert(self.ptr != null);
+                assert(self.ptr != null);
                 const precision = self.layout.data.scalar.data.int;
                 const value = self.asI128();
 
@@ -114,7 +123,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         }
     }
 
-    std.debug.assert(self.ptr != null);
+    assert(self.ptr != null);
     const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
     const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
     @memcpy(dst, src);
@@ -122,9 +131,9 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
 
 /// Read this StackValue's integer value, ensuring it's initialized
 pub fn asI128(self: StackValue) i128 {
-    std.debug.assert(self.is_initialized); // Ensure initialized before reading
-    std.debug.assert(self.ptr != null);
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+    assert(self.is_initialized); // Ensure initialized before reading
+    assert(self.ptr != null);
+    assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
 
     const precision = self.layout.data.scalar.data.int;
     return switch (precision) {
@@ -175,15 +184,15 @@ pub fn asI128(self: StackValue) i128 {
 pub fn setInt(self: *StackValue, value: i128) void {
 
     // Assert this is pointing to a valid memory location
-    std.debug.assert(self.ptr != null);
+    assert(self.ptr != null);
 
     // Assert this is an integer
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+    assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
 
     // Assert this is uninitialised memory
     //
     // Avoid accidental overwrite, manually toggle this if updating an already initialized value
-    std.debug.assert(!self.is_initialized);
+    assert(!self.is_initialized);
 
     const precision = self.layout.data.scalar.data.int;
 
@@ -235,15 +244,15 @@ pub fn setInt(self: *StackValue, value: i128) void {
 /// Initialise the StackValue boolean value
 pub fn setBool(self: *StackValue, value: u8) void {
     // Assert this is pointing to a valid memory location
-    std.debug.assert(self.ptr != null);
+    assert(self.ptr != null);
 
     // Assert this is a boolean
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .bool);
+    assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .bool);
 
     // Assert this is uninitialised memory
     //
     // Avoid accidental overwrite, manually toggle this if updating an already initialized value
-    std.debug.assert(!self.is_initialized);
+    assert(!self.is_initialized);
 
     // Write the boolean value as a byte
     const typed_ptr: *u8 = @ptrCast(@alignCast(self.ptr.?));
@@ -252,9 +261,9 @@ pub fn setBool(self: *StackValue, value: u8) void {
 
 /// Create a TupleAccessor for safe tuple element access
 pub fn asTuple(self: StackValue, layout_cache: *LayoutStore) !TupleAccessor {
-    std.debug.assert(self.is_initialized); // Tuple must be initialized before accessing
-    std.debug.assert(self.ptr != null);
-    std.debug.assert(self.layout.tag == .tuple);
+    assert(self.is_initialized); // Tuple must be initialized before accessing
+    assert(self.ptr != null);
+    assert(self.layout.tag == .tuple);
 
     const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
     const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
@@ -280,8 +289,8 @@ pub const TupleAccessor = struct {
             return error.TupleIndexOutOfBounds;
         }
 
-        std.debug.assert(self.base_value.is_initialized);
-        std.debug.assert(self.base_value.ptr != null);
+        assert(self.base_value.is_initialized);
+        assert(self.base_value.ptr != null);
 
         const element_layout_info = self.element_layouts.get(index);
         const element_layout = self.layout_cache.getLayout(element_layout_info.layout);
@@ -303,7 +312,7 @@ pub const TupleAccessor = struct {
     /// Set an element by copying from a source StackValue
     pub fn setElement(self: TupleAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
         const dest_element = try self.getElement(index);
-        source.copyToPtr(self.layout_cache, dest_element.ptr.?, ops);
+        try source.copyToPtr(self.layout_cache, dest_element.ptr.?, ops);
     }
 
     /// Get the number of elements in this tuple
@@ -323,9 +332,9 @@ pub const TupleAccessor = struct {
 
 /// Create a RecordAccessor for safe record field access
 pub fn asRecord(self: StackValue, layout_cache: *LayoutStore) !RecordAccessor {
-    std.debug.assert(self.is_initialized); // Record must be initialized before accessing
-    std.debug.assert(self.ptr != null);
-    std.debug.assert(self.layout.tag == .record);
+    assert(self.is_initialized); // Record must be initialized before accessing
+    assert(self.ptr != null);
+    assert(self.layout.tag == .record);
 
     const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
     const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
@@ -351,8 +360,8 @@ pub const RecordAccessor = struct {
             return error.RecordIndexOutOfBounds;
         }
 
-        std.debug.assert(self.base_value.is_initialized);
-        std.debug.assert(self.base_value.ptr != null);
+        assert(self.base_value.is_initialized);
+        assert(self.base_value.ptr != null);
 
         const field_layout_info = self.field_layouts.get(index);
         const field_layout = self.layout_cache.getLayout(field_layout_info.layout);
@@ -408,7 +417,7 @@ pub const RecordAccessor = struct {
     /// Set a field by copying from a source StackValue
     pub fn setFieldByIndex(self: RecordAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
         const dest_field = try self.getFieldByIndex(index);
-        source.copyToPtr(self.layout_cache, dest_field.ptr.?, ops);
+        try source.copyToPtr(self.layout_cache, dest_field.ptr.?, ops);
     }
 
     /// Get the number of fields in this record
@@ -439,14 +448,14 @@ pub const RecordAccessor = struct {
 
 /// Get this value as a string pointer
 pub fn asRocStr(self: StackValue) *RocStr {
-    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .str);
+    assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .str);
     return @ptrCast(@alignCast(self.ptr.?));
 }
 
 /// Get this value as a closure pointer
 pub fn asClosure(self: StackValue) *const Closure {
-    std.debug.assert(self.layout.tag == .closure);
-    std.debug.assert(self.ptr != null);
+    assert(self.layout.tag == .closure);
+    assert(self.ptr != null);
     return @ptrCast(@alignCast(self.ptr.?));
 }
 
@@ -462,8 +471,8 @@ pub fn cloneForBinding(self: StackValue) StackValue {
 
 /// Copy value data to another StackValue (with special string handling)
 pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) void {
-    std.debug.assert(self.is_initialized);
-    std.debug.assert(dest.ptr != null);
+    assert(self.is_initialized);
+    assert(dest.ptr != null);
 
     // For closures, use getTotalSize to include capture data; for others use layoutSize
     const size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache) else layout_cache.layoutSize(self.layout);
@@ -496,8 +505,8 @@ pub fn fromPtr(layout: Layout, ptr: *anyopaque) StackValue {
 
 /// Copy value data to another StackValue WITHOUT incrementing refcounts (move semantics)
 pub fn copyWithoutRefcount(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) void {
-    std.debug.assert(self.is_initialized);
-    std.debug.assert(dest.ptr != null);
+    assert(self.is_initialized);
+    assert(dest.ptr != null);
 
     // For closures, use getTotalSize to include capture data; for others use layoutSize
     const size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache) else layout_cache.layoutSize(self.layout);
@@ -526,7 +535,8 @@ pub fn incref(self: StackValue) void {
         return;
     }
     // TODO: Add support for other refcounted types (lists, boxes) when implemented
-    std.debug.panic("called incref on a non-refcounted value: {}", .{self.layout.tag});
+    // Called incref on a non-refcounted value
+    unreachable;
 }
 
 /// Decrement reference count for refcounted types
@@ -537,7 +547,8 @@ pub fn decref(self: StackValue, ops: *RocOps) void {
         return;
     }
     // TODO: Add support for other refcounted types (lists, boxes) when implemented
-    std.debug.panic("called decref on a non-refcounted value: {}", .{self.layout.tag});
+    // Called decref on a non-refcounted value
+    unreachable;
 }
 
 /// Calculate total memory footprint for a value.

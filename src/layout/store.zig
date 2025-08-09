@@ -1,6 +1,7 @@
 //! Stores Layout values by index.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const types = @import("types");
 const layout_ = @import("./layout.zig");
@@ -8,6 +9,15 @@ const collections = @import("collections");
 const work = @import("./work.zig");
 const ModuleEnv = @import("compile").ModuleEnv;
 const builtins = @import("builtins");
+
+// Helper for assertions that works in freestanding environments
+fn assert(condition: bool) void {
+    if (builtin.os.tag == .freestanding) {
+        if (!condition) unreachable;
+    } else {
+        std.debug.assert(condition);
+    }
+}
 
 const types_store = types.store;
 const target = base.target;
@@ -126,7 +136,7 @@ pub const Store = struct {
         _ = try layouts.append(env.gpa, Layout.frac(.f64));
         _ = try layouts.append(env.gpa, Layout.frac(.dec));
 
-        std.debug.assert(layouts.len() == num_scalars);
+        assert(layouts.len() == num_scalars);
 
         return .{
             .env = env,
@@ -735,7 +745,8 @@ pub const Store = struct {
         outer: while (true) {
             iterations += 1;
             if (iterations > max_iterations) {
-                std.debug.panic("Layout computation exceeded iteration limit - possible infinite loop\n", .{});
+                // Layout computation exceeded iteration limit - possible infinite loop
+                unreachable;
             }
 
             var layout = switch (current.desc.content) {
@@ -995,7 +1006,7 @@ pub const Store = struct {
                                 },
                                 .record => |pending_record| {
                                     // It turned out we were getting the layout for a record field
-                                    std.debug.assert(pending_record.pending_fields > 0);
+                                    assert(pending_record.pending_fields > 0);
                                     var updated_record = pending_record;
                                     updated_record.pending_fields -= 1;
 
@@ -1028,7 +1039,7 @@ pub const Store = struct {
                                 },
                                 .tuple => |pending_tuple| {
                                     // It turned out we were getting the layout for a tuple field
-                                    std.debug.assert(pending_tuple.pending_fields > 0);
+                                    assert(pending_tuple.pending_fields > 0);
                                     var updated_tuple = pending_tuple;
                                     updated_tuple.pending_fields -= 1;
 
@@ -1081,6 +1092,7 @@ pub const Store = struct {
                     break :blk Layout.int(.i64);
                 },
                 .rigid_var => |ident| blk: {
+                    _ = ident;
                     // Rigid vars can only be sent to the host if boxed.
                     if (self.work.pending_containers.len > 0) {
                         const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
@@ -1091,16 +1103,16 @@ pub const Store = struct {
 
                     // Rigid vars should not appear unboxed in layout computation.
                     // This is likely a bug in the type system.
-                    if (std.debug.runtime_safety) {
-                        std.debug.print("\nERROR: Encountered unboxed rigid_var in layout computation\n", .{});
-                        const name = self.env.idents.getText(ident);
-                        std.debug.print("  Rigid var name: {s}\n", .{name});
-                        std.debug.print("  Variable: {}\n", .{current.var_});
-                    }
+                    // if (comptime std.debug.runtime_safety and builtin.os.tag != .freestanding) {
+                    //     std.debug.print("\nERROR: Encountered unboxed rigid_var in layout computation\n", .{});
+                    //     const name = self.env.idents.getText(ident);
+                    //     std.debug.print("  Rigid var name: {s}\n", .{name});
+                    //     std.debug.print("  Variable: {}\n", .{current.var_});
+                    // }
 
                     // Unlike flex vars, rigid vars represent type parameters that should
                     // have been instantiated. This is a bug that should be fixed.
-                    std.debug.assert(false);
+                    assert(false);
                     return LayoutError.BugUnboxedRigidVar;
                 },
                 .alias => |alias| {
@@ -1128,7 +1140,7 @@ pub const Store = struct {
                         layout = Layout.list(layout_idx);
                     },
                     .record => |*pending_record| {
-                        std.debug.assert(pending_record.pending_fields > 0);
+                        assert(pending_record.pending_fields > 0);
                         pending_record.pending_fields -= 1;
 
                         // Pop the field we just processed
@@ -1150,7 +1162,7 @@ pub const Store = struct {
                         }
                     },
                     .tuple => |*pending_tuple| {
-                        std.debug.assert(pending_tuple.pending_fields > 0);
+                        assert(pending_tuple.pending_fields > 0);
                         pending_tuple.pending_fields -= 1;
 
                         // Pop the field we just processed
@@ -1182,8 +1194,8 @@ pub const Store = struct {
             }
 
             // Since there are no pending containers remaining, there shouldn't be any pending record or tuple fields either.
-            std.debug.assert(self.work.pending_record_fields.len == 0);
-            std.debug.assert(self.work.pending_tuple_fields.len == 0);
+            assert(self.work.pending_record_fields.len == 0);
+            assert(self.work.pending_tuple_fields.len == 0);
 
             // No more pending containers; we're done!
             return layout_idx;

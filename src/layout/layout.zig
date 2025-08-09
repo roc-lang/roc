@@ -4,10 +4,20 @@
 //! (using type and target information from previous steps in compilation).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
 const ModuleEnv = @import("compile").ModuleEnv;
+
+// Helper for assertions that works in freestanding environments
+fn assert(condition: bool) void {
+    if (builtin.os.tag == .freestanding) {
+        if (!condition) unreachable;
+    } else {
+        std.debug.assert(condition);
+    }
+}
 
 /// **Layout Store**
 pub const store = @import("store.zig");
@@ -240,7 +250,7 @@ pub const RocAlignment = enum(u3) {
     }
 
     pub fn fromByteUnits(n: u16) RocAlignment {
-        std.debug.assert(std.math.isPowerOfTwo(n));
+        assert(std.math.isPowerOfTwo(n));
         return @enumFromInt(@ctz(n));
     }
 };

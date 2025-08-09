@@ -4,6 +4,7 @@
 //! constructs into a simplified, normalized form suitable for type inference.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const base = @import("base");
 const parse = @import("parse");
@@ -8786,7 +8787,7 @@ test "unused variables are sorted by region" {
         \\
         \\func = |_| {
         \\    zebra = 5    # Line 3 - should be reported first
-        \\    apple = 10   # Line 4 - should be reported second  
+        \\    apple = 10   # Line 4 - should be reported second
         \\    monkey = 15  # Line 5 - should be reported third
         \\    used = 20    # Line 6 - this one is used
         \\    used

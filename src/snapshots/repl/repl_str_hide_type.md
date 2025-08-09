@@ -19,20 +19,20 @@ type=repl
 NIL
 # CANONICALIZE
 ~~~clojure
-(e-string @1.2-1.9
-	(e-literal @1.3-1.8 (string "hello")))
+(e-string @1.1-1.8
+	(e-literal @1.2-1.7 (string "hello")))
 ---
-(e-string @1.2-1.9
-	(e-literal @1.3-1.8 (string "world")))
+(e-string @1.1-1.8
+	(e-literal @1.2-1.7 (string "world")))
 ---
-(e-string @1.2-1.17
-	(e-literal @1.3-1.16 (string "Hello, World!")))
+(e-string @1.1-1.16
+	(e-literal @1.2-1.15 (string "Hello, World!")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.2-1.9 (type "Str"))
+(expr @1.1-1.8 (type "Str"))
 ---
-(expr @1.2-1.9 (type "Str"))
+(expr @1.1-1.8 (type "Str"))
 ---
-(expr @1.2-1.17 (type "Str"))
+(expr @1.1-1.16 (type "Str"))
 ~~~
