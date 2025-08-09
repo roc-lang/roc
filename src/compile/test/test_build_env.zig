@@ -67,7 +67,8 @@ fn testAppWithShorthandsHelper(comptime mode: compile.package.Mode, thread_count
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
 
     try tmp.dir.makePath("platform");
     try tmp.dir.makePath("foo");
@@ -179,7 +180,8 @@ test "BuildEnv: drainReports returns abs paths and aggregates multi-report modul
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
     try tmp.dir.makePath("app");
 
     // Two errors in a single module A.roc to exercise multi-report aggregation
@@ -309,7 +311,8 @@ test "BuildEnv: same-depth alphabetical ordering across packages via drainReport
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
 
     try tmp.dir.makePath("pkgA");
     try tmp.dir.makePath("pkgB");
@@ -395,7 +398,8 @@ test "BuildEnv: multi-threaded global queue end-to-end builds and drains" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
     try tmp.dir.makePath("app");
 
     // Create a trivial module with no errors and import it from Main
@@ -430,7 +434,8 @@ test "BuildEnv: multi-threaded global queue drives all phases" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
     try tmp.dir.makePath("app");
 
     // Create a multi-module app with dependencies to test phase progression
@@ -494,7 +499,8 @@ test "BuildEnv: multi-threaded concurrency stress test" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
     try tmp.dir.makePath("app");
 
     // Create many interconnected modules to stress concurrent processing
@@ -589,7 +595,8 @@ test "BuildEnv: streaming with module chain" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
     try tmp.dir.makePath("app");
 
     // Create a chain of modules A -> B -> C -> D
@@ -654,7 +661,8 @@ test "BuildEnv: enforce rules (only apps -> platforms, no package -> app)" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
 
     try tmp.dir.makePath("platform");
     try tmp.dir.makePath("pkg");
@@ -708,7 +716,8 @@ test "BuildEnv: app header can reference absolute paths; package/platform sandbo
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
 
     // Create an external directory outside the workspace root
     var external_dir = try std.fs.cwd().makeOpenPath("external_test_dir", .{});
@@ -745,7 +754,8 @@ test "BuildEnv: package header cannot reference paths outside workspace" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
 
     // Exterior dir and file
     var ext_dir = try std.fs.cwd().makeOpenPath("pkg_external_dir", .{});
@@ -799,7 +809,8 @@ test "BuildEnv: deterministic error ordering across packages" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
 
     try tmp.dir.makePath("pkgA");
     try tmp.dir.makePath("pkgB");
@@ -879,7 +890,8 @@ test "BuildEnv: package shorthands do not leak between packages" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
 
     // Create directory structure
     try tmp.dir.makePath("app");
@@ -1004,7 +1016,8 @@ test "BuildEnv: CacheManager integration - cached modules not rebuilt" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
     try tmp.dir.makePath("app");
     try tmp.dir.makePath("cache");
 
@@ -1087,7 +1100,8 @@ test "BuildEnv: CacheManager integration - cache invalidated on file change" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
     try tmp.dir.makePath("app");
     try tmp.dir.makePath("cache");
 
@@ -1169,7 +1183,8 @@ test "BuildEnv: cyclic dependency detection" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
     try tmp.dir.makePath("app");
 
     // Create modules with a direct cycle: A -> B -> A
@@ -1213,7 +1228,8 @@ test "BuildEnv: cyclic dependency detection - indirect cycle" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
     try tmp.dir.makePath("app");
 
     // Create modules with an indirect cycle: A -> B -> C -> A
@@ -1265,7 +1281,8 @@ test "BuildEnv: no false positive cycle detection" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
     try tmp.dir.makePath("app");
 
     // Create modules with shared dependencies but no cycle

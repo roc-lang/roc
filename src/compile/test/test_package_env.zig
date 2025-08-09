@@ -11,12 +11,13 @@ const ScheduleHook = compile.package.ScheduleHook;
 test "PackageEnv: parallel success across modules" {
     const gpa = std.testing.allocator;
 
-    var tmp = try std.testing.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
     // Layout:
     // root_dir/Main.roc imports A and B; A imports C. All succeed.
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
 
     try write(tmp.dir, "Main.roc", "import A\n" ++ "import B\n\n" ++ "main = A.val + B.one\n");
 
@@ -45,10 +46,11 @@ test "PackageEnv: parallel success across modules" {
 test "PackageEnv: deterministic error ordering by depth then name" {
     const gpa = std.testing.allocator;
 
-    var tmp = try std.testing.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
 
     // Main imports X and A; X imports Y.
     // Introduce errors in A and Y; Y should come before A by depth (Y depth=2, A depth=1) -> actually A should come first (depth 1), then Y (depth 2).
@@ -93,10 +95,11 @@ test "PackageEnv: deterministic error ordering by depth then name" {
 test "PackageEnv: single-threaded success across modules" {
     const gpa = std.testing.allocator;
 
-    var tmp = try std.testing.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
 
     try write(tmp.dir, "Main.roc", "import A\n" ++ "import B\n\n" ++ "main = A.v + B.w\n");
     try write(tmp.dir, "A.roc", "v = 2\n");
@@ -121,10 +124,11 @@ test "PackageEnv: single-threaded success across modules" {
 test "PackageEnv: same-depth alphabetical order" {
     const gpa = std.testing.allocator;
 
-    var tmp = try std.testing.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
 
     // Main imports B and A; both have errors; order should be A then B (alphabetical) since same depth.
     try write(tmp.dir, "Main.roc", "import B\n" ++ "import A\n\n" ++ "main = A.bad + B.bad\n");
@@ -162,10 +166,11 @@ test "PackageEnv: same-depth alphabetical order" {
 test "PackageEnv: detect import cycle and fail fast" {
     const gpa = std.testing.allocator;
 
-    var tmp = try std.testing.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root_dir = tmp.dir.path;
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
 
     // Main imports A; A imports Main -> cycle
     try write(tmp.dir, "Main.roc", "import A\n" ++ "main = A.x\n");
