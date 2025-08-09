@@ -440,64 +440,33 @@ test "eval runtime error - returns crash error" {
     const resources = try parseAndCanonicalizeExpr(test_allocator, source);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Check if the expression is a runtime error
-    const expr = resources.module_env.store.getExpr(resources.expr_idx);
-    if (expr == .e_runtime_error) {
-        // Create a stack for evaluation
-        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-        defer eval_stack.deinit();
+    // Create a stack for evaluation
+    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+    defer eval_stack.deinit();
 
-        // Create layout store
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-        defer layout_cache.deinit();
+    // Create layout store
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+    defer layout_cache.deinit();
 
-        var test_env_instance = test_env.TestEnv.init(test_allocator);
-        defer test_env_instance.deinit();
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
 
-        // Evaluating a runtime error should return an error
-        var interpreter = try eval.Interpreter.init(
-            test_allocator,
-            resources.module_env,
-            &eval_stack,
-            &layout_cache,
-            &resources.module_env.types,
-        );
-        defer interpreter.deinit(test_env_instance.get_ops());
-        test_env_instance.setInterpreter(&interpreter);
+    // Create interpreter and evaluate the crash expression
+    var interpreter = try eval.Interpreter.init(
+        test_allocator,
+        resources.module_env,
+        &eval_stack,
+        &layout_cache,
+        &resources.module_env.types,
+    );
+    defer interpreter.deinit(test_env_instance.get_ops());
+    test_env_instance.setInterpreter(&interpreter);
 
-        const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
-        try testing.expectError(eval.EvalError.Crash, result);
-    } else {
-        // If crash syntax is not supported in canonicalization, try anyway
-        var test_env_instance = test_env.TestEnv.init(testing.allocator);
-        defer test_env_instance.deinit();
-
-        const crash_resources = try parseAndCanonicalizeExpr(std.testing.allocator, source);
-        defer cleanupParseAndCanonical(std.testing.allocator, crash_resources);
-
-        var eval_stack_inner = try stack.Stack.initCapacity(std.testing.allocator, 1024);
-        defer eval_stack_inner.deinit();
-
-        var layout_cache_inner = try layout_store.Store.init(crash_resources.module_env, &crash_resources.module_env.types);
-        defer layout_cache_inner.deinit();
-
-        var interpreter = try eval.Interpreter.init(
-            std.testing.allocator,
-            crash_resources.module_env,
-            &eval_stack_inner,
-            &layout_cache_inner,
-            &crash_resources.module_env.types,
-        );
-        defer interpreter.deinit(test_env_instance.get_ops());
-        test_env_instance.setInterpreter(&interpreter);
-
-        const result = interpreter.eval(crash_resources.expr_idx, test_env_instance.get_ops());
-        try testing.expectError(eval.EvalError.Crash, result);
-    }
+    const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
+    try testing.expectError(eval.EvalError.Crash, result);
 }
 
 test "eval tag - already primitive" {
-    // Try to see if tag_union layout is now implemented
     const source = "True";
 
     const resources = try parseAndCanonicalizeExpr(test_allocator, source);
