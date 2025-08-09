@@ -1139,7 +1139,7 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) noret
     switch (err) {
         // Memory allocation
         error.OutOfMemory => stderr.print("Out of memory\n", .{}) catch {},
-        
+
         // File system errors
         error.FileNotFound => stderr.print("File not found\n", .{}) catch {},
         error.AccessDenied => stderr.print("Access denied\n", .{}) catch {},
@@ -1179,10 +1179,10 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) noret
         error.Unseekable => stderr.print("File is unseekable\n", .{}) catch {},
         error.LockedMemoryLimitExceeded => stderr.print("Locked memory limit exceeded\n", .{}) catch {},
         error.CurrentWorkingDirectoryUnlinked => stderr.print("Current working directory unlinked\n", .{}) catch {},
-        
+
         // Threading errors
         error.ThreadQuotaExceeded => stderr.print("Thread quota exceeded\n", .{}) catch {},
-        
+
         // Custom BuildEnv errors
         error.ExpectedAppHeader => stderr.print("Expected app header but found different header type\n", .{}) catch {},
         error.ExpectedPlatformString => stderr.print("Expected platform string in header\n", .{}) catch {},
@@ -1192,7 +1192,7 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) noret
         error.Internal => stderr.print("Internal compiler error\n", .{}) catch {},
         error.InvalidDependency => stderr.print("Invalid dependency relationship\n", .{}) catch {},
         error.TooNested => stderr.print("Too deeply nested\n", .{}) catch {},
-        
+
         // Timer errors
         error.TimerUnsupported => stderr.print("Timer not supported on this platform\n", .{}) catch {},
     }
@@ -1243,7 +1243,7 @@ const CheckTimingInfo = struct {
 const BuildAppError = error{
     // Memory allocation
     OutOfMemory,
-    
+
     // File system errors
     AccessDenied,
     FileNotFound,
@@ -1283,11 +1283,11 @@ const BuildAppError = error{
     Unseekable,
     LockedMemoryLimitExceeded,
     CurrentWorkingDirectoryUnlinked,
-    
+
     // Threading errors
     ThreadQuotaExceeded,
-    
-    // Custom BuildEnv errors  
+
+    // Custom BuildEnv errors
     ExpectedAppHeader,
     ExpectedPlatformString,
     PathOutsideWorkspace,
@@ -1296,7 +1296,7 @@ const BuildAppError = error{
     Internal,
     InvalidDependency,
     TooNested,
-    
+
     // Timer errors
     TimerUnsupported,
 };
@@ -1331,7 +1331,7 @@ fn checkFileWithBuildEnv(
     // Count errors and warnings
     var error_count: u32 = 0;
     var warning_count: u32 = 0;
-    
+
     for (drained) |mod| {
         for (mod.reports) |report| {
             switch (report.severity) {
@@ -1351,7 +1351,7 @@ fn checkFileWithBuildEnv(
         };
     }
 
-    // Free the original drained reports  
+    // Free the original drained reports
     // Note: abs_path is owned by BuildEnv, reports are moved to our array
     gpa.free(drained);
 
@@ -1432,7 +1432,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     } else {
         // For fresh compilation, process and display reports normally
         var has_errors = false;
-        
+
         // Render reports grouped by module
         for (check_result.reports) |module| {
             for (module.reports) |*report| {
@@ -1449,7 +1449,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
                 }
             }
         }
-        
+
         if (check_result.error_count > 0 or check_result.warning_count > 0) {
             stderr.writeAll("\n") catch {};
             stderr.print("Found {} error(s) and {} warning(s) in ", .{
@@ -1476,7 +1476,6 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
         stdout.print("  modules processed:            {}\n", .{check_result.timing.?.module_count}) catch {};
     }
 }
-
 
 fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {
     _ = gpa;
