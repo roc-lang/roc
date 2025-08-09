@@ -1,4 +1,5 @@
 //! Basic types that are useful throughout the compiler.
+const std = @import("std");
 
 pub const SExprTree = @import("SExprTree.zig");
 pub const Ident = @import("Ident.zig");
@@ -16,6 +17,10 @@ pub const target = @import("target.zig");
 pub const PackedDataSpan = @import("PackedDataSpan.zig").PackedDataSpan;
 pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
 pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;
+
+test {
+    std.testing.refAllDecls(@This());
+}
 
 /// Whether a function calls itself.
 pub const Recursive = enum {

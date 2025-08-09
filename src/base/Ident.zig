@@ -16,6 +16,10 @@ const SmallStringInterner = mod.SmallStringInterner;
 
 const Ident = @This();
 
+test {
+    std.testing.refAllDecls(@This());
+}
+
 /// The original text of the identifier.
 raw_text: []const u8,
 
@@ -312,3 +316,9 @@ pub const Store = struct {
         self.attributes.relocate(offset);
     }
 };
+
+test "from_bytes validates empty text" {
+    const result = Ident.from_bytes("");
+    try std.testing.expectError(Ident.Error.EmptyText, result);
+    @panic("ASdf");
+}

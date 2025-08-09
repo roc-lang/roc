@@ -110,11 +110,6 @@ test "SafeList simple serialization" {
     try std.testing.expectEqual(@as(u8, 'o'), deserialized.get(@enumFromInt(4)).*);
 }
 
-test "from_bytes validates empty text" {
-    const result = Ident.from_bytes("");
-    try std.testing.expectError(Ident.Error.EmptyText, result);
-}
-
 test "from_bytes validates null bytes" {
     const text_with_null = "hello\x00world";
     const result = Ident.from_bytes(text_with_null);
