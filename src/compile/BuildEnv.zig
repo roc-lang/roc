@@ -25,25 +25,8 @@ const Allocator = std.mem.Allocator;
 const threads_available = builtin.target.cpu.arch != .wasm32;
 
 const Thread = if (threads_available) std.Thread else struct {};
-const Mutex = if (threads_available) std.Thread.Mutex else struct {
-    pub fn lock(self: *@This()) void {
-        _ = self;
-    }
-    pub fn unlock(self: *@This()) void {
-        _ = self;
-    }
-};
-const ThreadCondition = if (threads_available) std.Thread.Condition else struct {
-    pub fn wait(self: *@This(), _: *Mutex) void {
-        _ = self;
-    }
-    pub fn signal(self: *@This()) void {
-        _ = self;
-    }
-    pub fn broadcast(self: *@This()) void {
-        _ = self;
-    }
-};
+const Mutex = if (threads_available) std.Thread.Mutex else struct {};
+const ThreadCondition = if (threads_available) std.Thread.Condition else struct {};
 
 // Inflight counter: atomic usize on non-wasm; no-op struct on wasm
 const InflightCounter = if (threads_available) struct {
@@ -60,18 +43,7 @@ const InflightCounter = if (threads_available) struct {
     pub fn load(self: *@This()) usize {
         return self.value.load(.monotonic);
     }
-} else struct {
-    pub fn inc(self: *@This()) void {
-        _ = self;
-    }
-    pub fn dec(self: *@This()) void {
-        _ = self;
-    }
-    pub fn load(self: *@This()) usize {
-        _ = self;
-        return 0;
-    }
-};
+} else struct {};
 
 fn freeSlice(gpa: Allocator, s: []const u8) void {
     gpa.free(@constCast(s));
@@ -159,10 +131,14 @@ const GlobalQueue = struct {
         // Wait until queue empty and no inflight work (non-wasm).
         // BuildEnv.emitDeterministic() will be called after this.
         while (true) {
-            self.lock.lock();
+            if (threads_available) {
+                self.lock.lock();
+            }
             const no_tasks = self.tasks.items.len == 0;
-            self.lock.unlock();
-            const inflight_zero = self.inflight.load() == 0;
+            if (threads_available) {
+                self.lock.unlock();
+            }
+            const inflight_zero = if (threads_available) self.inflight.load() == 0 else true;
             if (no_tasks and inflight_zero) break;
         }
     }
@@ -179,8 +155,10 @@ const GlobalQueue = struct {
     }
 
     fn take(self: *GlobalQueue) ?Task {
-        self.lock.lock();
-        defer self.lock.unlock();
+        if (threads_available) {
+            self.lock.lock();
+            defer self.lock.unlock();
+        }
         if (self.tasks.items.len == 0) return null;
         const idx = self.tasks.items.len - 1;
         const t = self.tasks.items[idx];
@@ -198,8 +176,10 @@ const GlobalQueue = struct {
                         const exists = sched.modules.getPtr(task.module_name) != null;
                         if (exists) {
                             // Mark inflight before processing and decrement after
-                            self.inflight.inc();
-                            defer self.inflight.dec();
+                            if (threads_available) {
+                                self.inflight.inc();
+                                defer self.inflight.dec();
+                            }
 
                             sched.process(.{ .module_name = task.module_name }) catch {
                                 // Continue processing other modules despite this error
@@ -212,12 +192,16 @@ const GlobalQueue = struct {
                 continue;
             }
 
-            self.lock.lock();
-            while (self.tasks.items.len == 0 and self.running) {
-                self.cond.wait(&self.lock);
-            }
-            const keep_running = self.running;
-            self.lock.unlock();
+            const keep_running = if (threads_available) blk: {
+                self.lock.lock();
+                while (self.tasks.items.len == 0 and self.running) {
+                    self.cond.wait(&self.lock);
+                }
+                const running = self.running;
+                self.lock.unlock();
+                break :blk running;
+            } else self.running;
+
             if (!keep_running) break;
         }
     }
