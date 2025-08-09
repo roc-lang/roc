@@ -26,7 +26,7 @@ const check = @import("check");
 
 const ModuleEnv = compile.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
-
+const TimingInfo = compile.package.TimingInfo;
 const CacheManager = cache_mod.CacheManager;
 const CacheConfig = cache_mod.CacheConfig;
 const tokenize = parse.tokenize;
@@ -1192,7 +1192,7 @@ const DrainedReport = struct {
 };
 
 /// Timing information for check phases
-const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else compile.PackageEnv.TimingInfo;
+const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else TimingInfo;
 
 /// Error set for BuildEnv.build operations
 const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs.File.ReadError || std.fs.File.WriteError || std.Thread.SpawnError || error{

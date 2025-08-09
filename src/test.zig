@@ -49,6 +49,8 @@ test {
 
     std.testing.refAllDeclsRecursive(@import("compile"));
     std.testing.refAllDecls(@import("compile/test/module_env_test.zig"));
+    std.testing.refAllDecls(@import("compile/test/test_build_env.zig"));
+    std.testing.refAllDecls(@import("compile/test/test_package_env.zig"));
 
     std.testing.refAllDeclsRecursive(@import("eval/interpreter.zig"));
     std.testing.refAllDeclsRecursive(@import("eval/test/eval_test.zig"));
