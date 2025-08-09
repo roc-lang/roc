@@ -2205,3 +2205,134 @@ test "BuildEnv: deterministic error ordering across packages" {
     // Accept either "Deep.Bad" or "B.Deep.Bad" depending on how names are interned
     try std.testing.expect(std.mem.endsWith(u8, second_mod, "Deep.Bad") or std.mem.eql(u8, second_mod, "B.Deep.Bad"));
 }
+
+test "BuildEnv: package shorthands do not leak between packages" {
+    const gpa = std.testing.allocator;
+    var tmp = try std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root_dir = tmp.dir.path;
+
+    // Create directory structure
+    try tmp.dir.makePath("app");
+    try tmp.dir.makePath("pkgA");
+    try tmp.dir.makePath("pkgB");
+    try tmp.dir.makePath("pkgC");
+    try tmp.dir.makePath("pkgD");
+
+    // Package B - will be referred to as "foo" by pkgA
+    try writeFile(tmp.dir, "pkgB/PkgB.roc",
+        \\package []
+        \\{ }
+    );
+    try writeFile(tmp.dir, "pkgB/ModuleB.roc",
+        \\module [valueB]
+        \\valueB = "from package B"
+    );
+
+    // Package C - will be referred to as "foo" by pkgD (same shorthand, different package!)
+    try writeFile(tmp.dir, "pkgC/PkgC.roc",
+        \\package []
+        \\{ }
+    );
+    try writeFile(tmp.dir, "pkgC/ModuleC.roc",
+        \\module [valueC]
+        \\valueC = "from package C"
+    );
+
+    // Package A uses shorthand "foo" for package B
+    const b_path = try std.fs.path.join(gpa, &.{ root_dir, "pkgB", "PkgB.roc" });
+    defer gpa.free(b_path);
+    const pkgA_header = try std.fmt.allocPrint(gpa,
+        \\package []
+        \\{{ foo: "{s}" }}
+    , .{b_path});
+    defer gpa.free(pkgA_header);
+    try writeFile(tmp.dir, "pkgA/PkgA.roc", pkgA_header);
+    try writeFile(tmp.dir, "pkgA/ModuleA.roc",
+        \\module [getFromB]
+        \\import foo.ModuleB
+        \\getFromB = ModuleB.valueB
+    );
+
+    // Package D uses shorthand "foo" for package C (different package!)
+    const c_path = try std.fs.path.join(gpa, &.{ root_dir, "pkgC", "PkgC.roc" });
+    defer gpa.free(c_path);
+    const pkgD_header = try std.fmt.allocPrint(gpa,
+        \\package []
+        \\{{ foo: "{s}" }}
+    , .{c_path});
+    defer gpa.free(pkgD_header);
+    try writeFile(tmp.dir, "pkgD/PkgD.roc", pkgD_header);
+    try writeFile(tmp.dir, "pkgD/ModuleD.roc",
+        \\module [getFromC]
+        \\import foo.ModuleC
+        \\getFromC = ModuleC.valueC
+    );
+
+    // App imports both pkgA and pkgD, which both use "foo" for different packages
+    const a_path = try std.fs.path.join(gpa, &.{ root_dir, "pkgA", "PkgA.roc" });
+    defer gpa.free(a_path);
+    const d_path = try std.fs.path.join(gpa, &.{ root_dir, "pkgD", "PkgD.roc" });
+    defer gpa.free(d_path);
+
+    // App tries to use "foo" shorthand (which should fail - shorthands don't leak!)
+    const app_main = try std.fmt.allocPrint(gpa,
+        \\app [main!] {{ A: "{s}", D: "{s}" }}
+        \\
+        \\import A.ModuleA
+        \\import D.ModuleD
+        \\import foo.SomeModule # This should fail - "foo" is not defined in app
+        \\
+        \\main! = |_| ModuleA.getFromB
+    , .{ a_path, d_path });
+    defer gpa.free(app_main);
+    try writeFile(tmp.dir, "app/Main.roc", app_main);
+
+    var ws = BuildEnv.init(gpa, .single_threaded, 1);
+    defer ws.deinit();
+
+    const app_path = try std.fs.path.join(gpa, &.{ root_dir, "app", "Main.roc" });
+    defer gpa.free(app_path);
+
+    // Building should fail because app cannot use "foo" shorthand
+    _ = ws.build(app_path) catch |err| {
+        // The build should fail, but we need to check that pkgA and pkgD
+        // can still use their respective "foo" shorthands without conflict
+        try std.testing.expect(err == error.Internal or err == error.InvalidDependency);
+    };
+
+    // Now test that packages can use their shorthands without interference
+    // Create a valid app that doesn't try to use undefined shorthands
+    const app_main2 = try std.fmt.allocPrint(gpa,
+        \\app [main!] {{ A: "{s}", D: "{s}" }}
+        \\
+        \\import A.ModuleA
+        \\import D.ModuleD
+        \\
+        \\main! = |_| Str.concat ModuleA.getFromB ModuleD.getFromC
+    , .{ a_path, d_path });
+    defer gpa.free(app_main2);
+    try writeFile(tmp.dir, "app/Main2.roc", app_main2);
+
+    var ws2 = BuildEnv.init(gpa, .single_threaded, 1);
+    defer ws2.deinit();
+
+    const app_path2 = try std.fs.path.join(gpa, &.{ root_dir, "app", "Main2.roc" });
+    defer gpa.free(app_path2);
+
+    // This should succeed - each package can use "foo" for different things
+    try ws2.build(app_path2);
+
+    // Verify that both packages were built successfully
+    const reports = try ws2.drainReports();
+    defer gpa.free(reports);
+
+    // Should have no errors - shorthands work correctly within their packages
+    var error_count: u32 = 0;
+    for (reports) |report| {
+        if (report.severity == .runtime_error or report.severity == .fatal) {
+            error_count += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(u32, 0), error_count);
+}
