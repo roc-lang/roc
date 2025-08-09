@@ -20,7 +20,8 @@ const Mode = BuildModule.Mode;
 const Report = reporting.Report;
 const Allocator = std.mem.Allocator;
 
-// Compile-time feature flags and thread/cond wrappers for targets without threads (e.g. wasm32)
+// Threading features aren't available when targeting WebAssembly,
+// so we disable them at comptime to prevent builds from failing.
 const threads_available = builtin.target.cpu.arch != .wasm32;
 
 /// Errors that can occur during build operations
@@ -29,31 +30,6 @@ pub const BuildError = error{
     ModuleProcessingFailed,
     SchedulingFailed,
     InvalidPath,
-};
-
-/// Log levels for build operations
-pub const LogLevel = enum {
-    err,
-    warn,
-    info,
-    debug,
-};
-
-/// Simple logger interface - can be overridden for production use
-pub const Logger = struct {
-    level: LogLevel = .warn,
-
-    pub fn log(self: Logger, level: LogLevel, comptime fmt: []const u8, args: anytype) void {
-        if (@intFromEnum(level) <= @intFromEnum(self.level)) {
-            const prefix = switch (level) {
-                .err => "ERROR",
-                .warn => "WARN",
-                .info => "INFO",
-                .debug => "DEBUG",
-            };
-            std.debug.print("[{s}] " ++ fmt ++ "\n", .{prefix} ++ args);
-        }
-    }
 };
 
 /// Configuration options for build system behavior
@@ -69,9 +45,6 @@ pub const Config = struct {
 
     /// Maximum inflight tasks for global queue
     max_inflight_tasks: usize = 1000,
-
-    /// Logger configuration
-    logger: Logger = .{},
 };
 
 const StdThread = if (threads_available) std.Thread else struct {};
@@ -253,8 +226,7 @@ const GlobalQueue = struct {
                             self.inflight.inc();
                             defer self.inflight.dec();
 
-                            sched.process(.{ .module_name = task.module_name }) catch |err| {
-                                be.config.logger.log(.err, "Failed to process module {s} in package {s}: {}", .{ task.module_name, task.pkg, err });
+                            sched.process(.{ .module_name = task.module_name }) catch {
                                 // Continue processing other modules despite this error
                             };
                         }
@@ -281,10 +253,7 @@ const GlobalQueue = struct {
         _ = _path;
         _ = _depth;
         // Enqueue to global queue - log but don't fail on error
-        self.enqueue(package_name, module_name) catch |err| {
-            if (self.build_env) |be| {
-                be.config.logger.log(.warn, "Failed to enqueue module {s} in package {s} to global queue: {}", .{ module_name, package_name, err });
-            }
+        self.enqueue(package_name, module_name) catch {
             // Continue anyway - the module will still be processed by local scheduler
         };
     }
@@ -539,15 +508,13 @@ pub const BuildEnv = struct {
         const target_pkg_name = ref.name;
         const target_pkg = self.ws.packages.get(target_pkg_name) orelse return;
 
-        const mod_path = self.ws.dottedToPath(target_pkg.root_dir, rest) catch |err| {
-            self.ws.config.logger.log(.warn, "Failed to resolve path for module {s} in package {s}: {}", .{ rest, target_pkg_name, err });
+        const mod_path = self.ws.dottedToPath(target_pkg.root_dir, rest) catch {
             return;
         };
         defer self.ws.gpa.free(mod_path);
 
         const sched = self.ws.schedulers.get(target_pkg_name) orelse return;
-        sched.*.scheduleModule(rest, mod_path, 1) catch |err| {
-            self.ws.config.logger.log(.warn, "Failed to schedule external module {s} in package {s}: {}", .{ rest, target_pkg_name, err });
+        sched.*.scheduleModule(rest, mod_path, 1) catch {
             // Continue anyway - dependency resolution will handle missing modules
         };
     }
@@ -587,8 +554,7 @@ pub const BuildEnv = struct {
     }
 
     fn makeResolver(self: *BuildEnv) BuildModule.ImportResolver {
-        const ctx = self.gpa.create(ResolverCtx) catch |err| {
-            self.config.logger.log(.err, "Critical: Failed to allocate resolver context: {}", .{err});
+        const ctx = self.gpa.create(ResolverCtx) catch {
             @panic("Cannot continue without resolver context");
         };
         ctx.* = .{ .ws = self };
@@ -658,8 +624,7 @@ pub const BuildEnv = struct {
 
         var stack = std.ArrayList([]const u8).init(self.gpa);
         defer stack.deinit();
-        stack.append(to_pkg) catch |err| {
-            self.config.logger.log(.warn, "Failed to append to cycle detection stack: {}", .{err});
+        stack.append(to_pkg) catch {
             return false;
         };
 
@@ -671,8 +636,7 @@ pub const BuildEnv = struct {
             const cur = stack.items[idx];
             stack.items.len = idx;
             if (visited.contains(cur)) continue;
-            visited.put(self.gpa, cur, {}) catch |err| {
-                self.config.logger.log(.warn, "Failed to mark package as visited in cycle detection: {}", .{err});
+            visited.put(self.gpa, cur, {}) catch {
                 return false;
             };
 
@@ -682,8 +646,7 @@ pub const BuildEnv = struct {
             var it = pkg.shorthands.iterator();
             while (it.next()) |e| {
                 const next = e.value_ptr.name;
-                stack.append(next) catch |err| {
-                    self.config.logger.log(.warn, "Failed to append to cycle detection stack: {}", .{err});
+                stack.append(next) catch {
                     return false;
                 };
             }
