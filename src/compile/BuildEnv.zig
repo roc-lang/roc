@@ -1,8 +1,12 @@
-//! Workspace-level build orchestrator for the Roc compiler.
+//! The state for an in-progress build. ("Builds" include `roc check` as well as `roc build`.)
 //!
-//! BuildEnv manages multi-package builds with deterministic, ordered report emission.
-//! It coordinates multiple BuildModule instances (one per package), handles cross-package
-//! imports, and ensures reports are emitted in a consistent order regardless of parallelism.
+//! Modules are built in parallel unless targeting WebAssembly, which doesn't support threads.
+//!
+//! Errors are reported as soon as they're encountered, with the only exception being that
+//! there is some buffering to make their output order determined by the dependency graph
+//! rather than by parallelism races. In other words, if you build the same set of source files
+//! repeatedly, you should always see the same errors be reported in the same order - but you
+//! shouldn't have to wait until the end of the build to start seeing them appear.
 
 const std = @import("std");
 const reporting = @import("reporting");

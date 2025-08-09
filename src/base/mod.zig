@@ -8,7 +8,6 @@ pub const RegionInfo = @import("RegionInfo.zig");
 pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
-pub const PackageEnv = @import("PackageEnv.zig");
 
 pub const safe_memory = @import("safe_memory.zig");
 
