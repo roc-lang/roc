@@ -1216,6 +1216,7 @@ fn checkFileWithBuildEnv(
     gpa: Allocator,
     filepath: []const u8,
     collect_timing: bool,
+    cache_config: CacheConfig,
 ) BuildAppError!CheckResult {
     _ = collect_timing; // Timing is always collected by BuildEnv
     const trace = tracy.trace(@src());
@@ -1225,6 +1226,14 @@ fn checkFileWithBuildEnv(
     var build_env = BuildEnv.init(gpa, .single_threaded, 1);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
+
+    // Set up cache manager if caching is enabled
+    if (cache_config.enabled) {
+        const cache_manager = try gpa.create(CacheManager);
+        cache_manager.* = CacheManager.init(gpa, cache_config, Filesystem.default());
+        build_env.setCacheManager(cache_manager);
+        // Note: BuildEnv.deinit() will clean up the cache manager
+    }
 
     // Build the file (works for both app and module files)
     try build_env.build(filepath);
@@ -1284,16 +1293,18 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
     var timer = try std.time.Timer.start();
 
-    // TODO: Implement caching at this level
-    // For now, caching is disabled due to module dependency constraints
-    _ = args.no_cache;
-    _ = args.verbose;
+    // Set up cache configuration based on command line args
+    const cache_config = CacheConfig{
+        .enabled = !args.no_cache,
+        .verbose = args.verbose,
+    };
 
     // Use BuildEnv to check the file
     var check_result = checkFileWithBuildEnv(
         gpa,
         args.path,
         args.time,
+        cache_config,
     ) catch |err| {
         handleProcessFileError(err, stderr, args.path);
     };

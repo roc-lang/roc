@@ -369,10 +369,6 @@ test "Header alignment" {
 }
 
 test "create and restore cache" {
-    // This test is skipepd for now, but will be replaced by the iovecs/relocation approach anyway.
-    const skip_test = true;
-    if (skip_test) return error.SkipZigTest;
-
     const gpa = std.testing.allocator;
 
     // Real Roc module source for comprehensive testing
@@ -389,7 +385,7 @@ test "create and restore cache" {
 
     // Parse the source
     var module_env = try ModuleEnv.init(gpa, source);
-    // commented out: defer module_env.deinit();
+    defer module_env.deinit();
 
     try module_env.initCIRFields(gpa, "TestModule");
     // CIR is now just an alias for ModuleEnv, so use module_env directly
