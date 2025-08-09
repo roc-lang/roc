@@ -2,19 +2,21 @@
 
 const std = @import("std");
 const base = @import("base");
-const reporting = @import("reporting");
-const compile = @import("compile");
 const fs_mod = @import("fs");
-const Filesystem = fs_mod.Filesystem;
-const cache_mod = @import("mod.zig");
-const Cache = cache_mod.CacheModule;
-const CacheConfig = cache_mod.CacheConfig;
-const CacheStats = cache_mod.CacheStats;
-const CacheReporting = @import("CacheReporting.zig");
-const SERIALIZATION_ALIGNMENT = 16;
+const compile = @import("compile");
+const cache_mod = @import("cache");
+const reporting = @import("reporting");
+const serialization = @import("serialization");
 
+const CacheReporting = cache_mod.reporting.CacheReporting;
+
+const Cache = cache_mod.CacheModule;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = compile.ModuleEnv;
+const Filesystem = fs_mod.Filesystem;
+const CacheStats = cache_mod.CacheStats;
+const CacheConfig = cache_mod.CacheConfig;
+const SERIALIZATION_ALIGNMENT = serialization.SERIALIZATION_ALIGNMENT;
 
 /// Result of a cache lookup operation
 pub const CacheResult = union(enum) {
@@ -202,7 +204,7 @@ pub const CacheManager = struct {
 
     /// Get the full cache file path for a given cache key.
     /// Uses subdirectory splitting: first 2 chars for subdir, rest for filename.
-    fn getCacheFilePath(self: *Self, cache_key: [32]u8) ![]u8 {
+    pub fn getCacheFilePath(self: *Self, cache_key: [32]u8) ![]u8 {
         const entries_dir = try self.config.getCacheEntriesDir(self.allocator);
         defer self.allocator.free(entries_dir);
 
@@ -277,96 +279,3 @@ pub const CacheManager = struct {
         } };
     }
 };
-
-// Tests
-const testing = std.testing;
-
-test "CacheManager initialization" {
-    const allocator = testing.allocator;
-    const config = CacheConfig{};
-    const filesystem = Filesystem.testing();
-
-    var manager = CacheManager.init(allocator, config, filesystem);
-
-    try testing.expect(manager.config.enabled == true);
-    try testing.expect(manager.stats.getTotalOps() == 0);
-}
-
-test "CacheManager generateCacheKey" {
-    const content = "module [test]\n\ntest = 42";
-    const compiler_version = "roc-zig-0.11.0-debug";
-
-    const key1 = CacheManager.generateCacheKey(content, compiler_version);
-    const key2 = CacheManager.generateCacheKey(content, compiler_version);
-
-    // Same content should produce same key
-    try testing.expectEqualSlices(u8, &key1, &key2);
-
-    // Should be 32 bytes
-    try testing.expectEqual(@as(usize, 32), key1.len);
-}
-
-test "CacheManager getCacheFilePath with subdirectory splitting" {
-    const allocator = testing.allocator;
-    const config = CacheConfig{};
-    const filesystem = Filesystem.testing();
-
-    var manager = CacheManager.init(allocator, config, filesystem);
-
-    const cache_key = [_]u8{
-        0xab, 0xcd, 0xef, 0x12, 0x34, 0x56, 0x78, 0x90,
-        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
-        0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00,
-        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
-    };
-    const cache_path = try manager.getCacheFilePath(cache_key);
-    defer allocator.free(cache_path);
-
-    // Should contain subdirectory split
-    try testing.expect(std.mem.containsAtLeast(u8, cache_path, 1, "ab"));
-    try testing.expect(std.mem.containsAtLeast(u8, cache_path, 1, "cdef123456789"));
-}
-
-test "CacheManager loadFromCache miss" {
-    const allocator = testing.allocator;
-    const config = CacheConfig{};
-    var filesystem = Filesystem.testing();
-
-    // Mock fileExists to return false
-    const TestFS = struct {
-        fn fileExists(path: []const u8) Filesystem.OpenError!bool {
-            _ = path;
-            return false;
-        }
-    };
-    filesystem.fileExists = TestFS.fileExists;
-
-    var manager = CacheManager.init(allocator, config, filesystem);
-
-    const source = "module [test]\n\ntest = 42";
-
-    const result = manager.loadFromCache("roc-zig-0.11.0-debug", source, "test");
-    switch (result) {
-        .miss => |_| {
-            try testing.expect(manager.stats.misses == 1);
-        },
-        else => return error.TestUnexpectedResult,
-    }
-}
-
-test "CacheManager disabled" {
-    const allocator = testing.allocator;
-    const config = CacheConfig{ .enabled = false };
-    const filesystem = Filesystem.testing();
-
-    var manager = CacheManager.init(allocator, config, filesystem);
-
-    const source = "module [test]\n\ntest = 42";
-
-    const result = manager.loadFromCache("roc-zig-0.11.0-debug", source, "test");
-    switch (result) {
-        .not_enabled => |_| {},
-        else => return error.TestUnexpectedResult,
-    }
-    try testing.expect(manager.stats.getTotalOps() == 0); // No stats recorded when disabled
-}

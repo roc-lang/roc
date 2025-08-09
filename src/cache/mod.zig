@@ -5,16 +5,19 @@
 
 const std = @import("std");
 
-// Re-export the unified cache
-pub const CacheModule = @import("CacheModule.zig").CacheModule;
-pub const Header = @import("CacheModule.zig").Header;
-pub const Diagnostics = @import("CacheModule.zig").Diagnostics;
+pub const module = @import("cache_module.zig");
+pub const key = @import("cache_key.zig");
+pub const config = @import("cache_config.zig");
+pub const reporting = @import("cache_reporting.zig");
+pub const manager = @import("cache_manager.zig");
 
-// Re-export new cache management components
-pub const CacheManager = @import("CacheManager.zig").CacheManager;
-pub const CacheResult = @import("CacheManager.zig").CacheResult;
-pub const CacheConfig = @import("CacheConfig.zig").CacheConfig;
-pub const CacheStats = @import("CacheConfig.zig").CacheStats;
+pub const CacheModule = module.CacheModule;
+pub const Header = module.Header;
+pub const Diagnostics = module.Diagnostics;
+pub const CacheManager = manager.CacheManager;
+pub const CacheResult = manager.CacheResult;
+pub const CacheConfig = config.CacheConfig;
+pub const CacheStats = config.CacheStats;
 
 /// Cache configuration constants
 pub const Config = struct {
@@ -86,30 +89,4 @@ pub fn blake3Hash(data: []const u8) [32]u8 {
     var digest: [32]u8 = undefined;
     std.crypto.hash.Blake3.hash(data, &digest, .{});
     return digest;
-}
-
-test "cache module" {
-    // Basic test to ensure module compiles and types are accessible
-    const allocator = std.testing.allocator;
-
-    // Test that we can access the main types
-    _ = CacheModule;
-    _ = Header;
-    _ = Diagnostics;
-    _ = CacheManager;
-    _ = CacheResult;
-    _ = CacheConfig;
-    _ = CacheStats;
-
-    // Test stats functionality
-    var stats = Stats{};
-    stats.hits = 10;
-    stats.misses = 5;
-    try std.testing.expectEqual(@as(f64, 2.0 / 3.0), stats.hitRate());
-
-    // Test config constants
-    try std.testing.expect(std.mem.eql(u8, Config.DEFAULT_CACHE_DIR, ".roc_cache"));
-    try std.testing.expect(std.mem.eql(u8, Config.CACHE_FILE_EXT, ".rcache"));
-
-    _ = allocator; // Suppress unused variable warning
 }

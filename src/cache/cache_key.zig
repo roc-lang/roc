@@ -1,7 +1,9 @@
 //! Cache key generation and management for uniquely identifying cached compilation results.
 
 const std = @import("std");
+const fs_mod = @import("fs");
 
+const Filesystem = fs_mod.Filesystem;
 const Allocator = std.mem.Allocator;
 
 /// Cache key that uniquely identifies a cached compilation result.
@@ -151,91 +153,4 @@ fn getCompilerVersionHash() [32]u8 {
     hasher.update(@tagName(@import("builtin").target.os.tag));
 
     return hasher.finalResult();
-}
-
-// Tests
-const testing = std.testing;
-
-test "CacheKey generation" {
-    const allocator = testing.allocator;
-
-    // Mock filesystem for testing
-    const fs = Filesystem.testing();
-
-    const source1 = "module [foo]\n\nfoo = 42";
-    const source2 = "module [bar]\n\nbar = 24";
-
-    var key1 = try CacheKey.generate(source1, "test1.roc", fs, allocator);
-    defer key1.deinit(allocator);
-    var key2 = try CacheKey.generate(source2, "test2.roc", fs, allocator);
-    defer key2.deinit(allocator);
-    var key1_again = try CacheKey.generate(source1, "test1.roc", fs, allocator);
-    defer key1_again.deinit(allocator);
-
-    // Different sources should produce different keys
-    try testing.expect(!key1.eql(key2));
-
-    // Same source should produce same key
-    try testing.expect(key1.eql(key1_again));
-}
-
-test "CacheKey to filename conversion" {
-    const allocator = testing.allocator;
-
-    const fs = Filesystem.testing();
-
-    const source = "module [test]\n\ntest = 123";
-    var key = try CacheKey.generate(source, "test.roc", fs, allocator);
-    defer key.deinit(allocator);
-
-    const filename = try key.toCacheFileName(allocator);
-    defer allocator.free(filename);
-
-    // Should be a hex string
-    try testing.expect(filename.len == 64); // SHA-256 hex = 64 chars
-
-    // Should only contain hex characters
-    for (filename) |char| {
-        try testing.expect(std.ascii.isHex(char));
-    }
-}
-
-test "CacheKey equality" {
-    const allocator = testing.allocator;
-
-    const fs = Filesystem.testing();
-
-    const source = "module [test]\n\ntest = 456";
-    var key1 = try CacheKey.generate(source, "test.roc", fs, allocator);
-    defer key1.deinit(allocator);
-    var key2 = try CacheKey.generate(source, "test.roc", fs, allocator);
-    defer key2.deinit(allocator);
-
-    try testing.expect(key1.eql(key2));
-
-    // Different content should produce different keys
-    const different_source = "module [test]\n\ntest = 789";
-    var key3 = try CacheKey.generate(different_source, "test.roc", fs, allocator);
-    defer key3.deinit(allocator);
-
-    try testing.expect(!key1.eql(key3));
-}
-
-test "CacheKey format" {
-    const allocator = testing.allocator;
-
-    const fs = Filesystem.testing();
-
-    const source = "module [format_test]\n\nformat_test = 1";
-    var key = try CacheKey.generate(source, "format_test.roc", fs, allocator);
-    defer key.deinit(allocator);
-
-    var buffer: [256]u8 = undefined;
-    const formatted = try std.fmt.bufPrint(&buffer, "{}", .{key});
-
-    // Should contain expected format elements
-    try testing.expect(std.mem.containsAtLeast(u8, formatted, 1, "CacheKey"));
-    try testing.expect(std.mem.containsAtLeast(u8, formatted, 1, "content"));
-    try testing.expect(std.mem.containsAtLeast(u8, formatted, 1, "mtime"));
-    try testing.expect(std.mem.containsAtLeast(u8, formatted, 1, "compiler"));
 }

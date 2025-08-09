@@ -164,7 +164,7 @@ pub const CacheStats = struct {
 
 /// Get the platform-specific cache directory name.
 /// Returns "roc" on Unix and "Roc" on Windows (matches Rust implementation).
-fn getCacheDirName() []const u8 {
+pub fn getCacheDirName() []const u8 {
     return switch (builtin.target.os.tag) {
         .windows => "Roc",
         else => "roc",
@@ -175,7 +175,7 @@ fn getCacheDirName() []const u8 {
 ///
 /// This creates a hash-based directory name that includes compiler version
 /// and build information to isolate cache entries between different builds.
-fn getCompilerVersionDir(allocator: Allocator) ![]u8 {
+pub fn getCompilerVersionDir(allocator: Allocator) ![]u8 {
     // Use build-time compiler version that includes git commit SHA
     const version_info = build_options.compiler_version;
 
@@ -187,92 +187,4 @@ fn getCompilerVersionDir(allocator: Allocator) ![]u8 {
     _ = std.fmt.bufPrint(hex_chars, "{}", .{std.fmt.fmtSliceHexLower(hash[0..16])}) catch unreachable;
 
     return hex_chars;
-}
-
-// Tests
-const testing = std.testing;
-
-test "CacheConfig default values" {
-    const config = CacheConfig{};
-
-    try testing.expect(config.enabled == true);
-    try testing.expect(config.cache_dir == null);
-    try testing.expect(config.max_size_mb == 1024);
-    try testing.expect(config.max_age_days == 30);
-    try testing.expect(config.verbose == false);
-}
-
-test "CacheConfig getMaxSizeBytes" {
-    const config = CacheConfig{ .max_size_mb = 100 };
-
-    try testing.expectEqual(@as(u64, 100 * 1024 * 1024), config.getMaxSizeBytes());
-}
-
-test "CacheConfig getMaxAgeNanos" {
-    const config = CacheConfig{ .max_age_days = 7 };
-
-    const expected = @as(i64, 7) * 24 * 60 * 60 * 1_000_000_000;
-    try testing.expectEqual(expected, config.getMaxAgeNanos());
-}
-
-test "CacheConfig getEffectiveCacheDir with explicit dir" {
-    const allocator = testing.allocator;
-    const config = CacheConfig{ .cache_dir = "/custom/cache" };
-
-    const dir = try config.getEffectiveCacheDir(allocator);
-    defer allocator.free(dir);
-
-    try testing.expectEqualStrings("/custom/cache", dir);
-}
-
-test "getCacheDirName platform specific" {
-    const name = getCacheDirName();
-
-    // Should be "roc" or "Roc" depending on platform
-    try testing.expect(std.mem.eql(u8, name, "roc") or std.mem.eql(u8, name, "Roc"));
-}
-
-test "getCompilerVersionDir" {
-    const allocator = testing.allocator;
-
-    const version_dir = try getCompilerVersionDir(allocator);
-    defer allocator.free(version_dir);
-
-    // Should be 32 hex characters
-    try testing.expectEqual(@as(usize, 32), version_dir.len);
-
-    // Should only contain hex characters
-    for (version_dir) |char| {
-        try testing.expect(std.ascii.isHex(char));
-    }
-}
-
-test "CacheStats basic operations" {
-    var stats = CacheStats{};
-
-    // Record some operations
-    stats.recordHit(1024); // 1KB read
-    stats.recordMiss();
-    stats.recordStore(2048); // 2KB written
-
-    try testing.expectEqual(@as(u64, 1), stats.hits);
-    try testing.expectEqual(@as(u64, 1), stats.misses);
-    try testing.expectEqual(@as(u64, 1), stats.stores);
-    try testing.expectEqual(@as(u64, 2), stats.getTotalOps());
-    try testing.expectEqual(@as(f64, 50.0), stats.getHitRate());
-}
-
-test "CacheStats hit rate calculation" {
-    var stats = CacheStats{};
-
-    // No operations - should be 0%
-    try testing.expectEqual(@as(f64, 0.0), stats.getHitRate());
-
-    // 3 hits, 1 miss = 75%
-    stats.recordHit(100);
-    stats.recordHit(200);
-    stats.recordHit(300);
-    stats.recordMiss();
-
-    try testing.expectEqual(@as(f64, 75.0), stats.getHitRate());
 }

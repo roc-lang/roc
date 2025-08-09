@@ -96,6 +96,7 @@ pub const RocModules = struct {
         self.check.addImport("builtins", self.builtins);
         self.check.addImport("reporting", self.reporting);
 
+        self.cache.addImport("cache", self.cache);
         self.cache.addImport("compile", self.compile);
         self.cache.addImport("base", self.base);
         self.cache.addImport("collections", self.collections);

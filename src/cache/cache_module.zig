@@ -4,26 +4,26 @@
 //! allowing fast serialization and deserialization of ModuleEnv and CIR data.
 
 const std = @import("std");
-const base = @import("base");
 const Can = @import("can");
-const collections = @import("collections");
+const base = @import("base");
+const fs_mod = @import("fs");
 const types = @import("types");
 const parse = @import("parse");
 const compile = @import("compile");
+const collections = @import("collections");
 const serialization = @import("serialization");
-const SExprTree = base.SExprTree;
-const fs_mod = @import("fs");
-const Filesystem = fs_mod.Filesystem;
 
-const SERIALIZATION_ALIGNMENT = 16;
-
-const Allocator = std.mem.Allocator;
-const TypeStore = types.Store;
-const ModuleEnv = compile.ModuleEnv;
 const Node = ModuleEnv.Node;
+const TypeStore = types.Store;
+const SExprTree = base.SExprTree;
+const ModuleEnv = compile.ModuleEnv;
+const Allocator = std.mem.Allocator;
+const Filesystem = fs_mod.Filesystem;
 const NodeStore = ModuleEnv.NodeStore;
 const SafeList = collections.SafeList;
 const SafeStringHashMap = collections.SafeStringHashMap;
+
+const SERIALIZATION_ALIGNMENT = serialization.SERIALIZATION_ALIGNMENT;
 
 /// Magic number for cache validation
 const CACHE_MAGIC: u32 = 0x524F4343; // "ROCC" in ASCII
@@ -362,233 +362,3 @@ pub const Diagnostics = struct {
     header_size: u32,
     data_size: u32,
 };
-
-test "Header alignment" {
-    // Verify the header is properly aligned
-    try std.testing.expect(@sizeOf(Header) % SERIALIZATION_ALIGNMENT == 0);
-}
-
-test "create and restore cache" {
-    const gpa = std.testing.allocator;
-
-    // Real Roc module source for comprehensive testing
-    const source =
-        \\module [foo]
-        \\
-        \\foo : U64 -> Str
-        \\foo = |num|
-        \\    when num is
-        \\        42 -> "forty-two"
-        \\        _ -> Num.toStr num
-        \\
-    ;
-
-    // Parse the source
-    var module_env = try ModuleEnv.init(gpa, source);
-    defer module_env.deinit();
-
-    try module_env.initCIRFields(gpa, "TestModule");
-    // CIR is now just an alias for ModuleEnv, so use module_env directly
-    const cir = &module_env;
-
-    // Parse and canonicalize
-    var ast = try parse(&module_env);
-    defer ast.deinit(gpa);
-
-    var czer = try Can.init(cir, &ast, null);
-    defer czer
-        .deinit();
-    try czer
-        .canonicalizeFile();
-
-    // Generate original S-expression for comparison
-    var original_tree = SExprTree.init(gpa);
-    defer original_tree.deinit();
-    try module_env.pushToSExprTree(null, &original_tree);
-
-    var original_sexpr = std.ArrayList(u8).init(gpa);
-    defer original_sexpr.deinit();
-    try original_tree.toStringPretty(original_sexpr.writer().any());
-
-    // Create arena for serialization
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-
-    // Create cache from real data
-    const cache_data = try CacheModule.create(gpa, arena.allocator(), &module_env, cir, 0, 0);
-    defer gpa.free(cache_data);
-
-    // Load cache
-    var cache = try CacheModule.fromMappedMemory(cache_data);
-
-    // Validate cache
-    try cache.validate();
-
-    // Restore ModuleEnv
-    // Duplicate source since restore takes ownership
-    const restored_env = try cache.restore(gpa, "TestModule", source);
-    // Note: restored_env points to data within the cache, so we don't free it
-
-    // Generate S-expression from restored ModuleEnv
-    var restored_tree = SExprTree.init(gpa);
-    defer restored_tree.deinit();
-
-    try restored_env.pushToSExprTree(null, &restored_tree);
-
-    var restored_sexpr = std.ArrayList(u8).init(gpa);
-    defer restored_sexpr.deinit();
-
-    try restored_tree.toStringPretty(restored_sexpr.writer().any());
-
-    // Verify round-trip integrity
-    try std.testing.expect(std.mem.eql(u8, original_sexpr.items, restored_sexpr.items));
-
-    // Get diagnostics
-    const diagnostics = cache.getDiagnostics();
-    try std.testing.expect(diagnostics.total_size > 0);
-}
-
-test "cache filesystem roundtrip with in-memory storage" {
-    const gpa = std.testing.allocator;
-
-    // Real Roc module source for comprehensive testing
-    const source =
-        \\module [foo]
-        \\
-        \\foo : U64 -> Str
-        \\foo = |num| num.to_str()
-    ;
-
-    // Parse the source
-    var module_env = try ModuleEnv.init(gpa, source);
-    defer module_env.deinit();
-
-    try module_env.initCIRFields(gpa, "TestModule");
-    // CIR is now just an alias for ModuleEnv, so use module_env directly
-    const cir = &module_env;
-
-    // Parse and canonicalize
-    var ast = try parse.parse(&module_env);
-    defer ast.deinit(gpa);
-
-    var czer = try Can.init(cir, &ast, null);
-    defer czer
-        .deinit();
-    try czer
-        .canonicalizeFile();
-
-    // Generate original S-expression for comparison
-    var original_tree = SExprTree.init(gpa);
-    defer original_tree.deinit();
-    try module_env.pushToSExprTree(null, &original_tree);
-
-    var original_sexpr = std.ArrayList(u8).init(gpa);
-    defer original_sexpr.deinit();
-    try original_tree.toStringPretty(original_sexpr.writer().any());
-
-    // Create arena for serialization
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-
-    // Create cache from real data
-    const cache_data = try CacheModule.create(gpa, arena.allocator(), &module_env, cir, 0, 0);
-    defer gpa.free(cache_data);
-
-    // In-memory file storage for comprehensive mock filesystem
-    var file_storage = std.StringHashMap([]const u8).init(gpa);
-    defer {
-        var iterator = file_storage.iterator();
-        while (iterator.next()) |entry| {
-            gpa.free(entry.value_ptr.*);
-        }
-        file_storage.deinit();
-    }
-
-    // Create comprehensive mock filesystem with proper storage using static variables
-    var filesystem = Filesystem.testing();
-
-    const MockFS = struct {
-        var storage: ?*std.StringHashMap([]const u8) = null;
-        var allocator: ?Allocator = null;
-
-        fn writeFile(path: []const u8, contents: []const u8) Filesystem.WriteError!void {
-            const store = storage orelse return error.SystemResources;
-            const alloc = allocator orelse return error.SystemResources;
-
-            // Store a copy of the contents in our storage
-            const stored_contents = alloc.dupe(u8, contents) catch return error.SystemResources;
-
-            // Free existing content if path already exists
-            if (store.get(path)) |existing| {
-                alloc.free(existing);
-            }
-
-            // Store the new content
-            store.put(path, stored_contents) catch {
-                alloc.free(stored_contents);
-                return error.SystemResources;
-            };
-        }
-
-        fn readFile(path: []const u8, alloc: Allocator) Filesystem.ReadError![]const u8 {
-            const store = storage orelse return error.FileNotFound;
-
-            if (store.get(path)) |contents| {
-                return alloc.dupe(u8, contents) catch return error.OutOfMemory;
-            } else {
-                return error.FileNotFound;
-            }
-        }
-    };
-
-    // Initialize the static variables
-    MockFS.storage = &file_storage;
-    MockFS.allocator = gpa;
-
-    filesystem.writeFile = MockFS.writeFile;
-    filesystem.readFile = MockFS.readFile;
-
-    // Test full roundtrip: write cache to mock filesystem
-    const test_path = "comprehensive_test_cache.bin";
-    try CacheModule.writeToFile(gpa, cache_data, test_path, filesystem);
-
-    // Verify the data was stored
-    try std.testing.expect(file_storage.contains(test_path));
-
-    // Read the cache back from mock filesystem
-    const read_cache_data = try CacheModule.readFromFile(gpa, test_path, filesystem);
-    // Don't free immediately - the restored ModuleEnv references this data
-
-    // Verify the read data matches the original
-    try std.testing.expectEqualSlices(u8, cache_data, read_cache_data);
-
-    // Load and validate the cache from the roundtrip data
-    var roundtrip_cache = try CacheModule.fromMappedMemory(read_cache_data);
-    try roundtrip_cache.validate();
-
-    // Restore from the roundtrip cache
-    // Duplicate source since restore takes ownership
-    const restored_env = try roundtrip_cache.restore(gpa, "TestModule", source);
-    // Note: restored_env points to data within the cache, so we don't free it
-
-    // Generate S-expression from restored ModuleEnv
-    var restored_tree = SExprTree.init(gpa);
-    defer restored_tree.deinit();
-
-    try restored_env.pushToSExprTree(null, &restored_tree);
-
-    var restored_sexpr = std.ArrayList(u8).init(gpa);
-    defer restored_sexpr.deinit();
-
-    try restored_tree.toStringPretty(restored_sexpr.writer().any());
-
-    // Verify complete roundtrip integrity
-    try std.testing.expect(std.mem.eql(u8, original_sexpr.items, restored_sexpr.items));
-
-    // Get diagnostics to ensure they're preserved
-    const diagnostics = roundtrip_cache.getDiagnostics();
-    try std.testing.expect(diagnostics.total_size > 0);
-
-    // Free the cache data after we're done with the ModuleEnv
-    gpa.free(read_cache_data);
-}
