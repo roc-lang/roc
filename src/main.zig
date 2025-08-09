@@ -1157,7 +1157,7 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) noret
 /// Result from checking a file using BuildEnv
 const CheckResult = struct {
     reports: []DrainedReport,
-    timing: if (builtin.target.cpu.arch == .wasm32) void else ?CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) {} else null,
+    timing: CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) .{} else .{ .total_ns = 0, .module_count = 0 },
     was_cached: bool = false,
     error_count: u32 = 0,
     warning_count: u32 = 0,
@@ -1186,7 +1186,7 @@ const DrainedReport = struct {
 };
 
 /// Timing information for check phases
-const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) void else struct {
+const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else struct {
     total_ns: u64,
     module_count: usize,
 };
@@ -1259,13 +1259,13 @@ fn checkFileWithBuildEnv(
     // Note: abs_path is owned by BuildEnv, reports are moved to our array
     gpa.free(drained);
 
-    const timing = if (builtin.target.cpu.arch == .wasm32) {} else if (timer) |*t|
-        CheckTimingInfo{
-            .total_ns = t.read(),
-            .module_count = reports.len,
-        }
+    const timing = if (builtin.target.cpu.arch == .wasm32)
+        CheckTimingInfo{}
     else
-        null;
+        CheckTimingInfo{
+            .total_ns = if (timer) |*t| t.read() else 0,
+            .module_count = reports.len,
+        };
 
     return CheckResult{
         .reports = reports,
@@ -1375,14 +1375,18 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     }
 
     // Print timing breakdown if requested
+    if (args.time and builtin.target.cpu.arch != .wasm32) {
+        printTimingBreakdown(stdout, check_result.timing);
+    }
+}
+
+fn printTimingBreakdown(stdout: anytype, timing: CheckTimingInfo) void {
     if (builtin.target.cpu.arch != .wasm32) {
-        if (args.time and check_result.timing != null) {
-            stdout.print("\nTiming breakdown:\n", .{}) catch {};
-            stdout.print("  total check time:             ", .{}) catch {};
-            formatElapsedTime(stdout, check_result.timing.?.total_ns) catch {};
-            stdout.print("  ({} ns)\n", .{check_result.timing.?.total_ns}) catch {};
-            stdout.print("  modules processed:            {}\n", .{check_result.timing.?.module_count}) catch {};
-        }
+        stdout.print("\nTiming breakdown:\n", .{}) catch {};
+        stdout.print("  total check time:             ", .{}) catch {};
+        formatElapsedTime(stdout, timing.total_ns) catch {};
+        stdout.print("  ({} ns)\n", .{timing.total_ns}) catch {};
+        stdout.print("  modules processed:            {}\n", .{timing.module_count}) catch {};
     }
 }
 
