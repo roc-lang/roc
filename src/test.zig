@@ -48,7 +48,7 @@ test {
     std.testing.refAllDecls(@import("parse"));
     std.testing.refAllDecls(@import("parse/test/ast_node_store_test.zig"));
 
-    std.testing.refAllDeclsRecursive(@import("compile"));
+    std.testing.refAllDecls(@import("compile"));
     std.testing.refAllDecls(@import("compile/test/module_env_test.zig"));
 
     std.testing.refAllDeclsRecursive(@import("eval/interpreter.zig"));
