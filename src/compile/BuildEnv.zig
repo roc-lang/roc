@@ -265,7 +265,7 @@ pub const BuildEnv = struct {
     compiler_version: []const u8 = "roc-zig-dev",
 
     // Workspace roots for sandboxing (absolute, canonical)
-    workspace_roots: std.ArrayList([]const u8),
+    workspace_roots: std.ArrayList([]u8),
 
     // Map of package name (alias) -> Package
     packages: std.StringHashMapUnmanaged(Package) = .{},
@@ -290,7 +290,7 @@ pub const BuildEnv = struct {
             .gpa = gpa,
             .mode = mode,
             .max_threads = max_threads,
-            .workspace_roots = std.ArrayList([]const u8).init(gpa),
+            .workspace_roots = std.ArrayList([]u8).init(gpa),
             .sink = OrderedSink.init(gpa),
             .global_queue = GlobalQueue.init(gpa),
             .resolver_ctxs = std.ArrayList(*ResolverCtx).init(gpa),
@@ -338,7 +338,9 @@ pub const BuildEnv = struct {
         self.global_queue.build_env = null;
 
         // Deinit roots
-        for (self.workspace_roots.items) |r| freeSlice(self.gpa, r);
+        for (self.workspace_roots.items) |r| {
+            self.gpa.free(r);
+        }
         self.workspace_roots.deinit();
 
         self.sink.deinit();
@@ -351,6 +353,7 @@ pub const BuildEnv = struct {
     pub fn build(self: *BuildEnv, root_file: []const u8) !void {
         // Workspace root is directory containing the app header; normalize/sandbox
         const root_abs = try self.makeAbsolute(root_file);
+        defer self.gpa.free(root_abs);
         const root_dir = if (std.fs.path.dirname(root_abs)) |d| try std.fs.path.resolve(self.gpa, &.{d}) else try self.gpa.dupe(u8, ".");
         // NOTE: Do not sandbox the app header; the app may reference arbitrary paths.
         // We still record the root_dir for convenience in later checks.
