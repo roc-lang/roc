@@ -4,6 +4,9 @@ pub const ModuleEnv = @import("ModuleEnv.zig");
 pub const type_writers = @import("type_writers.zig");
 pub const cir_types = @import("cir_types.zig");
 pub const CIR = @import("CIR.zig");
+pub const BuildModule = @import("BuildModule.zig");
+pub const BuildPackage = @import("BuildPackage.zig");
+pub const BuildEnv = @import("BuildEnv.zig").BuildEnv;
 
 // Re-export CIR types from ModuleEnv
 /// Node type representing various AST elements
