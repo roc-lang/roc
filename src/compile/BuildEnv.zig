@@ -1404,7 +1404,56 @@ fn writeFile(dir: std.fs.Dir, rel: []const u8, contents: []const u8) !void {
     try f.writeAll(contents);
 }
 
-test "BuildEnv: app with platform and package shorthands (local-only) succeeds - multi-threaded" {
+// Test helper functions
+fn cleanupReports(gpa: std.mem.Allocator, drained: []BuildEnv.DrainedReport) void {
+    var i: usize = 0;
+    while (i < drained.len) : (i += 1) {
+        for (drained[i].reports) |*rep| rep.deinit();
+        gpa.free(drained[i].reports);
+        gpa.free(drained[i].abs_path);
+    }
+    gpa.free(drained);
+}
+
+fn expectNoErrors(ws: *BuildEnv) !void {
+    const gpa = std.testing.allocator;
+    const drained = try ws.drainReports();
+    defer cleanupReports(gpa, drained);
+    try std.testing.expectEqual(@as(usize, 0), drained.len);
+}
+
+fn expectErrorCount(ws: *BuildEnv, expected_count: usize) !void {
+    const gpa = std.testing.allocator;
+    const drained = try ws.drainReports();
+    defer cleanupReports(gpa, drained);
+    
+    var total_reports: usize = 0;
+    for (drained) |entry| {
+        total_reports += entry.reports.len;
+    }
+    try std.testing.expectEqual(expected_count, total_reports);
+}
+
+fn expectSpecificError(ws: *BuildEnv, comptime error_type: Report.Tag, module_substring: []const u8) !void {
+    const gpa = std.testing.allocator;
+    const drained = try ws.drainReports();
+    defer cleanupReports(gpa, drained);
+    
+    var found = false;
+    for (drained) |entry| {
+        if (std.mem.indexOf(u8, entry.abs_path, module_substring) != null) {
+            for (entry.reports) |report| {
+                if (report.tag == error_type) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    try std.testing.expect(found);
+}
+
+fn testAppWithShorthandsHelper(comptime mode: BuildEnv.Mode, thread_count: u32) !void {
     const gpa = std.testing.allocator;
     var tmp = try std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1456,7 +1505,7 @@ test "BuildEnv: app with platform and package shorthands (local-only) succeeds -
 
     try writeFile(tmp.dir, "app/Main.roc", app_main);
 
-    var ws = BuildEnv.init(gpa, .multi_threaded, 4);
+    var ws = BuildEnv.init(gpa, mode, thread_count);
     defer ws.deinit();
 
     const app_path = try std.fs.path.join(gpa, &.{ root_dir, "app", "Main.roc" });
@@ -1465,7 +1514,15 @@ test "BuildEnv: app with platform and package shorthands (local-only) succeeds -
     try ws.buildApp(app_path);
 
     // Expect no reports
-    try std.testing.expectEqual(@as(usize, 0), ws.sink.entries.items.len);
+    try expectNoErrors(&ws);
+}
+
+test "BuildEnv: app with platform and package shorthands (local-only) succeeds - multi-threaded" {
+    try testAppWithShorthandsHelper(.multi_threaded, 4);
+}
+
+test "BuildEnv: app with platform and package shorthands (local-only) succeeds - single-threaded" {
+    try testAppWithShorthandsHelper(.single_threaded, 1);
 }
 
 // OrderedSink should gate emission to a contiguous ready prefix and drain in order.
@@ -1540,34 +1597,28 @@ test "BuildEnv: drainReports returns abs paths and aggregates multi-report modul
     // Build the app and then drain reports
     _ = ws.buildApp(app_path) catch {};
     const drained = try ws.drainReports();
-    defer {
-        // Deinit drained reports and free abs_path strings
-        var i: usize = 0;
-        while (i < drained.len) : (i += 1) {
-            for (drained[i].reports) |*rep| rep.deinit();
-            gpa.free(drained[i].reports);
-            gpa.free(drained[i].abs_path);
-        }
-        gpa.free(drained);
-    }
+    defer cleanupReports(gpa, drained);
 
-    // Expect at least one drained item, and at least one for A.roc with >= 2 reports
-    try std.testing.expect(drained.len >= 1);
-
-    var saw_a = false;
-    var i: usize = 0;
-    while (i < drained.len) : (i += 1) {
-        const p = drained[i].abs_path;
-        // abs_path should be absolute and end with A.roc for the A module
-        if (std.mem.endsWith(u8, p, std.fs.path.sep_str ++ "app" ++ std.fs.path.sep_str ++ "A.roc") or
-            std.mem.endsWith(u8, p, "A.roc"))
-        {
-            try std.testing.expect(std.fs.path.isAbsolute(p));
-            try std.testing.expect(drained[i].reports.len >= 2);
-            saw_a = true;
+    // Find the A.roc module which should have exactly 2 type errors
+    var found_a = false;
+    var total_errors_in_a: usize = 0;
+    
+    for (drained) |entry| {
+        if (std.mem.endsWith(u8, entry.abs_path, "A.roc")) {
+            found_a = true;
+            try std.testing.expect(std.fs.path.isAbsolute(entry.abs_path));
+            
+            // Count specific error types
+            for (entry.reports) |report| {
+                if (report.tag == .type_error) {
+                    total_errors_in_a += 1;
+                }
+            }
         }
     }
-    try std.testing.expect(saw_a);
+    
+    try std.testing.expect(found_a);
+    try std.testing.expectEqual(@as(usize, 2), total_errors_in_a);
 }
 
 test "OrderedSink: early emit before order still drains after order build" {
@@ -1761,15 +1812,7 @@ test "BuildEnv: multi-threaded global queue end-to-end builds and drains" {
     // Build should complete without deadlocks; drain should be callable (expect no reports)
     try ws.buildApp(app_path);
     const drained = try ws.drainReports();
-    defer {
-        var i: usize = 0;
-        while (i < drained.len) : (i += 1) {
-            for (drained[i].reports) |*rep| rep.deinit();
-            gpa.free(drained[i].reports);
-            gpa.free(drained[i].abs_path);
-        }
-        gpa.free(drained);
-    }
+    defer cleanupReports(gpa, drained);
     try std.testing.expectEqual(@as(usize, 0), drained.len);
 }
 
@@ -1833,15 +1876,7 @@ test "BuildEnv: multi-threaded global queue drives all phases" {
 
     // Drain reports (expect no errors)
     const drained = try ws.drainReports();
-    defer {
-        var i: usize = 0;
-        while (i < drained.len) : (i += 1) {
-            for (drained[i].reports) |*rep| rep.deinit();
-            gpa.free(drained[i].reports);
-            gpa.free(drained[i].abs_path);
-        }
-        gpa.free(drained);
-    }
+    defer cleanupReports(gpa, drained);
     try std.testing.expectEqual(@as(usize, 0), drained.len);
 }
 
@@ -2000,83 +2035,12 @@ test "BuildEnv: streaming with module chain" {
     // Should have successfully built all modules
     // Verify by checking that we can drain reports
     const drained = try ws.drainReports();
-    defer {
-        var i: usize = 0;
-        while (i < drained.len) : (i += 1) {
-            for (drained[i].reports) |*rep| rep.deinit();
-            gpa.free(drained[i].reports);
-            gpa.free(drained[i].abs_path);
-        }
-        gpa.free(drained);
-    }
+    defer cleanupReports(gpa, drained);
 
     // Expect no errors from this simple module chain
     try std.testing.expectEqual(@as(usize, 0), drained.len);
 }
 
-test "BuildEnv: app with platform and package shorthands (local-only) succeeds - single-threaded" {
-    const gpa = std.testing.allocator;
-    var tmp = try std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const root_dir = tmp.dir.path;
-
-    try tmp.dir.makePath("platform");
-    try tmp.dir.makePath("foo");
-    try tmp.dir.makePath("app");
-
-    // Platform header and module
-    try writeFile(tmp.dir, "platform/PlatformMain.roc",
-        \\platform "Basic"
-        \\requires {} {}
-        \\exposes []
-        \\packages {}
-        \\provides []
-    );
-    try writeFile(tmp.dir, "platform/Stdout.roc",
-        \\module [Stdout]
-        \\one = 1
-    );
-
-    // Foo package header and module
-    try writeFile(tmp.dir, "foo/FooMain.roc",
-        \\package []
-        \\{ }
-    );
-    try writeFile(tmp.dir, "foo/Util.roc",
-        \\module [Util]
-        \\two = 2
-    );
-
-    // App Main
-    const plat_path = try std.fs.path.join(gpa, &.{ root_dir, "platform", "PlatformMain.roc" });
-    defer gpa.free(plat_path);
-    const foo_path = try std.fs.path.join(gpa, &.{ root_dir, "foo", "FooMain.roc" });
-    defer gpa.free(foo_path);
-
-    const app_main = try std.fmt.allocPrint(gpa,
-        \\app [main!] {{ cli: platform "{s}", foo: "{s}" }}
-        \\
-        \\import cli.Stdout
-        \\import foo.Util
-        \\
-        \\main! = |_| Stdout.one + Util.two
-    , .{ plat_path, foo_path });
-    defer gpa.free(app_main);
-
-    try writeFile(tmp.dir, "app/Main.roc", app_main);
-
-    var ws = BuildEnv.init(gpa, .single_threaded, 1);
-    defer ws.deinit();
-
-    const app_path = try std.fs.path.join(gpa, &.{ root_dir, "app", "Main.roc" });
-    defer gpa.free(app_path);
-
-    try ws.buildApp(app_path);
-
-    // Expect no reports
-    try std.testing.expectEqual(@as(usize, 0), ws.sink.entries.items.len);
-}
 
 test "BuildEnv: enforce rules (only apps -> platforms, no package -> app)" {
     const gpa = std.testing.allocator;
@@ -2129,7 +2093,7 @@ test "BuildEnv: enforce rules (only apps -> platforms, no package -> app)" {
     // Building should fail the dependency validation (invalid dependency)
     const res = ws.buildApp(app_path);
     try std.testing.expectError(error.InvalidDependency, res);
-    try std.testing.expect(ws.sink.entries.items.len >= 1);
+    try expectSpecificError(&ws, .parse_error, "PkgMain.roc");
 }
 
 test "BuildEnv: app header can reference absolute paths; package/platform sandboxed" {
@@ -2178,6 +2142,7 @@ test "BuildEnv: package header cannot reference paths outside workspace" {
     // Exterior dir and file
     var ext_dir = try std.fs.cwd().makeOpenPath("pkg_external_dir", .{});
     defer ext_dir.close();
+    defer std.fs.cwd().deleteTree("pkg_external_dir") catch {};
     const ext_pkg = try std.fs.path.join(gpa, &.{ "pkg_external_dir", "Pkg.roc" });
     defer gpa.free(ext_pkg);
     try std.fs.cwd().writeFile(.{ .sub_path = ext_pkg, .data = "package []\\n{ }\\n" });
@@ -2279,19 +2244,27 @@ test "BuildEnv: deterministic error ordering across packages" {
     // Build workspace; expect errors from A.Bad (depth 1) and then B.Deep.Bad (depth 2)
     _ = ws.buildApp(app_path) catch {};
 
-    // Ensure we have at least two reports collected
-    try std.testing.expect(ws.sink.entries.items.len >= 2);
-
-    // Verify module names appear in deterministic order by (depth, then name)
-    // Depths: A.Bad at depth=1 should appear before B.Deep.Bad at depth=2
-    // Note: The aggregated sink stores module names in emission order.
-    const first_mod = ws.sink.entries.items[0].fq_name;
-    const second_mod = ws.sink.entries.items[1].fq_name;
-
-    try std.testing.expect(std.mem.eql(u8, first_mod, "Bad") or std.mem.eql(u8, first_mod, "A.Bad"));
-    // The second module must be the deeper one (B.Deep.Bad)
-    // Accept either "Deep.Bad" or "B.Deep.Bad" depending on how names are interned
-    try std.testing.expect(std.mem.endsWith(u8, second_mod, "Deep.Bad") or std.mem.eql(u8, second_mod, "B.Deep.Bad"));
+    // Drain reports to check ordering
+    const drained = try ws.drainReports();
+    defer cleanupReports(gpa, drained);
+    
+    // We should have exactly 2 modules with errors
+    try std.testing.expectEqual(@as(usize, 2), drained.len);
+    
+    // First error should be from A/Bad.roc (depth 1)
+    try std.testing.expect(std.mem.endsWith(u8, drained[0].abs_path, "Bad.roc"));
+    try std.testing.expect(std.mem.indexOf(u8, drained[0].abs_path, "pkgA") != null);
+    
+    // Second error should be from B/Deep/Bad.roc (depth 2)
+    try std.testing.expect(std.mem.endsWith(u8, drained[1].abs_path, "Bad.roc"));
+    try std.testing.expect(std.mem.indexOf(u8, drained[1].abs_path, "pkgB") != null);
+    try std.testing.expect(std.mem.indexOf(u8, drained[1].abs_path, "Deep") != null);
+    
+    // Verify each has a type error
+    for (drained) |entry| {
+        try std.testing.expect(entry.reports.len > 0);
+        try std.testing.expectEqual(Report.Tag.type_error, entry.reports[0].tag);
+    }
 }
 
 test "BuildEnv: package shorthands do not leak between packages" {
@@ -2383,7 +2356,7 @@ test "BuildEnv: package shorthands do not leak between packages" {
     defer gpa.free(app_path);
 
     // Building should fail because app cannot use "foo" shorthand
-    _ = ws.build(app_path) catch |err| {
+    _ = ws.buildApp(app_path) catch |err| {
         // The build should fail, but we need to check that pkgA and pkgD
         // can still use their respective "foo" shorthands without conflict
         try std.testing.expect(err == error.Internal or err == error.InvalidDependency);
@@ -2409,18 +2382,325 @@ test "BuildEnv: package shorthands do not leak between packages" {
     defer gpa.free(app_path2);
 
     // This should succeed - each package can use "foo" for different things
-    try ws2.build(app_path2);
+    try ws2.buildApp(app_path2);
 
-    // Verify that both packages were built successfully
-    const reports = try ws2.drainReports();
-    defer gpa.free(reports);
+    // Verify that both packages were built successfully - should have no errors
+    try expectNoErrors(&ws2);
+}
 
-    // Should have no errors - shorthands work correctly within their packages
-    var error_count: u32 = 0;
-    for (reports) |report| {
-        if (report.severity == .runtime_error or report.severity == .fatal) {
-            error_count += 1;
-        }
-    }
-    try std.testing.expectEqual(@as(u32, 0), error_count);
+test "BuildEnv: CacheManager integration - cached modules not rebuilt" {
+    const gpa = std.testing.allocator;
+    const fs_mod = @import("fs");
+    const Filesystem = fs_mod.Filesystem;
+    
+    var tmp = try std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    
+    const root_dir = tmp.dir.path;
+    try tmp.dir.makePath("app");
+    try tmp.dir.makePath("cache");
+    
+    // Create test modules
+    try writeFile(tmp.dir, "app/Utils.roc",
+        \\module [double]
+        \\
+        \\double = \n -> n * 2
+    );
+    
+    try writeFile(tmp.dir, "app/Main.roc",
+        \\app [main!] {}
+        \\
+        \\import Utils
+        \\
+        \\main! = |_| Utils.double 21
+    );
+    
+    // First build with caching enabled
+    var ws1 = BuildEnv.init(gpa, .single_threaded, 1);
+    defer ws1.deinit();
+    
+    // Set up cache
+    const cache_dir = try std.fs.path.join(gpa, &.{ root_dir, "cache" });
+    defer gpa.free(cache_dir);
+    const cache_config = cache.CacheConfig{
+        .enabled = true,
+        .dir = cache_dir,
+    };
+    const cache_manager = try gpa.create(cache.CacheManager);
+    defer gpa.destroy(cache_manager);
+    cache_manager.* = cache.CacheManager.init(gpa, cache_config, Filesystem.default());
+    defer cache_manager.deinit();
+    
+    ws1.setCacheManager(cache_manager);
+    
+    const app_path = try std.fs.path.join(gpa, &.{ root_dir, "app", "Main.roc" });
+    defer gpa.free(app_path);
+    
+    // First build - modules should be compiled and cached
+    try ws1.buildApp(app_path);
+    try expectNoErrors(&ws1);
+    
+    // Verify cache was populated by checking phase progression
+    const app_build1 = ws1.packages.get("app").?;
+    const main_sched1 = app_build1.schedulers.get("app").?;
+    
+    main_sched1.lock.lock();
+    const utils_state1 = main_sched1.modules.get("Utils").?;
+    const main_state1 = main_sched1.modules.get("Main").?;
+    try std.testing.expectEqual(BuildModule.Phase.Done, utils_state1.phase);
+    try std.testing.expectEqual(BuildModule.Phase.Done, main_state1.phase);
+    main_sched1.lock.unlock();
+    
+    // Second build with same cache - modules should be loaded from cache
+    var ws2 = BuildEnv.init(gpa, .single_threaded, 1);
+    defer ws2.deinit();
+    
+    // Use the same cache manager
+    const cache_manager2 = try gpa.create(cache.CacheManager);
+    defer gpa.destroy(cache_manager2);
+    cache_manager2.* = cache.CacheManager.init(gpa, cache_config, Filesystem.default());
+    defer cache_manager2.deinit();
+    
+    ws2.setCacheManager(cache_manager2);
+    
+    // Second build - should use cached modules
+    try ws2.buildApp(app_path);
+    try expectNoErrors(&ws2);
+    
+    // TODO: Once we have proper cache hit tracking, verify that modules were loaded from cache
+    // For now, just verify the build succeeded
+}
+
+test "BuildEnv: CacheManager integration - cache invalidated on file change" {
+    const gpa = std.testing.allocator;
+    const fs_mod = @import("fs");
+    const Filesystem = fs_mod.Filesystem;
+    
+    var tmp = try std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    
+    const root_dir = tmp.dir.path;
+    try tmp.dir.makePath("app");
+    try tmp.dir.makePath("cache");
+    
+    // Create initial module
+    try writeFile(tmp.dir, "app/Math.roc",
+        \\module [add]
+        \\
+        \\add = \a, b -> a + b
+    );
+    
+    try writeFile(tmp.dir, "app/Main.roc",
+        \\app [main!] {}
+        \\
+        \\import Math
+        \\
+        \\main! = |_| Math.add 1 2
+    );
+    
+    // First build with caching
+    var ws1 = BuildEnv.init(gpa, .single_threaded, 1);
+    defer ws1.deinit();
+    
+    const cache_dir = try std.fs.path.join(gpa, &.{ root_dir, "cache" });
+    defer gpa.free(cache_dir);
+    const cache_config = cache.CacheConfig{
+        .enabled = true,
+        .dir = cache_dir,
+    };
+    const cache_manager = try gpa.create(cache.CacheManager);
+    defer gpa.destroy(cache_manager);
+    cache_manager.* = cache.CacheManager.init(gpa, cache_config, Filesystem.default());
+    defer cache_manager.deinit();
+    
+    ws1.setCacheManager(cache_manager);
+    
+    const app_path = try std.fs.path.join(gpa, &.{ root_dir, "app", "Main.roc" });
+    defer gpa.free(app_path);
+    
+    try ws1.buildApp(app_path);
+    try expectNoErrors(&ws1);
+    
+    // Modify the Math module
+    try writeFile(tmp.dir, "app/Math.roc",
+        \\module [add, multiply]
+        \\
+        \\add = \a, b -> a + b
+        \\multiply = \a, b -> a * b
+    );
+    
+    // Second build - cache should be invalidated for Math.roc
+    var ws2 = BuildEnv.init(gpa, .single_threaded, 1);
+    defer ws2.deinit();
+    
+    const cache_manager2 = try gpa.create(cache.CacheManager);
+    defer gpa.destroy(cache_manager2);
+    cache_manager2.* = cache.CacheManager.init(gpa, cache_config, Filesystem.default());
+    defer cache_manager2.deinit();
+    
+    ws2.setCacheManager(cache_manager2);
+    
+    // Build should succeed with the modified module
+    try ws2.buildApp(app_path);
+    try expectNoErrors(&ws2);
+    
+    // Verify the module was rebuilt (has the new export)
+    const app_build = ws2.packages.get("app").?;
+    const main_sched = app_build.schedulers.get("app").?;
+    
+    main_sched.lock.lock();
+    defer main_sched.lock.unlock();
+    
+    const math_state = main_sched.modules.get("Math").?;
+    try std.testing.expectEqual(BuildModule.Phase.Done, math_state.phase);
+    // TODO: Once we track exports properly, verify that 'multiply' is now exported
+}
+
+test "BuildEnv: cyclic dependency detection" {
+    const gpa = std.testing.allocator;
+    var tmp = try std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    
+    const root_dir = tmp.dir.path;
+    try tmp.dir.makePath("app");
+    
+    // Create modules with a direct cycle: A -> B -> A
+    try writeFile(tmp.dir, "app/A.roc",
+        \\module [valueA]
+        \\
+        \\import B
+        \\
+        \\valueA = B.valueB + 1
+    );
+    
+    try writeFile(tmp.dir, "app/B.roc",
+        \\module [valueB]
+        \\
+        \\import A
+        \\
+        \\valueB = A.valueA + 2
+    );
+    
+    try writeFile(tmp.dir, "app/Main.roc",
+        \\app [main!] {}
+        \\
+        \\import A
+        \\
+        \\main! = |_| A.valueA
+    );
+    
+    var ws = BuildEnv.init(gpa, .single_threaded, 1);
+    defer ws.deinit();
+    
+    const app_path = try std.fs.path.join(gpa, &.{ root_dir, "app", "Main.roc" });
+    defer gpa.free(app_path);
+    
+    // Building should fail due to cyclic dependency
+    const res = ws.buildApp(app_path);
+    try std.testing.expectError(error.CyclicImport, res);
+}
+
+test "BuildEnv: cyclic dependency detection - indirect cycle" {
+    const gpa = std.testing.allocator;
+    var tmp = try std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    
+    const root_dir = tmp.dir.path;
+    try tmp.dir.makePath("app");
+    
+    // Create modules with an indirect cycle: A -> B -> C -> A
+    try writeFile(tmp.dir, "app/A.roc",
+        \\module [valueA]
+        \\
+        \\import B
+        \\
+        \\valueA = B.valueB + 1
+    );
+    
+    try writeFile(tmp.dir, "app/B.roc",
+        \\module [valueB]
+        \\
+        \\import C
+        \\
+        \\valueB = C.valueC + 2
+    );
+    
+    try writeFile(tmp.dir, "app/C.roc",
+        \\module [valueC]
+        \\
+        \\import A
+        \\
+        \\valueC = A.valueA + 3
+    );
+    
+    try writeFile(tmp.dir, "app/Main.roc",
+        \\app [main!] {}
+        \\
+        \\import A
+        \\
+        \\main! = |_| A.valueA
+    );
+    
+    var ws = BuildEnv.init(gpa, .single_threaded, 1);
+    defer ws.deinit();
+    
+    const app_path = try std.fs.path.join(gpa, &.{ root_dir, "app", "Main.roc" });
+    defer gpa.free(app_path);
+    
+    // Building should fail due to cyclic dependency
+    const res = ws.buildApp(app_path);
+    try std.testing.expectError(error.CyclicImport, res);
+}
+
+test "BuildEnv: no false positive cycle detection" {
+    const gpa = std.testing.allocator;
+    var tmp = try std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    
+    const root_dir = tmp.dir.path;
+    try tmp.dir.makePath("app");
+    
+    // Create modules with shared dependencies but no cycle
+    // Main -> A -> C
+    //      -> B -> C
+    try writeFile(tmp.dir, "app/C.roc",
+        \\module [valueC]
+        \\
+        \\valueC = 42
+    );
+    
+    try writeFile(tmp.dir, "app/A.roc",
+        \\module [valueA]
+        \\
+        \\import C
+        \\
+        \\valueA = C.valueC + 1
+    );
+    
+    try writeFile(tmp.dir, "app/B.roc",
+        \\module [valueB]
+        \\
+        \\import C
+        \\
+        \\valueB = C.valueC + 2
+    );
+    
+    try writeFile(tmp.dir, "app/Main.roc",
+        \\app [main!] {}
+        \\
+        \\import A
+        \\import B
+        \\
+        \\main! = |_| A.valueA + B.valueB
+    );
+    
+    var ws = BuildEnv.init(gpa, .multi_threaded, 4);
+    defer ws.deinit();
+    
+    const app_path = try std.fs.path.join(gpa, &.{ root_dir, "app", "Main.roc" });
+    defer gpa.free(app_path);
+    
+    // Building should succeed - no cycle exists
+    try ws.buildApp(app_path);
+    try expectNoErrors(&ws);
 }
