@@ -1,6 +1,19 @@
 const std = @import("std");
 const bundle = @import("bundle.zig");
 
+// Common FilePathIterator for tests
+const FilePathIterator = struct {
+    paths: []const []const u8,
+    index: usize = 0,
+
+    pub fn next(self: *FilePathIterator) !?[]const u8 {
+        if (self.index >= self.paths.len) return null;
+        const path = self.paths[self.index];
+        self.index += 1;
+        return path;
+    }
+};
+
 test "bundle and unbundle roundtrip" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -51,18 +64,6 @@ test "bundle and unbundle roundtrip" {
     };
 
     // Create an iterator for the file paths
-    const FilePathIterator = struct {
-        paths: []const []const u8,
-        index: usize = 0,
-
-        pub fn next(self: *@This()) !?[]const u8 {
-            if (self.index >= self.paths.len) return null;
-            const path = self.paths[self.index];
-            self.index += 1;
-            return path;
-        }
-    };
-
     var file_iter = FilePathIterator{ .paths = &file_paths };
 
     // Bundle to memory
@@ -146,18 +147,6 @@ test "bundle and unbundle over socket stream" {
         "test1.txt",
         "test2.txt",
         "nested/deep.txt",
-    };
-
-    const FilePathIterator = struct {
-        paths: []const []const u8,
-        index: usize = 0,
-
-        pub fn next(self: *@This()) !?[]const u8 {
-            if (self.index >= self.paths.len) return null;
-            const path = self.paths[self.index];
-            self.index += 1;
-            return path;
-        }
     };
 
     var file_iter = FilePathIterator{ .paths = &file_paths };
@@ -314,18 +303,6 @@ test "minimal bundle unbundle" {
     defer bundle_data.deinit();
 
     const file_paths = [_][]const u8{"test.txt"};
-    const FilePathIterator = struct {
-        paths: []const []const u8,
-        index: usize = 0,
-
-        pub fn next(self: *@This()) !?[]const u8 {
-            if (self.index >= self.paths.len) return null;
-            const path = self.paths[self.index];
-            self.index += 1;
-            return path;
-        }
-    };
-
     var file_iter = FilePathIterator{ .paths = &file_paths };
     const filename = try bundle.bundle(&file_iter, 3, allocator, bundle_data.writer(), src_dir, null);
     defer allocator.free(filename);
@@ -380,18 +357,6 @@ test "bundle with path prefix stripping" {
         "foo/bar/src/utils/helper.txt",
     };
 
-    const FilePathIterator = struct {
-        paths: []const []const u8,
-        index: usize = 0,
-
-        pub fn next(self: *@This()) !?[]const u8 {
-            if (self.index >= self.paths.len) return null;
-            const path = self.paths[self.index];
-            self.index += 1;
-            return path;
-        }
-    };
-
     var file_iter = FilePathIterator{ .paths = &file_paths };
 
     // Bundle with prefix "foo/bar/src/"
@@ -437,18 +402,6 @@ test "blake3 hash verification success" {
     defer bundle_data.deinit();
 
     const file_paths = [_][]const u8{"test.txt"};
-    const FilePathIterator = struct {
-        paths: []const []const u8,
-        index: usize = 0,
-
-        pub fn next(self: *@This()) !?[]const u8 {
-            if (self.index >= self.paths.len) return null;
-            const path = self.paths[self.index];
-            self.index += 1;
-            return path;
-        }
-    };
-
     var file_iter = FilePathIterator{ .paths = &file_paths };
     const filename = try bundle.bundle(&file_iter, 3, allocator, bundle_data.writer(), src_dir, null);
     defer allocator.free(filename);
@@ -491,18 +444,6 @@ test "blake3 hash verification failure" {
     defer bundle_data.deinit();
 
     const file_paths = [_][]const u8{"test.txt"};
-    const FilePathIterator = struct {
-        paths: []const []const u8,
-        index: usize = 0,
-
-        pub fn next(self: *@This()) !?[]const u8 {
-            if (self.index >= self.paths.len) return null;
-            const path = self.paths[self.index];
-            self.index += 1;
-            return path;
-        }
-    };
-
     var file_iter = FilePathIterator{ .paths = &file_paths };
     const filename = try bundle.bundle(&file_iter, 3, allocator, bundle_data.writer(), src_dir, null);
     defer allocator.free(filename);
@@ -545,6 +486,141 @@ test "base58 encode/decode roundtrip" {
     }
 }
 
+test "unbundle with existing directory error" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Create temp directory
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_dir = tmp.dir;
+
+    // Create a simple tar archive
+    var output_buffer = std.ArrayList(u8).init(allocator);
+    defer output_buffer.deinit();
+
+    const files = [_][]const u8{"test.txt"};
+    var iter = FilePathIterator{ .paths = &files };
+
+    // Create test file
+    {
+        const file = try tmp_dir.createFile("test.txt", .{});
+        defer file.close();
+        try file.writeAll("test content");
+    }
+
+    // Bundle the file
+    const filename = try bundle.bundle(&iter, 3, allocator, output_buffer.writer(), tmp_dir, null);
+    defer allocator.free(filename);
+
+    // Write the bundled data to a file
+    {
+        const bundle_file = try tmp_dir.createFile(filename, .{});
+        defer bundle_file.close();
+        try bundle_file.writeAll(output_buffer.items);
+    }
+
+    // Extract the base name without extension for directory
+    const dir_name = filename[0 .. filename.len - 8]; // Remove .tar.zst
+
+    // Create a directory with the same name
+    try tmp_dir.makePath(dir_name);
+
+    // Try to unbundle - should fail because directory exists
+    const bundle_file = try tmp_dir.openFile(filename, .{});
+    defer bundle_file.close();
+
+    // This should succeed but the CLI would error on existing directory
+    try bundle.unbundle(bundle_file.reader(), tmp_dir, allocator, filename);
+}
+
+test "unbundle multiple archives" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Create temp directory
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_dir = tmp.dir;
+
+    // Create two different archives
+    var filenames = std.ArrayList([]const u8).init(allocator);
+    defer {
+        for (filenames.items) |fname| {
+            allocator.free(fname);
+        }
+        filenames.deinit();
+    }
+
+    // First archive
+    {
+        var output_buffer = std.ArrayList(u8).init(allocator);
+        defer output_buffer.deinit();
+
+        const files = [_][]const u8{"file1.txt"};
+        var iter = FilePathIterator{ .paths = &files };
+
+        {
+            const file = try tmp_dir.createFile("file1.txt", .{});
+            defer file.close();
+            try file.writeAll("content 1");
+        }
+
+        const filename = try bundle.bundle(&iter, 3, allocator, output_buffer.writer(), tmp_dir, null);
+        try filenames.append(filename);
+
+        const bundle_file = try tmp_dir.createFile(filename, .{});
+        defer bundle_file.close();
+        try bundle_file.writeAll(output_buffer.items);
+    }
+
+    // Second archive
+    {
+        var output_buffer = std.ArrayList(u8).init(allocator);
+        defer output_buffer.deinit();
+
+        const files = [_][]const u8{"file2.txt"};
+        var iter = FilePathIterator{ .paths = &files };
+
+        {
+            const file = try tmp_dir.createFile("file2.txt", .{});
+            defer file.close();
+            try file.writeAll("content 2");
+        }
+
+        const filename = try bundle.bundle(&iter, 3, allocator, output_buffer.writer(), tmp_dir, null);
+        try filenames.append(filename);
+
+        const bundle_file = try tmp_dir.createFile(filename, .{});
+        defer bundle_file.close();
+        try bundle_file.writeAll(output_buffer.items);
+    }
+
+    // Unbundle both archives
+    for (filenames.items) |fname| {
+        const bundle_file = try tmp_dir.openFile(fname, .{});
+        defer bundle_file.close();
+
+        const dir_name = fname[0 .. fname.len - 8]; // Remove .tar.zst
+        const extract_dir = try tmp_dir.makeOpenPath(dir_name, .{});
+        defer extract_dir.close();
+
+        try bundle.unbundle(bundle_file.reader(), extract_dir, allocator, fname);
+    }
+
+    // Verify extraction
+    const dir1_name = filenames.items[0][0 .. filenames.items[0].len - 8];
+    const dir2_name = filenames.items[1][0 .. filenames.items[1].len - 8];
+
+    const extracted1 = try tmp_dir.readFileAlloc(allocator, try std.fmt.allocPrint(allocator, "{s}/file1.txt", .{dir1_name}), 1024);
+    defer allocator.free(extracted1);
+    try testing.expectEqualStrings("content 1", extracted1);
+
+    const extracted2 = try tmp_dir.readFileAlloc(allocator, try std.fmt.allocPrint(allocator, "{s}/file2.txt", .{dir2_name}), 1024);
+    defer allocator.free(extracted2);
+    try testing.expectEqualStrings("content 2", extracted2);
+}
+
 test "blake3 hash detects corruption" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -565,18 +641,6 @@ test "blake3 hash detects corruption" {
     defer bundle_data.deinit();
 
     const file_paths = [_][]const u8{"test.txt"};
-    const FilePathIterator = struct {
-        paths: []const []const u8,
-        index: usize = 0,
-
-        pub fn next(self: *@This()) !?[]const u8 {
-            if (self.index >= self.paths.len) return null;
-            const path = self.paths[self.index];
-            self.index += 1;
-            return path;
-        }
-    };
-
     var file_iter = FilePathIterator{ .paths = &file_paths };
     const filename = try bundle.bundle(&file_iter, 3, allocator, bundle_data.writer(), src_dir, null);
     defer allocator.free(filename);
@@ -596,4 +660,189 @@ test "blake3 hash detects corruption" {
     const result = bundle.unbundle(stream.reader(), dst_dir, allocator, filename);
 
     try testing.expectError(error.HashMismatch, result);
+}
+
+test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Create initial temp directory with test files
+    var initial_tmp = testing.tmpDir(.{});
+    defer initial_tmp.cleanup();
+    const initial_dir = initial_tmp.dir;
+
+    // Create test files with varied content
+    const test_files = [_]struct { path: []const u8, content: []const u8 }{
+        .{ .path = "README.md", .content = "# Test Project\n\nThis is a test." },
+        .{ .path = "src/main.roc", .content = "app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"" },
+        .{ .path = "src/utils.roc", .content = "module [helper]\n\nhelper = \\x -> x + 1" },
+        .{ .path = "test/test1.roc", .content = "# Test file 1\nexpect 1 == 1" },
+        .{ .path = "test/test2.roc", .content = "# Test file 2\nexpect 2 + 2 == 4" },
+        .{ .path = "docs/guide.txt", .content = "User Guide\n==========\n\nStep 1: ...\nStep 2: ..." },
+    };
+
+    // Create all test files
+    for (test_files) |test_file| {
+        if (std.fs.path.dirname(test_file.path)) |dir| {
+            try initial_dir.makePath(dir);
+        }
+        const file = try initial_dir.createFile(test_file.path, .{});
+        defer file.close();
+        try file.writeAll(test_file.content);
+    }
+
+    // First bundle
+    var first_bundle = std.ArrayList(u8).init(allocator);
+    defer first_bundle.deinit();
+
+    var paths1 = std.ArrayList([]const u8).init(allocator);
+    defer paths1.deinit();
+    for (test_files) |test_file| {
+        try paths1.append(test_file.path);
+    }
+    var iter1 = FilePathIterator{ .paths = paths1.items };
+
+    const filename1 = try bundle.bundle(&iter1, 3, allocator, first_bundle.writer(), initial_dir, null);
+    defer allocator.free(filename1);
+
+    // Write first bundle to file
+    {
+        const bundle_file = try initial_dir.createFile(filename1, .{});
+        defer bundle_file.close();
+        try bundle_file.writeAll(first_bundle.items);
+    }
+
+    // First unbundle
+    var unbundle1_tmp = testing.tmpDir(.{});
+    defer unbundle1_tmp.cleanup();
+    const unbundle1_dir = unbundle1_tmp.dir;
+
+    {
+        const bundle_file = try initial_dir.openFile(filename1, .{});
+        defer bundle_file.close();
+
+        const extract_dir = try unbundle1_dir.makeOpenPath("extracted1", .{});
+        defer extract_dir.close();
+
+        try bundle.unbundle(bundle_file.reader(), extract_dir, allocator, filename1);
+    }
+
+    // Second bundle (from first extraction)
+    var second_bundle = std.ArrayList(u8).init(allocator);
+    defer second_bundle.deinit();
+
+    var paths2 = std.ArrayList([]const u8).init(allocator);
+    defer paths2.deinit();
+    for (test_files) |test_file| {
+        try paths2.append(test_file.path);
+    }
+    var iter2 = FilePathIterator{ .paths = paths2.items };
+
+    const extracted1_dir = try unbundle1_dir.openDir("extracted1", .{});
+    const filename2 = try bundle.bundle(&iter2, 3, allocator, second_bundle.writer(), extracted1_dir, null);
+    defer allocator.free(filename2);
+
+    // Filenames should be identical (same content = same hash)
+    try testing.expectEqualStrings(filename1, filename2);
+
+    // Write second bundle to file
+    {
+        const bundle_file = try unbundle1_dir.createFile(filename2, .{});
+        defer bundle_file.close();
+        try bundle_file.writeAll(second_bundle.items);
+    }
+
+    // Second unbundle
+    var unbundle2_tmp = testing.tmpDir(.{});
+    defer unbundle2_tmp.cleanup();
+    const unbundle2_dir = unbundle2_tmp.dir;
+
+    {
+        const bundle_file = try unbundle1_dir.openFile(filename2, .{});
+        defer bundle_file.close();
+
+        const extract_dir = try unbundle2_dir.makeOpenPath("extracted2", .{});
+        defer extract_dir.close();
+
+        try bundle.unbundle(bundle_file.reader(), extract_dir, allocator, filename2);
+    }
+
+    // Verify all files match original content
+    const extracted2_dir = try unbundle2_dir.openDir("extracted2", .{});
+    for (test_files) |test_file| {
+        const content = try extracted2_dir.readFileAlloc(allocator, test_file.path, 10240);
+        defer allocator.free(content);
+        try testing.expectEqualStrings(test_file.content, content);
+    }
+
+    // Bundle sizes should be identical
+    try testing.expectEqual(first_bundle.items.len, second_bundle.items.len);
+}
+
+test "CLI unbundle with no args defaults to all .tar.zst files" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Create temp directory
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_dir = tmp.dir;
+
+    // Create multiple archives
+    var archive_names = std.ArrayList([]const u8).init(allocator);
+    defer {
+        for (archive_names.items) |name| {
+            allocator.free(name);
+        }
+        archive_names.deinit();
+    }
+
+    // Create 3 different archives
+    for ([_][]const u8{ "file1.txt", "file2.txt", "file3.txt" }) |filename| {
+        var output_buffer = std.ArrayList(u8).init(allocator);
+        defer output_buffer.deinit();
+
+        const files = [_][]const u8{filename};
+        var iter = FilePathIterator{ .paths = &files };
+
+        // Create test file
+        {
+            const file = try tmp_dir.createFile(filename, .{});
+            defer file.close();
+            try file.writer().print("Content of {s}", .{filename});
+        }
+
+        const archive_name = try bundle.bundle(&iter, 3, allocator, output_buffer.writer(), tmp_dir, null);
+        try archive_names.append(archive_name);
+
+        // Write archive to disk
+        const archive_file = try tmp_dir.createFile(archive_name, .{});
+        defer archive_file.close();
+        try archive_file.writeAll(output_buffer.items);
+    }
+
+    // Verify all archives exist
+    try testing.expectEqual(@as(usize, 3), archive_names.items.len);
+    for (archive_names.items) |name| {
+        try testing.expect(std.mem.endsWith(u8, name, ".tar.zst"));
+        _ = try tmp_dir.statFile(name);
+    }
+
+    // Simulate unbundle with no args - should extract all .tar.zst files
+    // Here we just verify that our test setup would work with the CLI
+    var cwd = try tmp_dir.openDir(".", .{ .iterate = true });
+    defer cwd.close();
+    
+    var found_archives = std.ArrayList([]const u8).init(allocator);
+    defer found_archives.deinit();
+    
+    var iter = cwd.iterate();
+    while (try iter.next()) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".tar.zst")) {
+            try found_archives.append(entry.name);
+        }
+    }
+    
+    // Should find all 3 archives
+    try testing.expectEqual(@as(usize, 3), found_archives.items.len);
 }

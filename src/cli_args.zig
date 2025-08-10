@@ -14,6 +14,7 @@ pub const CliArgs = union(enum) {
     format: FormatArgs,
     test_cmd: TestArgs,
     bundle: BundleArgs,
+    unbundle: UnbundleArgs,
     repl,
     version,
     docs: DocsArgs,
@@ -26,6 +27,7 @@ pub const CliArgs = union(enum) {
             .format => |fmt| gpa.free(fmt.paths),
             .run => |run| gpa.free(run.app_args),
             .bundle => |bundle| gpa.free(bundle.paths),
+            .unbundle => |unbundle| gpa.free(unbundle.paths),
             else => return,
         }
     }
@@ -105,6 +107,11 @@ pub const BundleArgs = struct {
     compression_level: i32 = 3, // zstd compression level (1-22, default 3)
 };
 
+/// Arguments for `roc unbundle`
+pub const UnbundleArgs = struct {
+    paths: []const []const u8, // the paths of .tar.zst files to unbundle
+};
+
 /// Arguments for `roc docs`
 pub const DocsArgs = struct {
     path: []const u8, // the main.roc file to base the generation on
@@ -113,12 +120,13 @@ pub const DocsArgs = struct {
 };
 
 /// Parse a list of arguments.
-pub fn parse(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
+pub fn parse(gpa: mem.Allocator, args: []const []const u8) !CliArgs {
     if (args.len == 0) return try parseRun(gpa, args);
 
     if (mem.eql(u8, args[0], "check")) return parseCheck(args[1..]);
     if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
     if (mem.eql(u8, args[0], "bundle")) return try parseBundle(gpa, args[1..]);
+    if (mem.eql(u8, args[0], "unbundle")) return try parseUnbundle(gpa, args[1..]);
     if (mem.eql(u8, args[0], "format")) return try parseFormat(gpa, args[1..]);
     if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
     if (mem.eql(u8, args[0], "repl")) return parseRepl(args[1..]);
@@ -140,6 +148,7 @@ const main_help =
     \\Commands:
     \\  build            Build a binary from the given .roc file, but don't run it
     \\  bundle           Bundle .roc files into a compressed archive
+    \\  unbundle         Extract files from compressed .tar.zst archives
     \\  test             Run all top-level `expect`s in a main module and any modules it imports
     \\  repl             Launch the interactive Read Eval Print Loop (REPL)
     \\  format           Format a .roc file or the .roc files contained in a directory using standard Roc formatting
@@ -330,6 +339,70 @@ fn parseBundle(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.E
         .paths = try paths.toOwnedSlice(),
         .output_dir = output_dir,
         .compression_level = compression_level,
+    } };
+}
+
+fn parseUnbundle(gpa: mem.Allocator, args: []const []const u8) !CliArgs {
+    var paths = std.ArrayList([]const u8).init(gpa);
+
+    for (args) |arg| {
+        if (isHelpFlag(arg)) {
+            paths.deinit();
+            return CliArgs{ .help =
+                \\Extract files from compressed .tar.zst archives
+                \\
+                \\Usage: roc unbundle [OPTIONS] [ARCHIVE_FILES]...
+                \\
+                \\Arguments:
+                \\  [ARCHIVE_FILES]...  The .tar.zst files to unbundle
+                \\                      [default: all .tar.zst files in current directory]
+                \\
+                \\Options:
+                \\  -h, --help  Print help
+                \\
+            };
+        } else if (mem.startsWith(u8, arg, "-")) {
+            paths.deinit();
+            return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "unbundle", .arg = arg } } };
+        } else {
+            try paths.append(arg);
+        }
+    }
+
+    // If no paths specified, default to all .tar.zst files in current directory
+    if (paths.items.len == 0) {
+        var cwd = try std.fs.cwd().openDir(".", .{ .iterate = true });
+        defer cwd.close();
+        var iter = cwd.iterate();
+        while (try iter.next()) |entry| {
+            if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".tar.zst")) {
+                try paths.append(try gpa.dupe(u8, entry.name));
+            }
+        }
+        
+        // If still no files found, show help
+        if (paths.items.len == 0) {
+            paths.deinit();
+            return CliArgs{ .help = 
+                \\Extract files from compressed .tar.zst archives
+                \\
+                \\Usage: roc unbundle [OPTIONS] [ARCHIVE_FILES]...
+                \\
+                \\Arguments:
+                \\  [ARCHIVE_FILES]...  The .tar.zst files to unbundle
+                \\                      [default: all .tar.zst files in current directory]
+                \\
+                \\Options:
+                \\  -h, --help  Print help
+                \\
+                \\Error: No .tar.zst files found in current directory
+                \\
+            };
+        }
+    }
+
+    return CliArgs{ .unbundle = UnbundleArgs{
+        .paths = try paths.toOwnedSlice(),
     } };
 }
 

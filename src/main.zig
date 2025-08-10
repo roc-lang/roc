@@ -367,6 +367,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
         .check => |check_args| rocCheck(gpa, check_args),
         .build => |build_args| rocBuild(gpa, build_args),
         .bundle => |bundle_args| rocBundle(gpa, bundle_args),
+        .unbundle => |unbundle_args| rocUnbundle(gpa, unbundle_args),
         .format => |format_args| rocFormat(gpa, arena, format_args),
         .test_cmd => |test_args| rocTest(gpa, test_args),
         .repl => rocRepl(gpa),
@@ -1106,7 +1107,7 @@ fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
         gpa,
         temp_file.writer(),
         cwd,
-        null, // no path prefix stripping for now
+        null, // path_prefix parameter - null means no stripping
     );
     defer gpa.free(final_filename);
 
@@ -1135,6 +1136,86 @@ fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     try stdout.print("Uncompressed size: {} bytes\n", .{uncompressed_size});
     try stdout.print("Compression ratio: {d:.2}:1\n", .{@as(f64, @floatFromInt(uncompressed_size)) / @as(f64, @floatFromInt(compressed_size))});
     try stdout.print("Time: {} ms\n", .{elapsed_ms});
+}
+
+fn rocUnbundle(gpa: Allocator, args: cli_args.UnbundleArgs) !void {
+    const stdout = std.io.getStdOut().writer();
+    const stderr = std.io.getStdErr().writer();
+    const cwd = std.fs.cwd();
+    
+    var had_errors = false;
+    
+    for (args.paths) |archive_path| {
+        // Extract directory name from archive filename
+        const basename = std.fs.path.basename(archive_path);
+        var dir_name: []const u8 = undefined;
+        
+        if (std.mem.endsWith(u8, basename, ".tar.zst")) {
+            dir_name = basename[0 .. basename.len - 8];
+        } else {
+            try stderr.print("Error: {s} is not a .tar.zst file\n", .{archive_path});
+            had_errors = true;
+            continue;
+        }
+        
+        // Check if directory already exists
+        cwd.access(dir_name, .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                // Good, directory doesn't exist
+            },
+            else => return err,
+        };
+        
+        if (cwd.openDir(dir_name, .{})) |_| {
+            try stderr.print("Error: Directory {s} already exists\n", .{dir_name});
+            had_errors = true;
+            continue;
+        } else |_| {
+            // Directory doesn't exist, proceed
+        }
+        
+        // Create the output directory
+        var output_dir = try cwd.makeOpenPath(dir_name, .{});
+        defer output_dir.close();
+        
+        // Open the archive file
+        const archive_file = cwd.openFile(archive_path, .{}) catch |err| {
+            try stderr.print("Error opening {s}: {s}\n", .{ archive_path, @errorName(err) });
+            had_errors = true;
+            continue;
+        };
+        defer archive_file.close();
+        
+        // Unbundle the archive
+        bundle.unbundle(
+            archive_file.reader(),
+            output_dir,
+            gpa,
+            basename,
+        ) catch |err| {
+            switch (err) {
+                error.HashMismatch => {
+                    try stderr.print("Error: Hash mismatch for {s} - file may be corrupted\n", .{archive_path});
+                    had_errors = true;
+                },
+                error.InvalidFilename => {
+                    try stderr.print("Error: Invalid filename format for {s}\n", .{archive_path});
+                    had_errors = true;
+                },
+                else => {
+                    try stderr.print("Error unbundling {s}: {s}\n", .{ archive_path, @errorName(err) });
+                    had_errors = true;
+                },
+            }
+            continue; // Skip success message on error
+        };
+        
+        try stdout.print("Extracted: {s}\n", .{dir_name});
+    }
+    
+    if (had_errors) {
+        std.process.exit(1);
+    }
 }
 
 fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {

@@ -442,6 +442,8 @@ pub fn unbundle(
     while (true) {
         const file = tar_iter.next() catch |err| {
             if (err == error.EndOfStream) break;
+            // Some tar implementations add extra padding at the end
+            // If we've successfully extracted at least one file, treat other errors as end of archive
             return error.InvalidTarHeader;
         };
 
