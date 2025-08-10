@@ -66,4 +66,5 @@ test {
     std.testing.refAllDeclsRecursive(@import("layout/store.zig"));
     std.testing.refAllDeclsRecursive(@import("layout/store_test.zig"));
     std.testing.refAllDeclsRecursive(@import("repl/eval.zig"));
+    std.testing.refAllDeclsRecursive(@import("bundle/bundle.zig"));
 }

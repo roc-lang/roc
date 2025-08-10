@@ -150,6 +150,12 @@ pub fn build(b: *std.Build) void {
     });
     roc_modules.addAllToTest(all_tests);
     all_tests.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
+    
+    const zstd = b.dependency("zstd", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    all_tests.linkLibrary(zstd.artifact("zstd"));
 
     b.default_step.dependOn(&all_tests.step);
     b.default_step.dependOn(playground_step);
