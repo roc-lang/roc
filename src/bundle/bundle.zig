@@ -357,13 +357,93 @@ pub fn validateBase58Hash(allocator: std.mem.Allocator, base58_hash: []const u8)
     return hash;
 }
 
+/// Writer interface for extracting files during unbundle
+pub const ExtractWriter = struct {
+    ptr: *anyopaque,
+    makeDirFn: *const fn (ptr: *anyopaque, path: []const u8) anyerror!void,
+    createFileFn: *const fn (ptr: *anyopaque, path: []const u8) anyerror!std.io.AnyWriter,
+    
+    pub fn makeDir(self: ExtractWriter, path: []const u8) !void {
+        return self.makeDirFn(self.ptr, path);
+    }
+    
+    pub fn createFile(self: ExtractWriter, path: []const u8) !std.io.AnyWriter {
+        return self.createFileFn(self.ptr, path);
+    }
+};
+
+/// File handle wrapper that provides AnyWriter
+const FileWriterWrapper = struct {
+    file: std.fs.File,
+    
+    pub fn writer(self: *FileWriterWrapper) std.io.AnyWriter {
+        return self.file.writer().any();
+    }
+    
+    pub fn close(self: *FileWriterWrapper) void {
+        self.file.close();
+    }
+};
+
+/// Directory-based extract writer
+pub const DirExtractWriter = struct {
+    dir: std.fs.Dir,
+    allocator: std.mem.Allocator,
+    open_files: std.ArrayList(*FileWriterWrapper),
+    
+    pub fn init(dir: std.fs.Dir, allocator: std.mem.Allocator) DirExtractWriter {
+        return .{ 
+            .dir = dir,
+            .allocator = allocator,
+            .open_files = std.ArrayList(*FileWriterWrapper).init(allocator),
+        };
+    }
+    
+    pub fn deinit(self: *DirExtractWriter) void {
+        for (self.open_files.items) |wrapper| {
+            wrapper.close();
+            self.allocator.destroy(wrapper);
+        }
+        self.open_files.deinit();
+    }
+    
+    pub fn extractWriter(self: *DirExtractWriter) ExtractWriter {
+        return .{
+            .ptr = self,
+            .makeDirFn = makeDir,
+            .createFileFn = createFile,
+        };
+    }
+    
+    fn makeDir(ptr: *anyopaque, path: []const u8) anyerror!void {
+        const self = @as(*DirExtractWriter, @ptrCast(@alignCast(ptr)));
+        try self.dir.makePath(path);
+    }
+    
+    fn createFile(ptr: *anyopaque, path: []const u8) anyerror!std.io.AnyWriter {
+        const self = @as(*DirExtractWriter, @ptrCast(@alignCast(ptr)));
+        
+        // Create parent directories if needed
+        if (std.fs.path.dirname(path)) |dir_name| {
+            try self.dir.makePath(dir_name);
+        }
+        
+        const file = try self.dir.createFile(path, .{});
+        const wrapper = try self.allocator.create(FileWriterWrapper);
+        wrapper.* = .{ .file = file };
+        try self.open_files.append(wrapper);
+        
+        return wrapper.writer();
+    }
+};
+
 /// Unbundle files from a compressed tar archive stream.
 ///
 /// This is the core streaming unbundle logic that can be used by both file-based
 /// unbundling and network-based downloading.
 pub fn unbundleStream(
     input_reader: anytype,
-    extract_dir: std.fs.Dir,
+    extract_writer: ExtractWriter,
     allocator: std.mem.Allocator,
     expected_hash: *const [32]u8,
 ) UnbundleError!void {
@@ -454,25 +534,17 @@ pub fn unbundleStream(
 
         switch (tar_file.kind) {
             .file => {
-                // Create parent directories if needed
-                if (std.fs.path.dirname(tar_file.name)) |dir_name| {
-                    extract_dir.makePath(dir_name) catch {
-                        return error.DirectoryCreateFailed;
-                    };
-                }
-
-                const out_file = extract_dir.createFile(tar_file.name, .{}) catch {
+                const writer = extract_writer.createFile(tar_file.name) catch {
                     return error.FileCreateFailed;
                 };
-                defer out_file.close();
 
                 // Copy file contents using writeAll
-                tar_file.writeAll(out_file.writer()) catch {
+                tar_file.writeAll(writer) catch {
                     return error.FileWriteFailed;
                 };
             },
             .directory => {
-                extract_dir.makePath(tar_file.name) catch {
+                extract_writer.makeDir(tar_file.name) catch {
                     return error.DirectoryCreateFailed;
                 };
             },
@@ -503,5 +575,7 @@ pub fn unbundle(
         return error.InvalidFilename;
     };
     
-    return unbundleStream(input_reader, extract_dir, allocator, &expected_hash);
+    var dir_writer = DirExtractWriter.init(extract_dir, allocator);
+    defer dir_writer.deinit();
+    return unbundleStream(input_reader, dir_writer.extractWriter(), allocator, &expected_hash);
 }

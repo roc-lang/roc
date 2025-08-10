@@ -91,5 +91,7 @@ pub fn download(
     const reader = request.reader();
     
     // Stream directly to unbundleStream
-    try bundle.unbundleStream(reader, extract_dir, allocator, &expected_hash);
+    var dir_writer = bundle.DirExtractWriter.init(extract_dir, allocator);
+    defer dir_writer.deinit();
+    try bundle.unbundleStream(reader, dir_writer.extractWriter(), allocator, &expected_hash);
 }

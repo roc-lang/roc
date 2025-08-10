@@ -909,3 +909,226 @@ test "download URL validation" {
         try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", hash);
     }
 }
+
+// In-memory file system for testing
+const MemoryFileSystem = struct {
+    allocator: std.mem.Allocator,
+    files: std.StringHashMap(std.ArrayList(u8)),
+    directories: std.StringHashMap(void),
+    
+    pub fn init(allocator: std.mem.Allocator) MemoryFileSystem {
+        return .{
+            .allocator = allocator,
+            .files = std.StringHashMap(std.ArrayList(u8)).init(allocator),
+            .directories = std.StringHashMap(void).init(allocator),
+        };
+    }
+    
+    pub fn deinit(self: *MemoryFileSystem) void {
+        var iter = self.files.iterator();
+        while (iter.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        self.files.deinit();
+        self.directories.deinit();
+    }
+    
+    pub fn extractWriter(self: *MemoryFileSystem) bundle.ExtractWriter {
+        return .{
+            .ptr = self,
+            .makeDirFn = makeDir,
+            .createFileFn = createFile,
+        };
+    }
+    
+    fn makeDir(ptr: *anyopaque, path: []const u8) anyerror!void {
+        const self = @as(*MemoryFileSystem, @ptrCast(@alignCast(ptr)));
+        try self.directories.put(try self.allocator.dupe(u8, path), {});
+    }
+    
+    fn createFile(ptr: *anyopaque, path: []const u8) anyerror!std.io.AnyWriter {
+        const self = @as(*MemoryFileSystem, @ptrCast(@alignCast(ptr)));
+        
+        // Create parent directories if needed
+        if (std.fs.path.dirname(path)) |dir_name| {
+            try self.directories.put(try self.allocator.dupe(u8, dir_name), {});
+        }
+        
+        var file_data = std.ArrayList(u8).init(self.allocator);
+        try self.files.put(try self.allocator.dupe(u8, path), file_data);
+        
+        const writer = self.files.getPtr(path).?.writer();
+        return writer.any();
+    }
+    
+    pub fn getFileContent(self: *MemoryFileSystem, path: []const u8) ?[]const u8 {
+        const file = self.files.get(path) orelse return null;
+        return file.items;
+    }
+};
+
+test "download from local server" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    
+    // Create test files in memory
+    var src_files = MemoryFileSystem.init(allocator);
+    defer src_files.deinit();
+    
+    try src_files.files.put(try allocator.dupe(u8, "README.md"), std.ArrayList(u8).init(allocator));
+    try src_files.files.getPtr("README.md").?.appendSlice("# Test Project\n\nThis is a test README.");
+    
+    try src_files.files.put(try allocator.dupe(u8, "src/main.roc"), std.ArrayList(u8).init(allocator));
+    try src_files.files.getPtr("src/main.roc").?.appendSlice("app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"");
+    
+    try src_files.files.put(try allocator.dupe(u8, "src/lib.roc"), std.ArrayList(u8).init(allocator));
+    try src_files.files.getPtr("src/lib.roc").?.appendSlice("module [helper]\n\nhelper = \\x -> x * 2");
+    
+    try src_files.files.put(try allocator.dupe(u8, "test/test1.roc"), std.ArrayList(u8).init(allocator));
+    try src_files.files.getPtr("test/test1.roc").?.appendSlice("# Test file 1\nexpect 2 + 2 == 4");
+    
+    try src_files.files.put(try allocator.dupe(u8, "docs/guide.md"), std.ArrayList(u8).init(allocator));
+    try src_files.files.getPtr("docs/guide.md").?.appendSlice("# User Guide\n\n## Getting Started\n\nWelcome to the guide!");
+    
+    // Create bundle in memory
+    var bundle_data = std.ArrayList(u8).init(allocator);
+    defer bundle_data.deinit();
+    
+    // Create file path iterator from memory files
+    const file_paths = [_][]const u8{
+        "README.md",
+        "src/main.roc",
+        "src/lib.roc",
+        "test/test1.roc",
+        "docs/guide.md",
+    };
+    var file_iter = FilePathIterator{ .paths = &file_paths };
+    
+    // Create a temp directory to serve as the source for bundling
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    
+    // Write memory files to temp dir for bundling
+    var src_iter = src_files.files.iterator();
+    while (src_iter.next()) |entry| {
+        if (std.fs.path.dirname(entry.key_ptr.*)) |dir| {
+            try tmp.dir.makePath(dir);
+        }
+        const file = try tmp.dir.createFile(entry.key_ptr.*, .{});
+        defer file.close();
+        try file.writeAll(entry.value_ptr.items);
+    }
+    
+    // Bundle the files
+    const filename = try bundle.bundle(&file_iter, 3, allocator, bundle_data.writer(), tmp.dir, null);
+    defer allocator.free(filename);
+    
+    // Extract hash from filename
+    const base58_hash = filename[0 .. filename.len - 8];
+    
+    // Try to find an available port
+    var port: u16 = 0;
+    var server: std.net.Server = undefined;
+    var attempts: u8 = 0;
+    while (attempts < 30) : (attempts += 1) {
+        // Generate random port between 20000 and 60000
+        port = 20000 + @as(u16, @intCast(std.crypto.random.int(u32) % 40000));
+        
+        const addr = try std.net.Address.parseIp("127.0.0.1", port);
+        server = std.net.Address.listen(addr, .{ .reuse_port = true }) catch |err| {
+            if (err == error.AddressInUse) continue;
+            return err;
+        };
+        break;
+    }
+    defer server.deinit();
+    
+    if (attempts >= 30) {
+        return error.NoAvailablePort;
+    }
+    
+    // Create server thread
+    const ServerContext = struct {
+        server: *std.net.Server,
+        bundle_data: []const u8,
+        served: std.Thread.ResetEvent = .{},
+        
+        fn run(ctx: *@This()) !void {
+            const connection = try ctx.server.accept();
+            defer connection.stream.close();
+            
+            // Read HTTP request (we don't really parse it, just consume it)
+            var request_buf: [4096]u8 = undefined;
+            _ = try connection.stream.read(&request_buf);
+            
+            // Send HTTP response with bundle data
+            const response = try std.fmt.allocPrint(
+                std.heap.page_allocator,
+                "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nContent-Type: application/octet-stream\r\n\r\n",
+                .{ctx.bundle_data.len}
+            );
+            defer std.heap.page_allocator.free(response);
+            
+            try connection.stream.writeAll(response);
+            try connection.stream.writeAll(ctx.bundle_data);
+            
+            ctx.served.set();
+        }
+    };
+    
+    var server_ctx = ServerContext{
+        .server = &server,
+        .bundle_data = bundle_data.items,
+    };
+    
+    const server_thread = try std.Thread.spawn(.{}, ServerContext.run, .{&server_ctx});
+    defer server_thread.join();
+    
+    // Download and extract to memory
+    var extracted_files = MemoryFileSystem.init(allocator);
+    defer extracted_files.deinit();
+    
+    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/{s}.tar.zst", .{ port, base58_hash });
+    defer allocator.free(url);
+    
+    // Download (with memory extract writer)
+    {
+        const expected_hash = (try bundle.validateBase58Hash(allocator, base58_hash)).?;
+        
+        var client = std.http.Client{ .allocator = allocator };
+        defer client.deinit();
+        
+        const uri = try std.Uri.parse(url);
+        
+        var server_header_buffer: [16 * 1024]u8 = undefined;
+        var request = try client.open(.GET, uri, .{
+            .server_header_buffer = &server_header_buffer,
+            .redirect_behavior = .unhandled,
+        });
+        defer request.deinit();
+        
+        try request.send();
+        try request.finish();
+        try request.wait();
+        
+        try testing.expectEqual(std.http.Status.ok, request.response.status);
+        
+        const reader = request.reader();
+        try bundle.unbundleStream(reader, extracted_files.extractWriter(), allocator, &expected_hash);
+    }
+    
+    // Wait for server to finish
+    server_ctx.served.wait();
+    
+    // Verify all files were extracted with correct content
+    try testing.expectEqualStrings("# Test Project\n\nThis is a test README.", extracted_files.getFileContent("README.md").?);
+    try testing.expectEqualStrings("app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"", extracted_files.getFileContent("src/main.roc").?);
+    try testing.expectEqualStrings("module [helper]\n\nhelper = \\x -> x * 2", extracted_files.getFileContent("src/lib.roc").?);
+    try testing.expectEqualStrings("# Test file 1\nexpect 2 + 2 == 4", extracted_files.getFileContent("test/test1.roc").?);
+    try testing.expectEqualStrings("# User Guide\n\n## Getting Started\n\nWelcome to the guide!", extracted_files.getFileContent("docs/guide.md").?);
+    
+    // Verify directories were created
+    try testing.expect(extracted_files.directories.contains("src"));
+    try testing.expect(extracted_files.directories.contains("test"));
+    try testing.expect(extracted_files.directories.contains("docs"));
+}
