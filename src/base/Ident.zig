@@ -314,7 +314,7 @@ pub const Store = struct {
 };
 
 test "from_bytes validates empty text" {
-    const result = Ident.from_bytes("");
-    try std.testing.expectError(Ident.Error.EmptyText, result);
-    @panic("ASdf");
+    // const result = Ident.from_bytes("");
+    // try std.testing.expectError(Ident.Error.EmptyText, result);
+    @panic("WHY ISN'T THIS FAILING!!!!");
 }
