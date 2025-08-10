@@ -75,7 +75,23 @@ pub fn download(
     var extra_headers: []const std.http.Header = &.{};
     if (uri.host) |host| {
         if (std.mem.eql(u8, host.percent_encoded, "localhost")) {
-            // Resolve localhost and verify it's loopback
+            // Security: We must resolve "localhost" and verify it points to a loopback address.
+            // This prevents attacks where:
+            // 1. An attacker modifies /etc/hosts to make localhost resolve to their server
+            // 2. A compromised DNS makes localhost resolve to an external IP
+            // 3. Container/VM networking misconfiguration exposes localhost to external IPs
+            //
+            // We're being intentionally strict here:
+            // - For IPv4: We only accept exactly 127.0.0.1 (not the full 127.0.0.0/8 range)
+            // - For IPv6: We only accept exactly ::1 (not other loopback addresses)
+            //
+            // While the specs technically allow any 127.x.y.z address for IPv4 loopback
+            // and multiple forms for IPv6, in practice localhost almost always resolves
+            // to exactly 127.0.0.1 or ::1. By being conservative, we:
+            // 1. Match real-world usage patterns (no practical downside)
+            // 2. Avoid potential edge cases in networking stack implementations
+            // 3. Reduce attack surface by accepting only the most common values
+            
             const port = uri.port orelse (if (std.mem.eql(u8, uri.scheme, "https")) @as(u16, 443) else @as(u16, 80));
 
             const address_list = std.net.getAddressList(allocator, "localhost", port) catch {
@@ -91,14 +107,15 @@ pub fn download(
             const first_addr = address_list.addrs[0];
             const is_loopback = switch (first_addr.any.family) {
                 std.posix.AF.INET => blk: {
-                    // Check if IPv4 address is in 127.0.0.0/8 range
+                    // Check if IPv4 address is exactly 127.0.0.1
                     const addr = first_addr.in.sa.addr;
-                    // IPv4 addresses are in network byte order
-                    const first_octet = if (comptime builtin.cpu.arch.endian() == .little)
-                        (addr & 0xFF)
+                    // IPv4 addresses are in network byte order (big-endian)
+                    // 127.0.0.1 in network byte order is 0x7F000001
+                    const expected = if (comptime builtin.cpu.arch.endian() == .little)
+                        0x0100007F  // Little-endian: bytes reversed
                     else
-                        (addr >> 24);
-                    break :blk first_octet == 127;
+                        0x7F000001; // Big-endian: natural order
+                    break :blk addr == expected;
                 },
                 std.posix.AF.INET6 => blk: {
                     // Check if IPv6 address is ::1
