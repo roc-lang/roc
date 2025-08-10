@@ -4,6 +4,15 @@ const std = @import("std");
 const builtin = @import("builtin");
 const bundle = @import("bundle.zig");
 
+// Network constants
+const HTTPS_DEFAULT_PORT: u16 = 443;
+const HTTP_DEFAULT_PORT: u16 = 80;
+const SERVER_HEADER_BUFFER_SIZE: usize = 16 * 1024;
+
+// IPv4 loopback address 127.0.0.1 in network byte order
+const IPV4_LOOPBACK_BE: u32 = 0x7F000001; // Big-endian
+const IPV4_LOOPBACK_LE: u32 = 0x0100007F; // Little-endian
+
 pub const DownloadError = error{
     InvalidUrl,
     LocalhostWasNotLoopback,
@@ -91,8 +100,8 @@ pub fn download(
             // 1. Match real-world usage patterns (no practical downside)
             // 2. Avoid potential edge cases in networking stack implementations
             // 3. Reduce attack surface by accepting only the most common values
-            
-            const port = uri.port orelse (if (std.mem.eql(u8, uri.scheme, "https")) @as(u16, 443) else @as(u16, 80));
+
+            const port = uri.port orelse (if (std.mem.eql(u8, uri.scheme, "https")) HTTPS_DEFAULT_PORT else HTTP_DEFAULT_PORT);
 
             const address_list = std.net.getAddressList(allocator, "localhost", port) catch {
                 return error.LocalhostWasNotLoopback;
@@ -110,11 +119,10 @@ pub fn download(
                     // Check if IPv4 address is exactly 127.0.0.1
                     const addr = first_addr.in.sa.addr;
                     // IPv4 addresses are in network byte order (big-endian)
-                    // 127.0.0.1 in network byte order is 0x7F000001
                     const expected = if (comptime builtin.cpu.arch.endian() == .little)
-                        0x0100007F  // Little-endian: bytes reversed
+                        IPV4_LOOPBACK_LE
                     else
-                        0x7F000001; // Big-endian: natural order
+                        IPV4_LOOPBACK_BE;
                     break :blk addr == expected;
                 },
                 std.posix.AF.INET6 => blk: {
@@ -150,7 +158,7 @@ pub fn download(
     }
 
     // Start the request with the potentially modified URI
-    var server_header_buffer: [16 * 1024]u8 = undefined;
+    var server_header_buffer: [SERVER_HEADER_BUFFER_SIZE]u8 = undefined;
     var request = client.open(.GET, uri, .{
         .server_header_buffer = &server_header_buffer,
         .redirect_behavior = .unhandled,

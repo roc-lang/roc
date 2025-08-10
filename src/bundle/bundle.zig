@@ -22,6 +22,12 @@ const c = @cImport({
 // Base58 alphabet (Bitcoin-style, no 0OIl)
 const base58_alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
+// Constants for magic numbers
+const USIZE_STORAGE_OVERHEAD: usize = 16; // Extra bytes for storing allocation size
+const BASE58_SIZE_RATIO_PERCENT: usize = 138; // Base58 is ~138% the size of base256
+const TAR_PATH_MAX_LENGTH: usize = 255; // Maximum path length for tar compatibility
+const TAR_NAME_BUFFER_SIZE: usize = 256; // Buffer size for tar file names
+
 pub fn base58Encode(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
     if (data.len == 0) return allocator.dupe(u8, "");
 
@@ -31,8 +37,15 @@ pub fn base58Encode(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
         if (byte == 0) leading_zeros += 1 else break;
     }
 
-    // Allocate output (base58 is ~138% the size of base256)
-    const max_size = (data.len * 138) / 100 + 1;
+    // Special case: if all bytes are zero, just return the appropriate number of '1's
+    if (leading_zeros == data.len) {
+        const result = try allocator.alloc(u8, leading_zeros);
+        @memset(result, '1');
+        return result;
+    }
+
+    // Allocate output
+    const max_size = (data.len * BASE58_SIZE_RATIO_PERCENT) / 100 + 1;
     var result = try allocator.alloc(u8, max_size);
     defer allocator.free(result);
 
@@ -130,24 +143,24 @@ pub fn base58Decode(allocator: std.mem.Allocator, encoded: []const u8) ![]u8 {
 // Wrapper functions to adapt Zig allocator to zstd's custom allocator interface
 fn myZstdAlloc(opaque_ptr: ?*anyopaque, size: usize) callconv(.C) ?*anyopaque {
     const allocator = @as(*std.mem.Allocator, @ptrCast(@alignCast(opaque_ptr.?)));
-    // Allocate extra 16 bytes to store the size
-    const total_size = size + 16;
+    // Allocate extra bytes to store the size
+    const total_size = size + USIZE_STORAGE_OVERHEAD;
     const mem = allocator.alloc(u8, total_size) catch return null;
 
     // Store the size in the first 8 bytes (usize)
     const size_ptr = @as(*usize, @ptrCast(@alignCast(mem.ptr)));
     size_ptr.* = total_size;
 
-    // Return pointer offset by 16 bytes
-    return @ptrFromInt(@intFromPtr(mem.ptr) + 16);
+    // Return pointer offset by overhead bytes
+    return @ptrFromInt(@intFromPtr(mem.ptr) + USIZE_STORAGE_OVERHEAD);
 }
 
 fn myZstdFree(opaque_ptr: ?*anyopaque, address: ?*anyopaque) callconv(.C) void {
     if (address == null) return;
     const allocator = @as(*std.mem.Allocator, @ptrCast(@alignCast(opaque_ptr.?)));
 
-    // Get the original allocation by subtracting 16 bytes
-    const original_ptr = @as([*]u8, @ptrFromInt(@intFromPtr(address) - 16));
+    // Get the original allocation by subtracting overhead bytes
+    const original_ptr = @as([*]u8, @ptrFromInt(@intFromPtr(address) - USIZE_STORAGE_OVERHEAD));
 
     // Read the size from the first 8 bytes
     const size_ptr = @as(*const usize, @ptrCast(@alignCast(original_ptr)));
@@ -241,7 +254,7 @@ pub fn bundle(
             }
         } else file_path;
 
-        if (tar_path.len > 255) {
+        if (tar_path.len > TAR_PATH_MAX_LENGTH) {
             return error.FilePathTooLong;
         }
 
@@ -483,8 +496,8 @@ pub fn unbundleStream(
     const tar_reader = decompressed_stream.reader();
 
     // Use std.tar to parse the archive
-    var file_name_buffer: [256]u8 = undefined;
-    var link_name_buffer: [256]u8 = undefined;
+    var file_name_buffer: [TAR_NAME_BUFFER_SIZE]u8 = undefined;
+    var link_name_buffer: [TAR_NAME_BUFFER_SIZE]u8 = undefined;
     var tar_iter = std.tar.iterator(tar_reader, .{
         .file_name_buffer = &file_name_buffer,
         .link_name_buffer = &link_name_buffer,
