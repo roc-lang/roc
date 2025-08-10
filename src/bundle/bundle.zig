@@ -1,3 +1,17 @@
+//! Bundle
+//!
+//! Future work:
+//! - Create a zstd dictionary for roc code (using ~1-10MB of representative roc source code, with the zstd cli;
+//!   adds about 110KB to our final binary) and use that. It's a backwards-compatible change (we can keep decoding
+//!   dictionary-free .zst files even after we introduce the dictionary)
+//! - Changing dictionaries after you've started using one is a breaking change (there's an auto-generated
+//!   dictionary ID in the binary, so you know when you're trying to decode with a different dictionary than
+//!   the one that the binary was compresed with, and zstd will error), and each time we add new dictionaries
+//!   in a nonbreaking way, we have to add +110KB to the `roc` binary, so we should avoid this and instead
+//!   only introduce a dictionary when we're confident we'll be happy with that being THE dictionary for a long time.
+//! - Compress/Decompress large binary blobs (e.g. for host data, or static List(U8) imports) separately
+//!   using different compression params and dictionaires (e.g. make a .tar.zst inside the main .tar.zst)
+
 const std = @import("std");
 const builtin = @import("builtin");
 const c = @cImport({
@@ -203,28 +217,18 @@ fn bundleImpl(
     output_writer: anytype,
     base_dir: std.fs.Dir,
 ) !void {
-    var buffered_writer = std.io.bufferedWriter(output_writer);
-    const buffered = buffered_writer.writer();
+    // First create the tar in memory
+    var tar_buffer = std.ArrayList(u8).init(allocator);
+    defer tar_buffer.deinit();
 
-    current_stage.* = "create_context";
-    const ctx = c.ZSTD_createCCtx() orelse return error.OutOfMemory;
-    defer _ = c.ZSTD_freeCCtx(ctx);
+    // Create tar writer
+    var tar_writer = std.tar.writer(tar_buffer.writer());
 
-    _ = c.ZSTD_CCtx_setParameter(ctx, c.ZSTD_c_compressionLevel, compression_level);
-
-    var compressed_buffer = std.ArrayList(u8).init(allocator);
-    defer compressed_buffer.deinit();
-
-    const out_buffer_size = c.ZSTD_CStreamOutSize();
-    var out_buffer = allocator.alloc(u8, out_buffer_size) catch {
-        return error.OutOfMemory;
-    };
-    defer allocator.free(out_buffer);
-
+    // Write files to tar
     while (try file_path_iter.next()) |file_path| {
         current_file_path.* = file_path;
 
-        if (file_path.len > 100) {
+        if (file_path.len > 255) {
             return error.FilePathTooLong;
         }
 
@@ -238,149 +242,64 @@ fn bundleImpl(
         const stat = file.stat() catch |err| {
             return err;
         };
-        const file_size = stat.size;
 
-        // Create tar header manually
-        var header: [512]u8 = [_]u8{0} ** 512;
-
-        // Name (up to 100 bytes)
-        const name_len = @min(file_path.len, 100);
-        @memcpy(header[0..name_len], file_path[0..name_len]);
-
-        // Mode (octal, 8 bytes)
-        current_stage.* = "mode";
-        _ = std.fmt.bufPrint(header[100..107], "{o:0>7}", .{0o644}) catch {
-            return error.BufferTooSmall;
+        current_stage.* = "read";
+        const file_content = allocator.alloc(u8, stat.size) catch {
+            return error.OutOfMemory;
         };
-        header[107] = 0;
+        defer allocator.free(file_content);
 
-        // UID and GID (octal, 8 bytes each)
-        current_stage.* = "uid";
-        _ = std.fmt.bufPrint(header[108..115], "{o:0>7}", .{0}) catch {
-            return error.BufferTooSmall;
-        };
-        header[115] = 0;
-        current_stage.* = "gid";
-        _ = std.fmt.bufPrint(header[116..123], "{o:0>7}", .{0}) catch {
-            return error.BufferTooSmall;
-        };
-        header[123] = 0;
-
-        // Size (octal, 12 bytes)
-        current_stage.* = "size";
-        _ = std.fmt.bufPrint(header[124..135], "{o:0>11}", .{file_size}) catch {
-            return error.BufferTooSmall;
-        };
-        header[135] = 0;
-
-        // Mtime (octal, 12 bytes)
-        const mtime: u64 = 0; // Use zero for reproducible builds
-        current_stage.* = "mtime";
-        _ = std.fmt.bufPrint(header[136..147], "{o:0>11}", .{mtime}) catch {
-            return error.BufferTooSmall;
-        };
-        header[147] = 0;
-
-        // Type flag
-        header[156] = '0'; // regular file
-
-        // Magic
-        @memcpy(header[257..263], "ustar\x00");
-
-        // Version
-        @memcpy(header[263..265], "00");
-
-        // Calculate checksum
-        @memset(header[148..156], ' ');
-        var checksum: u32 = 0;
-        for (header) |byte| {
-            checksum += byte;
-        }
-        current_stage.* = "checksum";
-        _ = std.fmt.bufPrint(header[148..155], "{o:0>7}", .{checksum}) catch {
-            return error.BufferTooSmall;
-        };
-        header[155] = 0;
-
-        current_stage.* = "header";
-        compressData(ctx, &header, &compressed_buffer, out_buffer) catch |err| {
+        // Seek to beginning of file before reading
+        file.seekTo(0) catch |err| {
             return err;
         };
-
-        var buf: [8192]u8 = undefined;
-        var bytes_written: u64 = 0;
-        while (bytes_written < file_size) {
-            current_stage.* = "read";
-            const bytes_read = file.read(&buf) catch |err| {
-                return err;
-            };
-            if (bytes_read == 0) break;
-            current_stage.* = "data";
-            compressData(ctx, buf[0..bytes_read], &compressed_buffer, out_buffer) catch |err| {
-                return err;
-            };
-            bytes_written += bytes_read;
+        const bytes_read = file.readAll(file_content) catch |err| {
+            return err;
+        };
+        if (bytes_read != stat.size) {
+            return error.UnexpectedEndOfStream;
         }
 
-        const padding = blockPadding(file_size);
-        if (padding > 0) {
-            const zeros = [_]u8{0} ** 512;
-            current_stage.* = "padding";
-            compressData(ctx, zeros[0..padding], &compressed_buffer, out_buffer) catch |err| {
-                return err;
-            };
-        }
+        current_stage.* = "tar_write";
+        // Use mtime of 0 for reproducible builds
+        const Options = @TypeOf(tar_writer).Options;
+        const options = Options{
+            .mode = 0o644,
+            .mtime = 0,
+        };
+        tar_writer.writeFileBytes(file_path, file_content, options) catch |err| {
+            return err;
+        };
     }
 
-    current_file_path.* = null;
-    current_stage.* = "trailer";
-    const trailer = [_]u8{0} ** 1024;
-    compressData(ctx, &trailer, &compressed_buffer, out_buffer) catch |err| {
+    // Finish the tar archive
+    current_stage.* = "tar_finish";
+    tar_writer.finish() catch |err| {
         return err;
     };
 
-    // Finalize compression
-    current_stage.* = "finalize";
-    var in_buf = c.ZSTD_inBuffer{ .src = "", .size = 0, .pos = 0 };
+    // Now compress the tar data
+    var buffered_writer = std.io.bufferedWriter(output_writer);
+    const buffered = buffered_writer.writer();
+
+    current_stage.* = "create_context";
+    const ctx = c.ZSTD_createCCtx() orelse return error.OutOfMemory;
+    defer _ = c.ZSTD_freeCCtx(ctx);
+
+    _ = c.ZSTD_CCtx_setParameter(ctx, c.ZSTD_c_compressionLevel, compression_level);
+
+    const out_buffer_size = c.ZSTD_CStreamOutSize();
+    var out_buffer = allocator.alloc(u8, out_buffer_size) catch {
+        return error.OutOfMemory;
+    };
+    defer allocator.free(out_buffer);
+
+    // Compress the tar data
+    current_stage.* = "compress";
+    var in_buf = c.ZSTD_inBuffer{ .src = tar_buffer.items.ptr, .size = tar_buffer.items.len, .pos = 0 };
     var out_buf = c.ZSTD_outBuffer{ .dst = out_buffer.ptr, .size = out_buffer.len, .pos = 0 };
 
-    while (true) {
-        const remaining = c.ZSTD_compressStream2(ctx, &out_buf, &in_buf, c.ZSTD_e_end);
-        if (c.ZSTD_isError(remaining) != 0) {
-            return error.ZstdError;
-        }
-
-        if (out_buf.pos > 0) {
-            compressed_buffer.appendSlice(out_buffer[0..out_buf.pos]) catch {
-                return error.OutOfMemory;
-            };
-            out_buf.pos = 0;
-        }
-
-        if (remaining == 0) break;
-    }
-
-    // Write all compressed data
-    current_stage.* = "write";
-    buffered.writeAll(compressed_buffer.items) catch |err| {
-        return err;
-    };
-    current_stage.* = "flush";
-    buffered_writer.flush() catch |err| {
-        return err;
-    };
-}
-
-fn blockPadding(size: u64) u64 {
-    const remainder = size % 512;
-    if (remainder == 0) return 0;
-    return 512 - remainder;
-}
-
-fn compressData(ctx: *c.ZSTD_CCtx, data: []const u8, buffer: *std.ArrayList(u8), out_buffer: []u8) !void {
-    var in_buf = c.ZSTD_inBuffer{ .src = data.ptr, .size = data.len, .pos = 0 };
-    var out_buf = c.ZSTD_outBuffer{ .dst = out_buffer.ptr, .size = out_buffer.len, .pos = 0 };
-
+    // Compress all data
     while (in_buf.pos < in_buf.size) {
         const result = c.ZSTD_compressStream2(ctx, &out_buf, &in_buf, c.ZSTD_e_continue);
         if (c.ZSTD_isError(result) != 0) {
@@ -388,12 +307,36 @@ fn compressData(ctx: *c.ZSTD_CCtx, data: []const u8, buffer: *std.ArrayList(u8),
         }
 
         if (out_buf.pos > 0) {
-            buffer.appendSlice(out_buffer[0..out_buf.pos]) catch {
-                return error.OutOfMemory;
+            buffered.writeAll(out_buffer[0..out_buf.pos]) catch |err| {
+                return err;
             };
             out_buf.pos = 0;
         }
     }
+
+    // Finalize compression
+    current_stage.* = "finalize";
+    in_buf = c.ZSTD_inBuffer{ .src = "", .size = 0, .pos = 0 };
+    while (true) {
+        const remaining = c.ZSTD_compressStream2(ctx, &out_buf, &in_buf, c.ZSTD_e_end);
+        if (c.ZSTD_isError(remaining) != 0) {
+            return error.ZstdError;
+        }
+
+        if (out_buf.pos > 0) {
+            buffered.writeAll(out_buffer[0..out_buf.pos]) catch |err| {
+                return err;
+            };
+            out_buf.pos = 0;
+        }
+
+        if (remaining == 0) break;
+    }
+
+    current_stage.* = "flush";
+    buffered_writer.flush() catch |err| {
+        return err;
+    };
 }
 
 /// Unbundle files from a compressed tar archive.
@@ -409,70 +352,14 @@ pub fn unbundle(
     var current_file_path: ?[]const u8 = null;
     var current_stage: []const u8 = "init";
 
-    // Implementation that tracks context
-    const result = unbundleImpl(&current_file_path, &current_stage, input_reader, extract_dir, allocator);
-
-    if (result) |_| {
-        return UnbundleResult{ .success = {} };
-    } else |err| {
-        // Map errors to structured UnbundleError based on context
-        if (err == error.OutOfMemory) {
-            return UnbundleResult{ .err = .{ .out_of_memory = {} } };
-        } else if (err == error.ZstdError) {
-            return UnbundleResult{ .err = .{ .decompression_failed = .{ .err = err } } };
-        } else if (err == error.InvalidTarHeader) {
-            return UnbundleResult{ .err = .{ .invalid_tar_header = .{ .reason = current_stage } } };
-        } else if (err == error.UnexpectedEndOfStream) {
-            return UnbundleResult{ .err = .{ .unexpected_end_of_stream = .{ .stage = current_stage } } };
-        } else if (current_file_path) |path| {
-            // Context-aware error handling
-            if (std.mem.eql(u8, current_stage, "create_file")) {
-                return UnbundleResult{ .err = .{ .file_create_failed = .{
-                    .path = path,
-                    .err = err,
-                } } };
-            } else if (std.mem.eql(u8, current_stage, "create_dir")) {
-                return UnbundleResult{ .err = .{ .directory_create_failed = .{
-                    .path = path,
-                    .err = err,
-                } } };
-            } else if (std.mem.eql(u8, current_stage, "write_file")) {
-                return UnbundleResult{ .err = .{ .file_write_failed = .{
-                    .path = path,
-                    .err = err,
-                } } };
-            }
-        }
-
-        // Default error mappings
-        if (std.mem.startsWith(u8, current_stage, "skip_")) {
-            return UnbundleResult{
-                .err = .{
-                    .skip_bytes_failed = .{
-                        .reason = current_stage[5..], // Remove "skip_" prefix
-                        .err = err,
-                    },
-                },
-            };
-        } else {
-            // Fallback
-            return UnbundleResult{ .err = .{ .decompression_failed = .{ .err = err } } };
-        }
-    }
-}
-
-fn unbundleImpl(
-    current_file_path: *?[]const u8,
-    current_stage: *[]const u8,
-    input_reader: anytype,
-    extract_dir: std.fs.Dir,
-    allocator: std.mem.Allocator,
-) !void {
+    // Buffered reader for input
     var buffered_reader = std.io.bufferedReader(input_reader);
     const buffered = buffered_reader.reader();
 
-    current_stage.* = "create_context";
-    const dctx = c.ZSTD_createDCtx() orelse return error.OutOfMemory;
+    current_stage = "create_context";
+    const dctx = c.ZSTD_createDCtx() orelse {
+        return UnbundleResult{ .err = .{ .out_of_memory = {} } };
+    };
     defer _ = c.ZSTD_freeDCtx(dctx);
 
     // Read and decompress data in chunks
@@ -482,18 +369,19 @@ fn unbundleImpl(
     const in_buffer_size = c.ZSTD_DStreamInSize();
     const out_buffer_size = c.ZSTD_DStreamOutSize();
     const in_buffer = allocator.alloc(u8, in_buffer_size) catch {
-        return error.OutOfMemory;
+        return UnbundleResult{ .err = .{ .out_of_memory = {} } };
     };
     defer allocator.free(in_buffer);
     var out_buffer = allocator.alloc(u8, out_buffer_size) catch {
-        return error.OutOfMemory;
+        return UnbundleResult{ .err = .{ .out_of_memory = {} } };
     };
     defer allocator.free(out_buffer);
 
+    // Decompress the entire stream
     while (true) {
-        current_stage.* = "input";
+        current_stage = "input";
         const bytes_read = buffered.read(in_buffer) catch {
-            return error.UnexpectedEndOfStream;
+            return UnbundleResult{ .err = .{ .unexpected_end_of_stream = .{ .stage = current_stage } } };
         };
         if (bytes_read == 0) break;
 
@@ -504,12 +392,12 @@ fn unbundleImpl(
 
             const result = c.ZSTD_decompressStream(dctx, &out_buf, &in_buf);
             if (c.ZSTD_isError(result) != 0) {
-                return error.ZstdError;
+                return UnbundleResult{ .err = .{ .decompression_failed = .{ .err = error.ZstdError } } };
             }
 
             if (out_buf.pos > 0) {
                 decompressed_data.appendSlice(out_buffer[0..out_buf.pos]) catch {
-                    return error.OutOfMemory;
+                    return UnbundleResult{ .err = .{ .out_of_memory = {} } };
                 };
             }
         }
@@ -517,98 +405,92 @@ fn unbundleImpl(
 
     // Create a reader from the decompressed data
     var decompressed_stream = std.io.fixedBufferStream(decompressed_data.items);
-    const reader = decompressed_stream.reader();
+    const tar_reader = decompressed_stream.reader();
 
-    var header_bytes: [512]u8 = undefined;
+    // Use std.tar to parse the archive
+    var file_name_buffer: [256]u8 = undefined;
+    var link_name_buffer: [256]u8 = undefined;
+    var tar_iter = std.tar.iterator(tar_reader, .{
+        .file_name_buffer = &file_name_buffer,
+        .link_name_buffer = &link_name_buffer,
+    });
 
+    // Process each file in the archive
     while (true) {
-        current_stage.* = "header";
-        _ = reader.readAll(&header_bytes) catch {
-            return error.UnexpectedEndOfStream;
+        current_stage = "header";
+        const file = tar_iter.next() catch |err| {
+            if (err == error.EndOfStream) break;
+            return UnbundleResult{ .err = .{ .invalid_tar_header = .{ .reason = @errorName(err) } } };
         };
 
-        // Check for end of archive (two consecutive zero blocks)
-        if (std.mem.allEqual(u8, &header_bytes, 0)) {
-            _ = reader.readAll(&header_bytes) catch {
-                return error.UnexpectedEndOfStream;
-            };
-            if (std.mem.allEqual(u8, &header_bytes, 0)) {
-                break;
-            }
-        }
+        if (file == null) break;
+        const tar_file = file.?;
 
-        // Parse header manually
-        const name_end = std.mem.indexOfScalar(u8, header_bytes[0..100], 0) orelse 100;
-        const name = header_bytes[0..name_end];
+        current_file_path = tar_file.name;
 
-        const size_str = header_bytes[124..136];
-        current_stage.* = "invalid file size";
-        const size = std.fmt.parseInt(u64, std.mem.trimRight(u8, size_str, &[_]u8{ 0, ' ' }), 8) catch {
-            return error.InvalidTarHeader;
-        };
-
-        const typeflag = header_bytes[156];
-
-        switch (typeflag) {
-            '0', 0 => { // regular file
-                current_file_path.* = name;
-
+        switch (tar_file.kind) {
+            .file => {
                 // Create parent directories if needed
-                if (std.fs.path.dirname(name)) |dir_name| {
-                    current_stage.* = "create_dir";
+                if (std.fs.path.dirname(tar_file.name)) |dir_name| {
+                    current_stage = "create_dir";
                     extract_dir.makePath(dir_name) catch |err| {
-                        return err;
+                        return UnbundleResult{ .err = .{ .directory_create_failed = .{
+                            .path = dir_name,
+                            .err = err,
+                        } } };
                     };
                 }
 
-                current_stage.* = "create_file";
-                const file = extract_dir.createFile(name, .{}) catch |err| {
-                    return err;
+                current_stage = "create_file";
+                const out_file = extract_dir.createFile(tar_file.name, .{}) catch |err| {
+                    return UnbundleResult{ .err = .{ .file_create_failed = .{
+                        .path = tar_file.name,
+                        .err = err,
+                    } } };
                 };
-                defer file.close();
+                defer out_file.close();
 
-                var bytes_written: u64 = 0;
+                // Copy file contents
+                current_stage = "write_file";
+                const reader = tar_iter.reader;
                 var buf: [8192]u8 = undefined;
-                while (bytes_written < size) {
-                    const to_read = @min(buf.len, size - bytes_written);
-                    current_stage.* = "data";
-                    const bytes_read = reader.read(buf[0..to_read]) catch {
-                        return error.UnexpectedEndOfStream;
+                var bytes_remaining = tar_file.size;
+                while (bytes_remaining > 0) {
+                    const to_read = @min(buf.len, bytes_remaining);
+                    const bytes_read = reader.read(buf[0..to_read]) catch |err| {
+                        return UnbundleResult{ .err = .{ .file_write_failed = .{
+                            .path = tar_file.name,
+                            .err = err,
+                        } } };
                     };
-                    if (bytes_read == 0) return error.UnexpectedEndOfStream;
-                    current_stage.* = "write_file";
-                    file.writeAll(buf[0..bytes_read]) catch |err| {
-                        return err;
+                    if (bytes_read == 0) break;
+                    out_file.writeAll(buf[0..bytes_read]) catch |err| {
+                        return UnbundleResult{ .err = .{ .file_write_failed = .{
+                            .path = tar_file.name,
+                            .err = err,
+                        } } };
                     };
-                    bytes_written += bytes_read;
-                }
-
-                // Skip padding
-                const padding = blockPadding(size);
-                if (padding > 0) {
-                    current_stage.* = "skip_padding";
-                    _ = reader.skipBytes(padding, .{}) catch |err| {
-                        return err;
-                    };
+                    bytes_remaining -= bytes_read;
                 }
             },
-            '5' => { // directory
-                current_file_path.* = name;
-                current_stage.* = "create_dir";
-                extract_dir.makePath(name) catch |err| {
-                    return err;
+            .directory => {
+                current_stage = "create_dir";
+                extract_dir.makePath(tar_file.name) catch |err| {
+                    return UnbundleResult{ .err = .{ .directory_create_failed = .{
+                        .path = tar_file.name,
+                        .err = err,
+                    } } };
                 };
             },
             else => {
-                // Skip unsupported file types
-                const total_bytes = size + blockPadding(size);
-                current_stage.* = "skip_unsupported_type";
-                _ = reader.skipBytes(total_bytes, .{}) catch |err| {
-                    return err;
-                };
+                // Skip other file types (symlinks, etc.)
+                current_stage = "skip_unsupported_type";
+                // std.tar automatically handles skipping the content for us
             },
         }
     }
+
+    return UnbundleResult{ .success = {} };
 }
 
 test "bundle and unbundle roundtrip" {
