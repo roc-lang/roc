@@ -888,11 +888,11 @@ test "download URL validation" {
         };
     }
 
-    // Invalid: localhost hostname
+    // Valid: localhost hostname (will be resolved and verified during download)
     {
         const url = "http://localhost:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        const result = download.validateUrl(url);
-        try testing.expectError(download.DownloadError.AttemptedLocalhost, result);
+        const hash = try download.validateUrl(url);
+        try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", hash);
     }
 
     // Invalid: HTTP (not localhost IP)

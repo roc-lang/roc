@@ -1,11 +1,12 @@
 //! Download and extract bundled tar.zst files over HTTPS
 
 const std = @import("std");
+const builtin = @import("builtin");
 const bundle = @import("bundle.zig");
 
 pub const DownloadError = error{
     InvalidUrl,
-    AttemptedLocalhost, // User should use 127.0.0.1 instead, since that is guaranteed to stay on the machine and is not an alias that can be overridden
+    LocalhostWasNotLoopback,
     InvalidHash,
     HttpError,
     NoHashInUrl,
@@ -22,7 +23,7 @@ pub fn validateUrl(url: []const u8) DownloadError![]const u8 {
     } else if (std.mem.startsWith(u8, url, "http://[::1]:") or std.mem.startsWith(u8, url, "http://[::1]/")) {
         // This is allowed for local testing (IPv6 loopback)
     } else if (std.mem.startsWith(u8, url, "http://localhost:") or std.mem.startsWith(u8, url, "http://localhost/")) {
-        return error.AttemptedLocalhost;
+        // This is allowed but will require verification that localhost resolves to loopback
     } else {
         return error.InvalidUrl;
     }
@@ -68,13 +69,75 @@ pub fn download(
     defer client.deinit();
 
     // Parse the URL
-    const uri = std.Uri.parse(url) catch return error.InvalidUrl;
+    var uri = std.Uri.parse(url) catch return error.InvalidUrl;
 
-    // Start the request
+    // Check if we need to resolve localhost
+    var extra_headers: []const std.http.Header = &.{};
+    if (uri.host) |host| {
+        if (std.mem.eql(u8, host.percent_encoded, "localhost")) {
+            // Resolve localhost and verify it's loopback
+            const port = uri.port orelse (if (std.mem.eql(u8, uri.scheme, "https")) @as(u16, 443) else @as(u16, 80));
+
+            const address_list = std.net.getAddressList(allocator, "localhost", port) catch {
+                return error.LocalhostWasNotLoopback;
+            };
+            defer address_list.deinit();
+
+            if (address_list.addrs.len == 0) {
+                return error.LocalhostWasNotLoopback;
+            }
+
+            // Take the first address and verify it's loopback
+            const first_addr = address_list.addrs[0];
+            const is_loopback = switch (first_addr.any.family) {
+                std.posix.AF.INET => blk: {
+                    // Check if IPv4 address is in 127.0.0.0/8 range
+                    const addr = first_addr.in.sa.addr;
+                    // IPv4 addresses are in network byte order
+                    const first_octet = if (comptime builtin.cpu.arch.endian() == .little)
+                        (addr & 0xFF)
+                    else
+                        (addr >> 24);
+                    break :blk first_octet == 127;
+                },
+                std.posix.AF.INET6 => blk: {
+                    // Check if IPv6 address is ::1
+                    const addr = first_addr.in6.sa.addr;
+                    for (addr[0..15]) |byte| {
+                        if (byte != 0) break :blk false;
+                    }
+                    break :blk addr[15] == 1;
+                },
+                else => false,
+            };
+
+            if (!is_loopback) {
+                return error.LocalhostWasNotLoopback;
+            }
+
+            // Update the URI to use the resolved IP instead of "localhost"
+            // We need to format the address correctly
+            if (first_addr.any.family == std.posix.AF.INET) {
+                // IPv4: just use "127.0.0.1" as the host
+                uri.host = .{ .percent_encoded = "127.0.0.1" };
+            } else {
+                // IPv6: use "[::1]" as the host
+                uri.host = .{ .percent_encoded = "[::1]" };
+            }
+
+            // Set Host header to preserve original hostname
+            extra_headers = &.{
+                .{ .name = "Host", .value = "localhost" },
+            };
+        }
+    }
+
+    // Start the request with the potentially modified URI
     var server_header_buffer: [16 * 1024]u8 = undefined;
     var request = client.open(.GET, uri, .{
         .server_header_buffer = &server_header_buffer,
         .redirect_behavior = .unhandled,
+        .extra_headers = extra_headers,
     }) catch return error.HttpError;
     defer request.deinit();
 
