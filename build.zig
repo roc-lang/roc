@@ -142,10 +142,8 @@ pub fn build(b: *std.Build) void {
         break :blk null;
     };
 
-    // Set up module tests
-    const module_tests = addModuleTests(b, roc_modules, target, optimize);
-
-    // Add all module test steps to default and test steps
+    // Create and add module tests
+    const module_tests = roc_modules.createModuleTests(b, target, optimize);
     for (module_tests) |module_test| {
         b.default_step.dependOn(&module_test.test_step.step);
         test_step.dependOn(&module_test.run_step.step);
@@ -208,42 +206,7 @@ pub fn build(b: *std.Build) void {
     }
 }
 
-const ModuleTest = struct {
-    test_step: *Step.Compile,
-    run_step: *Step.Run,
-};
-
-fn addModuleTests(
-    b: *std.Build,
-    roc_modules: modules.RocModules,
-    target: ResolvedTarget,
-    optimize: OptimizeMode,
-) []ModuleTest {
-    const module_configs = modules.RocModules.getTestableModules();
-
-    var tests = b.allocator.alloc(ModuleTest, module_configs.len) catch @panic("OOM");
-
-    for (module_configs, 0..) |config, i| {
-        const test_step = b.addTest(.{
-            .root_source_file = b.path(config.root_source_file),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        });
-        
-        // Add only the required dependencies for this specific module
-        roc_modules.setupModuleTest(test_step, config.name);
-
-        const run_step = b.addRunArtifact(test_step);
-
-        tests[i] = .{
-            .test_step = test_step,
-            .run_step = run_step,
-        };
-    }
-
-    return tests;
-}
+const ModuleTest = modules.ModuleTest;
 
 fn add_fuzz_target(
     b: *std.Build,
