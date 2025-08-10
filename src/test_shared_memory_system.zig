@@ -121,10 +121,7 @@ test "integration - shared memory setup and parsing" {
     defer allocator.free(roc_path);
 
     // Test that we can set up shared memory with ModuleEnv
-    const shm_handle = main.setupSharedMemoryWithModuleEnv(allocator, roc_path) catch |err| {
-        std.log.warn("Failed to set up shared memory: {}, skipping integration test\n", .{err});
-        return;
-    };
+    const shm_handle = try main.setupSharedMemoryWithModuleEnv(allocator, roc_path);
 
     // Verify that shared memory was set up correctly
     try testing.expect(shm_handle.size > 0);

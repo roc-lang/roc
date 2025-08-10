@@ -278,6 +278,9 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
     var interpreter = try eval.Interpreter.init(
         test_allocator,
         resources.module_env,
@@ -285,10 +288,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
         &layout_cache,
         &resources.module_env.types,
     );
-    defer interpreter.deinit();
-
-    var test_env_instance = test_env.TestEnv.init(test_allocator);
-    defer test_env_instance.deinit();
+    defer interpreter.deinit(test_env_instance.get_ops());
     test_env_instance.setInterpreter(&interpreter);
 
     if (should_trace == .trace) {
@@ -440,41 +440,33 @@ test "eval runtime error - returns crash error" {
     const resources = try parseAndCanonicalizeExpr(test_allocator, source);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    // Check if the expression is a runtime error
-    const expr = resources.module_env.store.getExpr(resources.expr_idx);
-    if (expr == .e_runtime_error) {
-        // Create a stack for evaluation
-        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-        defer eval_stack.deinit();
+    // Create a stack for evaluation
+    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+    defer eval_stack.deinit();
 
-        // Create layout store
-        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
-        defer layout_cache.deinit();
+    // Create layout store
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+    defer layout_cache.deinit();
 
-        var test_env_instance = test_env.TestEnv.init(test_allocator);
-        defer test_env_instance.deinit();
+    var test_env_instance = test_env.TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
 
-        // Evaluating a runtime error should return an error
-        var interpreter = try eval.Interpreter.init(
-            test_allocator,
-            resources.module_env,
-            &eval_stack,
-            &layout_cache,
-            &resources.module_env.types,
-        );
-        defer interpreter.deinit(test_env_instance.get_ops());
-        test_env_instance.setInterpreter(&interpreter);
+    // Create interpreter and evaluate the crash expression
+    var interpreter = try eval.Interpreter.init(
+        test_allocator,
+        resources.module_env,
+        &eval_stack,
+        &layout_cache,
+        &resources.module_env.types,
+    );
+    defer interpreter.deinit(test_env_instance.get_ops());
+    test_env_instance.setInterpreter(&interpreter);
 
-        const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
-        try testing.expectError(eval.EvalError.Crash, result);
-    } else {
-        // If crash syntax is not supported in canonicalization, skip
-        return error.SkipZigTest;
-    }
+    const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
+    try testing.expectError(eval.EvalError.Crash, result);
 }
 
 test "eval tag - already primitive" {
-    // Try to see if tag_union layout is now implemented
     const source = "True";
 
     const resources = try parseAndCanonicalizeExpr(test_allocator, source);
@@ -503,11 +495,7 @@ test "eval tag - already primitive" {
     test_env_instance.setInterpreter(&interpreter);
 
     // Try to evaluate - if tag_union layout is not implemented, this might fail
-    const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops()) catch |err| {
-        std.debug.print("Tag evaluation failed with error: {}\n", .{err});
-        // If evaluation fails for any reason, skip for now
-        return error.SkipZigTest;
-    };
+    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
     // If we get here, check if we have a valid result
     // True/False are optimized to scalar values in the current implementation

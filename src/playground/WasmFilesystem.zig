@@ -3,7 +3,8 @@
 //! can be provided from JavaScript and most other operations return errors.
 
 const std = @import("std");
-const Filesystem = @import("../fs/Filesystem.zig");
+const fs_mod = @import("fs");
+const Filesystem = fs_mod.Filesystem;
 const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;

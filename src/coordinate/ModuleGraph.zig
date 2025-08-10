@@ -8,8 +8,9 @@ const collections = @import("collections");
 const types = @import("types");
 const Can = @import("can");
 
-const cache = @import("../cache/mod.zig");
-const Filesystem = @import("../fs/Filesystem.zig");
+const cache = @import("cache");
+const fs_mod = @import("fs");
+const Filesystem = fs_mod.Filesystem;
 
 const Scope = Can.Scope;
 const Package = base.Package;

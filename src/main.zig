@@ -14,10 +14,10 @@ const tracy = @import("tracy");
 const SharedMemoryAllocator = @import("./SharedMemoryAllocator.zig");
 const platform = @import("ipc/platform.zig");
 const fmt = @import("fmt.zig");
-const coordinate_simple = @import("coordinate_simple.zig");
-const Filesystem = @import("fs/Filesystem.zig");
+const fs_mod = @import("fs");
+const Filesystem = fs_mod.Filesystem;
 const cli_args = @import("cli_args.zig");
-const cache_mod = @import("cache/mod.zig");
+const cache_mod = @import("cache");
 const bench = @import("bench.zig");
 const linker = @import("linker.zig");
 const compile = @import("compile");
@@ -25,7 +25,8 @@ const can = @import("can");
 const Check = @import("check").Check;
 
 const ModuleEnv = compile.ModuleEnv;
-
+const BuildEnv = compile.BuildEnv;
+const TimingInfo = compile.package.TimingInfo;
 const CacheManager = cache_mod.CacheManager;
 const CacheConfig = cache_mod.CacheConfig;
 const tokenize = parse.tokenize;
@@ -1136,12 +1137,150 @@ fn formatElapsedTime(writer: anytype, elapsed_ns: u64) !void {
 fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) noreturn {
     stderr.print("Failed to check {s}: ", .{path}) catch {};
     switch (err) {
-        error.FileNotFound => stderr.print("File not found\n", .{}) catch {},
-        error.AccessDenied => stderr.print("Access denied\n", .{}) catch {},
-        error.FileReadError => stderr.print("Could not read file\n", .{}) catch {},
-        else => stderr.print("{}\n", .{err}) catch {},
+        // Custom BuildEnv errors - these need special messages
+        error.ExpectedAppHeader => stderr.print("Expected app header but found different header type\n", .{}) catch {},
+        error.ExpectedPlatformString => stderr.print("Expected platform string in header\n", .{}) catch {},
+        error.PathOutsideWorkspace => stderr.print("Dependency path outside workspace not allowed\n", .{}) catch {},
+        error.UnsupportedHeader => stderr.print("Unsupported header type\n", .{}) catch {},
+        error.ExpectedString => stderr.print("Expected string in header\n", .{}) catch {},
+        error.Internal => stderr.print("Internal compiler error\n", .{}) catch {},
+        error.InvalidDependency => stderr.print("Invalid dependency relationship\n", .{}) catch {},
+        error.TooNested => stderr.print("Too deeply nested\n", .{}) catch {},
+        error.InvalidPackageName => stderr.print("Invalid package name\n", .{}) catch {},
+
+        // Catch-all for any other errors
+        else => stderr.print("{s}\n", .{@errorName(err)}) catch {},
     }
     std.process.exit(1);
+}
+
+/// Result from checking a file using BuildEnv
+const CheckResult = struct {
+    reports: []DrainedReport,
+    timing: CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) .{} else .{
+        .tokenize_parse_ns = 0,
+        .canonicalize_ns = 0,
+        .canonicalize_diagnostics_ns = 0,
+        .type_checking_ns = 0,
+        .check_diagnostics_ns = 0,
+    },
+    was_cached: bool = false,
+    error_count: u32 = 0,
+    warning_count: u32 = 0,
+
+    /// Free allocated memory
+    pub fn deinit(self: *CheckResult, gpa: Allocator) void {
+        for (self.reports) |*report| {
+            report.deinit(gpa);
+        }
+        gpa.free(self.reports);
+    }
+};
+
+/// Drained report with module info and file path
+const DrainedReport = struct {
+    file_path: []const u8,
+    reports: []reporting.Report,
+
+    pub fn deinit(self: *DrainedReport, gpa: Allocator) void {
+        gpa.free(self.file_path);
+        for (self.reports) |*report| {
+            report.deinit();
+        }
+        gpa.free(self.reports);
+    }
+};
+
+/// Timing information for check phases
+const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else TimingInfo;
+
+/// Error set for BuildEnv.build operations
+const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs.File.ReadError || std.fs.File.WriteError || std.Thread.SpawnError || error{
+    // Custom BuildEnv errors
+    ExpectedAppHeader,
+    ExpectedPlatformString,
+    PathOutsideWorkspace,
+    UnsupportedHeader,
+    ExpectedString,
+    Internal,
+    InvalidDependency,
+    TooNested,
+    InvalidPackageName,
+    // Additional errors from std library that might be missing
+    Unseekable,
+    CurrentWorkingDirectoryUnlinked,
+};
+
+/// Check a Roc file using the BuildEnv system
+fn checkFileWithBuildEnv(
+    gpa: Allocator,
+    filepath: []const u8,
+    collect_timing: bool,
+    cache_config: CacheConfig,
+) BuildAppError!CheckResult {
+    _ = collect_timing; // Timing is always collected by BuildEnv
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Initialize BuildEnv in single-threaded mode for checking
+    var build_env = BuildEnv.init(gpa, .single_threaded, 1);
+    build_env.compiler_version = build_options.compiler_version;
+    defer build_env.deinit();
+
+    // Set up cache manager if caching is enabled
+    if (cache_config.enabled) {
+        const cache_manager = try gpa.create(CacheManager);
+        cache_manager.* = CacheManager.init(gpa, cache_config, Filesystem.default());
+        build_env.setCacheManager(cache_manager);
+        // Note: BuildEnv.deinit() will clean up the cache manager
+    }
+
+    // Build the file (works for both app and module files)
+    try build_env.build(filepath);
+
+    // Drain all reports
+    const drained = try build_env.drainReports();
+
+    // Count errors and warnings
+    var error_count: u32 = 0;
+    var warning_count: u32 = 0;
+
+    for (drained) |mod| {
+        for (mod.reports) |report| {
+            switch (report.severity) {
+                .info => {},
+                .runtime_error, .fatal => error_count += 1,
+                .warning => warning_count += 1,
+            }
+        }
+    }
+
+    // Convert BuildEnv drained reports to our format
+    var reports = try gpa.alloc(DrainedReport, drained.len);
+    for (drained, 0..) |mod, i| {
+        reports[i] = .{
+            .file_path = try gpa.dupe(u8, mod.abs_path),
+            .reports = try gpa.dupe(reporting.Report, mod.reports),
+        };
+    }
+
+    // Free the original drained reports
+    // Note: abs_path is owned by BuildEnv, reports are moved to our array
+    gpa.free(drained);
+
+    // Get timing information from BuildEnv
+    const timing = if (builtin.target.cpu.arch == .wasm32)
+        CheckTimingInfo{}
+    else
+        build_env.getTimingInfo();
+
+    return CheckResult{
+        .reports = reports,
+        .timing = timing,
+        .was_cached = false, // BuildEnv doesn't currently expose cache info
+        .error_count = error_count,
+        .warning_count = warning_count,
+    };
 }
 
 fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
@@ -1154,44 +1293,31 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
     var timer = try std.time.Timer.start();
 
-    // Initialize cache if enabled
+    // Set up cache configuration based on command line args
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
         .verbose = args.verbose,
     };
 
-    var cache_manager = if (cache_config.enabled) blk: {
-        const manager = CacheManager.init(gpa, cache_config, Filesystem.default());
-        break :blk manager;
-    } else null;
-
-    // Process the file and get Reports
-    var process_result = coordinate_simple.processFile(
+    // Use BuildEnv to check the file
+    var check_result = checkFileWithBuildEnv(
         gpa,
-        Filesystem.default(),
         args.path,
-        if (cache_manager) |*cm| cm else null,
         args.time,
+        cache_config,
     ) catch |err| {
         handleProcessFileError(err, stderr, args.path);
     };
 
-    defer process_result.deinit(gpa);
+    defer check_result.deinit(gpa);
 
     const elapsed = timer.read();
 
-    // Print cache statistics if verbose
-    if (cache_manager) |*cm| {
-        if (args.verbose) {
-            cm.printStats(gpa);
-        }
-    }
-
     // Handle cached results vs fresh compilation results differently
-    if (process_result.was_cached) {
+    if (check_result.was_cached) {
         // For cached results, use the stored diagnostic counts
-        const total_errors = process_result.error_count;
-        const total_warnings = process_result.warning_count;
+        const total_errors = check_result.error_count;
+        const total_warnings = check_result.warning_count;
 
         if (total_errors > 0 or total_warnings > 0) {
             stderr.print("Found {} error(s) and {} warning(s) in ", .{
@@ -1208,13 +1334,11 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
         }
     } else {
         // For fresh compilation, process and display reports normally
-        if (process_result.reports.len > 0) {
-            var fatal_errors: usize = 0;
-            var runtime_errors: usize = 0;
-            var warnings: usize = 0;
+        var has_errors = false;
 
-            // Render each report
-            for (process_result.reports) |*report| {
+        // Render reports grouped by module
+        for (check_result.reports) |module| {
+            for (module.reports) |*report| {
 
                 // Render the diagnostic report to stderr
                 reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
@@ -1223,24 +1347,17 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
                     stderr.print("  {s}\n", .{report.title}) catch {};
                 };
 
-                switch (report.severity) {
-                    .info => {}, // Informational messages don't affect error/warning counts
-                    .runtime_error => {
-                        runtime_errors += 1;
-                    },
-                    .fatal => {
-                        fatal_errors += 1;
-                    },
-                    .warning => {
-                        warnings += 1;
-                    },
+                if (report.severity == .fatal or report.severity == .runtime_error) {
+                    has_errors = true;
                 }
             }
-            stderr.writeAll("\n") catch {};
+        }
 
+        if (check_result.error_count > 0 or check_result.warning_count > 0) {
+            stderr.writeAll("\n") catch {};
             stderr.print("Found {} error(s) and {} warning(s) in ", .{
-                (fatal_errors + runtime_errors),
-                warnings,
+                check_result.error_count,
+                check_result.warning_count,
             }) catch {};
             formatElapsedTime(stderr, elapsed) catch {};
             stderr.print(" for {s}.\n", .{args.path}) catch {};
@@ -1253,10 +1370,13 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
         }
     }
 
-    printTimingBreakdown(stdout, process_result.timing);
+    // Print timing breakdown if requested
+    if (args.time) {
+        printTimingBreakdown(stdout, if (builtin.target.cpu.arch == .wasm32) null else check_result.timing);
+    }
 }
 
-fn printTimingBreakdown(writer: anytype, timing: ?coordinate_simple.TimingInfo) void {
+fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
     if (timing) |t| {
         writer.print("\nTiming breakdown:\n", .{}) catch {};
         writer.print("  tokenize + parse:             ", .{}) catch {};

@@ -6,9 +6,10 @@
 
 const std = @import("std");
 const reporting = @import("reporting");
+const cache_mod = @import("cache");
 
 const Allocator = std.mem.Allocator;
-const CacheStats = @import("CacheConfig.zig").CacheStats;
+const CacheStats = cache_mod.CacheStats;
 const Report = reporting.Report;
 const Document = reporting.Document;
 const Severity = reporting.Severity;
@@ -16,7 +17,7 @@ const RenderTarget = reporting.RenderTarget;
 const ReportingConfig = reporting.ReportingConfig;
 
 /// Data size unit for formatting
-const DataSizeUnit = enum {
+pub const DataSizeUnit = enum {
     bytes,
     kb,
     mb,
@@ -30,7 +31,7 @@ const FormattedSize = struct {
 };
 
 /// Format a byte count into an appropriate unit (B, KB, MB, GB)
-fn formatDataSize(bytes: u64) FormattedSize {
+pub fn formatDataSize(bytes: u64) FormattedSize {
     const bytes_f = @as(f64, @floatFromInt(bytes));
 
     if (bytes < 1024) {
@@ -45,7 +46,7 @@ fn formatDataSize(bytes: u64) FormattedSize {
 }
 
 /// Get the unit string for a data size unit
-fn getUnitString(unit: DataSizeUnit) []const u8 {
+pub fn getUnitString(unit: DataSizeUnit) []const u8 {
     return switch (unit) {
         .bytes => "B",
         .kb => "KB",
@@ -163,69 +164,4 @@ pub fn renderCacheStatsToHtml(allocator: Allocator, stats: CacheStats, writer: a
 /// Render cache statistics to LSP format (convenience function).
 pub fn renderCacheStatsToLsp(allocator: Allocator, stats: CacheStats, writer: anytype) !void {
     try renderCacheStats(allocator, stats, writer, .language_server);
-}
-
-// Tests
-const testing = std.testing;
-
-test "formatDataSize bytes" {
-    const result = formatDataSize(512);
-    try testing.expectEqual(@as(f64, 512.0), result.value);
-    try testing.expectEqual(DataSizeUnit.bytes, result.unit);
-}
-
-test "formatDataSize KB" {
-    const result = formatDataSize(1536); // 1.5 KB
-    try testing.expectApproxEqRel(@as(f64, 1.5), result.value, 0.01);
-    try testing.expectEqual(DataSizeUnit.kb, result.unit);
-}
-
-test "formatDataSize MB" {
-    const result = formatDataSize(2 * 1024 * 1024); // 2 MB
-    try testing.expectApproxEqRel(@as(f64, 2.0), result.value, 0.01);
-    try testing.expectEqual(DataSizeUnit.mb, result.unit);
-}
-
-test "formatDataSize GB" {
-    const result = formatDataSize(3 * 1024 * 1024 * 1024); // 3 GB
-    try testing.expectApproxEqRel(@as(f64, 3.0), result.value, 0.01);
-    try testing.expectEqual(DataSizeUnit.gb, result.unit);
-}
-
-test "getUnitString" {
-    try testing.expectEqualStrings("B", getUnitString(.bytes));
-    try testing.expectEqualStrings("KB", getUnitString(.kb));
-    try testing.expectEqualStrings("MB", getUnitString(.mb));
-    try testing.expectEqualStrings("GB", getUnitString(.gb));
-}
-
-test "createCacheStatsReport empty stats" {
-    const allocator = testing.allocator;
-    const stats = CacheStats{};
-
-    var report = try createCacheStatsReport(allocator, stats);
-    defer report.deinit();
-
-    try testing.expectEqualStrings("CACHE STATISTICS", report.title);
-    try testing.expectEqual(Severity.info, report.severity);
-}
-
-test "createCacheStatsReport with operations" {
-    const allocator = testing.allocator;
-    var stats = CacheStats{};
-    stats.recordHit(1024); // 1KB read
-    stats.recordMiss();
-    stats.recordStore(2048); // 2KB written
-
-    var report = try createCacheStatsReport(allocator, stats);
-    defer report.deinit();
-
-    try testing.expectEqualStrings("CACHE STATISTICS", report.title);
-    try testing.expectEqual(Severity.info, report.severity);
-
-    // The report should contain information about operations
-    // More detailed testing would require inspecting the document structure
-    try testing.expectEqual(@as(u64, 1), stats.hits);
-    try testing.expectEqual(@as(u64, 1), stats.misses);
-    try testing.expectEqual(@as(u64, 1), stats.stores);
 }

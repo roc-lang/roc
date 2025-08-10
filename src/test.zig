@@ -17,8 +17,9 @@ test {
     // std.testing.refAllDecls(@import("test_fd_inheritance.zig"));
     // std.testing.refAllDecls(@import("test_shared_memory_system.zig"));
 
-    // std.testing.refAllDeclsRecursive(@import("serialization"));
-    // std.testing.refAllDecls(@import("serialization/test/compact_writer_test.zig"));
+    std.testing.refAllDecls(@import("types"));
+    std.testing.refAllDecls(@import("types/test/rigid_instantiation.zig"));
+    std.testing.refAllDecls(@import("test_shared_memory_system.zig"));
 
     // std.testing.refAllDecls(@import("can"));
     // std.testing.refAllDecls(@import("canonicalize/test/bool_test.zig"));
@@ -42,15 +43,19 @@ test {
     // std.testing.refAllDeclsRecursive(@import("compile"));
     // std.testing.refAllDecls(@import("compile/test/module_env_test.zig"));
 
-    // std.testing.refAllDeclsRecursive(@import("eval/interpreter.zig"));
-    // std.testing.refAllDeclsRecursive(@import("eval/test/eval_test.zig"));
+    std.testing.refAllDeclsRecursive(@import("compile"));
+    std.testing.refAllDecls(@import("compile/test/module_env_test.zig"));
+    std.testing.refAllDecls(@import("compile/test/test_build_env.zig"));
+    std.testing.refAllDecls(@import("compile/test/test_package_env.zig"));
 
     // std.testing.refAllDeclsRecursive(@import("main.zig"));
     // std.testing.refAllDeclsRecursive(@import("cache/mod.zig"));
     // std.testing.refAllDeclsRecursive(@import("cache/CacheModule.zig"));
 
-    // // TODO: Remove after hooking up
-    // std.testing.refAllDeclsRecursive(@import("reporting"));
+    std.testing.refAllDecls(@import("cache"));
+    std.testing.refAllDecls(@import("cache/cache_test.zig"));
+
+    std.testing.refAllDeclsRecursive(@import("main.zig"));
 
     // std.testing.refAllDeclsRecursive(@import("snapshot.zig"));
     // std.testing.refAllDeclsRecursive(@import("layout/layout.zig"));
