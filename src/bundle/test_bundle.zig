@@ -69,8 +69,7 @@ test "bundle and unbundle roundtrip" {
     var bundle_data = std.ArrayList(u8).init(allocator);
     defer bundle_data.deinit();
 
-    const bundle_result = bundle.bundle(&file_iter, 3, allocator, bundle_data.writer(), src_dir);
-    try testing.expect(bundle_result == .success);
+    try bundle.bundle(&file_iter, 3, allocator, bundle_data.writer(), src_dir);
 
     // Create destination temp directory
     var dst_tmp = testing.tmpDir(.{});
@@ -79,8 +78,7 @@ test "bundle and unbundle roundtrip" {
 
     // Unbundle from memory
     var stream = std.io.fixedBufferStream(bundle_data.items);
-    const unbundle_result = bundle.unbundle(stream.reader(), dst_dir, allocator);
-    try testing.expect(unbundle_result == .success);
+    try bundle.unbundle(stream.reader(), dst_dir, allocator);
 
     // Verify all files exist with correct content
     const file1_content = try dst_dir.readFileAlloc(allocator, "file1.txt", 1024);
@@ -234,8 +232,7 @@ test "bundle and unbundle over socket stream" {
     defer stream.close();
 
     // Unbundle from socket stream
-    const unbundle_result = bundle.unbundle(stream.reader(), dst_dir, allocator);
-    try testing.expect(unbundle_result == .success);
+    try bundle.unbundle(stream.reader(), dst_dir, allocator);
 
     // Wait for server to finish
     server_ctx.done.wait();
@@ -329,8 +326,7 @@ test "minimal bundle unbundle" {
     };
 
     var file_iter = FilePathIterator{ .paths = &file_paths };
-    const bundle_result = bundle.bundle(&file_iter, 3, allocator, bundle_data.writer(), src_dir);
-    try testing.expect(bundle_result == .success);
+    try bundle.bundle(&file_iter, 3, allocator, bundle_data.writer(), src_dir);
 
     // Create destination temp directory
     var dst_tmp = testing.tmpDir(.{});
@@ -339,8 +335,7 @@ test "minimal bundle unbundle" {
 
     // Unbundle from memory
     var stream = std.io.fixedBufferStream(bundle_data.items);
-    const unbundle_result = bundle.unbundle(stream.reader(), dst_dir, allocator);
-    try testing.expect(unbundle_result == .success);
+    try bundle.unbundle(stream.reader(), dst_dir, allocator);
 
     // Read and verify content
     const content = try dst_dir.readFileAlloc(allocator, "test.txt", 1024);
