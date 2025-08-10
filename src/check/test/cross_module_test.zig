@@ -4,7 +4,7 @@ const std = @import("std");
 const base = @import("base");
 const types_mod = @import("types");
 const compile = @import("compile");
-const Check = @import("check");
+const Check = @import("../Check.zig");
 
 const ModuleEnv = compile.ModuleEnv;
 const CIR = ModuleEnv.CIR;

@@ -8,7 +8,7 @@ const std = @import("std");
 const compile = @import("compile");
 const parse = @import("parse");
 const base = @import("base");
-const Can = @import("can");
+const Can = @import("../Mod.zig");
 
 const AST = parse.AST;
 const ModuleEnv = compile.ModuleEnv;

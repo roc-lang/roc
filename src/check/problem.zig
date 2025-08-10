@@ -1518,4 +1518,12 @@ pub const Store = struct {
         try self.problems.append(gpa, problem);
         return idx;
     }
+
+    pub fn get(self: *Self, idx: Problem.Idx) Problem {
+        return self.problems.items[@intFromEnum(idx)];
+    }
+
+    pub fn len(self: *Self) usize {
+        return self.problems.items.len;
+    }
 };

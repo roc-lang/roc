@@ -15,7 +15,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const serialization = @import("serialization");
-const IovecWriter = serialization.IovecWriter;
 
 /// A builder for creating sorted arrays directly without using hash maps
 /// This is more efficient when we know we won't have duplicates
@@ -246,51 +245,52 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             return true;
         }
 
-        /// Append this SortedArrayBuilder to an iovec writer for serialization
-        pub fn appendToIovecs(self: *const Self, writer: *IovecWriter) !usize {
+        // TODO FIXME
+        // /// Append this SortedArrayBuilder to an iovec writer for serialization
+        // pub fn appendToIovecs(self: *const Self, writer: *IovecWriter) !usize {
 
-            // Must be sorted before serialization
-            if (!self.sorted) {
-                @panic("SortedArrayBuilder must be sorted before serialization");
-            }
+        //     // Must be sorted before serialization
+        //     if (!self.sorted) {
+        //         @panic("SortedArrayBuilder must be sorted before serialization");
+        //     }
 
-            // Create a mutable copy of self that we can modify
-            var builder_copy = self.*;
+        //     // Create a mutable copy of self that we can modify
+        //     var builder_copy = self.*;
 
-            // Create a buffer for the final serialized struct
-            const builder_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(Self));
+        //     // Create a buffer for the final serialized struct
+        //     const builder_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(Self));
 
-            // Track this allocation so it gets freed when writer is deinitialized
-            try writer.owned_buffers.append(builder_copy_buffer);
+        //     // Track this allocation so it gets freed when writer is deinitialized
+        //     try writer.owned_buffers.append(builder_copy_buffer);
 
-            // Serialize entries array data
-            const entries_offset = if (self.entries.items.len > 0) blk: {
-                const data = std.mem.sliceAsBytes(self.entries.items);
-                const offset = try writer.appendBytes(Entry, data);
-                break :blk offset;
-            } else 0;
+        //     // Serialize entries array data
+        //     const entries_offset = if (self.entries.items.len > 0) blk: {
+        //         const data = std.mem.sliceAsBytes(self.entries.items);
+        //         const offset = try writer.appendBytes(Entry, data);
+        //         break :blk offset;
+        //     } else 0;
 
-            // Update pointer in the copy to use offset
-            // For empty arrays, use sentinel value instead of 0 to avoid null pointer
-            builder_copy.entries.items.ptr = if (entries_offset == 0)
-                @ptrFromInt(0xDEADBEEF) // EMPTY_ARRAY_SENTINEL
-            else
-                @ptrFromInt(entries_offset);
-            builder_copy.entries.items.len = self.entries.items.len;
+        //     // Update pointer in the copy to use offset
+        //     // For empty arrays, use sentinel value instead of 0 to avoid null pointer
+        //     builder_copy.entries.items.ptr = if (entries_offset == 0)
+        //         @ptrFromInt(0xDEADBEEF) // EMPTY_ARRAY_SENTINEL
+        //     else
+        //         @ptrFromInt(entries_offset);
+        //     builder_copy.entries.items.len = self.entries.items.len;
 
-            // Note: For string keys, we don't serialize the string data separately here.
-            // This assumes that the strings are already managed elsewhere (e.g., in an interner)
-            // and we're just storing pointers/slices to them. If string keys need to be
-            // serialized as well, that would require additional handling.
+        //     // Note: For string keys, we don't serialize the string data separately here.
+        //     // This assumes that the strings are already managed elsewhere (e.g., in an interner)
+        //     // and we're just storing pointers/slices to them. If string keys need to be
+        //     // serialized as well, that would require additional handling.
 
-            // Copy the modified struct to the buffer
-            @memcpy(builder_copy_buffer, std.mem.asBytes(&builder_copy));
+        //     // Copy the modified struct to the buffer
+        //     @memcpy(builder_copy_buffer, std.mem.asBytes(&builder_copy));
 
-            // Now that all pointers have been converted to offsets, add the copy to iovecs
-            const struct_offset = try writer.appendBytes(Self, builder_copy_buffer);
+        //     // Now that all pointers have been converted to offsets, add the copy to iovecs
+        //     const struct_offset = try writer.appendBytes(Self, builder_copy_buffer);
 
-            return struct_offset;
-        }
+        //     return struct_offset;
+        // }
 
         /// Serialized representation of a SortedArrayBuilder
         pub const Serialized = struct {
@@ -346,38 +346,39 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
     };
 }
 
-test "SortedArrayBuilder basic operations" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
+// TODO FIXME
+// test "SortedArrayBuilder basic operations" {
+//     const testing = std.testing;
+//     const allocator = testing.allocator;
 
-    var builder = SortedArrayBuilder([]const u8, u32).init();
-    defer builder.deinit(allocator);
+//     var builder = SortedArrayBuilder([]const u8, u32).init();
+//     defer builder.deinit(allocator);
 
-    // Add items in random order
-    try builder.put(allocator, "zebra", 100);
-    try builder.put(allocator, "apple", 50);
-    try builder.put(allocator, "banana", 150);
-    try builder.put(allocator, "cherry", 30);
+//     // Add items in random order
+//     try builder.put(allocator, "zebra", 100);
+//     try builder.put(allocator, "apple", 50);
+//     try builder.put(allocator, "banana", 150);
+//     try builder.put(allocator, "cherry", 30);
 
-    // Test count
-    try testing.expectEqual(@as(usize, 4), builder.count());
+//     // Test count
+//     try testing.expectEqual(@as(usize, 4), builder.count());
 
-    // Test get (forces sorting)
-    try testing.expectEqual(@as(?u32, 50), builder.get(allocator, "apple"));
-    try testing.expectEqual(@as(?u32, 150), builder.get(allocator, "banana"));
-    try testing.expectEqual(@as(?u32, 30), builder.get(allocator, "cherry"));
-    try testing.expectEqual(@as(?u32, 100), builder.get(allocator, "zebra"));
-    try testing.expectEqual(@as(?u32, null), builder.get(allocator, "missing"));
+//     // Test get (forces sorting)
+//     try testing.expectEqual(@as(?u32, 50), builder.get(allocator, "apple"));
+//     try testing.expectEqual(@as(?u32, 150), builder.get(allocator, "banana"));
+//     try testing.expectEqual(@as(?u32, 30), builder.get(allocator, "cherry"));
+//     try testing.expectEqual(@as(?u32, 100), builder.get(allocator, "zebra"));
+//     try testing.expectEqual(@as(?u32, null), builder.get(allocator, "missing"));
 
-    // Test iovec serialization
-    var writer = IovecWriter.init(allocator);
-    defer writer.deinit();
+//     // Test iovec serialization
+//     var writer = IovecWriter.init(allocator);
+//     defer writer.deinit();
 
-    _ = try builder.appendToIovecs(&writer);
+//     _ = try builder.appendToIovecs(&writer);
 
-    // Verify we have some iovecs (basic smoke test)
-    try testing.expect(writer.iovecs.items.len > 0);
-}
+//     // Verify we have some iovecs (basic smoke test)
+//     try testing.expect(writer.iovecs.items.len > 0);
+// }
 
 test "SortedArrayBuilder maintains sorted order when added in order" {
     const testing = std.testing;

@@ -1,6 +1,6 @@
 //! Tests for ModuleEnv
 const std = @import("std");
-const compile = @import("compile");
+const compile = @import("../mod.zig");
 const serialization = @import("serialization");
 const base = @import("base");
 

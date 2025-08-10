@@ -5335,7 +5335,7 @@ test "unify - fails on infinite type" {
     switch (result) {
         .ok => try std.testing.expect(false),
         .problem => |problem_idx| {
-            const problem = env.problems.problems.get(problem_idx);
+            const problem = env.problems.get(problem_idx);
             try std.testing.expectEqual(.infinite_recursion, @as(Problem.Tag, problem));
         },
     }
@@ -5363,7 +5363,7 @@ test "unify - fails on anonymous recursion" {
     switch (result) {
         .ok => try std.testing.expect(false),
         .problem => |problem_idx| {
-            const problem = env.problems.problems.get(problem_idx);
+            const problem = env.problems.get(problem_idx);
             try std.testing.expectEqual(.anonymous_recursion, @as(Problem.Tag, problem));
         },
     }
@@ -5818,5 +5818,5 @@ test "heterogeneous list reports only first incompatibility" {
     try std.testing.expectEqual(.ok, result3);
 
     // Check that we have exactly one problem recorded (from the string unification)
-    try std.testing.expect(env.problems.problems.len() == 1);
+    try std.testing.expect(env.problems.len() == 1);
 }

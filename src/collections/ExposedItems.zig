@@ -201,7 +201,7 @@ pub const ExposedItems = struct {
 
     /// Iterator for all exposed items
     pub const Iterator = struct {
-        items: []const SortedArrayBuilder(IdentIdx, u16).Entry,
+        // items: []const SortedArrayBuilder(IdentIdx, u16).Entry,
         index: usize,
 
         pub fn next(self: *Iterator) ?struct { ident_idx: IdentIdx, node_idx: u16 } {
@@ -221,7 +221,7 @@ pub const ExposedItems = struct {
 
     /// Serialized representation of ExposedItems
     pub const Serialized = struct {
-        items: SortedArrayBuilder(IdentIdx, u16).Serialized,
+        // items: SortedArrayBuilder(IdentIdx, u16).Serialized,
 
         /// Serialize an ExposedItems into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -304,7 +304,7 @@ test "ExposedItems empty CompactWriter roundtrip" {
     defer original.deinit(allocator);
 
     // Create a temp file
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test_empty_exposed.dat", .{ .read = true });
@@ -364,7 +364,7 @@ test "ExposedItems basic CompactWriter roundtrip" {
     original.ensureSorted(allocator);
 
     // Create a temp file
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test_basic_exposed.dat", .{ .read = true });
@@ -423,7 +423,7 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     original.ensureSorted(allocator);
 
     // Create a temp file
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test_duplicates_exposed.dat", .{ .read = true });
@@ -491,7 +491,7 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
     original.ensureSorted(allocator);
 
     // Create a temp file
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test_comprehensive_exposed.dat", .{ .read = true });
@@ -557,7 +557,7 @@ test "ExposedItems multiple instances CompactWriter roundtrip" {
     // exposed3 left empty - empty collections are already sorted
 
     // Create a temp file
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test_multiple_exposed.dat", .{ .read = true });

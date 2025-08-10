@@ -3,7 +3,7 @@
 const std = @import("std");
 const base = @import("base");
 const types_mod = @import("types");
-const Check = @import("check");
+const Check = @import("../Check.zig");
 
 const Ident = base.Ident;
 const testing = std.testing;

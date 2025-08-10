@@ -29,8 +29,11 @@ pub const ModuleType = enum {
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
         return switch (self) {
+            .build_options => &.{},
             .builtins => &.{},
             .serialization => &.{},
+            .fs => &.{},
+            .tracy => &.{ .build_options, .builtins },
             .collections => &.{.serialization},
             .base => &.{ .serialization, .collections },
             .reporting => &.{ .base, .collections },
@@ -38,12 +41,9 @@ pub const ModuleType = enum {
             // TODO check below deps, remove cycles
             .compile => &.{ .base, .collections, .types, .builtins, .reporting, .serialization },
             .parse => &.{ .base, .compile, .collections, .tracy, .reporting },
-            .can => &.{ .base, .parse, .collections, .compile, .types, .builtins, .tracy },
-            .check => &.{ .base, .tracy, .collections, .types, .can, .compile, .builtins, .reporting },
-            .tracy => &.{ .build_options, .builtins },
             .cache => &.{ .compile, .base, .collections, .serialization, .reporting, .fs, .build_options },
-            .fs => &.{},
-            .build_options => &.{},
+            .can => &.{ .base, .parse, .collections, .compile, .types, .builtins, .tracy },
+            .check => &.{ .base, .tracy, .parse, .collections, .types, .can, .compile, .builtins, .reporting },
         };
     }
 };
@@ -67,8 +67,14 @@ pub const RocModules = struct {
 
     pub fn create(b: *Build, build_options_step: *Step.Options) RocModules {
         const self = RocModules{
-            .serialization = b.addModule("serialization", .{ .root_source_file = b.path("src/serialization/mod.zig") }),
-            .collections = b.addModule("collections", .{ .root_source_file = b.path("src/collections/mod.zig") }),
+            .serialization = b.addModule(
+                "serialization",
+                .{ .root_source_file = b.path("src/serialization/mod.zig") },
+            ),
+            .collections = b.addModule(
+                "collections",
+                .{ .root_source_file = b.path("src/collections/mod.zig") },
+            ),
             .base = b.addModule("base", .{ .root_source_file = b.path("src/base/mod.zig") }),
             .types = b.addModule("types", .{ .root_source_file = b.path("src/types/mod.zig") }),
             .builtins = b.addModule("builtins", .{ .root_source_file = b.path("src/builtins/mod.zig") }),
@@ -80,7 +86,10 @@ pub const RocModules = struct {
             .tracy = b.addModule("tracy", .{ .root_source_file = b.path("src/tracy.zig") }),
             .cache = b.addModule("cache", .{ .root_source_file = b.path("src/cache/mod.zig") }),
             .fs = b.addModule("fs", .{ .root_source_file = b.path("src/fs/mod.zig") }),
-            .build_options = b.addModule("build_options", .{ .root_source_file = build_options_step.getOutput() }),
+            .build_options = b.addModule(
+                "build_options",
+                .{ .root_source_file = build_options_step.getOutput() },
+            ),
         };
 
         // Setup module dependencies using our generic helper

@@ -6,7 +6,7 @@ const base = @import("base");
 const parse = @import("parse");
 const Can = @import("can");
 const compile = @import("compile");
-const Check = @import("check");
+const Check = @import("../Check.zig");
 
 const ModuleEnv = compile.ModuleEnv;
 const CanonicalizedExpr = Can.CanonicalizedExpr;

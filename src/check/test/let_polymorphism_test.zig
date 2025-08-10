@@ -7,7 +7,7 @@ const base = @import("base");
 const types = @import("types");
 const parse = @import("parse");
 const compile = @import("compile");
-const Check = @import("check");
+const Check = @import("../Check.zig");
 
 const TypesStore = types.Store;
 const ModuleEnv = compile.ModuleEnv;
