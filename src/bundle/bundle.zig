@@ -18,6 +18,36 @@ const c = @cImport({
     @cInclude("zstd.h");
 });
 
+// Wrapper functions to adapt Zig allocator to zstd's custom allocator interface
+fn myZstdAlloc(opaque_ptr: ?*anyopaque, size: usize) callconv(.C) ?*anyopaque {
+    const allocator = @as(*std.mem.Allocator, @ptrCast(@alignCast(opaque_ptr.?)));
+    // Allocate extra 16 bytes to store the size
+    const total_size = size + 16;
+    const mem = allocator.alloc(u8, total_size) catch return null;
+
+    // Store the size in the first 8 bytes (usize)
+    const size_ptr = @as(*usize, @ptrCast(@alignCast(mem.ptr)));
+    size_ptr.* = total_size;
+
+    // Return pointer offset by 16 bytes
+    return @ptrFromInt(@intFromPtr(mem.ptr) + 16);
+}
+
+fn myZstdFree(opaque_ptr: ?*anyopaque, address: ?*anyopaque) callconv(.C) void {
+    if (address == null) return;
+    const allocator = @as(*std.mem.Allocator, @ptrCast(@alignCast(opaque_ptr.?)));
+
+    // Get the original allocation by subtracting 16 bytes
+    const original_ptr = @as([*]u8, @ptrFromInt(@intFromPtr(address) - 16));
+
+    // Read the size from the first 8 bytes
+    const size_ptr = @as(*const usize, @ptrCast(@alignCast(original_ptr)));
+    const total_size = size_ptr.*;
+
+    // Free the full allocation
+    allocator.free(original_ptr[0..total_size]);
+}
+
 pub const BundleError = error{
     FilePathTooLong,
     FileOpenFailed,
@@ -107,7 +137,14 @@ pub fn bundle(
     var buffered_writer = std.io.bufferedWriter(output_writer);
     const buffered = buffered_writer.writer();
 
-    const ctx = c.ZSTD_createCCtx() orelse return std.mem.Allocator.Error.OutOfMemory;
+    // Create custom memory allocator for zstd
+    const custom_mem = c.ZSTD_customMem{
+        .customAlloc = myZstdAlloc,
+        .customFree = myZstdFree,
+        .@"opaque" = @ptrCast(@constCast(&allocator)),
+    };
+
+    const ctx = c.ZSTD_createCCtx_advanced(custom_mem) orelse return std.mem.Allocator.Error.OutOfMemory;
     defer _ = c.ZSTD_freeCCtx(ctx);
 
     _ = c.ZSTD_CCtx_setParameter(ctx, c.ZSTD_c_compressionLevel, compression_level);
@@ -170,7 +207,14 @@ pub fn unbundle(
     var buffered_reader = std.io.bufferedReader(input_reader);
     const buffered = buffered_reader.reader();
 
-    const dctx = c.ZSTD_createDCtx() orelse return std.mem.Allocator.Error.OutOfMemory;
+    // Create custom memory allocator for zstd
+    const custom_mem = c.ZSTD_customMem{
+        .customAlloc = myZstdAlloc,
+        .customFree = myZstdFree,
+        .@"opaque" = @ptrCast(@constCast(&allocator)),
+    };
+
+    const dctx = c.ZSTD_createDCtx_advanced(custom_mem) orelse return std.mem.Allocator.Error.OutOfMemory;
     defer _ = c.ZSTD_freeDCtx(dctx);
 
     // Read and decompress data in chunks
