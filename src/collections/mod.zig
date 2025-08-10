@@ -98,3 +98,7 @@ test "collections tests" {
     std.testing.refAllDecls(@import("safe_list.zig"));
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
 }
+
+test "ASDF" {
+    @panic("ASDF");
+}

@@ -225,12 +225,14 @@ fn addModuleTests(
 
     for (module_configs, 0..) |config, i| {
         const test_step = b.addTest(.{
-            .root_source_file = b.path(config.test_path),
+            .root_source_file = b.path(config.root_source_file),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
         });
-        roc_modules.addAllToTest(test_step);
+        
+        // Add only the required dependencies for this specific module
+        roc_modules.setupModuleTest(test_step, config.name);
 
         const run_step = b.addRunArtifact(test_step);
 

@@ -1394,7 +1394,7 @@ test "SafeList(u32) CompactWriter roundtrip with file" {
     }
 
     // Create a temp file
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test.dat", .{ .read = true });
@@ -1451,7 +1451,7 @@ test "SafeList(struct) CompactWriter roundtrip with file" {
     _ = try original.append(gpa, .{ .x = 50, .y = 60 });
 
     // Create a temp file
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test_struct.dat", .{ .read = true });
@@ -1501,7 +1501,7 @@ test "SafeList empty list CompactWriter roundtrip" {
     defer original.deinit(gpa);
 
     // Create a temp file
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test_empty.dat", .{ .read = true });
@@ -1541,7 +1541,7 @@ test "SafeList empty lists CompactWriter roundtrip multiple types" {
     const gpa = testing.allocator;
 
     // Test empty lists with different types to ensure alignment works correctly
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const test_types = .{
@@ -1663,7 +1663,7 @@ test "SafeList CompactWriter complete roundtrip example" {
     _ = try original.append(gpa, 400);
 
     // Step 2: Create temp file and CompactWriter
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("example.dat", .{ .read = true });
@@ -1752,7 +1752,7 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     _ = try list_struct.append(gpa, .{ .x = 99, .y = 9999, .z = 128 });
 
     // Create temp file and CompactWriter
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("multi_list.dat", .{ .read = true });
@@ -1863,7 +1863,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     defer offsets.deinit();
 
     // Create temp file
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     const file = try tmp_dir.dir.createFile("interleaved.dat", .{ .read = true });
     defer file.close();
@@ -1959,7 +1959,7 @@ test "SafeList CompactWriter brute-force alignment verification" {
     // Test all combinations of slice lengths from 0 to 8 for different types
     // This ensures our alignment padding works correctly for all cases
 
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     // Test different types with different alignments
@@ -2089,7 +2089,7 @@ test "SafeMultiList CompactWriter roundtrip with file" {
     _ = try original.append(gpa, .{ .id = 400, .value = 4000, .flag = false, .data = 40 });
 
     // Create a temp file
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test_multi.dat", .{ .read = true });
@@ -2156,7 +2156,7 @@ test "SafeMultiList empty list CompactWriter roundtrip" {
     defer original.deinit(gpa);
 
     // Create a temp file
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test_empty_multi.dat", .{ .read = true });
@@ -2227,7 +2227,7 @@ test "SafeMultiList CompactWriter multiple lists different alignments" {
     _ = try list3.append(gpa, .{ .id = 888, .data = 84, .flag = false });
 
     // Create temp file
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("multi_types.dat", .{ .read = true });
@@ -2306,7 +2306,7 @@ test "SafeMultiList CompactWriter field access after deserialization" {
     _ = try original.append(gpa, .{ .id = 777, .value = 888, .flag = true, .data = 99 });
 
     // Create temp file
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test_field_access.dat", .{ .read = true });
@@ -2367,7 +2367,7 @@ test "SafeMultiList CompactWriter field access after deserialization" {
 test "SafeMultiList CompactWriter brute-force alignment verification" {
     const gpa = testing.allocator;
 
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     // Test with various struct configurations
@@ -2465,7 +2465,7 @@ test "SafeMultiList CompactWriter brute-force alignment verification" {
 test "SafeMultiList CompactWriter various field alignments and sizes" {
     const gpa = testing.allocator;
 
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     // Test different field alignment combinations
@@ -2602,7 +2602,7 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
         }
 
         // Now serialize using our implementation
-        const tmp_dir = testing.tmpDir(.{});
+        var tmp_dir = testing.tmpDir(.{});
         defer tmp_dir.cleanup();
 
         const file = try tmp_dir.dir.createFile("layout_test.dat", .{ .read = true });
@@ -2693,7 +2693,7 @@ test "SafeMultiList CompactWriter stress test many field types" {
             });
         }
 
-        const tmp_dir = testing.tmpDir(.{});
+        var tmp_dir = testing.tmpDir(.{});
         defer tmp_dir.cleanup();
 
         const file = try tmp_dir.dir.createFile("complex_test.dat", .{ .read = true });
@@ -2762,7 +2762,7 @@ test "SafeMultiList CompactWriter empty with capacity" {
     try testing.expect(list.items.capacity >= 50);
     try testing.expectEqual(@as(usize, 0), list.len());
 
-    const tmp_dir = testing.tmpDir(.{});
+    var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("empty_capacity.dat", .{ .read = true });

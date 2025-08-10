@@ -131,20 +131,99 @@ pub const RocModules = struct {
         step.root_module.addImport("build_options", self.build_options);
     }
 
-    /// Returns the list of modules that have test files
-    /// Each entry contains the module name and the path to its test file
-    pub fn getTestableModules() []const struct { name: []const u8, test_path: []const u8 } {
-        return &.{
-            .{ .name = "collections", .test_path = "src/collections/mod.zig" },
-            .{ .name = "base", .test_path = "src/base/mod.zig" },
-            .{ .name = "builtins", .test_path = "src/builtins/mod.zig" },
-            // .{ .name = "cache", .test_path = "src/cache/mod.zig" },
-            // .{ .name = "canonicalize", .test_path = "src/canonicalize/Mod.zig" },
-            // .{ .name = "check", .test_path = "src/check/Mod.zig" },
-            // .{ .name = "compile", .test_path = "src/compile/mod.zig" },
-            // .{ .name = "eval", .test_path = "src/eval/mod.zig" },
-            // .{ .name = "types", .test_path = "src/types/mod.zig" },
-            // .{ .name = "parse", .test_path = "src/parse/test.zig" },
+    const ModuleInfo = struct {
+        name: []const u8,
+        root_source_file: []const u8,
+    };
+
+    pub fn getTestableModules() []const ModuleInfo {
+        return &[_]ModuleInfo{
+            .{ .name = "serialization", .root_source_file = "src/serialization/mod.zig" },
+            .{ .name = "collections", .root_source_file = "src/collections/mod.zig" },
+            .{ .name = "base", .root_source_file = "src/base/mod.zig" },
+            .{ .name = "types", .root_source_file = "src/types/mod.zig" },
+            .{ .name = "builtins", .root_source_file = "src/builtins/mod.zig" },
+            .{ .name = "compile", .root_source_file = "src/compile/mod.zig" },
+            .{ .name = "reporting", .root_source_file = "src/reporting/mod.zig" },
+            .{ .name = "parse", .root_source_file = "src/parse/mod.zig" },
+            .{ .name = "can", .root_source_file = "src/canonicalize/Mod.zig" },
+            .{ .name = "check", .root_source_file = "src/check/Mod.zig" },
+            .{ .name = "cache", .root_source_file = "src/cache/mod.zig" },
+            .{ .name = "fs", .root_source_file = "src/fs/mod.zig" },
         };
+    }
+
+    pub fn setupModuleTest(self: RocModules, test_step: *Step.Compile, module_name: []const u8) void {
+        // Add build_options to all test steps
+        test_step.root_module.addImport("build_options", self.build_options);
+
+        // Add dependencies based on module name
+        if (std.mem.eql(u8, module_name, "serialization")) {
+            // serialization has no dependencies from other modules
+        } else if (std.mem.eql(u8, module_name, "collections")) {
+            test_step.root_module.addImport("serialization", self.serialization);
+        } else if (std.mem.eql(u8, module_name, "base")) {
+            test_step.root_module.addImport("serialization", self.serialization);
+            test_step.root_module.addImport("collections", self.collections);
+        } else if (std.mem.eql(u8, module_name, "types")) {
+            test_step.root_module.addImport("serialization", self.serialization);
+            test_step.root_module.addImport("base", self.base);
+            test_step.root_module.addImport("collections", self.collections);
+        } else if (std.mem.eql(u8, module_name, "builtins")) {
+            // builtins has no dependencies from other modules
+        } else if (std.mem.eql(u8, module_name, "reporting")) {
+            test_step.root_module.addImport("base", self.base);
+        } else if (std.mem.eql(u8, module_name, "compile")) {
+            test_step.root_module.addImport("base", self.base);
+            test_step.root_module.addImport("collections", self.collections);
+            test_step.root_module.addImport("types", self.types);
+            test_step.root_module.addImport("builtins", self.builtins);
+            test_step.root_module.addImport("reporting", self.reporting);
+            test_step.root_module.addImport("serialization", self.serialization);
+            test_step.root_module.addImport("parse", self.parse);
+            test_step.root_module.addImport("can", self.can);
+            test_step.root_module.addImport("check", self.check);
+            test_step.root_module.addImport("cache", self.cache);
+        } else if (std.mem.eql(u8, module_name, "parse")) {
+            test_step.root_module.addImport("base", self.base);
+            test_step.root_module.addImport("compile", self.compile);
+            test_step.root_module.addImport("collections", self.collections);
+            test_step.root_module.addImport("tracy", self.tracy);
+            test_step.root_module.addImport("reporting", self.reporting);
+        } else if (std.mem.eql(u8, module_name, "can")) {
+            test_step.root_module.addImport("base", self.base);
+            test_step.root_module.addImport("parse", self.parse);
+            test_step.root_module.addImport("collections", self.collections);
+            test_step.root_module.addImport("compile", self.compile);
+            test_step.root_module.addImport("types", self.types);
+            test_step.root_module.addImport("builtins", self.builtins);
+            test_step.root_module.addImport("tracy", self.tracy);
+        } else if (std.mem.eql(u8, module_name, "check")) {
+            test_step.root_module.addImport("base", self.base);
+            test_step.root_module.addImport("tracy", self.tracy);
+            test_step.root_module.addImport("collections", self.collections);
+            test_step.root_module.addImport("types", self.types);
+            test_step.root_module.addImport("can", self.can);
+            test_step.root_module.addImport("compile", self.compile);
+            test_step.root_module.addImport("builtins", self.builtins);
+            test_step.root_module.addImport("reporting", self.reporting);
+        } else if (std.mem.eql(u8, module_name, "cache")) {
+            test_step.root_module.addImport("compile", self.compile);
+            test_step.root_module.addImport("base", self.base);
+            test_step.root_module.addImport("collections", self.collections);
+            test_step.root_module.addImport("serialization", self.serialization);
+            test_step.root_module.addImport("reporting", self.reporting);
+            test_step.root_module.addImport("fs", self.fs);
+        } else if (std.mem.eql(u8, module_name, "fs")) {
+            // fs has no dependencies from other modules
+        }
+
+        // Add tracy and builtins imports for tests that might need them
+        if (!std.mem.eql(u8, module_name, "builtins")) {
+            test_step.root_module.addImport("builtins", self.builtins);
+        }
+        if (!std.mem.eql(u8, module_name, "tracy")) {
+            test_step.root_module.addImport("tracy", self.tracy);
+        }
     }
 };
