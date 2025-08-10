@@ -32,7 +32,7 @@ pub const RocCall = fn (
 ///
 /// This is used in both calls from actual hosts as well as evaluation of constants
 /// inside the Roc compiler itself.
-pub const RocOps = struct {
+pub const RocOps = extern struct {
     /// The host provides this pointer, and Roc passes it to each of the following
     /// function pointers as a second argument. This lets the host do things like use
     /// arena allocators for allocation and deallocation (by putting the arena in here).

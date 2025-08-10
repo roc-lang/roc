@@ -8,6 +8,7 @@ const std = @import("std");
 
 test {
     std.testing.refAllDecls(@import("base/test.zig"));
+    std.testing.refAllDecls(@import("builtins/test.zig"));
     // std.testing.refAllDecls(@import("base/test/base_test.zig"));
 
     // std.testing.refAllDecls(@import("builtins"));

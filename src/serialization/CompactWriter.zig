@@ -5,6 +5,7 @@
 //! proper deserialization of the written data.
 
 const std = @import("std");
+const collections = @import("collections");
 
 /// A writer that efficiently serializes data using scatter-gather I/O operations.
 pub const CompactWriter = struct {
@@ -219,3 +220,190 @@ const Iovec = extern struct {
     iov_base: [*]const u8,
     iov_len: usize,
 };
+
+/// Helper function to serialize data using CompactWriter with an arena allocator
+/// Returns the total bytes written
+fn serializeWithArena(
+    comptime T: type,
+    value: *const T,
+    gpa: std.mem.Allocator,
+    file: std.fs.File,
+) !usize {
+    // Use arena allocator for all serialization allocations
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    // Create and use CompactWriter
+    var writer = CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(arena_allocator);
+
+    _ = try value.serialize(arena_allocator, &writer);
+
+    const total_bytes = writer.total_bytes;
+
+    // Write to file
+    try writer.writeGather(arena_allocator, file);
+
+    return total_bytes;
+}
+
+test "SafeList simple serialization" {
+    const gpa = std.testing.allocator;
+
+    // Create a simple SafeList
+    var list = try collections.SafeList(u8).initCapacity(gpa, 10);
+    defer list.deinit(gpa);
+
+    _ = try list.append(gpa, 'H');
+    _ = try list.append(gpa, 'e');
+    _ = try list.append(gpa, 'l');
+    _ = try list.append(gpa, 'l');
+    _ = try list.append(gpa, 'o');
+
+    // Create a temp file
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const file = try tmp_dir.dir.createFile("test_safelist.dat", .{ .read = true });
+    defer file.close();
+
+    // Use arena allocator for serialization
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    // Serialize
+    var writer = CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+    };
+    defer writer.deinit(arena_allocator);
+
+    _ = try list.serialize(arena_allocator, &writer);
+
+    // Write to file
+    try writer.writeGather(arena_allocator, file);
+
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    defer gpa.free(buffer);
+
+    _ = try file.read(buffer);
+
+    // Cast and relocate
+    // The SafeList struct should be at the beginning (it was appended first)
+    const deserialized = @as(*collections.SafeList(u8), @ptrCast(@alignCast(buffer.ptr)));
+
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify
+    try std.testing.expectEqual(@as(u32, 5), deserialized.len());
+    try std.testing.expectEqual(@as(u8, 'H'), deserialized.get(@enumFromInt(0)).*);
+    try std.testing.expectEqual(@as(u8, 'e'), deserialized.get(@enumFromInt(1)).*);
+    try std.testing.expectEqual(@as(u8, 'l'), deserialized.get(@enumFromInt(2)).*);
+    try std.testing.expectEqual(@as(u8, 'l'), deserialized.get(@enumFromInt(3)).*);
+    try std.testing.expectEqual(@as(u8, 'o'), deserialized.get(@enumFromInt(4)).*);
+}
+
+// TODO: CompactWriter doesn't support serializing multiple independent structures
+// This test needs to be redesigned to either use separate writers or a containing structure
+// test "Ident.Store multiple stores CompactWriter roundtrip" {
+//     const gpa = std.testing.allocator;
+//
+//     // Create multiple stores to test alignment
+//     var store1 = try Ident.Store.initCapacity(gpa, 5);
+//     defer store1.deinit(gpa);
+//
+//     var store2 = try Ident.Store.initCapacity(gpa, 5);
+//     defer store2.deinit(gpa);
+//
+//     var store3 = try Ident.Store.initCapacity(gpa, 5);
+//     defer store3.deinit(gpa);
+//
+//     // Populate stores differently
+//     const idx1_1 = try store1.insert(gpa, Ident.for_text("store1_ident"));
+//     _ = try store1.genUnique(gpa);
+//
+//     const idx2_1 = try store2.insert(gpa, Ident.for_text("store2_ident!"));
+//     const idx2_2 = try store2.insert(gpa, Ident.for_text("_store2_ignored"));
+//     store2.freeze();
+//
+//     const idx3_1 = try store3.insert(gpa, Ident.for_text("store3"));
+
+//     // Create a temp file
+//     var tmp_dir = std.testing.tmpDir(.{});
+//     defer tmp_dir.cleanup();
+
+//     const file = try tmp_dir.dir.createFile("test_multiple_stores.dat", .{ .read = true });
+//     defer file.close();
+
+//     // Use arena allocator for serialization
+//     var arena = std.heap.ArenaAllocator.init(gpa);
+//     defer arena.deinit();
+//     const arena_allocator = arena.allocator();
+
+//     // Serialize all three
+//     var writer = CompactWriter{
+//         .iovecs = .{},
+//         .total_bytes = 0,
+//     };
+//     defer writer.deinit(arena_allocator);
+
+//     // Track where each store starts in the serialized data
+//     const offset1: usize = 0; // First store starts at 0
+//     _ = try store1.serialize(arena_allocator, &writer);
+//     const offset1_end = writer.total_bytes;
+
+//     const offset2 = offset1_end; // Second store starts where first ended
+//     _ = try store2.serialize(arena_allocator, &writer);
+//     const offset2_end = writer.total_bytes;
+
+//     const offset3 = offset2_end; // Third store starts where second ended
+//     _ = try store3.serialize(arena_allocator, &writer);
+//
+
+//     // Write to file
+//     try writer.writeGather(arena_allocator, file);
+
+//     // Read back
+//     try file.seekTo(0);
+//     const file_size = try file.getEndPos();
+//     const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+//     defer gpa.free(buffer);
+
+//     _ = try file.read(buffer);
+
+//     // Cast and relocate all three
+//     const deserialized1 = @as(*Ident.Store, @ptrCast(@alignCast(buffer.ptr + offset1)));
+//     deserialized1.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+//     const deserialized2 = @as(*Ident.Store, @ptrCast(@alignCast(buffer.ptr + offset2)));
+//     deserialized2.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+//     const deserialized3 = @as(*Ident.Store, @ptrCast(@alignCast(buffer.ptr + offset3)));
+//     deserialized3.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+//     // Verify store 1
+//     try std.testing.expectEqualStrings("store1_ident", deserialized1.getText(idx1_1));
+//     try std.testing.expectEqual(@as(u32, 1), deserialized1.next_unique_name);
+
+//     // Verify store 2 (frozen)
+//     try std.testing.expectEqualStrings("store2_ident!", deserialized2.getText(idx2_1));
+//     try std.testing.expectEqualStrings("_store2_ignored", deserialized2.getText(idx2_2));
+//     if (std.debug.runtime_safety) {
+//         try std.testing.expect(deserialized2.interner.frozen);
+//     }
+
+//     // Verify store 3
+//     try std.testing.expectEqualStrings("store3", deserialized3.getText(idx3_1));
+
+//     // Verify entry counts are preserved
+//     try std.testing.expectEqual(@as(u32, 2), deserialized1.interner.entry_count); // store1_ident + 1 genUnique
+//     try std.testing.expectEqual(@as(u32, 2), deserialized2.interner.entry_count); // store2_ident! + _store2_ignored
+//     try std.testing.expectEqual(@as(u32, 1), deserialized3.interner.entry_count); // store3
+// } // End of commented test
