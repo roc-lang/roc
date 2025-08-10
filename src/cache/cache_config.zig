@@ -179,11 +179,18 @@ pub fn getCompilerVersionDir(allocator: Allocator) ![]u8 {
     const version_info = build_options.compiler_version;
 
     // Use BLAKE3 hash instead of SHA-256 for consistency
-    const hash = cache_mod.blake3Hash(version_info);
+    const hash = blake3Hash(version_info);
 
     // Use first 16 bytes (32 hex chars) for directory name
     const hex_chars = try allocator.alloc(u8, 32);
     _ = std.fmt.bufPrint(hex_chars, "{}", .{std.fmt.fmtSliceHexLower(hash[0..16])}) catch unreachable;
 
     return hex_chars;
+}
+
+/// Hashes the given data using the BLAKE3 algorithm.
+pub fn blake3Hash(data: []const u8) [32]u8 {
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.Blake3.hash(data, &digest, .{});
+    return digest;
 }

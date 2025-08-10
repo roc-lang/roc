@@ -10,6 +10,43 @@ pub const ModuleTest = struct {
     run_step: *Step.Run,
 };
 
+pub const ModuleType = enum {
+    serialization,
+    collections,
+    base,
+    types,
+    builtins,
+    compile,
+    reporting,
+    parse,
+    can,
+    check,
+    tracy,
+    cache,
+    fs,
+    build_options,
+
+    /// Returns the dependencies for this module type
+    pub fn getDependencies(self: ModuleType) []const ModuleType {
+        return switch (self) {
+            .serialization => &.{},
+            .collections => &.{.serialization},
+            .base => &.{ .serialization, .collections },
+            .types => &.{ .serialization, .base, .collections },
+            .builtins => &.{},
+            .reporting => &.{.base},
+            .compile => &.{ .base, .collections, .types, .builtins, .reporting, .serialization },
+            .parse => &.{ .base, .compile, .collections, .tracy, .reporting },
+            .can => &.{ .base, .parse, .collections, .compile, .types, .builtins, .tracy },
+            .check => &.{ .base, .tracy, .collections, .types, .can, .compile, .builtins, .reporting },
+            .tracy => &.{ .build_options, .builtins },
+            .cache => &.{ .compile, .base, .collections, .serialization, .reporting, .fs, .build_options },
+            .fs => &.{},
+            .build_options => &.{},
+        };
+    }
+};
+
 /// Manages all Roc compiler modules and their dependencies
 pub const RocModules = struct {
     serialization: *Module,
@@ -45,64 +82,40 @@ pub const RocModules = struct {
             .build_options = b.addModule("build_options", .{ .root_source_file = build_options_step.getOutput() }),
         };
 
-        // Setup module dependencies
-        self.tracy.addImport("build_options", self.build_options);
-        self.tracy.addImport("builtins", self.builtins);
-
-        self.collections.addImport("serialization", self.serialization);
-
-        self.base.addImport("serialization", self.serialization);
-        self.base.addImport("collections", self.collections);
-
-        self.reporting.addImport("base", self.base);
-
-        self.types.addImport("serialization", self.serialization);
-        self.types.addImport("base", self.base);
-        self.types.addImport("collections", self.collections);
-
-        self.compile.addImport("base", self.base);
-        self.compile.addImport("collections", self.collections);
-        self.compile.addImport("types", self.types);
-        self.compile.addImport("builtins", self.builtins);
-        self.compile.addImport("reporting", self.reporting);
-        self.compile.addImport("serialization", self.serialization);
-        self.compile.addImport("parse", self.parse);
-        self.compile.addImport("can", self.can);
-        self.compile.addImport("check", self.check);
-        self.compile.addImport("cache", self.cache);
-
-        self.parse.addImport("base", self.base);
-        self.parse.addImport("compile", self.compile);
-        self.parse.addImport("collections", self.collections);
-        self.parse.addImport("tracy", self.tracy);
-        self.parse.addImport("reporting", self.reporting);
-
-        self.can.addImport("base", self.base);
-        self.can.addImport("parse", self.parse);
-        self.can.addImport("collections", self.collections);
-        self.can.addImport("compile", self.compile);
-        self.can.addImport("types", self.types);
-        self.can.addImport("builtins", self.builtins);
-        self.can.addImport("tracy", self.tracy);
-
-        self.check.addImport("base", self.base);
-        self.check.addImport("tracy", self.tracy);
-        self.check.addImport("collections", self.collections);
-        self.check.addImport("types", self.types);
-        self.check.addImport("can", self.can);
-        self.check.addImport("compile", self.compile);
-        self.check.addImport("builtins", self.builtins);
-        self.check.addImport("reporting", self.reporting);
-
-        self.cache.addImport("compile", self.compile);
-        self.cache.addImport("base", self.base);
-        self.cache.addImport("collections", self.collections);
-        self.cache.addImport("serialization", self.serialization);
-        self.cache.addImport("reporting", self.reporting);
-        self.cache.addImport("fs", self.fs);
-        self.cache.addImport("build_options", self.build_options);
+        // Setup module dependencies using our generic helper
+        self.setupModuleDependencies();
 
         return self;
+    }
+
+    fn setupModuleDependencies(self: RocModules) void {
+        const all_modules = [_]ModuleType{
+            .serialization,
+            .collections,
+            .base,
+            .types,
+            .builtins,
+            .compile,
+            .reporting,
+            .parse,
+            .can,
+            .check,
+            .tracy,
+            .cache,
+            .fs,
+            .build_options,
+        };
+
+        // Setup dependencies for each module
+        for (all_modules) |module_type| {
+            const module = self.getModule(module_type);
+            const dependencies = module_type.getDependencies();
+            
+            for (dependencies) |dep_type| {
+                const dep_module = self.getModule(dep_type);
+                module.addImport(@tagName(dep_type), dep_module);
+            }
+        }
     }
 
     pub fn addAll(self: RocModules, step: *Step.Compile) void {
@@ -126,43 +139,74 @@ pub const RocModules = struct {
         self.addAll(step);
     }
 
-    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode) []ModuleTest {
-        const test_configs = [_]struct { name: []const u8, path: []const u8 }{
-            .{ .name = "serialization", .path = "src/serialization/mod.zig" },
-            .{ .name = "collections", .path = "src/collections/mod.zig" },
-            .{ .name = "base", .path = "src/base/mod.zig" },
-            .{ .name = "types", .path = "src/types/mod.zig" },
-            .{ .name = "builtins", .path = "src/builtins/mod.zig" },
-            .{ .name = "compile", .path = "src/compile/mod.zig" },
-            .{ .name = "reporting", .path = "src/reporting/mod.zig" },
-            .{ .name = "parse", .path = "src/parse/mod.zig" },
-            .{ .name = "can", .path = "src/canonicalize/Mod.zig" },
-            .{ .name = "check", .path = "src/check/Mod.zig" },
-            .{ .name = "cache", .path = "src/cache/mod.zig" },
-            .{ .name = "fs", .path = "src/fs/mod.zig" },
+    /// Get a module by its type
+    pub fn getModule(self: RocModules, module_type: ModuleType) *Module {
+        return switch (module_type) {
+            .serialization => self.serialization,
+            .collections => self.collections,
+            .base => self.base,
+            .types => self.types,
+            .builtins => self.builtins,
+            .compile => self.compile,
+            .reporting => self.reporting,
+            .parse => self.parse,
+            .can => self.can,
+            .check => self.check,
+            .tracy => self.tracy,
+            .cache => self.cache,
+            .fs => self.fs,
+            .build_options => self.build_options,
         };
-        
-        var tests = b.allocator.alloc(ModuleTest, test_configs.len) catch @panic("OOM");
-        
-        for (test_configs, 0..) |config, i| {
+    }
+
+    /// Add dependencies for a specific module type to a compile step
+    pub fn addModuleDependencies(self: RocModules, step: *Step.Compile, module_type: ModuleType) void {
+        const dependencies = module_type.getDependencies();
+        for (dependencies) |dep_type| {
+            const dep_module = self.getModule(dep_type);
+            step.root_module.addImport(@tagName(dep_type), dep_module);
+        }
+    }
+
+    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode) [12]ModuleTest {
+        const test_configs = [_]ModuleType{
+            .serialization,
+            .collections,
+            .base,
+            .types,
+            .builtins,
+            .compile,
+            .reporting,
+            .parse,
+            .can,
+            .check,
+            .cache,
+            .fs,
+        };
+
+        var tests: [test_configs.len]ModuleTest = undefined;
+
+        inline for (test_configs, 0..) |module_type, i| {
+            const module = self.getModule(module_type);
             const test_step = b.addTest(.{
-                .root_source_file = b.path(config.path),
+                .name = b.fmt("{s}_test", .{@tagName(module_type)}),
+                .root_source_file = module.root_source_file.?,
                 .target = target,
                 .optimize = optimize,
-                .link_libc = true,
             });
-            
-            // Add all modules as dependencies so tests can import what they need
-            self.addAllToTest(test_step);
-            
+
+            // Add only the necessary dependencies for each module test
+            self.addModuleDependencies(test_step, module_type);
+
             const run_step = b.addRunArtifact(test_step);
-            
-            tests[i] = ModuleTest{
+
+            tests[i] = .{
                 .test_step = test_step,
                 .run_step = run_step,
             };
         }
-        
+
         return tests;
     }
+
 };

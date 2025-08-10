@@ -83,10 +83,3 @@ pub fn printGlobalStats() !void {
     const stderr = std.io.getStdErr().writer();
     try global_stats.print(stderr.any());
 }
-
-/// Hashes the given data using the BLAKE3 algorithm.
-pub fn blake3Hash(data: []const u8) [32]u8 {
-    var digest: [32]u8 = undefined;
-    std.crypto.hash.Blake3.hash(data, &digest, .{});
-    return digest;
-}
