@@ -10,7 +10,7 @@
 //!   in a nonbreaking way, we have to add +110KB to the `roc` binary, so we should avoid this and instead
 //!   only introduce a dictionary when we're confident we'll be happy with that being THE dictionary for a long time.
 //! - Compress/Decompress large binary blobs (e.g. for host data, or static List(U8) imports) separately
-//!   using different compression params and dictionaires (e.g. make a .tar.zst inside the main .tar.zst)
+//!   using different compression params and dictionaries (e.g. make a .tar.zst inside the main .tar.zst)
 
 const std = @import("std");
 const builtin = @import("builtin");
