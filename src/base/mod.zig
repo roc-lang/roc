@@ -13,7 +13,7 @@ pub const SmallStringInterner = @import("SmallStringInterner.zig");
 pub const safe_memory = @import("safe_memory.zig");
 
 pub const target = @import("target.zig");
-
+pub const DataSpan = @import("DataSpan.zig");
 pub const PackedDataSpan = @import("PackedDataSpan.zig").PackedDataSpan;
 pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
 pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;
@@ -93,22 +93,4 @@ pub const FracLiteral = union(enum) {
 pub const NumLiteral = union(enum) {
     Int: IntLiteral,
     Frac: FracLiteral,
-};
-
-/// Just a small struct to take a span of data in an array
-pub const DataSpan = struct {
-    start: u32,
-    len: u32,
-
-    pub fn empty() DataSpan {
-        return DataSpan{ .start = 0, .len = 0 };
-    }
-
-    pub fn init(start: u32, len: u32) DataSpan {
-        return DataSpan{ .start = start, .len = len };
-    }
-
-    pub fn as(self: DataSpan, comptime T: type) T {
-        return @as(T, .{ .span = self });
-    }
 };

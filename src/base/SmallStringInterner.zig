@@ -7,11 +7,10 @@
 //! arrays with values corresponding 1-to-1 to interned values, e.g. regions.
 
 const std = @import("std");
-const mod = @import("mod.zig");
 const collections = @import("collections");
 const serialization = @import("serialization");
 
-const Region = mod.Region;
+const Region = @import("Region.zig");
 const CompactWriter = serialization.CompactWriter;
 
 const Self = @This();

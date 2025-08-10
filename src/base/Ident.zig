@@ -6,19 +6,15 @@
 //! in constant time. Storing IDs in each IR instead of strings also uses less memory in the IRs.
 
 const std = @import("std");
-const mod = @import("mod.zig");
-const Region = @import("Region.zig");
 const serialization = @import("serialization");
-const CompactWriter = serialization.CompactWriter;
 const collections = @import("collections");
 
-const SmallStringInterner = mod.SmallStringInterner;
+const Region = @import("Region.zig");
+const SmallStringInterner = @import("SmallStringInterner.zig");
+
+const CompactWriter = serialization.CompactWriter;
 
 const Ident = @This();
-
-test {
-    std.testing.refAllDecls(@This());
-}
 
 /// The original text of the identifier.
 raw_text: []const u8,

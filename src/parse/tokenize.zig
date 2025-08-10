@@ -11,6 +11,7 @@ const collections = @import("collections");
 const tracy = @import("tracy");
 const compile = @import("compile");
 
+const DataSpan = base.DataSpan;
 const ModuleEnv = compile.ModuleEnv;
 
 /// representation of a token in the source code, like '+', 'foo', '=', '{'
@@ -37,7 +38,7 @@ pub const Token = struct {
     pub const List = std.MultiArrayList(@This());
 
     pub const Idx = u32;
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = struct { span: DataSpan };
 
     pub const Tag = enum(u8) {
         EndOfFile,
