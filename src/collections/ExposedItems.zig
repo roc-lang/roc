@@ -221,7 +221,7 @@ pub const ExposedItems = struct {
 
     /// Serialized representation of ExposedItems
     pub const Serialized = struct {
-        // items: SortedArrayBuilder(IdentIdx, u16).Serialized,
+        items: SortedArrayBuilder(IdentIdx, u16).Serialized,
 
         /// Serialize an ExposedItems into this Serialized struct, appending data to the writer
         pub fn serialize(

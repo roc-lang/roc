@@ -8692,7 +8692,7 @@ test "parseNumLiteralWithSuffix function" {
         const result = types.Num.parseNumLiteralWithSuffix(tc.input);
 
         if (!std.mem.eql(u8, result.num_text, tc.expected_num_text)) {
-            std.debug.print("MISMATCH num_text: parseNumLiteralWithSuffix('{}').num_text = '{}' (expected '{}')\n", .{ tc.input, result.num_text, tc.expected_num_text });
+            std.debug.print("MISMATCH num_text: parseNumLiteralWithSuffix('{s}').num_text = '{s}' (expected '{s}')\n", .{ tc.input, result.num_text, tc.expected_num_text });
         }
         try std.testing.expectEqualSlices(u8, tc.expected_num_text, result.num_text);
 
@@ -8760,17 +8760,17 @@ test "hex literal parsing logic integration" {
 
         // Debug print to see what's happening
         if (tc.literal[0] == '0' and (tc.literal[1] == 'x' or tc.literal[1] == 'b')) {
-            std.debug.print("Parsing '{}': num_text='{}', digit_part='{}', base={}, expected={}\n", .{ tc.literal, parsed.num_text, digit_part, int_base, tc.expected_value });
+            std.debug.print("Parsing '{s}': num_text='{s}', digit_part='{s}', base={}, expected={}\n", .{ tc.literal, parsed.num_text, digit_part, int_base, tc.expected_value });
         }
 
         const u128_val = parseIntWithUnderscores(u128, digit_part, int_base) catch |err| {
-            std.debug.print("ERROR parsing digit_part '{}' with base {}: {}\n", .{ digit_part, int_base, err });
+            std.debug.print("ERROR parsing digit_part '{s}' with base {}: {}\n", .{ digit_part, int_base, err });
             try std.testing.expect(false);
             continue;
         };
 
         if (u128_val != tc.expected_value) {
-            std.debug.print("MISMATCH for '{}': got {}, expected {}\n", .{ tc.literal, u128_val, tc.expected_value });
+            std.debug.print("MISMATCH for '{s}': got {}, expected {}\n", .{ tc.literal, u128_val, tc.expected_value });
         }
 
         try std.testing.expectEqual(tc.expected_value, u128_val);
