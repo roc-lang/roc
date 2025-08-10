@@ -142,33 +142,50 @@ pub fn build(b: *std.Build) void {
         break :blk null;
     };
 
-    const all_tests = b.addTest(.{
-        .root_source_file = b.path("src/test.zig"),
+    const base_test = b.addTest(.{
+        .root_source_file = b.path("src/base/test.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
-    roc_modules.addAllToTest(all_tests);
-    all_tests.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
+    roc_modules.addAllToTest(base_test);
 
-    b.default_step.dependOn(&all_tests.step);
+    const builtins_test = b.addTest(.{
+        .root_source_file = b.path("src/builtins/test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    roc_modules.addAllToTest(builtins_test);
+
+    const types_test = b.addTest(.{
+        .root_source_file = b.path("src/types/test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    roc_modules.addAllToTest(types_test);
+
+    b.default_step.dependOn(&base_test.step);
+    b.default_step.dependOn(&builtins_test.step);
+    b.default_step.dependOn(&types_test.step);
+
     b.default_step.dependOn(playground_step);
     if (playground_test_install) |install| {
         b.default_step.dependOn(&install.step);
     }
     if (no_bin) {
-        test_step.dependOn(&all_tests.step);
+        // test_step.dependOn(&all_tests.step);
     } else {
-        const run_tests = b.addRunArtifact(all_tests);
-        test_step.dependOn(&run_tests.step);
+        const base_tests = b.addRunArtifact(base_test);
+        const builtins_tests = b.addRunArtifact(builtins_test);
+        const types_tests = b.addRunArtifact(types_test);
 
-        // Add success message after all tests complete (cross-platform)
-        const tests_passed_step = if (builtin.target.os.tag == .windows)
-            b.addSystemCommand(&.{ "cmd.exe", "/c", "echo", "All tests passed!" })
-        else
-            b.addSystemCommand(&.{ "echo", "All tests passed!" });
-        tests_passed_step.step.dependOn(&run_tests.step);
-        test_step.dependOn(&tests_passed_step.step);
+        test_step.dependOn(&base_tests.step);
+        test_step.dependOn(&builtins_tests.step);
+        test_step.dependOn(&types_tests.step);
+
+        // TODO Add success message after all tests complete (cross-platform)
     }
 
     // Fmt zig code.

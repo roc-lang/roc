@@ -1114,7 +1114,7 @@ test "Store empty CompactWriter roundtrip" {
     defer original.deinit();
 
     // Create a temp file
-    const tmp_dir = std.testing.tmpDir(.{});
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test_empty_store.dat", .{ .read = true });
@@ -1174,7 +1174,7 @@ test "Store basic CompactWriter roundtrip" {
     try std.testing.expectEqual(flex_resolved.desc_idx, redirect_resolved.desc_idx);
 
     // Create a temp file
-    const tmp_dir = std.testing.tmpDir(.{});
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test_basic_store.dat", .{ .read = true });
@@ -1258,7 +1258,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     const tag_union_var = try original.freshFromContent(tag_union_content);
 
     // Create a temp file
-    const tmp_dir = std.testing.tmpDir(.{});
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test_comprehensive_store.dat", .{ .read = true });
@@ -1359,7 +1359,7 @@ test "SlotStore.Serialized roundtrip" {
     _ = try slot_store.insert(gpa, .{ .root = @enumFromInt(200) });
 
     // Create temp file
-    const tmp_dir = std.testing.tmpDir(.{});
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     const file = try tmp_dir.dir.createFile("test_slot_store_serialized.dat", .{ .read = true });
     defer file.close();
@@ -1415,7 +1415,7 @@ test "DescStore.Serialized roundtrip" {
     _ = try desc_store.insert(gpa, desc2);
 
     // Create temp file
-    const tmp_dir = std.testing.tmpDir(.{});
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     const file = try tmp_dir.dir.createFile("test_desc_store_serialized.dat", .{ .read = true });
     defer file.close();
@@ -1460,7 +1460,7 @@ test "Store.Serialized roundtrip" {
     const redirect_var = try store.freshRedirect(flex_var);
 
     // Create temp file
-    const tmp_dir = std.testing.tmpDir(.{});
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     const file = try tmp_dir.dir.createFile("test_store_serialized.dat", .{ .read = true });
     defer file.close();
@@ -1526,7 +1526,7 @@ test "Store multiple instances CompactWriter roundtrip" {
     // store3 left empty
 
     // Create a temp file
-    const tmp_dir = std.testing.tmpDir(.{});
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test_multiple_stores.dat", .{ .read = true });
@@ -1605,7 +1605,7 @@ test "SlotStore and DescStore serialization and deserialization" {
     try std.testing.expectEqual(@as(usize, 3), original.descs.backing.backing.len());
 
     // Create a temp file
-    const tmp_dir = std.testing.tmpDir(.{});
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test_explicit_stores.dat", .{ .read = true });
@@ -1679,7 +1679,7 @@ test "Store with path compression CompactWriter roundtrip" {
     try std.testing.expectEqual(Slot{ .redirect = c }, original.getSlot(b));
 
     // Create a temp file
-    const tmp_dir = std.testing.tmpDir(.{});
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     const file = try tmp_dir.dir.createFile("test_compressed_store.dat", .{ .read = true });
