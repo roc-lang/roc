@@ -1220,7 +1220,7 @@ test "Store basic CompactWriter roundtrip" {
 test "Store comprehensive CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
     const CompactWriter = serialization.CompactWriter;
-    const idents = try base.Ident.Store.initCapacity(gpa, 10);
+    var idents = try base.Ident.Store.initCapacity(gpa, 10);
     defer idents.deinit(gpa);
 
     var original = try Store.init(gpa);

@@ -142,50 +142,18 @@ pub fn build(b: *std.Build) void {
         break :blk null;
     };
 
-    const base_test = b.addTest(.{
-        .root_source_file = b.path("src/base/test.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    roc_modules.addAllToTest(base_test);
+    // Set up module tests
+    const module_tests = addModuleTests(b, roc_modules, target, optimize);
 
-    const builtins_test = b.addTest(.{
-        .root_source_file = b.path("src/builtins/test.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    roc_modules.addAllToTest(builtins_test);
-
-    const types_test = b.addTest(.{
-        .root_source_file = b.path("src/types/test.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    roc_modules.addAllToTest(types_test);
-
-    b.default_step.dependOn(&base_test.step);
-    b.default_step.dependOn(&builtins_test.step);
-    b.default_step.dependOn(&types_test.step);
+    // Add all module test steps to default and test steps
+    for (module_tests) |module_test| {
+        b.default_step.dependOn(&module_test.test_step.step);
+        test_step.dependOn(&module_test.run_step.step);
+    }
 
     b.default_step.dependOn(playground_step);
     if (playground_test_install) |install| {
         b.default_step.dependOn(&install.step);
-    }
-    if (no_bin) {
-        // test_step.dependOn(&all_tests.step);
-    } else {
-        const base_tests = b.addRunArtifact(base_test);
-        const builtins_tests = b.addRunArtifact(builtins_test);
-        const types_tests = b.addRunArtifact(types_test);
-
-        test_step.dependOn(&base_tests.step);
-        test_step.dependOn(&builtins_tests.step);
-        test_step.dependOn(&types_tests.step);
-
-        // TODO Add success message after all tests complete (cross-platform)
     }
 
     // Fmt zig code.
@@ -238,6 +206,41 @@ pub fn build(b: *std.Build) void {
             name,
         );
     }
+}
+
+const ModuleTest = struct {
+    test_step: *Step.Compile,
+    run_step: *Step.Run,
+};
+
+fn addModuleTests(
+    b: *std.Build,
+    roc_modules: modules.RocModules,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+) []ModuleTest {
+    const module_configs = modules.RocModules.getTestableModules();
+
+    var tests = b.allocator.alloc(ModuleTest, module_configs.len) catch @panic("OOM");
+
+    for (module_configs, 0..) |config, i| {
+        const test_step = b.addTest(.{
+            .root_source_file = b.path(config.test_path),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        roc_modules.addAllToTest(test_step);
+
+        const run_step = b.addRunArtifact(test_step);
+
+        tests[i] = .{
+            .test_step = test_step,
+            .run_step = run_step,
+        };
+    }
+
+    return tests;
 }
 
 fn add_fuzz_target(

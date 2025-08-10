@@ -3,7 +3,7 @@ const Build = std.Build;
 const Module = Build.Module;
 const Step = Build.Step;
 
-/// TODO
+/// Manages all Roc compiler modules and their dependencies
 pub const RocModules = struct {
     serialization: *Module,
     collections: *Module,
@@ -109,5 +109,19 @@ pub const RocModules = struct {
         step.root_module.addImport("tracy", self.tracy);
         step.root_module.addImport("builtins", self.builtins);
         step.root_module.addImport("build_options", self.build_options);
+    }
+
+    /// Returns the list of modules that have test files
+    /// Each entry contains the module name and the path to its test file
+    pub fn getTestableModules() []const struct { name: []const u8, test_path: []const u8 } {
+        return &.{
+            .{ .name = "base", .test_path = "src/base/test.zig" },
+            .{ .name = "builtins", .test_path = "src/builtins/test.zig" },
+            .{ .name = "types", .test_path = "src/types/test.zig" },
+            // Additional modules with tests can be added here
+            // .{ .name = "parse", .test_path = "src/parse/test.zig" },
+            // .{ .name = "collections", .test_path = "src/collections/test.zig" },
+            // .{ .name = "compile", .test_path = "src/compile/test.zig" },
+        };
     }
 };
