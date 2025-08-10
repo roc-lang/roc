@@ -395,6 +395,14 @@ fn addMainExe(
     }
 
     add_tracy(b, roc_modules.build_options, exe, target, enable_llvm, tracy);
+    
+    // Add zstd dependency for bundle functionality
+    const zstd = b.dependency("zstd", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.linkLibrary(zstd.artifact("zstd"));
+    
     return exe;
 }
 

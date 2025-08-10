@@ -15,6 +15,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const c = @cImport({
+    @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
     @cInclude("zstd.h");
 });
 

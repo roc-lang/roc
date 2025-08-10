@@ -13,6 +13,7 @@ pub const CliArgs = union(enum) {
     build: BuildArgs,
     format: FormatArgs,
     test_cmd: TestArgs,
+    bundle: BundleArgs,
     repl,
     version,
     docs: DocsArgs,
@@ -24,6 +25,7 @@ pub const CliArgs = union(enum) {
         switch (self) {
             .format => |fmt| gpa.free(fmt.paths),
             .run => |run| gpa.free(run.app_args),
+            .bundle => |bundle| gpa.free(bundle.paths),
             else => return,
         }
     }
@@ -96,6 +98,13 @@ pub const FormatArgs = struct {
     check: bool = false, // if the command should only check formatting rather than applying it
 };
 
+/// Arguments for `roc bundle`
+pub const BundleArgs = struct {
+    paths: []const []const u8, // the paths of roc files to bundle
+    output_dir: ?[]const u8 = null, // the directory to output the bundle to
+    compression_level: i32 = 3, // zstd compression level (1-22, default 3)
+};
+
 /// Arguments for `roc docs`
 pub const DocsArgs = struct {
     path: []const u8, // the main.roc file to base the generation on
@@ -109,6 +118,7 @@ pub fn parse(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Err
 
     if (mem.eql(u8, args[0], "check")) return parseCheck(args[1..]);
     if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
+    if (mem.eql(u8, args[0], "bundle")) return try parseBundle(gpa, args[1..]);
     if (mem.eql(u8, args[0], "format")) return try parseFormat(gpa, args[1..]);
     if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
     if (mem.eql(u8, args[0], "repl")) return parseRepl(args[1..]);
@@ -129,11 +139,12 @@ const main_help =
     \\
     \\Commands:
     \\  build            Build a binary from the given .roc file, but don't run it
+    \\  bundle           Bundle .roc files into a compressed archive
     \\  test             Run all top-level `expect`s in a main module and any modules it imports
     \\  repl             Launch the interactive Read Eval Print Loop (REPL)
     \\  format           Format a .roc file or the .roc files contained in a directory using standard Roc formatting
-    \\  version          Print the Roc compiler’s version
-    \\  check            Check the code for problems, but don’t build or run it
+    \\  version          Print the Roc compiler's version
+    \\  check            Check the code for problems, but don't build or run it
     \\  docs             Generate documentation for a Roc package or platform
     \\  help             Print this message
     \\  licenses         Prints license info for Roc as well as attributions to other projects used by Roc
@@ -255,6 +266,71 @@ fn parseBuild(args: []const []const u8) CliArgs {
         }
     }
     return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .output = output, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse } };
+}
+
+fn parseBundle(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
+    var paths = std.ArrayList([]const u8).init(gpa);
+    var output_dir: ?[]const u8 = null;
+    var compression_level: i32 = 3;
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (isHelpFlag(arg)) {
+            paths.deinit();
+            return CliArgs{ .help = 
+            \\Bundle .roc files into a compressed archive
+            \\
+            \\Usage: roc bundle [OPTIONS] [ROC_FILES]...
+            \\
+            \\Arguments:
+            \\  [ROC_FILES]...  The .roc files to bundle [default: main.roc]
+            \\
+            \\Options:
+            \\      --output-dir <PATH>  Directory to output the bundle to [default: current directory]
+            \\      --compression <N>    Compression level (1-22) [default: 3]
+            \\  -h, --help               Print help
+            \\
+        };
+        } else if (mem.eql(u8, arg, "--output-dir")) {
+            if (i + 1 >= args.len) {
+                paths.deinit();
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--output-dir" } } };
+            }
+            i += 1;
+            output_dir = args[i];
+        } else if (mem.eql(u8, arg, "--compression")) {
+            if (i + 1 >= args.len) {
+                paths.deinit();
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--compression" } } };
+            }
+            i += 1;
+            compression_level = std.fmt.parseInt(i32, args[i], 10) catch {
+                paths.deinit();
+                return CliArgs{ .problem = CliProblem{ .invalid_flag_value = .{ .value = args[i], .flag = "--compression", .valid_options = "integer between 1 and 22" } } };
+            };
+            if (compression_level < 1 or compression_level > 22) {
+                paths.deinit();
+                return CliArgs{ .problem = CliProblem{ .invalid_flag_value = .{ .value = args[i], .flag = "--compression", .valid_options = "integer between 1 and 22" } } };
+            }
+        } else if (mem.startsWith(u8, arg, "--")) {
+            paths.deinit();
+            return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "bundle", .arg = arg } } };
+        } else {
+            try paths.append(arg);
+        }
+    }
+
+    // Default to main.roc if no files specified
+    if (paths.items.len == 0) {
+        try paths.append("main.roc");
+    }
+
+    return CliArgs{ .bundle = BundleArgs{
+        .paths = try paths.toOwnedSlice(),
+        .output_dir = output_dir,
+        .compression_level = compression_level,
+    } };
 }
 
 fn parseFormat(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {

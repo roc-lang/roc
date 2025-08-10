@@ -23,6 +23,7 @@ const linker = @import("linker.zig");
 const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
+const bundle = @import("bundle/bundle.zig");
 
 const ModuleEnv = compile.ModuleEnv;
 
@@ -365,6 +366,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
         .run => |run_args| rocRun(gpa, run_args),
         .check => |check_args| rocCheck(gpa, check_args),
         .build => |build_args| rocBuild(gpa, build_args),
+        .bundle => |bundle_args| rocBundle(gpa, bundle_args),
         .format => |format_args| rocFormat(gpa, arena, format_args),
         .test_cmd => |test_args| rocTest(gpa, test_args),
         .repl => rocRepl(gpa),
@@ -1031,6 +1033,108 @@ pub fn extractReadRocFilePathShimLibrary(gpa: Allocator, output_path: []const u8
     defer shim_file.close();
 
     try shim_file.writeAll(roc_shim_lib);
+}
+
+fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
+    const stdout = std.io.getStdOut().writer();
+    const stderr = std.io.getStdErr().writer();
+
+    // Start timing
+    const start_time = std.time.nanoTimestamp();
+
+    // Get current working directory
+    const cwd = std.fs.cwd();
+
+    // Determine output directory
+    var output_dir = if (args.output_dir) |dir|
+        try cwd.openDir(dir, .{})
+    else
+        cwd;
+    defer if (args.output_dir != null) output_dir.close();
+
+    // Create a temporary directory for the output file
+    var tmp_dir = try std.fs.cwd().makeOpenPath(".roc_bundle_tmp", .{});
+    defer {
+        tmp_dir.close();
+        std.fs.cwd().deleteTree(".roc_bundle_tmp") catch {};
+    }
+
+    // Collect all files to bundle
+    var file_paths = std.ArrayList([]const u8).init(gpa);
+    defer file_paths.deinit();
+
+    var uncompressed_size: u64 = 0;
+
+    // Check that all files exist and collect their sizes
+    for (args.paths) |path| {
+        const file = cwd.openFile(path, .{}) catch |err| {
+            try stderr.print("Error: Could not open file '{s}': {}\n", .{ path, err });
+            return err;
+        };
+        defer file.close();
+
+        const stat = try file.stat();
+        uncompressed_size += stat.size;
+
+        try file_paths.append(path);
+    }
+
+    // Create temporary output file
+    const temp_filename = "temp_bundle.tar.zst";
+    const temp_file = try tmp_dir.createFile(temp_filename, .{});
+    defer temp_file.close();
+
+    // Create file path iterator
+    const FilePathIterator = struct {
+        paths: []const []const u8,
+        index: usize = 0,
+
+        pub fn next(self: *@This()) !?[]const u8 {
+            if (self.index >= self.paths.len) return null;
+            const path = self.paths[self.index];
+            self.index += 1;
+            return path;
+        }
+    };
+
+    var iter = FilePathIterator{ .paths = file_paths.items };
+
+    // Bundle the files
+    const final_filename = try bundle.bundle(
+        &iter,
+        @intCast(args.compression_level),
+        gpa,
+        temp_file.writer(),
+        cwd,
+        null, // no path prefix stripping for now
+    );
+    defer gpa.free(final_filename);
+
+    // Get the compressed file size
+    const compressed_stat = try temp_file.stat();
+    const compressed_size = compressed_stat.size;
+
+    // Move the temp file to the final location
+    try std.fs.rename(tmp_dir, temp_filename, output_dir, final_filename);
+
+    // Calculate elapsed time
+    const end_time = std.time.nanoTimestamp();
+    const elapsed_ns = @as(u64, @intCast(end_time - start_time));
+    const elapsed_ms = elapsed_ns / 1_000_000;
+
+    // Calculate relative path for display
+    const display_path = if (args.output_dir == null)
+        final_filename
+    else
+        try std.fs.path.join(gpa, &.{ args.output_dir.?, final_filename });
+    defer if (args.output_dir != null) gpa.free(display_path);
+
+    // Print results
+    try stdout.print("Created: {s}\n", .{display_path});
+    try stdout.print("Compressed size: {} bytes\n", .{compressed_size});
+    try stdout.print("Uncompressed size: {} bytes\n", .{uncompressed_size});
+    try stdout.print("Compression ratio: {d:.2}:1\n", .{@as(f64, @floatFromInt(uncompressed_size)) / @as(f64, @floatFromInt(compressed_size))});
+    try stdout.print("Time: {} ms\n", .{elapsed_ms});
 }
 
 fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
