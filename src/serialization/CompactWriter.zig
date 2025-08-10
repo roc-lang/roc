@@ -249,7 +249,7 @@ const AllocatedMemory = struct {
     ptr: [*]u8,
     len: usize,
     alignment: usize,
-    
+
     fn getAlignedSlice(self: @This()) []align(1) u8 {
         return self.ptr[0..self.len];
     }
