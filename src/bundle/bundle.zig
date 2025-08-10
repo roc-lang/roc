@@ -464,21 +464,10 @@ pub fn unbundle(
                 };
                 defer out_file.close();
 
-                // Copy file contents
-                const reader = tar_iter.reader;
-                var buf: [8192]u8 = undefined;
-                var bytes_remaining = tar_file.size;
-                while (bytes_remaining > 0) {
-                    const to_read = @min(buf.len, bytes_remaining);
-                    const bytes_read = reader.read(buf[0..to_read]) catch {
-                        return error.FileWriteFailed;
-                    };
-                    if (bytes_read == 0) break;
-                    out_file.writeAll(buf[0..bytes_read]) catch {
-                        return error.FileWriteFailed;
-                    };
-                    bytes_remaining -= bytes_read;
-                }
+                // Copy file contents using writeAll
+                tar_file.writeAll(out_file.writer()) catch {
+                    return error.FileWriteFailed;
+                };
             },
             .directory => {
                 extract_dir.makePath(tar_file.name) catch {
