@@ -35,17 +35,20 @@ pub const RocModules = struct {
         };
 
         self.tracy.addImport("build_options", self.build_options);
+        self.tracy.addImport("builtins", self.builtins);
 
         self.collections.addImport("serialization", self.serialization);
 
         self.base.addImport("serialization", self.serialization);
         self.base.addImport("collections", self.collections);
-        self.base.addImport("types", self.types);
+        self.base.addImport("types", self.types); // cycle
+
+        self.reporting.addImport("base", self.base);
 
         self.types.addImport("serialization", self.serialization);
         self.types.addImport("base", self.base);
         self.types.addImport("collections", self.collections);
-        self.types.addImport("compile", self.compile);
+        self.types.addImport("compile", self.compile); // cycle
 
         self.compile.addImport("base", self.base);
         self.compile.addImport("collections", self.collections);
@@ -54,15 +57,11 @@ pub const RocModules = struct {
         self.compile.addImport("reporting", self.reporting);
         self.compile.addImport("serialization", self.serialization);
 
-        self.reporting.addImport("base", self.base);
-
         self.parse.addImport("base", self.base);
         self.parse.addImport("compile", self.compile);
         self.parse.addImport("collections", self.collections);
         self.parse.addImport("tracy", self.tracy);
         self.parse.addImport("reporting", self.reporting);
-
-        self.tracy.addImport("builtins", self.builtins);
 
         self.can.addImport("base", self.base);
         self.can.addImport("parse", self.parse);

@@ -19,7 +19,7 @@ pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
 pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;
 
 test {
-    std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(@import("Ident.zig"));
 }
 
 /// Whether a function calls itself.
