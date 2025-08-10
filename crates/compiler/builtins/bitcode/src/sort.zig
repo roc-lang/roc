@@ -59,33 +59,31 @@ pub fn fluxsort(
             fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data, false);
         }
     } else {
-        if (utils.alloc(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
-            // Build list of pointers to sort.
-            const arr_ptr = @as([*]Opaque, @ptrCast(@alignCast(alloc_ptr)));
-            defer utils.dealloc(alloc_ptr, @alignOf(usize));
+        const alloc_ptr = utils.alloc(len * @sizeOf(usize), @alignOf(usize));
+
+        // Build list of pointers to sort.
+        const arr_ptr = @as([*]Opaque, @ptrCast(@alignCast(alloc_ptr)));
+        defer utils.dealloc(alloc_ptr, @alignOf(usize));
+        for (0..len) |i| {
+            arr_ptr[i] = array + i * element_width;
+        }
+
+        // Sort.
+        if (data_is_owned_runtime) {
+            fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_data, true);
+        } else {
+            fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_data, true);
+        }
+
+        if (utils.alloc(len * element_width, alignment)) |collect_ptr| {
+            // Collect sorted pointers into correct order.
+            defer utils.dealloc(collect_ptr, alignment);
             for (0..len) |i| {
-                arr_ptr[i] = array + i * element_width;
+                copy(collect_ptr + i * element_width, arr_ptr[i]);
             }
 
-            // Sort.
-            if (data_is_owned_runtime) {
-                fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_data, true);
-            } else {
-                fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_data, true);
-            }
-
-            if (utils.alloc(len * element_width, alignment)) |collect_ptr| {
-                // Collect sorted pointers into correct order.
-                defer utils.dealloc(collect_ptr, alignment);
-                for (0..len) |i| {
-                    copy(collect_ptr + i * element_width, arr_ptr[i]);
-                }
-
-                // Copy to original array as sorted.
-                @memcpy(array[0..(len * element_width)], collect_ptr[0..(len * element_width)]);
-            } else {
-                roc_panic("Out of memory while trying to allocate for sorting", 0);
-            }
+            // Copy to original array as sorted.
+            @memcpy(array[0..(len * element_width)], collect_ptr[0..(len * element_width)]);
         } else {
             roc_panic("Out of memory while trying to allocate for sorting", 0);
         }

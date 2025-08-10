@@ -66,7 +66,7 @@ pub const RocOps = extern struct {
     }
 
     pub fn alloc(self: *RocOps, alignment: usize, length: usize) *anyopaque {
-        const roc_alloc_args = RocAlloc{
+        var roc_alloc_args = RocAlloc{
             .alignment = alignment,
             .length = length,
             .answer = self.env,
@@ -76,7 +76,7 @@ pub const RocOps = extern struct {
     }
 
     pub fn dealloc(self: *RocOps, ptr: *anyopaque, alignment: usize) void {
-        const roc_dealloc_args = RocDealloc{
+        var roc_dealloc_args = RocDealloc{
             .alignment = alignment,
             .ptr = ptr,
         };
