@@ -66,10 +66,10 @@ pub fn fluxsort(
             fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data, false, roc_ops);
         }
     } else {
-        if (roc_ops(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
+        if (roc_ops.alloc(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
             // Build list of pointers to sort.
             const arr_ptr = @as([*]Opaque, @ptrCast(@alignCast(alloc_ptr)));
-            defer roc_ops(alloc_ptr, @alignOf(usize));
+            defer roc_ops.dealloc(alloc_ptr, @alignOf(usize));
             for (0..len) |i| {
                 arr_ptr[i] = array + i * element_width;
             }
@@ -81,9 +81,9 @@ pub fn fluxsort(
                 fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_data, true, roc_ops);
             }
 
-            if (roc_ops(len * element_width, alignment)) |collect_ptr| {
+            if (roc_ops.alloc(len * element_width, alignment)) |collect_ptr| {
                 // Collect sorted pointers into correct order.
-                defer roc_ops(collect_ptr, alignment);
+                defer roc_ops.dealloc(collect_ptr, alignment);
                 for (0..len) |i| {
                     copy(@as([*]u8, @ptrCast(collect_ptr)) + i * element_width, arr_ptr[i]);
                 }
@@ -112,26 +112,28 @@ fn fluxsort_direct(
     comptime indirect: bool,
     roc_ops: *RocOps,
 ) void {
-    if (roc_ops(len * element_width, alignment)) |swap| {
-        flux_analyze(array, len, @as([*]u8, @ptrCast(swap)), len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect);
+    const swap = roc_ops.alloc(len * element_width, alignment);
 
-        roc_ops(swap, alignment);
-    } else {
-        // Fallback to quadsort. It has ways to use less memory.
-        quadsort_direct(
-            array,
-            len,
-            cmp,
-            cmp_data,
-            element_width,
-            alignment,
-            copy,
-            data_is_owned,
-            inc_n_data,
-            indirect,
-            roc_ops,
-        );
-    }
+    flux_analyze(array, len, @as([*]u8, @ptrCast(swap)), len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect);
+
+    roc_ops.dealloc(swap, alignment);
+
+    // We can't fallback now as roc_alloc cannot fail... the host is expected to do something with OOM instead
+    //
+    // Fallback to quadsort. It has ways to use less memory.
+    // quadsort_direct(
+    //     array,
+    //     len,
+    //     cmp,
+    //     cmp_data,
+    //     element_width,
+    //     alignment,
+    //     copy,
+    //     data_is_owned,
+    //     inc_n_data,
+    //     indirect,
+    //     roc_ops,
+    // );
 }
 
 /// This value is used to help stay within l3 cache when sorting.
@@ -906,10 +908,10 @@ pub fn quadsort(
             quadsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_data, false, roc_ops);
         }
     } else {
-        if (roc_ops(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
+        if (roc_ops.alloc(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
             // Build list of pointers to sort.
             const arr_ptr = @as([*]Opaque, @ptrCast(@alignCast(alloc_ptr)));
-            defer roc_ops(alloc_ptr, @alignOf(usize));
+            defer roc_ops.dealloc(alloc_ptr, @alignOf(usize));
             for (0..len) |i| {
                 arr_ptr[i] = array + i * element_width;
             }
@@ -921,9 +923,9 @@ pub fn quadsort(
                 quadsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_data, true, roc_ops);
             }
 
-            if (roc_ops(len * element_width, alignment)) |collect_ptr| {
+            if (roc_ops.alloc(len * element_width, alignment)) |collect_ptr| {
                 // Collect sorted pointers into correct order.
-                defer roc_ops(collect_ptr, alignment);
+                defer roc_ops.dealloc(collect_ptr, alignment);
                 for (0..len) |i| {
                     copy(@as([*]u8, @ptrCast(collect_ptr)) + i * element_width, arr_ptr[i]);
                 }
@@ -970,12 +972,12 @@ fn quadsort_direct(
         //     while (swap_len * 8 <= len) : (swap_len *= 4) {}
         // }
 
-        if (roc_ops(swap_len * element_width, alignment)) |swap| {
+        if (roc_ops.alloc(swap_len * element_width, alignment)) |swap| {
             const block_len = quad_merge(arr_ptr, len, @ptrCast(swap), swap_len, 32, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect);
 
             rotate_merge(arr_ptr, len, @ptrCast(swap), swap_len, block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect);
 
-            roc_ops(swap, alignment);
+            roc_ops.dealloc(swap, alignment);
         } else {
             // Fallback to still sort even when out of memory.
             @call(.never_inline, quadsort_stack_swap, .{ arr_ptr, len, cmp, cmp_data, data_is_owned, inc_n_data, element_width, copy, indirect });

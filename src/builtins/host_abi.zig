@@ -64,6 +64,24 @@ pub const RocOps = extern struct {
         };
         self.roc_crashed(&roc_crashed_args, self.env);
     }
+
+    pub fn alloc(self: *RocOps, alignment: usize, length: usize) *anyopaque {
+        const roc_alloc_args = RocAlloc{
+            .alignment = alignment,
+            .length = length,
+            .answer = self.env,
+        };
+        self.roc_alloc(&roc_alloc_args, self.env);
+        return roc_alloc_args.answer;
+    }
+
+    pub fn dealloc(self: *RocOps, ptr: *anyopaque, alignment: usize) void {
+        const roc_dealloc_args = RocDealloc{
+            .alignment = alignment,
+            .ptr = ptr,
+        };
+        self.roc_dealloc(&roc_dealloc_args, self.env);
+    }
 };
 
 /// When RocOps.roc_alloc gets called, it will be passed one of these.

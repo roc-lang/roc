@@ -1021,6 +1021,7 @@ pub fn fromF64C(
         return dec.num;
     } else {
         roc_ops.crash("Decimal conversion from f64 failed!");
+        unreachable;
     }
 }
 
@@ -1034,6 +1035,7 @@ pub fn fromF32C(
         return dec.num;
     } else {
         roc_ops.crash("Decimal conversion from f32!");
+        unreachable;
     }
 }
 
@@ -1094,6 +1096,7 @@ pub fn negateC(
 ) callconv(.C) i128 {
     return if (@call(.always_inline, RocDec.negate, .{arg})) |dec| dec.num else {
         roc_ops.crash("Decimal negation overflow!");
+        unreachable;
     };
 }
 
@@ -1104,6 +1107,7 @@ pub fn absC(
 ) callconv(.C) i128 {
     const result = @call(.always_inline, RocDec.abs, .{arg}) catch {
         roc_ops.crash("Decimal absolute value overflow!");
+        unreachable;
     };
     return result.num;
 }
