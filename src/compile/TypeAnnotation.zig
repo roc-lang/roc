@@ -5,11 +5,10 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const compile = @import("compile");
 const collections = @import("collections");
 
-const ModuleEnv = compile.ModuleEnv;
-const Diagnostic = compile.Diagnostic;
+const ModuleEnv = @import("ModuleEnv.zig");
+const Diagnostic = @import("Diagnostic.zig");
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
@@ -82,7 +81,7 @@ pub const TypeAnno = union(enum) {
     /// This follows the "Inform Don't Block" principle - compilation continues with
     /// an error marker that will be reported to the user.
     malformed: struct {
-        diagnostic: Diagnostic.Idx, // The error that occurred
+        diagnostic: ModuleEnv.Diagnostic.Idx, // The error that occurred
     },
 
     pub const Idx = enum(u32) { _ };

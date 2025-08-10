@@ -7,20 +7,20 @@
 const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
-const types = @import("types");
 
-const TypesStore = types.store.Store;
-const Var = types.Var;
-const Content = types.Content;
-const FlatType = types.FlatType;
-const Alias = types.Alias;
-const Func = types.Func;
-const Record = types.Record;
-const TagUnion = types.TagUnion;
-const RecordField = types.RecordField;
-const Tag = types.Tag;
-const Num = types.Num;
-const NominalType = types.NominalType;
+const TypesStore = @import("store.zig").Store;
+const Var = @import("types.zig").Var;
+const Content = @import("types.zig").Content;
+const FlatType = @import("types.zig").FlatType;
+const Alias = @import("types.zig").Alias;
+const Func = @import("types.zig").Func;
+const Record = @import("types.zig").Record;
+const TagUnion = @import("types.zig").TagUnion;
+const RecordField = @import("types.zig").RecordField;
+const Tag = @import("types.zig").Tag;
+const Num = @import("types.zig").Num;
+const NominalType = @import("types.zig").NominalType;
+const Tuple = @import("types.zig").Tuple;
 
 /// Type to manage instantiation.
 ///
@@ -140,7 +140,7 @@ pub const Instantiate = struct {
         };
     }
 
-    fn instantiateAlias(self: *Self, alias: types.Alias, ctx: *Ctx) std.mem.Allocator.Error!types.Alias {
+    fn instantiateAlias(self: *Self, alias: Alias, ctx: *Ctx) std.mem.Allocator.Error!Alias {
         var fresh_vars = std.ArrayList(Var).init(self.store.gpa);
         defer fresh_vars.deinit();
 
@@ -155,7 +155,7 @@ pub const Instantiate = struct {
         }
 
         const fresh_vars_range = try self.store.appendVars(fresh_vars.items);
-        return types.Alias{
+        return Alias{
             .ident = alias.ident,
             .vars = .{ .nonempty = fresh_vars_range },
         };
@@ -186,7 +186,7 @@ pub const Instantiate = struct {
         };
     }
 
-    fn instantiateNominalType(self: *Self, nominal: types.NominalType, ctx: *Ctx) std.mem.Allocator.Error!types.NominalType {
+    fn instantiateNominalType(self: *Self, nominal: NominalType, ctx: *Ctx) std.mem.Allocator.Error!NominalType {
         var fresh_vars = std.ArrayList(Var).init(self.store.gpa);
         defer fresh_vars.deinit();
 
@@ -201,14 +201,14 @@ pub const Instantiate = struct {
         }
 
         const fresh_vars_range = try self.store.appendVars(fresh_vars.items);
-        return types.NominalType{
+        return NominalType{
             .ident = nominal.ident,
             .vars = .{ .nonempty = fresh_vars_range },
             .origin_module = nominal.origin_module,
         };
     }
 
-    fn instantiateTuple(self: *Self, tuple: types.Tuple, ctx: *Ctx) std.mem.Allocator.Error!types.Tuple {
+    fn instantiateTuple(self: *Self, tuple: Tuple, ctx: *Ctx) std.mem.Allocator.Error!Tuple {
         const elems_slice = self.store.sliceVars(tuple.elems);
         var fresh_elems = std.ArrayList(Var).init(self.store.gpa);
         defer fresh_elems.deinit();
@@ -219,7 +219,7 @@ pub const Instantiate = struct {
         }
 
         const fresh_elems_range = try self.store.appendVars(fresh_elems.items);
-        return types.Tuple{ .elems = fresh_elems_range };
+        return Tuple{ .elems = fresh_elems_range };
     }
 
     fn instantiateNum(self: *Self, num: Num, ctx: *Ctx) std.mem.Allocator.Error!Num {

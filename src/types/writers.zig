@@ -7,11 +7,10 @@
 
 const std = @import("std");
 const base = @import("base");
+
 const types = @import("types.zig");
 const ModuleEnv = @import("compile").ModuleEnv;
-
 const TypesStore = @import("store.zig").Store;
-
 const Allocator = std.mem.Allocator;
 const Desc = types.Descriptor;
 const Var = types.Var;

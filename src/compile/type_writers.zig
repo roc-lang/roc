@@ -8,7 +8,7 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const ModuleEnv = @import("compile").ModuleEnv;
+const ModuleEnv = @import("ModuleEnv.zig");
 
 const Allocator = std.mem.Allocator;
 const Desc = types.Descriptor;

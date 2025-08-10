@@ -6,7 +6,7 @@ const compile = @import("compile");
 const parse = @import("parse");
 const types = @import("types");
 const Can = @import("can");
-const Check = @import("check");
+const Check = @import("check").Check;
 const builtins = @import("builtins");
 
 const layout_store = @import("../layout/store.zig");

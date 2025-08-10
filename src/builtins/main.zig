@@ -16,7 +16,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const math = std.math;
-const utils = builtins.utils;
+const utils = @import("utils.zig");
 
 const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";

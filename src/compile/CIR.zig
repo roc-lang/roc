@@ -8,8 +8,9 @@ const base = @import("base");
 const reporting = @import("reporting");
 const builtins = @import("builtins");
 const serialization = @import("serialization");
-const CompactWriter = serialization.CompactWriter;
 
+const ModuleEnv = @import("ModuleEnv.zig");
+const CompactWriter = serialization.CompactWriter;
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
 const RegionInfo = base.RegionInfo;
@@ -141,7 +142,7 @@ pub const WhereClause = union(enum) {
         external_decl: ExternalDecl.Idx,
     },
     malformed: struct {
-        diagnostic: Diagnostic.Idx,
+        diagnostic: ModuleEnv.Diagnostic.Idx,
     },
 
     pub fn pushToSExprTree(self: *const WhereClause, cir: anytype, tree: anytype, idx: WhereClause.Idx) !void {
@@ -306,7 +307,7 @@ pub fn fromF64(f: f64) ?RocDec {
 }
 
 // Diagnostic types for compilation errors
-pub const Diagnostic = @import("compile").Diagnostic;
+pub const Diagnostic = @import("Diagnostic.zig");
 
 /// Represents an import statement in a module
 pub const Import = struct {

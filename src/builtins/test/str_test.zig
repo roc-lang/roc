@@ -4,31 +4,31 @@ const std = @import("std");
 const builtins = @import("builtins");
 const expect = std.testing.expect;
 
-const SMALL_STR_MAX_LENGTH = builtins.str.SMALL_STR_MAX_LENGTH;
-const Utf8DecodeError = builtins.str.Utf8DecodeError;
-const Utf8ByteProblem = builtins.str.Utf8ByteProblem;
-const ReverseUtf8View = builtins.str.ReverseUtf8View;
-const FromUtf8Result = builtins.str.FromUtf8Result;
-const RocListStr = builtins.str.RocListStr;
-const TestEnv = builtins.utils.TestEnv;
-const RocList = builtins.list.RocList;
-const RocStr = builtins.str.RocStr;
-const numberOfNextCodepointBytes = builtins.str.numberOfNextCodepointBytes;
-const toErrUtf8ByteResponse = builtins.str.toErrUtf8ByteResponse;
-const validateUtf8BytesX = builtins.str.validateUtf8BytesX;
-const validateUtf8Bytes = builtins.str.validateUtf8Bytes;
-const fromUtf8Lossy = builtins.str.fromUtf8Lossy;
-const isWhitespace = builtins.str.isWhitespace;
-const strTrimStart = builtins.str.strTrimStart;
-const strJoinWith = builtins.str.strJoinWith;
-const strTrimEnd = builtins.str.strTrimEnd;
-const startsWith = builtins.str.startsWith;
-const strConcat = builtins.str.strConcat;
-const sliceHelp = builtins.str.sliceHelp;
-const endsWith = builtins.str.endsWith;
-const rcNone = builtins.utils.rcNone;
-const strTrim = builtins.str.strTrim;
-const reserve = builtins.str.reserve;
+const SMALL_STR_MAX_LENGTH = @import("../str.zig").SMALL_STR_MAX_LENGTH;
+const Utf8DecodeError = @import("../str.zig").Utf8DecodeError;
+const Utf8ByteProblem = @import("../str.zig").Utf8ByteProblem;
+const ReverseUtf8View = @import("../str.zig").ReverseUtf8View;
+const FromUtf8Result = @import("../str.zig").FromUtf8Result;
+const RocListStr = @import("../str.zig").RocListStr;
+const TestEnv = @import("utils.zig").TestEnv;
+const RocList = @import("list.zig").RocList;
+const RocStr = @import("../str.zig").RocStr;
+const numberOfNextCodepointBytes = @import("../str.zig").numberOfNextCodepointBytes;
+const toErrUtf8ByteResponse = @import("../str.zig").toErrUtf8ByteResponse;
+const validateUtf8BytesX = @import("../str.zig").validateUtf8BytesX;
+const validateUtf8Bytes = @import("../str.zig").validateUtf8Bytes;
+const fromUtf8Lossy = @import("../str.zig").fromUtf8Lossy;
+const isWhitespace = @import("../str.zig").isWhitespace;
+const strTrimStart = @import("../str.zig").strTrimStart;
+const strJoinWith = @import("../str.zig").strJoinWith;
+const strTrimEnd = @import("../str.zig").strTrimEnd;
+const startsWith = @import("../str.zig").startsWith;
+const strConcat = @import("../str.zig").strConcat;
+const sliceHelp = @import("../str.zig").sliceHelp;
+const endsWith = @import("../str.zig").endsWith;
+const rcNone = @import("utils.zig").rcNone;
+const strTrim = @import("../str.zig").strTrim;
+const reserve = @import("../str.zig").reserve;
 
 fn expectOk(result: FromUtf8Result) !void {
     try std.testing.expectEqual(result.is_ok, true);
@@ -190,7 +190,7 @@ test "strSplitHelp: empty delimiter" {
     var array: [1]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    builtins.str.strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
+    @import("../str.zig").strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
 
     const expected = [1]RocStr{
         str,
@@ -227,7 +227,7 @@ test "strSplitHelp: no delimiter" {
     var array: [1]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    builtins.str.strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
+    @import("../str.zig").strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
 
     const expected = [1]RocStr{
         str,
@@ -267,7 +267,7 @@ test "strSplitHelp: empty start" {
     };
     const array_ptr: [*]RocStr = &array;
 
-    builtins.str.strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
+    @import("../str.zig").strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
 
     const one = RocStr.init("a", 1, test_env.getOps());
 
@@ -311,7 +311,7 @@ test "strSplitHelp: empty end" {
     };
     const array_ptr: [*]RocStr = &array;
 
-    builtins.str.strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
+    @import("../str.zig").strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
 
     const one = RocStr.init("1", 1, test_env.getOps());
     const two = RocStr.init("2", 1, test_env.getOps());
@@ -353,7 +353,7 @@ test "strSplitHelp: string equals delimiter" {
     };
     const array_ptr: [*]RocStr = &array;
 
-    builtins.str.strSplitOnHelp(array_ptr, str_delimiter, str_delimiter, test_env.getOps());
+    @import("../str.zig").strSplitOnHelp(array_ptr, str_delimiter, str_delimiter, test_env.getOps());
 
     const expected = [2]RocStr{ RocStr.empty(), RocStr.empty() };
 
@@ -391,7 +391,7 @@ test "strSplitHelp: delimiter on sides" {
         undefined,
     };
     const array_ptr: [*]RocStr = &array;
-    builtins.str.strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
+    @import("../str.zig").strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
 
     const ghi_arr = "ghi";
     const ghi = RocStr.init(ghi_arr, ghi_arr.len, test_env.getOps());
@@ -434,7 +434,7 @@ test "strSplitHelp: three pieces" {
     var array: [array_len]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    builtins.str.strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
+    @import("../str.zig").strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
 
     const a = RocStr.init("a", 1, test_env.getOps());
     const b = RocStr.init("b", 1, test_env.getOps());
@@ -477,7 +477,7 @@ test "strSplitHelp: overlapping delimiter 1" {
     var array: [2]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    builtins.str.strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
+    @import("../str.zig").strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
 
     const expected = [2]RocStr{
         RocStr.empty(),
@@ -505,7 +505,7 @@ test "strSplitHelp: overlapping delimiter 2" {
     var array: [3]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    builtins.str.strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
+    @import("../str.zig").strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
 
     const expected = [3]RocStr{
         RocStr.empty(),
@@ -538,7 +538,7 @@ test "countSegments: long delimiter" {
         delimiter.decref(test_env.getOps());
     }
 
-    const segments_count = builtins.str.countSegments(str, delimiter);
+    const segments_count = @import("../str.zig").countSegments(str, delimiter);
     try std.testing.expectEqual(segments_count, 1);
 }
 
@@ -559,7 +559,7 @@ test "countSegments: delimiter at start" {
         delimiter.decref(test_env.getOps());
     }
 
-    const segments_count = builtins.str.countSegments(str, delimiter);
+    const segments_count = @import("../str.zig").countSegments(str, delimiter);
 
     try std.testing.expectEqual(segments_count, 2);
 }
@@ -581,7 +581,7 @@ test "countSegments: delimiter interspered" {
         delimiter.decref(test_env.getOps());
     }
 
-    const segments_count = builtins.str.countSegments(str, delimiter);
+    const segments_count = @import("../str.zig").countSegments(str, delimiter);
 
     try std.testing.expectEqual(segments_count, 3);
 }
@@ -599,7 +599,7 @@ test "countSegments: string equals delimiter" {
         str_delimiter.decref(test_env.getOps());
     }
 
-    const segments_count = builtins.str.countSegments(str_delimiter, str_delimiter);
+    const segments_count = @import("../str.zig").countSegments(str_delimiter, str_delimiter);
 
     try std.testing.expectEqual(segments_count, 2);
 }
@@ -609,7 +609,7 @@ test "countSegments: overlapping delimiter 1" {
     defer test_env.deinit();
 
     // Str.splitOn "aaa" "aa" == ["", "a"]
-    const segments_count = builtins.str.countSegments(
+    const segments_count = @import("../str.zig").countSegments(
         RocStr.init("aaa", 3, test_env.getOps()),
         RocStr.init("aa", 2, test_env.getOps()),
     );
@@ -622,7 +622,7 @@ test "countSegments: overlapping delimiter 2" {
     defer test_env.deinit();
 
     // Str.splitOn "aaa" "aa" == ["", "a"]
-    const segments_count = builtins.str.countSegments(
+    const segments_count = @import("../str.zig").countSegments(
         RocStr.init("aaaa", 4, test_env.getOps()),
         RocStr.init("aa", 2, test_env.getOps()),
     );
@@ -640,7 +640,7 @@ test "substringUnsafe: start" {
     const expected = RocStr.fromSlice("abc", test_env.getOps());
     defer expected.decref(test_env.getOps());
 
-    const actual = builtins.str.substringUnsafe(str, 0, 3, test_env.getOps());
+    const actual = @import("../str.zig").substringUnsafe(str, 0, 3, test_env.getOps());
 
     try expect(RocStr.eq(actual, expected));
 }
@@ -655,7 +655,7 @@ test "substringUnsafe: middle" {
     const expected = RocStr.fromSlice("bcd", test_env.getOps());
     defer expected.decref(test_env.getOps());
 
-    const actual = builtins.str.substringUnsafe(str, 1, 3, test_env.getOps());
+    const actual = @import("../str.zig").substringUnsafe(str, 1, 3, test_env.getOps());
 
     try expect(RocStr.eq(actual, expected));
 }
@@ -670,7 +670,7 @@ test "substringUnsafe: end" {
     const expected = RocStr.fromSlice("heap-allocated", test_env.getOps());
     defer expected.decref(test_env.getOps());
 
-    const actual = builtins.str.substringUnsafe(str, 23, 37 - 23, test_env.getOps());
+    const actual = @import("../str.zig").substringUnsafe(str, 23, 37 - 23, test_env.getOps());
 
     try expect(RocStr.eq(actual, expected));
 }
@@ -1188,7 +1188,7 @@ test "withAsciiLowercased: small str" {
     const expected = RocStr.fromSlice("coffÉ", test_env.getOps());
     defer expected.decref(test_env.getOps());
 
-    const str_result = builtins.str.strWithAsciiLowercased(original, test_env.getOps());
+    const str_result = @import("../str.zig").strWithAsciiLowercased(original, test_env.getOps());
     defer str_result.decref(test_env.getOps());
 
     try expect(str_result.isSmallStr());
@@ -1206,7 +1206,7 @@ test "withAsciiLowercased: non small str" {
     const expected = RocStr.fromSlice("coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ", test_env.getOps());
     defer expected.decref(test_env.getOps());
 
-    const str_result = builtins.str.strWithAsciiLowercased(original, test_env.getOps());
+    const str_result = @import("../str.zig").strWithAsciiLowercased(original, test_env.getOps());
 
     try expect(!str_result.isSmallStr());
     try expect(str_result.eq(expected));
@@ -1217,7 +1217,7 @@ test "withAsciiLowercased: seamless slice" {
     defer test_env.deinit();
 
     const l = RocStr.fromSlice("cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ", test_env.getOps());
-    const original = builtins.str.substringUnsafeC(l, 1, l.len() - 1, test_env.getOps());
+    const original = @import("../str.zig").substringUnsafeC(l, 1, l.len() - 1, test_env.getOps());
     defer original.decref(test_env.getOps());
 
     try expect(original.isSeamlessSlice());
@@ -1225,7 +1225,7 @@ test "withAsciiLowercased: seamless slice" {
     const expected = RocStr.fromSlice("offÉ coffÉ coffÉ coffÉ coffÉ coffÉ", test_env.getOps());
     defer expected.decref(test_env.getOps());
 
-    const str_result = builtins.str.strWithAsciiLowercased(original, test_env.getOps());
+    const str_result = @import("../str.zig").strWithAsciiLowercased(original, test_env.getOps());
 
     try expect(!str_result.isSmallStr());
     try expect(str_result.eq(expected));
@@ -1241,7 +1241,7 @@ test "withAsciiUppercased: small str" {
     const expected = RocStr.fromSlice("COFFé", test_env.getOps());
     defer expected.decref(test_env.getOps());
 
-    const str_result = builtins.str.strWithAsciiUppercased(original, test_env.getOps());
+    const str_result = @import("../str.zig").strWithAsciiUppercased(original, test_env.getOps());
     defer str_result.decref(test_env.getOps());
 
     try expect(str_result.isSmallStr());
@@ -1259,7 +1259,7 @@ test "withAsciiUppercased: non small str" {
     const expected = RocStr.fromSlice("COFFé COFFé COFFé COFFé COFFé COFFé", test_env.getOps());
     defer expected.decref(test_env.getOps());
 
-    const str_result = builtins.str.strWithAsciiUppercased(original, test_env.getOps());
+    const str_result = @import("../str.zig").strWithAsciiUppercased(original, test_env.getOps());
 
     try expect(!str_result.isSmallStr());
     try expect(str_result.eq(expected));
@@ -1270,7 +1270,7 @@ test "withAsciiUppercased: seamless slice" {
     defer test_env.deinit();
 
     const l = RocStr.fromSlice("coffé coffé coffé coffé coffé coffé", test_env.getOps());
-    const original = builtins.str.substringUnsafeC(l, 1, l.len() - 1, test_env.getOps());
+    const original = @import("../str.zig").substringUnsafeC(l, 1, l.len() - 1, test_env.getOps());
     defer original.decref(test_env.getOps());
 
     try expect(original.isSeamlessSlice());
@@ -1278,7 +1278,7 @@ test "withAsciiUppercased: seamless slice" {
     const expected = RocStr.fromSlice("OFFé COFFé COFFé COFFé COFFé COFFé", test_env.getOps());
     defer expected.decref(test_env.getOps());
 
-    const str_result = builtins.str.strWithAsciiUppercased(original, test_env.getOps());
+    const str_result = @import("../str.zig").strWithAsciiUppercased(original, test_env.getOps());
 
     try expect(!str_result.isSmallStr());
     try expect(str_result.eq(expected));
@@ -1291,7 +1291,7 @@ test "caselessAsciiEquals: same str" {
     const str1 = RocStr.fromSlice("coFféÉ", test_env.getOps());
     defer str1.decref(test_env.getOps());
 
-    const are_equal = builtins.str.strCaselessAsciiEquals(str1, str1);
+    const are_equal = @import("../str.zig").strCaselessAsciiEquals(str1, str1);
     try expect(are_equal);
 }
 
@@ -1306,7 +1306,7 @@ test "caselessAsciiEquals: differently capitalized non-ascii char" {
     const str2 = RocStr.fromSlice("coffÉ", test_env.getOps());
     defer str2.decref(test_env.getOps());
 
-    const are_equal = builtins.str.strCaselessAsciiEquals(str1, str2);
+    const are_equal = @import("../str.zig").strCaselessAsciiEquals(str1, str2);
     try expect(!are_equal);
 }
 
@@ -1321,7 +1321,7 @@ test "caselessAsciiEquals: small str" {
     const str2 = RocStr.fromSlice("COFFé", test_env.getOps());
     defer str2.decref(test_env.getOps());
 
-    const are_equal = builtins.str.strCaselessAsciiEquals(str1, str2);
+    const are_equal = @import("../str.zig").strCaselessAsciiEquals(str1, str2);
     try expect(are_equal);
 }
 
@@ -1336,7 +1336,7 @@ test "caselessAsciiEquals: non small str" {
     const str2 = RocStr.fromSlice("COFFé COFFé COFFé COFFé COFFé COFFé", test_env.getOps());
     defer str2.decref(test_env.getOps());
 
-    const are_equal = builtins.str.strCaselessAsciiEquals(str1, str2);
+    const are_equal = @import("../str.zig").strCaselessAsciiEquals(str1, str2);
 
     try expect(are_equal);
 }
@@ -1346,7 +1346,7 @@ test "caselessAsciiEquals: seamless slice" {
     defer test_env.deinit();
 
     const l = RocStr.fromSlice("coffé coffé coffé coffé coffé coffé", test_env.getOps());
-    const str1 = builtins.str.substringUnsafeC(l, 1, l.len() - 1, test_env.getOps());
+    const str1 = @import("../str.zig").substringUnsafeC(l, 1, l.len() - 1, test_env.getOps());
     defer str1.decref(test_env.getOps());
 
     try expect(str1.isSeamlessSlice());
@@ -1354,7 +1354,7 @@ test "caselessAsciiEquals: seamless slice" {
     const str2 = RocStr.fromSlice("OFFé COFFé COFFé COFFé COFFé COFFé", test_env.getOps());
     defer str2.decref(test_env.getOps());
 
-    const are_equal = builtins.str.strCaselessAsciiEquals(str1, str2);
+    const are_equal = @import("../str.zig").strCaselessAsciiEquals(str1, str2);
 
     try expect(are_equal);
 }

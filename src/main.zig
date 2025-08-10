@@ -22,7 +22,7 @@ const bench = @import("bench.zig");
 const linker = @import("linker.zig");
 const compile = @import("compile");
 const can = @import("can");
-const check = @import("check");
+const Check = @import("check").Check;
 
 const ModuleEnv = compile.ModuleEnv;
 
@@ -825,7 +825,7 @@ pub fn setupSharedMemoryWithModuleEnv(_: std.mem.Allocator, roc_file_path: []con
     };
 
     // Type check the module
-    var checker = try check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions);
+    var checker = try Check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions);
     try checker.checkDefs();
 
     // Copy the ModuleEnv to the allocated space

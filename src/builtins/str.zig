@@ -7,15 +7,15 @@
 const builtins = @import("builtins");
 const std = @import("std");
 
-const RocList = builtins.list.RocList;
-const RocOps = builtins.host_abi.RocOps;
-const UpdateMode = builtins.utils.UpdateMode;
-const utils = builtins.utils;
+const RocList = @import("list.zig").RocList;
+const RocOps = @import("host_abi.zig").RocOps;
+const UpdateMode = @import("utils.zig").UpdateMode;
+const utils = @import("utils.zig");
 const ascii = std.ascii;
 const mem = std.mem;
 const unicode = std.unicode;
 const testing = std.testing;
-const rcNone = builtins.utils.rcNone;
+const rcNone = @import("utils.zig").rcNone;
 
 const InPlace = enum(u8) {
     InPlace,
@@ -118,7 +118,7 @@ pub const RocStr = extern struct {
         capacity: usize,
         roc_ops: *RocOps,
     ) RocStr {
-        const first_element = builtins.utils.allocateWithRefcount(
+        const first_element = @import("utils.zig").allocateWithRefcount(
             capacity,
             @sizeOf(usize),
             false,
@@ -198,7 +198,7 @@ pub const RocStr = extern struct {
             const alloc_ptr = self.getAllocationPtr();
             if (alloc_ptr != null) {
                 const isizes: [*]isize = @as([*]isize, @ptrCast(@alignCast(alloc_ptr)));
-                builtins.utils.increfRcPtrC(@as(*isize, @ptrCast(isizes - 1)), @as(isize, @intCast(n)));
+                @import("utils.zig").increfRcPtrC(@as(*isize, @ptrCast(isizes - 1)), @as(isize, @intCast(n)));
             }
         }
     }
@@ -208,7 +208,7 @@ pub const RocStr = extern struct {
         roc_ops: *RocOps,
     ) void {
         if (!self.isSmallStr()) {
-            builtins.utils.decref(self.getAllocationPtr(), self.capacity_or_alloc_ptr, RocStr.alignment, false, roc_ops);
+            @import("utils.zig").decref(self.getAllocationPtr(), self.capacity_or_alloc_ptr, RocStr.alignment, false, roc_ops);
         }
     }
 
@@ -280,8 +280,8 @@ pub const RocStr = extern struct {
                 output.setLen(new_length);
                 return output;
             }
-            const new_capacity = builtins.utils.calculateCapacity(old_capacity, new_length, element_width);
-            const new_source = builtins.utils.unsafeReallocate(
+            const new_capacity = @import("utils.zig").calculateCapacity(old_capacity, new_length, element_width);
+            const new_source = @import("utils.zig").unsafeReallocate(
                 source_ptr,
                 RocStr.alignment,
                 old_capacity,
@@ -307,7 +307,7 @@ pub const RocStr = extern struct {
         const result_is_big = new_length >= SMALL_STRING_SIZE;
 
         if (result_is_big) {
-            const capacity = builtins.utils.calculateCapacity(0, new_length, element_width);
+            const capacity = @import("utils.zig").calculateCapacity(0, new_length, element_width);
             var result = RocStr.allocateBig(new_length, capacity, roc_ops);
 
             // transfer the memory
@@ -403,7 +403,7 @@ pub const RocStr = extern struct {
     }
 
     fn isRefcountOne(self: RocStr) bool {
-        return builtins.utils.rcUnique(@bitCast(self.refcount()));
+        return @import("utils.zig").rcUnique(@bitCast(self.refcount()));
     }
 
     fn refcount(self: RocStr) usize {
@@ -875,7 +875,7 @@ inline fn strToBytes(
     if (length == 0) {
         return RocList.empty();
     } else if (arg.isSmallStr()) {
-        const ptr = builtins.utils.allocateWithRefcount(length, RocStr.alignment, false, roc_ops);
+        const ptr = @import("utils.zig").allocateWithRefcount(length, RocStr.alignment, false, roc_ops);
 
         @memcpy(ptr[0..length], arg.asU8ptr()[0..length]);
 

@@ -7,17 +7,17 @@
 
 const std = @import("std");
 const base = @import("base");
-const reporting = @import("reporting");
 
 const Allocator = std.mem.Allocator;
-const Severity = reporting.Severity;
-const Document = reporting.Document;
-const Annotation = reporting.Annotation;
-const RenderTarget = reporting.RenderTarget;
-const ReportingConfig = reporting.ReportingConfig;
+const Severity = @import("severity.zig").Severity;
+const Document = @import("document.zig").Document;
+const Annotation = @import("document.zig").Annotation;
+const RenderTarget = @import("renderer.zig").RenderTarget;
+const ReportingConfig = @import("config.zig").ReportingConfig;
 const RegionInfo = base.RegionInfo;
-
-const validateUtf8 = reporting.validateUtf8;
+const renderReport = @import("renderer.zig").renderReport;
+const validateUtf8 = @import("config.zig").validateUtf8;
+const truncateUtf8 = @import("config.zig").truncateUtf8;
 
 /// Default maximum message size in bytes for truncation
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 4096;
@@ -58,7 +58,7 @@ pub const Report = struct {
 
     /// Render the report to the specified writer and target format.
     pub fn render(self: *const Report, writer: anytype, target: RenderTarget) !void {
-        try reporting.renderReport(self, writer, target);
+        try renderReport(self, writer, target);
     }
 
     /// Add a section header to the report.
@@ -70,7 +70,7 @@ pub const Report = struct {
 
     /// Add a code snippet with proper formatting and UTF-8 validation.
     pub fn addCodeSnippet(self: *Report, code: []const u8, line_number: ?u32) !void {
-        reporting.validateUtf8(code) catch |err| switch (err) {
+        validateUtf8(code) catch |err| switch (err) {
             error.InvalidUtf8 => {
                 try self.document.addError("[Invalid UTF-8 in code snippet]");
                 try self.document.addLineBreak();
@@ -114,7 +114,7 @@ pub const Report = struct {
 
     /// Add a suggestion with proper formatting and UTF-8 validation.
     pub fn addSuggestion(self: *Report, suggestion: []const u8) !void {
-        reporting.validateUtf8(suggestion) catch |err| switch (err) {
+        validateUtf8(suggestion) catch |err| switch (err) {
             error.InvalidUtf8 => {
                 try self.document.addError("[Invalid UTF-8 in suggestion]");
                 try self.document.addLineBreak();
@@ -123,7 +123,7 @@ pub const Report = struct {
         };
 
         const truncated_suggestion = if (suggestion.len > DEFAULT_MAX_MESSAGE_BYTES) blk: {
-            const truncated = reporting.truncateUtf8(self.allocator, suggestion, DEFAULT_MAX_MESSAGE_BYTES) catch suggestion;
+            const truncated = truncateUtf8(self.allocator, suggestion, DEFAULT_MAX_MESSAGE_BYTES) catch suggestion;
             if (truncated.ptr != suggestion.ptr) {
                 try self.owned_strings.append(truncated);
             }

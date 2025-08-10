@@ -7,15 +7,14 @@
 //! for low-level operations and host interface functions.
 const std = @import("std");
 const builtin = @import("builtin");
-const builtins = @import("builtins");
 
-const RocOps = builtins.host_abi.RocOps;
-const RocDealloc = builtins.host_abi.RocDealloc;
-const RocAlloc = builtins.host_abi.RocAlloc;
-const RocRealloc = builtins.host_abi.RocRealloc;
-const RocDbg = builtins.host_abi.RocDbg;
-const RocExpectFailed = builtins.host_abi.RocExpectFailed;
-const RocCrashed = builtins.host_abi.RocCrashed;
+const RocOps = @import("host_abi.zig").RocOps;
+const RocDealloc = @import("host_abi.zig").RocDealloc;
+const RocAlloc = @import("host_abi.zig").RocAlloc;
+const RocRealloc = @import("host_abi.zig").RocRealloc;
+const RocDbg = @import("host_abi.zig").RocDbg;
+const RocExpectFailed = @import("host_abi.zig").RocExpectFailed;
+const RocCrashed = @import("host_abi.zig").RocCrashed;
 
 const DEBUG_INCDEC = false;
 const DEBUG_TESTING_ALLOC = false;

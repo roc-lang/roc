@@ -8,11 +8,11 @@
 const std = @import("std");
 const builtins = @import("builtins");
 
-const WithOverflow = builtins.utils.WithOverflow;
-const Ordering = builtins.utils.Ordering;
-const RocList = builtins.list.RocList;
-const RocOps = builtins.utils.RocOps;
-const RocStr = builtins.str.RocStr;
+const WithOverflow = @import("utils.zig").WithOverflow;
+const Ordering = @import("utils.zig").Ordering;
+const RocList = @import("list.zig").RocList;
+const RocOps = @import("utils.zig").RocOps;
+const RocStr = @import("str.zig").RocStr;
 const math = std.math;
 
 /// Result type for numeric parsing, with value and error code.

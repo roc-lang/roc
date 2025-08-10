@@ -2,13 +2,12 @@
 
 const std = @import("std");
 const base = @import("base");
-const parse = @import("parse");
 const compile = @import("compile");
 
-const AST = parse.AST;
+const AST = @import("AST.zig");
 const RegionInfo = base.RegionInfo;
 const ModuleEnv = compile.ModuleEnv;
-const Token = parse.Token;
+const Token = @import("tokenize.zig").Token;
 
 /// Generate an interactive source range span for the playground
 fn writeSourceRangeSpan(writer: anytype, region: base.Region, source: []const u8, line_starts: []const u32) !void {

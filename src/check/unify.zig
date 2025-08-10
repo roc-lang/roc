@@ -45,11 +45,10 @@ const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
 const compile = @import("compile");
-const Check = @import("check");
 
-const problem_mod = Check.problem;
-const occurs = Check.occurs;
-const snapshot_mod = Check.snapshot;
+const problem_mod = @import("problem.zig");
+const occurs = @import("occurs.zig");
+const snapshot_mod = @import("snapshot.zig");
 
 const ModuleEnv = compile.ModuleEnv;
 

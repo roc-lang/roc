@@ -7,7 +7,7 @@ const collections = @import("collections");
 const serialization = @import("serialization");
 const CompactWriter = serialization.CompactWriter;
 const Node = @import("Node.zig");
-const ModuleEnv = @import("compile").ModuleEnv;
+const ModuleEnv = @import("ModuleEnv.zig");
 const RocDec = ModuleEnv.RocDec;
 
 const SERIALIZATION_ALIGNMENT = 16;
@@ -16,7 +16,7 @@ const SafeList = collections.SafeList;
 const DataSpan = base.DataSpan;
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
-const Diagnostic = @import("compile").Diagnostic;
+const Diagnostic = @import("Diagnostic.zig");
 const Ident = base.Ident;
 const PackedDataSpan = base.PackedDataSpan;
 const FunctionArgs = base.FunctionArgs;
@@ -3132,7 +3132,7 @@ pub const Serialized = struct {
     scratch_anno_record_fields: std.ArrayListUnmanaged(ModuleEnv.TypeAnno.RecordField.Idx) = .{},
     scratch_exposed_items: std.ArrayListUnmanaged(ModuleEnv.ExposedItem.Idx) = .{},
     scratch_defs: std.ArrayListUnmanaged(ModuleEnv.Def.Idx) = .{},
-    scratch_diagnostics: std.ArrayListUnmanaged(Diagnostic.Idx) = .{},
+    scratch_diagnostics: std.ArrayListUnmanaged(ModuleEnv.Diagnostic.Idx) = .{},
     scratch_captures: std.ArrayListUnmanaged(ModuleEnv.Expr.Capture.Idx) = .{},
     gpa: std.mem.Allocator = undefined,
 
@@ -3180,7 +3180,7 @@ pub const Serialized = struct {
             .scratch_exposed_items = base.Scratch(ModuleEnv.ExposedItem.Idx){ .items = .{} },
             .scratch_defs = base.Scratch(ModuleEnv.Def.Idx){ .items = .{} },
             .scratch_where_clauses = base.Scratch(ModuleEnv.WhereClause.Idx){ .items = .{} },
-            .scratch_diagnostics = base.Scratch(Diagnostic.Idx){ .items = .{} },
+            .scratch_diagnostics = base.Scratch(ModuleEnv.Diagnostic.Idx){ .items = .{} },
         };
 
         return store;

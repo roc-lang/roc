@@ -3,22 +3,22 @@
 const std = @import("std");
 const builtins = @import("builtins");
 
-const TestEnv = builtins.utils.TestEnv;
-const calculateCapacity = builtins.utils.calculateCapacity;
-const allocateWithRefcount = builtins.utils.allocateWithRefcount;
+const TestEnv = @import("../utils.zig").TestEnv;
+const calculateCapacity = @import("../utils.zig").calculateCapacity;
+const allocateWithRefcount = @import("../utils.zig").allocateWithRefcount;
 
 test "increfC, refcounted data" {
     var mock_rc: isize = 17;
     const ptr_to_refcount: *isize = &mock_rc;
-    builtins.utils.increfRcPtrC(ptr_to_refcount, 2);
+    @import("../utils.zig").increfRcPtrC(ptr_to_refcount, 2);
     try std.testing.expectEqual(mock_rc, 19);
 }
 
 test "increfC, static data" {
-    var mock_rc: isize = builtins.utils.REFCOUNT_STATIC_DATA;
+    var mock_rc: isize = @import("../utils.zig").REFCOUNT_STATIC_DATA;
     const ptr_to_refcount: *isize = &mock_rc;
-    builtins.utils.increfRcPtrC(ptr_to_refcount, 2);
-    try std.testing.expectEqual(mock_rc, builtins.utils.REFCOUNT_STATIC_DATA);
+    @import("../utils.zig").increfRcPtrC(ptr_to_refcount, 2);
+    try std.testing.expectEqual(mock_rc, @import("../utils.zig").REFCOUNT_STATIC_DATA);
 }
 
 test "decrefC, refcounted data" {
@@ -27,7 +27,7 @@ test "decrefC, refcounted data" {
 
     var mock_rc: isize = 17;
     const ptr_to_refcount: *isize = &mock_rc;
-    builtins.utils.decrefRcPtrC(@ptrCast(ptr_to_refcount), 8, false, test_env.getOps());
+    @import("../utils.zig").decrefRcPtrC(@ptrCast(ptr_to_refcount), 8, false, test_env.getOps());
     try std.testing.expectEqual(mock_rc, 16);
 }
 
@@ -35,10 +35,10 @@ test "decrefC, static data" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var mock_rc: isize = builtins.utils.REFCOUNT_STATIC_DATA;
+    var mock_rc: isize = @import("../utils.zig").REFCOUNT_STATIC_DATA;
     const ptr_to_refcount: *isize = &mock_rc;
-    builtins.utils.decrefRcPtrC(@ptrCast(ptr_to_refcount), 8, false, test_env.getOps());
-    try std.testing.expectEqual(mock_rc, builtins.utils.REFCOUNT_STATIC_DATA);
+    @import("../utils.zig").decrefRcPtrC(@ptrCast(ptr_to_refcount), 8, false, test_env.getOps());
+    try std.testing.expectEqual(mock_rc, @import("../utils.zig").REFCOUNT_STATIC_DATA);
 }
 
 test "TestEnv basic functionality" {
@@ -61,7 +61,7 @@ test "TestEnv allocation tracking" {
     const ops = test_env.getOps();
 
     // Test allocation
-    var alloc_request = builtins.host_abi.RocAlloc{
+    var alloc_request = @import("host_abi.zig").RocAlloc{
         .alignment = 8,
         .length = 32,
         .answer = undefined,
@@ -71,7 +71,7 @@ test "TestEnv allocation tracking" {
     try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
 
     // Test deallocation
-    var dealloc_request = builtins.host_abi.RocDealloc{
+    var dealloc_request = @import("host_abi.zig").RocDealloc{
         .alignment = 8,
         .ptr = alloc_request.answer,
     };
@@ -118,19 +118,19 @@ test "isUnique with different scenarios" {
     const ops = test_env.getOps();
 
     // Test with null (should return true)
-    try std.testing.expect(builtins.utils.isUnique(null));
+    try std.testing.expect(@import("../utils.zig").isUnique(null));
 
     // Test with allocated memory
     const ptr = allocateWithRefcount(64, 8, false, ops);
-    try std.testing.expect(builtins.utils.isUnique(ptr));
+    try std.testing.expect(@import("../utils.zig").isUnique(ptr));
 }
 
 test "rcNone function" {
     // rcNone should be safe to call with any pointer
-    builtins.utils.rcNone(null);
+    @import("../utils.zig").rcNone(null);
 
     var dummy: u8 = 42;
-    builtins.utils.rcNone(@as(?[*]u8, @ptrCast(&dummy)));
+    @import("../utils.zig").rcNone(@as(?[*]u8, @ptrCast(&dummy)));
 
     // If we get here without crashing, the test passed
     try std.testing.expect(true);

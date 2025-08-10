@@ -8,7 +8,7 @@ const parse = @import("parse");
 const reporting = @import("reporting");
 const compile = @import("compile");
 const Can = @import("can");
-const Check = @import("check");
+const Check = @import("check").Check;
 const tracy = @import("tracy");
 
 const Filesystem = @import("fs/Filesystem.zig");

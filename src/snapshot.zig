@@ -13,7 +13,7 @@ const compile = @import("compile");
 const types = @import("types");
 const reporting = @import("reporting");
 const Can = @import("can");
-const Check = @import("check");
+const Check = @import("check").Check;
 const builtins = @import("builtins");
 
 const cache = @import("cache/mod.zig");

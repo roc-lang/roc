@@ -10,13 +10,12 @@ const builtin = @import("builtin");
 const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
-const compile = @import("compile");
 
 const serialization = @import("serialization");
 const TypeWriter = types_mod.TypeWriter;
 const CompactWriter = serialization.CompactWriter;
 
-pub const CIR = compile.CIR;
+pub const CIR = @import("CIR.zig");
 
 // Re-export types from CIR module
 /// Definition type for value and function definitions

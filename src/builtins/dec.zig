@@ -7,12 +7,12 @@
 const std = @import("std");
 const builtins = @import("builtins");
 
-const U256 = builtins.num.U256;
-const WithOverflow = builtins.utils.WithOverflow;
-const NumParseResult = builtins.dec.NumParseResult;
-const RocOps = builtins.host_abi.RocOps;
-const RocStr = builtins.str.RocStr;
-const mul_u128 = builtins.num.mul_u128;
+const U256 = @import("num.zig").U256;
+const WithOverflow = @import("utils.zig").WithOverflow;
+const NumParseResult = @import("num.zig").NumParseResult;
+const RocOps = @import("host_abi.zig").RocOps;
+const RocStr = @import("str.zig").RocStr;
+const mul_u128 = @import("num.zig").mul_u128;
 const math = std.math;
 
 /// TODO: Document the RocDec struct.

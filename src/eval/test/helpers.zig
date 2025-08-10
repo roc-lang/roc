@@ -5,7 +5,7 @@ const types = @import("types");
 const base = @import("base");
 const compile = @import("compile");
 const Can = @import("can");
-const Check = @import("check");
+const Check = @import("check").Check;
 
 const eval = @import("../interpreter.zig");
 const test_env = @import("../test_env.zig");

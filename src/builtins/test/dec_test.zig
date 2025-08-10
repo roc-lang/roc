@@ -3,9 +3,9 @@
 const std = @import("std");
 const builtins = @import("builtins");
 
-const TestEnv = builtins.utils.TestEnv;
+const TestEnv = @import("../utils.zig").TestEnv;
 const RocDec = builtins.dec.RocDec;
-const RocStr = builtins.str.RocStr;
+const RocStr = @import("../str.zig").RocStr;
 
 test "fromU64" {
     const dec = RocDec.fromU64(25);

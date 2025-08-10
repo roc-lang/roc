@@ -3,12 +3,11 @@
 //! Lists use copy-on-write semantics to minimize allocations when shared across contexts.
 //! Seamless slice optimization reduces memory overhead for substring operations.
 const std = @import("std");
-const builtins = @import("builtins");
 
-const UpdateMode = builtins.utils.UpdateMode;
-const RocOps = builtins.host_abi.RocOps;
-const RocStr = builtins.str.RocStr;
-const increfDataPtrC = builtins.utils.increfDataPtrC;
+const UpdateMode = @import("utils.zig").UpdateMode;
+const RocOps = @import("host_abi.zig").RocOps;
+const RocStr = @import("str.zig").RocStr;
+const increfDataPtrC = @import("utils.zig").increfDataPtrC;
 
 const Opaque = ?[*]u8;
 const EqFn = *const fn (Opaque, Opaque) callconv(.C) bool;
@@ -189,7 +188,7 @@ pub const RocList = extern struct {
         }
 
         // We use the raw capacity to ensure we always decrement the refcount of seamless slices.
-        builtins.utils.decref(
+        @import("utils.zig").decref(
             self.getAllocationDataPtr(),
             self.capacity_or_alloc_ptr,
             alignment,
@@ -203,7 +202,7 @@ pub const RocList = extern struct {
     }
 
     pub fn isUnique(self: RocList) bool {
-        return builtins.utils.rcUnique(@bitCast(self.refcount()));
+        return @import("utils.zig").rcUnique(@bitCast(self.refcount()));
     }
 
     fn refcount(self: RocList) usize {
@@ -269,10 +268,10 @@ pub const RocList = extern struct {
             return empty();
         }
 
-        const capacity = builtins.utils.calculateCapacity(0, length, element_width);
+        const capacity = @import("utils.zig").calculateCapacity(0, length, element_width);
         const data_bytes = capacity * element_width;
         return RocList{
-            .bytes = builtins.utils.allocateWithRefcount(
+            .bytes = @import("utils.zig").allocateWithRefcount(
                 data_bytes,
                 alignment,
                 elements_refcounted,
@@ -296,7 +295,7 @@ pub const RocList = extern struct {
 
         const data_bytes = length * element_width;
         return RocList{
-            .bytes = builtins.utils.allocateWithRefcount(
+            .bytes = @import("utils.zig").allocateWithRefcount(
                 data_bytes,
                 alignment,
                 elements_refcounted,
@@ -322,8 +321,8 @@ pub const RocList = extern struct {
                 if (capacity >= new_length) {
                     return RocList{ .bytes = self.bytes, .length = new_length, .capacity_or_alloc_ptr = capacity };
                 } else {
-                    const new_capacity = builtins.utils.calculateCapacity(capacity, new_length, element_width);
-                    const new_source = builtins.utils.unsafeReallocate(source_ptr, alignment, capacity, new_capacity, element_width, elements_refcounted);
+                    const new_capacity = @import("utils.zig").calculateCapacity(capacity, new_length, element_width);
+                    const new_source = @import("utils.zig").unsafeReallocate(source_ptr, alignment, capacity, new_capacity, element_width, elements_refcounted);
                     return RocList{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = new_capacity };
                 }
             }
@@ -363,7 +362,7 @@ pub const RocList = extern struct {
         }
 
         // Calls utils.decref directly to avoid decrementing the refcount of elements.
-        builtins.utils.decref(self.getAllocationDataPtr(), self.capacity_or_alloc_ptr, alignment, elements_refcounted, roc_ops);
+        @import("utils.zig").decref(self.getAllocationDataPtr(), self.capacity_or_alloc_ptr, alignment, elements_refcounted, roc_ops);
 
         return result;
     }
@@ -843,7 +842,7 @@ pub fn listSortWith(
     );
 
     if (list.bytes) |source_ptr| {
-        builtins.sort.fluxsort(
+        @import("sort.zig").fluxsort(
             source_ptr,
             list.len(),
             cmp,

@@ -8,9 +8,9 @@ const parse = @import("parse");
 const builtins = @import("builtins");
 
 const RocDec = builtins.RocDec;
-const Node = parse.Node;
-const NodeStore = parse.NodeStore;
-const AST = parse.AST;
+const Node = @import("Node.zig");
+const NodeStore = @import("NodeStore.zig");
+const AST = @import("AST.zig");
 
 var rand = std.Random.DefaultPrng.init(1234);
 

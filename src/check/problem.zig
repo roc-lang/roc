@@ -7,7 +7,7 @@ const collections = @import("collections");
 const types_mod = @import("types");
 const compile = @import("compile");
 const reporting = @import("reporting");
-const Check = @import("check");
+const Check = @import("Check.zig");
 
 const snapshot = Check.snapshot;
 

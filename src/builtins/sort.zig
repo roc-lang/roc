@@ -10,8 +10,8 @@ const builtins = @import("builtins");
 const GT = Ordering.GT;
 const LT = Ordering.LT;
 const EQ = Ordering.EQ;
-const Ordering = builtins.utils.Ordering;
-const RocOps = builtins.utils.RocOps;
+const Ordering = @import("utils.zig").Ordering;
+const RocOps = @import("utils.zig").RocOps;
 const testing = std.testing;
 
 /// TODO

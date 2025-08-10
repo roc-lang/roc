@@ -3,21 +3,21 @@
 const std = @import("std");
 const builtins = @import("builtins");
 
-const TestEnv = builtins.utils.TestEnv;
-const RocList = builtins.list.RocList;
-const RocStr = builtins.str.RocStr;
-const listConcatUtf8 = builtins.list.listConcatUtf8;
-const listConcat = builtins.list.listConcat;
-const listAppendUnsafe = builtins.list.listAppendUnsafe;
-const listPrepend = builtins.list.listPrepend;
-const listDropAt = builtins.list.listDropAt;
-const listReplace = builtins.list.listReplace;
-const listReplaceInPlace = builtins.list.listReplaceInPlace;
-const listAllocationPtr = builtins.list.listAllocationPtr;
-const listIncref = builtins.list.listIncref;
-const listDecref = builtins.list.listDecref;
-const listSwap = builtins.list.listSwap;
-const rcNone = builtins.utils.rcNone;
+const TestEnv = @import("../utils.zig").TestEnv;
+const RocList = @import("../list.zig").RocList;
+const RocStr = @import("../str.zig").RocStr;
+const listConcatUtf8 = @import("../list.zig").listConcatUtf8;
+const listConcat = @import("../list.zig").listConcat;
+const listAppendUnsafe = @import("../list.zig").listAppendUnsafe;
+const listPrepend = @import("../list.zig").listPrepend;
+const listDropAt = @import("../list.zig").listDropAt;
+const listReplace = @import("../list.zig").listReplace;
+const listReplaceInPlace = @import("../list.zig").listReplaceInPlace;
+const listAllocationPtr = @import("../list.zig").listAllocationPtr;
+const listIncref = @import("../list.zig").listIncref;
+const listDecref = @import("../list.zig").listDecref;
+const listSwap = @import("../list.zig").listSwap;
+const rcNone = @import("../utils.zig").rcNone;
 
 test "listConcat: non-unique with unique overlapping" {
     var test_env = TestEnv.init(std.testing.allocator);
@@ -27,7 +27,7 @@ test "listConcat: non-unique with unique overlapping" {
     const bytes: [*]u8 = @as([*]u8, @ptrCast(nonUnique.bytes));
     const ptr_width = @sizeOf(usize);
     const refcount_ptr = @as([*]isize, @ptrCast(@as([*]align(ptr_width) u8, @alignCast(bytes)) - ptr_width));
-    builtins.utils.increfRcPtrC(&refcount_ptr[0], 1);
+    @import("utils.zig").increfRcPtrC(&refcount_ptr[0], 1);
     // NOTE: nonUnique will be consumed by listConcat, so no defer decref needed
 
     const unique = RocList.fromSlice(u8, ([_]u8{ 2, 3, 4 })[0..], false, test_env.getOps());
@@ -160,7 +160,7 @@ test "RocList uniqueness and cloning" {
     try std.testing.expect(!list.isUnique());
 
     // Clone the list (this will consume one reference to the original)
-    const cloned = builtins.list.listClone(list, @alignOf(i32), @sizeOf(i32), false, rcNone, rcNone, test_env.getOps());
+    const cloned = @import("../list.zig").listClone(list, @alignOf(i32), @sizeOf(i32), false, rcNone, rcNone, test_env.getOps());
     defer cloned.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
 
     // Both should be equal but different objects (since list was not unique)
@@ -192,7 +192,7 @@ test "listWithCapacity basic functionality" {
     defer test_env.deinit();
 
     const capacity: usize = 10;
-    const list = builtins.list.listWithCapacity(capacity, @alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    const list = @import("../list.zig").listWithCapacity(capacity, @alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
     defer list.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
 
     // Should have the requested capacity
@@ -209,7 +209,7 @@ test "listReserve functionality" {
     const data = [_]u8{ 1, 2, 3 };
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
-    const reserved_list = builtins.list.listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, rcNone, builtins.utils.UpdateMode.Immutable, test_env.getOps());
+    const reserved_list = @import("../list.zig").listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
     defer reserved_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
 
     // Should have at least the requested capacity
@@ -233,7 +233,7 @@ test "listCapacity function" {
     const list = RocList.fromSlice(i16, data[0..], false, test_env.getOps());
     defer list.decref(@alignOf(i16), @sizeOf(i16), false, rcNone, test_env.getOps());
 
-    const capacity = builtins.list.listCapacity(list);
+    const capacity = @import("../list.zig").listCapacity(list);
     try std.testing.expectEqual(list.getCapacity(), capacity);
     try std.testing.expect(capacity >= list.len());
 }
@@ -262,14 +262,14 @@ test "listReleaseExcessCapacity functionality" {
     const list_with_data = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Reserve excess capacity for it
-    const list_with_excess = builtins.list.listReserve(list_with_data, @alignOf(u8), 100, @sizeOf(u8), false, rcNone, builtins.utils.UpdateMode.Immutable, test_env.getOps());
+    const list_with_excess = @import("../list.zig").listReserve(list_with_data, @alignOf(u8), 100, @sizeOf(u8), false, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
 
     // Verify it has excess capacity
     try std.testing.expect(list_with_excess.getCapacity() >= 100);
     try std.testing.expectEqual(@as(usize, 3), list_with_excess.len());
 
     // Release the excess capacity
-    const released_list = builtins.list.listReleaseExcessCapacity(list_with_excess, @alignOf(u8), @sizeOf(u8), false, rcNone, rcNone, builtins.utils.UpdateMode.Immutable, test_env.getOps());
+    const released_list = @import("../list.zig").listReleaseExcessCapacity(list_with_excess, @alignOf(u8), @sizeOf(u8), false, rcNone, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
     defer released_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
 
     // The released list should have capacity close to its length and preserve the data
@@ -295,7 +295,7 @@ test "listSublist basic functionality" {
     // Note: listSublist consumes the original list
 
     // Extract middle portion
-    const sublist = builtins.list.listSublist(list, @alignOf(u8), @sizeOf(u8), false, 2, 4, rcNone, test_env.getOps());
+    const sublist = @import("../list.zig").listSublist(list, @alignOf(u8), @sizeOf(u8), false, 2, 4, rcNone, test_env.getOps());
     defer sublist.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), sublist.len());
@@ -317,7 +317,7 @@ test "listSublist edge cases" {
     const list = RocList.fromSlice(i32, data[0..], false, test_env.getOps());
 
     // Take empty sublist
-    const empty_sublist = builtins.list.listSublist(list, @alignOf(i32), @sizeOf(i32), false, 1, 0, rcNone, test_env.getOps());
+    const empty_sublist = @import("../list.zig").listSublist(list, @alignOf(i32), @sizeOf(i32), false, 1, 0, rcNone, test_env.getOps());
     defer empty_sublist.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 0), empty_sublist.len());
@@ -343,7 +343,7 @@ test "listSwap basic functionality" {
         }
     }.copy;
 
-    const swapped_list = builtins.list.listSwap(list, @alignOf(u16), @sizeOf(u16), 1, 3, false, rcNone, rcNone, builtins.utils.UpdateMode.Immutable, copy_fn, test_env.getOps());
+    const swapped_list = @import("../list.zig").listSwap(list, @alignOf(u16), @sizeOf(u16), 1, 3, false, rcNone, rcNone, @import("utils.zig").UpdateMode.Immutable, copy_fn, test_env.getOps());
     defer swapped_list.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), swapped_list.len());
@@ -374,7 +374,7 @@ test "listAppendUnsafe basic functionality" {
     }.copy;
 
     // Create a list with some capacity
-    var list = builtins.list.listWithCapacity(10, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    var list = @import("../list.zig").listWithCapacity(10, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
 
     // Add some initial elements using listAppendUnsafe
     const element1: u8 = 42;
@@ -410,7 +410,7 @@ test "listAppendUnsafe with different types" {
     }.copy;
 
     // Test with i32
-    var int_list = builtins.list.listWithCapacity(5, @alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
+    var int_list = @import("../list.zig").listWithCapacity(5, @alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
 
     const int_val: i32 = -123;
     int_list = listAppendUnsafe(int_list, @as(?[*]u8, @ptrCast(@constCast(&int_val))), @sizeOf(i32), copy_fn);
@@ -441,7 +441,7 @@ test "listAppendUnsafe with pre-allocated capacity" {
     }.copy;
 
     // Create a list with capacity (listAppendUnsafe requires pre-allocated space)
-    var list_with_capacity = builtins.list.listWithCapacity(5, @alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+    var list_with_capacity = @import("../list.zig").listWithCapacity(5, @alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
 
     const element: u16 = 9999;
     list_with_capacity = listAppendUnsafe(list_with_capacity, @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u16), copy_fn);
@@ -857,7 +857,7 @@ test "edge case: listSublist with zero length" {
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Extract zero-length sublist from middle
-    const sublist = builtins.list.listSublist(list, @alignOf(u8), @sizeOf(u8), false, 2, 0, rcNone, test_env.getOps());
+    const sublist = @import("../list.zig").listSublist(list, @alignOf(u8), @sizeOf(u8), false, 2, 0, rcNone, test_env.getOps());
     defer sublist.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 0), sublist.len());
@@ -872,7 +872,7 @@ test "edge case: listSublist entire list" {
     const list = RocList.fromSlice(i16, data[0..], false, test_env.getOps());
 
     // Extract entire list as sublist
-    const sublist = builtins.list.listSublist(list, @alignOf(i16), @sizeOf(i16), false, 0, 3, rcNone, test_env.getOps());
+    const sublist = @import("../list.zig").listSublist(list, @alignOf(i16), @sizeOf(i16), false, 0, 3, rcNone, test_env.getOps());
     defer sublist.decref(@alignOf(i16), @sizeOf(i16), false, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 3), sublist.len());
@@ -926,7 +926,7 @@ test "edge case: listWithCapacity zero capacity" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    const list = builtins.list.listWithCapacity(0, @alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+    const list = @import("../list.zig").listWithCapacity(0, @alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
     defer list.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 0), list.len());
@@ -943,7 +943,7 @@ test "edge case: RocList equality with different capacities" {
     defer list1.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
 
     // Create list with larger capacity
-    var list2 = builtins.list.listWithCapacity(10, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    var list2 = @import("../list.zig").listWithCapacity(10, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
     // Manually set the same content
     list2.length = 3;
     if (list2.bytes) |bytes| {
@@ -974,7 +974,7 @@ test "edge case: listAppendUnsafe multiple times" {
     }.copy;
 
     // Create a list with sufficient capacity
-    var list = builtins.list.listWithCapacity(5, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    var list = @import("../list.zig").listWithCapacity(5, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
 
     // Append multiple elements
     const element1: u8 = 10;
@@ -1039,7 +1039,7 @@ test "seamless slice: manual creation and detection" {
     var seamless_list = RocList{
         .bytes = null,
         .length = 0,
-        .capacity_or_alloc_ptr = builtins.list.SEAMLESS_SLICE_BIT,
+        .capacity_or_alloc_ptr = @import("../list.zig").SEAMLESS_SLICE_BIT,
     };
 
     try std.testing.expect(seamless_list.isSeamlessSlice());
@@ -1062,7 +1062,7 @@ test "seamless slice: getCapacity behavior" {
     var seamless_list = RocList{
         .bytes = null,
         .length = 5,
-        .capacity_or_alloc_ptr = builtins.list.SEAMLESS_SLICE_BIT | 10, // High bit set, capacity of 10
+        .capacity_or_alloc_ptr = @import("../list.zig").SEAMLESS_SLICE_BIT | 10, // High bit set, capacity of 10
     };
 
     try std.testing.expect(seamless_list.isSeamlessSlice());
@@ -1132,14 +1132,14 @@ test "complex reference counting: listIsUnique consistency" {
     const list = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
 
     // Test that listIsUnique function matches isUnique method
-    try std.testing.expectEqual(list.isUnique(), builtins.list.listIsUnique(list));
+    try std.testing.expectEqual(list.isUnique(), @import("../list.zig").listIsUnique(list));
 
     // After incref, both should report not unique
     list.incref(1, false);
     defer list.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
 
-    try std.testing.expectEqual(list.isUnique(), builtins.list.listIsUnique(list));
-    try std.testing.expect(!builtins.list.listIsUnique(list));
+    try std.testing.expectEqual(list.isUnique(), @import("../list.zig").listIsUnique(list));
+    try std.testing.expect(!@import("../list.zig").listIsUnique(list));
 
     // Final cleanup
     list.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
@@ -1153,7 +1153,7 @@ test "complex reference counting: clone behavior" {
     const original_list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Clone should create a new independent copy
-    const cloned_list = builtins.list.listClone(original_list, @alignOf(u8), @sizeOf(u8), false, rcNone, rcNone, test_env.getOps());
+    const cloned_list = @import("../list.zig").listClone(original_list, @alignOf(u8), @sizeOf(u8), false, rcNone, rcNone, test_env.getOps());
     defer cloned_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
 
     // Cloned list should be unique and have same content
@@ -1346,7 +1346,7 @@ test "listAllocationPtr basic functionality" {
 }
 
 test "listAllocationPtr empty list" {
-    var test_env = builtins.utils.TestEnv.init(std.testing.allocator);
+    var test_env = @import("utils.zig").TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
     const empty_list = RocList.empty();
@@ -1447,7 +1447,7 @@ test "integration: concat then sublist operations" {
     try std.testing.expectEqual(@as(usize, 5), concatenated.len());
 
     // Extract a sublist from the middle
-    const sublist = builtins.list.listSublist(concatenated, @alignOf(i16), @sizeOf(i16), false, 1, 3, rcNone, test_env.getOps());
+    const sublist = @import("../list.zig").listSublist(concatenated, @alignOf(i16), @sizeOf(i16), false, 1, 3, rcNone, test_env.getOps());
     defer sublist.decref(@alignOf(i16), @sizeOf(i16), false, rcNone, test_env.getOps());
 
     // Should have [200, 300, 400]
@@ -1489,7 +1489,7 @@ test "integration: replace then swap operations" {
 
     // Now we should have [10, 99, 30, 40]
     // Swap elements at indices 0 and 2 (10 <-> 30)
-    list = listSwap(list, @alignOf(u32), @sizeOf(u32), 0, 2, false, rcNone, rcNone, builtins.utils.UpdateMode.Immutable, copy_fn, test_env.getOps());
+    list = listSwap(list, @alignOf(u32), @sizeOf(u32), 0, 2, false, rcNone, rcNone, @import("utils.zig").UpdateMode.Immutable, copy_fn, test_env.getOps());
 
     defer list.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
 
@@ -1523,7 +1523,7 @@ test "stress: large list operations" {
     try std.testing.expect(large_list.getCapacity() >= large_size);
 
     // Test sublist on large list (note: listSublist consumes the original list)
-    const mid_sublist = builtins.list.listSublist(large_list, @alignOf(u16), @sizeOf(u16), false, 400, 200, rcNone, test_env.getOps());
+    const mid_sublist = @import("../list.zig").listSublist(large_list, @alignOf(u16), @sizeOf(u16), false, 400, 200, rcNone, test_env.getOps());
     defer mid_sublist.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 200), mid_sublist.len());
@@ -1552,7 +1552,7 @@ test "stress: many small operations" {
     }.copy;
 
     // Start with a list with some capacity
-    var list = builtins.list.listWithCapacity(50, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    var list = @import("../list.zig").listWithCapacity(50, @alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
 
     // Add many elements using listAppendUnsafe
     var i: u8 = 0;
@@ -1580,20 +1580,20 @@ test "memory management: capacity boundary conditions" {
 
     // Create a list with exact capacity
     const exact_capacity: usize = 10;
-    var list = builtins.list.listWithCapacity(exact_capacity, @alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+    var list = @import("../list.zig").listWithCapacity(exact_capacity, @alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
 
     try std.testing.expect(list.getCapacity() >= exact_capacity);
     try std.testing.expectEqual(@as(usize, 0), list.len());
 
     // Use listReserve to ensure we have exactly the capacity we want
-    list = builtins.list.listReserve(list, @alignOf(u32), exact_capacity, @sizeOf(u32), false, rcNone, builtins.utils.UpdateMode.Immutable, test_env.getOps());
+    list = @import("../list.zig").listReserve(list, @alignOf(u32), exact_capacity, @sizeOf(u32), false, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
     defer list.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
 
     // Verify capacity management functions work correctly
     const initial_capacity = list.getCapacity();
     try std.testing.expect(initial_capacity >= exact_capacity);
 
-    const capacity_via_function = builtins.list.listCapacity(list);
+    const capacity_via_function = @import("../list.zig").listCapacity(list);
     try std.testing.expectEqual(initial_capacity, capacity_via_function);
 }
 
@@ -1606,13 +1606,13 @@ test "memory management: release excess capacity edge cases" {
     const small_list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Reserve much more capacity than needed
-    const oversized_list = builtins.list.listReserve(small_list, @alignOf(u8), 1000, @sizeOf(u8), false, rcNone, builtins.utils.UpdateMode.Immutable, test_env.getOps());
+    const oversized_list = @import("../list.zig").listReserve(small_list, @alignOf(u8), 1000, @sizeOf(u8), false, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 1), oversized_list.len());
     try std.testing.expect(oversized_list.getCapacity() >= 1000);
 
     // Release excess capacity
-    const trimmed_list = builtins.list.listReleaseExcessCapacity(oversized_list, @alignOf(u8), @sizeOf(u8), false, rcNone, rcNone, builtins.utils.UpdateMode.Immutable, test_env.getOps());
+    const trimmed_list = @import("../list.zig").listReleaseExcessCapacity(oversized_list, @alignOf(u8), @sizeOf(u8), false, rcNone, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
     defer trimmed_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
 
     // Should maintain content but reduce capacity
@@ -1636,19 +1636,19 @@ test "boundary conditions: zero-sized operations" {
 
     // Zero-length sublist from start
     const list1 = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
-    const empty_start = builtins.list.listSublist(list1, @alignOf(u16), @sizeOf(u16), false, 0, 0, rcNone, test_env.getOps());
+    const empty_start = @import("../list.zig").listSublist(list1, @alignOf(u16), @sizeOf(u16), false, 0, 0, rcNone, test_env.getOps());
     defer empty_start.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
     try std.testing.expectEqual(@as(usize, 0), empty_start.len());
 
     // Zero-length sublist from middle
     const list2 = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
-    const empty_mid = builtins.list.listSublist(list2, @alignOf(u16), @sizeOf(u16), false, 2, 0, rcNone, test_env.getOps());
+    const empty_mid = @import("../list.zig").listSublist(list2, @alignOf(u16), @sizeOf(u16), false, 2, 0, rcNone, test_env.getOps());
     defer empty_mid.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
     try std.testing.expectEqual(@as(usize, 0), empty_mid.len());
 
     // Zero-length sublist from end
     const list3 = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
-    const empty_end = builtins.list.listSublist(list3, @alignOf(u16), @sizeOf(u16), false, 5, 0, rcNone, test_env.getOps());
+    const empty_end = @import("../list.zig").listSublist(list3, @alignOf(u16), @sizeOf(u16), false, 5, 0, rcNone, test_env.getOps());
     defer empty_end.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
     try std.testing.expectEqual(@as(usize, 0), empty_end.len());
 }
@@ -1691,7 +1691,7 @@ test "memory management: clone with different update modes" {
     defer original.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
 
     // Clone should create an independent copy
-    const cloned = builtins.list.listClone(original, @alignOf(i32), @sizeOf(i32), false, rcNone, rcNone, test_env.getOps());
+    const cloned = @import("../list.zig").listClone(original, @alignOf(i32), @sizeOf(i32), false, rcNone, rcNone, test_env.getOps());
     defer cloned.decref(@alignOf(i32), @sizeOf(i32), false, rcNone, test_env.getOps());
 
     // Verify independence - they should have the same content but different memory
@@ -1728,7 +1728,7 @@ test "boundary conditions: swap with identical indices" {
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Swap element with itself (index 2 with index 2)
-    const swapped = listSwap(list, @alignOf(u8), @sizeOf(u8), 2, 2, false, rcNone, rcNone, builtins.utils.UpdateMode.Immutable, copy_fn, test_env.getOps());
+    const swapped = listSwap(list, @alignOf(u8), @sizeOf(u8), 2, 2, false, rcNone, rcNone, @import("utils.zig").UpdateMode.Immutable, copy_fn, test_env.getOps());
     defer swapped.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
 
     // Should be unchanged
@@ -1751,13 +1751,13 @@ test "memory management: multiple reserve operations" {
     var list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Reserve capacity multiple times, each time increasing
-    list = builtins.list.listReserve(list, @alignOf(u8), 10, @sizeOf(u8), false, rcNone, builtins.utils.UpdateMode.Immutable, test_env.getOps());
+    list = @import("../list.zig").listReserve(list, @alignOf(u8), 10, @sizeOf(u8), false, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
     try std.testing.expect(list.getCapacity() >= 12); // 2 existing + 10 spare
 
-    list = builtins.list.listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, rcNone, builtins.utils.UpdateMode.Immutable, test_env.getOps());
+    list = @import("../list.zig").listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
     try std.testing.expect(list.getCapacity() >= 22); // 2 existing + 20 spare
 
-    list = builtins.list.listReserve(list, @alignOf(u8), 5, @sizeOf(u8), false, rcNone, builtins.utils.UpdateMode.Immutable, test_env.getOps());
+    list = @import("../list.zig").listReserve(list, @alignOf(u8), 5, @sizeOf(u8), false, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
     // Should not decrease capacity, so still >= 22
     try std.testing.expect(list.getCapacity() >= 22);
 
