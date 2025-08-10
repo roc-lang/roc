@@ -19,7 +19,6 @@ const c = @cImport({
 });
 
 pub const BundleError = error{
-    OutOfMemory,
     FilePathTooLong,
     FileOpenFailed,
     FileStatFailed,
@@ -31,7 +30,6 @@ pub const BundleError = error{
 } || std.mem.Allocator.Error;
 
 pub const UnbundleError = error{
-    OutOfMemory,
     DecompressionFailed,
     InvalidTarHeader,
     UnexpectedEndOfStream,
@@ -47,16 +45,6 @@ pub const UnbundleError = error{
 /// and on Windows must use forward slashes. File paths are limited to 255 bytes for
 /// tar compatibility. Paths must be encoded as WTF-8 on Windows, UTF-8 elsewhere.
 pub fn bundle(
-    file_path_iter: anytype,
-    compression_level: c_int,
-    allocator: std.mem.Allocator,
-    output_writer: anytype,
-    base_dir: std.fs.Dir,
-) BundleError!void {
-    try bundleImpl(file_path_iter, compression_level, allocator, output_writer, base_dir);
-}
-
-fn bundleImpl(
     file_path_iter: anytype,
     compression_level: c_int,
     allocator: std.mem.Allocator,
@@ -119,7 +107,7 @@ fn bundleImpl(
     var buffered_writer = std.io.bufferedWriter(output_writer);
     const buffered = buffered_writer.writer();
 
-    const ctx = c.ZSTD_createCCtx() orelse return error.OutOfMemory;
+    const ctx = c.ZSTD_createCCtx() orelse return std.mem.Allocator.Error.OutOfMemory;
     defer _ = c.ZSTD_freeCCtx(ctx);
 
     _ = c.ZSTD_CCtx_setParameter(ctx, c.ZSTD_c_compressionLevel, compression_level);
@@ -182,9 +170,7 @@ pub fn unbundle(
     var buffered_reader = std.io.bufferedReader(input_reader);
     const buffered = buffered_reader.reader();
 
-    const dctx = c.ZSTD_createDCtx() orelse {
-        return error.OutOfMemory;
-    };
+    const dctx = c.ZSTD_createDCtx() orelse return std.mem.Allocator.Error.OutOfMemory;
     defer _ = c.ZSTD_freeDCtx(dctx);
 
     // Read and decompress data in chunks
