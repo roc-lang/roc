@@ -171,7 +171,7 @@ pub fn SafeList(comptime T: type) type {
         }
 
         /// Get the length of this list.
-        pub fn len(self: *const SafeList(T)) u32 {
+        pub fn len(self: *const SafeList(T)) u64 {
             return @intCast(self.items.items.len);
         }
 

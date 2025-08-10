@@ -113,3 +113,11 @@ test "cache module" {
 
     _ = allocator; // Suppress unused variable warning
 }
+
+test "cache tests" {
+    std.testing.refAllDecls(@import("CacheConfig.zig"));
+    std.testing.refAllDecls(@import("CacheKey.zig"));
+    std.testing.refAllDecls(@import("CacheManager.zig"));
+    std.testing.refAllDecls(@import("CacheModule.zig"));
+    std.testing.refAllDecls(@import("CacheReporting.zig"));
+}

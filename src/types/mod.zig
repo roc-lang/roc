@@ -5,6 +5,8 @@
 //! the compiler, including type aliases, content types, function types,
 //! and nominal types.
 
+const std = @import("std");
+
 pub const types = @import("types.zig");
 pub const store = @import("store.zig");
 pub const instantiate = @import("instantiate.zig");
@@ -33,3 +35,7 @@ pub const ResolvedVarDesc = store.ResolvedVarDesc;
 pub const ResolvedVarDescs = store.ResolvedVarDescs;
 pub const Store = store.Store;
 pub const DescStoreIdx = store.DescStoreIdx;
+
+test {
+    std.testing.refAllDecls(@import("test_rigid_instantiation.zig"));
+}

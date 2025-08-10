@@ -21,3 +21,17 @@ pub const occurs = @import("occurs.zig");
 pub const problem = @import("problem.zig");
 
 pub const Check = @import("Check.zig");
+
+test "check tests" {
+    std.testing.refAllDecls(@import("Check.zig"));
+    std.testing.refAllDecls(@import("copy_import.zig"));
+    std.testing.refAllDecls(@import("occurs.zig"));
+    std.testing.refAllDecls(@import("problem.zig"));
+    std.testing.refAllDecls(@import("snapshot.zig"));
+    std.testing.refAllDecls(@import("unify.zig"));
+    std.testing.refAllDecls(@import("test/cross_module_test.zig"));
+    std.testing.refAllDecls(@import("test/let_polymorphism_integration_test.zig"));
+    std.testing.refAllDecls(@import("test/let_polymorphism_test.zig"));
+    std.testing.refAllDecls(@import("test/literal_size_test.zig"));
+    std.testing.refAllDecls(@import("test/static_dispatch_test.zig"));
+}

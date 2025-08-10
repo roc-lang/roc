@@ -115,13 +115,16 @@ pub const RocModules = struct {
     /// Each entry contains the module name and the path to its test file
     pub fn getTestableModules() []const struct { name: []const u8, test_path: []const u8 } {
         return &.{
-            .{ .name = "base", .test_path = "src/base/test.zig" },
-            .{ .name = "builtins", .test_path = "src/builtins/test.zig" },
-            .{ .name = "types", .test_path = "src/types/test.zig" },
-            // Additional modules with tests can be added here
-            // .{ .name = "parse", .test_path = "src/parse/test.zig" },
-            // .{ .name = "collections", .test_path = "src/collections/test.zig" },
-            // .{ .name = "compile", .test_path = "src/compile/test.zig" },
+            .{ .name = "base", .test_path = "src/base/mod.zig" },
+            .{ .name = "builtins", .test_path = "src/builtins/mod.zig" },
+            .{ .name = "cache", .test_path = "src/cache/mod.zig" },
+            .{ .name = "canonicalize", .test_path = "src/canonicalize/Mod.zig" },
+            .{ .name = "check", .test_path = "src/check/Mod.zig" },
+            .{ .name = "collections", .test_path = "src/collections/mod.zig" },
+            .{ .name = "compile", .test_path = "src/compile/mod.zig" },
+            .{ .name = "eval", .test_path = "src/eval/mod.zig" },
+            .{ .name = "types", .test_path = "src/types/mod.zig" },
+            .{ .name = "parse", .test_path = "src/parse/test.zig" },
         };
     }
 };

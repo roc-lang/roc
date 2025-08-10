@@ -8786,7 +8786,7 @@ test "unused variables are sorted by region" {
         \\
         \\func = |_| {
         \\    zebra = 5    # Line 3 - should be reported first
-        \\    apple = 10   # Line 4 - should be reported second  
+        \\    apple = 10   # Line 4 - should be reported second
         \\    monkey = 15  # Line 5 - should be reported third
         \\    used = 20    # Line 6 - this one is used
         \\    used
@@ -8851,4 +8851,14 @@ test "unused variables are sorted by region" {
             try std.testing.expectEqualStrings("monkey", ident_text);
         }
     }
+}
+
+test "canonicalize tests" {
+    std.testing.refAllDecls(@import("Scope.zig"));
+    std.testing.refAllDecls(@import("test/bool_test.zig"));
+    std.testing.refAllDecls(@import("test/exposed_shadowing_test.zig"));
+    std.testing.refAllDecls(@import("test/frac_test.zig"));
+    std.testing.refAllDecls(@import("test/import_validation_test.zig"));
+    std.testing.refAllDecls(@import("test/int_test.zig"));
+    std.testing.refAllDecls(@import("test/node_store_test.zig"));
 }

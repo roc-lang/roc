@@ -1,4 +1,5 @@
 //! Compilation-related types and functionality.
+const std = @import("std");
 
 pub const ModuleEnv = @import("ModuleEnv.zig");
 pub const cir_types = @import("cir_types.zig");
@@ -48,3 +49,18 @@ pub const Report = ModuleEnv.Report;
 pub const castIdx = ModuleEnv.castIdx;
 
 pub const TypeWriter = @import("TypeWriter.zig");
+
+test "compile tests" {
+    std.testing.refAllDecls(@import("CIR.zig"));
+    std.testing.refAllDecls(@import("test/module_env_test.zig"));
+    std.testing.refAllDecls(@import("cir_types.zig"));
+    std.testing.refAllDecls(@import("Diagnostic.zig"));
+    std.testing.refAllDecls(@import("Expression.zig"));
+    std.testing.refAllDecls(@import("ModuleEnv.zig"));
+    std.testing.refAllDecls(@import("Node.zig"));
+    std.testing.refAllDecls(@import("NodeStore.zig"));
+    std.testing.refAllDecls(@import("Pattern.zig"));
+    std.testing.refAllDecls(@import("Statement.zig"));
+    std.testing.refAllDecls(@import("TypeAnnotation.zig"));
+    std.testing.refAllDecls(@import("TypeWriter.zig"));
+}

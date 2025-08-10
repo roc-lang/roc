@@ -2087,9 +2087,9 @@ fn Unifier(comptime StoreTypeB: type) type {
             std.mem.sort(RecordField, b_fields, ident_store, comptime RecordField.sortByNameAsc);
 
             // Get the start of index of the new range
-            const a_fields_start: u32 = scratch.only_in_a_fields.len();
-            const b_fields_start: u32 = scratch.only_in_b_fields.len();
-            const both_fields_start: u32 = scratch.in_both_fields.len();
+            const a_fields_start: u32 = @intCast(scratch.only_in_a_fields.len());
+            const b_fields_start: u32 = @intCast(scratch.only_in_b_fields.len());
+            const both_fields_start: u32 = @intCast(scratch.in_both_fields.len());
 
             // Iterate over the fields in order, grouping them
             var a_i: usize = 0;
@@ -2487,9 +2487,9 @@ fn Unifier(comptime StoreTypeB: type) type {
             std.mem.sort(Tag, b_tags, ident_store, comptime Tag.sortByNameAsc);
 
             // Get the start of index of the new range
-            const a_tags_start: u32 = scratch.only_in_a_tags.len();
-            const b_tags_start: u32 = scratch.only_in_b_tags.len();
-            const both_tags_start: u32 = scratch.in_both_tags.len();
+            const a_tags_start: u32 = @intCast(scratch.only_in_a_tags.len());
+            const b_tags_start: u32 = @intCast(scratch.only_in_b_tags.len());
+            const both_tags_start: u32 = @intCast(scratch.in_both_tags.len());
 
             // Iterate over the tags in order, grouping them
             var a_i: usize = 0;
@@ -2743,7 +2743,7 @@ pub const Scratch = struct {
                 RecordField{ .name = name, .var_ = var_ },
             );
         }
-        return self.gathered_fields.rangeToEnd(start_int);
+        return self.gathered_fields.rangeToEnd(@intCast(start_int));
     }
 
     /// Given a multi list of tag and a range, copy from the multi list
@@ -2761,7 +2761,7 @@ pub const Scratch = struct {
                 Tag{ .name = ident, .args = args },
             );
         }
-        return self.gathered_tags.rangeToEnd(start_int);
+        return self.gathered_tags.rangeToEnd(@intCast(start_int));
     }
 
     fn appendSliceGatheredFields(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordFieldSafeList.Range {

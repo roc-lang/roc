@@ -75,7 +75,7 @@ pub fn deinit(self: *SmallStringInterner, gpa: std.mem.Allocator) void {
 
 /// Find a string in the hash table using linear probing.
 /// Returns the Idx if found, or the slot index where it should be inserted if not found.
-pub fn findStringOrSlot(self: *const SmallStringInterner, string: []const u8) struct { idx: ?Idx, slot: u32 } {
+pub fn findStringOrSlot(self: *const SmallStringInterner, string: []const u8) struct { idx: ?Idx, slot: u64 } {
     const hash = std.hash.Fnv1a_32.hash(string);
     const table_size = self.hash_table.len();
     var slot = hash % table_size;

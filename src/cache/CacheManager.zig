@@ -3,11 +3,10 @@
 const std = @import("std");
 const base = @import("base");
 const reporting = @import("reporting");
-const Filesystem = @import("../fs/Filesystem.zig");
-const cache_mod = @import("mod.zig");
-const Cache = cache_mod.CacheModule;
-const CacheConfig = cache_mod.CacheConfig;
-const CacheStats = cache_mod.CacheStats;
+const Filesystem = @import("fs").Filesystem;
+const CacheModule = @import("CacheModule.zig").CacheModule;
+const CacheConfig = @import("CacheConfig.zig").CacheConfig;
+const CacheStats = @import("CacheConfig.zig").CacheStats;
 const CacheReporting = @import("CacheReporting.zig");
 const SERIALIZATION_ALIGNMENT = 16;
 const coordinate_simple = @import("../coordinate_simple.zig");
@@ -80,7 +79,7 @@ pub const CacheManager = struct {
         }
 
         // Read cache data using memory mapping for better performance
-        const mapped_cache = cache_mod.CacheModule.readFromFileMapped(self.allocator, cache_path, self.filesystem) catch |err| {
+        const mapped_cache = CacheModule.readFromFileMapped(self.allocator, cache_path, self.filesystem) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to read cache file {s}: {}", .{ cache_path, err });
             }
@@ -133,7 +132,7 @@ pub const CacheManager = struct {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
 
-        const cache_data = Cache.create(self.allocator, arena.allocator(), process_result.cir, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
+        const cache_data = CacheModule.create(self.allocator, arena.allocator(), process_result.cir, process_result.cir, process_result.error_count, process_result.warning_count) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to serialize cache data: {}", .{err});
             }
@@ -257,7 +256,7 @@ pub const CacheManager = struct {
         warning_count: u32,
     } {
         // Load cache using existing Cache functionality
-        var cache = cache_mod.CacheModule.fromMappedMemory(cache_data) catch return error.InvalidCache;
+        var cache = CacheModule.fromMappedMemory(cache_data) catch return error.InvalidCache;
 
         // Validate cache
         cache.validate() catch return error.InvalidCache;
