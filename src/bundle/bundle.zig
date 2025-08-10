@@ -181,6 +181,7 @@ pub const BundleError = error{
     FileOpenFailed,
     FileStatFailed,
     FileReadFailed,
+    FileTooLarge,
     TarWriteFailed,
     CompressionFailed,
     WriteFailed,
@@ -197,6 +198,7 @@ pub const UnbundleError = error{
     FileWriteFailed,
     HashMismatch,
     InvalidFilename,
+    FileTooLarge,
 } || std.mem.Allocator.Error;
 
 /// Bundle files into a compressed tar archive.
@@ -242,13 +244,14 @@ pub fn bundle(
 
         // Reset buffer and ensure capacity
         file_buffer.clearRetainingCapacity();
-        try file_buffer.ensureTotalCapacity(stat.size);
-        file_buffer.items.len = stat.size;
+        const file_size = std.math.cast(usize, stat.size) orelse return error.FileTooLarge;
+        try file_buffer.ensureTotalCapacity(file_size);
+        file_buffer.items.len = file_size;
 
         const bytes_read = file.readAll(file_buffer.items) catch {
             return error.FileReadFailed;
         };
-        if (bytes_read != stat.size) {
+        if (bytes_read != file_size) {
             return error.FileReadFailed;
         }
 
@@ -525,12 +528,13 @@ pub fn unbundleStream(
         switch (tar_file.kind) {
             .file => {
                 // Read file content into buffer
-                const file_content = try allocator.alloc(u8, tar_file.size);
+                const tar_file_size = std.math.cast(usize, tar_file.size) orelse return error.FileTooLarge;
+                const file_content = try allocator.alloc(u8, tar_file_size);
                 defer allocator.free(file_content);
 
                 const reader = tar_file.reader();
                 const bytes_read = try reader.readAll(file_content);
-                if (bytes_read != tar_file.size) {
+                if (bytes_read != tar_file_size) {
                     return error.UnexpectedEndOfStream;
                 }
 
