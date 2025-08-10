@@ -16,6 +16,7 @@ test "CompactWriter basic functionality" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
 
     // Test appendAlloc
@@ -46,6 +47,7 @@ test "CompactWriter appendSlice" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
 
     // First append something to ensure we don't have offset 0
@@ -72,6 +74,7 @@ test "CompactWriter alignment padding" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
 
     // First append a u8 (1-byte aligned)
@@ -100,6 +103,7 @@ test "CompactWriter multiple allocations" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
 
     // Append multiple items
@@ -130,6 +134,7 @@ test "CompactWriter up-front padding with various alignments" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
 
     // Start with u8 (1-byte aligned)
@@ -170,6 +175,7 @@ test "CompactWriter slice alignment" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
 
     // Start with a u8
@@ -210,6 +216,7 @@ test "CompactWriter brute-force appendSlice alignment" {
             var writer = CompactWriter{
                 .iovecs = .{},
                 .total_bytes = 0,
+                .allocated_memory = .{},
             };
 
             // Create test data

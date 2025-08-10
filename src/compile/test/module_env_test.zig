@@ -54,6 +54,7 @@ test "ModuleEnv.Serialized roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(arena_alloc);
 
@@ -127,6 +128,7 @@ test "ModuleEnv with types CompactWriter roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(arena_alloc);
 
@@ -185,6 +187,7 @@ test "ModuleEnv empty CompactWriter roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(arena_alloc);
 
@@ -255,6 +258,7 @@ test "ModuleEnv with source code CompactWriter roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(arena_alloc);
 

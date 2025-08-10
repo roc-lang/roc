@@ -529,6 +529,7 @@ test "Import.Store empty CompactWriter roundtrip" {
     var writer = serialization.CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(gpa);
 
@@ -592,6 +593,7 @@ test "Import.Store empty CompactWriter roundtrip" {
 //     var writer = collections.CompactWriter{
 //         .iovecs = .{},
 //         .total_bytes = 0,
+//         .allocated_memory = .{},
 //     };
 //     defer writer.deinit(gpa);
 
@@ -665,6 +667,7 @@ test "Import.Store empty CompactWriter roundtrip" {
 //     var writer = collections.CompactWriter{
 //         .iovecs = .{},
 //         .total_bytes = 0,
+//         .allocated_memory = .{},
 //     };
 //     defer writer.deinit(gpa);
 
@@ -768,6 +771,7 @@ test "Import.Store uses interned string deduplication" {
 //     var writer = collections.CompactWriter{
 //         .iovecs = .{},
 //         .total_bytes = 0,
+//         .allocated_memory = .{},
 //     };
 //     defer writer.deinit(arena_alloc);
 

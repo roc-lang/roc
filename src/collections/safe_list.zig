@@ -1415,6 +1415,7 @@ test "SafeList(u32) CompactWriter roundtrip with file" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(gpa);
 
@@ -1472,6 +1473,7 @@ test "SafeList(struct) CompactWriter roundtrip with file" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(gpa);
 
@@ -1522,6 +1524,7 @@ test "SafeList empty list CompactWriter roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(gpa);
 
@@ -1587,6 +1590,7 @@ test "SafeList empty lists CompactWriter roundtrip multiple types" {
         var writer = CompactWriter{
             .iovecs = .{},
             .total_bytes = 0,
+            .allocated_memory = .{},
         };
         defer writer.deinit(gpa);
 
@@ -1649,6 +1653,7 @@ test "SafeList CompactWriter verify offset calculation" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(gpa);
 
@@ -1683,6 +1688,7 @@ test "SafeList CompactWriter complete roundtrip example" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(gpa);
 
@@ -1772,6 +1778,7 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(gpa);
 
@@ -1866,6 +1873,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(gpa);
 
@@ -2019,6 +2027,7 @@ test "SafeList CompactWriter brute-force alignment verification" {
             var writer = CompactWriter{
                 .iovecs = .{},
                 .total_bytes = 0,
+                .allocated_memory = .{},
             };
             defer writer.deinit(gpa);
 
@@ -2110,6 +2119,7 @@ test "SafeMultiList CompactWriter roundtrip with file" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(gpa);
 
@@ -2177,6 +2187,7 @@ test "SafeMultiList empty list CompactWriter roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(gpa);
 
@@ -2247,6 +2258,7 @@ test "SafeMultiList CompactWriter multiple lists different alignments" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(gpa);
 
@@ -2328,6 +2340,7 @@ test "SafeMultiList CompactWriter multiple lists different alignments" {
 //     var writer = CompactWriter{
 //         .iovecs = .{},
 //         .total_bytes = 0,
+//         .allocated_memory = .{},
 //     };
 //     defer writer.deinit(gpa);
 
@@ -2425,6 +2438,7 @@ test "SafeMultiList CompactWriter brute-force alignment verification" {
         var writer = CompactWriter{
             .iovecs = .{},
             .total_bytes = 0,
+            .allocated_memory = .{},
         };
         defer writer.deinit(gpa);
 
@@ -2529,6 +2543,7 @@ test "SafeMultiList CompactWriter various field alignments and sizes" {
             var writer = CompactWriter{
                 .iovecs = .{},
                 .total_bytes = 0,
+                .allocated_memory = .{},
             };
             defer writer.deinit(gpa);
 
@@ -2630,6 +2645,7 @@ test "SafeMultiList CompactWriter various field alignments and sizes" {
 //         var writer = CompactWriter{
 //             .iovecs = .{},
 //             .total_bytes = 0,
+//             .allocated_memory = .{},
 //         };
 //         defer writer.deinit(gpa);
 
@@ -2721,6 +2737,7 @@ test "SafeMultiList CompactWriter stress test many field types" {
         var writer = CompactWriter{
             .iovecs = .{},
             .total_bytes = 0,
+            .allocated_memory = .{},
         };
         defer writer.deinit(gpa);
 
@@ -2790,6 +2807,7 @@ test "SafeMultiList CompactWriter empty with capacity" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(gpa);
 
@@ -2846,6 +2864,7 @@ test "SafeMultiList CompactWriter empty with capacity" {
 //     var writer = CompactWriter{
 //         .iovecs = .{},
 //         .total_bytes = 0,
+//         .allocated_memory = .{},
 //     };
 //     defer writer.deinit(arena_alloc);
 

@@ -282,6 +282,7 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(arena_allocator);
 
@@ -355,6 +356,7 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(arena_allocator);
 
@@ -431,6 +433,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(arena_allocator);
 
@@ -502,6 +505,7 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(arena_allocator);
 
@@ -576,6 +580,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(arena_allocator);
 
@@ -655,6 +660,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
 //     var writer = CompactWriter{
 //         .iovecs = .{},
 //         .total_bytes = 0,
+//         .allocated_memory = .{},
 //     };
 //     defer writer.deinit(arena_allocator);
 

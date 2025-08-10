@@ -3206,6 +3206,7 @@ test "NodeStore empty CompactWriter roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(gpa);
 
@@ -3276,6 +3277,7 @@ test "NodeStore empty CompactWriter roundtrip" {
 //     var writer = CompactWriter{
 //         .iovecs = .{},
 //         .total_bytes = 0,
+//         .allocated_memory = .{},
 //     };
 //     defer writer.deinit(gpa);
 
@@ -3384,6 +3386,7 @@ test "NodeStore empty CompactWriter roundtrip" {
 //     var writer = CompactWriter{
 //         .iovecs = .{},
 //         .total_bytes = 0,
+//         .allocated_memory = .{},
 //     };
 //     defer writer.deinit(gpa);
 

@@ -1125,6 +1125,7 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
 //     var writer = CompactWriter{
 //         .iovecs = .{},
 //         .total_bytes = 0,
+//         .allocated_memory = .{},
 //     };
 //     defer writer.deinit(gpa);
 
@@ -1186,6 +1187,7 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
 //     var writer = CompactWriter{
 //         .iovecs = .{},
 //         .total_bytes = 0,
+//         .allocated_memory = .{},
 //     };
 //     defer writer.deinit(gpa);
 
@@ -1271,6 +1273,7 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
 //     var writer = CompactWriter{
 //         .iovecs = .{},
 //         .total_bytes = 0,
+//         .allocated_memory = .{},
 //     };
 //     defer writer.deinit(gpa);
 
@@ -1370,7 +1373,11 @@ test "SlotStore.Serialized roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{ .iovecs = .{}, .total_bytes = 0 };
+    var writer = CompactWriter{
+        .iovecs = .{},
+        .total_bytes = 0,
+        .allocated_memory = .{},
+    };
     defer writer.deinit(arena_allocator);
 
     const serialized_ptr = try writer.appendAlloc(arena_allocator, SlotStore.Serialized);
@@ -1431,7 +1438,7 @@ test "SlotStore.Serialized roundtrip" {
 //     defer arena.deinit();
 //     const arena_allocator = arena.allocator();
 
-//     var writer = CompactWriter{ .iovecs = .{}, .total_bytes = 0 };
+//     var writer = CompactWriter{ .iovecs = .{}, .total_bytes = 0, .allocated_memory = .{}, };
 //     defer writer.deinit(arena_allocator);
 
 //     const serialized_ptr = try writer.appendAlloc(arena_allocator, DescStore.Serialized);
@@ -1478,7 +1485,7 @@ test "SlotStore.Serialized roundtrip" {
 //     defer file.close();
 
 //     // Serialize using Store.Serialized
-//     var writer = CompactWriter{ .iovecs = .{}, .total_bytes = 0 };
+//     var writer = CompactWriter{ .iovecs = .{}, .total_bytes = 0, .allocated_memory = .{}, };
 //     defer writer.deinit(gpa);
 
 //     const serialized_ptr = try writer.appendAlloc(gpa, Store.Serialized);
@@ -1549,6 +1556,7 @@ test "SlotStore.Serialized roundtrip" {
 //     var writer = CompactWriter{
 //         .iovecs = .{},
 //         .total_bytes = 0,
+//         .allocated_memory = .{},
 //     };
 //     defer writer.deinit(gpa);
 
@@ -1632,6 +1640,7 @@ test "SlotStore and DescStore serialization and deserialization" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(arena_allocator);
 
@@ -1707,6 +1716,7 @@ test "SlotStore and DescStore serialization and deserialization" {
 //     var writer = CompactWriter{
 //         .iovecs = .{},
 //         .total_bytes = 0,
+//         .allocated_memory = .{},
 //     };
 //     defer writer.deinit(gpa);
 

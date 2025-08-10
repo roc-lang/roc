@@ -99,6 +99,7 @@ pub const CacheModule = struct {
         var writer = CompactWriter{
             .iovecs = .{},
             .total_bytes = 0,
+            .allocated_memory = .{},
         };
 
         // Allocate space for ModuleEnv.Serialized

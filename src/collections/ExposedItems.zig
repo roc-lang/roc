@@ -314,6 +314,7 @@ test "ExposedItems empty CompactWriter roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(allocator);
 
@@ -374,6 +375,7 @@ test "ExposedItems basic CompactWriter roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(allocator);
 
@@ -433,6 +435,7 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(allocator);
 
@@ -501,6 +504,7 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(allocator);
 
@@ -567,6 +571,7 @@ test "ExposedItems multiple instances CompactWriter roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(allocator);
 
@@ -651,6 +656,7 @@ test "ExposedItems.Serialized roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(arena_alloc);
 

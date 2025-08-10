@@ -15,6 +15,8 @@ pub const CompactWriter = struct {
 
     iovecs: std.ArrayListUnmanaged(Iovec),
     total_bytes: usize,
+    // Track allocated memory that needs to be freed
+    allocated_memory: std.ArrayListUnmanaged(AllocatedMemory),
 
     /// Does a pwritev() on UNIX systems.
     /// There is no usable equivalent of this on Windows
@@ -128,6 +130,13 @@ pub const CompactWriter = struct {
         const items = try allocator.alignedAlloc(T, alignment, 1);
         const answer = &items[0];
 
+        // Track the allocated memory for cleanup
+        try self.allocated_memory.append(allocator, .{
+            .ptr = @as([*]u8, @ptrCast(items)),
+            .len = size,
+            .alignment = alignment,
+        });
+
         // Add the pointer to uninitialized memory to the iovecs for later.
         try self.iovecs.append(allocator, .{
             .iov_base = @ptrCast(@as([*]u8, @ptrCast(answer))),
@@ -212,6 +221,21 @@ pub const CompactWriter = struct {
 
     /// Deinitialize the CompactWriter, freeing all allocated memory
     pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        // Free all tracked allocated memory
+        for (self.allocated_memory.items) |memory| {
+            const alignment_enum = switch (memory.alignment) {
+                1 => std.mem.Alignment.@"1",
+                2 => std.mem.Alignment.@"2",
+                4 => std.mem.Alignment.@"4",
+                8 => std.mem.Alignment.@"8",
+                16 => std.mem.Alignment.@"16",
+                32 => std.mem.Alignment.@"32",
+                64 => std.mem.Alignment.@"64",
+                else => std.mem.Alignment.@"1", // fallback to unaligned
+            };
+            allocator.rawFree(memory.ptr[0..memory.len], alignment_enum, @returnAddress());
+        }
+        self.allocated_memory.deinit(allocator);
         self.iovecs.deinit(allocator);
     }
 };
@@ -219,6 +243,16 @@ pub const CompactWriter = struct {
 const Iovec = extern struct {
     iov_base: [*]const u8,
     iov_len: usize,
+};
+
+const AllocatedMemory = struct {
+    ptr: [*]u8,
+    len: usize,
+    alignment: usize,
+    
+    fn getAlignedSlice(self: @This()) []align(1) u8 {
+        return self.ptr[0..self.len];
+    }
 };
 
 /// Helper function to serialize data using CompactWriter with an arena allocator
@@ -238,6 +272,7 @@ fn serializeWithArena(
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(arena_allocator);
 
@@ -279,6 +314,7 @@ test "SafeList simple serialization" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(arena_allocator);
 
@@ -351,6 +387,7 @@ test "SafeList simple serialization" {
 //     var writer = CompactWriter{
 //         .iovecs = .{},
 //         .total_bytes = 0,
+//         .allocated_memory = .{},
 //     };
 //     defer writer.deinit(arena_allocator);
 

@@ -721,6 +721,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         var writer = CompactWriter{
             .iovecs = .{},
             .total_bytes = 0,
+            .allocated_memory = .{},
         };
         defer writer.deinit(arena_alloc);
 

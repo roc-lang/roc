@@ -215,8 +215,23 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 // Define sentinel value locally since iovec_serialize is not available
                 const EMPTY_ARRAY_SENTINEL: usize = 0xDEADBEEF;
                 if (old_ptr != EMPTY_ARRAY_SENTINEL) {
-                    const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
-                    self.entries.items.ptr = @ptrFromInt(new_ptr);
+                    // Handle negative offsets properly
+                    if (offset >= 0) {
+                        const new_ptr = old_ptr + @as(usize, @intCast(offset));
+                        // Maintain proper alignment for Entry type
+                        const aligned_ptr = @alignCast(new_ptr);
+                        self.entries.items.ptr = @ptrFromInt(aligned_ptr);
+                    } else {
+                        // For negative offsets, we need to ensure we don't underflow
+                        const abs_offset = @as(usize, @intCast(-offset));
+                        if (old_ptr >= abs_offset) {
+                            const new_ptr = old_ptr - abs_offset;
+                            // Maintain proper alignment for Entry type
+                            const aligned_ptr = @alignCast(new_ptr);
+                            self.entries.items.ptr = @ptrFromInt(aligned_ptr);
+                        }
+                        // If old_ptr < abs_offset, we can't relocate safely, so skip
+                    }
                 }
             }
         }
@@ -550,6 +565,7 @@ test "SortedArrayBuilder.Serialized roundtrip" {
     var writer = CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
     defer writer.deinit(arena_alloc);
 
