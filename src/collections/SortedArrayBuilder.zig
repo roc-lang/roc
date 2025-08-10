@@ -14,8 +14,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// Import base for both testing and runtime
-const base = @import("base");
 const serialization = @import("serialization");
 const IovecWriter = serialization.IovecWriter;
 

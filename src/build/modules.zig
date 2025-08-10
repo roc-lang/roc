@@ -29,12 +29,13 @@ pub const ModuleType = enum {
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
         return switch (self) {
+            .builtins => &.{},
             .serialization => &.{},
             .collections => &.{.serialization},
             .base => &.{ .serialization, .collections },
+            .reporting => &.{ .base, .collections },
             .types => &.{ .serialization, .base, .collections },
-            .builtins => &.{},
-            .reporting => &.{.base},
+            // TODO check below deps, remove cycles
             .compile => &.{ .base, .collections, .types, .builtins, .reporting, .serialization },
             .parse => &.{ .base, .compile, .collections, .tracy, .reporting },
             .can => &.{ .base, .parse, .collections, .compile, .types, .builtins, .tracy },
@@ -110,7 +111,7 @@ pub const RocModules = struct {
         for (all_modules) |module_type| {
             const module = self.getModule(module_type);
             const dependencies = module_type.getDependencies();
-            
+
             for (dependencies) |dep_type| {
                 const dep_module = self.getModule(dep_type);
                 module.addImport(@tagName(dep_type), dep_module);
@@ -208,5 +209,4 @@ pub const RocModules = struct {
 
         return tests;
     }
-
 };
