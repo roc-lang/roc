@@ -4,18 +4,17 @@ const std = @import("std");
 const base = @import("base");
 const fs_mod = @import("fs");
 const compile = @import("compile");
-const cache_mod = @import("cache");
 const reporting = @import("reporting");
 const serialization = @import("serialization");
 
-const CacheReporting = cache_mod.reporting.CacheReporting;
+const CacheReporting = @import("cache_reporting.zig").CacheReporting;
 
-const Cache = cache_mod.CacheModule;
+const CacheModule = @import("cache_module.zig").CacheModule;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = compile.ModuleEnv;
 const Filesystem = fs_mod.Filesystem;
-const CacheStats = cache_mod.CacheStats;
-const CacheConfig = cache_mod.CacheConfig;
+const CacheStats = @import("cache_config.zig").CacheStats;
+const CacheConfig = @import("cache_config.zig").CacheConfig;
 const SERIALIZATION_ALIGNMENT = serialization.SERIALIZATION_ALIGNMENT;
 
 /// Result of a cache lookup operation
@@ -146,7 +145,7 @@ pub const CacheManager = struct {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
 
-        const cache_data = Cache.create(self.allocator, arena.allocator(), module_env, module_env, error_count, warning_count) catch |err| {
+        const cache_data = CacheModule.create(self.allocator, arena.allocator(), module_env, module_env, error_count, warning_count) catch |err| {
             if (self.config.verbose) {
                 std.log.debug("Failed to serialize cache data: {}", .{err});
             }
@@ -262,12 +261,12 @@ pub const CacheManager = struct {
     /// The caller must not free it after calling this function.
     fn restoreFromCache(
         self: *Self,
-        mapped_cache: cache_mod.CacheModule.CacheData,
+        mapped_cache: CacheModule.CacheData,
         source: []const u8,
         module_name: []const u8,
     ) !CacheResult {
         // Validate cache format
-        const cache = try Cache.fromMappedMemory(mapped_cache.data());
+        const cache = try CacheModule.fromMappedMemory(mapped_cache.data());
 
         // Restore the ModuleEnv from cache
         const module_env = try cache.restore(self.allocator, module_name, source);

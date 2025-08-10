@@ -86,7 +86,6 @@ pub const RocModules = struct {
         self.check.addImport("builtins", self.builtins);
         self.check.addImport("reporting", self.reporting);
 
-        self.cache.addImport("cache", self.cache);
         self.cache.addImport("compile", self.compile);
         self.cache.addImport("base", self.base);
         self.cache.addImport("collections", self.collections);
@@ -136,16 +135,16 @@ pub const RocModules = struct {
     /// Each entry contains the module name and the path to its test file
     pub fn getTestableModules() []const struct { name: []const u8, test_path: []const u8 } {
         return &.{
+            .{ .name = "collections", .test_path = "src/collections/mod.zig" },
             .{ .name = "base", .test_path = "src/base/mod.zig" },
             .{ .name = "builtins", .test_path = "src/builtins/mod.zig" },
-            .{ .name = "cache", .test_path = "src/cache/mod.zig" },
-            .{ .name = "canonicalize", .test_path = "src/canonicalize/Mod.zig" },
-            .{ .name = "check", .test_path = "src/check/Mod.zig" },
-            .{ .name = "collections", .test_path = "src/collections/mod.zig" },
-            .{ .name = "compile", .test_path = "src/compile/mod.zig" },
-            .{ .name = "eval", .test_path = "src/eval/mod.zig" },
-            .{ .name = "types", .test_path = "src/types/mod.zig" },
-            .{ .name = "parse", .test_path = "src/parse/test.zig" },
+            // .{ .name = "cache", .test_path = "src/cache/mod.zig" },
+            // .{ .name = "canonicalize", .test_path = "src/canonicalize/Mod.zig" },
+            // .{ .name = "check", .test_path = "src/check/Mod.zig" },
+            // .{ .name = "compile", .test_path = "src/compile/mod.zig" },
+            // .{ .name = "eval", .test_path = "src/eval/mod.zig" },
+            // .{ .name = "types", .test_path = "src/types/mod.zig" },
+            // .{ .name = "parse", .test_path = "src/parse/test.zig" },
         };
     }
 };

@@ -6,10 +6,9 @@
 
 const std = @import("std");
 const reporting = @import("reporting");
-const cache_mod = @import("cache");
 
 const Allocator = std.mem.Allocator;
-const CacheStats = cache_mod.CacheStats;
+const CacheStats = @import("cache_config.zig").CacheStats;
 const Report = reporting.Report;
 const Document = reporting.Document;
 const Severity = reporting.Severity;

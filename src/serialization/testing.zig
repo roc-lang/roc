@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const safety = @import("safety.zig");
-const mod = @import("mod.zig");
 
 const SERIALIZATION_ALIGNMENT = safety.SERIALIZATION_ALIGNMENT;
 

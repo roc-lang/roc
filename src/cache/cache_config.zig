@@ -6,7 +6,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
-const cache_mod = @import("mod.zig");
 
 const Allocator = std.mem.Allocator;
 
