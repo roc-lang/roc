@@ -1667,7 +1667,7 @@ pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree)
             try self.store.getStatement(stmt_idx).pushToSExprTree(self, tree, stmt_idx);
         }
 
-        for (0..self.external_decls.len()) |i| {
+        for (0..@intCast(self.external_decls.len())) |i| {
             const external_decl = self.external_decls.get(@enumFromInt(i));
             try external_decl.pushToSExprTree(self, tree);
         }

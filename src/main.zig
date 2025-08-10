@@ -21,7 +21,7 @@ const cache_mod = @import("cache");
 const bench = @import("bench.zig");
 const linker = @import("linker.zig");
 const compile = @import("compile");
-const can = @import("can");
+const Can = @import("can").Can;
 const Check = @import("check").Check;
 
 const ModuleEnv = compile.ModuleEnv;
@@ -797,7 +797,7 @@ pub fn setupSharedMemoryWithModuleEnv(_: std.mem.Allocator, roc_file_path: []con
     try env.initCIRFields(shm_allocator, module_name);
 
     // Create canonicalizer
-    var canonicalizer = try can.init(&env, &parse_ast, null);
+    var canonicalizer = try Can.init(&env, &parse_ast, null);
 
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();

@@ -124,7 +124,7 @@ pub const Store = struct {
     }
 
     /// Return the number of type variables in the store.
-    pub fn len(self: *const Self) usize {
+    pub fn len(self: *const Self) u64 {
         return self.slots.backing.len();
     }
 

@@ -39,10 +39,10 @@ pub const ModuleType = enum {
             .reporting => &.{ .base, .collections },
             .types => &.{ .serialization, .base, .collections },
             // TODO check below deps, remove cycles
-            .compile => &.{ .base, .collections, .types, .builtins, .reporting, .serialization },
             .parse => &.{ .base, .compile, .collections, .tracy, .reporting },
             .cache => &.{ .compile, .base, .collections, .serialization, .reporting, .fs, .build_options },
             .can => &.{ .base, .parse, .collections, .compile, .types, .builtins, .tracy },
+            .compile => &.{ .base, .collections, .types, .builtins, .cache, .parse, .can, .check, .reporting, .serialization },
             .check => &.{ .base, .tracy, .parse, .collections, .types, .can, .compile, .builtins, .reporting },
         };
     }

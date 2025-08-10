@@ -20,8 +20,8 @@ const parse = @import("parse");
 const reporting = @import("reporting");
 const types = @import("types");
 const compile = @import("compile");
-const Can = @import("can");
-const Check = @import("check");
+const Can = @import("can").Can;
+const Check = @import("check").Check;
 
 const WasmFilesystem = @import("playground/WasmFilesystem.zig");
 
@@ -1032,7 +1032,7 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
                     const ident_text = cir.idents.getText(assign.ident);
                     if (std.mem.eql(u8, ident_text, identifier)) {
                         // 1. Get type string
-                        var type_writer = try types.TypeWriter.init(local_allocator, @ptrCast(cir));
+                        var type_writer = try compile.TypeWriter.init(local_allocator, @ptrCast(cir));
                         defer type_writer.deinit();
 
                         const def_var = @as(types.Var, @enumFromInt(@intFromEnum(def_idx)));

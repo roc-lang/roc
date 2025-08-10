@@ -10,7 +10,7 @@ const testing = std.testing;
 const base = @import("base");
 const parse = @import("parse");
 const compile = @import("compile");
-const Can = @import("../Mod.zig");
+const Can = @import("../Can.zig");
 
 const ModuleEnv = compile.ModuleEnv;
 const expectEqual = testing.expectEqual;

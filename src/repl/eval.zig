@@ -5,7 +5,7 @@ const base = @import("base");
 const compile = @import("compile");
 const parse = @import("parse");
 const types = @import("types");
-const Can = @import("can");
+const Can = @import("can").Can;
 const Check = @import("check").Check;
 const builtins = @import("builtins");
 

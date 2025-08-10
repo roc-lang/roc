@@ -78,7 +78,7 @@ pub fn deinit(self: *SmallStringInterner, gpa: std.mem.Allocator) void {
 pub fn findStringOrSlot(self: *const SmallStringInterner, string: []const u8) struct { idx: ?Idx, slot: u64 } {
     const hash = std.hash.Fnv1a_32.hash(string);
     const table_size = self.hash_table.len();
-    var slot = hash % table_size;
+    var slot: usize = @intCast(hash % table_size);
 
     while (true) {
         const idx_at_slot = self.hash_table.items.items[slot];
@@ -104,14 +104,14 @@ pub fn findStringOrSlot(self: *const SmallStringInterner, string: []const u8) st
         }
 
         // Linear probe to next slot (with wraparound)
-        slot = (slot + 1) % table_size;
+        slot = @intCast((slot + 1) % table_size);
     }
 }
 
 /// Resize the hash table when it gets too full.
 fn resizeHashTable(self: *SmallStringInterner, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
     const old_table = self.hash_table;
-    const new_size = old_table.len() * 2;
+    const new_size: usize = @intCast(old_table.len() * 2);
 
     // Create new hash table initialized to zeros
     self.hash_table = try collections.SafeList(Idx).initCapacity(gpa, new_size);
@@ -125,7 +125,7 @@ fn resizeHashTable(self: *SmallStringInterner, gpa: std.mem.Allocator) std.mem.A
             // Get the string for this index
             const string = self.getText(idx);
             const result = self.findStringOrSlot(string);
-            self.hash_table.items.items[result.slot] = idx;
+            self.hash_table.items.items[@intCast(result.slot)] = idx;
         }
     }
 
@@ -157,7 +157,7 @@ pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []cons
         _ = try self.bytes.append(gpa, 0);
 
         // Add to hash table
-        self.hash_table.items.items[result.slot] = new_offset;
+        self.hash_table.items.items[@intCast(result.slot)] = new_offset;
         self.entry_count += 1;
 
         return new_offset;

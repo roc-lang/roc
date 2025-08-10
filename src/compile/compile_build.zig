@@ -11,17 +11,16 @@
 const std = @import("std");
 const parse = @import("parse");
 const cache = @import("cache");
-const compile = @import("compile");
 const builtin = @import("builtin");
 const reporting = @import("reporting");
 
 const Report = reporting.Report;
-const Mode = compile.package.Mode;
+const Mode = @import("compile_package.zig").Mode;
 const Allocator = std.mem.Allocator;
-const ModuleEnv = compile.ModuleEnv;
-const PackageEnv = compile.PackageEnv;
-const ModuleTimingInfo = compile.package.TimingInfo;
-const ImportResolver = compile.package.ImportResolver;
+const ModuleEnv = @import("ModuleEnv.zig");
+const PackageEnv = @import("compile_package.zig").PackageEnv;
+const ModuleTimingInfo = @import("compile_package.zig").TimingInfo;
+const ImportResolver = @import("compile_package.zig").ImportResolver;
 
 // Threading features aren't available when targeting WebAssembly,
 // so we disable them at comptime to prevent builds from failing.
@@ -434,7 +433,7 @@ pub const BuildEnv = struct {
         // Build and let the main function handle everything
         // The build function accepts both apps and modules
         try self.build(app_file);
-        
+
         // After building, verify it was actually an app
         // Check the package we just created
         const pkg = self.packages.get("app");

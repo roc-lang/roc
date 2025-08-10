@@ -12,7 +12,7 @@ const parse = @import("parse");
 const compile = @import("compile");
 const types = @import("types");
 const reporting = @import("reporting");
-const Can = @import("can");
+const Can = @import("can").Can;
 const Check = @import("check").Check;
 const builtins = @import("builtins");
 

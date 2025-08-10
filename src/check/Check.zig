@@ -8,7 +8,7 @@ const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
-const Can = @import("can");
+const can = @import("can");
 const compile = @import("compile");
 
 const copy_import = @import("copy_import.zig");
@@ -1440,11 +1440,11 @@ fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region
         .lt, .gt, .le, .ge, .eq, .ne => {
             // Comparison operators always return Bool
             const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-            const fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+            const fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             _ = try self.unify(expr_var, fresh_bool);
         },
         .@"and" => {
-            const lhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+            const lhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -1453,7 +1453,7 @@ fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region
             } });
 
             if (lhs_result.isOk()) {
-                const rhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+                const rhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
                 const rhs_result = try self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
@@ -1463,7 +1463,7 @@ fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region
             }
         },
         .@"or" => {
-            const lhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+            const lhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -1472,7 +1472,7 @@ fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region
             } });
 
             if (lhs_result.isOk()) {
-                const rhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+                const rhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
                 const rhs_result = try self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
@@ -1522,7 +1522,7 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Reg
     const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
 
     // Create a fresh boolean variable for the operation
-    const bool_var = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+    const bool_var = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
 
     // Unify operand and result with the boolean type
     _ = try self.unify(operand_var, bool_var);
@@ -1668,7 +1668,7 @@ fn checkIfElseExpr(
     // Check the condition of the 1st branch
     var does_fx = try self.checkExpr(first_branch.cond);
     const first_cond_var: Var = @enumFromInt(@intFromEnum(first_branch.cond));
-    const bool_var = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+    const bool_var = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
     const first_cond_result = try self.unify(bool_var, first_cond_var);
     self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
 
@@ -1688,7 +1688,7 @@ fn checkIfElseExpr(
         // Check the branches condition
         does_fx = try self.checkExpr(branch.cond) or does_fx;
         const cond_var: Var = @enumFromInt(@intFromEnum(branch.cond));
-        const branch_bool_var = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+        const branch_bool_var = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
         const cond_result = try self.unify(branch_bool_var, cond_var);
         self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
 
@@ -1711,7 +1711,7 @@ fn checkIfElseExpr(
                 does_fx = try self.checkExpr(remaining_branch.cond) or does_fx;
                 const remaining_cond_var: Var = @enumFromInt(@intFromEnum(remaining_branch.cond));
 
-                const fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+                const fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
                 const remaining_cond_result = try self.unify(fresh_bool, remaining_cond_var);
                 self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
 

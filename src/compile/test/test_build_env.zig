@@ -1,12 +1,11 @@
 const std = @import("std");
-const compile = @import("compile");
 const cache = @import("cache");
 const reporting = @import("reporting");
 
 const Report = reporting.Report;
-const BuildEnv = compile.BuildEnv;
-const OrderedSink = compile.build.OrderedSink;
-const PackageEnv = compile.package.PackageEnv;
+const BuildEnv = @import("../compile_build.zig").BuildEnv;
+const OrderedSink = @import("../compile_build.zig").OrderedSink;
+const PackageEnv = @import("../compile_package.zig").PackageEnv;
 
 fn writeFile(dir: std.fs.Dir, rel: []const u8, contents: []const u8) !void {
     var f = try dir.createFile(rel, .{ .read = true, .truncate = true, .exclusive = false });
@@ -481,7 +480,7 @@ test "BuildEnv: multi-threaded global queue drives all phases" {
     const main_id = main_sched.module_names.get("Main").?;
     const helper_id = main_sched.module_names.get("Helper").?;
     const utils_id = main_sched.module_names.get("Utils").?;
-    
+
     const main_state = main_sched.modules.items[main_id];
     const helper_state = main_sched.modules.items[helper_id];
     const utils_state = main_sched.modules.items[utils_id];

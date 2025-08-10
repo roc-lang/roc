@@ -16,13 +16,12 @@
 const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
-const Can = @import("can");
-const Check = @import("check");
-const compile = @import("compile");
+const Can = @import("can").Can;
+const Check = @import("check").Check;
 const reporting = @import("reporting");
 
 const Report = reporting.Report;
-const ModuleEnv = compile.ModuleEnv;
+const ModuleEnv = @import("ModuleEnv.zig");
 const problem = Check.problem;
 
 /// Timing information for different phases
