@@ -12,7 +12,7 @@ const collections = @import("collections");
 const base = @import("base");
 
 const serialization = @import("serialization");
-const TypeWriter = types_mod.TypeWriter;
+const TypeWriter = @import("TypeWriter.zig");
 const CompactWriter = serialization.CompactWriter;
 
 pub const CIR = @import("CIR.zig");

@@ -7,7 +7,6 @@
 
 pub const types = @import("types.zig");
 pub const store = @import("store.zig");
-pub const writers = @import("writers.zig");
 pub const instantiate = @import("instantiate.zig");
 
 pub const Alias = types.Alias;
@@ -34,5 +33,3 @@ pub const ResolvedVarDesc = store.ResolvedVarDesc;
 pub const ResolvedVarDescs = store.ResolvedVarDescs;
 pub const Store = store.Store;
 pub const DescStoreIdx = store.DescStoreIdx;
-
-pub const TypeWriter = writers.TypeWriter;
