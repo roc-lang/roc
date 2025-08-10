@@ -13,6 +13,7 @@ const SERVER_HEADER_BUFFER_SIZE: usize = 16 * 1024;
 const IPV4_LOOPBACK_BE: u32 = 0x7F000001; // Big-endian
 const IPV4_LOOPBACK_LE: u32 = 0x0100007F; // Little-endian
 
+/// Errors that can occur during the download operation.
 pub const DownloadError = error{
     InvalidUrl,
     LocalhostWasNotLoopback,

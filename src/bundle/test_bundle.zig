@@ -1,3 +1,12 @@
+//! Tests for the bundle and download functionality.
+//!
+//! This file contains comprehensive tests for:
+//! - Bundle creation with tar and zstd compression
+//! - Bundle extraction with hash verification
+//! - Base58 encoding/decoding
+//! - Download URL validation
+//! - Memory-based file system for testing
+
 const std = @import("std");
 const bundle = @import("bundle.zig");
 const download = @import("download.zig");

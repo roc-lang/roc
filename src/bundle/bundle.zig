@@ -19,7 +19,7 @@ const c = @cImport({
     @cInclude("zstd.h");
 });
 
-// Base58 alphabet (Bitcoin-style, no 0OIl)
+// Base58 alphabet (no '0', 'O', 'I', or 'l' to deter visual similarity attacks.)
 const base58_alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
 // Constants for magic numbers
@@ -28,6 +28,8 @@ const BASE58_SIZE_RATIO_PERCENT: usize = 138; // Base58 is ~138% the size of bas
 const TAR_PATH_MAX_LENGTH: usize = 255; // Maximum path length for tar compatibility
 const TAR_NAME_BUFFER_SIZE: usize = 256; // Buffer size for tar file names
 
+/// Encode binary data to a base58 string.
+/// The caller owns the returned memory.
 pub fn base58Encode(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
     if (data.len == 0) return allocator.dupe(u8, "");
 
@@ -87,6 +89,9 @@ pub fn base58Encode(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
     return final_result;
 }
 
+/// Decode base58 string back to binary data.
+/// The caller owns the returned memory.
+/// Returns InvalidBase58 error if the string contains invalid characters.
 pub fn base58Decode(allocator: std.mem.Allocator, encoded: []const u8) ![]u8 {
     if (encoded.len == 0) return allocator.dupe(u8, "");
 
@@ -170,6 +175,7 @@ fn myZstdFree(opaque_ptr: ?*anyopaque, address: ?*anyopaque) callconv(.C) void {
     allocator.free(original_ptr[0..total_size]);
 }
 
+/// Errors that can occur during the bundle operation.
 pub const BundleError = error{
     FilePathTooLong,
     FileOpenFailed,
@@ -181,6 +187,7 @@ pub const BundleError = error{
     FlushFailed,
 } || std.mem.Allocator.Error;
 
+/// Errors that can occur during the unbundle operation.
 pub const UnbundleError = error{
     DecompressionFailed,
     InvalidTarHeader,

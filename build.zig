@@ -150,7 +150,8 @@ pub fn build(b: *std.Build) void {
     });
     roc_modules.addAllToTest(all_tests);
     all_tests.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
-    
+
+    // We use zstd for `roc bundle` and `roc unbundle` and downloading .tar.zst bundles.
     const zstd = b.dependency("zstd", .{
         .target = target,
         .optimize = optimize,
@@ -395,14 +396,14 @@ fn addMainExe(
     }
 
     add_tracy(b, roc_modules.build_options, exe, target, enable_llvm, tracy);
-    
-    // Add zstd dependency for bundle functionality
+
+    // We use zstd for `roc bundle` and `roc unbundle` and downloading .tar.zst bundles.
     const zstd = b.dependency("zstd", .{
         .target = target,
         .optimize = optimize,
     });
     exe.linkLibrary(zstd.artifact("zstd"));
-    
+
     return exe;
 }
 
