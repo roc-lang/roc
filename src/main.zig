@@ -1142,14 +1142,14 @@ fn rocUnbundle(gpa: Allocator, args: cli_args.UnbundleArgs) !void {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
     const cwd = std.fs.cwd();
-    
+
     var had_errors = false;
-    
+
     for (args.paths) |archive_path| {
         // Extract directory name from archive filename
         const basename = std.fs.path.basename(archive_path);
         var dir_name: []const u8 = undefined;
-        
+
         if (std.mem.endsWith(u8, basename, ".tar.zst")) {
             dir_name = basename[0 .. basename.len - 8];
         } else {
@@ -1157,7 +1157,7 @@ fn rocUnbundle(gpa: Allocator, args: cli_args.UnbundleArgs) !void {
             had_errors = true;
             continue;
         }
-        
+
         // Check if directory already exists
         cwd.access(dir_name, .{}) catch |err| switch (err) {
             error.FileNotFound => {
@@ -1165,7 +1165,7 @@ fn rocUnbundle(gpa: Allocator, args: cli_args.UnbundleArgs) !void {
             },
             else => return err,
         };
-        
+
         if (cwd.openDir(dir_name, .{})) |_| {
             try stderr.print("Error: Directory {s} already exists\n", .{dir_name});
             had_errors = true;
@@ -1173,11 +1173,11 @@ fn rocUnbundle(gpa: Allocator, args: cli_args.UnbundleArgs) !void {
         } else |_| {
             // Directory doesn't exist, proceed
         }
-        
+
         // Create the output directory
         var output_dir = try cwd.makeOpenPath(dir_name, .{});
         defer output_dir.close();
-        
+
         // Open the archive file
         const archive_file = cwd.openFile(archive_path, .{}) catch |err| {
             try stderr.print("Error opening {s}: {s}\n", .{ archive_path, @errorName(err) });
@@ -1185,7 +1185,7 @@ fn rocUnbundle(gpa: Allocator, args: cli_args.UnbundleArgs) !void {
             continue;
         };
         defer archive_file.close();
-        
+
         // Unbundle the archive
         bundle.unbundle(
             archive_file.reader(),
@@ -1209,10 +1209,10 @@ fn rocUnbundle(gpa: Allocator, args: cli_args.UnbundleArgs) !void {
             }
             continue; // Skip success message on error
         };
-        
+
         try stdout.print("Extracted: {s}\n", .{dir_name});
     }
-    
+
     if (had_errors) {
         std.process.exit(1);
     }

@@ -68,4 +68,5 @@ test {
     std.testing.refAllDeclsRecursive(@import("repl/eval.zig"));
     std.testing.refAllDeclsRecursive(@import("bundle/bundle.zig"));
     std.testing.refAllDeclsRecursive(@import("bundle/download.zig"));
+    std.testing.refAllDeclsRecursive(@import("bundle/test_bundle.zig"));
 }

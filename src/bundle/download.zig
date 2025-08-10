@@ -18,27 +18,29 @@ pub fn validateUrl(url: []const u8) DownloadError![]const u8 {
     if (std.mem.startsWith(u8, url, "https://")) {
         // This is fine, extract hash from last segment
     } else if (std.mem.startsWith(u8, url, "http://127.0.0.1:") or std.mem.startsWith(u8, url, "http://127.0.0.1/")) {
-        // This is allowed for local testing
+        // This is allowed for local testing (IPv4 loopback)
+    } else if (std.mem.startsWith(u8, url, "http://[::1]:") or std.mem.startsWith(u8, url, "http://[::1]/")) {
+        // This is allowed for local testing (IPv6 loopback)
     } else if (std.mem.startsWith(u8, url, "http://localhost:") or std.mem.startsWith(u8, url, "http://localhost/")) {
         return error.AttemptedLocalhost;
     } else {
         return error.InvalidUrl;
     }
-    
+
     // Extract the last path segment (should be the hash)
     const last_slash = std.mem.lastIndexOf(u8, url, "/") orelse return error.NoHashInUrl;
     const hash_part = url[last_slash + 1 ..];
-    
+
     // Remove .tar.zst extension if present
     const hash = if (std.mem.endsWith(u8, hash_part, ".tar.zst"))
         hash_part[0 .. hash_part.len - 8]
     else
         hash_part;
-    
+
     if (hash.len == 0) {
         return error.NoHashInUrl;
     }
-    
+
     return hash;
 }
 
@@ -55,20 +57,19 @@ pub fn download(
 ) DownloadError!void {
     // Validate URL and extract hash
     const base58_hash = try validateUrl(url);
-    
+
     // Validate the hash before starting any I/O
     const expected_hash = (try bundle.validateBase58Hash(allocator, base58_hash)) orelse {
         return error.InvalidHash;
     };
-    
-    
+
     // Create HTTP client
     var client = std.http.Client{ .allocator = allocator };
     defer client.deinit();
-    
+
     // Parse the URL
     const uri = std.Uri.parse(url) catch return error.InvalidUrl;
-    
+
     // Start the request
     var server_header_buffer: [16 * 1024]u8 = undefined;
     var request = client.open(.GET, uri, .{
@@ -76,22 +77,21 @@ pub fn download(
         .redirect_behavior = .unhandled,
     }) catch return error.HttpError;
     defer request.deinit();
-    
+
     // Send the request
     request.send() catch return error.HttpError;
     request.finish() catch return error.HttpError;
     request.wait() catch return error.HttpError;
-    
+
     // Check response status
     if (request.response.status != .ok) {
         return error.HttpError;
     }
-    
+
     // Get the response reader
     const reader = request.reader();
-    
+
     // Stream directly to unbundleStream
-    var dir_writer = bundle.DirExtractWriter.init(extract_dir, allocator);
-    defer dir_writer.deinit();
+    var dir_writer = bundle.DirExtractWriter.init(extract_dir);
     try bundle.unbundleStream(reader, dir_writer.extractWriter(), allocator, &expected_hash);
 }

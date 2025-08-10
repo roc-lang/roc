@@ -348,19 +348,19 @@ fn parseUnbundle(gpa: mem.Allocator, args: []const []const u8) !CliArgs {
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             paths.deinit();
-            return CliArgs{ .help =
-                \\Extract files from compressed .tar.zst archives
-                \\
-                \\Usage: roc unbundle [OPTIONS] [ARCHIVE_FILES]...
-                \\
-                \\Arguments:
-                \\  [ARCHIVE_FILES]...  The .tar.zst files to unbundle
-                \\                      [default: all .tar.zst files in current directory]
-                \\
-                \\Options:
-                \\  -h, --help  Print help
-                \\
-            };
+            return CliArgs{ .help = 
+            \\Extract files from compressed .tar.zst archives
+            \\
+            \\Usage: roc unbundle [OPTIONS] [ARCHIVE_FILES]...
+            \\
+            \\Arguments:
+            \\  [ARCHIVE_FILES]...  The .tar.zst files to unbundle
+            \\                      [default: all .tar.zst files in current directory]
+            \\
+            \\Options:
+            \\  -h, --help  Print help
+            \\
+        };
         } else if (mem.startsWith(u8, arg, "-")) {
             paths.deinit();
             return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "unbundle", .arg = arg } } };
@@ -379,25 +379,25 @@ fn parseUnbundle(gpa: mem.Allocator, args: []const []const u8) !CliArgs {
                 try paths.append(try gpa.dupe(u8, entry.name));
             }
         }
-        
+
         // If still no files found, show help
         if (paths.items.len == 0) {
             paths.deinit();
             return CliArgs{ .help = 
-                \\Extract files from compressed .tar.zst archives
-                \\
-                \\Usage: roc unbundle [OPTIONS] [ARCHIVE_FILES]...
-                \\
-                \\Arguments:
-                \\  [ARCHIVE_FILES]...  The .tar.zst files to unbundle
-                \\                      [default: all .tar.zst files in current directory]
-                \\
-                \\Options:
-                \\  -h, --help  Print help
-                \\
-                \\Error: No .tar.zst files found in current directory
-                \\
-            };
+            \\Extract files from compressed .tar.zst archives
+            \\
+            \\Usage: roc unbundle [OPTIONS] [ARCHIVE_FILES]...
+            \\
+            \\Arguments:
+            \\  [ARCHIVE_FILES]...  The .tar.zst files to unbundle
+            \\                      [default: all .tar.zst files in current directory]
+            \\
+            \\Options:
+            \\  -h, --help  Print help
+            \\
+            \\Error: No .tar.zst files found in current directory
+            \\
+        };
         }
     }
 

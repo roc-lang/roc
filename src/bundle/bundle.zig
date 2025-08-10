@@ -347,11 +347,11 @@ pub fn bundle(
 pub fn validateBase58Hash(allocator: std.mem.Allocator, base58_hash: []const u8) !?[32]u8 {
     const decoded = base58Decode(allocator, base58_hash) catch return null;
     defer allocator.free(decoded);
-    
+
     if (decoded.len != 32) {
         return null;
     }
-    
+
     var hash: [32]u8 = undefined;
     @memcpy(&hash, decoded);
     return hash;
@@ -361,79 +361,49 @@ pub fn validateBase58Hash(allocator: std.mem.Allocator, base58_hash: []const u8)
 pub const ExtractWriter = struct {
     ptr: *anyopaque,
     makeDirFn: *const fn (ptr: *anyopaque, path: []const u8) anyerror!void,
-    createFileFn: *const fn (ptr: *anyopaque, path: []const u8) anyerror!std.io.AnyWriter,
-    
+    writeFileFn: *const fn (ptr: *anyopaque, path: []const u8, data: []const u8) anyerror!void,
+
     pub fn makeDir(self: ExtractWriter, path: []const u8) !void {
         return self.makeDirFn(self.ptr, path);
     }
-    
-    pub fn createFile(self: ExtractWriter, path: []const u8) !std.io.AnyWriter {
-        return self.createFileFn(self.ptr, path);
-    }
-};
 
-/// File handle wrapper that provides AnyWriter
-const FileWriterWrapper = struct {
-    file: std.fs.File,
-    
-    pub fn writer(self: *FileWriterWrapper) std.io.AnyWriter {
-        return self.file.writer().any();
-    }
-    
-    pub fn close(self: *FileWriterWrapper) void {
-        self.file.close();
+    pub fn writeFile(self: ExtractWriter, path: []const u8, data: []const u8) !void {
+        return self.writeFileFn(self.ptr, path, data);
     }
 };
 
 /// Directory-based extract writer
 pub const DirExtractWriter = struct {
     dir: std.fs.Dir,
-    allocator: std.mem.Allocator,
-    open_files: std.ArrayList(*FileWriterWrapper),
-    
-    pub fn init(dir: std.fs.Dir, allocator: std.mem.Allocator) DirExtractWriter {
-        return .{ 
-            .dir = dir,
-            .allocator = allocator,
-            .open_files = std.ArrayList(*FileWriterWrapper).init(allocator),
-        };
+
+    pub fn init(dir: std.fs.Dir) DirExtractWriter {
+        return .{ .dir = dir };
     }
-    
-    pub fn deinit(self: *DirExtractWriter) void {
-        for (self.open_files.items) |wrapper| {
-            wrapper.close();
-            self.allocator.destroy(wrapper);
-        }
-        self.open_files.deinit();
-    }
-    
+
     pub fn extractWriter(self: *DirExtractWriter) ExtractWriter {
         return .{
             .ptr = self,
             .makeDirFn = makeDir,
-            .createFileFn = createFile,
+            .writeFileFn = writeFile,
         };
     }
-    
+
     fn makeDir(ptr: *anyopaque, path: []const u8) anyerror!void {
         const self = @as(*DirExtractWriter, @ptrCast(@alignCast(ptr)));
         try self.dir.makePath(path);
     }
-    
-    fn createFile(ptr: *anyopaque, path: []const u8) anyerror!std.io.AnyWriter {
+
+    fn writeFile(ptr: *anyopaque, path: []const u8, data: []const u8) anyerror!void {
         const self = @as(*DirExtractWriter, @ptrCast(@alignCast(ptr)));
-        
+
         // Create parent directories if needed
         if (std.fs.path.dirname(path)) |dir_name| {
             try self.dir.makePath(dir_name);
         }
-        
+
         const file = try self.dir.createFile(path, .{});
-        const wrapper = try self.allocator.create(FileWriterWrapper);
-        wrapper.* = .{ .file = file };
-        try self.open_files.append(wrapper);
-        
-        return wrapper.writer();
+        defer file.close();
+        try file.writeAll(data);
     }
 };
 
@@ -534,12 +504,18 @@ pub fn unbundleStream(
 
         switch (tar_file.kind) {
             .file => {
-                const writer = extract_writer.createFile(tar_file.name) catch {
-                    return error.FileCreateFailed;
-                };
+                // Read file content into buffer
+                const file_content = try allocator.alloc(u8, tar_file.size);
+                defer allocator.free(file_content);
 
-                // Copy file contents using writeAll
-                tar_file.writeAll(writer) catch {
+                const reader = tar_file.reader();
+                const bytes_read = try reader.readAll(file_content);
+                if (bytes_read != tar_file.size) {
+                    return error.UnexpectedEndOfStream;
+                }
+
+                // Write complete file
+                extract_writer.writeFile(tar_file.name, file_content) catch {
                     return error.FileWriteFailed;
                 };
             },
@@ -574,8 +550,7 @@ pub fn unbundle(
     const expected_hash = (try validateBase58Hash(allocator, base58_hash)) orelse {
         return error.InvalidFilename;
     };
-    
-    var dir_writer = DirExtractWriter.init(extract_dir, allocator);
-    defer dir_writer.deinit();
+
+    var dir_writer = DirExtractWriter.init(extract_dir);
     return unbundleStream(input_reader, dir_writer.extractWriter(), allocator, &expected_hash);
 }
