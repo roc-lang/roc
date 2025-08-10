@@ -6,7 +6,7 @@
 //!   dictionary-free .zst files even after we introduce the dictionary)
 //! - Changing dictionaries after you've started using one is a breaking change (there's an auto-generated
 //!   dictionary ID in the binary, so you know when you're trying to decode with a different dictionary than
-//!   the one that the binary was compresed with, and zstd will error), and each time we add new dictionaries
+//!   the one that the binary was compressed with, and zstd will error), and each time we add new dictionaries
 //!   in a nonbreaking way, we have to add +110KB to the `roc` binary, so we should avoid this and instead
 //!   only introduce a dictionary when we're confident we'll be happy with that being THE dictionary for a long time.
 //! - Compress/Decompress large binary blobs (e.g. for host data, or static List(U8) imports) separately
