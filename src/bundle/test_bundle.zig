@@ -1,5 +1,6 @@
 const std = @import("std");
 const bundle = @import("bundle.zig");
+const download = @import("download.zig");
 
 // Common FilePathIterator for tests
 const FilePathIterator = struct {
@@ -845,4 +846,66 @@ test "CLI unbundle with no args defaults to all .tar.zst files" {
     
     // Should find all 3 archives
     try testing.expectEqual(@as(usize, 3), found_archives.items.len);
+}
+
+test "download URL validation" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    
+    // Create a temp dir for testing (won't actually download)
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    
+    // Valid HTTPS URLs
+    {
+        const url = "https://example.com/path/to/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        _ = download.validateUrl(url) catch |err| {
+            try testing.expect(false); // Should not error
+            std.debug.print("Unexpected error: {}\n", .{err});
+        };
+    }
+    
+    // Valid localhost IP URL
+    {
+        const url = "http://127.0.0.1:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        _ = download.validateUrl(url) catch |err| {
+            try testing.expect(false); // Should not error
+            std.debug.print("Unexpected error: {}\n", .{err});
+        };
+    }
+    
+    // Invalid: localhost hostname
+    {
+        const url = "http://localhost:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        const result = download.validateUrl(url);
+        try testing.expectError(download.DownloadError.AttemptedLocalhost, result);
+    }
+    
+    // Invalid: HTTP (not localhost IP)
+    {
+        const url = "http://example.com/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        const result = download.validateUrl(url);
+        try testing.expectError(download.DownloadError.InvalidUrl, result);
+    }
+    
+    // Invalid: no hash in URL
+    {
+        const url = "https://example.com/path/to/";
+        const result = download.validateUrl(url);
+        try testing.expectError(download.DownloadError.NoHashInUrl, result);
+    }
+    
+    // Valid: hash without .tar.zst extension
+    {
+        const url = "https://example.com/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf";
+        const hash = try download.validateUrl(url);
+        try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", hash);
+    }
+    
+    // Valid: hash with .tar.zst extension
+    {
+        const url = "https://example.com/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        const hash = try download.validateUrl(url);
+        try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", hash);
+    }
 }

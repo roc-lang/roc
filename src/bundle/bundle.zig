@@ -342,29 +342,31 @@ pub fn bundle(
     return filename;
 }
 
-/// Unbundle files from a compressed tar archive.
+/// Validate a base58-encoded hash string and return the decoded hash.
+/// Returns null if the hash is invalid.
+pub fn validateBase58Hash(allocator: std.mem.Allocator, base58_hash: []const u8) !?[32]u8 {
+    const decoded = base58Decode(allocator, base58_hash) catch return null;
+    defer allocator.free(decoded);
+    
+    if (decoded.len != 32) {
+        return null;
+    }
+    
+    var hash: [32]u8 = undefined;
+    @memcpy(&hash, decoded);
+    return hash;
+}
+
+/// Unbundle files from a compressed tar archive stream.
 ///
-/// Extracts files to the provided directory, creating subdirectories as needed.
-/// The filename parameter should be the base58-encoded blake3 hash + .tar.zst extension.
-pub fn unbundle(
+/// This is the core streaming unbundle logic that can be used by both file-based
+/// unbundling and network-based downloading.
+pub fn unbundleStream(
     input_reader: anytype,
     extract_dir: std.fs.Dir,
     allocator: std.mem.Allocator,
-    filename: []const u8,
+    expected_hash: *const [32]u8,
 ) UnbundleError!void {
-    // Extract expected hash from filename
-    if (!std.mem.endsWith(u8, filename, ".tar.zst")) {
-        return error.InvalidFilename;
-    }
-    const base58_hash = filename[0 .. filename.len - 8]; // Remove .tar.zst
-    const expected_hash = base58Decode(allocator, base58_hash) catch {
-        return error.InvalidFilename;
-    };
-    defer allocator.free(expected_hash);
-
-    if (expected_hash.len != 32) {
-        return error.InvalidFilename;
-    }
     // Buffered reader for input
     var buffered_reader = std.io.bufferedReader(input_reader);
     const buffered = buffered_reader.reader();
@@ -480,4 +482,26 @@ pub fn unbundle(
             },
         }
     }
+}
+
+/// Unbundle files from a compressed tar archive.
+///
+/// Extracts files to the provided directory, creating subdirectories as needed.
+/// The filename parameter should be the base58-encoded blake3 hash + .tar.zst extension.
+pub fn unbundle(
+    input_reader: anytype,
+    extract_dir: std.fs.Dir,
+    allocator: std.mem.Allocator,
+    filename: []const u8,
+) UnbundleError!void {
+    // Extract expected hash from filename
+    if (!std.mem.endsWith(u8, filename, ".tar.zst")) {
+        return error.InvalidFilename;
+    }
+    const base58_hash = filename[0 .. filename.len - 8]; // Remove .tar.zst
+    const expected_hash = (try validateBase58Hash(allocator, base58_hash)) orelse {
+        return error.InvalidFilename;
+    };
+    
+    return unbundleStream(input_reader, extract_dir, allocator, &expected_hash);
 }
