@@ -151,7 +151,7 @@ pub fn findIdent(self: *const Self, text: []const u8) ?Ident.Idx {
 
 /// Retrieves the text of an identifier by its index.
 pub fn getIdent(self: *const Self, idx: Ident.Idx) []const u8 {
-    return self.getIdent(idx);
+    return self.idents.getText(idx);
 }
 
 /// Returns a const reference to the identifier store.
