@@ -1036,6 +1036,32 @@ pub fn extractReadRocFilePathShimLibrary(gpa: Allocator, output_path: []const u8
     try shim_file.writeAll(roc_shim_lib);
 }
 
+/// Format a path validation reason into a user-friendly error message
+fn formatPathValidationReason(reason: bundle.PathValidationReason) []const u8 {
+    return switch (reason) {
+        .empty_path => "Path cannot be empty",
+        .path_too_long => "Path exceeds maximum length of 255 characters",
+        .contains_nul => "Path contains NUL byte (\\0)",
+        .contains_backslash => "Path contains backslash (\\). Use forward slashes (/) for all paths",
+        .windows_reserved_char => |char| switch (char) {
+            ':' => "Path contains colon (:) which is reserved on Windows",
+            '*' => "Path contains asterisk (*) which is a wildcard on Windows",
+            '?' => "Path contains question mark (?) which is a wildcard on Windows",
+            '"' => "Path contains quote (\") which is reserved on Windows",
+            '<' => "Path contains less-than (<) which is reserved on Windows",
+            '>' => "Path contains greater-than (>) which is reserved on Windows",
+            '|' => "Path contains pipe (|) which is reserved on Windows",
+            else => "Path contains reserved character",
+        },
+        .absolute_path => "Absolute paths are not allowed",
+        .path_traversal => "Path traversal (..) is not allowed",
+        .current_directory_reference => "Current directory reference (.) is not allowed",
+        .windows_reserved_name => "Path contains Windows reserved device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)",
+        .component_ends_with_space => "Path components cannot end with space",
+        .component_ends_with_period => "Path components cannot end with period",
+    };
+}
+
 fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
@@ -1102,14 +1128,22 @@ fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
 
     // Bundle the files
     var allocator_copy = gpa;
-    const final_filename = try bundle.bundle(
+    var error_ctx: bundle.ErrorContext = undefined;
+    const final_filename = bundle.bundle(
         &iter,
         @intCast(args.compression_level),
         &allocator_copy,
         temp_file.writer(),
         cwd,
         null, // path_prefix parameter - null means no stripping
-    );
+        &error_ctx,
+    ) catch |err| {
+        if (err == error.InvalidPath) {
+            try stderr.print("Error: Invalid file path - {s}\n", .{formatPathValidationReason(error_ctx.reason)});
+            try stderr.print("Path: {s}\n", .{error_ctx.path});
+        }
+        return err;
+    };
     defer gpa.free(final_filename);
 
     // Get the compressed file size
@@ -1189,11 +1223,13 @@ fn rocUnbundle(gpa: Allocator, args: cli_args.UnbundleArgs) !void {
 
         // Unbundle the archive
         var allocator_copy2 = gpa;
+        var error_ctx: bundle.ErrorContext = undefined;
         bundle.unbundle(
             archive_file.reader(),
             output_dir,
             &allocator_copy2,
             basename,
+            &error_ctx,
         ) catch |err| {
             switch (err) {
                 error.HashMismatch => {
@@ -1202,6 +1238,12 @@ fn rocUnbundle(gpa: Allocator, args: cli_args.UnbundleArgs) !void {
                 },
                 error.InvalidFilename => {
                     try stderr.print("Error: Invalid filename format for {s}\n", .{archive_path});
+                    had_errors = true;
+                },
+                error.InvalidPath => {
+                    try stderr.print("Error: Invalid path in archive - {s}\n", .{formatPathValidationReason(error_ctx.reason)});
+                    try stderr.print("Path: {s}\n", .{error_ctx.path});
+                    try stderr.print("Archive: {s}\n", .{archive_path});
                     had_errors = true;
                 },
                 else => {

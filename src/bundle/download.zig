@@ -183,5 +183,5 @@ pub fn download(
 
     // Stream directly to unbundleStream
     var dir_writer = bundle.DirExtractWriter.init(extract_dir);
-    try bundle.unbundleStream(reader, dir_writer.extractWriter(), allocator, &expected_hash);
+    try bundle.unbundleStream(reader, dir_writer.extractWriter(), allocator, &expected_hash, null);
 }

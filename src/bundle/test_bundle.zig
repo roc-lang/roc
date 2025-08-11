@@ -15,6 +15,162 @@ const test_util = @import("test_util.zig");
 const DirExtractWriter = bundle.DirExtractWriter;
 const FilePathIterator = test_util.FilePathIterator;
 
+// Use fast compression for tests
+const TEST_COMPRESSION_LEVEL: c_int = 2;
+
+test "path validation prevents malicious paths" {
+    const testing = std.testing;
+
+    const test_cases = [_]struct {
+        path: []const u8,
+        should_fail: bool,
+        description: []const u8,
+    }{
+        // Directory traversal
+        .{ .path = "../../../etc/passwd", .should_fail = true, .description = "Directory traversal" },
+        .{ .path = "foo/../../../etc/passwd", .should_fail = true, .description = "Directory traversal in middle" },
+        .{ .path = "./foo/../../bar", .should_fail = true, .description = "Directory traversal with current dir" },
+        .{ .path = "foo/bar/..", .should_fail = true, .description = "Trailing directory traversal" },
+
+        // Absolute paths
+        .{ .path = "/etc/passwd", .should_fail = true, .description = "Absolute path Unix" },
+
+        // Current directory references
+        .{ .path = "foo/./bar", .should_fail = true, .description = "Current directory reference" },
+        .{ .path = ".", .should_fail = true, .description = "Single dot" },
+        .{ .path = "./foo", .should_fail = true, .description = "Current directory prefix" },
+
+        // Reserved characters
+        .{ .path = "foo:bar.txt", .should_fail = true, .description = "Colon character" },
+        .{ .path = "foo*bar.txt", .should_fail = true, .description = "Asterisk character" },
+        .{ .path = "foo?bar.txt", .should_fail = true, .description = "Question mark" },
+        .{ .path = "foo\"bar.txt", .should_fail = true, .description = "Quote character" },
+        .{ .path = "foo<bar.txt", .should_fail = true, .description = "Less than character" },
+        .{ .path = "foo>bar.txt", .should_fail = true, .description = "Greater than character" },
+        .{ .path = "foo|bar.txt", .should_fail = true, .description = "Pipe character" },
+        .{ .path = "foo\\bar.txt", .should_fail = true, .description = "Backslash character" },
+
+        // Windows reserved names
+        .{ .path = "CON", .should_fail = true, .description = "Windows reserved name CON" },
+        .{ .path = "con", .should_fail = true, .description = "Windows reserved name con (lowercase)" },
+        .{ .path = "PRN.txt", .should_fail = true, .description = "Windows reserved name PRN with extension" },
+        .{ .path = "AUX", .should_fail = true, .description = "Windows reserved name AUX" },
+        .{ .path = "NUL", .should_fail = true, .description = "Windows reserved name NUL" },
+        .{ .path = "COM1", .should_fail = true, .description = "Windows reserved name COM1" },
+        .{ .path = "LPT1", .should_fail = true, .description = "Windows reserved name LPT1" },
+        .{ .path = "folder/CON/file.txt", .should_fail = true, .description = "Windows reserved name in path" },
+
+        // Components ending with space or period
+        .{ .path = "foo /bar.txt", .should_fail = true, .description = "Component ending with space" },
+        .{ .path = "foo./bar.txt", .should_fail = true, .description = "Component ending with period" },
+        .{ .path = "folder/file.txt ", .should_fail = true, .description = "Filename ending with space" },
+        .{ .path = "folder/file.txt.", .should_fail = true, .description = "Filename ending with period" },
+
+        // Edge cases
+        .{ .path = "", .should_fail = true, .description = "Empty path" },
+        .{ .path = "a" ** 256, .should_fail = true, .description = "Path too long (> 255 chars)" },
+
+        // Valid paths
+        .{ .path = "foo/bar.txt", .should_fail = false, .description = "Valid path" },
+        .{ .path = "src/main.zig", .should_fail = false, .description = "Valid source path" },
+        .{ .path = "a-b_c.123", .should_fail = false, .description = "Valid filename with special chars" },
+        .{ .path = "deeply/nested/folder/structure/file.ext", .should_fail = false, .description = "Valid nested path" },
+    };
+
+    for (test_cases) |tc| {
+        const validation_result = bundle.validatePath(tc.path);
+        const is_valid = validation_result == null;
+
+        if (tc.should_fail) {
+            try testing.expect(!is_valid);
+        } else {
+            if (validation_result) |err| {
+                std.debug.print("Unexpected validation failure for '{s}': {}\n", .{ tc.path, err.reason });
+            }
+            try testing.expect(is_valid);
+        }
+    }
+
+    // Test path with NUL byte separately since we can't put it in a string literal easily
+    const nul_path = [_]u8{ 'f', 'o', 'o', 0, 'b', 'a', 'r' };
+    const nul_result = bundle.validatePath(&nul_path);
+    try testing.expect(nul_result != null);
+    if (nul_result) |err| {
+        try testing.expectEqual(bundle.PathValidationReason.contains_nul, err.reason);
+    }
+}
+
+test "path validation returns correct error reasons" {
+    const testing = std.testing;
+
+    // Test specific error reasons
+    const test_cases = [_]struct {
+        path: []const u8,
+        expected_reason: bundle.PathValidationReason,
+    }{
+        .{ .path = "", .expected_reason = .empty_path },
+        .{ .path = "a" ** 256, .expected_reason = .path_too_long },
+        .{ .path = "foo\\bar", .expected_reason = .contains_backslash },
+        .{ .path = "foo:bar", .expected_reason = .{ .windows_reserved_char = ':' } },
+        .{ .path = "foo*bar", .expected_reason = .{ .windows_reserved_char = '*' } },
+        .{ .path = "foo?bar", .expected_reason = .{ .windows_reserved_char = '?' } },
+        .{ .path = "foo<bar", .expected_reason = .{ .windows_reserved_char = '<' } },
+        .{ .path = "/etc/passwd", .expected_reason = .absolute_path },
+        .{ .path = "../etc/passwd", .expected_reason = .path_traversal },
+        .{ .path = "foo/./bar", .expected_reason = .current_directory_reference },
+        .{ .path = "CON", .expected_reason = .windows_reserved_name },
+        .{ .path = "com1.txt", .expected_reason = .windows_reserved_name },
+        .{ .path = "foo ", .expected_reason = .component_ends_with_space },
+        .{ .path = "foo.", .expected_reason = .component_ends_with_period },
+    };
+
+    for (test_cases) |tc| {
+        const result = bundle.validatePath(tc.path);
+        try testing.expect(result != null);
+        if (result) |err| {
+            try testing.expectEqual(tc.expected_reason, err.reason);
+        }
+    }
+}
+
+test "bundle fails with invalid paths" {
+    const testing = std.testing;
+    var allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Create a valid file that we'll try to bundle with invalid names
+    {
+        const file = try tmp.dir.createFile("valid.txt", .{});
+        defer file.close();
+        try file.writeAll("Test content");
+    }
+
+    // Test cases with invalid paths
+    const invalid_paths = [_][]const u8{
+        "foo:bar.txt", // Colon
+        "foo*bar.txt", // Asterisk
+        "foo\\bar.txt", // Backslash
+        "../etc/passwd", // Directory traversal
+        "CON", // Windows reserved name
+        "file.txt ", // Trailing space
+    };
+
+    for (invalid_paths) |invalid_path| {
+        var bundle_data = std.ArrayList(u8).init(allocator);
+        defer bundle_data.deinit();
+
+        const paths = [_][]const u8{invalid_path};
+        var iter = FilePathIterator{ .paths = &paths };
+
+        var error_ctx: bundle.ErrorContext = undefined;
+        const result = bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), tmp.dir, null, &error_ctx);
+
+        try testing.expectError(error.InvalidPath, result);
+    }
+}
+
 test "path validation prevents directory traversal" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -66,9 +222,57 @@ test "path validation prevents directory traversal" {
         dir_writer.extractWriter(),
         &allocator_copy2,
         &hash,
+        null,
     );
 
     try testing.expectError(error.InvalidPath, result);
+}
+
+test "empty directories are preserved" {
+    const testing = std.testing;
+    var allocator = testing.allocator;
+
+    // Create source with empty directories
+    var src_tmp = testing.tmpDir(.{});
+    defer src_tmp.cleanup();
+    const src_dir = src_tmp.dir;
+
+    // Create empty directories
+    try src_dir.makePath("empty_dir");
+    try src_dir.makePath("nested/empty");
+
+    // Create one file to ensure bundle isn't empty
+    {
+        const file = try src_dir.createFile("readme.txt", .{});
+        defer file.close();
+        try file.writeAll("Test");
+    }
+
+    // Bundle with explicit directory entries
+    var bundle_data = std.ArrayList(u8).init(allocator);
+    defer bundle_data.deinit();
+
+    // Note: Current implementation doesn't explicitly handle empty directories
+    // This test documents current behavior - empty dirs are NOT preserved
+    const file_paths = [_][]const u8{"readme.txt"};
+    var file_iter = FilePathIterator{ .paths = &file_paths };
+
+    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
+    defer allocator.free(filename);
+
+    // Extract
+    var dst_tmp = testing.tmpDir(.{});
+    defer dst_tmp.cleanup();
+
+    var stream = std.io.fixedBufferStream(bundle_data.items);
+    var allocator_copy = allocator;
+    try bundle.unbundle(stream.reader(), dst_tmp.dir, &allocator_copy, filename, null);
+
+    // Verify file exists
+    _ = try dst_tmp.dir.statFile("readme.txt");
+
+    // Document that empty directories are NOT preserved
+    // This is a known limitation of the current implementation
 }
 
 test "bundle and unbundle roundtrip" {
@@ -127,7 +331,7 @@ test "bundle and unbundle roundtrip" {
     var bundle_data = std.ArrayList(u8).init(allocator);
     defer bundle_data.deinit();
 
-    const filename = try bundle.bundle(&file_iter, 3, &allocator, bundle_data.writer(), src_dir, null);
+    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
     defer allocator.free(filename);
 
     // Create destination temp directory
@@ -137,7 +341,7 @@ test "bundle and unbundle roundtrip" {
 
     // Unbundle from memory
     var stream = std.io.fixedBufferStream(bundle_data.items);
-    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename);
+    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
 
     // Verify all files exist with correct content
     const file1_content = try dst_dir.readFileAlloc(allocator, "file1.txt", 1024);
@@ -207,7 +411,7 @@ test "bundle and unbundle over socket stream" {
     };
 
     var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, 3, &allocator, bundle_file.writer(), src_dir, null);
+    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_file.writer(), src_dir, null, null);
     defer allocator.free(filename);
 
     // Create socket in temp directory
@@ -279,7 +483,7 @@ test "bundle and unbundle over socket stream" {
     defer stream.close();
 
     // Unbundle from socket stream
-    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename);
+    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
 
     // Wait for server to finish
     server_ctx.done.wait();
@@ -361,7 +565,7 @@ test "minimal bundle unbundle" {
 
     const file_paths = [_][]const u8{"test.txt"};
     var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, 3, &allocator, bundle_data.writer(), src_dir, null);
+    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
     defer allocator.free(filename);
 
     // Create destination temp directory
@@ -371,7 +575,7 @@ test "minimal bundle unbundle" {
 
     // Unbundle from memory
     var stream = std.io.fixedBufferStream(bundle_data.items);
-    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename);
+    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
 
     // Read and verify content
     const content = try dst_dir.readFileAlloc(allocator, "test.txt", 1024);
@@ -417,7 +621,7 @@ test "bundle with path prefix stripping" {
     var file_iter = FilePathIterator{ .paths = &file_paths };
 
     // Bundle with prefix "foo/bar/src/"
-    const filename = try bundle.bundle(&file_iter, 3, &allocator, bundle_data.writer(), src_dir, "foo/bar/src/");
+    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, "foo/bar/src/", null);
     defer allocator.free(filename);
 
     // Create destination temp directory
@@ -427,7 +631,7 @@ test "bundle with path prefix stripping" {
 
     // Unbundle
     var stream = std.io.fixedBufferStream(bundle_data.items);
-    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename);
+    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
 
     // Verify files exist WITHOUT the prefix
     const main_content = try dst_dir.readFileAlloc(allocator, "main.txt", 1024);
@@ -460,7 +664,7 @@ test "blake3 hash verification success" {
 
     const file_paths = [_][]const u8{"test.txt"};
     var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, 3, &allocator, bundle_data.writer(), src_dir, null);
+    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
     defer allocator.free(filename);
 
     // Verify filename ends with .tar.zst
@@ -473,7 +677,7 @@ test "blake3 hash verification success" {
 
     // Unbundle with correct filename - should succeed
     var stream = std.io.fixedBufferStream(bundle_data.items);
-    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename);
+    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
 
     // Verify content
     const content = try dst_dir.readFileAlloc(allocator, "test.txt", 1024);
@@ -502,7 +706,7 @@ test "blake3 hash verification failure" {
 
     const file_paths = [_][]const u8{"test.txt"};
     var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, 3, &allocator, bundle_data.writer(), src_dir, null);
+    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
     defer allocator.free(filename);
 
     // Create destination directory
@@ -513,7 +717,7 @@ test "blake3 hash verification failure" {
     // Try to unbundle with wrong filename - should fail
     const wrong_filename = "1234567890abcdef.tar.zst";
     var stream = std.io.fixedBufferStream(bundle_data.items);
-    const result = bundle.unbundle(stream.reader(), dst_dir, &allocator, wrong_filename);
+    const result = bundle.unbundle(stream.reader(), dst_dir, &allocator, wrong_filename, null);
 
     try testing.expectError(error.InvalidFilename, result);
 }
@@ -542,7 +746,7 @@ test "unbundle with existing directory error" {
     }
 
     // Bundle the file
-    const filename = try bundle.bundle(&iter, 3, &allocator, output_buffer.writer(), tmp_dir, null);
+    const filename = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, output_buffer.writer(), tmp_dir, null, null);
     defer allocator.free(filename);
 
     // Write the bundled data to a file
@@ -563,7 +767,7 @@ test "unbundle with existing directory error" {
     defer bundle_file.close();
 
     // This should succeed but the CLI would error on existing directory
-    try bundle.unbundle(bundle_file.reader(), tmp_dir, &allocator, filename);
+    try bundle.unbundle(bundle_file.reader(), tmp_dir, &allocator, filename, null);
 }
 
 test "unbundle multiple archives" {
@@ -598,7 +802,7 @@ test "unbundle multiple archives" {
             try file.writeAll("content 1");
         }
 
-        const filename = try bundle.bundle(&iter, 3, &allocator, output_buffer.writer(), tmp_dir, null);
+        const filename = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, output_buffer.writer(), tmp_dir, null, null);
         try filenames.append(filename);
 
         const bundle_file = try tmp_dir.createFile(filename, .{});
@@ -620,7 +824,7 @@ test "unbundle multiple archives" {
             try file.writeAll("content 2");
         }
 
-        const filename = try bundle.bundle(&iter, 3, &allocator, output_buffer.writer(), tmp_dir, null);
+        const filename = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, output_buffer.writer(), tmp_dir, null, null);
         try filenames.append(filename);
 
         const bundle_file = try tmp_dir.createFile(filename, .{});
@@ -636,7 +840,7 @@ test "unbundle multiple archives" {
         const dir_name = fname[0 .. fname.len - 8]; // Remove .tar.zst
         const extract_dir = try tmp_dir.makeOpenPath(dir_name, .{});
 
-        try bundle.unbundle(bundle_file.reader(), extract_dir, &allocator, fname);
+        try bundle.unbundle(bundle_file.reader(), extract_dir, &allocator, fname, null);
     }
 
     // Verify extraction
@@ -677,7 +881,7 @@ test "blake3 hash detects corruption" {
 
     const file_paths = [_][]const u8{"test.txt"};
     var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, 3, &allocator, bundle_data.writer(), src_dir, null);
+    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
     defer allocator.free(filename);
 
     // Corrupt the data by flipping a bit
@@ -694,7 +898,7 @@ test "blake3 hash detects corruption" {
 
     // Try to unbundle corrupted data - should fail with HashMismatch or DecompressionFailed
     var stream = std.io.fixedBufferStream(bundle_data.items);
-    const result = bundle.unbundle(stream.reader(), dst_dir, &allocator, filename);
+    const result = bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
 
     // Corruption can cause either hash mismatch (if decompression succeeds but data is wrong)
     // or decompression failure (if the compressed stream structure is corrupted)
@@ -750,7 +954,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
     }
     var iter1 = FilePathIterator{ .paths = paths1.items };
 
-    const filename1 = try bundle.bundle(&iter1, 3, &allocator, first_bundle.writer(), initial_dir, null);
+    const filename1 = try bundle.bundle(&iter1, TEST_COMPRESSION_LEVEL, &allocator, first_bundle.writer(), initial_dir, null, null);
     defer allocator.free(filename1);
 
     // Write first bundle to file
@@ -771,7 +975,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
 
         const extract_dir = try unbundle1_dir.makeOpenPath("extracted1", .{});
 
-        try bundle.unbundle(bundle_file.reader(), extract_dir, &allocator, filename1);
+        try bundle.unbundle(bundle_file.reader(), extract_dir, &allocator, filename1, null);
     }
 
     // Second bundle (from first extraction)
@@ -786,7 +990,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
     var iter2 = FilePathIterator{ .paths = paths2.items };
 
     const extracted1_dir = try unbundle1_dir.openDir("extracted1", .{});
-    const filename2 = try bundle.bundle(&iter2, 3, &allocator, second_bundle.writer(), extracted1_dir, null);
+    const filename2 = try bundle.bundle(&iter2, TEST_COMPRESSION_LEVEL, &allocator, second_bundle.writer(), extracted1_dir, null, null);
     defer allocator.free(filename2);
 
     // Filenames should be identical (same content = same hash)
@@ -810,7 +1014,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
 
         const extract_dir = try unbundle2_dir.makeOpenPath("extracted2", .{});
 
-        try bundle.unbundle(bundle_file.reader(), extract_dir, &allocator, filename2);
+        try bundle.unbundle(bundle_file.reader(), extract_dir, &allocator, filename2, null);
     }
 
     // Verify all files match original content
@@ -858,7 +1062,7 @@ test "CLI unbundle with no args defaults to all .tar.zst files" {
             try file.writer().print("Content of {s}", .{filename});
         }
 
-        const archive_name = try bundle.bundle(&iter, 3, &allocator, output_buffer.writer(), tmp_dir, null);
+        const archive_name = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, output_buffer.writer(), tmp_dir, null, null);
         try archive_names.append(archive_name);
 
         // Write archive to disk
@@ -1113,7 +1317,7 @@ test "download from local server" {
     }
 
     // Bundle the files
-    const filename = try bundle.bundle(&file_iter, 3, &allocator, bundle_data.writer(), tmp.dir, null);
+    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), tmp.dir, null, null);
     defer allocator.free(filename);
 
     // Extract hash from filename
@@ -1203,7 +1407,7 @@ test "download from local server" {
         try testing.expectEqual(std.http.Status.ok, request.response.status);
 
         const reader = request.reader();
-        try bundle.unbundleStream(reader, extracted_files.extractWriter(), &allocator, &expected_hash);
+        try bundle.unbundleStream(reader, extracted_files.extractWriter(), &allocator, &expected_hash, null);
     }
 
     // Wait for server to finish

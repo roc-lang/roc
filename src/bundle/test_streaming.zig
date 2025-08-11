@@ -7,6 +7,9 @@ const c = @cImport({
     @cInclude("zstd.h");
 });
 
+// Use fast compression for tests
+const TEST_COMPRESSION_LEVEL: c_int = 2;
+
 test "simple streaming write" {
     var allocator = std.testing.allocator;
 
@@ -161,8 +164,8 @@ test "different compression levels" {
 
     const test_data = "This is test data that will be compressed at different levels!";
 
-    // Test compression levels 1 (fastest) to 9 (best ratio)
-    const levels = [_]c_int{ 1, 3, 6, 9 };
+    // Test compression levels 1 (fastest) to 22 (max compression)
+    const levels = [_]c_int{ 1, 6, 12, 22 };
     var sizes: [levels.len]usize = undefined;
 
     for (levels, 0..) |level, i| {
@@ -253,6 +256,7 @@ test "large file streaming extraction" {
         bundle_data.writer(),
         tmp.dir,
         null,
+        null,
     );
     defer allocator.free(filename);
 
@@ -263,7 +267,7 @@ test "large file streaming extraction" {
     // Unbundle - this should use streaming for the 2MB file
     var stream = std.io.fixedBufferStream(bundle_data.items);
     var allocator_copy2 = allocator;
-    try bundle.unbundle(stream.reader(), extract_dir, &allocator_copy2, filename);
+    try bundle.unbundle(stream.reader(), extract_dir, &allocator_copy2, filename, null);
 
     // Verify file was extracted correctly
     const stat = try extract_dir.statFile("large.bin");
