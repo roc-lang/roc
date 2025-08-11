@@ -1101,10 +1101,11 @@ fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     var iter = FilePathIterator{ .paths = file_paths.items };
 
     // Bundle the files
+    var allocator_copy = gpa;
     const final_filename = try bundle.bundle(
         &iter,
         @intCast(args.compression_level),
-        gpa,
+        &allocator_copy,
         temp_file.writer(),
         cwd,
         null, // path_prefix parameter - null means no stripping
@@ -1187,10 +1188,11 @@ fn rocUnbundle(gpa: Allocator, args: cli_args.UnbundleArgs) !void {
         defer archive_file.close();
 
         // Unbundle the archive
+        var allocator_copy2 = gpa;
         bundle.unbundle(
             archive_file.reader(),
             output_dir,
-            gpa,
+            &allocator_copy2,
             basename,
         ) catch |err| {
             switch (err) {

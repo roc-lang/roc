@@ -10,23 +10,70 @@
 const std = @import("std");
 const bundle = @import("bundle.zig");
 const download = @import("download.zig");
+const streaming_writer = @import("streaming_writer.zig");
+const test_util = @import("test_util.zig");
+const DirExtractWriter = bundle.DirExtractWriter;
+const FilePathIterator = test_util.FilePathIterator;
 
-// Common FilePathIterator for tests
-const FilePathIterator = struct {
-    paths: []const []const u8,
-    index: usize = 0,
+test "path validation prevents directory traversal" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
 
-    pub fn next(self: *FilePathIterator) !?[]const u8 {
-        if (self.index >= self.paths.len) return null;
-        const path = self.paths[self.index];
-        self.index += 1;
-        return path;
-    }
-};
+    // Create a malicious tar with directory traversal attempt
+    var malicious_tar = std.ArrayList(u8).init(allocator);
+    defer malicious_tar.deinit();
+
+    var tar_writer = std.tar.writer(malicious_tar.writer());
+
+    // Try to write a file with ".." in path
+    const Options = @TypeOf(tar_writer).Options;
+    const options = Options{
+        .mode = 0o644,
+        .mtime = 0,
+    };
+
+    try tar_writer.writeFileBytes("../../../etc/passwd", "malicious content", options);
+    try tar_writer.finish();
+
+    // Compress it
+    var compressed = std.ArrayList(u8).init(allocator);
+    defer compressed.deinit();
+
+    var allocator_copy = allocator;
+    var writer = try streaming_writer.CompressingHashWriter.init(
+        &allocator_copy,
+        3,
+        compressed.writer().any(),
+        bundle.allocForZstd,
+        bundle.freeForZstd,
+    );
+    defer writer.deinit();
+
+    try writer.writer().writeAll(malicious_tar.items);
+    try writer.finish();
+
+    const hash = writer.getHash();
+
+    // Try to extract - should fail with InvalidPath error
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var stream = std.io.fixedBufferStream(compressed.items);
+    var allocator_copy2 = allocator;
+    var dir_writer = DirExtractWriter.init(tmp.dir);
+    const result = bundle.unbundleStream(
+        stream.reader(),
+        dir_writer.extractWriter(),
+        &allocator_copy2,
+        &hash,
+    );
+
+    try testing.expectError(error.InvalidPath, result);
+}
 
 test "bundle and unbundle roundtrip" {
     const testing = std.testing;
-    const allocator = testing.allocator;
+    var allocator = testing.allocator;
 
     // Create source temp directory
     var src_tmp = testing.tmpDir(.{});
@@ -80,7 +127,7 @@ test "bundle and unbundle roundtrip" {
     var bundle_data = std.ArrayList(u8).init(allocator);
     defer bundle_data.deinit();
 
-    const filename = try bundle.bundle(&file_iter, 3, allocator, bundle_data.writer(), src_dir, null);
+    const filename = try bundle.bundle(&file_iter, 3, &allocator, bundle_data.writer(), src_dir, null);
     defer allocator.free(filename);
 
     // Create destination temp directory
@@ -90,7 +137,7 @@ test "bundle and unbundle roundtrip" {
 
     // Unbundle from memory
     var stream = std.io.fixedBufferStream(bundle_data.items);
-    try bundle.unbundle(stream.reader(), dst_dir, allocator, filename);
+    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename);
 
     // Verify all files exist with correct content
     const file1_content = try dst_dir.readFileAlloc(allocator, "file1.txt", 1024);
@@ -116,7 +163,7 @@ test "bundle and unbundle roundtrip" {
 
 test "bundle and unbundle over socket stream" {
     const testing = std.testing;
-    const allocator = testing.allocator;
+    var allocator = testing.allocator;
 
     // Skip on Windows as Unix sockets aren't supported
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
@@ -160,7 +207,7 @@ test "bundle and unbundle over socket stream" {
     };
 
     var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, 3, allocator, bundle_file.writer(), src_dir, null);
+    const filename = try bundle.bundle(&file_iter, 3, &allocator, bundle_file.writer(), src_dir, null);
     defer allocator.free(filename);
 
     // Create socket in temp directory
@@ -232,7 +279,7 @@ test "bundle and unbundle over socket stream" {
     defer stream.close();
 
     // Unbundle from socket stream
-    try bundle.unbundle(stream.reader(), dst_dir, allocator, filename);
+    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename);
 
     // Wait for server to finish
     server_ctx.done.wait();
@@ -294,7 +341,7 @@ test "std.tar.writer creates valid tar" {
 
 test "minimal bundle unbundle" {
     const testing = std.testing;
-    const allocator = testing.allocator;
+    var allocator = testing.allocator;
 
     // Create source temp directory
     var src_tmp = testing.tmpDir(.{});
@@ -314,7 +361,7 @@ test "minimal bundle unbundle" {
 
     const file_paths = [_][]const u8{"test.txt"};
     var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, 3, allocator, bundle_data.writer(), src_dir, null);
+    const filename = try bundle.bundle(&file_iter, 3, &allocator, bundle_data.writer(), src_dir, null);
     defer allocator.free(filename);
 
     // Create destination temp directory
@@ -324,7 +371,7 @@ test "minimal bundle unbundle" {
 
     // Unbundle from memory
     var stream = std.io.fixedBufferStream(bundle_data.items);
-    try bundle.unbundle(stream.reader(), dst_dir, allocator, filename);
+    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename);
 
     // Read and verify content
     const content = try dst_dir.readFileAlloc(allocator, "test.txt", 1024);
@@ -334,7 +381,7 @@ test "minimal bundle unbundle" {
 
 test "bundle with path prefix stripping" {
     const testing = std.testing;
-    const allocator = testing.allocator;
+    var allocator = testing.allocator;
 
     // Create source temp directory with nested structure
     var src_tmp = testing.tmpDir(.{});
@@ -370,7 +417,7 @@ test "bundle with path prefix stripping" {
     var file_iter = FilePathIterator{ .paths = &file_paths };
 
     // Bundle with prefix "foo/bar/src/"
-    const filename = try bundle.bundle(&file_iter, 3, allocator, bundle_data.writer(), src_dir, "foo/bar/src/");
+    const filename = try bundle.bundle(&file_iter, 3, &allocator, bundle_data.writer(), src_dir, "foo/bar/src/");
     defer allocator.free(filename);
 
     // Create destination temp directory
@@ -380,7 +427,7 @@ test "bundle with path prefix stripping" {
 
     // Unbundle
     var stream = std.io.fixedBufferStream(bundle_data.items);
-    try bundle.unbundle(stream.reader(), dst_dir, allocator, filename);
+    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename);
 
     // Verify files exist WITHOUT the prefix
     const main_content = try dst_dir.readFileAlloc(allocator, "main.txt", 1024);
@@ -394,7 +441,7 @@ test "bundle with path prefix stripping" {
 
 test "blake3 hash verification success" {
     const testing = std.testing;
-    const allocator = testing.allocator;
+    var allocator = testing.allocator;
 
     // Create a simple test file
     var src_tmp = testing.tmpDir(.{});
@@ -413,7 +460,7 @@ test "blake3 hash verification success" {
 
     const file_paths = [_][]const u8{"test.txt"};
     var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, 3, allocator, bundle_data.writer(), src_dir, null);
+    const filename = try bundle.bundle(&file_iter, 3, &allocator, bundle_data.writer(), src_dir, null);
     defer allocator.free(filename);
 
     // Verify filename ends with .tar.zst
@@ -426,7 +473,7 @@ test "blake3 hash verification success" {
 
     // Unbundle with correct filename - should succeed
     var stream = std.io.fixedBufferStream(bundle_data.items);
-    try bundle.unbundle(stream.reader(), dst_dir, allocator, filename);
+    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename);
 
     // Verify content
     const content = try dst_dir.readFileAlloc(allocator, "test.txt", 1024);
@@ -436,7 +483,7 @@ test "blake3 hash verification success" {
 
 test "blake3 hash verification failure" {
     const testing = std.testing;
-    const allocator = testing.allocator;
+    var allocator = testing.allocator;
 
     // Create a simple test file
     var src_tmp = testing.tmpDir(.{});
@@ -455,7 +502,7 @@ test "blake3 hash verification failure" {
 
     const file_paths = [_][]const u8{"test.txt"};
     var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, 3, allocator, bundle_data.writer(), src_dir, null);
+    const filename = try bundle.bundle(&file_iter, 3, &allocator, bundle_data.writer(), src_dir, null);
     defer allocator.free(filename);
 
     // Create destination directory
@@ -466,15 +513,14 @@ test "blake3 hash verification failure" {
     // Try to unbundle with wrong filename - should fail
     const wrong_filename = "1234567890abcdef.tar.zst";
     var stream = std.io.fixedBufferStream(bundle_data.items);
-    const result = bundle.unbundle(stream.reader(), dst_dir, allocator, wrong_filename);
+    const result = bundle.unbundle(stream.reader(), dst_dir, &allocator, wrong_filename);
 
     try testing.expectError(error.InvalidFilename, result);
 }
 
-
 test "unbundle with existing directory error" {
     const testing = std.testing;
-    const allocator = testing.allocator;
+    var allocator = testing.allocator;
 
     // Create temp directory
     var tmp = testing.tmpDir(.{});
@@ -496,7 +542,7 @@ test "unbundle with existing directory error" {
     }
 
     // Bundle the file
-    const filename = try bundle.bundle(&iter, 3, allocator, output_buffer.writer(), tmp_dir, null);
+    const filename = try bundle.bundle(&iter, 3, &allocator, output_buffer.writer(), tmp_dir, null);
     defer allocator.free(filename);
 
     // Write the bundled data to a file
@@ -517,12 +563,12 @@ test "unbundle with existing directory error" {
     defer bundle_file.close();
 
     // This should succeed but the CLI would error on existing directory
-    try bundle.unbundle(bundle_file.reader(), tmp_dir, allocator, filename);
+    try bundle.unbundle(bundle_file.reader(), tmp_dir, &allocator, filename);
 }
 
 test "unbundle multiple archives" {
     const testing = std.testing;
-    const allocator = testing.allocator;
+    var allocator = testing.allocator;
 
     // Create temp directory
     var tmp = testing.tmpDir(.{});
@@ -552,7 +598,7 @@ test "unbundle multiple archives" {
             try file.writeAll("content 1");
         }
 
-        const filename = try bundle.bundle(&iter, 3, allocator, output_buffer.writer(), tmp_dir, null);
+        const filename = try bundle.bundle(&iter, 3, &allocator, output_buffer.writer(), tmp_dir, null);
         try filenames.append(filename);
 
         const bundle_file = try tmp_dir.createFile(filename, .{});
@@ -574,7 +620,7 @@ test "unbundle multiple archives" {
             try file.writeAll("content 2");
         }
 
-        const filename = try bundle.bundle(&iter, 3, allocator, output_buffer.writer(), tmp_dir, null);
+        const filename = try bundle.bundle(&iter, 3, &allocator, output_buffer.writer(), tmp_dir, null);
         try filenames.append(filename);
 
         const bundle_file = try tmp_dir.createFile(filename, .{});
@@ -590,7 +636,7 @@ test "unbundle multiple archives" {
         const dir_name = fname[0 .. fname.len - 8]; // Remove .tar.zst
         const extract_dir = try tmp_dir.makeOpenPath(dir_name, .{});
 
-        try bundle.unbundle(bundle_file.reader(), extract_dir, allocator, fname);
+        try bundle.unbundle(bundle_file.reader(), extract_dir, &allocator, fname);
     }
 
     // Verify extraction
@@ -612,7 +658,7 @@ test "unbundle multiple archives" {
 
 test "blake3 hash detects corruption" {
     const testing = std.testing;
-    const allocator = testing.allocator;
+    var allocator = testing.allocator;
 
     // Create a test file
     var src_tmp = testing.tmpDir(.{});
@@ -631,7 +677,7 @@ test "blake3 hash detects corruption" {
 
     const file_paths = [_][]const u8{"test.txt"};
     var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, 3, allocator, bundle_data.writer(), src_dir, null);
+    const filename = try bundle.bundle(&file_iter, 3, &allocator, bundle_data.writer(), src_dir, null);
     defer allocator.free(filename);
 
     // Corrupt the data by flipping a bit
@@ -648,7 +694,7 @@ test "blake3 hash detects corruption" {
 
     // Try to unbundle corrupted data - should fail with HashMismatch or DecompressionFailed
     var stream = std.io.fixedBufferStream(bundle_data.items);
-    const result = bundle.unbundle(stream.reader(), dst_dir, allocator, filename);
+    const result = bundle.unbundle(stream.reader(), dst_dir, &allocator, filename);
 
     // Corruption can cause either hash mismatch (if decompression succeeds but data is wrong)
     // or decompression failure (if the compressed stream structure is corrupted)
@@ -656,8 +702,8 @@ test "blake3 hash detects corruption" {
         return error.TestUnexpectedResult;
     } else |err| {
         switch (err) {
-            error.HashMismatch, error.DecompressionFailed => {
-                // Either error is acceptable - corruption was detected
+            error.HashMismatch, error.DecompressionFailed, error.InvalidTarHeader => {
+                // Any of these errors are acceptable - corruption was detected
             },
             else => return err,
         }
@@ -666,7 +712,7 @@ test "blake3 hash detects corruption" {
 
 test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
     const testing = std.testing;
-    const allocator = testing.allocator;
+    var allocator = testing.allocator;
 
     // Create initial temp directory with test files
     var initial_tmp = testing.tmpDir(.{});
@@ -704,7 +750,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
     }
     var iter1 = FilePathIterator{ .paths = paths1.items };
 
-    const filename1 = try bundle.bundle(&iter1, 3, allocator, first_bundle.writer(), initial_dir, null);
+    const filename1 = try bundle.bundle(&iter1, 3, &allocator, first_bundle.writer(), initial_dir, null);
     defer allocator.free(filename1);
 
     // Write first bundle to file
@@ -725,7 +771,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
 
         const extract_dir = try unbundle1_dir.makeOpenPath("extracted1", .{});
 
-        try bundle.unbundle(bundle_file.reader(), extract_dir, allocator, filename1);
+        try bundle.unbundle(bundle_file.reader(), extract_dir, &allocator, filename1);
     }
 
     // Second bundle (from first extraction)
@@ -740,7 +786,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
     var iter2 = FilePathIterator{ .paths = paths2.items };
 
     const extracted1_dir = try unbundle1_dir.openDir("extracted1", .{});
-    const filename2 = try bundle.bundle(&iter2, 3, allocator, second_bundle.writer(), extracted1_dir, null);
+    const filename2 = try bundle.bundle(&iter2, 3, &allocator, second_bundle.writer(), extracted1_dir, null);
     defer allocator.free(filename2);
 
     // Filenames should be identical (same content = same hash)
@@ -764,7 +810,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
 
         const extract_dir = try unbundle2_dir.makeOpenPath("extracted2", .{});
 
-        try bundle.unbundle(bundle_file.reader(), extract_dir, allocator, filename2);
+        try bundle.unbundle(bundle_file.reader(), extract_dir, &allocator, filename2);
     }
 
     // Verify all files match original content
@@ -781,7 +827,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
 
 test "CLI unbundle with no args defaults to all .tar.zst files" {
     const testing = std.testing;
-    const allocator = testing.allocator;
+    var allocator = testing.allocator;
 
     // Create temp directory
     var tmp = testing.tmpDir(.{});
@@ -812,7 +858,7 @@ test "CLI unbundle with no args defaults to all .tar.zst files" {
             try file.writer().print("Content of {s}", .{filename});
         }
 
-        const archive_name = try bundle.bundle(&iter, 3, allocator, output_buffer.writer(), tmp_dir, null);
+        const archive_name = try bundle.bundle(&iter, 3, &allocator, output_buffer.writer(), tmp_dir, null);
         try archive_names.append(archive_name);
 
         // Write archive to disk
@@ -959,7 +1005,7 @@ const MemoryFileSystem = struct {
         return .{
             .ptr = self,
             .makeDirFn = makeDir,
-            .writeFileFn = writeFile,
+            .streamFileFn = streamFile,
         };
     }
 
@@ -970,7 +1016,7 @@ const MemoryFileSystem = struct {
         }
     }
 
-    fn writeFile(ptr: *anyopaque, path: []const u8, data: []const u8) anyerror!void {
+    fn streamFile(ptr: *anyopaque, path: []const u8, reader: std.io.AnyReader, size: usize) anyerror!void {
         const self = @as(*MemoryFileSystem, @ptrCast(@alignCast(ptr)));
 
         // Create parent directories if needed
@@ -980,8 +1026,31 @@ const MemoryFileSystem = struct {
             }
         }
 
+        // Create new file data
         var file_data = std.ArrayList(u8).init(self.allocator);
-        try file_data.appendSlice(data);
+
+        // Stream from reader
+        var buffer: [bundle.STREAM_BUFFER_SIZE]u8 = undefined;
+        var total_read: usize = 0;
+
+        while (total_read < size) {
+            const to_read = @min(buffer.len, size - total_read);
+            const bytes_read = try reader.read(buffer[0..to_read]);
+
+            if (bytes_read == 0) {
+                break;
+            }
+
+            try file_data.appendSlice(buffer[0..bytes_read]);
+            total_read += bytes_read;
+        }
+
+        if (total_read != size) {
+            file_data.deinit();
+            return error.UnexpectedEndOfStream;
+        }
+
+        // Store the file
         try self.files.put(try self.allocator.dupe(u8, path), file_data);
     }
 
@@ -993,7 +1062,7 @@ const MemoryFileSystem = struct {
 
 test "download from local server" {
     const testing = std.testing;
-    const allocator = testing.allocator;
+    var allocator = testing.allocator;
 
     // Create test files in memory
     var src_files = MemoryFileSystem.init(allocator);
@@ -1044,7 +1113,7 @@ test "download from local server" {
     }
 
     // Bundle the files
-    const filename = try bundle.bundle(&file_iter, 3, allocator, bundle_data.writer(), tmp.dir, null);
+    const filename = try bundle.bundle(&file_iter, 3, &allocator, bundle_data.writer(), tmp.dir, null);
     defer allocator.free(filename);
 
     // Extract hash from filename
@@ -1134,7 +1203,7 @@ test "download from local server" {
         try testing.expectEqual(std.http.Status.ok, request.response.status);
 
         const reader = request.reader();
-        try bundle.unbundleStream(reader, extracted_files.extractWriter(), allocator, &expected_hash);
+        try bundle.unbundleStream(reader, extracted_files.extractWriter(), &allocator, &expected_hash);
     }
 
     // Wait for server to finish

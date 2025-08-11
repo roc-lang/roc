@@ -16,6 +16,8 @@
 
 const std = @import("std");
 const base58 = @import("base58.zig");
+const streaming_writer = @import("streaming_writer.zig");
+const streaming_reader = @import("streaming_reader.zig");
 const c = @cImport({
     @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
     @cInclude("zstd.h");
@@ -24,9 +26,12 @@ const c = @cImport({
 // Constants for magic numbers
 const SIZE_STORAGE_BYTES: usize = 16; // Extra bytes for storing allocation size; use 16 to preserve alignment.
 const TAR_PATH_MAX_LENGTH: usize = 255; // Maximum path length for tar compatibility
+pub const STREAM_BUFFER_SIZE: usize = 64 * 1024; // 64KB buffer for streaming operations
+const TAR_EXTENSION = ".tar.zst";
+pub const DEFAULT_COMPRESSION_LEVEL: c_int = 22; // Maximum compression
 
 // zstd's C library does custom allocations using a slightly different format from Zig's allocator API.
-fn allocForZstd(opaque_ptr: ?*anyopaque, size: usize) callconv(.C) ?*anyopaque {
+pub fn allocForZstd(opaque_ptr: ?*anyopaque, size: usize) callconv(.C) ?*anyopaque {
     const allocator = @as(*std.mem.Allocator, @ptrCast(@alignCast(opaque_ptr.?)));
     // Allocate extra bytes to store the size
     const total_size = size + SIZE_STORAGE_BYTES;
@@ -40,7 +45,7 @@ fn allocForZstd(opaque_ptr: ?*anyopaque, size: usize) callconv(.C) ?*anyopaque {
     return @ptrFromInt(@intFromPtr(mem.ptr) + SIZE_STORAGE_BYTES);
 }
 
-fn freeForZstd(opaque_ptr: ?*anyopaque, address: ?*anyopaque) callconv(.C) void {
+pub fn freeForZstd(opaque_ptr: ?*anyopaque, address: ?*anyopaque) callconv(.C) void {
     if (address == null) return;
     const allocator = @as(*std.mem.Allocator, @ptrCast(@alignCast(opaque_ptr.?)));
 
@@ -58,7 +63,11 @@ fn freeForZstd(opaque_ptr: ?*anyopaque, address: ?*anyopaque) callconv(.C) void 
 /// Errors that can occur during the bundle operation.
 pub const BundleError = error{
     FilePathTooLong,
+    FileNotFound,
+    AccessDenied,
+    IsDir,
     FileOpenFailed,
+    SystemResources,
     FileStatFailed,
     FileReadFailed,
     FileTooLarge,
@@ -79,6 +88,7 @@ pub const UnbundleError = error{
     HashMismatch,
     InvalidFilename,
     FileTooLarge,
+    InvalidPath,
 } || std.mem.Allocator.Error;
 
 /// Bundle files into a compressed tar archive.
@@ -91,49 +101,53 @@ pub const UnbundleError = error{
 /// If path_prefix is provided, it will be stripped from the beginning of each file path
 /// before adding to the tar archive.
 ///
+/// Compression level should be between 1 (fastest) and 22 (best compression).
+/// Level 3 is a good default for speed/size tradeoff.
+///
 /// Returns the filename (base58-encoded blake3 hash + .tar.zst). Caller must free the returned string.
 pub fn bundle(
     file_path_iter: anytype,
     compression_level: c_int,
-    allocator: std.mem.Allocator,
+    allocator: *std.mem.Allocator,
     output_writer: anytype,
     base_dir: std.fs.Dir,
     path_prefix: ?[]const u8,
 ) BundleError![]u8 {
-    // First create the tar in memory
-    var tar_buffer = std.ArrayList(u8).init(allocator);
-    defer tar_buffer.deinit();
+    // Create a buffered writer for the output
+    var buffered_writer = std.io.bufferedWriter(output_writer);
+    const buffered = buffered_writer.writer();
 
-    // Create tar writer
-    var tar_writer = std.tar.writer(tar_buffer.writer());
+    // Create compressing hash writer that chains: tar → compress → hash → output
+    var compress_writer = streaming_writer.CompressingHashWriter.init(
+        allocator,
+        compression_level,
+        buffered.any(),
+        allocForZstd,
+        freeForZstd,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    defer compress_writer.deinit();
 
-    // Create reusable buffer for file contents
-    var file_buffer = std.ArrayList(u8).init(allocator);
-    defer file_buffer.deinit();
+    // Create tar writer that writes to the compressing writer
+    var tar_writer = std.tar.writer(compress_writer.writer());
 
-    // Write files to tar
+    // Process files one at a time
     while (try file_path_iter.next()) |file_path| {
-        const file = base_dir.openFile(file_path, .{}) catch {
-            return error.FileOpenFailed;
+        const file = base_dir.openFile(file_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return error.FileNotFound,
+            error.AccessDenied => return error.AccessDenied,
+            error.IsDir => return error.IsDir,
+            else => return error.FileOpenFailed,
         };
         defer file.close();
 
-        const stat = file.stat() catch {
-            return error.FileStatFailed;
+        const stat = file.stat() catch |err| switch (err) {
+            error.SystemResources => return error.SystemResources,
+            else => return error.FileStatFailed,
         };
 
-        // Reset buffer and ensure capacity
-        file_buffer.clearRetainingCapacity();
         const file_size = std.math.cast(usize, stat.size) orelse return error.FileTooLarge;
-        try file_buffer.ensureTotalCapacity(file_size);
-        file_buffer.items.len = file_size;
-
-        const bytes_read = file.readAll(file_buffer.items) catch {
-            return error.FileReadFailed;
-        };
-        if (bytes_read != file_size) {
-            return error.FileReadFailed;
-        }
 
         // Strip path prefix if provided
         const tar_path = if (path_prefix) |prefix| blk: {
@@ -148,14 +162,20 @@ pub fn bundle(
             return error.FilePathTooLong;
         }
 
-        // Use mtime of 0 for reproducible builds
+        // Write tar header and stream file content
         const Options = @TypeOf(tar_writer).Options;
         const options = Options{
             .mode = 0o644,
             .mtime = 0,
         };
-        tar_writer.writeFileBytes(tar_path, file_buffer.items[0..bytes_read], options) catch {
-            return error.TarWriteFailed;
+
+        // Create a reader for the file
+        const file_reader = file.reader();
+
+        // Stream the file to tar
+        tar_writer.writeFileStream(tar_path, file_size, file_reader, options) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.TarWriteFailed,
         };
     }
 
@@ -164,86 +184,27 @@ pub fn bundle(
         return error.TarWriteFailed;
     };
 
-    // Now compress the tar data and compute blake3 hash incrementally
-    var buffered_writer = std.io.bufferedWriter(output_writer);
-    const buffered = buffered_writer.writer();
-
-    // Initialize blake3 hasher
-    var hasher = std.crypto.hash.Blake3.init(.{});
-
-    // Create custom memory allocator for zstd
-    const custom_mem = c.ZSTD_customMem{
-        .customAlloc = allocForZstd,
-        .customFree = freeForZstd,
-        .@"opaque" = @ptrCast(@constCast(&allocator)),
+    // Finish compression
+    compress_writer.finish() catch |err| switch (err) {
+        error.CompressionFailed => return error.CompressionFailed,
+        error.WriteFailed => return error.WriteFailed,
+        error.AlreadyFinished => return error.CompressionFailed,
+        error.OutOfMemory => return error.OutOfMemory,
     };
-
-    const ctx = c.ZSTD_createCCtx_advanced(custom_mem) orelse return std.mem.Allocator.Error.OutOfMemory;
-    defer _ = c.ZSTD_freeCCtx(ctx);
-
-    _ = c.ZSTD_CCtx_setParameter(ctx, c.ZSTD_c_compressionLevel, compression_level);
-
-    const out_buffer_size = c.ZSTD_CStreamOutSize();
-    var out_buffer = try allocator.alloc(u8, out_buffer_size);
-    defer allocator.free(out_buffer);
-
-    // Compress the tar data
-    var in_buf = c.ZSTD_inBuffer{ .src = tar_buffer.items.ptr, .size = tar_buffer.items.len, .pos = 0 };
-    var out_buf = c.ZSTD_outBuffer{ .dst = out_buffer.ptr, .size = out_buffer.len, .pos = 0 };
-
-    // Compress all data
-    while (in_buf.pos < in_buf.size) {
-        const result = c.ZSTD_compressStream2(ctx, &out_buf, &in_buf, c.ZSTD_e_continue);
-        if (c.ZSTD_isError(result) != 0) {
-            return error.CompressionFailed;
-        }
-
-        if (out_buf.pos > 0) {
-            const chunk = out_buffer[0..out_buf.pos];
-            buffered.writeAll(chunk) catch {
-                return error.WriteFailed;
-            };
-            // Update hash with compressed data
-            hasher.update(chunk);
-            out_buf.pos = 0;
-        }
-    }
-
-    // Finalize compression
-    in_buf = c.ZSTD_inBuffer{ .src = "", .size = 0, .pos = 0 };
-    while (true) {
-        const remaining = c.ZSTD_compressStream2(ctx, &out_buf, &in_buf, c.ZSTD_e_end);
-        if (c.ZSTD_isError(remaining) != 0) {
-            return error.CompressionFailed;
-        }
-
-        if (out_buf.pos > 0) {
-            const chunk = out_buffer[0..out_buf.pos];
-            buffered.writeAll(chunk) catch {
-                return error.WriteFailed;
-            };
-            // Update hash with compressed data
-            hasher.update(chunk);
-            out_buf.pos = 0;
-        }
-
-        if (remaining == 0) break;
-    }
 
     buffered_writer.flush() catch {
         return error.FlushFailed;
     };
 
     // Get the blake3 hash and encode as base58
-    var hash: [32]u8 = undefined;
-    hasher.final(&hash);
+    const hash = compress_writer.getHash();
     var base58_buffer: [base58.base58_hash_bytes]u8 = undefined;
     const base58_encoded = base58.encode(&hash, &base58_buffer);
-    const base58_hash = try allocator.dupe(u8, base58_encoded);
-    defer allocator.free(base58_hash);
+    const base58_hash = try allocator.*.dupe(u8, base58_encoded);
+    defer allocator.*.free(base58_hash);
 
     // Create filename with .tar.zst extension
-    const filename = try std.fmt.allocPrint(allocator, "{s}.tar.zst", .{base58_hash});
+    const filename = try std.fmt.allocPrint(allocator.*, "{s}{s}", .{ base58_hash, TAR_EXTENSION });
     return filename;
 }
 
@@ -259,18 +220,40 @@ pub fn validateBase58Hash(base58_hash: []const u8) !?[32]u8 {
     return hash;
 }
 
+/// Validate a file path to prevent directory traversal attacks.
+/// Returns false if the path contains ".." components or absolute paths.
+fn isValidPath(path: []const u8) bool {
+    // Reject empty paths
+    if (path.len == 0) return false;
+
+    // Reject absolute paths
+    if (path[0] == '/' or (path.len >= 3 and path[1] == ':' and path[2] == '/')) {
+        return false;
+    }
+
+    // Check for ".." components
+    var it = std.mem.tokenizeAny(u8, path, "/\\");
+    while (it.next()) |component| {
+        if (std.mem.eql(u8, component, "..")) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 /// Writer interface for extracting files during unbundle
 pub const ExtractWriter = struct {
     ptr: *anyopaque,
     makeDirFn: *const fn (ptr: *anyopaque, path: []const u8) anyerror!void,
-    writeFileFn: *const fn (ptr: *anyopaque, path: []const u8, data: []const u8) anyerror!void,
+    streamFileFn: *const fn (ptr: *anyopaque, path: []const u8, reader: std.io.AnyReader, size: usize) anyerror!void,
 
     pub fn makeDir(self: ExtractWriter, path: []const u8) !void {
         return self.makeDirFn(self.ptr, path);
     }
 
-    pub fn writeFile(self: ExtractWriter, path: []const u8, data: []const u8) !void {
-        return self.writeFileFn(self.ptr, path, data);
+    pub fn streamFile(self: ExtractWriter, path: []const u8, reader: std.io.AnyReader, size: usize) !void {
+        return self.streamFileFn(self.ptr, path, reader, size);
     }
 };
 
@@ -286,7 +269,7 @@ pub const DirExtractWriter = struct {
         return .{
             .ptr = self,
             .makeDirFn = makeDir,
-            .writeFileFn = writeFile,
+            .streamFileFn = streamFile,
         };
     }
 
@@ -295,7 +278,7 @@ pub const DirExtractWriter = struct {
         try self.dir.makePath(path);
     }
 
-    fn writeFile(ptr: *anyopaque, path: []const u8, data: []const u8) anyerror!void {
+    fn streamFile(ptr: *anyopaque, path: []const u8, reader: std.io.AnyReader, size: usize) anyerror!void {
         const self = @as(*DirExtractWriter, @ptrCast(@alignCast(ptr)));
 
         // Create parent directories if needed
@@ -305,7 +288,26 @@ pub const DirExtractWriter = struct {
 
         const file = try self.dir.createFile(path, .{});
         defer file.close();
-        try file.writeAll(data);
+
+        // Stream from reader to file
+        var buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
+        var total_written: usize = 0;
+
+        while (total_written < size) {
+            const to_read = @min(buffer.len, size - total_written);
+            const bytes_read = try reader.read(buffer[0..to_read]);
+
+            if (bytes_read == 0) {
+                break;
+            }
+
+            try file.writeAll(buffer[0..bytes_read]);
+            total_written += bytes_read;
+        }
+
+        if (total_written != size) {
+            return error.UnexpectedEndOfStream;
+        }
     }
 };
 
@@ -316,110 +318,61 @@ pub const DirExtractWriter = struct {
 pub fn unbundleStream(
     input_reader: anytype,
     extract_writer: ExtractWriter,
-    allocator: std.mem.Allocator,
+    allocator: *std.mem.Allocator,
     expected_hash: *const [32]u8,
 ) UnbundleError!void {
     // Buffered reader for input
     var buffered_reader = std.io.bufferedReader(input_reader);
     const buffered = buffered_reader.reader();
 
-    // Initialize blake3 hasher to verify integrity
-    var hasher = std.crypto.hash.Blake3.init(.{});
-
-    // Create custom memory allocator for zstd
-    const custom_mem = c.ZSTD_customMem{
-        .customAlloc = allocForZstd,
-        .customFree = freeForZstd,
-        .@"opaque" = @ptrCast(@constCast(&allocator)),
+    // Create decompressing hash reader that chains: input → verify hash → decompress
+    var decompress_reader = streaming_reader.DecompressingHashReader.init(
+        allocator,
+        buffered.any(),
+        expected_hash.*,
+        allocForZstd,
+        freeForZstd,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
     };
-
-    const dctx = c.ZSTD_createDCtx_advanced(custom_mem) orelse return std.mem.Allocator.Error.OutOfMemory;
-    defer _ = c.ZSTD_freeDCtx(dctx);
-
-    // Read and decompress data in chunks
-    var decompressed_data = std.ArrayList(u8).init(allocator);
-    defer decompressed_data.deinit();
-
-    const in_buffer_size = c.ZSTD_DStreamInSize();
-    const out_buffer_size = c.ZSTD_DStreamOutSize();
-    const in_buffer = try allocator.alloc(u8, in_buffer_size);
-    defer allocator.free(in_buffer);
-    var out_buffer = try allocator.alloc(u8, out_buffer_size);
-    defer allocator.free(out_buffer);
-
-    // Decompress the entire stream
-    while (true) {
-        const bytes_read = buffered.read(in_buffer) catch {
-            return error.UnexpectedEndOfStream;
-        };
-        if (bytes_read == 0) break;
-
-        // Update hash with compressed data as we read it
-        hasher.update(in_buffer[0..bytes_read]);
-
-        var in_buf = c.ZSTD_inBuffer{ .src = in_buffer.ptr, .size = bytes_read, .pos = 0 };
-
-        while (in_buf.pos < in_buf.size) {
-            var out_buf = c.ZSTD_outBuffer{ .dst = out_buffer.ptr, .size = out_buffer.len, .pos = 0 };
-
-            const result = c.ZSTD_decompressStream(dctx, &out_buf, &in_buf);
-            if (c.ZSTD_isError(result) != 0) {
-                return error.DecompressionFailed;
-            }
-
-            if (out_buf.pos > 0) {
-                try decompressed_data.appendSlice(out_buffer[0..out_buf.pos]);
-            }
-        }
-    }
-
-    // Verify the hash
-    var actual_hash: [32]u8 = undefined;
-    hasher.final(&actual_hash);
-    if (!std.mem.eql(u8, &actual_hash, expected_hash)) {
-        return error.HashMismatch;
-    }
-
-    // Create a reader from the decompressed data
-    var decompressed_stream = std.io.fixedBufferStream(decompressed_data.items);
-    const tar_reader = decompressed_stream.reader();
+    defer decompress_reader.deinit();
 
     // Use std.tar to parse the archive; allocate MAX_LENGTH + 1 for null terminator
     var file_name_buffer: [TAR_PATH_MAX_LENGTH + 1]u8 = undefined;
     var link_name_buffer: [TAR_PATH_MAX_LENGTH + 1]u8 = undefined;
-    var tar_iter = std.tar.iterator(tar_reader, .{
+    var tar_iter = std.tar.iterator(decompress_reader.reader(), .{
         .file_name_buffer = &file_name_buffer,
         .link_name_buffer = &link_name_buffer,
     });
 
-    // Process each file in the archive
+    // Process each file in the archive - streaming directly from decompression
     while (true) {
         const file = tar_iter.next() catch |err| {
             if (err == error.EndOfStream) break;
-            // Some tar implementations add extra padding at the end
-            // If we've successfully extracted at least one file, treat other errors as end of archive
+            // Any other error means the tar archive is corrupted or malformed.
+            // We don't try to recover because partial extraction could leave
+            // the system in an inconsistent state.
             return error.InvalidTarHeader;
         };
 
         if (file == null) break;
         const tar_file = file.?;
 
+        // Validate path to prevent directory traversal
+        if (!isValidPath(tar_file.name)) {
+            return error.InvalidPath;
+        }
+
         switch (tar_file.kind) {
             .file => {
-                // Read file content into buffer
                 const tar_file_size = std.math.cast(usize, tar_file.size) orelse return error.FileTooLarge;
-                const file_content = try allocator.alloc(u8, tar_file_size);
-                defer allocator.free(file_content);
 
-                const reader = tar_file.reader();
-                const bytes_read = try reader.readAll(file_content);
-                if (bytes_read != tar_file_size) {
-                    return error.UnexpectedEndOfStream;
-                }
-
-                // Write complete file
-                extract_writer.writeFile(tar_file.name, file_content) catch {
-                    return error.FileWriteFailed;
+                // Stream file directly from tar to disk
+                extract_writer.streamFile(tar_file.name, tar_file.reader().any(), tar_file_size) catch |err| {
+                    switch (err) {
+                        error.UnexpectedEndOfStream => return error.UnexpectedEndOfStream,
+                        else => return error.FileWriteFailed,
+                    }
                 };
             },
             .directory => {
@@ -433,6 +386,14 @@ pub fn unbundleStream(
             },
         }
     }
+
+    // Ensure all data was read and hash was verified
+    decompress_reader.verifyComplete() catch |err| switch (err) {
+        error.HashMismatch => return error.HashMismatch,
+        error.UnexpectedEndOfStream => return error.UnexpectedEndOfStream,
+        error.DecompressionFailed => return error.DecompressionFailed,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
 }
 
 /// Unbundle files from a compressed tar archive.
@@ -442,14 +403,14 @@ pub fn unbundleStream(
 pub fn unbundle(
     input_reader: anytype,
     extract_dir: std.fs.Dir,
-    allocator: std.mem.Allocator,
+    allocator: *std.mem.Allocator,
     filename: []const u8,
 ) UnbundleError!void {
     // Extract expected hash from filename
-    if (!std.mem.endsWith(u8, filename, ".tar.zst")) {
+    if (!std.mem.endsWith(u8, filename, TAR_EXTENSION)) {
         return error.InvalidFilename;
     }
-    const base58_hash = filename[0 .. filename.len - 8]; // Remove .tar.zst
+    const base58_hash = filename[0 .. filename.len - TAR_EXTENSION.len]; // Remove .tar.zst
     const expected_hash = (try validateBase58Hash(base58_hash)) orelse {
         return error.InvalidFilename;
     };

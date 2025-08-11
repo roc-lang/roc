@@ -63,7 +63,7 @@ pub fn validateUrl(url: []const u8) DownloadError![]const u8 {
 /// - Have the base58-encoded blake3 hash as the last path segment
 /// - Point to a tar.zst file created with `roc bundle`
 pub fn download(
-    allocator: std.mem.Allocator,
+    allocator: *std.mem.Allocator,
     url: []const u8,
     extract_dir: std.fs.Dir,
 ) DownloadError!void {
@@ -76,7 +76,7 @@ pub fn download(
     };
 
     // Create HTTP client
-    var client = std.http.Client{ .allocator = allocator };
+    var client = std.http.Client{ .allocator = allocator.* };
     defer client.deinit();
 
     // Parse the URL
@@ -105,7 +105,7 @@ pub fn download(
 
             const port = uri.port orelse (if (std.mem.eql(u8, uri.scheme, "https")) HTTPS_DEFAULT_PORT else HTTP_DEFAULT_PORT);
 
-            const address_list = std.net.getAddressList(allocator, "localhost", port) catch {
+            const address_list = std.net.getAddressList(allocator.*, "localhost", port) catch {
                 return error.LocalhostWasNotLoopback;
             };
             defer address_list.deinit();
