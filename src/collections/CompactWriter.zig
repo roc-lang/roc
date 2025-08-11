@@ -8,7 +8,10 @@ const std = @import("std");
 
 const CompactWriter = @This();
 
-// Buffer alignment requirement for deserialization
+/// The alignment requirement for buffers used in deserialization.
+/// All serialized data must be aligned to this boundary to ensure proper
+/// memory access patterns and avoid alignment faults on architectures that
+/// require aligned memory access.
 pub const SERIALIZATION_ALIGNMENT = 16;
 
 const ZEROS: [16]u8 = [_]u8{0} ** 16;
@@ -205,6 +208,9 @@ pub fn appendSlice(
     return result;
 }
 
+/// Adds padding bytes to ensure the next write will be aligned to the specified boundary.
+/// This is critical for ensuring that serialized data structures maintain their required
+/// alignment when written to the output buffer.
 pub fn padToAlignment(self: *@This(), allocator: std.mem.Allocator, alignment: usize) std.mem.Allocator.Error!void {
     const padding_bytes_needed = std.mem.alignForward(usize, self.total_bytes, alignment) - self.total_bytes;
 

@@ -75,10 +75,14 @@ pub fn deinit(self: *TypeWriter) void {
     self.seen.deinit();
 }
 
+/// Returns the current contents of the type writer's buffer as a slice.
+/// This contains the formatted type representation built up by write operations.
 pub fn get(self: *const TypeWriter) []u8 {
     return self.buf.items[0..];
 }
 
+/// Writes a type variable to the buffer, formatting it as a human-readable string.
+/// This clears any existing content in the buffer before writing.
 pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
     self.buf.clearRetainingCapacity();
     self.next_name_index = 0;
@@ -758,6 +762,8 @@ fn writeFracType(self: *TypeWriter, prec: Num.Frac.Precision) std.mem.Allocator.
     };
 }
 
+/// Retrieves the text representation of an identifier by its index.
+/// This is used when formatting types that reference named identifiers.
 pub fn getIdent(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
     return self.idents.getText(idx);
 }

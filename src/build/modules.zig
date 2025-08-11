@@ -5,11 +5,13 @@ const Step = Build.Step;
 const OptimizeMode = std.builtin.OptimizeMode;
 const ResolvedTarget = std.Build.ResolvedTarget;
 
+/// Represents a test module with its compilation and execution steps.
 pub const ModuleTest = struct {
     test_step: *Step.Compile,
     run_step: *Step.Run,
 };
 
+/// Enumerates the different modules in the Roc compiler codebase.
 pub const ModuleType = enum {
     collections,
     base,

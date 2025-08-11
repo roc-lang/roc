@@ -21,6 +21,8 @@ pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuil
 pub const ExposedItems = @import("ExposedItems.zig").ExposedItems;
 pub const CompactWriter = @import("CompactWriter.zig");
 
+/// Re-exported alignment constant from CompactWriter for convenience.
+/// This alignment is required for all serialization buffers to ensure proper memory access.
 pub const SERIALIZATION_ALIGNMENT = CompactWriter.SERIALIZATION_ALIGNMENT;
 
 /// A range that must have at least one element

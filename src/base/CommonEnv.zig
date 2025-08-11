@@ -1,3 +1,9 @@
+//! CommonEnv provides shared environment state that is common across all modules.
+//! This includes identifier and string literal interning, exposed items tracking,
+//! source code management, and diagnostic information like line start positions.
+//! It serves as a central repository for data that needs to be accessed across
+//! different phases of compilation.
+
 const std = @import("std");
 const builtin = @import("builtin");
 const collections = @import("collections");
@@ -77,6 +83,8 @@ pub fn serialize(
     return @constCast(offset_self);
 }
 
+/// Freezes the identifier and string interners, preventing further modifications.
+/// This is used to ensure thread safety when sharing the environment across threads.
 pub fn freezeInterners(self: *Self) void {
     self.idents.freeze();
     self.strings.freeze();
@@ -131,42 +139,52 @@ pub const Serialized = struct {
     }
 };
 
+/// Inserts an identifier into the store and returns its index.
 pub fn insertIdent(self: *Self, gpa: std.mem.Allocator, ident: Ident) std.mem.Allocator.Error!Ident.Idx {
     return try self.idents.insert(gpa, ident);
 }
 
+/// Searches for an identifier by its text content, returning its index if found.
 pub fn findIdent(self: *const Self, text: []const u8) ?Ident.Idx {
     return self.idents.findByString(text);
 }
 
+/// Retrieves the text of an identifier by its index.
 pub fn getIdent(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.getIdent(idx);
 }
 
+/// Returns a const reference to the identifier store.
 pub fn getIdentStore(self: *const Self) *const Ident.Store {
     return &self.idents;
 }
 
+/// Inserts a string literal into the store and returns its index.
 pub fn insertString(self: *Self, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!StringLiteral.Idx {
     return try self.strings.insert(gpa, string);
 }
 
+/// Retrieves a string literal by its index.
 pub fn getString(self: *const Self, idx: StringLiteral.Idx) []const u8 {
     return self.strings.get(idx);
 }
 
+/// Returns a mutable reference to the string literal store.
 pub fn getStringStore(self: *Self) *StringLiteral.Store {
     return &self.strings;
 }
 
+/// Adds an identifier to the exposed items list by its index.
 pub fn addExposedById(self: *Self, gpa: std.mem.Allocator, ident_idx: Ident.Idx) !void {
     return try self.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
 }
 
+/// Retrieves the node index associated with an exposed identifier.
 pub fn getNodeIndexById(self: *const Self, allocator: std.mem.Allocator, ident_idx: Ident.Idx) ?u16 {
     return self.exposed_items.getNodeIndexById(allocator, @bitCast(ident_idx));
 }
 
+/// Associates a node index with an exposed identifier.
 pub fn setNodeIndexById(self: *Self, gpa: std.mem.Allocator, ident_idx: Ident.Idx, node_idx: u16) !void {
     return try self.exposed_items.setNodeIndexById(gpa, @bitCast(ident_idx), node_idx);
 }
@@ -209,6 +227,7 @@ pub fn calcRegionInfo(self: *const Self, region: Region) RegionInfo {
     return info;
 }
 
+/// Returns the entire source code content.
 pub fn getSourceAll(self: *const Self) []const u8 {
     return self.source;
 }
@@ -238,6 +257,7 @@ pub fn calcLineStarts(self: *Self, gpa: std.mem.Allocator) !void {
     }
 }
 
+/// Returns all line start positions for source code position mapping.
 pub fn getLineStartsAll(self: *const Self) []const u32 {
     return self.line_starts.items.items;
 }

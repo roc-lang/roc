@@ -1140,18 +1140,22 @@ pub fn varFrom(idx: anytype) TypeVar {
     return @enumFromInt(@intFromEnum(idx));
 }
 
+/// Adds an identifier to the list of exposed items by its identifier index.
 pub fn addExposedById(self: *Self, ident_idx: Ident.Idx) !void {
     return try self.common.exposed_items.addExposedById(self.gpa, @bitCast(ident_idx));
 }
 
+/// Associates a node index with an exposed identifier.
 pub fn setExposedNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u16) !void {
     return try self.common.exposed_items.setNodeIndexById(self.gpa, @bitCast(ident_idx), node_idx);
 }
 
+/// Retrieves the node index associated with an exposed identifier, if any.
 pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u16 {
     return self.common.getNodeIndexById(self.gpa, ident_idx);
 }
 
+/// Checks whether the given identifier is exposed by this module.
 pub fn containsExposedById(self: *const Self, ident_idx: Ident.Idx) bool {
     return self.common.exposed_items.containsById(self.gpa, @bitCast(ident_idx));
 }
@@ -1790,18 +1794,22 @@ fn pushExprTypesToSExprTree(self: *Self, expr_idx: CIR.Expr.Idx, tree: *SExprTre
     try tree.endNode(expr_begin, tree.beginNode());
 }
 
+/// Retrieves a string literal by its index from the common environment.
 pub fn getString(self: *const Self, idx: StringLiteral.Idx) []const u8 {
     return self.common.getString(idx);
 }
 
+/// Inserts a string literal into the common environment and returns its index.
 pub fn insertString(self: *Self, string: []const u8) std.mem.Allocator.Error!StringLiteral.Idx {
     return try self.common.insertString(self.gpa, string);
 }
 
+/// Returns a mutable reference to the identifier store.
 pub fn getIdentStore(self: *Self) *Ident.Store {
     return &self.common.idents;
 }
 
+/// Retrieves the text of an identifier by its index.
 pub fn getIdent(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.common.getIdent(idx);
 }
@@ -1828,10 +1836,13 @@ pub fn initTypeWriter(self: *Self) std.mem.Allocator.Error!TypeWriter {
     return TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore());
 }
 
+/// Inserts an identifier into the common environment and returns its index.
 pub fn insertIdent(self: *Self, ident: Ident) std.mem.Allocator.Error!Ident.Idx {
     return try self.common.insertIdent(self.gpa, ident);
 }
 
+/// Returns the line start positions for source code position mapping.
+/// Each element represents the byte offset where a new line begins.
 pub fn getLineStarts(self: *const Self) []const u32 {
     return self.common.getLineStartsAll();
 }
