@@ -10,17 +10,18 @@
 
 const std = @import("std");
 const parse = @import("parse");
-const cache = @import("cache");
+const can = @import("can");
 const builtin = @import("builtin");
 const reporting = @import("reporting");
 
 const Report = reporting.Report;
 const Mode = @import("compile_package.zig").Mode;
 const Allocator = std.mem.Allocator;
-const ModuleEnv = @import("ModuleEnv.zig");
+const ModuleEnv = can.ModuleEnv;
 const PackageEnv = @import("compile_package.zig").PackageEnv;
 const ModuleTimingInfo = @import("compile_package.zig").TimingInfo;
 const ImportResolver = @import("compile_package.zig").ImportResolver;
+const CacheManager = @import("cache_manager.zig").CacheManager;
 
 // Threading features aren't available when targeting WebAssembly,
 // so we disable them at comptime to prevent builds from failing.
@@ -239,7 +240,7 @@ const GlobalQueue = struct {
                                     };
                                     defer be.gpa.free(source);
 
-                                    const cache_key = cache.CacheManager.generateCacheKey(source, "roc-zig-dev");
+                                    const cache_key = CacheManager.generateCacheKey(source, "roc-zig-dev");
                                     // For now, just pass 0 for error and warning counts
                                     // TODO: Extract actual error/warning counts from reports
                                     const error_count: u32 = 0;
@@ -349,7 +350,7 @@ pub const BuildEnv = struct {
     global_queue: GlobalQueue,
 
     // Cache manager for compiled modules
-    cache_manager: ?*cache.CacheManager = null,
+    cache_manager: ?*CacheManager = null,
 
     // Owned resolver ctx pointers for cleanup (typed)
     resolver_ctxs: std.ArrayList(*ResolverCtx),
@@ -424,7 +425,7 @@ pub const BuildEnv = struct {
     }
 
     /// Set the cache manager for this build environment
-    pub fn setCacheManager(self: *BuildEnv, cache_manager: *cache.CacheManager) void {
+    pub fn setCacheManager(self: *BuildEnv, cache_manager: *CacheManager) void {
         self.cache_manager = cache_manager;
     }
 

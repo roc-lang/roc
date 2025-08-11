@@ -24,12 +24,10 @@ const std = @import("std");
 const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
+const builtins = @import("builtins");
 
 const ModuleEnv = @import("ModuleEnv.zig");
-const Diagnostic = @import("Diagnostic.zig");
-const Pattern = @import("Pattern.zig");
-const Statement = @import("Statement.zig");
-const ExternalDecl = @import("ExternalDecl.zig");
+const CIR = @import("CIR.zig");
 
 const StringLiteral = base.StringLiteral;
 const Region = base.Region;
@@ -38,12 +36,8 @@ const CalledVia = base.CalledVia;
 const Ident = base.Ident;
 const SExprTree = base.SExprTree;
 const SExpr = base.SExpr;
-const IntValue = ModuleEnv.IntValue;
-const RocDec = ModuleEnv.RocDec;
+const RocDec = builtins.dec.RocDec;
 const TypeVar = types.Var;
-const If = ModuleEnv.If;
-const RecordField = ModuleEnv.RecordField;
-
 
 const Self = Expr;
 
@@ -59,7 +53,7 @@ pub const Expr = union(enum) {
     /// 0b1010      # Binary integer
     /// ```
     e_int: struct {
-        value: IntValue,
+        value: CIR.IntValue,
     },
     /// A 32-bit floating-point literal.
     e_frac_f32: struct {
@@ -116,7 +110,7 @@ pub const Expr = union(enum) {
     /// bar = foo + 1 # the "foo" here references the local "foo"
     /// ```
     e_lookup_local: struct {
-        pattern_idx: Pattern.Idx,
+        pattern_idx: CIR.Pattern.Idx,
     },
     /// Lookup defined in another module
     /// ```roc
@@ -124,7 +118,7 @@ pub const Expr = union(enum) {
     /// foo = Utf8.encode("hello") # "Utf8.encode" is defined in another module
     /// ```
     e_lookup_external: struct {
-        module_idx: ModuleEnv.Import.Idx,
+        module_idx: CIR.Import.Idx,
         target_node_idx: u16,
         region: Region,
     },
@@ -181,7 +175,7 @@ pub const Expr = union(enum) {
     /// { ..config, debug: True }  # Record update syntax
     /// ```
     e_record: struct {
-        fields: RecordField.Span,
+        fields: CIR.RecordField.Span,
         ext: ?Expr.Idx,
     },
     /// Empty record constant
@@ -199,7 +193,7 @@ pub const Expr = union(enum) {
     /// ```
     e_block: struct {
         /// Statements executed in sequence
-        stmts: Statement.Span,
+        stmts: CIR.Statement.Span,
         /// Final expression that produces the block's value
         final_expr: Expr.Idx,
     },
@@ -226,7 +220,7 @@ pub const Expr = union(enum) {
     /// Point.(1.0)                # Values
     /// ```
     e_nominal: struct {
-        nominal_type_decl: Statement.Idx,
+        nominal_type_decl: CIR.Statement.Idx,
         backing_expr: Expr.Idx,
         backing_type: NominalBackingType,
     },
@@ -239,7 +233,7 @@ pub const Expr = union(enum) {
     /// OtherModule.Point.(1.0)                # Values
     /// ```
     e_nominal_external: struct {
-        module_idx: ModuleEnv.Import.Idx,
+        module_idx: CIR.Import.Idx,
         target_node_idx: u16,
         backing_expr: Expr.Idx,
         backing_type: NominalBackingType,
@@ -318,7 +312,7 @@ pub const Expr = union(enum) {
     /// nums = [1, 2, "hello"]  # mixing numbers and strings
     /// ```
     e_runtime_error: struct {
-        diagnostic: Diagnostic.Idx,
+        diagnostic: CIR.Diagnostic.Idx,
     },
     /// A crash expression that terminates execution with a message.
     /// This expression never returns and causes the program to crash at runtime.
@@ -389,7 +383,7 @@ pub const Expr = union(enum) {
     /// A pure lambda expression, with no captures. This represents the
     /// function's code before it's closed over.
     pub const Lambda = struct {
-        args: Pattern.Span,
+        args: CIR.Pattern.Span,
         body: Expr.Idx,
     };
 
@@ -1124,7 +1118,7 @@ pub const Expr = union(enum) {
         /// }
         /// ```
         pub const BranchPattern = struct {
-            pattern: Pattern.Idx,
+            pattern: CIR.Pattern.Idx,
             /// Degenerate branch patterns are those that don't fully bind symbols that the branch body
             /// needs. For example, in `A x | B y -> x`, the `B y` pattern is degenerate.
             /// Degenerate patterns emit a runtime error if reached in a program.
@@ -1161,7 +1155,7 @@ pub const Expr = union(enum) {
     /// Represents a variable captured by a lambda
     pub const Capture = struct {
         name: base.Ident.Idx,
-        pattern_idx: Pattern.Idx,
+        pattern_idx: CIR.Pattern.Idx,
         scope_depth: u32,
 
         pub const Idx = enum(u32) { _ };

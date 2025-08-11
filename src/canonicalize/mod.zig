@@ -4,8 +4,10 @@ const std = @import("std");
 
 /// The canonicalizer (the thing that canonicalizes the AST).
 pub const Can = @import("Can.zig");
-// The Canonical Intermediate Representation (CIR)
+/// The Canonical Intermediate Representation (CIR)
 pub const CIR = @import("CIR.zig");
+/// The Module Environment after canonicalization (used also for type checking and serialization)
+pub const ModuleEnv = @import("ModuleEnv.zig");
 
 test "compile tests" {
     std.testing.refAllDecls(@import("Can.zig"));

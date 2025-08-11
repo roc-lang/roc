@@ -16,12 +16,13 @@
 const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
-const Can = @import("can").Can;
+const can = @import("can");
 const Check = @import("check").Check;
 const reporting = @import("reporting");
 
+const Can = can.Can;
 const Report = reporting.Report;
-const ModuleEnv = @import("ModuleEnv.zig");
+const ModuleEnv = can.ModuleEnv;
 const problem = Check.problem;
 
 /// Timing information for different phases
@@ -506,9 +507,9 @@ pub const PackageEnv = struct {
 
         // canonicalize using the AST
         const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var can = try Can.init(&env, &parse_ast, null);
-        try can.canonicalizeFile();
-        can.deinit();
+        var czer = try Can.init(&env, &parse_ast, null);
+        try czer.canonicalizeFile();
+        czer.deinit();
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {
             self.total_canonicalize_ns += @intCast(canon_end - canon_start);

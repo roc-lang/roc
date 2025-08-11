@@ -30,7 +30,7 @@ const DataSpan = base.DataSpan;
 const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
-const RocDec = builtins.RocDec;
+const RocDec = builtins.dec.RocDec;
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
@@ -86,7 +86,7 @@ pub const Pattern = union(enum) {
     /// MyModule.Point.(1.0)                # Values
     /// ```
     nominal_external: struct {
-        module_idx: ModuleEnv.Import.Idx,
+        module_idx: CIR.Import.Idx,
         target_node_idx: u16,
         backing_pattern: Pattern.Idx,
         backing_type: CIR.Expr.NominalBackingType,
@@ -229,7 +229,7 @@ pub const Pattern = union(enum) {
     underscore: void,
     /// Compiles, but will crash if reached
     runtime_error: struct {
-        diagnostic: Diagnostic.Idx,
+        diagnostic: CIR.Diagnostic.Idx,
     },
 
     pub const Idx = enum(u32) { _ };

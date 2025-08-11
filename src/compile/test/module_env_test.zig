@@ -1,12 +1,13 @@
 //! Tests for ModuleEnv
 const std = @import("std");
 const base = @import("base");
+const can = @import("can");
 const collections = @import("collections");
 
-const ModuleEnv = @import("../ModuleEnv.zig");
+const ModuleEnv = can.ModuleEnv;
 const CompactWriter = collections.CompactWriter;
 const Ident = base.Ident;
-const Expr = @import("../Expression.zig").Expr;
+const Expr = can.CIR.Expr;
 
 test "ModuleEnv.Serialized roundtrip" {
     const testing = std.testing;

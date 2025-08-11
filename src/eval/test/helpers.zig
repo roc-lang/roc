@@ -4,7 +4,7 @@ const parse = @import("parse");
 const types = @import("types");
 const base = @import("base");
 const compile = @import("compile");
-const Can = @import("can");
+const can = @import("can");
 const Check = @import("check").Check;
 
 const eval = @import("../interpreter.zig");
@@ -14,7 +14,9 @@ const layout_store = @import("../../layout/store.zig");
 const layout = @import("../../layout/layout.zig");
 const builtins = @import("builtins");
 
-const ModuleEnv = compile.ModuleEnv;
+const Can = can.Can;
+const CIR = can.CIR;
+const ModuleEnv = can.ModuleEnv;
 const Layout = layout.Layout;
 const Closure = eval.Closure;
 const testing = std.testing;
@@ -358,12 +360,12 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Create czer
     //
-    const can = try allocator.create(Can);
-    can.* = try Can.init(module_env, parse_ast, null);
+    const czer = try allocator.create(Can);
+    czer.* = try Can.init(module_env, parse_ast, null);
 
     // Canonicalize the expression
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
+    const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx) orelse {
         // If canonicalization fails, create a runtime error
         const diagnostic_idx = try module_env.store.addDiagnostic(.{ .not_implemented = .{
             .feature = try module_env.insertString(allocator, "canonicalization failed"),

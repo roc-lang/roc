@@ -26,6 +26,7 @@ pub const Expr = @import("Expression.zig").Expr;
 pub const Pattern = @import("Pattern.zig").Pattern;
 pub const Statement = @import("Statement.zig").Statement;
 pub const TypeAnno = @import("TypeAnnotation.zig").TypeAnno;
+pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
 // Type definitions for module compilation
 
@@ -142,7 +143,7 @@ pub const WhereClause = union(enum) {
         external_decl: ExternalDecl.Idx,
     },
     malformed: struct {
-        diagnostic: ModuleEnv.Diagnostic.Idx,
+        diagnostic: Diagnostic.Idx,
     },
 
     pub fn pushToSExprTree(self: *const WhereClause, cir: anytype, tree: anytype, idx: WhereClause.Idx) !void {
@@ -305,9 +306,6 @@ pub fn fromF64(f: f64) ?RocDec {
     const scaled = @as(i128, @intFromFloat(f * 1_000_000_000_000_000_000.0));
     return RocDec{ .num = scaled };
 }
-
-// Diagnostic types for compilation errors
-pub const Diagnostic = @import("Diagnostic.zig");
 
 /// Represents an import statement in a module
 pub const Import = struct {

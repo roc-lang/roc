@@ -3,7 +3,8 @@
 const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
-const ModuleEnv = @import("ModuleEnv.zig");
+
+const CIR = @import("CIR.zig");
 
 const Ident = base.Ident;
 
@@ -21,7 +22,7 @@ module_aliases: std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
 /// Maps exposed item names to their source modules and original names (for import resolution)
 exposed_items: std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
 /// Maps module names to their Import.Idx for modules imported in this scope
-imported_modules: std.StringHashMapUnmanaged(ModuleEnv.Import.Idx),
+imported_modules: std.StringHashMapUnmanaged(CIR.Import.Idx),
 is_function_boundary: bool,
 
 /// Initialize the scope
@@ -33,7 +34,7 @@ pub fn init(is_function_boundary: bool) Scope {
         .type_vars = std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx){},
         .module_aliases = std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx){},
         .exposed_items = std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo){},
-        .imported_modules = std.StringHashMapUnmanaged(ModuleEnv.Import.Idx){},
+        .imported_modules = std.StringHashMapUnmanaged(CIR.Import.Idx){},
         .is_function_boundary = is_function_boundary,
     };
 }
@@ -140,14 +141,14 @@ pub const ExposedItemIntroduceResult = union(enum) {
 
 /// Result of looking up an imported module
 pub const ImportedModuleLookupResult = union(enum) {
-    found: ModuleEnv.Import.Idx,
+    found: CIR.Import.Idx,
     not_found: void,
 };
 
 /// Result of introducing an imported module
 pub const ImportedModuleIntroduceResult = union(enum) {
     success: void,
-    already_imported: ModuleEnv.Import.Idx, // The module was already imported in this scope
+    already_imported: CIR.Import.Idx, // The module was already imported in this scope
 };
 
 /// Item kinds in a scope
@@ -414,7 +415,7 @@ pub fn introduceImportedModule(
     scope: *Scope,
     gpa: std.mem.Allocator,
     module_name: []const u8,
-    import_idx: ModuleEnv.Import.Idx,
+    import_idx: CIR.Import.Idx,
 ) std.mem.Allocator.Error!ImportedModuleIntroduceResult {
     if (scope.imported_modules.contains(module_name)) {
         return ImportedModuleIntroduceResult{ .already_imported = scope.imported_modules.get(module_name).? };

@@ -5,7 +5,7 @@ const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
-const compile = @import("compile");
+const can = @import("can");
 const reporting = @import("reporting");
 const Check = @import("Check.zig");
 
@@ -13,7 +13,8 @@ const snapshot = Check.snapshot;
 
 const Allocator = std.mem.Allocator;
 
-const ModuleEnv = compile.ModuleEnv;
+const CIR = can.CIR;
+const ModuleEnv = can.ModuleEnv;
 
 const Report = reporting.Report;
 const Document = reporting.Document;

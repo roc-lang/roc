@@ -14,6 +14,8 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
+
+const CIR = @import("CIR.zig");
 const ModuleEnv = @import("ModuleEnv.zig");
 
 const Region = base.Region;
@@ -124,7 +126,7 @@ pub const Statement = union(enum) {
         module_name_tok: Ident.Idx,
         qualifier_tok: ?Ident.Idx,
         alias_tok: ?Ident.Idx,
-        exposes: ModuleEnv.ExposedItem.Span,
+        exposes: CIR.ExposedItem.Span,
     },
     /// An alias type declaration, e.g., `Foo : Str`
     ///
@@ -148,7 +150,7 @@ pub const Statement = union(enum) {
     s_type_anno: struct {
         name: Ident.Idx,
         anno: CIR.TypeAnno.Idx,
-        where: ?ModuleEnv.WhereClause.Span,
+        where: ?CIR.WhereClause.Span,
     },
 
     pub const Idx = enum(u32) { _ };

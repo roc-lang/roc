@@ -3,15 +3,14 @@
 const std = @import("std");
 const base = @import("base");
 const fs_mod = @import("fs");
-const compile = @import("compile");
+const can = @import("can");
 const reporting = @import("reporting");
-const serialization = @import("serialization");
+const collections = @import("collections");
 
 const CacheReporting = @import("cache_reporting.zig").CacheReporting;
-
 const CacheModule = @import("cache_module.zig").CacheModule;
 const Allocator = std.mem.Allocator;
-const ModuleEnv = compile.ModuleEnv;
+const ModuleEnv = can.ModuleEnv;
 const Filesystem = fs_mod.Filesystem;
 const CacheStats = @import("cache_config.zig").CacheStats;
 const CacheConfig = @import("cache_config.zig").CacheConfig;

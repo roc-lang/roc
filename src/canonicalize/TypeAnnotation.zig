@@ -5,9 +5,11 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
+const builtins = @import("builtins");
 const collections = @import("collections");
 
 const ModuleEnv = @import("ModuleEnv.zig");
+const CIR = @import("CIR.zig");
 const Diagnostic = @import("Diagnostic.zig");
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
@@ -17,8 +19,8 @@ const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
 const Expr = CIR.Expr;
-const IntValue = ModuleEnv.IntValue;
-const RocDec = ModuleEnv.RocDec;
+const IntValue = CIR.IntValue;
+const RocDec = builtins.RocDec;
 
 /// Canonical representation of type annotations in Roc.
 ///
@@ -74,14 +76,14 @@ pub const TypeAnno = union(enum) {
     ///
     /// Examples: `Json.Value`, `Http.Request` - types that will be resolved when dependencies are available
     ty_lookup_external: struct {
-        module_idx: ModuleEnv.Import.Idx,
+        module_idx: CIR.Import.Idx,
         target_node_idx: u16,
     },
     /// Malformed type annotation: represents a type that couldn't be parsed correctly.
     /// This follows the "Inform Don't Block" principle - compilation continues with
     /// an error marker that will be reported to the user.
     malformed: struct {
-        diagnostic: ModuleEnv.Diagnostic.Idx, // The error that occurred
+        diagnostic: CIR.Diagnostic.Idx, // The error that occurred
     },
 
     pub const Idx = enum(u32) { _ };
@@ -279,7 +281,7 @@ pub const TypeAnno = union(enum) {
 
     /// A type application of an external type in a type annotation
     pub const ApplyExternal = struct {
-        module_idx: ModuleEnv.Import.Idx,
+        module_idx: CIR.Import.Idx,
         target_node_idx: u16,
         args: TypeAnno.Span, // The type arguments (e.g., [Str], [String, Int])
     };

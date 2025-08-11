@@ -9,21 +9,14 @@ const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
 const can = @import("can");
-const compile = @import("compile");
 
 const copy_import = @import("copy_import.zig");
+const unifier = @import("unify.zig");
+const occurs = @import("occurs.zig");
+const problem = @import("problem.zig");
 
-/// **Hindley-Milner+ Unification**
-pub const unifier = @import("unify.zig");
-/// **Type Snapshot**
-pub const snapshot = @import("snapshot.zig");
-/// **Recursion Checking**
-pub const occurs = @import("occurs.zig");
-/// **Problem Reporting**
-pub const problem = @import("problem.zig");
-
-const ModuleEnv = compile.ModuleEnv;
-const testing = std.testing;
+const CIR = can.CIR;
+const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const Region = base.Region;
@@ -31,6 +24,9 @@ const Instantiate = types_mod.instantiate.Instantiate;
 const Func = types_mod.Func;
 const Var = types_mod.Var;
 const Content = types_mod.Content;
+const testing = std.testing;
+const SnapshotStore = @import("snapshot.zig").Store;
+const ProblemStore = @import("problem.zig").Store;
 
 const Self = @This();
 
@@ -76,8 +72,8 @@ cir: *const ModuleEnv,
 regions: *Region.List,
 other_modules: []const *ModuleEnv,
 // owned
-snapshots: snapshot.Store,
-problems: problem.Store,
+snapshots: SnapshotStore,
+problems: ProblemStore,
 unify_scratch: unifier.Scratch,
 occurs_scratch: occurs.Scratch,
 var_map: std.AutoHashMap(Var, Var),
@@ -102,8 +98,8 @@ pub fn init(
         .cir = cir,
         .other_modules = other_modules,
         .regions = regions,
-        .snapshots = try snapshot.Store.initCapacity(gpa, 512),
-        .problems = try problem.Store.initCapacity(gpa, 64),
+        .snapshots = try SnapshotStore.initCapacity(gpa, 512),
+        .problems = try ProblemStore.initCapacity(gpa, 64),
         .unify_scratch = try unifier.Scratch.init(gpa),
         .occurs_scratch = try occurs.Scratch.init(gpa),
         .var_map = std.AutoHashMap(Var, Var).init(gpa),
@@ -1916,10 +1912,10 @@ test "minimum signed values fit in their respective types" {
     try module_env.initModuleEnvFields(gpa, "Test");
     defer module_env.deinit();
 
-    var problems = try problem.Store.initCapacity(gpa, 16);
+    var problems = try ProblemStore.initCapacity(gpa, 16);
     defer problems.deinit(gpa);
 
-    var snapshots = try snapshot.Store.initCapacity(gpa, 16);
+    var snapshots = try SnapshotStore.initCapacity(gpa, 16);
     defer snapshots.deinit();
 
     var unify_scratch = try unifier.Scratch.init(gpa);

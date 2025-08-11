@@ -6,7 +6,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const base = @import("base");
-const compile = @import("compile");
+const can = @import("can");
 const types = @import("types");
 const eval = @import("eval/interpreter.zig");
 const stack = @import("eval/stack.zig");
@@ -15,8 +15,9 @@ const layout = @import("layout/layout.zig");
 
 const SharedMemoryAllocator = @import("SharedMemoryAllocator.zig");
 
+const CIR = can.CIR;
+const ModuleEnv = can.ModuleEnv;
 const RocStr = builtins.str.RocStr;
-const ModuleEnv = compile.ModuleEnv;
 const RocOps = builtins.host_abi.RocOps;
 const Interpreter = eval.Interpreter;
 const safe_memory = base.safe_memory;
@@ -115,7 +116,7 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator) ShimError!*ModuleEnv {
 
     // Get ModuleEnv pointer and set it up
     const env_addr = @intFromPtr(data_ptr) + MODULE_ENV_OFFSET;
-    const env_ptr = @as(*ModuleEnv, @ptrFromInt(env_addr));
+    const env_ptr: *ModuleEnv = @ptrFromInt(env_addr);
 
     // Set up the environment
     env_ptr.gpa = std.heap.page_allocator;

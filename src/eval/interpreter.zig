@@ -30,7 +30,7 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const compile = @import("compile");
+const can = @import("can");
 const builtins = @import("builtins");
 const collections = @import("collections");
 
@@ -39,10 +39,11 @@ const build_options = @import("build_options");
 const stack = @import("stack.zig");
 const StackValue = @import("StackValue.zig");
 
+const CIR = can.CIR;
+const ModuleEnv = can.ModuleEnv;
 const StringLiteral = base.StringLiteral;
 const RocOps = builtins.host_abi.RocOps;
 const RocList = builtins.list.RocList;
-const ModuleEnv = compile.ModuleEnv;
 const RocStr = builtins.str.RocStr;
 const LayoutTag = layout.LayoutTag;
 const RocDec = builtins.dec.RocDec;
@@ -460,7 +461,7 @@ pub const Interpreter = struct {
                     work.extra.dot_access_field_name,
                 ),
                 .w_crash => {
-                    const msg = self.env.strings.get(work.extra.crash_msg);
+                    const msg = self.env.getString(work.extra.crash_msg);
                     roc_ops.crash(msg);
                     // The crash function will set has_crashed = true
                     // Clear the work stack to prevent further evaluation
@@ -1124,7 +1125,7 @@ pub const Interpreter = struct {
 
             .e_str_segment => |str_seg| {
                 // Get the string literal content
-                const literal_content = self.env.strings.get(str_seg.literal);
+                const literal_content = self.env.getString(str_seg.literal);
                 self.traceInfo("Creating string literal: \"{s}\"", .{literal_content});
 
                 // Allocate stack space for RocStr
@@ -2295,7 +2296,7 @@ pub const Interpreter = struct {
 
             // Runtime errors
             .w_crash => {
-                const msg = self.env.strings.get(work.extra.crash_msg);
+                const msg = self.env.getString(work.extra.crash_msg);
                 std.log.err("Runtime crash: {s}", .{msg});
                 return error.RuntimeCrash;
             },

@@ -3,12 +3,14 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const layout_ = @import("./layout.zig");
 const collections = @import("collections");
-const work = @import("./work.zig");
-const ModuleEnv = @import("compile").ModuleEnv;
+const can = @import("can");
 const builtins = @import("builtins");
 
+const layout_ = @import("./layout.zig");
+const work = @import("./work.zig");
+
+const ModuleEnv = can.ModuleEnv;
 const types_store = types.store;
 const target = base.target;
 const Ident = base.Ident;

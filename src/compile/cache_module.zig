@@ -9,17 +9,14 @@ const base = @import("base");
 const fs_mod = @import("fs");
 const types = @import("types");
 const parse = @import("parse");
-const compile = @import("compile");
+const can = @import("can");
 const collections = @import("collections");
-const serialization = @import("serialization");
 
-const Node = ModuleEnv.Node;
 const TypeStore = types.Store;
 const SExprTree = base.SExprTree;
-const ModuleEnv = compile.ModuleEnv;
+const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const Filesystem = fs_mod.Filesystem;
-const NodeStore = ModuleEnv.NodeStore;
 const SafeList = collections.SafeList;
 const SafeStringHashMap = collections.SafeStringHashMap;
 
@@ -96,11 +93,7 @@ pub const CacheModule = struct {
         const CompactWriter = collections.CompactWriter;
 
         // Create CompactWriter
-        var writer = CompactWriter{
-            .iovecs = .{},
-            .total_bytes = 0,
-            .allocated_memory = .{},
-        };
+        var writer = CompactWriter.init();
 
         // Allocate space for ModuleEnv.Serialized
         const env_ptr = try writer.appendAlloc(arena_allocator, ModuleEnv);
