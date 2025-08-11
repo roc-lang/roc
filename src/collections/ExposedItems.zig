@@ -335,68 +335,61 @@ test "ExposedItems basic CompactWriter roundtrip" {
     try testing.expectEqual(@as(?u16, 0), deserialized.getNodeIndexById(allocator, id3));
 }
 
-// TODO FIXME
-// test "ExposedItems with duplicates CompactWriter roundtrip" {
-//     const testing = std.testing;
-//     const allocator = testing.allocator;
+test "ExposedItems with duplicates CompactWriter roundtrip" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
 
-//     var original = ExposedItems.init();
-//     defer original.deinit(allocator);
+    var original = ExposedItems.init();
+    defer original.deinit(allocator);
 
-//     // Add items with duplicates
-//     const id1: IdentIdx = 100;
-//     const id2: IdentIdx = 200;
+    // Add items with duplicates
+    const id1: IdentIdx = 100;
+    const id2: IdentIdx = 200;
 
-//     try original.addExposedById(allocator, id1);
-//     try original.setNodeIndexById(allocator, id1, 42);
-//     try original.addExposedById(allocator, id2);
-//     try original.addExposedById(allocator, id1); // duplicate
-//     try original.setNodeIndexById(allocator, id2, 84);
-//     try original.addExposedById(allocator, id2); // duplicate
+    try original.addExposedById(allocator, id1);
+    try original.setNodeIndexById(allocator, id1, 42);
+    try original.addExposedById(allocator, id2);
+    try original.addExposedById(allocator, id1); // duplicate
+    try original.setNodeIndexById(allocator, id2, 84);
+    try original.addExposedById(allocator, id2); // duplicate
 
-//     // Ensure sorted before serialization (this will also deduplicate)
-//     original.ensureSorted(allocator);
+    // Ensure sorted before serialization (this will also deduplicate)
+    original.ensureSorted(allocator);
 
-//     // Create a temp file
-//     var tmp_dir = testing.tmpDir(.{});
-//     defer tmp_dir.cleanup();
+    // Create a temp file
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
 
-//     const file = try tmp_dir.dir.createFile("test_duplicates_exposed.dat", .{ .read = true });
-//     defer file.close();
+    const file = try tmp_dir.dir.createFile("test_duplicates_exposed.dat", .{ .read = true });
+    defer file.close();
 
-//     // Serialize
-//     var writer = CompactWriter{
-//         .iovecs = .{},
-//         .total_bytes = 0,
-//         .allocated_memory = .{},
-//     };
-//     defer writer.deinit(allocator);
+    // Serialize
+    var writer = CompactWriter.init();
+    defer writer.deinit(allocator);
 
-//     _ = try original.serialize(allocator, &writer);
+    _ = try original.serialize(allocator, &writer);
 
-//     // Write to file
-//     try writer.writeGather(allocator, file);
+    // Write to file
+    try writer.writeGather(allocator, file);
 
-//     // Read back
-//     try file.seekTo(0);
-//     const file_size = try file.getEndPos();
-//     const serialized_size = @sizeOf(ExposedItems.Serialized);
-//     const serialized_align = @alignOf(ExposedItems);
-//     const buffer = try allocator.alignedAlloc(u8, serialized_align, file_size);
-//     defer allocator.free(buffer);
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try allocator.alignedAlloc(u8, @alignOf(ExposedItems.Serialized), file_size);
+    defer allocator.free(buffer);
 
-//     _ = try file.read(buffer);
+    _ = try file.read(buffer);
 
-//     // Cast to Serialized type and deserialize
-//     const serialized_offset = writer.total_bytes - serialized_size;
-//     const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr + serialized_offset)));
-//     const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    // The serialized ExposedItems.Serialized struct is at the beginning of the buffer
+    // (appendAlloc is called first in serialize)
+    const serialized_ptr: *ExposedItems.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
 
-//     // After deduplication, should have only 2 items
-//     try testing.expectEqual(@as(usize, 2), deserialized.count());
-//     try testing.expectEqual(@as(?u16, 42), deserialized.getNodeIndexById(allocator, id1));
-//     try testing.expectEqual(@as(?u16, 84), deserialized.getNodeIndexById(allocator, id2));
-// }
+    // After deduplication, should have only 2 items
+    try testing.expectEqual(@as(usize, 2), deserialized.count());
+    try testing.expectEqual(@as(?u16, 42), deserialized.getNodeIndexById(allocator, id1));
+    try testing.expectEqual(@as(?u16, 84), deserialized.getNodeIndexById(allocator, id2));
+}
 
 // TODO FIXME
 // test "ExposedItems comprehensive CompactWriter roundtrip" {
