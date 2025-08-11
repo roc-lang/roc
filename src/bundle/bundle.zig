@@ -40,24 +40,39 @@ const MAX_BASE58_HASH_BYTES = 45;
 
 /// Encode the given nonempty slice of bytes as a base58 string and write it to the destination.
 /// This is guaranteed to write at least 1 byte to the destination, even if the given bytes are all zeros.
-pub fn base58Encode(src: []const u8, dest: [MAX_BASE58_HASH_BYTES]u8) void {
-    // This should be a nonempty slice.
+pub fn base58Encode(src: []const u8, dest: *[MAX_BASE58_HASH_BYTES]u8) void {
+    // The src slice should have been nonempty.
     std.debug.assert(src.len > 0);
 
-    // Count leading zeros
+    // Preserve leading zeros so we always have the same output string length
     var leading_zeros: usize = 0;
     for (src) |byte| {
-        if (byte == 0) leading_zeros += 1 else break;
+        if (byte == 0) {
+            dest[leading_zeros] = '1'; // Base58 excludes "0" because it can be mixed up with "O", so '1' represents 0.
+            leading_zeros += 1;
+        } else {
+            break;
+        }
     }
 
-    // If all of our bytes turned out to be zero, return 0.
-    if (leading_zeros == src.len) {
-        dest.len = 1;
-        dest[0] = '1';
-        return;
-    }
+    // Fill in the dest buffer, working from the end to the start to avoid needing a second pass.
+    var dest_idx: usize = MAX_BASE58_HASH_BYTES;
 
-    // TODO: draw the rest of the owl
+    for (src[leading_zeros + 1 ..]) |byte| {
+        var carry: u32 = byte;
+
+        // Multiply existing base58 digits by 256 and add carry
+        var j: usize = MAX_BASE58_HASH_BYTES;
+        while (j > dest_idx or carry != 0) {
+            j -= 1;
+            if (j >= dest_idx) {
+                carry += @as(u32, dest[j] - '1') * 256;
+            }
+            dest[j] = base58_alphabet[carry % 58];
+            carry /= 58;
+        }
+        dest_idx = j;
+    }
 }
 
 /// Decode base58 string back to binary data.
