@@ -1,9 +1,11 @@
-//! Bundle
+//! Bundle and unbundle a roc package and everything it requires, including host object files if the
+//! package is a platform, and any files imported via `import` with `Str` or `List(U8)`.
 //!
 //! Future work:
+//! - Canonicalize to discover all the files we actually need to pull in, including non-.roc files.
 //! - Create a zstd dictionary for roc code (using ~1-10MB of representative roc source code, with the zstd cli;
-//!   adds about 110KB to our final binary) and use that. It's a backwards-compatible change (we can keep decoding
-//!   dictionary-free .zst files even after we introduce the dictionary)
+//!   adds about 110KB to our final binary) and use that. It's a backwards-compatible change, as we can keep decoding
+//!   dictionary-free .zst files even after we introduce the dictionary.
 //! - Changing dictionaries after you've started using one is a breaking change (there's an auto-generated
 //!   dictionary ID in the binary, so you know when you're trying to decode with a different dictionary than
 //!   the one that the binary was compressed with, and zstd will error), and each time we add new dictionaries
@@ -23,10 +25,9 @@ const c = @cImport({
 const base58_alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
 // Constants for magic numbers
-const USIZE_STORAGE_OVERHEAD: usize = 16; // Extra bytes for storing allocation size
+const SIZE_STORAGE_BYTES: usize = 16; // Extra bytes for storing allocation size; use 16 to preserve alignment.
 const BASE58_SIZE_RATIO_PERCENT: usize = 138; // Base58 is ~138% the size of base256
 const TAR_PATH_MAX_LENGTH: usize = 255; // Maximum path length for tar compatibility
-const TAR_NAME_BUFFER_SIZE: usize = 256; // Buffer size for tar file names
 
 /// Encode binary data to a base58 string.
 /// The caller owns the returned memory.
@@ -145,11 +146,11 @@ pub fn base58Decode(allocator: std.mem.Allocator, encoded: []const u8) ![]u8 {
     return final_result;
 }
 
-// Wrapper functions to adapt Zig allocator to zstd's custom allocator interface
-fn myZstdAlloc(opaque_ptr: ?*anyopaque, size: usize) callconv(.C) ?*anyopaque {
+// zstd's C library does custom allocations using a slightly different format from Zig's allocator API.
+fn allocForZstd(opaque_ptr: ?*anyopaque, size: usize) callconv(.C) ?*anyopaque {
     const allocator = @as(*std.mem.Allocator, @ptrCast(@alignCast(opaque_ptr.?)));
     // Allocate extra bytes to store the size
-    const total_size = size + USIZE_STORAGE_OVERHEAD;
+    const total_size = size + SIZE_STORAGE_BYTES;
     const mem = allocator.alloc(u8, total_size) catch return null;
 
     // Store the size in the first 8 bytes (usize)
@@ -157,15 +158,15 @@ fn myZstdAlloc(opaque_ptr: ?*anyopaque, size: usize) callconv(.C) ?*anyopaque {
     size_ptr.* = total_size;
 
     // Return pointer offset by overhead bytes
-    return @ptrFromInt(@intFromPtr(mem.ptr) + USIZE_STORAGE_OVERHEAD);
+    return @ptrFromInt(@intFromPtr(mem.ptr) + SIZE_STORAGE_BYTES);
 }
 
-fn myZstdFree(opaque_ptr: ?*anyopaque, address: ?*anyopaque) callconv(.C) void {
+fn freeForZstd(opaque_ptr: ?*anyopaque, address: ?*anyopaque) callconv(.C) void {
     if (address == null) return;
     const allocator = @as(*std.mem.Allocator, @ptrCast(@alignCast(opaque_ptr.?)));
 
     // Get the original allocation by subtracting overhead bytes
-    const original_ptr = @as([*]u8, @ptrFromInt(@intFromPtr(address) - USIZE_STORAGE_OVERHEAD));
+    const original_ptr = @as([*]u8, @ptrFromInt(@intFromPtr(address) - SIZE_STORAGE_BYTES));
 
     // Read the size from the first 8 bytes
     const size_ptr = @as(*const usize, @ptrCast(@alignCast(original_ptr)));
@@ -293,8 +294,8 @@ pub fn bundle(
 
     // Create custom memory allocator for zstd
     const custom_mem = c.ZSTD_customMem{
-        .customAlloc = myZstdAlloc,
-        .customFree = myZstdFree,
+        .customAlloc = allocForZstd,
+        .customFree = freeForZstd,
         .@"opaque" = @ptrCast(@constCast(&allocator)),
     };
 
@@ -449,8 +450,8 @@ pub fn unbundleStream(
 
     // Create custom memory allocator for zstd
     const custom_mem = c.ZSTD_customMem{
-        .customAlloc = myZstdAlloc,
-        .customFree = myZstdFree,
+        .customAlloc = allocForZstd,
+        .customFree = freeForZstd,
         .@"opaque" = @ptrCast(@constCast(&allocator)),
     };
 
@@ -505,9 +506,9 @@ pub fn unbundleStream(
     var decompressed_stream = std.io.fixedBufferStream(decompressed_data.items);
     const tar_reader = decompressed_stream.reader();
 
-    // Use std.tar to parse the archive
-    var file_name_buffer: [TAR_NAME_BUFFER_SIZE]u8 = undefined;
-    var link_name_buffer: [TAR_NAME_BUFFER_SIZE]u8 = undefined;
+    // Use std.tar to parse the archive; allocate MAX_LENGTH + 1 for null terminator
+    var file_name_buffer: [TAR_PATH_MAX_LENGTH + 1]u8 = undefined;
+    var link_name_buffer: [TAR_PATH_MAX_LENGTH + 1]u8 = undefined;
     var tar_iter = std.tar.iterator(tar_reader, .{
         .file_name_buffer = &file_name_buffer,
         .link_name_buffer = &link_name_buffer,

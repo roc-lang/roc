@@ -1,4 +1,5 @@
-//! Download and extract bundled tar.zst files over HTTPS
+//! Download and extract bundled tar.zst files over https
+//! (or http if the URL host is `localhost`, `127.0.0.1`, or `::1`)
 
 const std = @import("std");
 const builtin = @import("builtin");
