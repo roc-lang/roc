@@ -71,7 +71,7 @@ pub fn download(
     const base58_hash = try validateUrl(url);
 
     // Validate the hash before starting any I/O
-    const expected_hash = (try bundle.validateBase58Hash(allocator, base58_hash)) orelse {
+    const expected_hash = (try bundle.validateBase58Hash(base58_hash)) orelse {
         return error.InvalidHash;
     };
 

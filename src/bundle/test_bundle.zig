@@ -471,30 +471,6 @@ test "blake3 hash verification failure" {
     try testing.expectError(error.InvalidFilename, result);
 }
 
-test "base58 encode/decode roundtrip" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    // Test various inputs
-    const test_cases = [_][]const u8{
-        "",
-        "\x00",
-        "\x00\x00",
-        "Hello",
-        "The quick brown fox jumps over the lazy dog",
-        "\xFF\xFF\xFF\xFF",
-    };
-
-    for (test_cases) |input| {
-        const encoded = try bundle.base58Encode(allocator, input);
-        defer allocator.free(encoded);
-
-        const decoded = try bundle.base58Decode(allocator, encoded);
-        defer allocator.free(decoded);
-
-        try testing.expectEqualSlices(u8, input, decoded);
-    }
-}
 
 test "unbundle with existing directory error" {
     const testing = std.testing;
@@ -1137,7 +1113,7 @@ test "download from local server" {
 
     // Download (with memory extract writer)
     {
-        const expected_hash = (try bundle.validateBase58Hash(allocator, base58_hash)).?;
+        const expected_hash = (try bundle.validateBase58Hash(base58_hash)).?;
 
         var client = std.http.Client{ .allocator = allocator };
         defer client.deinit();

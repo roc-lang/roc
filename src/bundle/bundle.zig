@@ -15,121 +15,15 @@
 //!   using different compression params and dictionaries (e.g. make a .tar.zst inside the main .tar.zst)
 
 const std = @import("std");
-const builtin = @import("builtin");
+const base58 = @import("base58.zig");
 const c = @cImport({
     @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
     @cInclude("zstd.h");
 });
 
-// Base58 alphabet (no '0', 'O', 'I', or 'l' to deter visual similarity attacks.)
-const base58_alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
 // Constants for magic numbers
 const SIZE_STORAGE_BYTES: usize = 16; // Extra bytes for storing allocation size; use 16 to preserve alignment.
 const TAR_PATH_MAX_LENGTH: usize = 255; // Maximum path length for tar compatibility
-
-// Calculate how many base58 characters are needed to represent a 256-bit hash
-// Each base58 character can represent 58 values
-// So we need ceil(log58(MAX_HASH + 1)) characters
-// Which is ceil(log(MAX_HASH + 1) / log(58))
-// Since MAX_HASH is 2^256 - 1, we need ceil(256 * log(2) / log(58))
-// log(2) / log(58) ≈ 0.17329
-// 256 * 0.17329 ≈ 44.36
-// So we need 45 characters
-const MAX_BASE58_HASH_BYTES = 45;
-
-/// Encode the given nonempty slice of bytes as a base58 string and write it to the destination.
-/// This is guaranteed to write at least 1 byte to the destination, even if the given bytes are all zeros.
-pub fn base58Encode(src: []const u8, dest: *[MAX_BASE58_HASH_BYTES]u8) void {
-    // The src slice should have been nonempty.
-    std.debug.assert(src.len > 0);
-
-    // Preserve leading zeros so we always have the same output string length
-    var leading_zeros: usize = 0;
-    for (src) |byte| {
-        if (byte == 0) {
-            dest[leading_zeros] = '1'; // Base58 excludes "0" because it can be mixed up with "O", so '1' represents 0.
-            leading_zeros += 1;
-        } else {
-            break;
-        }
-    }
-
-    // Fill in the dest buffer, working from the end to the start to avoid needing a second pass.
-    var dest_idx: usize = MAX_BASE58_HASH_BYTES;
-
-    for (src[leading_zeros + 1 ..]) |byte| {
-        var carry: u32 = byte;
-
-        // Multiply existing base58 digits by 256 and add carry
-        var j: usize = MAX_BASE58_HASH_BYTES;
-        while (j > dest_idx or carry != 0) {
-            j -= 1;
-            if (j >= dest_idx) {
-                carry += @as(u32, dest[j] - '1') * 256;
-            }
-            dest[j] = base58_alphabet[carry % 58];
-            carry /= 58;
-        }
-        dest_idx = j;
-    }
-}
-
-/// Decode base58 string back to binary data.
-/// The caller owns the returned memory.
-/// Returns InvalidBase58 error if the string contains invalid characters.
-pub fn base58Decode(allocator: std.mem.Allocator, encoded: []const u8) ![]u8 {
-    if (encoded.len == 0) return allocator.dupe(u8, "");
-
-    // Count leading '1's (representing zeros)
-    var leading_ones: usize = 0;
-    for (encoded) |char| {
-        if (char == '1') leading_ones += 1 else break;
-    }
-
-    // Allocate result (overestimate)
-    var result = try allocator.alloc(u8, encoded.len);
-    defer allocator.free(result);
-    @memset(result, 0);
-
-    // Decode
-    for (encoded) |char| {
-        // Find char in alphabet
-        var carry: usize = 0;
-        for (base58_alphabet, 0..) |alpha_char, i| {
-            if (char == alpha_char) {
-                carry = i;
-                break;
-            }
-        } else {
-            return error.InvalidBase58;
-        }
-
-        // Multiply by 58 and add carry
-        var j = result.len;
-        while (j > 0) {
-            j -= 1;
-            carry += @as(usize, result[j]) * 58;
-            result[j] = @intCast(carry & 0xFF);
-            carry >>= 8;
-        }
-    }
-
-    // Find first non-zero byte
-    var first_non_zero: usize = 0;
-    for (result) |byte| {
-        if (byte != 0) break;
-        first_non_zero += 1;
-    }
-
-    // Create final result with leading zeros
-    const final_size = leading_ones + (result.len - first_non_zero);
-    var final_result = try allocator.alloc(u8, final_size);
-    @memset(final_result[0..leading_ones], 0);
-    @memcpy(final_result[leading_ones..], result[first_non_zero..]);
-
-    return final_result;
-}
 
 // zstd's C library does custom allocations using a slightly different format from Zig's allocator API.
 fn allocForZstd(opaque_ptr: ?*anyopaque, size: usize) callconv(.C) ?*anyopaque {
@@ -343,7 +237,9 @@ pub fn bundle(
     // Get the blake3 hash and encode as base58
     var hash: [32]u8 = undefined;
     hasher.final(&hash);
-    const base58_hash = try base58Encode(allocator, &hash);
+    var base58_buffer: [base58.base58_hash_bytes]u8 = undefined;
+    const base58_encoded = base58.encode(&hash, &base58_buffer);
+    const base58_hash = try allocator.dupe(u8, base58_encoded);
     defer allocator.free(base58_hash);
 
     // Create filename with .tar.zst extension
@@ -353,16 +249,13 @@ pub fn bundle(
 
 /// Validate a base58-encoded hash string and return the decoded hash.
 /// Returns null if the hash is invalid.
-pub fn validateBase58Hash(allocator: std.mem.Allocator, base58_hash: []const u8) !?[32]u8 {
-    const decoded = base58Decode(allocator, base58_hash) catch return null;
-    defer allocator.free(decoded);
-
-    if (decoded.len != 32) {
+pub fn validateBase58Hash(base58_hash: []const u8) !?[32]u8 {
+    if (base58_hash.len > base58.base58_hash_bytes) {
         return null;
     }
 
     var hash: [32]u8 = undefined;
-    @memcpy(&hash, decoded);
+    base58.decode(base58_hash, &hash) catch return null;
     return hash;
 }
 
@@ -557,7 +450,7 @@ pub fn unbundle(
         return error.InvalidFilename;
     }
     const base58_hash = filename[0 .. filename.len - 8]; // Remove .tar.zst
-    const expected_hash = (try validateBase58Hash(allocator, base58_hash)) orelse {
+    const expected_hash = (try validateBase58Hash(base58_hash)) orelse {
         return error.InvalidFilename;
     };
 
