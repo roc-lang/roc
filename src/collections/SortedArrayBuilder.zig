@@ -14,8 +14,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const serialization = @import("serialization");
-const CompactWriter = serialization.CompactWriter;
+const CompactWriter = @import("CompactWriter.zig");
 
 /// A builder for creating sorted arrays directly without using hash maps
 /// This is more efficient when we know we won't have duplicates

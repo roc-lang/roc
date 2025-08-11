@@ -700,7 +700,7 @@ pub fn canonicalizeFile(
                 try self.scopeUpdateTypeDecl(type_header.name, type_decl_stmt_idx);
 
                 // Remove from exposed_type_texts since the type is now fully defined
-                const type_text = self.env.idents.getText(type_header.name);
+                const type_text = self.env.getIdent(type_header.name);
                 _ = self.exposed_type_texts.remove(type_text);
             },
             else => {
@@ -770,7 +770,7 @@ pub fn canonicalizeFile(
             },
             .@"var" => |var_stmt| {
                 // Not valid at top-level
-                const string_idx = try self.env.strings.insert(self.env.gpa, "var");
+                const string_idx = try self.env.insertString("var");
                 const region = self.parse_ir.tokenizedRegionToRegion(var_stmt.region);
                 try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
@@ -780,7 +780,7 @@ pub fn canonicalizeFile(
             },
             .expr => |expr_stmt| {
                 // Not valid at top-level
-                const string_idx = try self.env.strings.insert(self.env.gpa, "expression");
+                const string_idx = try self.env.insertString("expression");
                 const region = self.parse_ir.tokenizedRegionToRegion(expr_stmt.region);
                 try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
@@ -790,7 +790,7 @@ pub fn canonicalizeFile(
             },
             .crash => |crash_stmt| {
                 // Not valid at top-level
-                const string_idx = try self.env.strings.insert(self.env.gpa, "crash");
+                const string_idx = try self.env.insertString("crash");
                 const region = self.parse_ir.tokenizedRegionToRegion(crash_stmt.region);
                 try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
@@ -800,7 +800,7 @@ pub fn canonicalizeFile(
             },
             .dbg => |dbg_stmt| {
                 // Not valid at top-level
-                const string_idx = try self.env.strings.insert(self.env.gpa, "dbg");
+                const string_idx = try self.env.insertString("dbg");
                 const region = self.parse_ir.tokenizedRegionToRegion(dbg_stmt.region);
                 try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
@@ -838,7 +838,7 @@ pub fn canonicalizeFile(
             },
             .@"for" => |for_stmt| {
                 // Not valid at top-level
-                const string_idx = try self.env.strings.insert(self.env.gpa, "for");
+                const string_idx = try self.env.insertString("for");
                 const region = self.parse_ir.tokenizedRegionToRegion(for_stmt.region);
                 try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
@@ -847,7 +847,7 @@ pub fn canonicalizeFile(
             },
             .@"return" => |return_stmt| {
                 // Not valid at top-level
-                const string_idx = try self.env.strings.insert(self.env.gpa, "return");
+                const string_idx = try self.env.insertString("return");
                 const region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
                 try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
@@ -859,13 +859,12 @@ pub fn canonicalizeFile(
                 last_type_anno = null; // Clear on non-annotation statement
             },
             .type_anno => |ta| {
-                const gpa = self.env.gpa;
                 const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
 
                 // Top-level type annotation - store for connection to next declaration
                 const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse {
                     // Malformed identifier - skip this annotation
-                    const feature = try self.env.strings.insert(gpa, "handle malformed identifier for a type annotation");
+                    const feature = try self.env.insertString("handle malformed identifier for a type annotation");
                     try self.env.pushDiagnostic(Diagnostic{
                         .not_implemented = .{
                             .feature = feature,
@@ -1031,7 +1030,7 @@ fn createExposedScope(
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
                     // Add to exposed_items for permanent storage (unconditionally)
-                    try self.env.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
+                    try self.env.addExposedById(ident_idx);
 
                     // Use a dummy pattern index - we just need to track that it's exposed
                     const dummy_idx = @as(Pattern.Idx, @enumFromInt(0));
@@ -1064,7 +1063,7 @@ fn createExposedScope(
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
                     // Add to exposed_items for permanent storage (unconditionally)
-                    try self.env.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
+                    try self.env.addExposedById(ident_idx);
 
                     // Use a dummy statement index - we just need to track that it's exposed
                     const dummy_idx = @as(Statement.Idx, @enumFromInt(0));
@@ -1097,7 +1096,7 @@ fn createExposedScope(
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
                     // Add to exposed_items for permanent storage (unconditionally)
-                    try self.env.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
+                    try self.env.addExposedById(ident_idx);
 
                     // Use a dummy statement index - we just need to track that it's exposed
                     const dummy_idx = @as(Statement.Idx, @enumFromInt(0));
@@ -1263,7 +1262,7 @@ fn canonicalizeImportStatement(
     const module_name = blk: {
         if (self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok) == null) {
             const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
-            const feature = try self.env.strings.insert(self.env.gpa, "resolve import module name token");
+            const feature = try self.env.insertString("resolve import module name token");
             try self.env.pushDiagnostic(Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = region,
@@ -1274,7 +1273,7 @@ fn canonicalizeImportStatement(
         if (import_stmt.qualifier_tok) |qualifier_tok| {
             if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok) == null) {
                 const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
-                const feature = try self.env.strings.insert(self.env.gpa, "resolve import qualifier token");
+                const feature = try self.env.insertString("resolve import qualifier token");
                 try self.env.pushDiagnostic(Diagnostic{ .not_implemented = .{
                     .feature = feature,
                     .region = region,
@@ -1298,7 +1297,7 @@ fn canonicalizeImportStatement(
                     base.Ident.Error.ContainsNullByte => "malformed import module name contains null bytes",
                     base.Ident.Error.ContainsControlCharacters => "malformed import module name contains invalid control characters",
                 };
-                const feature = try self.env.strings.insert(self.env.gpa, error_msg);
+                const feature = try self.env.insertString(error_msg);
                 try self.env.pushDiagnostic(Diagnostic{ .not_implemented = .{
                     .feature = feature,
                     .region = region,
@@ -1318,7 +1317,7 @@ fn canonicalizeImportStatement(
     const alias = try self.resolveModuleAlias(import_stmt.alias_tok, module_name) orelse return null;
 
     // 3. Get or create Import.Idx for this module
-    const module_name_text = self.env.idents.getText(module_name);
+    const module_name_text = self.env.getIdent(module_name);
     const module_import_idx = try self.env.imports.getOrPut(self.env.gpa, &self.env.strings, module_name_text);
 
     // 4. Add to scope: alias -> module_name mapping
@@ -1392,8 +1391,8 @@ fn createQualifiedName(
     module_name: Ident.Idx,
     field_name: Ident.Idx,
 ) Ident.Idx {
-    const module_text = self.env.idents.getText(module_name);
-    const field_text = self.env.idents.getText(field_name);
+    const module_text = self.env.getIdent(module_name);
+    const field_text = self.env.getIdent(field_name);
 
     // Allocate space for "module.field" - this case still needs allocation since we're combining
     // module name from import with field name from usage site
@@ -1497,7 +1496,7 @@ fn introduceExposedItemsIntoScope(
 
     // If we have module_envs, validate the imports
     if (self.module_envs) |envs_map| {
-        const module_name_text = self.env.idents.getText(module_name);
+        const module_name_text = self.env.getIdent(module_name);
 
         // Check if the module exists
         if (!envs_map.contains(module_name_text)) {
@@ -1512,7 +1511,7 @@ fn introduceExposedItemsIntoScope(
         // Validate each exposed item
         for (exposed_items_slice) |exposed_item_idx| {
             const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
-            const item_name_text = self.env.idents.getText(exposed_item.name);
+            const item_name_text = self.env.getIdent(exposed_item.name);
 
             // Check if the item is exposed by the module
             // We need to look up by string because the identifiers are from different modules
@@ -1846,7 +1845,7 @@ pub fn canonicalizeExpr(
                         // Check if this is a module alias
                         if (self.scopeLookupModule(module_alias)) |module_name| {
                             // This is a module-qualified lookup
-                            const module_text = self.env.idents.getText(module_name);
+                            const module_text = self.env.getIdent(module_name);
 
                             // Check if this module is imported in the current scope
                             const import_idx = self.scopeLookupImportedModule(module_text) orelse {
@@ -1862,7 +1861,7 @@ pub fn canonicalizeExpr(
 
                             // Look up the target node index in the module's exposed_items
                             // Need to convert identifier from current module to target module
-                            const field_text = self.env.idents.getText(ident);
+                            const field_text = self.env.getIdent(ident);
                             const target_node_idx = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
                                     if (module_env.idents.findByString(field_text)) |target_ident| {
@@ -1912,7 +1911,7 @@ pub fn canonicalizeExpr(
                         // Check if this identifier is an exposed item from an import
                         if (self.scopeLookupExposedItem(ident)) |exposed_info| {
                             // Get the Import.Idx for the module this item comes from
-                            const module_text = self.env.idents.getText(exposed_info.module_name);
+                            const module_text = self.env.getIdent(exposed_info.module_name);
                             const import_idx = self.scopeLookupImportedModule(module_text) orelse {
                                 // This shouldn't happen if imports are properly tracked, but handle it gracefully
                                 return CanonicalizedExpr{
@@ -1926,7 +1925,7 @@ pub fn canonicalizeExpr(
 
                             // Look up the target node index in the module's exposed_items
                             // Need to convert identifier from current module to target module
-                            const field_text = self.env.idents.getText(exposed_info.original_name);
+                            const field_text = self.env.getIdent(exposed_info.original_name);
                             const target_node_idx = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
                                     if (module_env.idents.findByString(field_text)) |target_ident| {
@@ -1959,7 +1958,7 @@ pub fn canonicalizeExpr(
                     },
                 }
             } else {
-                const feature = try self.env.strings.insert(self.env.gpa, "report an error when unable to resolve identifier");
+                const feature = try self.env.insertString("report an error when unable to resolve identifier");
                 return CanonicalizedExpr{
                     .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                         .feature = feature,
@@ -2304,7 +2303,7 @@ pub fn canonicalizeExpr(
             return self.canonicalizeTagExpr(e, null, region);
         },
         .string_part => |_| {
-            const feature = try self.env.strings.insert(self.env.gpa, "canonicalize string_part expression");
+            const feature = try self.env.insertString("canonicalize string_part expression");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
@@ -2621,7 +2620,7 @@ pub fn canonicalizeExpr(
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
         },
         .record_updater => |_| {
-            const feature = try self.env.strings.insert(self.env.gpa, "canonicalize record_updater expression");
+            const feature = try self.env.insertString("canonicalize record_updater expression");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
@@ -2641,7 +2640,7 @@ pub fn canonicalizeExpr(
             };
         },
         .local_dispatch => |_| {
-            const feature = try self.env.strings.insert(self.env.gpa, "canonicalize local_dispatch expression");
+            const feature = try self.env.insertString("canonicalize local_dispatch expression");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
@@ -2679,7 +2678,7 @@ pub fn canonicalizeExpr(
                 .OpDoubleQuestion => .null_coalesce,
                 else => {
                     // Unknown operator
-                    const feature = try self.env.strings.insert(self.env.gpa, "binop");
+                    const feature = try self.env.insertString("binop");
                     const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                         .feature = feature,
                         .region = region,
@@ -2696,7 +2695,7 @@ pub fn canonicalizeExpr(
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
         },
         .suffix_single_question => |_| {
-            const feature = try self.env.strings.insert(self.env.gpa, "canonicalize suffix_single_question expression");
+            const feature = try self.env.insertString("canonicalize suffix_single_question expression");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
@@ -2732,7 +2731,7 @@ pub fn canonicalizeExpr(
                 },
                 else => {
                     // Other operators not yet implemented or malformed
-                    const feature = try self.env.strings.insert(self.env.gpa, "canonicalize unary_op expression (non-minus)");
+                    const feature = try self.env.insertString("canonicalize unary_op expression (non-minus)");
                     const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                         .feature = feature,
                         .region = region,
@@ -2968,7 +2967,7 @@ pub fn canonicalizeExpr(
             return CanonicalizedExpr{ .idx = dbg_expr, .free_vars = can_inner.free_vars };
         },
         .record_builder => |_| {
-            const feature = try self.env.strings.insert(self.env.gpa, "canonicalize record_builder expression");
+            const feature = try self.env.insertString("canonicalize record_builder expression");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
@@ -3111,7 +3110,7 @@ pub fn canonicalizeExpr(
 // Canonicalize a tag expr
 fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, region: base.Region) std.mem.Allocator.Error!?CanonicalizedExpr {
     const tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse @panic("tag token is not an ident");
-    const tag_name_text = self.parse_ir.env.idents.getText(tag_name);
+    const tag_name_text = self.parse_ir.env.getIdent(tag_name);
 
     var args_span = Expr.Span{ .span = DataSpan.empty() };
 
@@ -3210,7 +3209,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                 };
             },
             else => {
-                const feature = try self.env.strings.insert(self.env.gpa, "report an error resolved type decl in scope wasn't actually a type decl");
+                const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
                 const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                     .feature = feature,
                     .region = Region.zero(),
@@ -3233,7 +3232,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
         const type_tok_idx = qualifier_toks[qualifier_toks.len - 1];
         const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
         const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
-        const type_tok_text = self.env.idents.getText(type_tok_ident);
+        const type_tok_text = self.env.getIdent(type_tok_ident);
 
         // Get the fully resolved module name from all but the last qualifier
         const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
@@ -3252,7 +3251,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                 .region = region,
             } }), .free_vars = null };
         };
-        const module_name_text = self.env.idents.getText(module_name);
+        const module_name_text = self.env.getIdent(module_name);
 
         // Check if this module is imported in the current scope
         const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
@@ -3313,7 +3312,6 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
 
 /// Extract string segments from parsed string parts
 fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Allocator.Error!Expr.Span {
-    const gpa = self.env.gpa;
     const start = self.env.store.scratchExprTop();
 
     for (parts) |part| {
@@ -3324,7 +3322,7 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Alloc
                 const part_text = self.parse_ir.resolve(sp.token);
 
                 // intern the string in the ModuleEnv
-                const string_idx = try self.env.strings.insert(gpa, part_text);
+                const string_idx = try self.env.insertString(part_text);
 
                 // create a node for the string literal
                 const str_expr_idx = try self.env.addExprAndTypeVar(ModuleEnv.Expr{ .e_str_segment = .{
@@ -3385,7 +3383,7 @@ fn canonicalizePattern(
                     .top_level_var_error => {
                         return try self.env.pushMalformed(Pattern.Idx, Diagnostic{
                             .invalid_top_level_statement = .{
-                                .stmt = try self.env.strings.insert(self.env.gpa, "var"),
+                                .stmt = try self.env.insertString("var"),
                                 .region = region,
                             },
                         });
@@ -3400,7 +3398,7 @@ fn canonicalizePattern(
 
                 return pattern_idx;
             } else {
-                const feature = try self.env.strings.insert(self.env.gpa, "report an error when unable to resolve identifier");
+                const feature = try self.env.insertString("report an error when unable to resolve identifier");
                 const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                     .feature = feature,
                     .region = Region.zero(),
@@ -3680,7 +3678,7 @@ fn canonicalizePattern(
 
             // TODO: Handle escape sequences
             // For now, just intern the raw string
-            const literal = try self.env.strings.insert(gpa, token_text);
+            const literal = try self.env.insertString(token_text);
 
             const str_pattern = Pattern{
                 .str_literal = .{
@@ -3696,7 +3694,7 @@ fn canonicalizePattern(
         },
         .tag => |e| {
             const tag_name = self.parse_ir.tokens.resolveIdentifier(e.tag_tok) orelse return null;
-            const tag_name_text = self.parse_ir.env.idents.getText(tag_name);
+            const tag_name_text = self.parse_ir.env.getIdent(tag_name);
 
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
@@ -3785,7 +3783,7 @@ fn canonicalizePattern(
                         } });
                     },
                     else => {
-                        const feature = try self.env.strings.insert(self.env.gpa, "report an error resolved type decl in scope wasn't actually a type decl");
+                        const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
                         return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                             .feature = feature,
                             .region = Region.zero(),
@@ -3804,7 +3802,7 @@ fn canonicalizePattern(
                 const type_tok_idx = qualifier_toks[qualifier_toks.len - 1];
                 const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
                 const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
-                const type_tok_text = self.env.idents.getText(type_tok_ident);
+                const type_tok_text = self.env.getIdent(type_tok_ident);
 
                 // Get the fully resolved module name from all but the last qualifier
                 const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
@@ -3823,7 +3821,7 @@ fn canonicalizePattern(
                         .region = region,
                     } });
                 };
-                const module_name_text = self.env.idents.getText(module_name);
+                const module_name_text = self.env.getIdent(module_name);
 
                 // Check if this module is imported in the current scope
                 const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
@@ -3938,7 +3936,7 @@ fn canonicalizePattern(
                             .top_level_var_error => {
                                 const pattern_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{
                                     .invalid_top_level_statement = .{
-                                        .stmt = try self.env.strings.insert(self.env.gpa, "var"),
+                                        .stmt = try self.env.insertString("var"),
                                         .region = field_region,
                                     },
                                 });
@@ -3954,7 +3952,7 @@ fn canonicalizePattern(
                         }
                     }
                 } else {
-                    const feature = try self.env.strings.insert(self.env.gpa, "report an error when unable to resolve field identifier");
+                    const feature = try self.env.insertString("report an error when unable to resolve field identifier");
                     const pattern_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                         .feature = feature,
                         .region = field_region,
@@ -4079,7 +4077,7 @@ fn canonicalizePattern(
 
                             current_rest_pattern = assign_idx;
                         } else {
-                            const feature = try self.env.strings.insert(gpa, "list rest pattern with unresolvable name");
+                            const feature = try self.env.insertString("list rest pattern with unresolvable name");
                             const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                                 .feature = feature,
                                 .region = list_rest_region,
@@ -4162,7 +4160,7 @@ fn canonicalizePattern(
         },
         .list_rest => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-            const feature = try self.env.strings.insert(self.env.gpa, "standalone list rest pattern");
+            const feature = try self.env.insertString("standalone list rest pattern");
             const pattern_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = region,
@@ -4172,7 +4170,7 @@ fn canonicalizePattern(
         .alternatives => |_| {
             // Alternatives patterns should only appear in match expressions and are handled there
             // If we encounter one here, it's likely a parser error or misplaced pattern
-            const feature = try self.env.strings.insert(self.env.gpa, "alternatives pattern outside match expression");
+            const feature = try self.env.insertString("alternatives pattern outside match expression");
             const pattern_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
@@ -4184,7 +4182,7 @@ fn canonicalizePattern(
 
             // Canonicalize the inner pattern
             const inner_pattern = try self.canonicalizePattern(e.pattern) orelse {
-                const feature = try self.env.strings.insert(self.env.gpa, "canonicalize as pattern with malformed inner pattern");
+                const feature = try self.env.insertString("canonicalize as pattern with malformed inner pattern");
                 const pattern_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                     .feature = feature,
                     .region = region,
@@ -4218,7 +4216,7 @@ fn canonicalizePattern(
                     .top_level_var_error => {
                         return try self.env.pushMalformed(Pattern.Idx, Diagnostic{
                             .invalid_top_level_statement = .{
-                                .stmt = try self.env.strings.insert(self.env.gpa, "var"),
+                                .stmt = try self.env.insertString("var"),
                                 .region = region,
                             },
                         });
@@ -4233,7 +4231,7 @@ fn canonicalizePattern(
 
                 return pattern_idx;
             } else {
-                const feature = try self.env.strings.insert(self.env.gpa, "report an error when unable to resolve as pattern identifier");
+                const feature = try self.env.insertString("report an error when unable to resolve as pattern identifier");
                 const pattern_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                     .feature = feature,
                     .region = region,
@@ -4540,7 +4538,7 @@ fn scopeIntroduceIdent(
         .top_level_var_error => {
             return self.env.pushMalformed(T, Diagnostic{
                 .invalid_top_level_statement = .{
-                    .stmt = try self.env.strings.insert(self.env.gpa, "var"),
+                    .stmt = try self.env.insertString("var"),
                     .region = region,
                 },
             });
@@ -4548,7 +4546,7 @@ fn scopeIntroduceIdent(
         .var_across_function_boundary => |_| {
             // This shouldn't happen for regular identifiers
             return self.env.pushMalformed(T, Diagnostic{ .not_implemented = .{
-                .feature = try self.env.strings.insert(self.env.gpa, "var across function boundary for non-var identifier"),
+                .feature = try self.env.insertString("var across function boundary for non-var identifier"),
                 .region = region,
             } });
         },
@@ -4589,7 +4587,7 @@ fn scopeIntroduceVar(
         .top_level_var_error => {
             return try self.env.pushMalformed(T, Diagnostic{
                 .invalid_top_level_statement = .{
-                    .stmt = try self.env.strings.insert(self.env.gpa, "var"),
+                    .stmt = try self.env.insertString("var"),
                     .region = region,
                 },
             });
@@ -4619,7 +4617,7 @@ fn collectTypeVarProblems(ident: Ident.Idx, is_single_use: bool, ast_anno: AST.T
 fn reportTypeVarProblems(self: *Self, problems: []const TypeVarProblem) std.mem.Allocator.Error!void {
     for (problems) |problem| {
         const region = self.getTypeVarRegionFromAST(problem.ast_anno, problem.ident) orelse Region.zero();
-        const name_text = self.env.idents.getText(problem.ident);
+        const name_text = self.env.getIdent(problem.ident);
 
         switch (problem.problem) {
             .type_var_ending_in_underscore => {
@@ -4691,7 +4689,7 @@ fn processCollectedTypeVars(self: *Self) std.mem.Allocator.Error!void {
     const problems = self.scratch_type_var_problems.slice(problems_start, self.scratch_type_var_problems.top());
     // Report problems with zero regions since we don't have AST context
     for (problems) |problem| {
-        const name_text = self.env.idents.getText(problem.ident);
+        const name_text = self.env.getIdent(problem.ident);
 
         switch (problem.problem) {
             .type_var_ending_in_underscore => {
@@ -5012,7 +5010,7 @@ fn canonicalizeTypeAnnoBasicType(
                 .region = region,
             } }), .mb_local_decl_idx = null };
         };
-        const module_name_text = self.env.idents.getText(module_name);
+        const module_name_text = self.env.getIdent(module_name);
 
         // Check if this module is imported in the current scope
         const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
@@ -5023,7 +5021,7 @@ fn canonicalizeTypeAnnoBasicType(
         };
 
         // Look up the target node index in the module's exposed_nodes
-        const type_name_text = self.env.idents.getText(type_name_ident);
+        const type_name_text = self.env.getIdent(type_name_ident);
         const target_node_idx, const type_content = blk: {
             const envs_map = self.module_envs orelse {
                 break :blk .{ 0, Content.err };
@@ -5548,7 +5546,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
 
                 // Create type variable annotation for this parameter
                 // Check for underscore in type parameter
-                const param_name = self.parse_ir.env.idents.getText(param_ident);
+                const param_name = self.parse_ir.env.getIdent(param_ident);
                 if (param_name.len > 0 and param_name[0] == '_') {
                     try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                         .is_alias = true,
@@ -5738,11 +5736,11 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
                             const first_part = self.parse_ir.store.getExpr(parts[0]);
                             if (first_part == .string_part) {
                                 const part_text = self.parse_ir.resolve(first_part.string_part.token);
-                                break :blk try self.env.strings.insert(self.env.gpa, part_text);
+                                break :blk try self.env.insertString(part_text);
                             }
                         }
                         // Fall back to default if we can't extract
-                        break :blk try self.env.strings.insert(self.env.gpa, "crash");
+                        break :blk try self.env.insertString("crash");
                     },
                     else => {
                         // For non-string expressions, create a malformed expression
@@ -5824,7 +5822,7 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
         },
         .type_decl => |s| {
             // TODO type declarations in statement context
-            const feature = try self.env.strings.insert(self.env.gpa, "type_decl in statement context");
+            const feature = try self.env.insertString("type_decl in statement context");
             const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = self.parse_ir.tokenizedRegionToRegion(s.region),
@@ -5837,7 +5835,7 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
 
             // Resolve the identifier name
             const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse {
-                const feature = try self.env.strings.insert(self.env.gpa, "type annotation identifier resolution");
+                const feature = try self.env.insertString("type annotation identifier resolution");
                 const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                     .feature = feature,
                     .region = region,
@@ -5903,7 +5901,7 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
         },
         else => {
             // Other statement types not yet implemented
-            const feature = try self.env.strings.insert(self.env.gpa, "statement type in block");
+            const feature = try self.env.insertString("statement type in block");
             const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
@@ -6590,13 +6588,13 @@ fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope
         .success => {},
         .shadowing_warning => |shadowed_info| {
             // Create diagnostic for exposed item shadowing
-            const item_text = self.env.idents.getText(item_name);
-            const shadowed_module_text = self.env.idents.getText(shadowed_info.module_name);
-            const current_module_text = self.env.idents.getText(item_info.module_name);
+            const item_text = self.env.getIdent(item_name);
+            const shadowed_module_text = self.env.getIdent(shadowed_info.module_name);
+            const current_module_text = self.env.getIdent(item_info.module_name);
 
             // For now, just add a simple diagnostic message
             const message = try std.fmt.allocPrint(gpa, "Exposed item '{s}' from module '{s}' shadows item from module '{s}'", .{ item_text, current_module_text, shadowed_module_text });
-            const message_str = try self.env.strings.insert(gpa, message);
+            const message_str = try self.env.insertString(message);
             gpa.free(message);
 
             try self.env.pushDiagnostic(Diagnostic{
@@ -6608,12 +6606,12 @@ fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope
         },
         .already_in_scope => |existing_info| {
             // Create diagnostic for duplicate exposed item
-            const item_text = self.env.idents.getText(item_name);
-            const existing_module_text = self.env.idents.getText(existing_info.module_name);
-            const new_module_text = self.env.idents.getText(item_info.module_name);
+            const item_text = self.env.getIdent(item_name);
+            const existing_module_text = self.env.getIdent(existing_info.module_name);
+            const new_module_text = self.env.getIdent(item_info.module_name);
 
             const message = try std.fmt.allocPrint(gpa, "Exposed item '{s}' already imported from module '{s}', cannot import again from module '{s}'", .{ item_text, existing_module_text, new_module_text });
-            const message_str = try self.env.strings.insert(gpa, message);
+            const message_str = try self.env.insertString(message);
             gpa.free(message);
 
             try self.env.pushDiagnostic(Diagnostic{
@@ -6664,7 +6662,7 @@ fn scopeLookupImportedModule(self: *const Self, module_name: []const u8) ?Import
 
 /// Extract the module name from a full qualified name (e.g., "Json" from "json.Json")
 fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) std.mem.Allocator.Error!Ident.Idx {
-    const module_text = self.env.idents.getText(module_name_ident);
+    const module_text = self.env.getIdent(module_name_ident);
 
     // Find the last dot and extract the part after it
     if (std.mem.lastIndexOf(u8, module_text, ".")) |last_dot_idx| {
@@ -6718,7 +6716,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
             // Create external declaration for where clause method constraint
             // This represents the requirement that type variable must come from a module
             // that provides the specified method
-            const var_name_text = self.env.idents.getText(var_ident);
+            const var_name_text = self.env.getIdent(var_ident);
 
             // Create qualified name: "module(a).method"
             const qualified_text = try std.fmt.allocPrint(self.env.gpa, "module({s}).{s}", .{ var_name_text, method_name_clean });
@@ -6763,7 +6761,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
             // Create external declaration for where clause alias constraint
             // This represents the requirement that type variable must come from a module
             // that provides the specified type alias
-            const var_name_text = self.env.idents.getText(var_ident);
+            const var_name_text = self.env.getIdent(var_ident);
 
             // Create qualified name: "module(a).Alias"
             const qualified_text = try std.fmt.allocPrint(self.env.gpa, "module({s}).{s}", .{ var_name_text, alias_name_clean });
@@ -6847,7 +6845,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
 
     // Check if this is a module alias
     const module_name = self.scopeLookupModule(module_alias) orelse return null;
-    const module_text = self.env.idents.getText(module_name);
+    const module_text = self.env.getIdent(module_name);
 
     // Check if this module is imported in the current scope
     const import_idx = self.scopeLookupImportedModule(module_text) orelse {
@@ -6871,7 +6869,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
 
     // Look up the target node index in the module's exposed_items
     // Need to convert identifier from current module to target module
-    const field_text = self.env.idents.getText(field_name);
+    const field_text = self.env.getIdent(field_name);
     const target_node_idx = if (self.module_envs) |envs_map| blk: {
         if (envs_map.get(module_text)) |module_env| {
             if (module_env.idents.findByString(field_text)) |target_ident| {
@@ -8066,7 +8064,7 @@ test "record literal uses record_unbound" {
 
                     // Check the field
                     const fields_slice = env.types.getRecordFieldsSlice(fields);
-                    const field_name = env.idents.getText(fields_slice.get(0).name);
+                    const field_name = env.getIdent(fields_slice.get(0).name);
                     try testing.expectEqualStrings("value", field_name);
                 },
                 else => return error.ExpectedRecordUnbound,
@@ -8110,8 +8108,8 @@ test "record_unbound basic functionality" {
 
                 // Check field names
                 const field_slice = env.types.getRecordFieldsSlice(fields);
-                try testing.expectEqualStrings("x", env.idents.getText(field_slice.get(0).name));
-                try testing.expectEqualStrings("y", env.idents.getText(field_slice.get(1).name));
+                try testing.expectEqualStrings("x", env.getIdent(field_slice.get(0).name));
+                try testing.expectEqualStrings("y", env.getIdent(field_slice.get(1).name));
             },
             else => return error.ExpectedRecordUnbound,
         },
@@ -8151,9 +8149,9 @@ test "record_unbound with multiple fields" {
 
                 // Check field names
                 const field_slice = env.types.getRecordFieldsSlice(fields);
-                try testing.expectEqualStrings("a", env.idents.getText(field_slice.get(0).name));
-                try testing.expectEqualStrings("b", env.idents.getText(field_slice.get(1).name));
-                try testing.expectEqualStrings("c", env.idents.getText(field_slice.get(2).name));
+                try testing.expectEqualStrings("a", env.getIdent(field_slice.get(0).name));
+                try testing.expectEqualStrings("b", env.getIdent(field_slice.get(1).name));
+                try testing.expectEqualStrings("c", env.getIdent(field_slice.get(2).name));
             },
             else => return error.ExpectedRecordUnbound,
         },
@@ -8845,7 +8843,7 @@ test "hex literal parsing logic integration" {
 //         prev_offset = current_offset;
 
 //         // Also verify the names are in the expected order (zebra, apple, monkey)
-//         const ident_text = ctx.module_env.idents.getText(diagnostic.ident);
+//         const ident_text = ctx.module_env.getIdent(diagnostic.ident);
 //         if (unused_var_diagnostics.items[0].ident.idx == diagnostic.ident.idx) {
 //             try std.testing.expectEqualStrings("zebra", ident_text);
 //         } else if (unused_var_diagnostics.items[1].ident.idx == diagnostic.ident.idx) {

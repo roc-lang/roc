@@ -11,7 +11,6 @@ pub const ModuleTest = struct {
 };
 
 pub const ModuleType = enum {
-    serialization,
     collections,
     base,
     types,
@@ -31,26 +30,23 @@ pub const ModuleType = enum {
         return switch (self) {
             .build_options => &.{},
             .builtins => &.{},
-            .serialization => &.{},
             .fs => &.{},
             .tracy => &.{ .build_options, .builtins },
-            .collections => &.{.serialization},
-            .base => &.{ .serialization, .collections },
-            .reporting => &.{ .base, .collections },
-            .types => &.{ .serialization, .base, .collections },
-            // TODO check below deps, remove cycles
-            .parse => &.{ .base, .compile, .collections, .tracy, .reporting },
-            .cache => &.{ .compile, .base, .collections, .serialization, .reporting, .fs, .build_options },
-            .can => &.{ .base, .parse, .collections, .compile, .types, .builtins, .tracy },
-            .compile => &.{ .base, .collections, .types, .builtins, .cache, .parse, .can, .check, .reporting, .serialization },
-            .check => &.{ .base, .tracy, .parse, .collections, .types, .can, .compile, .builtins, .reporting },
+            .collections => &.{},
+            .base => &.{.collections},
+            .types => &.{ .base, .collections },
+            .reporting => &.{ .collections, .base },
+            .parse => &.{ .tracy, .collections, .base, .reporting },
+            .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse },
+            .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
+            .compile => &.{ .tracy, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting },
+            .cache => &.{ .tracy, .collections, .base, .compile, .reporting, .fs, .build_options },
         };
     }
 };
 
 /// Manages all Roc compiler modules and their dependencies
 pub const RocModules = struct {
-    serialization: *Module,
     collections: *Module,
     base: *Module,
     types: *Module,
@@ -67,10 +63,6 @@ pub const RocModules = struct {
 
     pub fn create(b: *Build, build_options_step: *Step.Options) RocModules {
         const self = RocModules{
-            .serialization = b.addModule(
-                "serialization",
-                .{ .root_source_file = b.path("src/serialization/mod.zig") },
-            ),
             .collections = b.addModule(
                 "collections",
                 .{ .root_source_file = b.path("src/collections/mod.zig") },
@@ -100,7 +92,6 @@ pub const RocModules = struct {
 
     fn setupModuleDependencies(self: RocModules) void {
         const all_modules = [_]ModuleType{
-            .serialization,
             .collections,
             .base,
             .types,
@@ -132,7 +123,6 @@ pub const RocModules = struct {
         step.root_module.addImport("base", self.base);
         step.root_module.addImport("collections", self.collections);
         step.root_module.addImport("types", self.types);
-        step.root_module.addImport("serialization", self.serialization);
         step.root_module.addImport("compile", self.compile);
         step.root_module.addImport("reporting", self.reporting);
         step.root_module.addImport("parse", self.parse);
@@ -152,7 +142,6 @@ pub const RocModules = struct {
     /// Get a module by its type
     pub fn getModule(self: RocModules, module_type: ModuleType) *Module {
         return switch (module_type) {
-            .serialization => self.serialization,
             .collections => self.collections,
             .base => self.base,
             .types => self.types,
@@ -178,9 +167,8 @@ pub const RocModules = struct {
         }
     }
 
-    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode) [12]ModuleTest {
+    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode) [11]ModuleTest {
         const test_configs = [_]ModuleType{
-            .serialization,
             .collections,
             .base,
             .types,

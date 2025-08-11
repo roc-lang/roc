@@ -1029,7 +1029,7 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
             const pattern = cir.store.getPattern(def.pattern);
             switch (pattern) {
                 .assign => |assign| {
-                    const ident_text = cir.idents.getText(assign.ident);
+                    const ident_text = cir.getIdent(assign.ident);
                     if (std.mem.eql(u8, ident_text, identifier)) {
                         // 1. Get type string
                         var type_writer = try compile.TypeWriter.init(local_allocator, @ptrCast(cir));

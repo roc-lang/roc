@@ -5,7 +5,7 @@ const collections = @import("collections");
 const serialization = @import("serialization");
 const testing = std.testing;
 
-const CompactWriter = serialization.CompactWriter;
+const CompactWriter = collections.CompactWriter;
 
 /// The index of this string in a `Store`.
 pub const Idx = enum(u32) { _ };
@@ -93,28 +93,6 @@ pub const Store = struct {
         const raw_size = @sizeOf(u32) + self.buffer.len();
         // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
         return std.mem.alignForward(usize, raw_size, serialization.SERIALIZATION_ALIGNMENT);
-    }
-
-    /// Deserialize a Store from the provided buffer
-    pub fn deserializeFrom(buffer: []const u8, gpa: std.mem.Allocator) !Store {
-        if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
-
-        // Read buffer length
-        const buffer_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr))).*;
-
-        const expected_size = @sizeOf(u32) + buffer_len;
-        if (buffer.len < expected_size) return error.BufferTooSmall;
-
-        // Create store with exact capacity
-        var store = try Store.initCapacityBytes(gpa, buffer_len);
-
-        // Copy buffer data
-        if (buffer_len > 0) {
-            const data_start = @sizeOf(u32);
-            _ = try store.buffer.appendSlice(gpa, buffer[data_start .. data_start + buffer_len]);
-        }
-
-        return store;
     }
 
     /// Serialize this Store to the given CompactWriter. The resulting Store
@@ -213,11 +191,7 @@ test "Store empty CompactWriter roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
@@ -269,11 +243,7 @@ test "Store basic CompactWriter roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
@@ -339,11 +309,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
@@ -401,11 +367,7 @@ test "Store frozen state CompactWriter roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
@@ -455,11 +417,7 @@ test "Store.Serialized roundtrip" {
     const tmp_file = try tmp_dir.dir.createFile("test.compact", .{ .read = true });
     defer tmp_file.close();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_alloc);
 
     // Allocate and serialize using the Serialized struct
@@ -529,11 +487,7 @@ test "Store edge case indices CompactWriter roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);

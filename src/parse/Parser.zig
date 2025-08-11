@@ -253,7 +253,7 @@ fn debugToken(self: *Parser, window: usize) void {
         var extra: []u8 = "";
         if (tag == .LowerIdent or tag == .UpperIdent) {
             const e = tok_extra[i];
-            extra = self.tok_buf.env.idents.getText(e.interned);
+            extra = self.tok_buf.env.getIdent(e.interned);
         }
         std.debug.print("{s}{d}: {s} \"{s}\"\n", .{ if (i == current) "-->" else "   ", i, @tagName(tag), extra });
     }

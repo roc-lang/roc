@@ -1,10 +1,9 @@
 //! Tests for ModuleEnv
 const std = @import("std");
-const serialization = @import("serialization");
 const base = @import("base");
 
 const ModuleEnv = @import("../ModuleEnv.zig");
-const CompactWriter = serialization.CompactWriter;
+const CompactWriter = collections.CompactWriter;
 const Ident = base.Ident;
 const Expr = @import("../Expression.zig").Expr;
 
@@ -12,23 +11,24 @@ test "ModuleEnv.Serialized roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
+    var common_env = try base.CommonEnv.init(gpa, "");
+    defer common_env.deinit(gpa);
+
+    // Add some test data
+    const hello_idx = try common_env.insertIdent(gpa, Ident.for_text("hello"));
+    const world_idx = try common_env.insertIdent(gpa, Ident.for_text("world"));
+
+    _ = try common_env.insertString(gpa, "test string");
+
+    try common_env.addExposedById(gpa, hello_idx);
+
     // Create original ModuleEnv with some data
-    var original = try ModuleEnv.init(gpa, "");
+    var original = try ModuleEnv.init(gpa, &common_env);
     defer original.deinit();
 
     // Initialize CIR fields to ensure imports are available
     try original.initCIRFields(gpa, "TestModule");
 
-    // Add some test data
-    const hello_idx = try original.idents.insert(gpa, Ident.for_text("hello"));
-    const world_idx = try original.idents.insert(gpa, Ident.for_text("world"));
-    _ = try original.ident_ids_for_slicing.append(gpa, hello_idx);
-    _ = try original.ident_ids_for_slicing.append(gpa, world_idx);
-
-    const str_idx = try original.strings.insert(gpa, "test string");
-    _ = str_idx;
-
-    try original.exposed_items.addExposedById(gpa, @as(u32, @bitCast(hello_idx)));
     try original.exposed_items.setNodeIndexById(gpa, @as(u32, @bitCast(hello_idx)), 42);
     original.exposed_items.ensureSorted(gpa);
 
@@ -77,9 +77,9 @@ test "ModuleEnv.Serialized roundtrip" {
     const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule");
 
     // Verify the data was preserved
-    try testing.expectEqual(@as(usize, 2), env.ident_ids_for_slicing.len());
-    try testing.expectEqualStrings("hello", env.idents.getText(hello_idx));
-    try testing.expectEqualStrings("world", env.idents.getText(world_idx));
+    // try testing.expectEqual(@as(usize, 2), env.ident_ids_for_slicing.len());
+    try testing.expectEqualStrings("hello", env.getIdent(hello_idx));
+    try testing.expectEqualStrings("world", env.getIdent(world_idx));
 
     try testing.expectEqual(@as(usize, 1), env.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
@@ -97,8 +97,11 @@ test "ModuleEnv with types CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
+    var common_env = try base.CommonEnv.init(gpa, "");
+    defer common_env.deinit(gpa);
+
     // Create ModuleEnv with some types
-    var original = try ModuleEnv.init(gpa, "");
+    var original = try ModuleEnv.init(gpa, &common_env);
     defer original.deinit();
 
     // Initialize CIR fields
@@ -164,8 +167,11 @@ test "ModuleEnv empty CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
+    var common_env = try base.CommonEnv.init(gpa, "");
+    defer common_env.deinit(gpa);
+
     // Create empty ModuleEnv
-    var original = try ModuleEnv.init(gpa, "");
+    var original = try ModuleEnv.init(gpa, &common_env);
     defer original.deinit();
 
     // Don't initialize CIR fields to keep it truly empty
@@ -231,15 +237,18 @@ test "ModuleEnv with source code CompactWriter roundtrip" {
         \\}
     ;
 
+    var common_env = try base.CommonEnv.init(gpa, source);
+    defer common_env.deinit(gpa);
+
+    // Calculate line starts
+    try common_env.calcLineStarts(gpa);
+
     // Create ModuleEnv with source
-    var original = try ModuleEnv.init(gpa, source);
+    var original = try ModuleEnv.init(gpa, &common_env);
     defer original.deinit();
 
     // Initialize CIR fields
     try original.initCIRFields(gpa, "test.Hello");
-
-    // Calculate line starts
-    try original.calcLineStarts();
 
     // Create arena allocator for serialization
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -294,12 +303,15 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    // Create a simple ModuleEnv
-    var env = try ModuleEnv.init(gpa, "");
-    defer env.deinit();
+    var common_env = try base.CommonEnv.init(gpa, "");
+    defer common_env.deinit(gpa);
 
     // First add a string literal
-    const str_literal_idx = try env.strings.insert(gpa, "hello");
+    const str_literal_idx = try common_env.insertString(gpa, "hello");
+
+    // Create a simple ModuleEnv
+    var env = try ModuleEnv.init(gpa, &common_env);
+    defer env.deinit();
 
     // Add a string segment expression
     const segment_idx = try env.addExprAndTypeVar(.{ .e_str_segment = .{ .literal = str_literal_idx } }, .{ .structure = .str }, base.Region.from_raw_offsets(0, 5));

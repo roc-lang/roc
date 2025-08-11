@@ -54,8 +54,6 @@ pub const Report = ModuleEnv.Report;
 /// Cast function for index types
 pub const castIdx = ModuleEnv.castIdx;
 
-pub const TypeWriter = @import("TypeWriter.zig");
-
 test "compile tests" {
     std.testing.refAllDecls(@import("CIR.zig"));
     std.testing.refAllDecls(@import("test/module_env_test.zig"));
@@ -68,5 +66,4 @@ test "compile tests" {
     std.testing.refAllDecls(@import("Pattern.zig"));
     std.testing.refAllDecls(@import("Statement.zig"));
     std.testing.refAllDecls(@import("TypeAnnotation.zig"));
-    std.testing.refAllDecls(@import("TypeWriter.zig"));
 }

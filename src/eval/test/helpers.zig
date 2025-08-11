@@ -314,7 +314,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
         var i: u32 = 0;
         while (i < sorted_fields.len) : (i += 1) {
             const sorted_field = sorted_fields.get(i);
-            const field_name = resources.module_env.idents.getText(sorted_field.name);
+            const field_name = resources.module_env.getIdent(sorted_field.name);
             if (std.mem.eql(u8, field_name, expected_field.name)) {
                 found = true;
                 const field_layout = layout_cache.getLayout(sorted_field.layout);
@@ -366,7 +366,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
         // If canonicalization fails, create a runtime error
         const diagnostic_idx = try module_env.store.addDiagnostic(.{ .not_implemented = .{
-            .feature = try module_env.strings.insert(allocator, "canonicalization failed"),
+            .feature = try module_env.insertString(allocator, "canonicalization failed"),
             .region = base.Region.zero(),
         } });
         const checker = try allocator.create(Check);

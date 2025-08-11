@@ -93,7 +93,7 @@ pub const CacheModule = struct {
         error_count: u32,
         warning_count: u32,
     ) ![]align(SERIALIZATION_ALIGNMENT) u8 {
-        const CompactWriter = serialization.CompactWriter;
+        const CompactWriter = collections.CompactWriter;
 
         // Create CompactWriter
         var writer = CompactWriter{

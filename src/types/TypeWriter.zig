@@ -7,10 +7,9 @@
 
 const std = @import("std");
 const base = @import("base");
-const types_mod = @import("types");
+const types_mod = @import("types.zig");
 
-const ModuleEnv = @import("ModuleEnv.zig");
-const TypesStore = types_mod.store.Store;
+const TypesStore = @import("store.zig");
 const Allocator = std.mem.Allocator;
 const Desc = types_mod.Descriptor;
 const Var = types_mod.Var;
@@ -58,11 +57,6 @@ buf: std.ArrayList(u8),
 seen: std.ArrayList(Var),
 next_name_index: u32,
 name_counters: std.EnumMap(TypeContext, u32),
-
-/// Initialize a TypeWriter with an immutable ModuleEnv reference.
-pub fn init(gpa: std.mem.Allocator, env: *const ModuleEnv) std.mem.Allocator.Error!TypeWriter {
-    return TypeWriter.initFromParts(gpa, &env.types, &env.idents);
-}
 
 /// Initialize a TypeWriter with immutable types and idents references.
 pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, idents: *const Ident.Store) std.mem.Allocator.Error!TypeWriter {
@@ -207,7 +201,7 @@ fn writeNameCheckingCollisions(self: *TypeWriter, candidate_name: []const u8) st
     var i: u32 = 0;
     while (i < self.idents.interner.outer_indices.items.len) : (i += 1) {
         const ident_idx = Ident.Idx{ .idx = @truncate(i), .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
-        const existing_name = self.idents.getText(ident_idx);
+        const existing_name = self.getIdent(ident_idx);
         if (std.mem.eql(u8, existing_name, candidate_name)) {
             exists = true;
             break;
@@ -335,7 +329,7 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
             switch (resolved.desc.content) {
                 .flex_var => |mb_ident_idx| {
                     if (mb_ident_idx) |ident_idx| {
-                        _ = try self.buf.writer().write(self.idents.getText(ident_idx));
+                        _ = try self.buf.writer().write(self.getIdent(ident_idx));
                     } else {
                         // Check if this variable appears multiple times
                         const occurrences = self.countVarOccurrences(var_, root_var);
@@ -346,7 +340,7 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
                     }
                 },
                 .rigid_var => |ident_idx| {
-                    _ = try self.buf.writer().write(self.idents.getText(ident_idx));
+                    _ = try self.buf.writer().write(self.getIdent(ident_idx));
                 },
                 .alias => |alias| {
                     try self.writeAlias(alias, root_var);
@@ -368,7 +362,7 @@ fn writeVar(self: *TypeWriter, var_: Var, root_var: Var) std.mem.Allocator.Error
 
 /// Write an alias type
 fn writeAlias(self: *TypeWriter, alias: Alias, root_var: Var) std.mem.Allocator.Error!void {
-    _ = try self.buf.writer().write(self.idents.getText(alias.ident.ident_idx));
+    _ = try self.buf.writer().write(self.getIdent(alias.ident.ident_idx));
     var args_iter = self.types.iterAliasArgs(alias);
     if (args_iter.count() > 0) {
         _ = try self.buf.writer().write("(");
@@ -461,7 +455,7 @@ fn writeTuple(self: *TypeWriter, tuple: Tuple, root_var: Var) std.mem.Allocator.
 
 /// Write a nominal type
 fn writeNominalType(self: *TypeWriter, nominal_type: NominalType, root_var: Var) std.mem.Allocator.Error!void {
-    _ = try self.buf.writer().write(self.idents.getText(nominal_type.ident.ident_idx));
+    _ = try self.buf.writer().write(self.getIdent(nominal_type.ident.ident_idx));
 
     var args_iter = self.types.iterNominalArgs(nominal_type);
     if (args_iter.count() > 0) {
@@ -492,14 +486,14 @@ fn writeRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range,
     const fields_slice = self.types.getRecordFieldsSlice(fields);
 
     // Write first field - we already verified that there's at least one field
-    _ = try self.buf.writer().write(self.idents.getText(fields_slice.items(.name)[0]));
+    _ = try self.buf.writer().write(self.getIdent(fields_slice.items(.name)[0]));
     _ = try self.buf.writer().write(": ");
     try self.writeVarWithContext(fields_slice.items(.var_)[0], .RecordFieldContent, root_var);
 
     // Write remaining fields
     for (fields_slice.items(.name)[1..], fields_slice.items(.var_)[1..]) |name, var_| {
         _ = try self.buf.writer().write(", ");
-        _ = try self.buf.writer().write(self.idents.getText(name));
+        _ = try self.buf.writer().write(self.getIdent(name));
         _ = try self.buf.writer().write(": ");
         try self.writeVarWithContext(var_, .RecordFieldContent, root_var);
     }
@@ -535,7 +529,7 @@ fn writeRecord(self: *TypeWriter, record: Record, root_var: Var) std.mem.Allocat
     _ = try self.buf.writer().write("{ ");
     for (fields.items(.name), fields.items(.var_), 0..) |field_name, field_var, i| {
         if (i > 0) _ = try self.buf.writer().write(", ");
-        _ = try self.buf.writer().write(self.idents.getText(field_name));
+        _ = try self.buf.writer().write(self.getIdent(field_name));
         _ = try self.buf.writer().write(": ");
         try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
     }
@@ -550,7 +544,7 @@ fn writeRecord(self: *TypeWriter, record: Record, root_var: Var) std.mem.Allocat
                 const ext_fields = self.types.getRecordFieldsSlice(ext_record.fields);
                 for (ext_fields.items(.name), ext_fields.items(.var_)) |field_name, field_var| {
                     if (fields.len > 0 or ext_fields.len > 0) _ = try self.buf.writer().write(", ");
-                    _ = try self.buf.writer().write(self.idents.getText(field_name));
+                    _ = try self.buf.writer().write(self.getIdent(field_name));
                     _ = try self.buf.writer().write(": ");
                     try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
                 }
@@ -574,7 +568,7 @@ fn writeRecord(self: *TypeWriter, record: Record, root_var: Var) std.mem.Allocat
             // Show rigid vars with .. syntax
             if (fields.len > 0) _ = try self.buf.writer().write(", ");
             _ = try self.buf.writer().write("..");
-            _ = try self.buf.writer().write(self.idents.getText(ident_idx));
+            _ = try self.buf.writer().write(self.getIdent(ident_idx));
         },
         else => {
             if (fields.len > 0) _ = try self.buf.writer().write(", ");
@@ -596,7 +590,7 @@ fn writeRecordExtension(self: *TypeWriter, ext_var: Var, num_fields: usize, root
                 const ext_fields = self.types.getRecordFieldsSlice(ext_record.fields);
                 for (ext_fields.items(.name), ext_fields.items(.var_)) |field_name, field_var| {
                     _ = try self.buf.writer().write(", ");
-                    _ = try self.buf.writer().write(self.idents.getText(field_name));
+                    _ = try self.buf.writer().write(self.getIdent(field_name));
                     _ = try self.buf.writer().write(": ");
                     try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
                 }
@@ -620,7 +614,7 @@ fn writeRecordExtension(self: *TypeWriter, ext_var: Var, num_fields: usize, root
             // Show rigid vars with .. syntax
             if (num_fields > 0) _ = try self.buf.writer().write(", ");
             _ = try self.buf.writer().write("..");
-            _ = try self.buf.writer().write(self.idents.getText(ident_idx));
+            _ = try self.buf.writer().write(self.getIdent(ident_idx));
         },
         else => {
             // Show other types (aliases, errors, etc)
@@ -650,7 +644,7 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
     switch (ext_resolved.desc.content) {
         .flex_var => |mb_ident_idx| {
             if (mb_ident_idx) |ident_idx| {
-                _ = try self.buf.writer().write(self.idents.getText(ident_idx));
+                _ = try self.buf.writer().write(self.getIdent(ident_idx));
             } else {
                 // Check if this variable appears multiple times
                 const occurrences = self.countVarOccurrences(tag_union.ext, root_var);
@@ -667,7 +661,7 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
             },
         },
         .rigid_var => |ident_idx| {
-            _ = try self.buf.writer().write(self.idents.getText(ident_idx));
+            _ = try self.buf.writer().write(self.getIdent(ident_idx));
         },
         else => {
             try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
@@ -677,7 +671,7 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
 
 /// Write a single tag
 fn writeTag(self: *TypeWriter, tag: Tag, root_var: Var) std.mem.Allocator.Error!void {
-    _ = try self.buf.writer().write(self.idents.getText(tag.name));
+    _ = try self.buf.writer().write(self.getIdent(tag.name));
     const args = self.types.sliceVars(tag.args);
     if (args.len > 0) {
         _ = try self.buf.writer().write("(");
@@ -762,4 +756,8 @@ fn writeFracType(self: *TypeWriter, prec: Num.Frac.Precision) std.mem.Allocator.
         .f64 => try self.buf.writer().write("F64"),
         .dec => try self.buf.writer().write("Dec"),
     };
+}
+
+pub fn getIdent(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
+    return self.idents.getText(idx);
 }

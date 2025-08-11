@@ -573,7 +573,7 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                const value = ir.strings.get(e.literal);
+                const value = ir.getString(e.literal);
                 try tree.pushStringPair("string", value);
 
                 const attrs = tree.beginNode();
@@ -782,7 +782,7 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-tag");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("name", ir.idents.getText(tag_expr.name));
+                try tree.pushStringPair("name", ir.getIdent(tag_expr.name));
                 const attrs = tree.beginNode();
 
                 if (tag_expr.args.span.len > 0) {
@@ -807,7 +807,7 @@ pub const Expr = union(enum) {
                 switch (stmt) {
                     .s_nominal_decl => |decl| {
                         const header = ir.store.getTypeHeader(decl.header);
-                        try tree.pushStringPair("nominal", ir.idents.getText(header.name));
+                        try tree.pushStringPair("nominal", ir.getIdent(header.name));
                     },
                     else => {
                         // Handle malformed nominal type declaration by pushing error info
@@ -989,7 +989,7 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-crash");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("msg", ir.strings.get(e.msg));
+                try tree.pushStringPair("msg", ir.getString(e.msg));
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },

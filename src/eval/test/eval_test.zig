@@ -16,7 +16,7 @@ const serialization = @import("serialization");
 const builtins = @import("builtins");
 
 const ModuleEnv = compile.ModuleEnv;
-const CompactWriter = serialization.CompactWriter;
+const CompactWriter = collections.CompactWriter;
 const testing = std.testing;
 const test_allocator = testing.allocator;
 

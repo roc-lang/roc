@@ -1674,7 +1674,7 @@ pub const ExposedItem = union(enum) {
                     try tree.endNode(begin, attrs);
                     return;
                 };
-                const text = env.idents.getText(ident_idx);
+                const text = env.getIdent(ident_idx);
                 try tree.pushString(text);
                 const attrs2 = tree.beginNode();
                 try tree.endNode(text_begin, attrs2);
@@ -1686,7 +1686,7 @@ pub const ExposedItem = union(enum) {
                         try tree.endNode(begin, attrs);
                         return;
                     };
-                    const as_text = env.idents.getText(as_ident);
+                    const as_text = env.getIdent(as_ident);
                     try tree.pushStringPair("as", as_text);
                 }
 
@@ -1699,13 +1699,13 @@ pub const ExposedItem = union(enum) {
 
                 // text attribute
                 const token = ast.tokens.tokens.get(i.ident);
-                const text = env.idents.getText(token.extra.interned);
+                const text = env.getIdent(token.extra.interned);
                 try tree.pushStringPair("text", text);
 
                 // as attribute if present
                 if (i.as) |a| {
                     const as_tok = ast.tokens.tokens.get(a);
-                    const as_text = env.idents.getText(as_tok.extra.interned);
+                    const as_text = env.getIdent(as_tok.extra.interned);
                     try tree.pushStringPair("as", as_text);
                 }
 
@@ -1720,7 +1720,7 @@ pub const ExposedItem = union(enum) {
 
                 // text attribute
                 const token = ast.tokens.tokens.get(i.ident);
-                const text = env.idents.getText(token.extra.interned);
+                const text = env.getIdent(token.extra.interned);
                 try tree.pushStringPair("text", text);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);

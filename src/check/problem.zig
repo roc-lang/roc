@@ -1122,11 +1122,11 @@ pub const ReportBuilder = struct {
 
             // Check if there's a tag with the same name in the list of possible tags
 
-            const actual_tag_name_str = self.can_ir.idents.getText(actual_tag.name);
+            const actual_tag_name_str = self.can_ir.getIdent(actual_tag.name);
             var iter = expected_content.structure.tag_union.tags.iterIndices();
             while (iter.next()) |tag_index| {
                 const cur_expected_tag = self.snapshots.tags.get(tag_index);
-                const expected_tag_name_str = self.can_ir.idents.getText(cur_expected_tag.name);
+                const expected_tag_name_str = self.can_ir.getIdent(cur_expected_tag.name);
 
                 if (std.mem.eql(u8, actual_tag_name_str, expected_tag_name_str)) {
                     snapshot_writer.resetContext();
@@ -1199,7 +1199,7 @@ pub const ReportBuilder = struct {
         try report.document.addReflowingText("But ");
         if (data.fn_name) |fn_name_ident| {
             self.buf.clearRetainingCapacity();
-            const fn_name = try report.addOwnedString(self.can_ir.idents.getText(fn_name_ident));
+            const fn_name = try report.addOwnedString(self.can_ir.getIdent(fn_name_ident));
             try report.document.addAnnotated(fn_name, .inline_code);
         } else {
             try report.document.addReflowingText("the function");
@@ -1233,7 +1233,7 @@ pub const ReportBuilder = struct {
         };
         var report = Report.init(self.gpa, title, .runtime_error);
 
-        const type_name = try report.addOwnedString(self.can_ir.idents.getText(data.type_name));
+        const type_name = try report.addOwnedString(self.can_ir.getIdent(data.type_name));
 
         self.buf.clearRetainingCapacity();
         try self.buf.writer().print("{d}", .{data.num_expected_args});

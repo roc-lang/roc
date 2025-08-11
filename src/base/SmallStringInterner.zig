@@ -11,7 +11,7 @@ const collections = @import("collections");
 const serialization = @import("serialization");
 
 const Region = @import("Region.zig");
-const CompactWriter = serialization.CompactWriter;
+const CompactWriter = collections.CompactWriter;
 
 const SmallStringInterner = @This();
 

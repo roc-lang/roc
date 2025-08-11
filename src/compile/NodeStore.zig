@@ -5,7 +5,7 @@ const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
 const serialization = @import("serialization");
-const CompactWriter = serialization.CompactWriter;
+const CompactWriter = collections.CompactWriter;
 const Node = @import("Node.zig");
 const ModuleEnv = @import("ModuleEnv.zig");
 const RocDec = ModuleEnv.RocDec;
@@ -3203,11 +3203,7 @@ test "NodeStore empty CompactWriter roundtrip" {
     defer file.close();
 
     // Serialize using CompactWriter
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);

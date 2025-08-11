@@ -5,9 +5,7 @@ const base = @import("base");
 const parse = @import("parse");
 const compile = @import("compile");
 const reporting = @import("reporting");
-const serialization = @import("serialization");
 
-const SERIALIZATION_ALIGNMENT = serialization.SERIALIZATION_ALIGNMENT;
 const DataSizeUnit = @import("cache_reporting.zig").DataSizeUnit;
 const CacheManager = @import("cache_manager.zig").CacheManager;
 const CacheConfig = @import("cache_config.zig").CacheConfig;

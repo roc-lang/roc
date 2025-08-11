@@ -11,6 +11,8 @@ pub const types = @import("types.zig");
 pub const store = @import("store.zig");
 pub const instantiate = @import("instantiate.zig");
 
+pub const TypeWriter = @import("TypeWriter.zig");
+
 pub const Alias = types.Alias;
 pub const Content = types.Content;
 pub const FlatType = types.FlatType;

@@ -12,7 +12,7 @@ const collections = @import("collections");
 const Region = @import("Region.zig");
 const SmallStringInterner = @import("SmallStringInterner.zig");
 
-const CompactWriter = serialization.CompactWriter;
+const CompactWriter = collections.CompactWriter;
 
 const Ident = @This();
 
@@ -245,45 +245,6 @@ pub const Store = struct {
         return std.mem.alignForward(usize, size, serialization.SERIALIZATION_ALIGNMENT);
     }
 
-    /// Deserialize an Ident.Store from the provided buffer
-    pub fn deserializeFrom(buffer: []const u8, gpa: std.mem.Allocator) !Store {
-        if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
-
-        var offset: usize = 0;
-
-        // Deserialize interner bytes
-        const bytes_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-        var bytes = collections.SafeList(u8){};
-        if (bytes_len > 0) {
-            if (offset + bytes_len > buffer.len) return error.BufferTooSmall;
-            bytes = try collections.SafeList(u8).initCapacity(gpa, bytes_len);
-            _ = try bytes.appendSlice(gpa, buffer[offset .. offset + bytes_len]);
-            offset += bytes_len;
-        }
-        offset = std.mem.alignForward(usize, offset, @alignOf(u32));
-
-        // Deserialize next_unique_name
-        if (offset + @sizeOf(u32) > buffer.len) return error.BufferTooSmall;
-        const next_unique_name = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-
-        // Create empty hash table
-        const hash_table = collections.SafeList(SmallStringInterner.Idx){};
-
-        // Construct the interner
-        const interner = SmallStringInterner{
-            .bytes = bytes,
-            .hash_table = hash_table,
-            .entry_count = 0,
-            .frozen = if (std.debug.runtime_safety) false else {},
-        };
-
-        return Store{
-            .interner = interner,
-            .next_unique_name = next_unique_name,
-        };
-    }
-
     /// Serialize this Store to the given CompactWriter. The resulting Store
     /// in the writer's buffer will have offsets instead of pointers. Calling any
     /// methods on it or dereferencing its internal "pointers" (which are now
@@ -291,7 +252,7 @@ pub const Store = struct {
     pub fn serialize(
         self: *const Store,
         allocator: std.mem.Allocator,
-        writer: *serialization.CompactWriter,
+        writer: *collections.CompactWriter,
     ) std.mem.Allocator.Error!*const Store {
         // First, write the Store struct itself
         const offset_self = try writer.appendAlloc(allocator, Store);

@@ -44,16 +44,14 @@ const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
-const compile = @import("compile");
 
 const problem_mod = @import("problem.zig");
 const occurs = @import("occurs.zig");
 const snapshot_mod = @import("snapshot.zig");
 
-const ModuleEnv = compile.ModuleEnv;
-
 const Region = base.Region;
 const Ident = base.Ident;
+const CommonEnv = base.CommonEnv;
 
 const SmallStringInterner = collections.SmallStringInterner;
 
@@ -120,7 +118,7 @@ pub const Result = union(enum) {
 /// * Compares variable contents for equality
 /// * Merges unified variables so 1 is "root" and the other is "redirect"
 pub fn unify(
-    module_env: *const ModuleEnv,
+    common_env: *const CommonEnv,
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
@@ -136,7 +134,7 @@ pub fn unify(
     unify_scratch.reset();
 
     // Unify
-    var unifier = Unifier(*types_mod.Store).init(module_env, types, unify_scratch, occurs_scratch);
+    var unifier = Unifier(*types_mod.Store).init(common_env, types, unify_scratch, occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
         const problem: Problem = blk: {
             switch (err) {
@@ -274,7 +272,7 @@ pub fn unify(
                 },
             }
         };
-        const problem_idx = try problems.appendProblem(module_env.gpa, problem);
+        const problem_idx = try problems.appendProblem(common_env.gpa, problem);
         types.union_(a, b, .{
             .content = .err,
             .rank = Rank.generalized,
@@ -308,7 +306,7 @@ fn Unifier(comptime StoreTypeB: type) type {
     return struct {
         const Self = @This();
 
-        module_env: *const ModuleEnv,
+        common_env: *const CommonEnv,
         types_store: StoreTypeB,
         scratch: *Scratch,
         occurs_scratch: *occurs.Scratch,
@@ -317,13 +315,13 @@ fn Unifier(comptime StoreTypeB: type) type {
 
         /// Init unifier
         pub fn init(
-            module_env: *const ModuleEnv,
+            common_env: *const CommonEnv,
             types_store: *types_mod.Store,
             scratch: *Scratch,
             occurs_scratch: *occurs.Scratch,
         ) Unifier(*types_mod.Store) {
             return .{
-                .module_env = module_env,
+                .common_env = common_env,
                 .types_store = types_store,
                 .scratch = scratch,
                 .occurs_scratch = occurs_scratch,
@@ -519,7 +517,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     //     self.merge(vars, vars.a.desc.content);
                     //     return;
                     // }
-                    if (TypeIdent.eql(&self.module_env.idents, a_alias.ident, b_alias.ident)) {
+                    if (TypeIdent.eql(&self.common_env.idents, a_alias.ident, b_alias.ident)) {
                         try self.unifyTwoAliases(vars, a_alias, b_alias);
                     } else {
                         try self.unifyGuarded(backing_var, b_backing_var);
@@ -777,7 +775,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                             // Partition the fields
                             const partitioned = Self.partitionFields(
-                                &self.module_env.idents,
+                                &self.common_env.idents,
                                 self.scratch,
                                 a_gathered_fields.range,
                                 b_gathered_range,
@@ -832,7 +830,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                             // Partition the fields
                             const partitioned = Self.partitionFields(
-                                &self.module_env.idents,
+                                &self.common_env.idents,
                                 self.scratch,
                                 a_gathered_range,
                                 b_gathered_fields.range,
@@ -871,7 +869,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                             // Partition the fields
                             const partitioned = Self.partitionFields(
-                                &self.module_env.idents,
+                                &self.common_env.idents,
                                 self.scratch,
                                 a_gathered_range,
                                 b_gathered_range,
@@ -908,7 +906,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                             // Partition the fields
                             const partitioned = Self.partitionFields(
-                                &self.module_env.idents,
+                                &self.common_env.idents,
                                 self.scratch,
                                 a_gathered_range,
                                 b_gathered_fields.range,
@@ -960,7 +958,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                             // Partition the fields
                             const partitioned = Self.partitionFields(
-                                &self.module_env.idents,
+                                &self.common_env.idents,
                                 self.scratch,
                                 a_gathered_fields.range,
                                 b_gathered_range,
@@ -1197,7 +1195,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                         },
                         .int_precision => |prec| {
                             // Check if the requirements variable is rigid
-                            const req_var_desc = self.module_env.types.resolveVar(a_poly.var_).desc;
+                            const req_var_desc = self.common_env.types.resolveVar(a_poly.var_).desc;
                             if (req_var_desc.content == .rigid_var) {
                                 return error.TypeMismatch;
                             }
@@ -1243,7 +1241,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                         },
                         .num_compact => |b_compact| {
                             // Check if the requirements variable is rigid
-                            const req_var_desc = self.module_env.types.resolveVar(a_poly.var_).desc;
+                            const req_var_desc = self.common_env.types.resolveVar(a_poly.var_).desc;
                             if (req_var_desc.content == .rigid_var) {
                                 return error.TypeMismatch;
                             }
@@ -1504,7 +1502,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                         },
                         .frac_poly => |b_poly| {
                             // Check if the requirements variable is rigid
-                            const req_var_desc = self.module_env.types.resolveVar(b_poly.var_).desc;
+                            const req_var_desc = self.common_env.types.resolveVar(b_poly.var_).desc;
                             if (req_var_desc.content == .rigid_var) {
                                 return error.TypeMismatch;
                             }
@@ -1715,7 +1713,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                 return;
             }
 
-            if (!TypeIdent.eql(&self.module_env.idents, a_type.ident, b_type.ident)) {
+            if (!TypeIdent.eql(&self.common_env.idents, a_type.ident, b_type.ident)) {
                 return error.TypeMismatch;
             }
 
@@ -1856,7 +1854,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
             // Then partition the fields
             const partitioned = Self.partitionFields(
-                &self.module_env.idents,
+                &self.common_env.idents,
                 self.scratch,
                 a_gathered_fields.range,
                 b_gathered_fields.range,
@@ -2273,7 +2271,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
             // Then partition the tags
             const partitioned = Self.partitionTags(
-                &self.module_env.idents,
+                &self.common_env.idents,
                 self.scratch,
                 a_gathered_tags.range,
                 b_gathered_tags.range,
@@ -2793,7 +2791,7 @@ const RootModule = @This();
 const TestEnv = struct {
     const Self = @This();
 
-    module_env: *ModuleEnv,
+    module_env: *CommonEnv,
     snapshots: snapshot_mod.Store,
     problems: problem_mod.Store,
     scratch: Scratch,
@@ -2806,8 +2804,8 @@ const TestEnv = struct {
     /// could pull module_env's initialization out of here, but this results in
     /// slight more verbose setup for each test
     fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
-        const module_env = try gpa.create(ModuleEnv);
-        module_env.* = try ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        const module_env = try gpa.create(CommonEnv);
+        module_env.* = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
         try module_env.initCIRFields(gpa, "Test");
         return .{
             .module_env = module_env,

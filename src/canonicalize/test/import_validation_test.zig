@@ -61,13 +61,13 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     // Add exposed items to Json module
     const Ident = base.Ident;
     const decode_idx = try json_env.idents.insert(allocator, Ident.for_text("decode"));
-    try json_env.exposed_items.addExposedById(allocator, @bitCast(decode_idx));
+    try json_env.addExposedById(decode_idx);
     const encode_idx = try json_env.idents.insert(allocator, Ident.for_text("encode"));
-    try json_env.exposed_items.addExposedById(allocator, @bitCast(encode_idx));
+    try json_env.addExposedById(encode_idx);
     const json_error_idx = try json_env.idents.insert(allocator, Ident.for_text("JsonError"));
-    try json_env.exposed_items.addExposedById(allocator, @bitCast(json_error_idx));
+    try json_env.addExposedById(json_error_idx);
     const decode_problem_idx = try json_env.idents.insert(allocator, Ident.for_text("DecodeProblem"));
-    try json_env.exposed_items.addExposedById(allocator, @bitCast(decode_problem_idx));
+    try json_env.addExposedById(decode_problem_idx);
 
     try module_envs.put("Json", json_env);
 
@@ -81,11 +81,11 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
 
     // Add exposed items to Utils module
     const map_idx = try utils_env.idents.insert(allocator, Ident.for_text("map"));
-    try utils_env.exposed_items.addExposedById(allocator, @bitCast(map_idx));
+    try utils_env.addExposedById(map_idx);
     const filter_idx = try utils_env.idents.insert(allocator, Ident.for_text("filter"));
-    try utils_env.exposed_items.addExposedById(allocator, @bitCast(filter_idx));
+    try utils_env.addExposedById(filter_idx);
     const result_idx = try utils_env.idents.insert(allocator, Ident.for_text("Result"));
-    try utils_env.exposed_items.addExposedById(allocator, @bitCast(result_idx));
+    try utils_env.addExposedById(result_idx);
 
     try module_envs.put("Utils", utils_env);
 
@@ -143,21 +143,21 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         switch (diagnostic) {
             .module_not_found => |d| {
                 module_not_found_count += 1;
-                const module_name = parse_env.idents.getText(d.module_name);
+                const module_name = parse_env.getIdent(d.module_name);
                 if (std.mem.eql(u8, module_name, "NonExistent")) {
                     found_non_existent = true;
                 }
             },
             .value_not_exposed => |d| {
                 value_not_exposed_count += 1;
-                const value_name = parse_env.idents.getText(d.value_name);
+                const value_name = parse_env.getIdent(d.value_name);
                 if (std.mem.eql(u8, value_name, "doesNotExist")) {
                     found_does_not_exist = true;
                 }
             },
             .type_not_exposed => |d| {
                 type_not_exposed_count += 1;
-                const type_name = parse_env.idents.getText(d.type_name);
+                const type_name = parse_env.getIdent(d.type_name);
                 if (std.mem.eql(u8, type_name, "InvalidType")) {
                     found_invalid_type = true;
                 }
@@ -273,7 +273,7 @@ test "import interner - Import.Idx functionality" {
     var found_set = false;
 
     for (result.parse_env.imports.imports.items.items) |import_string_idx| {
-        const module_name = result.parse_env.strings.get(import_string_idx);
+        const module_name = result.parse_env.getString(import_string_idx);
 
         if (std.mem.eql(u8, module_name, "List")) {
             found_list = true;
@@ -296,7 +296,7 @@ test "import interner - Import.Idx functionality" {
     // Get the Import.Idx for "List" (should be used twice)
     var list_import_idx: ?ModuleEnv.Import.Idx = null;
     for (result.parse_env.imports.imports.items.items, 0..) |import_string_idx, idx| {
-        if (std.mem.eql(u8, result.parse_env.strings.get(import_string_idx), "List")) {
+        if (std.mem.eql(u8, result.parse_env.getString(import_string_idx), "List")) {
             list_import_idx = @enumFromInt(idx);
             break;
         }
@@ -353,12 +353,12 @@ test "import interner - comprehensive usage example" {
     var found_result = false;
 
     for (result.parse_env.imports.imports.items.items, 0..) |import_string_idx, idx| {
-        if (std.mem.eql(u8, result.parse_env.strings.get(import_string_idx), "List")) {
+        if (std.mem.eql(u8, result.parse_env.getString(import_string_idx), "List")) {
             found_list = true;
             // Note: We can't verify exposed items count here as Import.Store only stores module names
-        } else if (std.mem.eql(u8, result.parse_env.strings.get(import_string_idx), "Dict")) {
+        } else if (std.mem.eql(u8, result.parse_env.getString(import_string_idx), "Dict")) {
             found_dict = true;
-        } else if (std.mem.eql(u8, result.parse_env.strings.get(import_string_idx), "Result")) {
+        } else if (std.mem.eql(u8, result.parse_env.getString(import_string_idx), "Result")) {
             found_result = true;
         }
 
@@ -434,7 +434,7 @@ test "module scopes - imports work in module scope" {
     var has_list = false;
     var has_dict = false;
     for (imports.items.items) |import_string_idx| {
-        const import_name = result.parse_env.strings.get(import_string_idx);
+        const import_name = result.parse_env.getString(import_string_idx);
         if (std.mem.eql(u8, import_name, "List")) has_list = true;
         if (std.mem.eql(u8, import_name, "Dict")) has_dict = true;
     }
@@ -491,7 +491,7 @@ test "module-qualified lookups with e_lookup_external" {
     var has_list = false;
     var has_dict = false;
     for (imports_list.items.items) |import_string_idx| {
-        const import_name = result.parse_env.strings.get(import_string_idx);
+        const import_name = result.parse_env.getString(import_string_idx);
         if (std.mem.eql(u8, import_name, "List")) has_list = true;
         if (std.mem.eql(u8, import_name, "Dict")) has_dict = true;
     }
@@ -534,11 +534,11 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     // Add exposed items and set their node indices
     const Ident = base.Ident;
     const add_idx = try math_env.idents.insert(allocator, Ident.for_text("add"));
-    try math_env.exposed_items.addExposedById(allocator, @bitCast(add_idx));
+    try math_env.addExposedById(add_idx);
     const multiply_idx = try math_env.idents.insert(allocator, Ident.for_text("multiply"));
-    try math_env.exposed_items.addExposedById(allocator, @bitCast(multiply_idx));
+    try math_env.addExposedById(multiply_idx);
     const pi_idx = try math_env.idents.insert(allocator, Ident.for_text("PI"));
-    try math_env.exposed_items.addExposedById(allocator, @bitCast(pi_idx));
+    try math_env.addExposedById(pi_idx);
 
     // Simulate having CIR node indices for these exposed items
     // In real usage, these would be set during canonicalization of MathUtils
@@ -584,7 +584,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     const imports_list = result.parse_env.imports.imports;
     var has_mathutils = false;
     for (imports_list.items.items) |import_string_idx| {
-        const import_name = result.parse_env.strings.get(import_string_idx);
+        const import_name = result.parse_env.getString(import_string_idx);
         if (std.mem.eql(u8, import_name, "MathUtils")) {
             has_mathutils = true;
             break;
@@ -611,7 +611,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
         allocator.destroy(empty_env);
     }
     const undefined_idx = try empty_env.idents.insert(allocator, Ident.for_text("undefined"));
-    try empty_env.exposed_items.addExposedById(allocator, @bitCast(undefined_idx));
+    try empty_env.addExposedById(undefined_idx);
     // Don't set node index - should default to 0
     try module_envs.put("EmptyModule", empty_env);
 
@@ -642,7 +642,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     const imports_list2 = result2.parse_env.imports.imports;
     var has_empty_module = false;
     for (imports_list2.items.items) |import_string_idx| {
-        const import_name = result2.parse_env.strings.get(import_string_idx);
+        const import_name = result2.parse_env.getString(import_string_idx);
         if (std.mem.eql(u8, import_name, "EmptyModule")) {
             has_empty_module = true;
             break;

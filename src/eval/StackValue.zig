@@ -429,7 +429,7 @@ pub const RecordAccessor = struct {
     pub fn findFieldIndex(self: RecordAccessor, env: anytype, field_name: []const u8) ?usize {
         for (0..self.field_layouts.len) |idx| {
             const field = self.field_layouts.get(idx);
-            if (std.mem.eql(u8, env.idents.getText(field.name), field_name)) {
+            if (std.mem.eql(u8, env.getIdent(field.name), field_name)) {
                 return idx;
             }
         }

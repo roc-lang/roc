@@ -18,6 +18,8 @@ pub const PackedDataSpan = @import("PackedDataSpan.zig").PackedDataSpan;
 pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
 pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;
 
+pub const CommonEnv = @import("CommonEnv.zig");
+
 test {
     _ = @import("Ident.zig");
 }

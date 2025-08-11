@@ -811,7 +811,7 @@ pub fn setupSharedMemoryWithModuleEnv(_: std.mem.Allocator, roc_file_path: []con
         const pattern = env.store.getPattern(def.pattern);
         if (pattern == .assign) {
             const ident_idx = pattern.assign.ident;
-            const ident_text = env.idents.getText(ident_idx);
+            const ident_text = env.getIdent(ident_idx);
             if (std.mem.eql(u8, ident_text, "main")) {
                 main_expr_idx = @intFromEnum(def.expr);
                 break;

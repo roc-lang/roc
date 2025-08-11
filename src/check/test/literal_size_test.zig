@@ -4,9 +4,7 @@ const std = @import("std");
 const base = @import("base");
 const types = @import("types");
 const Check = @import("../Check.zig");
-const compile = @import("compile");
 
-const ModuleEnv = compile.ModuleEnv;
 const TypesStore = types.TypesStore;
 const Content = types.Content;
 const Var = types.Var;

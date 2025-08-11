@@ -13,8 +13,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuilder;
-const CompactWriter = @import("serialization").CompactWriter;
-const serialization = @import("serialization");
+const CompactWriter = @import("CompactWriter.zig");
 
 // We use u32 which is the bit representation of base.Ident.Idx
 // This includes both the 29-bit index AND the 3-bit attributes (effectful, ignored, reassignable)

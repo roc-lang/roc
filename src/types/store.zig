@@ -687,7 +687,7 @@ pub const Store = struct {
             self: *Serialized,
             store: *const Store,
             allocator: Allocator,
-            writer: *serialization.CompactWriter,
+            writer: *collections.CompactWriter,
         ) Allocator.Error!void {
             // Serialize each component
             try self.slots.serialize(&store.slots, allocator, writer);
@@ -725,7 +725,7 @@ pub const Store = struct {
     pub fn serialize(
         self: *const Self,
         allocator: Allocator,
-        writer: *serialization.CompactWriter,
+        writer: *collections.CompactWriter,
     ) std.mem.Allocator.Error!*const Self {
         // First, write the Store struct itself
         const offset_self = try writer.appendAlloc(allocator, Self);
@@ -865,7 +865,7 @@ const SlotStore = struct {
             self: *Serialized,
             slot_store: *const SlotStore,
             allocator: Allocator,
-            writer: *serialization.CompactWriter,
+            writer: *collections.CompactWriter,
         ) Allocator.Error!void {
             try self.backing.serialize(&slot_store.backing, allocator, writer);
         }
@@ -912,7 +912,7 @@ const SlotStore = struct {
     pub fn serialize(
         self: *const Self,
         allocator: Allocator,
-        writer: *serialization.CompactWriter,
+        writer: *collections.CompactWriter,
     ) std.mem.Allocator.Error!*const Self {
         // Since SlotStore is just a wrapper around SafeList, serialize the backing directly
         const serialized_backing = try self.backing.serialize(allocator, writer);
@@ -969,7 +969,7 @@ const DescStore = struct {
             self: *Serialized,
             desc_store: *const DescStore,
             allocator: Allocator,
-            writer: *serialization.CompactWriter,
+            writer: *collections.CompactWriter,
         ) Allocator.Error!void {
             try self.backing.serialize(&desc_store.backing, allocator, writer);
         }
@@ -1010,7 +1010,7 @@ const DescStore = struct {
     pub fn serialize(
         self: *const Self,
         allocator: Allocator,
-        writer: *serialization.CompactWriter,
+        writer: *collections.CompactWriter,
     ) std.mem.Allocator.Error!*const Self {
         // Since DescStore is just a wrapper around SafeMultiList, serialize the backing directly
         const serialized_backing = try self.backing.serialize(allocator, writer);
@@ -1108,7 +1108,7 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
 // TODO: Fix serialization issues
 // test "Store empty CompactWriter roundtrip" {
 //     const gpa = std.testing.allocator;
-//     const CompactWriter = serialization.CompactWriter;
+//     const CompactWriter = collections.CompactWriter;
 
 //     // Create an empty Store
 //     var original = try Store.init(gpa);
@@ -1153,7 +1153,7 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
 // TODO FIXME
 // test "Store basic CompactWriter roundtrip" {
 //     const gpa = std.testing.allocator;
-//     const CompactWriter = serialization.CompactWriter;
+//     const CompactWriter = collections.CompactWriter;
 
 //     // Create original Store and add some types
 //     var original = try Store.init(gpa);
@@ -1224,7 +1224,7 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
 // TODO FIXME
 // test "Store comprehensive CompactWriter roundtrip" {
 //     const gpa = std.testing.allocator;
-//     const CompactWriter = serialization.CompactWriter;
+//     const CompactWriter = collections.CompactWriter;
 //     var idents = try base.Ident.Store.initCapacity(gpa, 10);
 //     defer idents.deinit(gpa);
 
@@ -1352,7 +1352,7 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
 
 test "SlotStore.Serialized roundtrip" {
     const gpa = std.testing.allocator;
-    const CompactWriter = serialization.CompactWriter;
+    const CompactWriter = collections.CompactWriter;
 
     var slot_store = try SlotStore.init(gpa, 4);
     defer slot_store.deinit(gpa);
@@ -1407,7 +1407,7 @@ test "SlotStore.Serialized roundtrip" {
 // TODO FIXME
 // test "DescStore.Serialized roundtrip" {
 //     const gpa = std.testing.allocator;
-//     const CompactWriter = serialization.CompactWriter;
+//     const CompactWriter = collections.CompactWriter;
 
 //     var desc_store = try DescStore.init(gpa, 4);
 //     defer desc_store.deinit(gpa);
@@ -1468,7 +1468,7 @@ test "SlotStore.Serialized roundtrip" {
 // TODO FIXME
 // test "Store.Serialized roundtrip" {
 //     const gpa = std.testing.allocator;
-//     const CompactWriter = serialization.CompactWriter;
+//     const CompactWriter = collections.CompactWriter;
 
 //     var store = try Store.init(gpa);
 //     defer store.deinit();
@@ -1521,7 +1521,7 @@ test "SlotStore.Serialized roundtrip" {
 // TODO FIXME
 // test "Store multiple instances CompactWriter roundtrip" {
 //     const gpa = std.testing.allocator;
-//     const CompactWriter = serialization.CompactWriter;
+//     const CompactWriter = collections.CompactWriter;
 
 //     // Create multiple stores
 //     var store1 = try Store.init(gpa);
@@ -1604,7 +1604,7 @@ test "SlotStore.Serialized roundtrip" {
 
 test "SlotStore and DescStore serialization and deserialization" {
     const gpa = std.testing.allocator;
-    const CompactWriter = serialization.CompactWriter;
+    const CompactWriter = collections.CompactWriter;
 
     var original = try Store.init(gpa);
     defer original.deinit();
@@ -1637,11 +1637,7 @@ test "SlotStore and DescStore serialization and deserialization" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
@@ -1688,7 +1684,7 @@ test "SlotStore and DescStore serialization and deserialization" {
 // TODO FIXME
 // test "Store with path compression CompactWriter roundtrip" {
 //     const gpa = std.testing.allocator;
-//     const CompactWriter = serialization.CompactWriter;
+//     const CompactWriter = collections.CompactWriter;
 
 //     var original = try Store.init(gpa);
 //     defer original.deinit();

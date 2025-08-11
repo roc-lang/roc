@@ -21,6 +21,7 @@ const Tag = @import("types.zig").Tag;
 const Num = @import("types.zig").Num;
 const NominalType = @import("types.zig").NominalType;
 const Tuple = @import("types.zig").Tuple;
+const Ident = base.Ident;
 
 /// Type to manage instantiation.
 ///
@@ -91,7 +92,7 @@ pub const Instantiate = struct {
         switch (resolved.desc.content) {
             .rigid_var => |ident| {
                 // Get the ident of the rigid var
-                const ident_bytes = self.idents.getText(ident);
+                const ident_bytes = self.getIdent(ident);
 
                 if (Self.getRigidVarSub(ctx.rigid_var_subs, ident_bytes)) |existing_flex_var| {
                     try self.seen_vars_subs.put(resolved_var, existing_flex_var);
@@ -323,5 +324,9 @@ pub const Instantiate = struct {
             .tags = tags_range,
             .ext = try self.instantiateVar(tag_union.ext, ctx),
         };
+    }
+
+    pub fn getIdent(self: *const Self, idx: Ident.Idx) []const u8 {
+        return self.idents.getText(idx);
     }
 };

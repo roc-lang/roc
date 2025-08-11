@@ -770,7 +770,7 @@ pub const PackageEnv = struct {
             const stmt = env.store.getStatement(stmt_idx);
             switch (stmt) {
                 .s_import => |imp| {
-                    const imported_text = env.idents.getText(imp.module_name_tok);
+                    const imported_text = env.getIdent(imp.module_name_tok);
                     if (!std.mem.eql(u8, imported_text, mod_name_text)) continue;
                     // If qualifier_tok is set, the import was package-qualified in source
                     if (imp.qualifier_tok != null) return true;

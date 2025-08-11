@@ -597,7 +597,7 @@ fn buildRigidVarMapping(
         switch (base_arg_resolved) {
             .rigid_var => |ident| {
                 // Found a rigid variable in the base type - map it to the annotation argument
-                const ident_text = self.cir.idents.getText(ident);
+                const ident_text = self.cir.getIdent(ident);
 
                 const anno_arg_var = ModuleEnv.varFrom(anno_arg_idx);
                 const anno_arg_var_inst = try self.instantiateVar(anno_arg_var, &self.annotation_rigid_var_subs, .use_last_var);
@@ -1089,7 +1089,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                         if (dot_access.args) |args_span| {
                             // Method call with arguments
                             // Get the origin module path
-                            const origin_module_path = self.cir.idents.getText(nominal.origin_module);
+                            const origin_module_path = self.cir.getIdent(nominal.origin_module);
 
                             // Find which imported module matches this path
                             var origin_module_idx: ?ModuleEnv.Import.Idx = null;
@@ -1112,7 +1112,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                             if (origin_module) |module| {
                                 // Look up the method in the origin module's exports
                                 // Need to convert identifier from current module to target module
-                                const method_name_str = self.cir.idents.getText(dot_access.field_name);
+                                const method_name_str = self.cir.getIdent(dot_access.field_name);
 
                                 // Search through the module's exposed items
                                 const node_idx_opt = if (module.idents.findByString(method_name_str)) |target_ident|

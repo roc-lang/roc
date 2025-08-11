@@ -13,7 +13,8 @@ const base = @import("base");
 
 const serialization = @import("serialization");
 const TypeWriter = @import("TypeWriter.zig");
-const CompactWriter = serialization.CompactWriter;
+const CompactWriter = collections.CompactWriter;
+const CommonEnv = base.CommonEnv;
 
 pub const CIR = @import("CIR.zig");
 
@@ -66,20 +67,8 @@ const TypeVar = types_mod.Var;
 const Self = @This();
 
 gpa: std.mem.Allocator,
-idents: Ident.Store,
-ident_ids_for_slicing: collections.SafeList(Ident.Idx),
-strings: StringLiteral.Store,
+common: *CommonEnv,
 types: types_mod.Store,
-/// The items (a combination of types and values) that this module exposes
-exposed_items: collections.ExposedItems,
-
-/// Line starts for error reporting. We retain only start and offset positions in the IR
-/// and then use these line starts to calculate the line number and column number as required.
-/// this is a more compact representation at the expense of extra computation only when generating error diagnostics.
-line_starts: collections.SafeList(u32),
-
-/// The source code of this module.
-source: []const u8,
 
 // ===== Module compilation fields =====
 // NOTE: These fields are populated during canonicalization and preserved for later use
@@ -119,19 +108,13 @@ pub fn initModuleEnvFields(self: *Self, gpa: std.mem.Allocator, module_name: []c
 }
 
 /// Initialize the module environment.
-pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!Self {
+pub fn init(gpa: std.mem.Allocator, common_env: *CommonEnv) std.mem.Allocator.Error!Self {
     // TODO: maybe wire in smarter default based on the initial input text size.
 
     return Self{
         .gpa = gpa,
-        .idents = try Ident.Store.initCapacity(gpa, 1024),
-        .ident_ids_for_slicing = try collections.SafeList(Ident.Idx).initCapacity(gpa, 256),
-        .strings = try StringLiteral.Store.initCapacityBytes(gpa, 4096),
+        .common = common_env,
         .types = try types_mod.Store.initCapacity(gpa, 2048, 512),
-        .exposed_items = collections.ExposedItems.init(),
-        .line_starts = try collections.SafeList(u32).initCapacity(gpa, 256),
-        .source = source,
-        // Initialize compilation fields with empty/default values
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try ExternalDecl.SafeList.initCapacity(gpa, 16),
@@ -144,42 +127,10 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
 
 /// Deinitialize the module environment.
 pub fn deinit(self: *Self) void {
-    self.idents.deinit(self.gpa);
-    self.ident_ids_for_slicing.deinit(self.gpa);
-    self.strings.deinit(self.gpa);
     self.types.deinit();
-    self.line_starts.deinit(self.gpa);
-    self.exposed_items.deinit(self.gpa);
-    // Clean up compilation fields
-    self.external_decls.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
-}
-
-/// Calculate and store line starts from the source text
-pub fn calcLineStarts(self: *Self) !void {
-    // Reset line_starts by creating a new SafeList
-    self.line_starts.deinit(self.gpa);
-    self.line_starts = try collections.SafeList(u32).initCapacity(self.gpa, 256);
-
-    // if the source is empty, we're done
-    if (self.source.len == 0) {
-        return;
-    }
-
-    // the first line starts at offset 0
-    _ = try self.line_starts.append(self.gpa, 0);
-
-    // find all newlines in the source, save their offset
-    var pos: u32 = 0;
-    for (self.source) |c| {
-        if (c == '\n') {
-            // next line starts after the newline in the current position
-            _ = try self.line_starts.append(self.gpa, pos + 1);
-        }
-        pos += 1;
-    }
 }
 
 /// Freeze all interners in this module environment, preventing any new entries from being added.
@@ -188,8 +139,7 @@ pub fn calcLineStarts(self: *Self) !void {
 /// that goes from ident to string, because we don't go from string to ident
 /// (or add new entries) in any of the later stages of compilation.
 pub fn freezeInterners(self: *Self) void {
-    self.idents.freeze();
-    self.strings.freeze();
+    self.common.freezeInterners();
 }
 
 // ===== Module compilation functionality =====
@@ -248,7 +198,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             const region_info = self.calcRegionInfo(data.region);
 
             // Extract the literal text from the source
-            const literal_text = self.source[data.region.start.offset..data.region.end.offset];
+            const literal_text = self.getSource(data.region);
 
             var report = Report.init(allocator, "INVALID NUMBER", .runtime_error);
             const owned_literal = try report.addOwnedString(literal_text);
@@ -263,8 +213,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             try report.document.addLineBreak();
@@ -282,7 +232,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
         },
         .ident_not_in_scope => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
-            const ident_name = self.idents.getText(data.ident);
+            const ident_name = self.getIdent(data.ident);
 
             var report = Report.init(allocator, "UNDEFINED VARIABLE", .runtime_error);
             const owned_ident = try report.addOwnedString(ident_name);
@@ -302,8 +252,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             break :blk report;
@@ -313,7 +263,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             var report = Report.init(allocator, "EXPOSED BUT NOT DEFINED", .runtime_error);
 
-            const ident_name = self.idents.getText(data.ident);
+            const ident_name = self.getIdent(data.ident);
             const owned_ident = try report.addOwnedString(ident_name);
 
             try report.document.addReflowingText("The module header says that ");
@@ -324,7 +274,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             // Add source context with location
             const owned_filename = try report.addOwnedString(filename);
-            try report.addSourceContext(region_info, owned_filename, self.source, self.line_starts.items.items);
+            try report.addSourceContext(region_info, owned_filename, self.getSourceAll(), self.getLineStartsAll());
 
             try report.document.addReflowingText("You can fix this by either defining ");
             try report.document.addUnqualifiedSymbol(owned_ident);
@@ -334,7 +284,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
         },
         .unused_variable => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
-            const ident_name = self.idents.getText(data.ident);
+            const ident_name = self.getIdent(data.ident);
 
             var report = Report.init(allocator, "UNUSED VARIABLE", .warning);
             const owned_ident = try report.addOwnedString(ident_name);
@@ -367,8 +317,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             break :blk report;
@@ -388,7 +338,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             // Add source context with location
             const owned_filename = try report.addOwnedString(filename);
-            try report.addSourceContext(region_info, owned_filename, self.source, self.line_starts.items.items);
+            try report.addSourceContext(region_info, owned_filename, self.getSourceAll(), self.getLineStartsAll());
 
             try report.document.addLineBreak();
             const explanation = try std.fmt.allocPrint(allocator, "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.", .{});
@@ -399,7 +349,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             break :blk report;
         },
         .undeclared_type => |data| blk: {
-            const type_name = self.idents.getText(data.name);
+            const type_name = self.getIdent(data.name);
             const region_info = self.calcRegionInfo(data.region);
 
             var report = Report.init(allocator, "UNDECLARED TYPE", .runtime_error);
@@ -417,14 +367,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             break :blk report;
         },
         .type_alias_but_needed_nominal => |data| blk: {
-            const type_name = self.idents.getText(data.name);
+            const type_name = self.getIdent(data.name);
             const region_info = self.calcRegionInfo(data.region);
 
             var report = Report.init(allocator, "EXPECTED NOMINAL TYPE", .runtime_error);
@@ -442,8 +392,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             try report.document.addLineBreak();
@@ -456,7 +406,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             break :blk report;
         },
         .type_redeclared => |data| blk: {
-            const type_name = self.idents.getText(data.name);
+            const type_name = self.getIdent(data.name);
             const original_region_info = self.calcRegionInfo(data.original_region);
             const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
 
@@ -476,8 +426,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 redeclared_region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             try report.document.addLineBreak();
@@ -489,14 +439,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 original_region_info,
                 .dimmed,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             break :blk report;
         },
         .invalid_top_level_statement => |data| blk: {
-            const stmt_name = self.strings.get(data.stmt);
+            const stmt_name = self.getString(data.stmt);
             const region_info = self.calcRegionInfo(data.region);
 
             var report = Report.init(allocator, "INVALID STATEMENT", .runtime_error);
@@ -513,14 +463,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             break :blk report;
         },
         .used_underscore_variable => |data| blk: {
-            const ident_name = self.idents.getText(data.ident);
+            const ident_name = self.getIdent(data.ident);
             const region_info = self.calcRegionInfo(data.region);
 
             var report = Report.init(allocator, "UNDERSCORE VARIABLE USED", .warning);
@@ -548,8 +498,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .warning_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             break :blk report;
@@ -567,8 +517,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             try report.document.addLineBreak();
@@ -598,14 +548,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             break :blk report;
         },
         .duplicate_record_field => |data| blk: {
-            const field_name = self.idents.getText(data.field_name);
+            const field_name = self.getIdent(data.field_name);
             const duplicate_region_info = self.calcRegionInfo(data.duplicate_region);
             const original_region_info = self.calcRegionInfo(data.original_region);
 
@@ -626,8 +576,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 duplicate_region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             try report.document.addLineBreak();
@@ -639,8 +589,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 original_region_info,
                 .dimmed,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             try report.document.addLineBreak();
@@ -649,7 +599,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             break :blk report;
         },
         .redundant_exposed => |data| blk: {
-            const ident_name = self.idents.getText(data.ident);
+            const ident_name = self.getIdent(data.ident);
             const region_info = self.calcRegionInfo(data.region);
             const original_region_info = self.calcRegionInfo(data.original_region);
 
@@ -666,8 +616,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             // we don't need to display the original region info
@@ -679,7 +629,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             break :blk report;
         },
         .undeclared_type_var => |data| blk: {
-            const type_var_name = self.idents.getText(data.name);
+            const type_var_name = self.getIdent(data.name);
             const region_info = self.calcRegionInfo(data.region);
 
             var report = Report.init(allocator, "UNDECLARED TYPE VARIABLE", .runtime_error);
@@ -701,14 +651,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             break :blk report;
         },
         .not_implemented => |data| blk: {
-            const feature = self.strings.get(data.feature);
+            const feature = self.getString(data.feature);
             var report = Report.init(allocator, "NOT IMPLEMENTED", .fatal);
             const owned_feature = try report.addOwnedString(feature);
             try report.document.addReflowingText("This feature is not yet implemented: ");
@@ -730,8 +680,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             break :blk report;
@@ -779,7 +729,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
             break :blk report;
         },
         .shadowing_warning => |data| blk: {
-            const ident_name = self.idents.getText(data.ident);
+            const ident_name = self.getIdent(data.ident);
             const new_region_info = self.calcRegionInfo(data.region);
             const original_region_info = self.calcRegionInfo(data.original_region);
 
@@ -799,8 +749,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 new_region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             try report.document.addLineBreak();
@@ -812,8 +762,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 original_region_info,
                 .dimmed,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             break :blk report;
@@ -829,8 +779,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
             try report.document.addLineBreak();
             try report.document.addReflowingText("If you want to represent nothing, try using an empty record: ");
@@ -859,8 +809,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
             try report.document.addLineBreak();
             try report.document.addReflowingText("Check the syntax of your where clause.");
@@ -891,7 +841,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
         },
         .f64_pattern_literal => |data| blk: {
             // Extract the literal text from the source
-            const literal_text = self.source[data.region.start.offset..data.region.end.offset];
+            const literal_text = self.getSourceAll()[data.region.start.offset..data.region.end.offset];
 
             var report = Report.init(allocator, "F64 NOT ALLOWED IN PATTERN", .runtime_error);
 
@@ -933,10 +883,10 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             var report = Report.init(allocator, "TYPE NOT EXPOSED", .runtime_error);
 
-            const type_name_bytes = self.idents.getText(data.type_name);
+            const type_name_bytes = self.getIdent(data.type_name);
             const type_name = try report.addOwnedString(type_name_bytes);
 
-            const module_name_bytes = self.idents.getText(data.module_name);
+            const module_name_bytes = self.getIdent(data.module_name);
             const module_name = try report.addOwnedString(module_name_bytes);
 
             // Format the message to match origin/main
@@ -955,8 +905,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             break :blk report;
@@ -966,7 +916,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             var report = Report.init(allocator, "MODULE NOT FOUND", .runtime_error);
 
-            const module_name_bytes = self.idents.getText(data.module_name);
+            const module_name_bytes = self.getIdent(data.module_name);
             const module_name = try report.addOwnedString(module_name_bytes);
 
             // Format the message to match origin/main
@@ -983,8 +933,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             break :blk report;
@@ -994,7 +944,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
             var report = Report.init(allocator, "MODULE NOT IMPORTED", .runtime_error);
 
-            const module_name_bytes = self.idents.getText(data.module_name);
+            const module_name_bytes = self.getIdent(data.module_name);
             const module_name = try report.addOwnedString(module_name_bytes);
 
             // Format the message to match origin/main
@@ -1011,8 +961,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             break :blk report;
@@ -1036,8 +986,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
                 region_info,
                 .error_highlight,
                 owned_filename,
-                self.source,
-                self.line_starts.items.items,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
             );
 
             break :blk report;
@@ -1067,47 +1017,24 @@ pub fn diagnosticToReport(self: *Self, diagnostic: Diagnostic, allocator: std.me
 
 /// Get region info for a given region
 pub fn getRegionInfo(self: *const Self, region: Region) !RegionInfo {
-    return base.RegionInfo.position(self.source, self.line_starts.items.items, region.start.offset, region.end.offset);
+    return self.common.getRegionInfo(region);
 }
 
 /// Returns diagnostic position information for the given region.
 /// This is a standalone utility function that takes the source text as a parameter
 /// to avoid storing it in the cacheable IR structure.
 pub fn calcRegionInfo(self: *const Self, region: Region) RegionInfo {
-    const empty = RegionInfo{
-        .start_line_idx = 0,
-        .start_col_idx = 0,
-        .end_line_idx = 0,
-        .end_col_idx = 0,
-    };
-
-    // In the Can IR, regions store byte offsets directly, not token indices.
-    // We can use these offsets directly to calculate the diagnostic position.
-    const source = self.source;
-
-    const info = base.RegionInfo.position(source, self.line_starts.items.items, region.start.offset, region.end.offset) catch {
-        // Return a zero position if we can't calculate it
-        return empty;
-    };
-
-    return info;
+    return self.common.calcRegionInfo(region);
 }
 
 /// Extract a literal from source code between given byte offsets
 pub fn literal_from_source(self: *const Self, start_offset: u32, end_offset: u32) []const u8 {
-    return self.source[start_offset..end_offset];
+    return self.common.source[start_offset..end_offset];
 }
 
 /// Get the source line for a given region
 pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
-    const region_info = try self.getRegionInfo(region);
-    const line_start = self.line_starts.items.items[region_info.start_line_idx];
-    const line_end = if (region_info.start_line_idx + 1 < self.line_starts.items.items.len)
-        self.line_starts.items.items[region_info.start_line_idx + 1]
-    else
-        self.source.len;
-
-    return self.source[line_start..line_end];
+    return self.common.getSourceLine(region);
 }
 
 /// Serialize this ModuleEnv to the given CompactWriter.
@@ -1125,13 +1052,8 @@ pub fn serialize(
     // Then serialize the sub-structures and update the struct
     offset_self.* = .{
         .gpa = undefined, // Will be set when deserializing
-        .idents = (try self.idents.serialize(allocator, writer)).*,
-        .ident_ids_for_slicing = (try self.ident_ids_for_slicing.serialize(allocator, writer)).*,
-        .strings = (try self.strings.serialize(allocator, writer)).*,
+        .common = @constCast(try self.common.serialize(allocator, writer)),
         .types = (try self.types.serialize(allocator, writer)).*,
-        .exposed_items = (try self.exposed_items.serialize(allocator, writer)).*,
-        .line_starts = (try self.line_starts.serialize(allocator, writer)).*,
-        .source = "", // Will be set when deserializing
         .all_defs = self.all_defs,
         .all_statements = self.all_statements,
         .external_decls = (try self.external_decls.serialize(allocator, writer)).*,
@@ -1150,17 +1072,11 @@ pub fn serialize(
 /// Add the given offset to the memory addresses of all pointers in `self`.
 /// IMPORTANT: The gpa, source, and module_name fields must be manually set before calling this function.
 pub fn relocate(self: *Self, offset: isize) void {
-    // IMPORTANT: gpa, source, and module_name are not relocated - they should be set manually before calling relocate
+    // IMPORTANT: gpa, and module_name are not relocated - they should be set manually before calling relocate
 
     // Relocate all sub-structures
-    self.idents.relocate(offset);
-    self.ident_ids_for_slicing.relocate(offset);
-    self.strings.relocate(offset);
     self.types.relocate(offset);
-    self.exposed_items.relocate(offset);
-    self.line_starts.relocate(offset);
 
-    // Note: source is not relocated - it should be set manually
     // Note: all_defs and all_statements are just spans with numeric values, no pointers to relocate
 
     self.external_decls.relocate(offset);
@@ -1176,13 +1092,8 @@ pub fn relocate(self: *Self, offset: isize) void {
 /// Serialized representation of ModuleEnv
 pub const Serialized = struct {
     gpa: std.mem.Allocator, // Serialized as zeros, provided during deserialization
-    idents: Ident.Store.Serialized,
-    ident_ids_for_slicing: collections.SafeList(Ident.Idx).Serialized,
-    strings: StringLiteral.Store.Serialized,
+    common: CommonEnv.Serialized,
     types: types_mod.Store.Serialized,
-    exposed_items: collections.ExposedItems.Serialized,
-    line_starts: collections.SafeList(u32).Serialized,
-    source: []const u8, // Serialized as zeros, provided during deserialization
     all_defs: Def.Span,
     all_statements: Statement.Span,
     external_decls: ExternalDecl.SafeList.Serialized,
@@ -1200,16 +1111,9 @@ pub const Serialized = struct {
     ) !void {
         // Set fields that will be provided during deserialization to zeros
         self.gpa = undefined; // Will be set to zeros below
-        self.source = ""; // Empty slice
-        self.module_name = ""; // Empty slice
 
-        // Serialize each component using its Serialized struct
-        try self.idents.serialize(&env.idents, allocator, writer);
-        try self.ident_ids_for_slicing.serialize(&env.ident_ids_for_slicing, allocator, writer);
-        try self.strings.serialize(&env.strings, allocator, writer);
+        try self.common.serialize(env.common, allocator, writer);
         try self.types.serialize(&env.types, allocator, writer);
-        try self.exposed_items.serialize(&env.exposed_items, allocator, writer);
-        try self.line_starts.serialize(&env.line_starts, allocator, writer);
 
         // Copy simple values directly
         self.all_defs = env.all_defs;
@@ -1245,7 +1149,7 @@ pub const Serialized = struct {
         env.* = Self{
             .gpa = gpa,
             .idents = self.idents.deserialize(offset).*,
-            .ident_ids_for_slicing = self.ident_ids_for_slicing.deserialize(offset).*,
+            // .ident_ids_for_slicing = self.ident_ids_for_slicing.deserialize(offset).*,
             .strings = self.strings.deserialize(offset).*,
             .types = self.types.deserialize(offset).*,
             .exposed_items = self.exposed_items.deserialize(offset).*,
@@ -1630,7 +1534,7 @@ pub fn sliceExternalDecls(self: *const Self, span: ExternalDecl.Span) []const Ex
 
 /// Retrieves the text of an identifier by its index
 pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
-    return self.idents.getText(idx);
+    return self.getIdent(idx);
 }
 
 /// Helper to format pattern index for s-expr output
@@ -1906,4 +1810,38 @@ fn pushExprTypesToSExprTree(self: *Self, expr_idx: Expr.Idx, tree: *SExprTree) s
     try tree.pushStringPair("type", type_str);
 
     try tree.endNode(expr_begin, tree.beginNode());
+}
+
+pub fn getString(self: *const Self, idx: StringLiteral.Idx) []const u8 {
+    return self.common.getString(idx);
+}
+
+pub fn getIdentStore(self: *const Self) *const Ident.Store {
+    return &self.common.idents;
+}
+
+pub fn getIdent(self: *const Self, idx: Ident.Idx) []const u8 {
+    return self.common.getIdent(idx);
+}
+
+/// Get the source text for a given region
+pub fn getSource(self: *const Self, region: Region) []const u8 {
+    return self.common.getSource(region);
+}
+
+/// TODO this is a code smell... we should track down the places using this
+/// and replace with something more sensible -- need to refactor diagnostics a little.
+pub fn getSourceAll(self: *const Self) []const u8 {
+    return self.getSourceAll();
+}
+
+/// TODO this is a code smell... we should track down the places using this
+/// and replace with something more sensible -- need to refactor diagnostics a little.
+pub fn getLineStartsAll(self: *const Self) []const u32 {
+    return self.common.getLineStartsAll();
+}
+
+/// Initialize a TypeWriter with an immutable ModuleEnv reference.
+pub fn initTypeWriter(gpa: std.mem.Allocator, env: *const Self) std.mem.Allocator.Error!TypeWriter {
+    return TypeWriter.initFromParts(gpa, &env.types, env.getIdentStore());
 }

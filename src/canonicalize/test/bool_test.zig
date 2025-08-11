@@ -49,7 +49,7 @@ test "canonicalize True as Bool" {
     try testing.expectEqual(ModuleEnv.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
 
     // The tag should be "True"
-    const tag_name = module_env.idents.getText(backing_expr.e_tag.name);
+    const tag_name = module_env.getIdent(backing_expr.e_tag.name);
     try testing.expectEqualStrings("True", tag_name);
 }
 
@@ -93,7 +93,7 @@ test "canonicalize False as Bool" {
     try testing.expectEqual(ModuleEnv.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
 
     // The tag should be "False"
-    const tag_name = module_env.idents.getText(backing_expr.e_tag.name);
+    const tag_name = module_env.getIdent(backing_expr.e_tag.name);
     try testing.expectEqualStrings("False", tag_name);
 }
 
@@ -132,6 +132,6 @@ test "canonicalize random tag not as Bool" {
     try testing.expectEqual(.e_tag, std.meta.activeTag(expr));
 
     // The tag should be "SomeTag"
-    const tag_name = module_env.idents.getText(expr.e_tag.name);
+    const tag_name = module_env.getIdent(expr.e_tag.name);
     try testing.expectEqualStrings("SomeTag", tag_name);
 }

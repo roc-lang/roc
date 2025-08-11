@@ -352,7 +352,7 @@ pub const Interpreter = struct {
             .assign => |a| a.ident,
             else => return error.LayoutError,
         };
-        const capture_name_text = self.env.idents.getText(ident_idx);
+        const capture_name_text = self.env.getIdent(ident_idx);
 
         if (captures_layout.tag == .record) {
             // Use RecordAccessor for safe field access
@@ -709,7 +709,7 @@ pub const Interpreter = struct {
 
                 std.debug.assert(result_value.ptr != null);
                 const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
-                const tag_name = self.env.idents.getText(tag.name);
+                const tag_name = self.env.getIdent(tag.name);
                 if (std.mem.eql(u8, tag_name, "True")) {
                     tag_ptr.* = 1;
                 } else if (std.mem.eql(u8, tag_name, "False")) {
@@ -866,7 +866,7 @@ pub const Interpreter = struct {
                         .structure => |flat_type| switch (flat_type) {
                             .nominal_type => {
                                 // Good - we have a nominal type
-                                const nominal_ident = self.env.idents.getText(flat_type.nominal_type.ident.ident_idx);
+                                const nominal_ident = self.env.getIdent(flat_type.nominal_type.ident.ident_idx);
                                 if (std.mem.eql(u8, nominal_ident, "Bool")) {
                                     // For Bool nominal types, verify we get boolean layout
                                     const nominal_layout = self.layout_cache.getLayout(nominal_layout_idx);
@@ -889,7 +889,7 @@ pub const Interpreter = struct {
                 const resolved = self.layout_cache.types_store.resolveVar(nominal_var);
                 const nominal_ident = switch (resolved.desc.content) {
                     .structure => |flat_type| switch (flat_type) {
-                        .nominal_type => |nt| self.env.idents.getText(nt.ident.ident_idx),
+                        .nominal_type => |nt| self.env.getIdent(nt.ident.ident_idx),
                         else => "unknown",
                     },
                     else => "unknown",
@@ -1423,7 +1423,7 @@ pub const Interpreter = struct {
 
     /// Handle boolean scalar tag expressions (True/False) by setting the appropriate boolean value
     fn handleBooleanScalarTag(self: *Interpreter, result_value: StackValue, tag_name: Ident.Idx) EvalError!void {
-        const tag_text = self.env.idents.getText(tag_name);
+        const tag_text = self.env.getIdent(tag_name);
         const bool_value: u8 = if (std.mem.eql(u8, tag_text, "True")) 1 else if (std.mem.eql(u8, tag_text, "False")) 0 else {
             self.traceError("Invalid boolean tag: {s}", .{tag_text});
             return error.InvalidBooleanTag;
@@ -1822,7 +1822,7 @@ pub const Interpreter = struct {
                 const dest_field = try record_accessor.getFieldByIndex(prev_field_index_in_sorted);
                 prev_field_value.copyWithoutRefcount(dest_field, self.layout_cache);
 
-                self.traceInfo("Copied field '{s}' (size={}) to index {}", .{ self.env.idents.getText(prev_field_layout_info.name), prev_field_size, prev_field_index_in_sorted });
+                self.traceInfo("Copied field '{s}' (size={}) to index {}", .{ self.env.getIdent(prev_field_layout_info.name), prev_field_size, prev_field_index_in_sorted });
             }
         }
 
@@ -1859,7 +1859,7 @@ pub const Interpreter = struct {
 
             const current_field_value_expr_idx = value_expr_idx orelse {
                 // This should be impossible if the CIR and layout are consistent.
-                self.traceError("Could not find value for field '{s}'", .{self.env.idents.getText(current_field_name)});
+                self.traceError("Could not find value for field '{s}'", .{self.env.getIdent(current_field_name)});
                 return error.LayoutError;
             };
 
@@ -1884,7 +1884,7 @@ pub const Interpreter = struct {
         const record_value = try self.popStackValue();
 
         // Get the field name
-        const field_name = self.env.idents.getText(field_name_idx);
+        const field_name = self.env.getIdent(field_name_idx);
 
         // The record must have a record layout
         if (record_value.layout.tag != .record) {
@@ -2141,7 +2141,7 @@ pub const Interpreter = struct {
                     .value = value.cloneForBinding(),
                 };
                 self.traceInfo("Binding '{s}' (pattern_idx={})", .{
-                    self.env.idents.getText(assign_pattern.ident),
+                    self.env.getIdent(assign_pattern.ident),
                     @intFromEnum(pattern_idx),
                 });
                 try self.traceValue("value", value);
@@ -2161,7 +2161,7 @@ pub const Interpreter = struct {
                 // For each field in the pattern
                 for (destructs) |destruct_idx| {
                     const destruct = self.env.store.getRecordDestruct(destruct_idx);
-                    const field_name = self.env.idents.getText(destruct.label);
+                    const field_name = self.env.getIdent(destruct.label);
 
                     // Find the field by name using RecordAccessor
                     const field_index = record_accessor.findFieldIndex(self.env, field_name) orelse return error.LayoutError;
@@ -2790,7 +2790,7 @@ pub const Interpreter = struct {
         const pattern = self.env.store.getPattern(pattern_idx);
         switch (pattern) {
             .assign => |assign_pattern| {
-                return self.env.idents.getText(assign_pattern.ident);
+                return self.env.getIdent(assign_pattern.ident);
             },
             else => return null,
         }

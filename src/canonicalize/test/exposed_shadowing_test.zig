@@ -43,7 +43,7 @@ test "exposed but not implemented - values" {
         const diag = env.store.getDiagnostic(diag_idx);
         switch (diag) {
             .exposed_but_not_implemented => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = env.getIdent(d.ident);
                 if (std.mem.eql(u8, ident_text, "bar")) {
                     found_bar_error = true;
                 }
@@ -82,7 +82,7 @@ test "exposed but not implemented - types" {
         const diag = env.store.getDiagnostic(diag_idx);
         switch (diag) {
             .exposed_but_not_implemented => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = env.getIdent(d.ident);
                 if (std.mem.eql(u8, ident_text, "OtherType")) {
                     found_other_type_error = true;
                 }
@@ -126,7 +126,7 @@ test "redundant exposed entries" {
         const diag = env.store.getDiagnostic(diag_idx);
         switch (diag) {
             .redundant_exposed => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = env.getIdent(d.ident);
                 if (std.mem.eql(u8, ident_text, "foo")) {
                     found_foo_redundant = true;
                 } else if (std.mem.eql(u8, ident_text, "bar")) {
@@ -213,7 +213,7 @@ test "shadowing non-exposed items" {
         const diag = env.store.getDiagnostic(diag_idx);
         switch (diag) {
             .shadowing_warning => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = env.getIdent(d.ident);
                 if (std.mem.eql(u8, ident_text, "notExposed")) {
                     found_shadowing = true;
                 }
@@ -267,13 +267,13 @@ test "exposed items correctly tracked across shadowing" {
         const diag = env.store.getDiagnostic(diag_idx);
         switch (diag) {
             .shadowing_warning => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = env.getIdent(d.ident);
                 if (std.mem.eql(u8, ident_text, "x")) {
                     found_x_shadowing = true;
                 }
             },
             .exposed_but_not_implemented => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = env.getIdent(d.ident);
                 if (std.mem.eql(u8, ident_text, "z")) {
                     found_z_not_implemented = true;
                 } else if (std.mem.eql(u8, ident_text, "x") or std.mem.eql(u8, ident_text, "y")) {
@@ -326,19 +326,19 @@ test "complex case with redundant, shadowing, and not implemented" {
         const diag = env.store.getDiagnostic(diag_idx);
         switch (diag) {
             .redundant_exposed => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = env.getIdent(d.ident);
                 if (std.mem.eql(u8, ident_text, "a")) {
                     found_a_redundant = true;
                 }
             },
             .shadowing_warning => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = env.getIdent(d.ident);
                 if (std.mem.eql(u8, ident_text, "a")) {
                     found_a_shadowing = true;
                 }
             },
             .exposed_but_not_implemented => |d| {
-                const ident_text = env.idents.getText(d.ident);
+                const ident_text = env.getIdent(d.ident);
                 if (std.mem.eql(u8, ident_text, "NotImplemented")) {
                     found_not_implemented = true;
                 }
