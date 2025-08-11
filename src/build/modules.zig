@@ -21,7 +21,6 @@ pub const ModuleType = enum {
     can,
     check,
     tracy,
-    cache,
     fs,
     build_options,
 
@@ -40,7 +39,6 @@ pub const ModuleType = enum {
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
             .compile => &.{ .tracy, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting },
-            .cache => &.{ .tracy, .collections, .base, .compile, .reporting, .fs, .build_options },
         };
     }
 };
@@ -57,7 +55,6 @@ pub const RocModules = struct {
     can: *Module,
     check: *Module,
     tracy: *Module,
-    cache: *Module,
     fs: *Module,
     build_options: *Module,
 
@@ -76,7 +73,6 @@ pub const RocModules = struct {
             .can = b.addModule("can", .{ .root_source_file = b.path("src/canonicalize/Mod.zig") }),
             .check = b.addModule("check", .{ .root_source_file = b.path("src/check/Mod.zig") }),
             .tracy = b.addModule("tracy", .{ .root_source_file = b.path("src/tracy.zig") }),
-            .cache = b.addModule("cache", .{ .root_source_file = b.path("src/cache/mod.zig") }),
             .fs = b.addModule("fs", .{ .root_source_file = b.path("src/fs/mod.zig") }),
             .build_options = b.addModule(
                 "build_options",
@@ -102,7 +98,6 @@ pub const RocModules = struct {
             .can,
             .check,
             .tracy,
-            .cache,
             .fs,
             .build_options,
         };
@@ -130,7 +125,6 @@ pub const RocModules = struct {
         step.root_module.addImport("check", self.check);
         step.root_module.addImport("tracy", self.tracy);
         step.root_module.addImport("builtins", self.builtins);
-        step.root_module.addImport("cache", self.cache);
         step.root_module.addImport("fs", self.fs);
         step.root_module.addImport("build_options", self.build_options);
     }
@@ -152,7 +146,6 @@ pub const RocModules = struct {
             .can => self.can,
             .check => self.check,
             .tracy => self.tracy,
-            .cache => self.cache,
             .fs => self.fs,
             .build_options => self.build_options,
         };
@@ -167,7 +160,7 @@ pub const RocModules = struct {
         }
     }
 
-    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode) [11]ModuleTest {
+    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode) [10]ModuleTest {
         const test_configs = [_]ModuleType{
             .collections,
             .base,
@@ -178,7 +171,6 @@ pub const RocModules = struct {
             .parse,
             .can,
             .check,
-            .cache,
             .fs,
         };
 

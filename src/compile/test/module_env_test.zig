@@ -1,6 +1,7 @@
 //! Tests for ModuleEnv
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 
 const ModuleEnv = @import("../ModuleEnv.zig");
 const CompactWriter = collections.CompactWriter;
@@ -73,7 +74,7 @@ test "ModuleEnv.Serialized roundtrip" {
     _ = try tmp_file.pread(buffer, 0);
 
     // Find the ModuleEnv at the tracked offset
-    const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
+    const deserialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr + env_start_offset));
     const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule");
 
     // Verify the data was preserved

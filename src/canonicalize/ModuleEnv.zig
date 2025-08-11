@@ -11,8 +11,7 @@ const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
 
-const serialization = @import("serialization");
-const TypeWriter = @import("TypeWriter.zig");
+const TypeWriter = types_mod.TypeWriter;
 const CompactWriter = collections.CompactWriter;
 const CommonEnv = base.CommonEnv;
 
