@@ -26,68 +26,38 @@ const base58_alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvw
 
 // Constants for magic numbers
 const SIZE_STORAGE_BYTES: usize = 16; // Extra bytes for storing allocation size; use 16 to preserve alignment.
-const BASE58_SIZE_RATIO_PERCENT: usize = 138; // Base58 is ~138% the size of base256
 const TAR_PATH_MAX_LENGTH: usize = 255; // Maximum path length for tar compatibility
 
-/// Encode binary data to a base58 string.
-/// The caller owns the returned memory.
-pub fn base58Encode(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
-    if (data.len == 0) return allocator.dupe(u8, "");
+// Calculate how many base58 characters are needed to represent a 256-bit hash
+// Each base58 character can represent 58 values
+// So we need ceil(log58(MAX_HASH + 1)) characters
+// Which is ceil(log(MAX_HASH + 1) / log(58))
+// Since MAX_HASH is 2^256 - 1, we need ceil(256 * log(2) / log(58))
+// log(2) / log(58) ≈ 0.17329
+// 256 * 0.17329 ≈ 44.36
+// So we need 45 characters
+const MAX_BASE58_HASH_BYTES = 45;
+
+/// Encode the given nonempty slice of bytes as a base58 string and write it to the destination.
+/// This is guaranteed to write at least 1 byte to the destination, even if the given bytes are all zeros.
+pub fn base58Encode(src: []const u8, dest: [MAX_BASE58_HASH_BYTES]u8) void {
+    // This should be a nonempty slice.
+    std.debug.assert(src.len > 0);
 
     // Count leading zeros
     var leading_zeros: usize = 0;
-    for (data) |byte| {
+    for (src) |byte| {
         if (byte == 0) leading_zeros += 1 else break;
     }
 
-    // Special case: if all bytes are zero, just return the appropriate number of '1's
-    if (leading_zeros == data.len) {
-        const result = try allocator.alloc(u8, leading_zeros);
-        @memset(result, '1');
-        return result;
+    // If all of our bytes turned out to be zero, return 0.
+    if (leading_zeros == src.len) {
+        dest.len = 1;
+        dest[0] = '1';
+        return;
     }
 
-    // Allocate output
-    const max_size = (data.len * BASE58_SIZE_RATIO_PERCENT) / 100 + 1;
-    var result = try allocator.alloc(u8, max_size);
-    defer allocator.free(result);
-
-    // Convert to base58
-    var output_len: usize = 0;
-    var input = try allocator.dupe(u8, data);
-    defer allocator.free(input);
-
-    while (true) {
-        var carry: u32 = 0;
-        var all_zero = true;
-
-        // Divide by 58
-        for (input, 0..) |byte, i| {
-            const value = carry * 256 + byte;
-            input[i] = @intCast(value / 58);
-            carry = @intCast(value % 58);
-            if (input[i] != 0) all_zero = false;
-        }
-
-        result[output_len] = base58_alphabet[carry];
-        output_len += 1;
-
-        if (all_zero) break;
-    }
-
-    // Add leading '1's for leading zeros
-    for (0..leading_zeros) |_| {
-        result[output_len] = '1';
-        output_len += 1;
-    }
-
-    // Reverse the result
-    var final_result = try allocator.alloc(u8, output_len);
-    for (0..output_len) |i| {
-        final_result[i] = result[output_len - 1 - i];
-    }
-
-    return final_result;
+    // TODO: draw the rest of the owl
 }
 
 /// Decode base58 string back to binary data.
