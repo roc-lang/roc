@@ -9,7 +9,7 @@ const can = @import("can");
 const reporting = @import("reporting");
 const Check = @import("Check.zig");
 
-const snapshot = Check.snapshot;
+const snapshot = @import("snapshot.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -108,7 +108,7 @@ pub const IncompatibleListElements = struct {
 /// Problem data for cross-module import type mismatches
 pub const CrossModuleImport = struct {
     import_region: CIR.Expr.Idx,
-    module_idx: ModuleEnv.Import.Idx,
+    module_idx: CIR.Import.Idx,
 };
 
 /// Problem data when

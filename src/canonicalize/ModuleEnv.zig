@@ -1111,7 +1111,7 @@ pub const Serialized = struct {
 
         env.* = Self{
             .gpa = gpa,
-            .common = self.common.deserialize(offset, source).*,
+            .common = self.common.deserialize(offset, source),
             .types = self.types.deserialize(offset).*,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,

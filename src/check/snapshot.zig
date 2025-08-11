@@ -4,10 +4,10 @@ const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
 const types = @import("types");
-const compile = @import("compile");
+const can = @import("can");
 
 const Allocator = std.mem.Allocator;
-const ModuleEnv = compile.ModuleEnv;
+const ModuleEnv = can.ModuleEnv;
 const TypesStore = types.Store;
 const Ident = base.Ident;
 

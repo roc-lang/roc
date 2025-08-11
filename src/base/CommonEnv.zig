@@ -120,7 +120,7 @@ pub const Serialized = struct {
 
         env.* = Self{
             .idents = self.idents.deserialize(offset).*,
-            .ident_ids_for_slicing = self.ident_ids_for_slicing.deserialize(offset).*,
+            // .ident_ids_for_slicing = self.ident_ids_for_slicing.deserialize(offset).*,
             .strings = self.strings.deserialize(offset).*,
             .exposed_items = self.exposed_items.deserialize(offset).*,
             .line_starts = self.line_starts.deserialize(offset).*,
@@ -160,7 +160,7 @@ pub fn getStringStore(self: *Self) *StringLiteral.Store {
 }
 
 pub fn addExposedById(self: *Self, gpa: std.mem.Allocator, ident_idx: Ident.Idx) !void {
-    return try self.exposed_items.addExposedById(gpa, ident_idx);
+    return try self.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
 }
 
 pub fn getNodeIndexById(self: *const Self, allocator: std.mem.Allocator, ident_idx: Ident.Idx) ?u16 {
@@ -168,7 +168,7 @@ pub fn getNodeIndexById(self: *const Self, allocator: std.mem.Allocator, ident_i
 }
 
 pub fn setNodeIndexById(self: *Self, gpa: std.mem.Allocator, ident_idx: Ident.Idx, node_idx: u16) !void {
-    return try self.exposed_items.setNodeIndexById(gpa, ident_idx, node_idx);
+    return try self.exposed_items.setNodeIndexById(gpa, @bitCast(ident_idx), node_idx);
 }
 
 /// Get region info for a given region
