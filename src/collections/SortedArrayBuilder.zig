@@ -335,17 +335,25 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
                 const builder = @as(*SortedArrayBuilder(K, V), @ptrFromInt(@intFromPtr(self)));
 
-                // Apply the offset to convert from serialized offset to actual pointer
-                const entries_ptr_usize: usize = @intCast(self.entries_offset + offset);
-                const entries_ptr: [*]Entry = @ptrFromInt(entries_ptr_usize);
+                // Handle empty array case
+                if (self.entries_len == 0) {
+                    builder.* = SortedArrayBuilder(K, V){
+                        .entries = .{},
+                        .sorted = self.sorted,
+                    };
+                } else {
+                    // Apply the offset to convert from serialized offset to actual pointer
+                    const entries_ptr_usize: usize = @intCast(self.entries_offset + offset);
+                    const entries_ptr: [*]Entry = @ptrFromInt(entries_ptr_usize);
 
-                builder.* = SortedArrayBuilder(K, V){
-                    .entries = .{
-                        .items = entries_ptr[0..@intCast(self.entries_len)],
-                        .capacity = @intCast(self.entries_capacity),
-                    },
-                    .sorted = self.sorted,
-                };
+                    builder.* = SortedArrayBuilder(K, V){
+                        .entries = .{
+                            .items = entries_ptr[0..@intCast(self.entries_len)],
+                            .capacity = @intCast(self.entries_capacity),
+                        },
+                        .sorted = self.sorted,
+                    };
+                }
 
                 return builder;
             }

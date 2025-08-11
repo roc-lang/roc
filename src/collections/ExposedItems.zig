@@ -391,164 +391,134 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     try testing.expectEqual(@as(?u16, 84), deserialized.getNodeIndexById(allocator, id2));
 }
 
-// TODO FIXME
-// test "ExposedItems comprehensive CompactWriter roundtrip" {
-//     const testing = std.testing;
-//     const allocator = testing.allocator;
+test "ExposedItems comprehensive CompactWriter roundtrip" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
 
-//     var original = ExposedItems.init();
-//     defer original.deinit(allocator);
+    var original = ExposedItems.init();
+    defer original.deinit(allocator);
 
-//     // Test with many items including edge cases
-//     const test_items = [_]struct { id: IdentIdx, node_idx: u16 }{
-//         .{ .id = 0, .node_idx = 0 }, // minimum ID
-//         .{ .id = 1, .node_idx = 100 },
-//         .{ .id = 42, .node_idx = 200 },
-//         .{ .id = 100, .node_idx = 300 },
-//         .{ .id = 1000, .node_idx = 400 },
-//         .{ .id = 10000, .node_idx = 500 },
-//         .{ .id = 65535, .node_idx = 600 }, // near max u16 node index
-//         .{ .id = 100000, .node_idx = 0 }, // exposed but not defined
-//         .{ .id = std.math.maxInt(u32) - 1, .node_idx = 999 }, // near max ID
-//     };
+    // Test with many items including edge cases
+    const test_items = [_]struct { id: IdentIdx, node_idx: u16 }{
+        .{ .id = 0, .node_idx = 0 }, // minimum ID
+        .{ .id = 1, .node_idx = 100 },
+        .{ .id = 42, .node_idx = 200 },
+        .{ .id = 100, .node_idx = 300 },
+        .{ .id = 1000, .node_idx = 400 },
+        .{ .id = 10000, .node_idx = 500 },
+        .{ .id = 65535, .node_idx = 600 }, // near max u16 node index
+        .{ .id = 100000, .node_idx = 0 }, // exposed but not defined
+        .{ .id = std.math.maxInt(u32) - 1, .node_idx = 999 }, // near max ID
+    };
 
-//     // Add all items
-//     for (test_items) |item| {
-//         try original.addExposedById(allocator, item.id);
-//         if (item.node_idx > 0) {
-//             try original.setNodeIndexById(allocator, item.id, item.node_idx);
-//         }
-//     }
+    // Add all items
+    for (test_items) |item| {
+        try original.addExposedById(allocator, item.id);
+        if (item.node_idx > 0) {
+            try original.setNodeIndexById(allocator, item.id, item.node_idx);
+        }
+    }
 
-//     // Ensure sorted before serialization
-//     original.ensureSorted(allocator);
+    // Ensure sorted before serialization
+    original.ensureSorted(allocator);
 
-//     // Create a temp file
-//     var tmp_dir = testing.tmpDir(.{});
-//     defer tmp_dir.cleanup();
+    // Create a temp file
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
 
-//     const file = try tmp_dir.dir.createFile("test_comprehensive_exposed.dat", .{ .read = true });
-//     defer file.close();
+    const file = try tmp_dir.dir.createFile("test_comprehensive_exposed.dat", .{ .read = true });
+    defer file.close();
 
-//     // Serialize
-//     var writer = CompactWriter{
-//         .iovecs = .{},
-//         .total_bytes = 0,
-//         .allocated_memory = .{},
-//     };
-//     defer writer.deinit(allocator);
+    // Serialize
+    var writer = CompactWriter.init();
+    defer writer.deinit(allocator);
 
-//     _ = try original.serialize(allocator, &writer);
+    _ = try original.serialize(allocator, &writer);
 
-//     // Write to file
-//     try writer.writeGather(allocator, file);
+    // Write to file
+    try writer.writeGather(allocator, file);
 
-//     // Read back
-//     try file.seekTo(0);
-//     const file_size = try file.getEndPos();
-//     const serialized_size = @sizeOf(ExposedItems.Serialized);
-//     const serialized_align = @alignOf(ExposedItems);
-//     const buffer = try allocator.alignedAlloc(u8, serialized_align, file_size);
-//     defer allocator.free(buffer);
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const serialized_align = @alignOf(ExposedItems);
+    const buffer = try allocator.alignedAlloc(u8, serialized_align, file_size);
+    defer allocator.free(buffer);
 
-//     _ = try file.read(buffer);
+    _ = try file.read(buffer);
 
-//     // Cast to Serialized type and deserialize
-//     const serialized_offset = writer.total_bytes - serialized_size;
-//     const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr + serialized_offset)));
-//     const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    // Cast to Serialized type and deserialize
+    const serialized_ptr: *ExposedItems.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
 
-//     // Verify all items
-//     try testing.expectEqual(@as(usize, test_items.len), deserialized.count());
-//     for (test_items) |item| {
-//         const actual = deserialized.getNodeIndexById(allocator, item.id);
-//         try testing.expectEqual(@as(?u16, item.node_idx), actual);
-//     }
-// }
+    // Verify all items
+    try testing.expectEqual(@as(usize, test_items.len), deserialized.count());
+    for (test_items) |item| {
+        const actual = deserialized.getNodeIndexById(allocator, item.id);
+        try testing.expectEqual(@as(?u16, item.node_idx), actual);
+    }
+}
 
-// TODO FIXME
-// test "ExposedItems multiple instances CompactWriter roundtrip" {
-//     const testing = std.testing;
-//     const allocator = testing.allocator;
+test "ExposedItems edge cases CompactWriter roundtrip" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
 
-//     // Create multiple ExposedItems instances
-//     var exposed1 = ExposedItems.init();
-//     defer exposed1.deinit(allocator);
+    // Test empty ExposedItems
+    {
+        var exposed = ExposedItems.init();
+        defer exposed.deinit(allocator);
 
-//     var exposed2 = ExposedItems.init();
-//     defer exposed2.deinit(allocator);
+        // Empty collections should serialize and deserialize correctly
+        var writer = CompactWriter.init();
+        defer writer.deinit(allocator);
 
-//     var exposed3 = ExposedItems.init();
-//     defer exposed3.deinit(allocator);
+        _ = try exposed.serialize(allocator, &writer);
 
-//     // Populate differently
-//     try exposed1.addExposedById(allocator, 100);
-//     try exposed1.setNodeIndexById(allocator, 100, 42);
-//     exposed1.ensureSorted(allocator);
+        const buffer = try allocator.alloc(u8, writer.total_bytes);
+        defer allocator.free(buffer);
+        _ = try writer.writeToBuffer(buffer);
 
-//     try exposed2.addExposedById(allocator, 200);
-//     try exposed2.addExposedById(allocator, 201);
-//     try exposed2.setNodeIndexById(allocator, 200, 84);
-//     try exposed2.setNodeIndexById(allocator, 201, 85);
-//     exposed2.ensureSorted(allocator);
+        const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
+        const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
 
-//     // exposed3 left empty - empty collections are already sorted
+        try testing.expectEqual(@as(usize, 0), deserialized.count());
+    }
 
-//     // Create a temp file
-//     var tmp_dir = testing.tmpDir(.{});
-//     defer tmp_dir.cleanup();
+    // Test single item with file I/O to ensure writeGather works correctly
+    {
+        var exposed = ExposedItems.init();
+        defer exposed.deinit(allocator);
 
-//     const file = try tmp_dir.dir.createFile("test_multiple_exposed.dat", .{ .read = true });
-//     defer file.close();
+        try exposed.addExposedById(allocator, 100);
+        try exposed.setNodeIndexById(allocator, 100, 42);
+        exposed.ensureSorted(allocator);
 
-//     // Serialize all three
-//     var writer = CompactWriter{
-//         .iovecs = .{},
-//         .total_bytes = 0,
-//         .allocated_memory = .{},
-//     };
-//     defer writer.deinit(allocator);
+        // Create a temp file
+        var tmp_dir = testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+        const file = try tmp_dir.dir.createFile("test_single.dat", .{ .read = true });
+        defer file.close();
 
-//     _ = try exposed1.serialize(allocator, &writer);
-//     const offset1 = writer.total_bytes - @sizeOf(ExposedItems.Serialized);
+        var writer = CompactWriter.init();
+        defer writer.deinit(allocator);
 
-//     _ = try exposed2.serialize(allocator, &writer);
-//     const offset2 = writer.total_bytes - @sizeOf(ExposedItems.Serialized);
+        _ = try exposed.serialize(allocator, &writer);
 
-//     _ = try exposed3.serialize(allocator, &writer);
-//     const offset3 = writer.total_bytes - @sizeOf(ExposedItems.Serialized);
+        // Test writeGather
+        try writer.writeGather(allocator, file);
 
-//     // Write to file
-//     try writer.writeGather(allocator, file);
+        // Read back and verify
+        try file.seekTo(0);
+        const file_size = try file.getEndPos();
+        const buffer = try allocator.alignedAlloc(u8, @alignOf(ExposedItems.Serialized), file_size);
+        defer allocator.free(buffer);
 
-//     // Read back
-//     try file.seekTo(0);
-//     const file_size = try file.getEndPos();
-//     const serialized_align = @alignOf(ExposedItems.Serialized);
-//     const buffer = try allocator.alignedAlloc(u8, serialized_align, file_size);
-//     defer allocator.free(buffer);
+        _ = try file.read(buffer);
 
-//     _ = try file.read(buffer);
+        const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
+        const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
 
-//     // Cast to Serialized types and deserialize
-//     const serialized1_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr + offset1)));
-//     const deserialized1 = serialized1_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
-
-//     const serialized2_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr + offset2)));
-//     const deserialized2 = serialized2_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
-
-//     const serialized3_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr + offset3)));
-//     const deserialized3 = serialized3_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
-
-//     // Verify exposed1
-//     try testing.expectEqual(@as(usize, 1), deserialized1.count());
-//     try testing.expectEqual(@as(?u16, 42), deserialized1.getNodeIndexById(allocator, 100));
-
-//     // Verify exposed2
-//     try testing.expectEqual(@as(usize, 2), deserialized2.count());
-//     try testing.expectEqual(@as(?u16, 84), deserialized2.getNodeIndexById(allocator, 200));
-//     try testing.expectEqual(@as(?u16, 85), deserialized2.getNodeIndexById(allocator, 201));
-
-//     // Verify exposed3 (empty)
-//     try testing.expectEqual(@as(usize, 0), deserialized3.count());
-// }
+        try testing.expectEqual(@as(usize, 1), deserialized.count());
+        try testing.expectEqual(@as(?u16, 42), deserialized.getNodeIndexById(allocator, 100));
+    }
+}
