@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const parse = @import("parse");
+const base = @import("base");
 const can = @import("can");
 const builtin = @import("builtin");
 const reporting = @import("reporting");
@@ -719,9 +720,14 @@ pub const BuildEnv = struct {
         // Read source; ModuleEnv takes ownership of source
         const file_abs = try std.fs.path.resolve(self.gpa, &.{file_path});
         const src = try std.fs.cwd().readFileAlloc(self.gpa, file_abs, std.math.maxInt(usize));
-        var env = try ModuleEnv.init(self.gpa, src);
+
+        var common_env = try base.CommonEnv.init(self.gpa, src);
+        defer common_env.deinit(self.gpa);
+
+        try common_env.calcLineStarts(self.gpa);
+
+        var env = try ModuleEnv.init(self.gpa, &common_env);
         defer env.deinit();
-        try env.calcLineStarts();
 
         var ast = try parse.parse(&env);
         defer ast.deinit(self.gpa);

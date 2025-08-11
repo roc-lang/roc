@@ -524,11 +524,7 @@ test "Import.Store empty CompactWriter roundtrip" {
     defer file.close();
 
     // Serialize using CompactWriter
-    var writer = collections.CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = collections.CompactWriter.init();
     defer writer.deinit(gpa);
 
     _ = try original.serialize(gpa, &writer);

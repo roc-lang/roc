@@ -2685,7 +2685,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) std.mem.Allocato
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
-pub fn addMalformed(store: *NodeStore, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) std.mem.Allocator.Error!ModuleEnv.Node.Idx {
+pub fn addMalformed(store: *NodeStore, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) std.mem.Allocator.Error!Node.Idx {
     const malformed_node = Node{
         .data_1 = @intFromEnum(diagnostic_idx),
         .data_2 = 0,
@@ -3006,61 +3006,6 @@ pub fn addScratchMatchBranchPattern(store: *NodeStore, pattern_idx: CIR.Expr.Mat
 /// Create a span from the scratch match branch patterns starting at the given index.
 pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!CIR.Expr.Match.BranchPattern.Span {
     return try store.spanFrom("scratch_match_branch_patterns", CIR.Expr.Match.BranchPattern.Span, start);
-}
-
-/// Calculate the size needed to serialize this NodeStore
-pub fn serializedSize(self: *const NodeStore) usize {
-    // We only serialize nodes, regions, and extra_data (the scratch arrays are transient)
-    const raw_size = self.nodes.serializedSize() +
-        self.regions.serializedSize() +
-        self.extra_data.serializedSize();
-    // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
-    return std.mem.alignForward(usize, raw_size, SERIALIZATION_ALIGNMENT);
-}
-
-/// Deserialize a NodeStore from the provided buffer
-pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.mem.Allocator) !NodeStore {
-    var offset: usize = 0;
-
-    // Deserialize nodes - cast to proper alignment for Node type
-    const nodes_buffer = @as([]align(@alignOf(Node)) const u8, @alignCast(buffer[offset..]));
-    const nodes = try Node.List.deserializeFrom(nodes_buffer, allocator);
-    offset += nodes.serializedSize();
-
-    // Deserialize regions
-    const regions_buffer = @as([]align(@alignOf(Region)) const u8, @alignCast(buffer[offset..]));
-    const regions = try Region.List.deserializeFrom(regions_buffer, allocator);
-    offset += regions.serializedSize();
-
-    // Deserialize extra_data items
-    const extra_data_buffer = @as([]align(@alignOf(u32)) const u8, @alignCast(buffer[offset..]));
-    const extra_data = try SafeList(u32).deserializeFrom(extra_data_buffer, allocator);
-    offset += extra_data.serializedSize();
-
-    // Create NodeStore with empty scratch arrays
-    return NodeStore{
-        .gpa = allocator,
-        .nodes = nodes,
-        .regions = regions,
-        .extra_data = extra_data, // This is now a SafeList
-        // All scratch arrays start empty
-        .scratch_statements = base.Scratch(CIR.Statement.Idx){ .items = .{} },
-        .scratch_exprs = base.Scratch(CIR.Expr.Idx){ .items = .{} },
-        .scratch_captures = base.Scratch(CIR.Expr.Capture.Idx){ .items = .{} },
-        .scratch_record_fields = base.Scratch(CIR.RecordField.Idx){ .items = .{} },
-        .scratch_match_branches = base.Scratch(CIR.Expr.Match.Branch.Idx){ .items = .{} },
-        .scratch_match_branch_patterns = base.Scratch(CIR.Expr.Match.BranchPattern.Idx){ .items = .{} },
-        .scratch_if_branches = base.Scratch(CIR.Expr.IfBranch.Idx){ .items = .{} },
-        .scratch_where_clauses = base.Scratch(CIR.WhereClause.Idx){ .items = .{} },
-        .scratch_patterns = base.Scratch(CIR.Pattern.Idx){ .items = .{} },
-        .scratch_pattern_record_fields = base.Scratch(CIR.PatternRecordField.Idx){ .items = .{} },
-        .scratch_type_annos = base.Scratch(CIR.TypeAnno.Idx){ .items = .{} },
-        .scratch_anno_record_fields = base.Scratch(CIR.TypeAnno.RecordField.Idx){ .items = .{} },
-        .scratch_exposed_items = base.Scratch(CIR.ExposedItem.Idx){ .items = .{} },
-        .scratch_defs = base.Scratch(CIR.Def.Idx){ .items = .{} },
-        .scratch_diagnostics = base.Scratch(CIR.Diagnostic.Idx){ .items = .{} },
-        .scratch_record_destructs = base.Scratch(CIR.Pattern.RecordDestruct.Idx){ .items = .{} },
-    };
 }
 
 /// Serialize this NodeStore to the given CompactWriter. The resulting NodeStore

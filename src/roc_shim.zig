@@ -122,12 +122,12 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator) ShimError!*ModuleEnv {
     env_ptr.gpa = std.heap.page_allocator;
     env_ptr.relocate(offset);
 
-    // Relocate strings manually if they exist
-    if (env_ptr.source.len > 0) {
-        const old_source_ptr = @intFromPtr(env_ptr.source.ptr);
-        const new_source_ptr = @as(isize, @intCast(old_source_ptr)) + offset;
-        env_ptr.source.ptr = @ptrFromInt(@as(usize, @intCast(new_source_ptr)));
-    }
+    // TODO Relocate strings manually if they exist
+    // if (env_ptr.source.len > 0) {
+    //     const old_source_ptr = @intFromPtr(env_ptr.source.ptr);
+    //     const new_source_ptr = @as(isize, @intCast(old_source_ptr)) + offset;
+    //     env_ptr.source.ptr = @ptrFromInt(@as(usize, @intCast(new_source_ptr)));
+    // }
 
     if (env_ptr.module_name.len > 0) {
         const old_module_ptr = @intFromPtr(env_ptr.module_name.ptr);

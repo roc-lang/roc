@@ -36,9 +36,9 @@ pub const ModuleType = enum {
             .types => &.{ .base, .collections },
             .reporting => &.{ .collections, .base },
             .parse => &.{ .tracy, .collections, .base, .reporting },
-            .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse },
+            .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
-            .compile => &.{ .tracy, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting },
+            .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting },
         };
     }
 };

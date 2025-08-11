@@ -35,12 +35,12 @@ cached_malformed_node: ?Node.Idx,
 nesting_counter: u8,
 
 /// init the parser from a buffer of tokens
-pub fn init(tokens: TokenizedBuffer) std.mem.Allocator.Error!Parser {
+pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.Error!Parser {
     const estimated_node_count = tokens.tokens.len;
-    const store = try NodeStore.initCapacity(tokens.env.gpa, estimated_node_count);
+    const store = try NodeStore.initCapacity(gpa, estimated_node_count);
 
     return Parser{
-        .gpa = tokens.env.gpa,
+        .gpa = gpa,
         .pos = 0,
         .tok_buf = tokens,
         .store = store,

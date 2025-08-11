@@ -105,14 +105,46 @@ pub const Serialized = struct {
         try self.exposed_items.serialize(&env.exposed_items, allocator, writer);
         try self.line_starts.serialize(&env.line_starts, allocator, writer);
     }
+
+    /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
+    pub fn deserialize(
+        self: *Serialized,
+        offset: i64,
+        source: []const u8,
+    ) *Self {
+        // ModuleEnv.Serialized should be at least as big as ModuleEnv
+        std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Self));
+
+        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+        const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
+
+        env.* = Self{
+            .idents = self.idents.deserialize(offset).*,
+            .ident_ids_for_slicing = self.ident_ids_for_slicing.deserialize(offset).*,
+            .strings = self.strings.deserialize(offset).*,
+            .exposed_items = self.exposed_items.deserialize(offset).*,
+            .line_starts = self.line_starts.deserialize(offset).*,
+            .source = source,
+        };
+
+        return env;
+    }
 };
 
 pub fn insertIdent(self: *Self, gpa: std.mem.Allocator, ident: Ident) std.mem.Allocator.Error!Ident.Idx {
     return try self.idents.insert(gpa, ident);
 }
 
+pub fn findIdent(self: *const Self, text: []const u8) ?Ident.Idx {
+    return self.idents.findByString(text);
+}
+
 pub fn getIdent(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.getIdent(idx);
+}
+
+pub fn getIdentStore(self: *const Self) *const Ident.Store {
+    return &self.idents;
 }
 
 pub fn insertString(self: *Self, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!StringLiteral.Idx {
@@ -123,8 +155,16 @@ pub fn getString(self: *const Self, idx: StringLiteral.Idx) []const u8 {
     return self.strings.get(idx);
 }
 
+pub fn getStringStore(self: *Self) *StringLiteral.Store {
+    return &self.strings;
+}
+
 pub fn addExposedById(self: *Self, gpa: std.mem.Allocator, ident_idx: Ident.Idx) !void {
     return try self.exposed_items.addExposedById(gpa, ident_idx);
+}
+
+pub fn getNodeIndexById(self: *const Self, allocator: std.mem.Allocator, ident_idx: Ident.Idx) ?u16 {
+    return self.exposed_items.getNodeIndexById(allocator, @bitCast(ident_idx));
 }
 
 pub fn setNodeIndexById(self: *Self, gpa: std.mem.Allocator, ident_idx: Ident.Idx, node_idx: u16) !void {

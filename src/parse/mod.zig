@@ -5,16 +5,15 @@
 
 const std = @import("std");
 const base = @import("base");
-const compile = @import("compile");
 const tracy = @import("tracy");
 
 pub const tokenize = @import("tokenize.zig");
 
+const CommonEnv = base.CommonEnv;
 const TokenIndex = tokenize.TokenIndex;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const NodeList = AST.NodeList;
 const Diagnostic = AST.Diagnostic;
-const ModuleEnv = compile.ModuleEnv;
 
 /// **AST.Parser**
 pub const Parser = @import("Parser.zig");
@@ -28,29 +27,31 @@ pub const NodeStore = @import("NodeStore.zig");
 /// Represents the intermediate representation or Abstract Syntax Tree (AST) of a parsed Roc file.
 pub const AST = @import("AST.zig");
 
-fn runParse(env: *ModuleEnv, parserCall: *const fn (*Parser) Parser.Error!u32) Parser.Error!AST {
+fn runParse(env: *CommonEnv, gpa: std.mem.Allocator, parserCall: *const fn (*Parser) Parser.Error!u32) Parser.Error!AST {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // TODO why is this here?
+    //
     // Calculate and store line starts for diagnostic position calculation
-    try env.calcLineStarts();
+    // try env.calcLineStarts();
 
     var messages: [128]tokenize.Diagnostic = undefined;
     const msg_slice = messages[0..];
-    var tokenizer = try tokenize.Tokenizer.init(env, env.source, msg_slice);
-    try tokenizer.tokenize();
-    var result = tokenizer.finishAndDeinit();
+    var tokenizer = try tokenize.Tokenizer.init(env, gpa, env.source, msg_slice);
+    try tokenizer.tokenize(gpa);
+    var result = tokenizer.finishAndDeinit(gpa);
 
-    var parser = try Parser.init(result.tokens);
+    var parser = try Parser.init(result.tokens, gpa);
     defer parser.deinit();
 
-    errdefer result.tokens.deinit();
+    errdefer result.tokens.deinit(gpa);
     errdefer parser.store.deinit();
-    errdefer parser.diagnostics.deinit(env.gpa);
+    errdefer parser.diagnostics.deinit(gpa);
 
     const idx = try parserCall(&parser);
 
-    const tokenize_diagnostics_slice = try env.gpa.dupe(tokenize.Diagnostic, result.messages);
+    const tokenize_diagnostics_slice = try gpa.dupe(tokenize.Diagnostic, result.messages);
     const tokenize_diagnostics = std.ArrayListUnmanaged(tokenize.Diagnostic).fromOwnedSlice(tokenize_diagnostics_slice);
 
     return .{
@@ -65,8 +66,8 @@ fn runParse(env: *ModuleEnv, parserCall: *const fn (*Parser) Parser.Error!u32) P
 
 /// Parses a single Roc file.  The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parse(env: *ModuleEnv) Parser.Error!AST {
-    return try runParse(env, parseFileAndReturnIdx);
+pub fn parse(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST {
+    return try runParse(env, gpa, parseFileAndReturnIdx);
 }
 
 fn parseFileAndReturnIdx(parser: *Parser) Parser.Error!u32 {
@@ -81,8 +82,8 @@ fn parseExprAndReturnIdx(parser: *Parser) Parser.Error!u32 {
 
 /// Parses a Roc expression - only for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parseExpr(env: *ModuleEnv) Parser.Error!AST {
-    return try runParse(env, parseExprAndReturnIdx);
+pub fn parseExpr(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST {
+    return try runParse(env, gpa, parseExprAndReturnIdx);
 }
 
 fn parseHeaderAndReturnIdx(parser: *Parser) Parser.Error!u32 {
@@ -92,12 +93,12 @@ fn parseHeaderAndReturnIdx(parser: *Parser) Parser.Error!u32 {
 
 /// Parses a Roc Header - only for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parseHeader(env: *ModuleEnv) Parser.Error!AST {
-    return try runParse(env, parseHeaderAndReturnIdx);
+pub fn parseHeader(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST {
+    return try runParse(env, gpa, parseHeaderAndReturnIdx);
 }
 
-fn parseStatementAndReturnIdx(parser: *Parser) Parser.Error!u32 {
-    const maybe_statement_idx = try parser.parseStmt();
+fn parseStatementAndReturnIdx(parser: *Parser, gpa: std.mem.Allocator) Parser.Error!u32 {
+    const maybe_statement_idx = try parser.parseStmt(gpa);
     if (maybe_statement_idx) |idx| {
         return @intFromEnum(idx);
     }
@@ -106,6 +107,6 @@ fn parseStatementAndReturnIdx(parser: *Parser) Parser.Error!u32 {
 
 /// Parses a single Roc statement for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parseStatement(env: *ModuleEnv) Parser.Error!AST {
-    return try runParse(env, parseStatementAndReturnIdx);
+pub fn parseStatement(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST {
+    return try runParse(env, gpa, parseStatementAndReturnIdx);
 }

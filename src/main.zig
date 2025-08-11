@@ -10,25 +10,27 @@ const collections = @import("collections");
 const reporting = @import("reporting");
 const parse = @import("parse");
 const tracy = @import("tracy");
+const fs_mod = @import("fs");
+const compile = @import("compile");
+const can = @import("can");
+const check = @import("check");
 
 const SharedMemoryAllocator = @import("./SharedMemoryAllocator.zig");
 const platform = @import("ipc/platform.zig");
 const fmt = @import("fmt.zig");
-const fs_mod = @import("fs");
-const Filesystem = fs_mod.Filesystem;
 const cli_args = @import("cli_args.zig");
-const cache_mod = @import("cache");
 const bench = @import("bench.zig");
 const linker = @import("linker.zig");
-const compile = @import("compile");
-const Can = @import("can").Can;
-const Check = @import("check").Check;
 
-const ModuleEnv = compile.ModuleEnv;
+const Can = can.Can;
+const Check = check.Check;
+
+const Filesystem = fs_mod.Filesystem;
+const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
 const TimingInfo = compile.package.TimingInfo;
-const CacheManager = cache_mod.CacheManager;
-const CacheConfig = cache_mod.CacheConfig;
+const CacheManager = compile.CacheManager;
+const CacheConfig = compile.CacheConfig;
 const tokenize = parse.tokenize;
 
 const roc_shim_lib = if (builtin.is_test) &[_]u8{} else if (builtin.target.os.tag == .windows) @embedFile("roc_shim.lib") else @embedFile("libroc_shim.a");
@@ -782,13 +784,17 @@ pub fn setupSharedMemoryWithModuleEnv(_: std.mem.Allocator, roc_file_path: []con
     const basename = std.fs.path.basename(roc_file_path);
     const module_name = try shm_allocator.dupe(u8, basename);
 
-    var env = try ModuleEnv.init(shm_allocator, source);
-    env.source = source;
+    var common_env = try base.CommonEnv.init(shm_allocator, source);
+    defer common_env.deinit(shm_allocator);
+
+    try common_env.calcLineStarts(shm_allocator);
+
+    var env = try ModuleEnv.init(shm_allocator, &common_env);
+    // env.source = source;
     env.module_name = module_name;
-    try env.calcLineStarts();
 
     // Parse the source code as a full module
-    var parse_ast = try parse.parse(&env);
+    var parse_ast = try parse.parse(&common_env);
 
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
@@ -811,7 +817,7 @@ pub fn setupSharedMemoryWithModuleEnv(_: std.mem.Allocator, roc_file_path: []con
         const pattern = env.store.getPattern(def.pattern);
         if (pattern == .assign) {
             const ident_idx = pattern.assign.ident;
-            const ident_text = env.getIdent(ident_idx);
+            const ident_text = env.idents.getText(ident_idx);
             if (std.mem.eql(u8, ident_text, "main")) {
                 main_expr_idx = @intFromEnum(def.expr);
                 break;

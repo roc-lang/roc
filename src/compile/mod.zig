@@ -11,8 +11,8 @@ pub const config = @import("cache_config.zig");
 pub const reporting = @import("cache_reporting.zig");
 pub const manager = @import("cache_manager.zig");
 
-pub const CacheModule = module.CacheModule;
 pub const Header = module.Header;
+pub const CacheModule = module.CacheModule;
 pub const Diagnostics = module.Diagnostics;
 pub const CacheManager = manager.CacheManager;
 pub const CacheResult = manager.CacheResult;

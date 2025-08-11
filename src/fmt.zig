@@ -4,13 +4,13 @@ const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
 const collections = @import("collections");
-const compile = @import("compile");
+const can = @import("can");
 
 const fs_mod = @import("fs");
 const Filesystem = fs_mod.Filesystem;
 const tracy = @import("tracy");
 
-const ModuleEnv = compile.ModuleEnv;
+const ModuleEnv = can.ModuleEnv;
 const Token = tokenize.Token;
 const Parser = parse.Parser;
 const AST = parse.AST;
@@ -194,8 +194,12 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 /// Format the contents of stdin and output the result to stdout
 pub fn formatStdin(gpa: std.mem.Allocator) !void {
     const contents = try std.io.getStdIn().readToEndAlloc(gpa, Filesystem.max_file_size);
+
+    var common_env = try base.CommonEnv.init(gpa, contents);
+    defer common_env.deinit(gpa);
+
     // ModuleEnv takes ownership of contents
-    var module_env = try ModuleEnv.init(gpa, contents);
+    var module_env = try ModuleEnv.init(gpa, &common_env);
     defer module_env.deinit();
 
     var parse_ast: AST = try parse.parse(&module_env);

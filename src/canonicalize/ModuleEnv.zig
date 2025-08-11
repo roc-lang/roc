@@ -25,12 +25,13 @@ const Region = base.Region;
 const SExprTree = base.SExprTree;
 const SExpr = base.SExpr;
 const TypeVar = types_mod.Var;
+const TypeStore = types_mod.Store;
 
 const Self = @This();
 
 gpa: std.mem.Allocator,
 common: *CommonEnv,
-types: types_mod.Store,
+types: TypeStore,
 
 // ===== Module compilation fields =====
 // NOTE: These fields are populated during canonicalization and preserved for later use
@@ -76,7 +77,7 @@ pub fn init(gpa: std.mem.Allocator, common_env: *CommonEnv) std.mem.Allocator.Er
     return Self{
         .gpa = gpa,
         .common = common_env,
-        .types = try types_mod.Store.initCapacity(gpa, 2048, 512),
+        .types = try TypeStore.initCapacity(gpa, 2048, 512),
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
@@ -1055,7 +1056,7 @@ pub fn relocate(self: *Self, offset: isize) void {
 pub const Serialized = struct {
     gpa: std.mem.Allocator, // Serialized as zeros, provided during deserialization
     common: CommonEnv.Serialized,
-    types: types_mod.Store.Serialized,
+    types: TypeStore.Serialized,
     all_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
@@ -1110,13 +1111,8 @@ pub const Serialized = struct {
 
         env.* = Self{
             .gpa = gpa,
-            .idents = self.idents.deserialize(offset).*,
-            // .ident_ids_for_slicing = self.ident_ids_for_slicing.deserialize(offset).*,
-            .strings = self.strings.deserialize(offset).*,
+            .common = self.common.deserialize(offset, source).*,
             .types = self.types.deserialize(offset).*,
-            .exposed_items = self.exposed_items.deserialize(offset).*,
-            .line_starts = self.line_starts.deserialize(offset).*,
-            .source = source,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .external_decls = self.external_decls.deserialize(offset).*,
@@ -1138,6 +1134,22 @@ pub fn nodeIdxFrom(idx: anytype) Node.Idx {
 /// Convert a type into a type var
 pub fn varFrom(idx: anytype) TypeVar {
     return @enumFromInt(@intFromEnum(idx));
+}
+
+pub fn addExposedById(self: *Self, ident_idx: Ident.Idx) !void {
+    return try self.common.exposed_items.addExposedById(self.gpa, @bitCast(ident_idx));
+}
+
+pub fn setExposedNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u16) !void {
+    return try self.common.exposed_items.setNodeIndexById(self.gpa, @bitCast(ident_idx), node_idx);
+}
+
+pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u16 {
+    return self.common.getNodeIndexById(self.gpa, ident_idx);
+}
+
+pub fn containsExposedById(self: *const Self, ident_idx: Ident.Idx) bool {
+    return self.common.exposed_items.containsById(self.gpa, @bitCast(ident_idx));
 }
 
 /// Assert that nodes, regions and types are all in sync
@@ -1606,7 +1618,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             const pattern_region = self.store.getRegionAt(pattern_node_idx);
 
             // Create a TypeWriter to format the type
-            var type_writer = TypeWriter.init(self.gpa, self) catch continue;
+            var type_writer = self.initTypeWriter() catch continue;
             defer type_writer.deinit();
 
             // Write the type to the buffer
@@ -1660,7 +1672,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         const stmt_var = varFrom(stmt_idx);
 
                         // Create a TypeWriter to format the type
-                        var type_writer = TypeWriter.init(self.gpa, self) catch continue;
+                        var type_writer = self.initTypeWriter() catch continue;
                         defer type_writer.deinit();
 
                         // Write the type to the buffer
@@ -1689,7 +1701,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         const stmt_var = varFrom(stmt_idx);
 
                         // Create a TypeWriter to format the type
-                        var type_writer = TypeWriter.init(self.gpa, self) catch continue;
+                        var type_writer = self.initTypeWriter() catch continue;
                         defer type_writer.deinit();
 
                         // Write the type to the buffer
@@ -1728,7 +1740,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             const expr_region = self.store.getRegionAt(expr_node_idx);
 
             // Create a TypeWriter to format the type
-            var type_writer = TypeWriter.init(self.gpa, self) catch continue;
+            var type_writer = self.initTypeWriter() catch continue;
             defer type_writer.deinit();
 
             // Write the type to the buffer
@@ -1761,7 +1773,7 @@ fn pushExprTypesToSExprTree(self: *Self, expr_idx: CIR.Expr.Idx, tree: *SExprTre
     const expr_var = varFrom(expr_idx);
 
     // Create a TypeWriter to format the type
-    var type_writer = try TypeWriter.init(self.gpa, self);
+    var type_writer = try self.initTypeWriter();
     defer type_writer.deinit();
 
     // Write the type to the buffer
@@ -1778,7 +1790,11 @@ pub fn getString(self: *const Self, idx: StringLiteral.Idx) []const u8 {
     return self.common.getString(idx);
 }
 
-pub fn getIdentStore(self: *const Self) *const Ident.Store {
+pub fn insertString(self: *Self, string: []const u8) std.mem.Allocator.Error!StringLiteral.Idx {
+    return try self.common.insertString(self.gpa, string);
+}
+
+pub fn getIdentStore(self: *Self) *Ident.Store {
     return &self.common.idents;
 }
 
@@ -1804,6 +1820,10 @@ pub fn getLineStartsAll(self: *const Self) []const u32 {
 }
 
 /// Initialize a TypeWriter with an immutable ModuleEnv reference.
-pub fn initTypeWriter(gpa: std.mem.Allocator, env: *const Self) std.mem.Allocator.Error!TypeWriter {
-    return TypeWriter.initFromParts(gpa, &env.types, env.getIdentStore());
+pub fn initTypeWriter(self: *Self) std.mem.Allocator.Error!TypeWriter {
+    return TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore());
+}
+
+pub fn insertIdent(self: *Self, ident: Ident) std.mem.Allocator.Error!Ident.Idx {
+    return try self.common.insertIdent(self.gpa, ident);
 }

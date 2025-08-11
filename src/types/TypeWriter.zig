@@ -9,7 +9,7 @@ const std = @import("std");
 const base = @import("base");
 const types_mod = @import("types.zig");
 
-const TypesStore = @import("store.zig");
+const TypesStore = @import("store.zig").Store;
 const Allocator = std.mem.Allocator;
 const Desc = types_mod.Descriptor;
 const Var = types_mod.Var;
