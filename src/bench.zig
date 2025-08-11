@@ -90,9 +90,13 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
 
                 // ModuleEnv takes ownership of the source code, so we need to dupe it each iteration
                 const source_copy = try gpa.dupe(u8, roc_file.content);
-                var parse_env = try ModuleEnv.init(gpa, source_copy);
 
-                var ir = try parse.parse(&parse_env);
+                var common_env1 = try CommonEnv.init(gpa, source_copy);
+                defer common_env1.deinit(gpa);
+
+                var parse_env = try ModuleEnv.init(gpa, &common_env1);
+
+                var ir = try parse.parse(&common_env1, gpa);
                 iteration_tokens += ir.tokens.tokens.len;
                 ir.deinit(gpa);
                 parse_env.deinit();
@@ -101,11 +105,11 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
                 var messages: [128]tokenize.Diagnostic = undefined;
                 const msg_slice = messages[0..];
 
-                var tokenizer = try tokenize.Tokenizer.init(&env.?, roc_file.content, msg_slice);
-                try tokenizer.tokenize();
-                var result = tokenizer.finishAndDeinit();
+                var tokenizer = try tokenize.Tokenizer.init(env.?.common, gpa, roc_file.content, msg_slice);
+                try tokenizer.tokenize(gpa);
+                var result = tokenizer.finishAndDeinit(gpa);
                 iteration_tokens += result.tokens.tokens.len;
-                result.tokens.deinit();
+                result.tokens.deinit(gpa);
             }
         }
 

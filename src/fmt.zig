@@ -17,6 +17,7 @@ const AST = parse.AST;
 const Node = parse.Node;
 const NodeStore = parse.NodeStore;
 const SafeList = collections.SafeList;
+const CommonEnv = base.CommonEnv;
 
 const tokenize = parse.tokenize;
 const fatal = collections.utils.fatal;
@@ -162,16 +163,19 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
         }
     };
 
-    var module_env = try ModuleEnv.init(gpa, contents);
+    var common_env = try CommonEnv.init(gpa, contents);
+    defer common_env.deinit(gpa);
+
+    var module_env = try ModuleEnv.init(gpa, &common_env);
     defer module_env.deinit();
 
-    var parse_ast: AST = try parse.parse(&module_env);
+    var parse_ast: AST = try parse.parse(&common_env, gpa);
     defer parse_ast.deinit(gpa);
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
-        try printParseErrors(gpa, module_env.source, parse_ast);
+        parse_ast.toSExprStr(gpa, &common_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        try printParseErrors(gpa, common_env.source, parse_ast);
         return error.ParsingFailed;
     }
 
@@ -180,7 +184,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
         var formatted = std.ArrayList(u8).init(gpa);
         defer formatted.deinit();
         try formatAst(parse_ast, formatted.writer().any());
-        if (!std.mem.eql(u8, formatted.items, module_env.source)) {
+        if (!std.mem.eql(u8, formatted.items, common_env.source)) {
             try unformatted_files.?.append(path);
         }
     } else { // Otherwise actually format it
@@ -202,13 +206,13 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
     var module_env = try ModuleEnv.init(gpa, &common_env);
     defer module_env.deinit();
 
-    var parse_ast: AST = try parse.parse(&module_env);
+    var parse_ast: AST = try parse.parse(&common_env, gpa);
     defer parse_ast.deinit(gpa);
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
-        try printParseErrors(gpa, module_env.source, parse_ast);
+        parse_ast.toSExprStr(gpa, &common_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        try printParseErrors(gpa, common_env.source, parse_ast);
         return error.ParsingFailed;
     }
 

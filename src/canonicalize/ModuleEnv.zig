@@ -1827,3 +1827,7 @@ pub fn initTypeWriter(self: *Self) std.mem.Allocator.Error!TypeWriter {
 pub fn insertIdent(self: *Self, ident: Ident) std.mem.Allocator.Error!Ident.Idx {
     return try self.common.insertIdent(self.gpa, ident);
 }
+
+pub fn getLineStarts(self: *const Self) []const u32 {
+    return self.common.getLineStartsAll();
+}

@@ -22,6 +22,8 @@ pub const problem = @import("problem.zig");
 
 pub const Check = @import("Check.zig");
 
+pub const ReportBuilder = problem.ReportBuilder;
+
 test "check tests" {
     std.testing.refAllDecls(@import("Check.zig"));
     std.testing.refAllDecls(@import("copy_import.zig"));

@@ -747,7 +747,7 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 /// Set up shared memory with a compiled ModuleEnv from a Roc file.
 /// This parses, canonicalizes, and type-checks the Roc file, with the resulting ModuleEnv
 /// ending up in shared memory because all allocations were done into shared memory.
-pub fn setupSharedMemoryWithModuleEnv(_: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
+pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size);
@@ -794,7 +794,7 @@ pub fn setupSharedMemoryWithModuleEnv(_: std.mem.Allocator, roc_file_path: []con
     env.module_name = module_name;
 
     // Parse the source code as a full module
-    var parse_ast = try parse.parse(&common_env);
+    var parse_ast = try parse.parse(&common_env, gpa);
 
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
@@ -817,7 +817,7 @@ pub fn setupSharedMemoryWithModuleEnv(_: std.mem.Allocator, roc_file_path: []con
         const pattern = env.store.getPattern(def.pattern);
         if (pattern == .assign) {
             const ident_idx = pattern.assign.ident;
-            const ident_text = env.idents.getText(ident_idx);
+            const ident_text = env.getIdent(ident_idx);
             if (std.mem.eql(u8, ident_text, "main")) {
                 main_expr_idx = @intFromEnum(def.expr);
                 break;

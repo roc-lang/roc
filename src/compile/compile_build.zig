@@ -729,7 +729,7 @@ pub const BuildEnv = struct {
         var env = try ModuleEnv.init(self.gpa, &common_env);
         defer env.deinit();
 
-        var ast = try parse.parse(&env);
+        var ast = try parse.parse(&common_env, self.gpa);
         defer ast.deinit(self.gpa);
 
         const file = ast.store.getFile();

@@ -76,8 +76,17 @@ pub fn writeGather(
             // Skip iovecs that have no remaining data
             if (iovec.iov_len <= offset) continue;
 
+            // Handle potential null pointer when adding offset
+            const base_addr = @intFromPtr(iovec.iov_base);
+            const new_base = if (base_addr == 0 and offset == 0)
+                iovec.iov_base // Keep null if already null
+            else if (base_addr == 0)
+                @as([*]const u8, @ptrFromInt(offset)) // This shouldn't happen, but handle it
+            else
+                @as([*]const u8, @ptrFromInt(base_addr + offset));
+            
             adjusted_iovecs[adjusted_index] = .{
-                .base = @ptrFromInt(@intFromPtr(iovec.iov_base) + offset),
+                .base = new_base,
                 .len = iovec.iov_len - offset,
             };
             adjusted_index += 1;

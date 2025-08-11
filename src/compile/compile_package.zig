@@ -17,13 +17,14 @@ const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
-const Check = @import("check").Check;
+const check = @import("check");
 const reporting = @import("reporting");
 
+const Check = check.Check;
 const Can = can.Can;
 const Report = reporting.Report;
 const ModuleEnv = can.ModuleEnv;
-const problem = Check.problem;
+const ReportBuilder = check.ReportBuilder;
 
 /// Timing information for different phases
 pub const TimingInfo = struct {
@@ -477,9 +478,13 @@ pub const PackageEnv = struct {
         var st = &self.modules.items[module_id];
         const src = try std.fs.cwd().readFileAlloc(self.gpa, st.path, std.math.maxInt(usize));
 
-        var env = try ModuleEnv.init(self.gpa, src);
+        var common_env = try base.CommonEnv.init(self.gpa, src);
+        defer common_env.deinit(self.gpa);
+
         // line starts for diagnostics and consistent positions
-        try env.calcLineStarts();
+        try common_env.calcLineStarts(self.gpa);
+
+        var env = try ModuleEnv.init(self.gpa, &common_env);
         // init CIR fields
         try env.initCIRFields(self.gpa, st.name);
 
@@ -497,7 +502,7 @@ pub const PackageEnv = struct {
 
         // Parse and canonicalize in one step to avoid double parsing
         const parse_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var parse_ast = try parse.parse(&env);
+        var parse_ast = try parse.parse(env.common, self.gpa);
         defer parse_ast.deinit(self.gpa);
         parse_ast.store.emptyScratch();
         const parse_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -534,7 +539,7 @@ pub const PackageEnv = struct {
         // Mark current node as visiting (gray) before exploring imports
         st.visit_color = 1;
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
-            const mod_name = env.strings.get(str_idx);
+            const mod_name = env.getString(str_idx);
 
             // Use CIR qualifier metadata instead of heuristic; this allocates nothing and scans only once
             const qualified = hadQualifiedImport(&env, mod_name);
@@ -681,7 +686,7 @@ pub const PackageEnv = struct {
         var others = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, import_count);
         defer others.deinit();
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
-            const import_name = env.strings.get(str_idx);
+            const import_name = env.getString(str_idx);
             // Determine external vs local from CIR s_import qualifier metadata directly
             const is_ext = hadQualifiedImport(&env, import_name);
 
@@ -718,7 +723,7 @@ pub const PackageEnv = struct {
 
         // Build reports from problems
         const check_diag_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var rb = problem.ReportBuilder.init(self.gpa, &env, &env, &checker.snapshots, st.path, others.items);
+        var rb = ReportBuilder.init(self.gpa, &env, &env, &checker.snapshots, st.path, others.items);
         defer rb.deinit();
         for (checker.problems.problems.items) |prob| {
             const rep = rb.build(prob) catch continue;

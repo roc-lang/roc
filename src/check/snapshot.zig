@@ -753,7 +753,7 @@ pub const SnapshotWriter = struct {
         switch (content) {
             .flex_var => |mb_ident_idx| {
                 if (mb_ident_idx) |ident_idx| {
-                    _ = try self.writer.write(self.getIdent(ident_idx));
+                    _ = try self.writer.write(self.idents.getText(ident_idx));
                 } else {
                     // Check if this variable appears multiple times
                     const occurrences = self.countOccurrences(current_idx, root_idx);
@@ -764,7 +764,7 @@ pub const SnapshotWriter = struct {
                 }
             },
             .rigid_var => |ident_idx| {
-                _ = try self.writer.write(self.getIdent(ident_idx));
+                _ = try self.writer.write(self.idents.getText(ident_idx));
             },
             .alias => |alias| {
                 try self.writeAlias(alias, root_idx);
@@ -780,7 +780,7 @@ pub const SnapshotWriter = struct {
 
     /// Write an alias type
     pub fn writeAlias(self: *Self, alias: SnapshotAlias, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        _ = try self.writer.write(self.getIdent(alias.ident.ident_idx));
+        _ = try self.writer.write(self.idents.getText(alias.ident.ident_idx));
 
         // The 1st var is the alias type's backing var, so we skip it
         var vars = self.snapshots.sliceVars(alias.vars);
@@ -871,7 +871,7 @@ pub const SnapshotWriter = struct {
 
     /// Write a nominal type
     pub fn writeNominalType(self: *Self, nominal_type: SnapshotNominalType, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        _ = try self.writer.write(self.getIdent(nominal_type.ident.ident_idx));
+        _ = try self.writer.write(self.idents.getText(nominal_type.ident.ident_idx));
 
         // The 1st var is the nominal type's backing var, so we skip it
         var vars = self.snapshots.sliceVars(nominal_type.vars);
@@ -889,7 +889,7 @@ pub const SnapshotWriter = struct {
 
         // Add origin information if it's from a different module
         if (self.current_module_name) |current_module| {
-            const origin_module_name = self.getIdent(nominal_type.origin_module);
+            const origin_module_name = self.idents.getText(nominal_type.origin_module);
 
             // Only show origin if it's different from the current module
             if (!std.mem.eql(u8, origin_module_name, current_module)) {
@@ -934,14 +934,14 @@ pub const SnapshotWriter = struct {
 
         if (fields_slice.len > 0) {
             // Write first field
-            _ = try self.writer.write(self.getIdent(fields_slice.items(.name)[0]));
+            _ = try self.writer.write(self.idents.getText(fields_slice.items(.name)[0]));
             _ = try self.writer.write(": ");
             try self.writeWithContext(fields_slice.items(.content)[0], .RecordFieldContent, root_idx);
 
             // Write remaining fields
             for (fields_slice.items(.name)[1..], fields_slice.items(.content)[1..]) |name, content| {
                 _ = try self.writer.write(", ");
-                _ = try self.writer.write(self.getIdent(name));
+                _ = try self.writer.write(self.idents.getText(name));
                 _ = try self.writer.write(": ");
                 try self.writeWithContext(content, .RecordFieldContent, root_idx);
             }
@@ -977,14 +977,14 @@ pub const SnapshotWriter = struct {
         _ = try self.writer.write("{ ");
 
         // Write first field - we already verified that there is at least one field.
-        _ = try self.writer.write(self.getIdent(fields_slice.items(.name)[0]));
+        _ = try self.writer.write(self.idents.getText(fields_slice.items(.name)[0]));
         _ = try self.writer.write(": ");
         try self.writeWithContext(fields_slice.items(.content)[0], .RecordFieldContent, root_idx);
 
         // Write remaining fields
         for (fields_slice.items(.name)[1..], fields_slice.items(.content)[1..]) |name, content| {
             _ = try self.writer.write(", ");
-            _ = try self.writer.write(self.getIdent(name));
+            _ = try self.writer.write(self.idents.getText(name));
             _ = try self.writer.write(": ");
             try self.writeWithContext(content, .RecordFieldContent, root_idx);
         }
@@ -1011,7 +1011,7 @@ pub const SnapshotWriter = struct {
         switch (self.snapshots.contents.get(tag_union.ext).*) {
             .flex_var => |mb_ident| {
                 if (mb_ident) |ident_idx| {
-                    _ = try self.writer.write(self.getIdent(ident_idx));
+                    _ = try self.writer.write(self.idents.getText(ident_idx));
                 } else {
                     // Check if this variable appears multiple times
                     const occurrences = self.countOccurrences(tag_union.ext, root_idx);
@@ -1028,7 +1028,7 @@ pub const SnapshotWriter = struct {
                 },
             },
             .rigid_var => |ident_idx| {
-                _ = try self.writer.write(self.getIdent(ident_idx));
+                _ = try self.writer.write(self.idents.getText(ident_idx));
             },
             else => {
                 try self.writeWithContext(tag_union.ext, .TagUnionExtension, root_idx);
@@ -1038,7 +1038,7 @@ pub const SnapshotWriter = struct {
 
     /// Write a single tag
     pub fn writeTag(self: *Self, tag: SnapshotTag, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        _ = try self.writer.write(self.getIdent(tag.name));
+        _ = try self.writer.write(self.idents.getText(tag.name));
         const args = self.snapshots.sliceVars(tag.args);
         if (args.len > 0) {
             _ = try self.writer.write("(");
