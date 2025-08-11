@@ -15,11 +15,14 @@ const ZEROS: [16]u8 = [_]u8{0} ** 16;
 
 iovecs: std.ArrayListUnmanaged(Iovec),
 total_bytes: usize,
+// Track all allocated memory so we can free it in deinit
+allocated_memory: std.ArrayListUnmanaged(AllocatedMemory),
 
 pub fn init() CompactWriter {
     return CompactWriter{
         .iovecs = .{},
         .total_bytes = 0,
+        .allocated_memory = .{},
     };
 }
 
@@ -84,7 +87,7 @@ pub fn writeGather(
                 @as([*]const u8, @ptrFromInt(offset)) // This shouldn't happen, but handle it
             else
                 @as([*]const u8, @ptrFromInt(base_addr + offset));
-            
+
             adjusted_iovecs[adjusted_index] = .{
                 .base = new_base,
                 .len = iovec.iov_len - offset,
@@ -143,6 +146,13 @@ pub fn appendAlloc(
     // Allocate a single item of type T
     const items = try allocator.alignedAlloc(T, alignment, 1);
     const answer = &items[0];
+
+    // Track the allocated memory for cleanup
+    try self.allocated_memory.append(allocator, .{
+        .ptr = @as([*]u8, @ptrCast(answer)),
+        .size = size,
+        .alignment = alignment,
+    });
 
     // Add the pointer to uninitialized memory to the iovecs for later.
     try self.iovecs.append(allocator, .{
@@ -228,10 +238,24 @@ pub fn writeToBuffer(
 
 /// Deinitialize the CompactWriter, freeing all allocated memory
 pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+    // Free all allocated memory slices
+    for (self.allocated_memory.items) |memory_slice| {
+        const slice = memory_slice.ptr[0..memory_slice.size];
+        const alignment_log2 = std.math.log2_int(usize, memory_slice.alignment);
+        const alignment: std.mem.Alignment = @enumFromInt(alignment_log2);
+        allocator.rawFree(slice, alignment, @returnAddress());
+    }
+    self.allocated_memory.deinit(allocator);
     self.iovecs.deinit(allocator);
 }
 
 const Iovec = extern struct {
     iov_base: [*]const u8,
     iov_len: usize,
+};
+
+const AllocatedMemory = struct {
+    ptr: [*]u8,
+    size: usize,
+    alignment: usize,
 };
