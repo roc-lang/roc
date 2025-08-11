@@ -2273,7 +2273,7 @@ fn setProblemTypeMismatchDetail(self: *Self, problem_idx: problem.Problem.Idx, m
 //     const gpa = std.testing.allocator;
 
 //     var common_env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
-//     defer common_env.deinit(gpa);
+//     // Module env takes ownership of Common env -- no need to deinit here
 
 //     // Create a minimal environment for testing
 //     var module_env = try ModuleEnv.init(gpa, &common_env);

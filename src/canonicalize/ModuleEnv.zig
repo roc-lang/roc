@@ -30,6 +30,8 @@ const TypeStore = types_mod.Store;
 const Self = @This();
 
 gpa: std.mem.Allocator,
+
+/// IMPORTANT takes ownership of the common environment... will deinit using the allocator
 common: *CommonEnv,
 types: TypeStore,
 
@@ -90,6 +92,7 @@ pub fn init(gpa: std.mem.Allocator, common_env: *CommonEnv) std.mem.Allocator.Er
 
 /// Deinitialize the module environment.
 pub fn deinit(self: *Self) void {
+    self.common.deinit(self.gpa);
     self.types.deinit();
     self.imports.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately

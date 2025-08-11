@@ -7598,7 +7598,7 @@ const min_i128_negated: u128 = 170141183460469231731687303715884105728;
 
 //     for (test_cases) |tc| {
 //         var common_env = try base.CommonEnv.init(gpa, tc.literal);
-//         defer common_env.deinit(gpa);
+//         // Module env takes ownership of Common env -- no need to deinit here
 
 //         var env = try ModuleEnv.init(gpa, &common_env);
 //         defer env.deinit();
@@ -7968,7 +7968,7 @@ const min_i128_negated: u128 = 170141183460469231731687303715884105728;
 //         const source1 = "{ x: 42, y: \"hello\" }";
 
 //         var common_env = try base.CommonEnv.init(gpa, source1);
-//         defer common_env.deinit(gpa);
+//         // Module env takes ownership of Common env -- no need to deinit here
 
 //         var env = try ModuleEnv.init(gpa, &common_env);
 //         defer env.deinit();
@@ -8088,7 +8088,7 @@ const min_i128_negated: u128 = 170141183460469231731687303715884105728;
 //     const source = "{ x: 42, y: 99 }";
 
 //     var common_env = try base.CommonEnv.init(gpa, source);
-//     defer common_env.deinit(gpa);
+//     // Module env takes ownership of Common env -- no need to deinit here
 
 //     // Test that record literals create record_unbound types
 //     var env = try ModuleEnv.init(gpa, &common_env);
@@ -8134,7 +8134,7 @@ const min_i128_negated: u128 = 170141183460469231731687303715884105728;
 //     const source = "{ a: 123, b: 456, c: 789 }";
 
 //     var common_env = try base.CommonEnv.init(gpa, source);
-//     defer common_env.deinit(gpa);
+//     // Module env takes ownership of Common env -- no need to deinit here
 
 //     var env = try ModuleEnv.init(gpa, &common_env);
 //     defer env.deinit();
@@ -8178,7 +8178,7 @@ const min_i128_negated: u128 = 170141183460469231731687303715884105728;
 //     const gpa = std.testing.allocator;
 
 //     var common_env = try base.CommonEnv.init(gpa, "");
-//     defer common_env.deinit(gpa);
+//     // Module env takes ownership of Common env -- no need to deinit here
 
 //     var env = try ModuleEnv.init(gpa, &common_env);
 //     defer env.deinit();
@@ -8256,7 +8256,7 @@ const min_i128_negated: u128 = 170141183460469231731687303715884105728;
 //     // Test frac_poly pattern
 //     {
 //         var common_env = try base.CommonEnv.init(gpa, "");
-//         defer common_env.deinit(gpa);
+//         // Module env takes ownership of Common env -- no need to deinit here
 
 //         var env = try ModuleEnv.init(gpa, &common_env);
 //         defer env.deinit();
@@ -8314,7 +8314,7 @@ const min_i128_negated: u128 = 170141183460469231731687303715884105728;
 //     // Test max/min integer values
 //     {
 //         var common_env = try base.CommonEnv.init(gpa, "");
-//         defer common_env.deinit(gpa);
+//         // Module env takes ownership of Common env -- no need to deinit here
 
 //         var env = try ModuleEnv.init(gpa, &common_env);
 //         defer env.deinit();
@@ -8345,7 +8345,7 @@ const min_i128_negated: u128 = 170141183460469231731687303715884105728;
 //     // Test small decimal pattern
 //     {
 //         var common_env = try base.CommonEnv.init(gpa, "");
-//         defer common_env.deinit(gpa);
+//         // Module env takes ownership of Common env -- no need to deinit here
 
 //         var env = try ModuleEnv.init(gpa, &common_env);
 //         defer env.deinit();
@@ -8371,7 +8371,7 @@ const min_i128_negated: u128 = 170141183460469231731687303715884105728;
 //     // Test dec literal pattern
 //     {
 //         var common_env = try base.CommonEnv.init(gpa, "");
-//         defer common_env.deinit(gpa);
+//         // Module env takes ownership of Common env -- no need to deinit here
 
 //         var env = try ModuleEnv.init(gpa, &common_env);
 //         defer env.deinit();
@@ -8395,7 +8395,7 @@ const min_i128_negated: u128 = 170141183460469231731687303715884105728;
 //     // Test special float values
 //     {
 //         var common_env = try base.CommonEnv.init(gpa, "");
-//         defer common_env.deinit(gpa);
+//         // Module env takes ownership of Common env -- no need to deinit here
 
 //         var env = try ModuleEnv.init(gpa, &common_env);
 //         defer env.deinit();
@@ -8423,7 +8423,7 @@ const min_i128_negated: u128 = 170141183460469231731687303715884105728;
 //     // Test transitioning from unbound to concrete type
 //     {
 //         var common_env = try base.CommonEnv.init(gpa, "");
-//         defer common_env.deinit(gpa);
+//         // Module env takes ownership of Common env -- no need to deinit here
 
 //         var env = try ModuleEnv.init(gpa, &common_env);
 //         defer env.deinit();
@@ -8471,7 +8471,7 @@ const min_i128_negated: u128 = 170141183460469231731687303715884105728;
 //     // Test hex/binary/octal patterns must be integers
 //     {
 //         var common_env = try base.CommonEnv.init(gpa, "");
-//         defer common_env.deinit(gpa);
+//         // Module env takes ownership of Common env -- no need to deinit here
 
 //         var env = try ModuleEnv.init(gpa, &common_env);
 //         defer env.deinit();
@@ -8519,7 +8519,7 @@ const min_i128_negated: u128 = 170141183460469231731687303715884105728;
 //     // Test that pattern indices work correctly as type variables with type inference
 //     {
 //         var common_env = try base.CommonEnv.init(gpa, "");
-//         defer common_env.deinit(gpa);
+//         // Module env takes ownership of Common env -- no need to deinit here
 
 //         var env = try ModuleEnv.init(gpa, &common_env);
 //         defer env.deinit();
@@ -8590,7 +8590,7 @@ const min_i128_negated: u128 = 170141183460469231731687303715884105728;
 //     // Test patterns with type constraints from context
 //     {
 //         var common_env = try base.CommonEnv.init(gpa, "");
-//         defer common_env.deinit(gpa);
+//         // Module env takes ownership of Common env -- no need to deinit here
 
 //         var env = try ModuleEnv.init(gpa, &common_env);
 //         defer env.deinit();

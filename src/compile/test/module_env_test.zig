@@ -14,7 +14,7 @@ const Expr = can.CIR.Expr;
 //     const gpa = testing.allocator;
 
 //     var common_env = try base.CommonEnv.init(gpa, "");
-//     defer common_env.deinit(gpa);
+//     // Module env takes ownership of Common env -- no need to deinit here
 
 //     // Add some test data
 //     const hello_idx = try common_env.insertIdent(gpa, Ident.for_text("hello"));
@@ -97,7 +97,7 @@ test "ModuleEnv with types CompactWriter roundtrip" {
     const gpa = testing.allocator;
 
     var common_env = try base.CommonEnv.init(gpa, "");
-    defer common_env.deinit(gpa);
+    // Module env takes ownership of Common env -- no need to deinit here
 
     // Create ModuleEnv with some types
     var original = try ModuleEnv.init(gpa, &common_env);
@@ -163,7 +163,7 @@ test "ModuleEnv with types CompactWriter roundtrip" {
 //     const gpa = testing.allocator;
 
 //     var common_env = try base.CommonEnv.init(gpa, "");
-//     defer common_env.deinit(gpa);
+//     // Module env takes ownership of Common env -- no need to deinit here
 
 //     // Create empty ModuleEnv
 //     var original = try ModuleEnv.init(gpa, &common_env);
@@ -229,7 +229,7 @@ test "ModuleEnv with types CompactWriter roundtrip" {
 //     ;
 
 //     var common_env = try base.CommonEnv.init(gpa, source);
-//     defer common_env.deinit(gpa);
+//     // Module env takes ownership of Common env -- no need to deinit here
 
 //     // Calculate line starts
 //     try common_env.calcLineStarts(gpa);
@@ -291,7 +291,7 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     const gpa = testing.allocator;
 
     var common_env = try base.CommonEnv.init(gpa, "");
-    defer common_env.deinit(gpa);
+    // Module env takes ownership of Common env -- no need to deinit here
 
     // First add a string literal
     const str_literal_idx = try common_env.insertString(gpa, "hello");

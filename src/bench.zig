@@ -64,7 +64,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
     std.debug.print("Total: {} bytes, {} lines\n", .{ metrics.total_bytes, metrics.total_lines });
 
     var common_env = try CommonEnv.init(gpa, "");
-    defer common_env.deinit(gpa);
+    // Module env takes ownership of Common env -- no need to deinit here
 
     // Create a module environment for tokenization (reused for tokenizer, created per-iteration for parser)
     var env: ?ModuleEnv = if (!is_parse) try ModuleEnv.init(gpa, &common_env) else null;
@@ -92,8 +92,6 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
                 const source_copy = try gpa.dupe(u8, roc_file.content);
 
                 var common_env1 = try CommonEnv.init(gpa, source_copy);
-                defer common_env1.deinit(gpa);
-
                 var parse_env = try ModuleEnv.init(gpa, &common_env1);
 
                 var ir = try parse.parse(&common_env1, gpa);

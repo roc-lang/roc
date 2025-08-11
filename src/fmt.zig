@@ -164,7 +164,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     };
 
     var common_env = try CommonEnv.init(gpa, contents);
-    defer common_env.deinit(gpa);
+    // Module env takes ownership of Common env -- no need to deinit here
 
     var module_env = try ModuleEnv.init(gpa, &common_env);
     defer module_env.deinit();
@@ -200,7 +200,7 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
     const contents = try std.io.getStdIn().readToEndAlloc(gpa, Filesystem.max_file_size);
 
     var common_env = try base.CommonEnv.init(gpa, contents);
-    defer common_env.deinit(gpa);
+    // Module env takes ownership of Common env -- no need to deinit here
 
     // ModuleEnv takes ownership of contents
     var module_env = try ModuleEnv.init(gpa, &common_env);
