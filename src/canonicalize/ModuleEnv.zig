@@ -94,6 +94,7 @@ pub fn init(gpa: std.mem.Allocator, common_env: *CommonEnv) std.mem.Allocator.Er
 pub fn deinit(self: *Self) void {
     self.common.deinit(self.gpa);
     self.types.deinit();
+    self.external_decls.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
