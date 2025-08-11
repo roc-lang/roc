@@ -16,7 +16,7 @@ const DataSpan = base.DataSpan;
 const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
-const Expr = ModuleEnv.Expr;
+const Expr = CIR.Expr;
 const IntValue = ModuleEnv.IntValue;
 const RocDec = ModuleEnv.RocDec;
 

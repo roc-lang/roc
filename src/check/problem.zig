@@ -99,14 +99,14 @@ pub const TypeMismatchDetail = union(enum) {
 
 /// Problem data for when list elements have incompatible types
 pub const IncompatibleListElements = struct {
-    last_elem_expr: ModuleEnv.Expr.Idx,
+    last_elem_expr: CIR.Expr.Idx,
     incompatible_elem_index: u32, // 0-based index of the incompatible element
     list_length: u32, // Total number of elements in the list
 };
 
 /// Problem data for cross-module import type mismatches
 pub const CrossModuleImport = struct {
-    import_region: ModuleEnv.Expr.Idx,
+    import_region: CIR.Expr.Idx,
     module_idx: ModuleEnv.Import.Idx,
 };
 
@@ -120,15 +120,15 @@ pub const IncompatibleFnCallArg = struct {
 
 /// Problem data for when if branches have incompatible types
 pub const IncompatibleIfBranches = struct {
-    parent_if_expr: ModuleEnv.Expr.Idx,
-    last_if_branch: ModuleEnv.Expr.IfBranch.Idx,
+    parent_if_expr: CIR.Expr.Idx,
+    last_if_branch: CIR.Expr.IfBranch.Idx,
     num_branches: u32,
     problem_branch_index: u32,
 };
 
 /// Problem data for when match patterns have have incompatible types
 pub const IncompatibleMatchPatterns = struct {
-    match_expr: ModuleEnv.Expr.Idx,
+    match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
     num_patterns: u32,
@@ -137,14 +137,14 @@ pub const IncompatibleMatchPatterns = struct {
 
 /// Problem data for when match branches have have incompatible types
 pub const IncompatibleMatchBranches = struct {
-    match_expr: ModuleEnv.Expr.Idx,
+    match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
 };
 
 /// Problem data for when a bool binop (`and` or `or`) is invalid
 pub const InvalidBoolBinop = struct {
-    binop_expr: ModuleEnv.Expr.Idx,
+    binop_expr: CIR.Expr.Idx,
     problem_side: enum { lhs, rhs },
     binop: enum { @"and", @"or" },
 };

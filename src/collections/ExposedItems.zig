@@ -250,11 +250,7 @@ test "ExposedItems empty CompactWriter roundtrip" {
     defer file.close();
 
     // Serialize using CompactWriter
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(allocator);
 
     _ = try original.serialize(allocator, &writer);

@@ -9,6 +9,21 @@ const build_options = @import("build_options");
 
 const Allocator = std.mem.Allocator;
 
+/// Cache configuration constants
+pub const Constants = struct {
+    /// Default cache directory name
+    pub const DEFAULT_CACHE_DIR = ".roc_cache";
+
+    /// Default file extension for cache files
+    pub const CACHE_FILE_EXT = ".rcache";
+
+    /// Maximum cache file size (256MB)
+    pub const MAX_CACHE_SIZE = 256 * 1024 * 1024;
+
+    /// Cache format version
+    pub const CACHE_VERSION = 1;
+};
+
 /// Configuration for the Roc cache system.
 ///
 /// This struct controls cache behavior including storage location,

@@ -22,8 +22,8 @@ const Ident = base.Ident;
 const DataSpan = base.DataSpan;
 const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
-const Pattern = ModuleEnv.Pattern;
-const Expr = ModuleEnv.Expr;
+const Pattern = CIR.Pattern;
+const Expr = CIR.Expr;
 
 /// A single statement - either at the top-level or within a block expression.
 pub const Statement = union(enum) {
@@ -130,15 +130,15 @@ pub const Statement = union(enum) {
     ///
     /// Only valid at the top level of a module
     s_alias_decl: struct {
-        header: ModuleEnv.TypeHeader.Idx,
-        anno: ModuleEnv.TypeAnno.Idx,
+        header: CIR.TypeHeader.Idx,
+        anno: CIR.TypeAnno.Idx,
     },
     /// A nominal type declaration, e.g., `Foo := (U64, Str)`
     ///
     /// Only valid at the top level of a module
     s_nominal_decl: struct {
-        header: ModuleEnv.TypeHeader.Idx,
-        anno: ModuleEnv.TypeAnno.Idx,
+        header: CIR.TypeHeader.Idx,
+        anno: CIR.TypeAnno.Idx,
     },
     /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
     ///
@@ -147,7 +147,7 @@ pub const Statement = union(enum) {
     /// ```
     s_type_anno: struct {
         name: Ident.Idx,
-        anno: ModuleEnv.TypeAnno.Idx,
+        anno: CIR.TypeAnno.Idx,
         where: ?ModuleEnv.WhereClause.Span,
     },
 

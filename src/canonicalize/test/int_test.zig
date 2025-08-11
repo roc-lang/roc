@@ -8,11 +8,10 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const types = @import("types");
-const compile = @import("compile");
 const parse = @import("parse");
 const Can = @import("../Can.zig");
 
-const ModuleEnv = compile.ModuleEnv;
+const ModuleEnv = @import("../ModuleEnv.zig");
 
 // Note: Each test should create its own GPA to avoid memory leak detection issues
 
@@ -20,7 +19,7 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
     can: *Can,
-    expr_idx: ModuleEnv.Expr.Idx,
+    expr_idx: CIR.Expr.Idx,
 } {
     const module_env = try allocator.create(ModuleEnv);
     module_env.* = try ModuleEnv.init(allocator, source);
@@ -69,7 +68,7 @@ fn cleanup(allocator: std.mem.Allocator, resources: anytype) void {
     allocator.destroy(resources.module_env);
 }
 
-fn getIntValue(module_env: *ModuleEnv, expr_idx: ModuleEnv.Expr.Idx) !i128 {
+fn getIntValue(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) !i128 {
     const expr = module_env.store.getExpr(expr_idx);
     switch (expr) {
         .e_int => |int_expr| {

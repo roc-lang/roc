@@ -279,11 +279,7 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
@@ -353,11 +349,7 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
@@ -430,11 +422,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
@@ -502,11 +490,7 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
@@ -577,11 +561,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);

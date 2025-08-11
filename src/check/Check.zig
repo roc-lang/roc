@@ -427,7 +427,7 @@ fn checkDef(self: *Self, def_idx: ModuleEnv.Def.Idx) std.mem.Allocator.Error!voi
 // annotations //
 
 /// Check the types for the provided pattern
-pub fn checkAnnotation(self: *Self, anno_idx: ModuleEnv.TypeAnno.Idx) std.mem.Allocator.Error!void {
+pub fn checkAnnotation(self: *Self, anno_idx: CIR.TypeAnno.Idx) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -518,7 +518,7 @@ pub fn checkApplyAnno(
     self: *Self,
     anno_var: Var,
     anno_region: Region,
-    anno_args_span: ModuleEnv.TypeAnno.Span,
+    anno_args_span: CIR.TypeAnno.Span,
 ) std.mem.Allocator.Error!void {
     // Clear any previous rigid variable mappings
     self.annotation_rigid_var_subs.items.clearRetainingCapacity();
@@ -575,7 +575,7 @@ fn buildRigidVarMapping(
     self: *Self,
     base_name: Ident.Idx,
     base_arg_vars: []const types_mod.Var,
-    anno_args: []const ModuleEnv.TypeAnno.Idx,
+    anno_args: []const CIR.TypeAnno.Idx,
     anno_var: types_mod.Var,
 ) std.mem.Allocator.Error!void {
     // Ensure we have the same number of parameters and arguments
@@ -624,7 +624,7 @@ fn buildRigidVarMapping(
 // pattern //
 
 /// Check the types for the provided pattern
-pub fn checkPattern(self: *Self, pattern_idx: ModuleEnv.Pattern.Idx) std.mem.Allocator.Error!void {
+pub fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -694,7 +694,7 @@ pub fn checkPattern(self: *Self, pattern_idx: ModuleEnv.Pattern.Idx) std.mem.All
 // expr //
 
 /// Check the types for an exprexpression. Returns whether evaluating the expr might perform side effects.
-pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Error!bool {
+pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -787,7 +787,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
             // We need to type-check the first element, but we don't need to unify it with
             // anything because we already pre-unified the list's elem var with it.
             const first_elem_idx = elems[0];
-            var last_elem_idx: ModuleEnv.Expr.Idx = first_elem_idx;
+            var last_elem_idx: CIR.Expr.Idx = first_elem_idx;
             does_fx = try self.checkExpr(first_elem_idx) or does_fx;
 
             for (elems[1..], 1..) |elem_expr_id, i| {
@@ -1144,7 +1144,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                                     // Check all arguments
                                     var i: u32 = 0;
                                     while (i < args_span.span.len) : (i += 1) {
-                                        const arg_expr_idx = @as(ModuleEnv.Expr.Idx, @enumFromInt(args_span.span.start + i));
+                                        const arg_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(args_span.span.start + i));
                                         does_fx = try self.checkExpr(arg_expr_idx) or does_fx;
                                     }
 
@@ -1158,7 +1158,7 @@ pub fn checkExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Er
                                     // Add the remaining arguments
                                     i = 0;
                                     while (i < args_span.span.len) : (i += 1) {
-                                        const arg_expr_idx = @as(ModuleEnv.Expr.Idx, @enumFromInt(args_span.span.start + i));
+                                        const arg_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(args_span.span.start + i));
                                         const arg_var = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
                                         try args.append(arg_var);
                                     }
@@ -1278,7 +1278,7 @@ fn unifyFunctionCall(
     self: *Self,
     call_var: Var, // var for the entire call expr
     call_func_var: Var, // var for the fn itself
-    call_args: []const ModuleEnv.Expr.Idx, // var for the fn args
+    call_args: []const CIR.Expr.Idx, // var for the fn args
     expected_func: types_mod.Func, // the expected type of the fn (must be instantiated)
     region: Region,
 ) std.mem.Allocator.Error!void {
@@ -1338,9 +1338,9 @@ fn unifyFunctionCall(
 /// validation, making it harder to locate the actual problem in the source code.
 fn checkLambdaWithAnno(
     self: *Self,
-    expr_idx: ModuleEnv.Expr.Idx,
+    expr_idx: CIR.Expr.Idx,
     _: Region,
-    lambda: std.meta.FieldType(ModuleEnv.Expr, .e_lambda),
+    lambda: std.meta.FieldType(CIR.Expr, .e_lambda),
     anno_type: ?Var,
 ) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
@@ -1411,7 +1411,7 @@ fn checkLambdaWithAnno(
 // binop //
 
 /// Check the types for an if-else expr
-fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region, binop: ModuleEnv.Expr.Binop) Allocator.Error!bool {
+fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, binop: CIR.Expr.Binop) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1488,7 +1488,7 @@ fn checkBinopExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region
     return does_fx;
 }
 
-fn checkUnaryMinusExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region, unary: ModuleEnv.Expr.UnaryMinus) Allocator.Error!bool {
+fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, unary: CIR.Expr.UnaryMinus) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1510,7 +1510,7 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: R
     return does_fx;
 }
 
-fn checkUnaryNotExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, expr_region: Region, unary: ModuleEnv.Expr.UnaryNot) Allocator.Error!bool {
+fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, unary: CIR.Expr.UnaryNot) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1556,7 +1556,7 @@ fn checkNominal(
     node_var: Var,
     node_region: Region,
     node_backing_var: Var,
-    node_backing_type: ModuleEnv.Expr.NominalBackingType,
+    node_backing_type: CIR.Expr.NominalBackingType,
     real_nominal_var: Var,
 ) Allocator.Error!void {
     // Clear the rigid variable substitution map to ensure fresh instantiation
@@ -1649,9 +1649,9 @@ fn checkNominal(
 /// Check the types for an if-else expr
 fn checkIfElseExpr(
     self: *Self,
-    if_expr_idx: ModuleEnv.Expr.Idx,
+    if_expr_idx: CIR.Expr.Idx,
     expr_region: Region,
-    if_: std.meta.FieldType(ModuleEnv.Expr, .e_if),
+    if_: std.meta.FieldType(CIR.Expr, .e_if),
 ) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -1747,7 +1747,7 @@ fn checkIfElseExpr(
 // match //
 
 /// Check the types for an if-else expr
-fn checkMatchExpr(self: *Self, expr_idx: ModuleEnv.Expr.Idx, match: ModuleEnv.Expr.Match) Allocator.Error!bool {
+fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 

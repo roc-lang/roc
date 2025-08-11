@@ -15,7 +15,7 @@ const ModuleEnv = compile.ModuleEnv;
 const Filesystem = fs_mod.Filesystem;
 const CacheStats = @import("cache_config.zig").CacheStats;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
-const SERIALIZATION_ALIGNMENT = serialization.SERIALIZATION_ALIGNMENT;
+const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
 /// Result of a cache lookup operation
 pub const CacheResult = union(enum) {

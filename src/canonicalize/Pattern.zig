@@ -17,9 +17,12 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
+const builtins = @import("builtins");
 const collections = @import("collections");
 
 const ModuleEnv = @import("ModuleEnv.zig");
+const Diagnostic = @import("Diagnostic.zig");
+const CIR = @import("CIR.zig");
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
@@ -27,10 +30,7 @@ const DataSpan = base.DataSpan;
 const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
-const Diagnostic = ModuleEnv.Diagnostic;
-const Expr = ModuleEnv.Expr;
-const IntValue = ModuleEnv.IntValue;
-const RocDec = ModuleEnv.RocDec;
+const RocDec = builtins.RocDec;
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
@@ -72,9 +72,9 @@ pub const Pattern = union(enum) {
     /// Point.(1.0)                # Values
     /// ```
     nominal: struct {
-        nominal_type_decl: ModuleEnv.Statement.Idx,
+        nominal_type_decl: CIR.Statement.Idx,
         backing_pattern: Pattern.Idx,
-        backing_type: Expr.NominalBackingType,
+        backing_type: CIR.Expr.NominalBackingType,
     },
     /// Pattern that matches a nominal type
     /// Used for pattern matching nominal types.
@@ -89,7 +89,7 @@ pub const Pattern = union(enum) {
         module_idx: ModuleEnv.Import.Idx,
         target_node_idx: u16,
         backing_pattern: Pattern.Idx,
-        backing_type: Expr.NominalBackingType,
+        backing_type: CIR.Expr.NominalBackingType,
     },
     /// Pattern that destructures a record, extracting specific fields including nested records.
     ///
@@ -149,7 +149,7 @@ pub const Pattern = union(enum) {
     /// }
     /// ```
     int_literal: struct {
-        value: IntValue,
+        value: CIR.IntValue,
     },
     /// Pattern that matches a small decimal literal (represented as rational number).
     /// This is Roc's preferred approach for exact decimal matching, avoiding

@@ -8,10 +8,11 @@ const std = @import("std");
 const compile = @import("compile");
 const parse = @import("parse");
 const base = @import("base");
+
 const Can = @import("../Can.zig");
+const ModuleEnv = @import("../ModuleEnv.zig");
 
 const AST = parse.AST;
-const ModuleEnv = compile.ModuleEnv;
 const tokenize = parse.tokenize;
 const testing = std.testing;
 

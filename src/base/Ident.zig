@@ -242,7 +242,7 @@ pub const Store = struct {
         size += @sizeOf(u32); // next_unique_name
 
         // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
-        return std.mem.alignForward(usize, size, serialization.SERIALIZATION_ALIGNMENT);
+        return std.mem.alignForward(usize, size, collections.SERIALIZATION_ALIGNMENT);
     }
 
     /// Serialize this Store to the given CompactWriter. The resulting Store
@@ -344,11 +344,7 @@ test "Ident.Store empty CompactWriter roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
@@ -417,11 +413,7 @@ test "Ident.Store basic CompactWriter roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
@@ -505,11 +497,7 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
@@ -577,11 +565,7 @@ test "Ident.Store frozen state CompactWriter roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);
@@ -667,11 +651,7 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     _ = try original.serialize(arena_allocator, &writer);

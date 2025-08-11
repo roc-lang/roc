@@ -1,15 +1,14 @@
-//! Unit tests to verify `ModuleEnv.Statement` are correctly stored in `NodeStore`
+//! Unit tests to verify `CIR.Statement` are correctly stored in `NodeStore`
 
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const types = @import("types");
-const compile = @import("compile");
 const builtins = @import("builtins");
 
 const StringLiteral = base.StringLiteral;
-const ModuleEnv = compile.ModuleEnv;
-const NodeStore = compile.NodeStore;
+const ModuleEnv = @import("../ModuleEnv.zig");
+const NodeStore = @import("../NodeStore.zig");
 const RocDec = builtins.dec.RocDec;
 const CalledVia = base.CalledVia;
 const TypeVar = types.Var;
@@ -58,69 +57,69 @@ test "NodeStore round trip - Statements" {
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
-    var statements = std.ArrayList(ModuleEnv.Statement).init(gpa);
+    var statements = std.ArrayList(CIR.Statement).init(gpa);
     defer statements.deinit();
 
-    try statements.append(ModuleEnv.Statement{
+    try statements.append(CIR.Statement{
         .s_decl = .{
-            .pattern = rand_idx(ModuleEnv.Pattern.Idx),
-            .expr = rand_idx(ModuleEnv.Expr.Idx),
+            .pattern = rand_idx(CIR.Pattern.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
         },
     });
 
-    try statements.append(ModuleEnv.Statement{
+    try statements.append(CIR.Statement{
         .s_var = .{
-            .pattern_idx = rand_idx(ModuleEnv.Pattern.Idx),
-            .expr = rand_idx(ModuleEnv.Expr.Idx),
+            .pattern_idx = rand_idx(CIR.Pattern.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
         },
     });
 
-    try statements.append(ModuleEnv.Statement{
+    try statements.append(CIR.Statement{
         .s_reassign = .{
-            .pattern_idx = rand_idx(ModuleEnv.Pattern.Idx),
-            .expr = rand_idx(ModuleEnv.Expr.Idx),
+            .pattern_idx = rand_idx(CIR.Pattern.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
         },
     });
 
-    try statements.append(ModuleEnv.Statement{
+    try statements.append(CIR.Statement{
         .s_expr = .{
-            .expr = rand_idx(ModuleEnv.Expr.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
         },
     });
 
-    try statements.append(ModuleEnv.Statement{
+    try statements.append(CIR.Statement{
         .s_crash = .{
             .msg = rand_idx(StringLiteral.Idx),
         },
     });
 
-    try statements.append(ModuleEnv.Statement{
+    try statements.append(CIR.Statement{
         .s_dbg = .{
-            .expr = rand_idx(ModuleEnv.Expr.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
         },
     });
 
-    try statements.append(ModuleEnv.Statement{
+    try statements.append(CIR.Statement{
         .s_expect = .{
-            .body = rand_idx(ModuleEnv.Expr.Idx),
+            .body = rand_idx(CIR.Expr.Idx),
         },
     });
 
-    try statements.append(ModuleEnv.Statement{
+    try statements.append(CIR.Statement{
         .s_for = .{
-            .patt = rand_idx(ModuleEnv.Pattern.Idx),
-            .expr = rand_idx(ModuleEnv.Expr.Idx),
-            .body = rand_idx(ModuleEnv.Expr.Idx),
+            .patt = rand_idx(CIR.Pattern.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
+            .body = rand_idx(CIR.Expr.Idx),
         },
     });
 
-    try statements.append(ModuleEnv.Statement{
+    try statements.append(CIR.Statement{
         .s_return = .{
-            .expr = rand_idx(ModuleEnv.Expr.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
         },
     });
 
-    try statements.append(ModuleEnv.Statement{
+    try statements.append(CIR.Statement{
         .s_import = .{
             .module_name_tok = rand_ident_idx(),
             .qualifier_tok = rand_ident_idx(),
@@ -129,23 +128,23 @@ test "NodeStore round trip - Statements" {
         },
     });
 
-    try statements.append(ModuleEnv.Statement{
+    try statements.append(CIR.Statement{
         .s_alias_decl = .{
-            .header = rand_idx(ModuleEnv.TypeHeader.Idx),
-            .anno = rand_idx(ModuleEnv.TypeAnno.Idx),
+            .header = rand_idx(CIR.TypeHeader.Idx),
+            .anno = rand_idx(CIR.TypeAnno.Idx),
         },
     });
 
-    try statements.append(ModuleEnv.Statement{
+    try statements.append(CIR.Statement{
         .s_nominal_decl = .{
-            .header = rand_idx(ModuleEnv.TypeHeader.Idx),
-            .anno = rand_idx(ModuleEnv.TypeAnno.Idx),
+            .header = rand_idx(CIR.TypeHeader.Idx),
+            .anno = rand_idx(CIR.TypeAnno.Idx),
         },
     });
 
-    try statements.append(ModuleEnv.Statement{ .s_type_anno = .{
+    try statements.append(CIR.Statement{ .s_type_anno = .{
         .name = rand_ident_idx(),
-        .anno = rand_idx(ModuleEnv.TypeAnno.Idx),
+        .anno = rand_idx(CIR.TypeAnno.Idx),
         .where = null,
     } });
 
@@ -174,112 +173,112 @@ test "NodeStore round trip - Expressions" {
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
-    var expressions = std.ArrayList(ModuleEnv.Expr).init(gpa);
+    var expressions = std.ArrayList(CIR.Expr).init(gpa);
     defer expressions.deinit();
 
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_int = .{
             .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_frac_f32 = .{ .value = rand.random().float(f32) },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_frac_f64 = .{ .value = rand.random().float(f64) },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_frac_dec = .{
             .value = ModuleEnv.RocDec{ .num = 314 },
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_dec_small = .{
             .numerator = rand.random().int(i16),
             .denominator_power_of_ten = rand.random().int(u8),
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_str_segment = .{
             .literal = rand_idx(StringLiteral.Idx),
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_str = .{
-            .span = ModuleEnv.Expr.Span{ .span = rand_span() },
+            .span = CIR.Expr.Span{ .span = rand_span() },
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_lookup_local = .{
-            .pattern_idx = rand_idx(ModuleEnv.Pattern.Idx),
+            .pattern_idx = rand_idx(CIR.Pattern.Idx),
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_lookup_external = .{
             .module_idx = rand_idx_u16(ModuleEnv.Import.Idx),
             .target_node_idx = rand.random().int(u16),
             .region = rand_region(),
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_list = .{
             .elem_var = rand_idx(TypeVar),
-            .elems = ModuleEnv.Expr.Span{ .span = rand_span() },
+            .elems = CIR.Expr.Span{ .span = rand_span() },
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_tuple = .{
-            .elems = ModuleEnv.Expr.Span{ .span = rand_span() },
+            .elems = CIR.Expr.Span{ .span = rand_span() },
         },
     });
-    try expressions.append(ModuleEnv.Expr{
-        .e_match = ModuleEnv.Expr.Match{
-            .cond = rand_idx(ModuleEnv.Expr.Idx),
-            .branches = ModuleEnv.Expr.Match.Branch.Span{ .span = rand_span() },
+    try expressions.append(CIR.Expr{
+        .e_match = CIR.Expr.Match{
+            .cond = rand_idx(CIR.Expr.Idx),
+            .branches = CIR.Expr.Match.Branch.Span{ .span = rand_span() },
             .exhaustive = rand_idx(TypeVar),
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_if = .{
-            .branches = ModuleEnv.Expr.IfBranch.Span{ .span = rand_span() },
-            .final_else = rand_idx(ModuleEnv.Expr.Idx),
+            .branches = CIR.Expr.IfBranch.Span{ .span = rand_span() },
+            .final_else = rand_idx(CIR.Expr.Idx),
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_call = .{
-            .args = ModuleEnv.Expr.Span{ .span = rand_span() },
+            .args = CIR.Expr.Span{ .span = rand_span() },
             .called_via = CalledVia.apply,
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_record = .{
             .fields = ModuleEnv.RecordField.Span{ .span = rand_span() },
             .ext = null,
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_empty_list = .{},
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_block = .{
-            .stmts = ModuleEnv.Statement.Span{ .span = rand_span() },
-            .final_expr = rand_idx(ModuleEnv.Expr.Idx),
+            .stmts = CIR.Statement.Span{ .span = rand_span() },
+            .final_expr = rand_idx(CIR.Expr.Idx),
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_tag = .{
             .name = rand_ident_idx(),
-            .args = ModuleEnv.Expr.Span{ .span = rand_span() },
+            .args = CIR.Expr.Span{ .span = rand_span() },
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_nominal = .{
-            .nominal_type_decl = rand_idx(ModuleEnv.Statement.Idx),
-            .backing_expr = rand_idx(ModuleEnv.Expr.Idx),
+            .nominal_type_decl = rand_idx(CIR.Statement.Idx),
+            .backing_expr = rand_idx(CIR.Expr.Idx),
             .backing_type = .tag,
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_zero_argument_tag = .{
             .closure_name = rand_ident_idx(),
             .variant_var = rand_idx(TypeVar),
@@ -287,75 +286,75 @@ test "NodeStore round trip - Expressions" {
             .name = rand_ident_idx(),
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_closure = .{
-            .lambda_idx = rand_idx(ModuleEnv.Expr.Idx),
-            .captures = ModuleEnv.Expr.Capture.Span{ .span = rand_span() },
+            .lambda_idx = rand_idx(CIR.Expr.Idx),
+            .captures = CIR.Expr.Capture.Span{ .span = rand_span() },
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_lambda = .{
-            .args = ModuleEnv.Pattern.Span{ .span = rand_span() },
-            .body = rand_idx(ModuleEnv.Expr.Idx),
+            .args = CIR.Pattern.Span{ .span = rand_span() },
+            .body = rand_idx(CIR.Expr.Idx),
         },
     });
-    try expressions.append(ModuleEnv.Expr{
-        .e_binop = ModuleEnv.Expr.Binop.init(
+    try expressions.append(CIR.Expr{
+        .e_binop = CIR.Expr.Binop.init(
             .add,
-            rand_idx(ModuleEnv.Expr.Idx),
-            rand_idx(ModuleEnv.Expr.Idx),
+            rand_idx(CIR.Expr.Idx),
+            rand_idx(CIR.Expr.Idx),
         ),
     });
-    try expressions.append(ModuleEnv.Expr{
-        .e_unary_minus = ModuleEnv.Expr.UnaryMinus.init(rand_idx(ModuleEnv.Expr.Idx)),
+    try expressions.append(CIR.Expr{
+        .e_unary_minus = CIR.Expr.UnaryMinus.init(rand_idx(CIR.Expr.Idx)),
     });
-    try expressions.append(ModuleEnv.Expr{
-        .e_unary_not = ModuleEnv.Expr.UnaryNot.init(rand_idx(ModuleEnv.Expr.Idx)),
+    try expressions.append(CIR.Expr{
+        .e_unary_not = CIR.Expr.UnaryNot.init(rand_idx(CIR.Expr.Idx)),
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_dot_access = .{
-            .receiver = rand_idx(ModuleEnv.Expr.Idx),
+            .receiver = rand_idx(CIR.Expr.Idx),
             .field_name = rand_ident_idx(),
             .args = null,
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_runtime_error = .{
             .diagnostic = rand_idx(ModuleEnv.Diagnostic.Idx),
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_crash = .{
             .msg = rand_idx(StringLiteral.Idx),
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_dbg = .{
-            .expr = rand_idx(ModuleEnv.Expr.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_empty_record = .{},
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_expect = .{
-            .body = rand_idx(ModuleEnv.Expr.Idx),
+            .body = rand_idx(CIR.Expr.Idx),
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_frac_dec = .{
             .value = ModuleEnv.RocDec{ .num = 123456789 },
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_nominal_external = .{
             .module_idx = rand_idx_u16(ModuleEnv.Import.Idx),
             .target_node_idx = rand.random().int(u16),
-            .backing_expr = rand_idx(ModuleEnv.Expr.Idx),
+            .backing_expr = rand_idx(CIR.Expr.Idx),
             .backing_type = .tag,
         },
     });
-    try expressions.append(ModuleEnv.Expr{
+    try expressions.append(CIR.Expr{
         .e_ellipsis = .{},
     });
 
@@ -731,86 +730,86 @@ test "NodeStore round trip - TypeAnno" {
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
-    var type_annos = std.ArrayList(ModuleEnv.TypeAnno).init(gpa);
+    var type_annos = std.ArrayList(CIR.TypeAnno).init(gpa);
     defer type_annos.deinit();
 
     // Test all TypeAnno variants to ensure complete coverage
-    try type_annos.append(ModuleEnv.TypeAnno{
+    try type_annos.append(CIR.TypeAnno{
         .apply = .{
             .symbol = rand_ident_idx(),
-            .args = ModuleEnv.TypeAnno.Span{ .span = rand_span() },
+            .args = CIR.TypeAnno.Span{ .span = rand_span() },
         },
     });
 
-    try type_annos.append(ModuleEnv.TypeAnno{
+    try type_annos.append(CIR.TypeAnno{
         .ty_var = .{
             .name = rand_ident_idx(),
         },
     });
 
-    try type_annos.append(ModuleEnv.TypeAnno{
+    try type_annos.append(CIR.TypeAnno{
         .underscore = {},
     });
 
-    try type_annos.append(ModuleEnv.TypeAnno{
+    try type_annos.append(CIR.TypeAnno{
         .ty = .{
             .symbol = rand_ident_idx(),
         },
     });
 
-    try type_annos.append(ModuleEnv.TypeAnno{
+    try type_annos.append(CIR.TypeAnno{
         .ty = .{
             .symbol = rand_ident_idx(),
         },
     });
 
-    try type_annos.append(ModuleEnv.TypeAnno{
+    try type_annos.append(CIR.TypeAnno{
         .tag_union = .{
-            .tags = ModuleEnv.TypeAnno.Span{ .span = rand_span() },
-            .ext = rand_idx(ModuleEnv.TypeAnno.Idx),
+            .tags = CIR.TypeAnno.Span{ .span = rand_span() },
+            .ext = rand_idx(CIR.TypeAnno.Idx),
         },
     });
 
-    try type_annos.append(ModuleEnv.TypeAnno{
+    try type_annos.append(CIR.TypeAnno{
         .tuple = .{
-            .elems = ModuleEnv.TypeAnno.Span{ .span = rand_span() },
+            .elems = CIR.TypeAnno.Span{ .span = rand_span() },
         },
     });
 
-    try type_annos.append(ModuleEnv.TypeAnno{
+    try type_annos.append(CIR.TypeAnno{
         .record = .{
-            .fields = ModuleEnv.TypeAnno.RecordField.Span{ .span = rand_span() },
+            .fields = CIR.TypeAnno.RecordField.Span{ .span = rand_span() },
         },
     });
 
-    try type_annos.append(ModuleEnv.TypeAnno{
+    try type_annos.append(CIR.TypeAnno{
         .@"fn" = .{
-            .args = ModuleEnv.TypeAnno.Span{ .span = rand_span() },
-            .ret = rand_idx(ModuleEnv.TypeAnno.Idx),
+            .args = CIR.TypeAnno.Span{ .span = rand_span() },
+            .ret = rand_idx(CIR.TypeAnno.Idx),
             .effectful = rand.random().boolean(),
         },
     });
 
-    try type_annos.append(ModuleEnv.TypeAnno{
+    try type_annos.append(CIR.TypeAnno{
         .parens = .{
-            .anno = rand_idx(ModuleEnv.TypeAnno.Idx),
+            .anno = rand_idx(CIR.TypeAnno.Idx),
         },
     });
 
-    try type_annos.append(ModuleEnv.TypeAnno{
+    try type_annos.append(CIR.TypeAnno{
         .ty = .{
             .symbol = rand_ident_idx(),
         },
     });
 
-    try type_annos.append(ModuleEnv.TypeAnno{
+    try type_annos.append(CIR.TypeAnno{
         .ty_lookup_external = .{
             .module_idx = rand_idx(ModuleEnv.Import.Idx),
             .target_node_idx = rand.random().int(u16),
         },
     });
 
-    try type_annos.append(ModuleEnv.TypeAnno{
+    try type_annos.append(CIR.TypeAnno{
         .malformed = .{
             .diagnostic = rand_idx(ModuleEnv.Diagnostic.Idx),
         },
@@ -831,7 +830,7 @@ test "NodeStore round trip - TypeAnno" {
 
     const actual_test_count = type_annos.items.len;
     if (actual_test_count < NodeStore.MODULEENV_TYPE_ANNO_NODE_COUNT) {
-        std.debug.print("ModuleEnv.TypeAnno test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_TYPE_ANNO_NODE_COUNT, actual_test_count });
+        std.debug.print("CIR.TypeAnno test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_TYPE_ANNO_NODE_COUNT, actual_test_count });
         std.debug.print("Please add test cases for missing type annotation variants.\n", .{});
         return error.IncompleteTypeAnnoTestCoverage;
     }
@@ -842,63 +841,63 @@ test "NodeStore round trip - Pattern" {
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
-    var patterns = std.ArrayList(ModuleEnv.Pattern).init(gpa);
+    var patterns = std.ArrayList(CIR.Pattern).init(gpa);
     defer patterns.deinit();
 
     // Test all Pattern variants to ensure complete coverage
-    try patterns.append(ModuleEnv.Pattern{
+    try patterns.append(CIR.Pattern{
         .assign = .{
             .ident = rand_ident_idx(),
         },
     });
-    try patterns.append(ModuleEnv.Pattern{
+    try patterns.append(CIR.Pattern{
         .as = .{
-            .pattern = rand_idx(ModuleEnv.Pattern.Idx),
+            .pattern = rand_idx(CIR.Pattern.Idx),
             .ident = rand_ident_idx(),
         },
     });
-    try patterns.append(ModuleEnv.Pattern{
+    try patterns.append(CIR.Pattern{
         .applied_tag = .{
             .name = rand_ident_idx(),
-            .args = ModuleEnv.Pattern.Span{ .span = rand_span() },
+            .args = CIR.Pattern.Span{ .span = rand_span() },
         },
     });
-    try patterns.append(ModuleEnv.Pattern{
+    try patterns.append(CIR.Pattern{
         .nominal = .{
-            .nominal_type_decl = rand_idx(ModuleEnv.Statement.Idx),
-            .backing_pattern = rand_idx(ModuleEnv.Pattern.Idx),
+            .nominal_type_decl = rand_idx(CIR.Statement.Idx),
+            .backing_pattern = rand_idx(CIR.Pattern.Idx),
             .backing_type = .tag,
         },
     });
-    try patterns.append(ModuleEnv.Pattern{
+    try patterns.append(CIR.Pattern{
         .nominal_external = .{
             .module_idx = rand_idx_u16(ModuleEnv.Import.Idx),
             .target_node_idx = rand.random().int(u16),
-            .backing_pattern = rand_idx(ModuleEnv.Pattern.Idx),
+            .backing_pattern = rand_idx(CIR.Pattern.Idx),
             .backing_type = .tag,
         },
     });
-    try patterns.append(ModuleEnv.Pattern{
+    try patterns.append(CIR.Pattern{
         .record_destructure = .{
             .whole_var = rand_idx(TypeVar),
             .ext_var = rand_idx(TypeVar),
-            .destructs = ModuleEnv.Pattern.RecordDestruct.Span{ .span = rand_span() },
+            .destructs = CIR.Pattern.RecordDestruct.Span{ .span = rand_span() },
         },
     });
-    try patterns.append(ModuleEnv.Pattern{
+    try patterns.append(CIR.Pattern{
         .list = .{
             .list_var = rand_idx(TypeVar),
             .elem_var = rand_idx(TypeVar),
-            .patterns = ModuleEnv.Pattern.Span{ .span = rand_span() },
-            .rest_info = .{ .index = rand.random().int(u32), .pattern = rand_idx(ModuleEnv.Pattern.Idx) },
+            .patterns = CIR.Pattern.Span{ .span = rand_span() },
+            .rest_info = .{ .index = rand.random().int(u32), .pattern = rand_idx(CIR.Pattern.Idx) },
         },
     });
-    try patterns.append(ModuleEnv.Pattern{
+    try patterns.append(CIR.Pattern{
         .tuple = .{
-            .patterns = ModuleEnv.Pattern.Span{ .span = rand_span() },
+            .patterns = CIR.Pattern.Span{ .span = rand_span() },
         },
     });
-    try patterns.append(ModuleEnv.Pattern{
+    try patterns.append(CIR.Pattern{
         .int_literal = .{
             .value = ModuleEnv.IntValue{
                 .bytes = @bitCast(rand.random().int(i128)),
@@ -906,34 +905,34 @@ test "NodeStore round trip - Pattern" {
             },
         },
     });
-    try patterns.append(ModuleEnv.Pattern{
+    try patterns.append(CIR.Pattern{
         .small_dec_literal = .{
             .numerator = rand.random().int(i16),
             .denominator_power_of_ten = rand.random().int(u8),
         },
     });
-    try patterns.append(ModuleEnv.Pattern{
+    try patterns.append(CIR.Pattern{
         .dec_literal = .{
             .value = RocDec.fromU64(rand.random().int(u64)),
         },
     });
-    try patterns.append(ModuleEnv.Pattern{
+    try patterns.append(CIR.Pattern{
         .str_literal = .{
             .literal = rand_idx(StringLiteral.Idx),
         },
     });
-    try patterns.append(ModuleEnv.Pattern{
+    try patterns.append(CIR.Pattern{
         .frac_f32_literal = .{
             .value = rand.random().float(f32),
         },
     });
-    try patterns.append(ModuleEnv.Pattern{
+    try patterns.append(CIR.Pattern{
         .frac_f64_literal = .{
             .value = rand.random().float(f64),
         },
     });
-    try patterns.append(ModuleEnv.Pattern{ .underscore = {} });
-    try patterns.append(ModuleEnv.Pattern{
+    try patterns.append(CIR.Pattern{ .underscore = {} });
+    try patterns.append(CIR.Pattern{
         .runtime_error = .{
             .diagnostic = rand_idx(ModuleEnv.Diagnostic.Idx),
         },
@@ -966,7 +965,7 @@ test "NodeStore round trip - Pattern" {
 
     const actual_test_count = patterns.items.len;
     if (actual_test_count < NodeStore.MODULEENV_PATTERN_NODE_COUNT) {
-        std.debug.print("ModuleEnv.Pattern test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_PATTERN_NODE_COUNT, actual_test_count });
+        std.debug.print("CIR.Pattern test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_PATTERN_NODE_COUNT, actual_test_count });
         std.debug.print("Please add test cases for missing pattern variants.\n", .{});
         return error.IncompletePatternTestCoverage;
     }

@@ -123,20 +123,6 @@ test "SafeStringHashMap(u16) basic operations" {
     try testing.expect(map.get("missing") == null);
 }
 
-test "SafeStringHashMap deserialization buffer too small error" {
-    const gpa = testing.allocator;
-
-    // Buffer too small to even contain count
-    var tiny_buffer: [2]u8 = undefined;
-    try testing.expectError(error.BufferTooSmall, SafeStringHashMap(void).deserializeFrom(&tiny_buffer, gpa));
-
-    // Buffer with count but insufficient data
-    var partial_buffer: [8]u8 = undefined;
-    std.mem.writeInt(u32, partial_buffer[0..4], 1, .little); // Claims 1 item
-    std.mem.writeInt(u32, partial_buffer[4..8], 10, .little); // Claims key length 10, but no space for key
-    try testing.expectError(error.BufferTooSmall, SafeStringHashMap(void).deserializeFrom(&partial_buffer, gpa));
-}
-
 test "SafeStringHashMap duplicate key handling" {
     const gpa = testing.allocator;
 

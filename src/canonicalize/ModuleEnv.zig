@@ -11,50 +11,12 @@ const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
 
+const NodeStore = @import("NodeStore.zig");
+const CIR = @import("CIR.zig");
+
 const TypeWriter = types_mod.TypeWriter;
 const CompactWriter = collections.CompactWriter;
 const CommonEnv = base.CommonEnv;
-
-pub const CIR = @import("CIR.zig");
-
-// Re-export types from CIR module
-/// Definition type for value and function definitions
-pub const Def = CIR.Def;
-/// Type header for type declarations
-pub const TypeHeader = CIR.TypeHeader;
-/// Where clause for type constraints
-pub const WhereClause = CIR.WhereClause;
-/// Type annotation with position information
-pub const Annotation = CIR.Annotation;
-/// Items exposed by a module's interface
-pub const ExposedItem = CIR.ExposedItem;
-/// Fields in record patterns for pattern matching
-pub const PatternRecordField = CIR.PatternRecordField;
-/// Arbitrary precision integer values
-pub const IntValue = CIR.IntValue;
-/// Roc decimal type representation
-pub const RocDec = CIR.RocDec;
-/// Diagnostic messages for compilation errors and warnings
-pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
-/// Store for all nodes in the CIR
-pub const NodeStore = CIR.NodeStore;
-/// Node type representing various AST elements
-pub const Node = CIR.Node;
-/// Expression type for Roc expressions
-pub const Expr = CIR.Expr;
-/// Pattern type for pattern matching
-pub const Pattern = CIR.Pattern;
-/// Statement type for module-level statements
-pub const Statement = CIR.Statement;
-/// Type annotation representation
-pub const TypeAnno = CIR.TypeAnno;
-/// Import statements
-pub const Import = CIR.Import;
-/// Fields in record expressions
-pub const RecordField = CIR.RecordField;
-/// External declarations from other modules
-pub const ExternalDecl = CIR.ExternalDecl;
-
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
 const RegionInfo = base.RegionInfo;
@@ -73,18 +35,18 @@ types: types_mod.Store,
 // NOTE: These fields are populated during canonicalization and preserved for later use
 
 /// All the definitions in the module (populated by canonicalization)
-all_defs: Def.Span,
+all_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
-all_statements: Statement.Span,
+all_statements: CIR.Statement.Span,
 /// All external declarations referenced in this module
-external_decls: ExternalDecl.SafeList,
+external_decls: CIR.ExternalDecl.SafeList,
 /// Store for interned module imports
-imports: Import.Store,
+imports: CIR.Import.Store,
 /// The module's name as a string
 /// This is needed for import resolution to match import names to modules
 module_name: []const u8,
 /// Diagnostics collected during canonicalization (optional)
-diagnostics: Diagnostic.Span,
+diagnostics: CIR.Diagnostic.Span,
 /// Stores the raw nodes which represent the intermediate representation
 /// Uses an efficient data structure, and provides helpers for storing and retrieving nodes.
 store: NodeStore,
@@ -116,7 +78,7 @@ pub fn init(gpa: std.mem.Allocator, common_env: *CommonEnv) std.mem.Allocator.Er
         .types = try types_mod.Store.initCapacity(gpa, 2048, 512),
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
-        .external_decls = try ExternalDecl.SafeList.initCapacity(gpa, 16),
+        .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = Import.Store.init(),
         .module_name = "", // Will be set later during canonicalization
         .diagnostics = Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
@@ -1095,7 +1057,7 @@ pub const Serialized = struct {
     types: types_mod.Store.Serialized,
     all_defs: Def.Span,
     all_statements: Statement.Span,
-    external_decls: ExternalDecl.SafeList.Serialized,
+    external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: Import.Store.Serialized,
     module_name: []const u8, // Serialized as zeros, provided during deserialization
     diagnostics: Diagnostic.Span,
@@ -1260,7 +1222,7 @@ pub fn addPatternAndTypeVarRedirect(self: *Self, expr: Pattern, redirect_to: Typ
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
-pub fn addExprAndTypeVar(self: *Self, expr: Expr, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Expr.Idx {
+pub fn addExprAndTypeVar(self: *Self, expr: CIR.Expr, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.Expr.Idx {
     const expr_idx = try self.store.addExpr(expr, region);
     const expr_var = try self.types.freshFromContent(content);
     debugAssertIdxsEql("addExprAndTypeVar", expr_idx, expr_var);
@@ -1270,7 +1232,7 @@ pub fn addExprAndTypeVar(self: *Self, expr: Expr, content: types_mod.Content, re
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
-pub fn addExprAndTypeVarRedirect(self: *Self, expr: Expr, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!Expr.Idx {
+pub fn addExprAndTypeVarRedirect(self: *Self, expr: CIR.Expr, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!CIR.Expr.Idx {
     const expr_idx = try self.store.addExpr(expr, region);
     const expr_var = try self.types.freshRedirect(redirect_to);
     debugAssertIdxsEql("addExprAndTypeVarRedirect", expr_idx, expr_var);
@@ -1280,7 +1242,7 @@ pub fn addExprAndTypeVarRedirect(self: *Self, expr: Expr, redirect_to: TypeVar, 
 
 /// Add a new capture and type variable.
 /// This function asserts that the types array and the nodes are in sync.
-pub fn addCaptureAndTypeVar(self: *Self, capture: Expr.Capture, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Expr.Capture.Idx {
+pub fn addCaptureAndTypeVar(self: *Self, capture: CIR.Expr.Capture, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.Expr.Capture.Idx {
     const capture_idx = try self.store.addCapture(capture, region);
     const capture_var = try self.types.freshFromContent(content);
     debugAssertIdxsEql("addCaptureAndTypeVar", capture_idx, capture_var);
@@ -1300,7 +1262,7 @@ pub fn addRecordFieldAndTypeVar(self: *Self, expr: RecordField, content: types_m
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
-pub fn addRecordDestructAndTypeVar(self: *Self, expr: Pattern.RecordDestruct, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Pattern.RecordDestruct.Idx {
+pub fn addRecordDestructAndTypeVar(self: *Self, expr: CIR.Pattern.RecordDestruct, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Pattern.RecordDestruct.Idx {
     const expr_idx = try self.store.addRecordDestruct(expr, region);
     const expr_var = try self.types.freshFromContent(content);
     debugAssertIdxsEql("addRecordDestructorAndTypeVar", expr_idx, expr_var);
@@ -1310,7 +1272,7 @@ pub fn addRecordDestructAndTypeVar(self: *Self, expr: Pattern.RecordDestruct, co
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
-pub fn addIfBranchAndTypeVar(self: *Self, expr: Expr.IfBranch, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Expr.IfBranch.Idx {
+pub fn addIfBranchAndTypeVar(self: *Self, expr: CIR.Expr.IfBranch, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.Expr.IfBranch.Idx {
     const expr_idx = try self.store.addIfBranch(expr, region);
     const expr_var = try self.types.freshFromContent(content);
     debugAssertIdxsEql("addIfBranchAndTypeVar", expr_idx, expr_var);
@@ -1320,7 +1282,7 @@ pub fn addIfBranchAndTypeVar(self: *Self, expr: Expr.IfBranch, content: types_mo
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
-pub fn addMatchBranchAndTypeVar(self: *Self, expr: Expr.Match.Branch, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Expr.Match.Branch.Idx {
+pub fn addMatchBranchAndTypeVar(self: *Self, expr: CIR.Expr.Match.Branch, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.Expr.Match.Branch.Idx {
     const expr_idx = try self.store.addMatchBranch(expr, region);
     const expr_var = try self.types.freshFromContent(content);
     debugAssertIdxsEql("addMatchBranchAndTypeVar", expr_idx, expr_var);
@@ -1340,7 +1302,7 @@ pub fn addWhereClauseAndTypeVar(self: *Self, expr: WhereClause, content: types_m
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
-pub fn addTypeAnnoAndTypeVar(self: *Self, expr: TypeAnno, content: types_mod.Content, region: Region) std.mem.Allocator.Error!TypeAnno.Idx {
+pub fn addTypeAnnoAndTypeVar(self: *Self, expr: CIR.TypeAnno, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.Idx {
     const expr_idx = try self.store.addTypeAnno(expr, region);
     const expr_var = try self.types.freshFromContent(content);
     debugAssertIdxsEql("addTypeAnnoAndTypeVar", expr_idx, expr_var);
@@ -1350,7 +1312,7 @@ pub fn addTypeAnnoAndTypeVar(self: *Self, expr: TypeAnno, content: types_mod.Con
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
-pub fn addTypeAnnoAndTypeVarRedirect(self: *Self, expr: TypeAnno, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!TypeAnno.Idx {
+pub fn addTypeAnnoAndTypeVarRedirect(self: *Self, expr: CIR.TypeAnno, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.Idx {
     const expr_idx = try self.store.addTypeAnno(expr, region);
     const expr_var = try self.types.freshRedirect(redirect_to);
     debugAssertIdxsEql("addTypeAnnoAndTypeVarRedirect", expr_idx, expr_var);
@@ -1380,7 +1342,7 @@ pub fn addAnnotationAndTypeVarRedirect(self: *Self, expr: Annotation, redirect_t
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
-pub fn addAnnoRecordFieldAndTypeVar(self: *Self, expr: TypeAnno.RecordField, content: types_mod.Content, region: Region) std.mem.Allocator.Error!TypeAnno.RecordField.Idx {
+pub fn addAnnoRecordFieldAndTypeVar(self: *Self, expr: CIR.TypeAnno.RecordField, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.RecordField.Idx {
     const expr_idx = try self.store.addAnnoRecordField(expr, region);
     const expr_var = try self.types.freshFromContent(content);
     debugAssertIdxsEql("addAnnoRecordFieldAndTypeVar", expr_idx, expr_var);
@@ -1390,7 +1352,7 @@ pub fn addAnnoRecordFieldAndTypeVar(self: *Self, expr: TypeAnno.RecordField, con
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
-pub fn addAnnoRecordFieldAndTypeVarRedirect(self: *Self, expr: TypeAnno.RecordField, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!TypeAnno.RecordField.Idx {
+pub fn addAnnoRecordFieldAndTypeVarRedirect(self: *Self, expr: CIR.TypeAnno.RecordField, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.RecordField.Idx {
     const expr_idx = try self.store.addAnnoRecordField(expr, region);
     const expr_var = try self.types.freshRedirect(redirect_to);
     debugAssertIdxsEql("addAnnoRecordFieldAndTypeVar", expr_idx, expr_var);
@@ -1435,7 +1397,7 @@ pub fn addMalformedAndTypeVar(self: *Self, diagnostic_idx: Diagnostic.Idx, conte
 
 /// Add a new match branch pattern and type variable.
 /// This function asserts that the types array and the nodes are in sync.
-pub fn addMatchBranchPatternAndTypeVar(self: *Self, expr: Expr.Match.BranchPattern, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Expr.Match.BranchPattern.Idx {
+pub fn addMatchBranchPatternAndTypeVar(self: *Self, expr: CIR.Expr.Match.BranchPattern, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.Expr.Match.BranchPattern.Idx {
     const expr_idx = try self.store.addMatchBranchPattern(expr, region);
     const expr_var = try self.types.freshFromContent(content);
     debugAssertIdxsEql("addMatchBranchPatternAndTypeVar", expr_idx, expr_var);
@@ -1505,29 +1467,29 @@ pub fn redirectTypeTo(
 }
 
 /// Adds an external declaration and returns its index
-pub fn pushExternalDecl(self: *Self, decl: ExternalDecl) std.mem.Allocator.Error!ExternalDecl.Idx {
+pub fn pushExternalDecl(self: *Self, decl: CIR.ExternalDecl) std.mem.Allocator.Error!CIR.ExternalDecl.Idx {
     const idx = @as(u32, @intCast(self.external_decls.len()));
     _ = try self.external_decls.append(self.gpa, decl);
     return @enumFromInt(idx);
 }
 
 /// Retrieves an external declaration by its index
-pub fn getExternalDecl(self: *const Self, idx: ExternalDecl.Idx) *const ExternalDecl {
-    return self.external_decls.get(@as(ExternalDecl.SafeList.Idx, @enumFromInt(@intFromEnum(idx))));
+pub fn getExternalDecl(self: *const Self, idx: CIR.ExternalDecl.Idx) *const CIR.ExternalDecl {
+    return self.external_decls.get(@as(CIR.ExternalDecl.SafeList.Idx, @enumFromInt(@intFromEnum(idx))));
 }
 
 /// Adds multiple external declarations and returns a span
-pub fn pushExternalDecls(self: *Self, decls: []const ExternalDecl) std.mem.Allocator.Error!ExternalDecl.Span {
+pub fn pushExternalDecls(self: *Self, decls: []const CIR.ExternalDecl) std.mem.Allocator.Error!CIR.ExternalDecl.Span {
     const start = @as(u32, @intCast(self.external_decls.len()));
     for (decls) |decl| {
         _ = try self.external_decls.append(self.gpa, decl);
     }
-    return ExternalDecl.Span{ .span = .{ .start = start, .len = @as(u32, @intCast(decls.len)) } };
+    return CIR.ExternalDecl.Span{ .span = .{ .start = start, .len = @as(u32, @intCast(decls.len)) } };
 }
 
 /// Gets a slice of external declarations from a span
-pub fn sliceExternalDecls(self: *const Self, span: ExternalDecl.Span) []const ExternalDecl {
-    const range = ExternalDecl.SafeList.Range{ .start = @enumFromInt(span.span.start), .count = span.span.len };
+pub fn sliceExternalDecls(self: *const Self, span: CIR.ExternalDecl.Span) []const CIR.ExternalDecl {
+    const range = CIR.ExternalDecl.SafeList.Range{ .start = @enumFromInt(span.span.start), .count = span.span.len };
     return self.external_decls.sliceRange(range);
 }
 
@@ -1537,7 +1499,7 @@ pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
 }
 
 /// Helper to format pattern index for s-expr output
-fn formatPatternIdxNode(gpa: std.mem.Allocator, pattern_idx: Pattern.Idx) SExpr {
+fn formatPatternIdxNode(gpa: std.mem.Allocator, pattern_idx: CIR.Pattern.Idx) SExpr {
     var node = SExpr.init(gpa, "pid");
     node.appendUnsignedInt(gpa, @intFromEnum(pattern_idx));
     return node;
@@ -1545,7 +1507,7 @@ fn formatPatternIdxNode(gpa: std.mem.Allocator, pattern_idx: Pattern.Idx) SExpr 
 
 /// Helper function to generate the S-expression node for the entire module.
 /// If a single expression is provided, only that expression is returned.
-pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
+pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
     if (maybe_expr_idx) |expr_idx| {
         // Only output the given expression
         try self.store.getExpr(expr_idx).pushToSExprTree(self, tree, expr_idx);
@@ -1787,7 +1749,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?Expr.Idx, tree: *SExpr
     }
 }
 
-fn pushExprTypesToSExprTree(self: *Self, expr_idx: Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
+fn pushExprTypesToSExprTree(self: *Self, expr_idx: CIR.Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
     const expr_begin = tree.beginNode();
     try tree.pushStaticAtom("expr");
 

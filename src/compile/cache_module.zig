@@ -23,7 +23,7 @@ const NodeStore = ModuleEnv.NodeStore;
 const SafeList = collections.SafeList;
 const SafeStringHashMap = collections.SafeStringHashMap;
 
-const SERIALIZATION_ALIGNMENT = serialization.SERIALIZATION_ALIGNMENT;
+const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
 /// Magic number for cache validation
 const CACHE_MAGIC: u32 = 0x524F4343; // "ROCC" in ASCII

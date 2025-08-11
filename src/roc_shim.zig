@@ -75,7 +75,7 @@ fn evaluateFromSharedMemory(roc_ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*an
 
     // Get expression info from shared memory
     const base_ptr = shm.getBasePtr();
-    const expr_idx: ModuleEnv.Expr.Idx = @enumFromInt(
+    const expr_idx: CIR.Expr.Idx = @enumFromInt(
         safe_memory.safeRead(u32, base_ptr, FIRST_ALLOC_OFFSET + @sizeOf(u64), shm.total_size) catch {
             return error.MemoryLayoutInvalid;
         },

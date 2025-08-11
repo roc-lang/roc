@@ -1,13 +1,14 @@
 //! Tests for canonicalizing boolean expressions
 const std = @import("std");
-const testing = std.testing;
 const base = @import("base");
 const types = @import("types");
 const compile = @import("compile");
 const parse = @import("parse");
-const Can = @import("../Can.zig");
 
-const ModuleEnv = compile.ModuleEnv;
+const Can = @import("../Can.zig");
+const ModuleEnv = @import("../ModuleEnv.zig");
+
+const testing = std.testing;
 
 test "canonicalize True as Bool" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
@@ -46,7 +47,7 @@ test "canonicalize True as Bool" {
     // The backing expression should be a tag
     const backing_expr = module_env.store.getExpr(expr.e_nominal.backing_expr);
     try testing.expectEqual(.e_tag, std.meta.activeTag(backing_expr));
-    try testing.expectEqual(ModuleEnv.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
+    try testing.expectEqual(CIR.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
 
     // The tag should be "True"
     const tag_name = module_env.getIdent(backing_expr.e_tag.name);
@@ -90,7 +91,7 @@ test "canonicalize False as Bool" {
     // The backing expression should be a tag
     const backing_expr = module_env.store.getExpr(expr.e_nominal.backing_expr);
     try testing.expectEqual(.e_tag, std.meta.activeTag(backing_expr));
-    try testing.expectEqual(ModuleEnv.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
+    try testing.expectEqual(CIR.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
 
     // The tag should be "False"
     const tag_name = module_env.getIdent(backing_expr.e_tag.name);

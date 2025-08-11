@@ -337,7 +337,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     parse_ast: *parse.AST,
     can: *Can,
     checker: *Check,
-    expr_idx: ModuleEnv.Expr.Idx,
+    expr_idx: CIR.Expr.Idx,
 } {
     // Initialize the ModuleEnv
     const module_env = try allocator.create(ModuleEnv);

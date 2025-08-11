@@ -23,7 +23,7 @@ const LayoutTag = layout_mod.LayoutTag;
 const RocDec = builtins.dec.RocDec;
 const SExprTree = base.SExprTree;
 const Closure = layout_mod.Closure;
-const Expr = ModuleEnv.Expr;
+const Expr = CIR.Expr;
 const Ident = base.Ident;
 
 const StackValue = @This();

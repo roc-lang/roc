@@ -26,7 +26,11 @@ const types = @import("types");
 const collections = @import("collections");
 
 const ModuleEnv = @import("ModuleEnv.zig");
-const Diagnostic = ModuleEnv.Diagnostic;
+const Diagnostic = @import("Diagnostic.zig");
+const Pattern = @import("Pattern.zig");
+const Statement = @import("Statement.zig");
+const ExternalDecl = @import("ExternalDecl.zig");
+
 const StringLiteral = base.StringLiteral;
 const Region = base.Region;
 const DataSpan = base.DataSpan;
@@ -34,14 +38,14 @@ const CalledVia = base.CalledVia;
 const Ident = base.Ident;
 const SExprTree = base.SExprTree;
 const SExpr = base.SExpr;
-const Pattern = ModuleEnv.Pattern;
 const IntValue = ModuleEnv.IntValue;
 const RocDec = ModuleEnv.RocDec;
-const ExternalDecl = ModuleEnv.ExternalDecl;
 const TypeVar = types.Var;
 const If = ModuleEnv.If;
 const RecordField = ModuleEnv.RecordField;
-const Statement = ModuleEnv.Statement;
+
+
+const Self = Expr;
 
 /// An expression in the Roc language.
 pub const Expr = union(enum) {
@@ -390,7 +394,7 @@ pub const Expr = union(enum) {
     };
 
     pub fn initStr(expr_span: Expr.Span) Expr {
-        return ModuleEnv.Expr{
+        return Self{
             .e_str = .{
                 .span = expr_span,
             },
@@ -398,7 +402,7 @@ pub const Expr = union(enum) {
     }
 
     pub fn initStrSegment(literal: StringLiteral.Idx) Expr {
-        return ModuleEnv.Expr{
+        return Self{
             .e_str_segment = .{
                 .literal = literal,
             },
@@ -466,7 +470,7 @@ pub const Expr = union(enum) {
     /// The type inside a nominal var
     pub const NominalBackingType = enum { tag, record, tuple, value };
 
-    pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, expr_idx: ModuleEnv.Expr.Idx) std.mem.Allocator.Error!void {
+    pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, expr_idx: Self.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .e_int => |int_expr| {
                 const begin = tree.beginNode();

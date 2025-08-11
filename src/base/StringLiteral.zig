@@ -86,15 +86,6 @@ pub const Store = struct {
         }
     }
 
-    /// Calculate the size needed to serialize this Store
-    pub fn serializedSize(self: *const Store) usize {
-        // Header: 4 bytes for buffer length
-        // Data: buffer.items.len bytes
-        const raw_size = @sizeOf(u32) + self.buffer.len();
-        // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
-        return std.mem.alignForward(usize, raw_size, serialization.SERIALIZATION_ALIGNMENT);
-    }
-
     /// Serialize this Store to the given CompactWriter. The resulting Store
     /// in the writer's buffer will have offsets instead of pointers. Calling any
     /// methods on it or dereferencing its internal "pointers" (which are now

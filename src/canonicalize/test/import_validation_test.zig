@@ -6,15 +6,15 @@
 //! the canonicalization process.
 
 const std = @import("std");
-const testing = std.testing;
 const base = @import("base");
 const parse = @import("parse");
-const compile = @import("compile");
-const Can = @import("../Can.zig");
-
-const ModuleEnv = compile.ModuleEnv;
-const expectEqual = testing.expectEqual;
 const collections = @import("collections");
+
+const Can = @import("../Can.zig");
+const ModuleEnv = @import("../ModuleEnv.zig");
+
+const testing = std.testing;
+const expectEqual = testing.expectEqual;
 
 // Helper function to parse and canonicalize source code
 fn parseAndCanonicalizeSource(allocator: std.mem.Allocator, source: []const u8, module_envs: ?*std.StringHashMap(*ModuleEnv)) !struct {

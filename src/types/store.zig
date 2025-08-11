@@ -28,7 +28,7 @@ const NominalType = types.NominalType;
 const Record = types.Record;
 const Num = types.Num;
 
-const SERIALIZATION_ALIGNMENT = serialization.SERIALIZATION_ALIGNMENT;
+const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
 /// A variable & its descriptor info
 pub const ResolvedVarDesc = struct { var_: Var, desc_idx: DescStore.Idx, desc: Desc };
@@ -1373,11 +1373,7 @@ test "SlotStore.Serialized roundtrip" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
     const serialized_ptr = try writer.appendAlloc(arena_allocator, SlotStore.Serialized);

@@ -228,6 +228,31 @@ pub fn SafeList(comptime T: type) type {
             self.items.items[@as(usize, @intFromEnum(id))] = value;
         }
 
+        /// Returns a SafeList that has had its pointer converted to an offset.
+        /// It's only safe to serialize this return value; attempting to call
+        /// methods on it or dereference its internal "pointers" (which are now
+        /// offsets) is illegal behavior!
+        pub fn serialize(
+            self: *const SafeList(T),
+            allocator: Allocator,
+            writer: *CompactWriter,
+        ) Allocator.Error!*const SafeList(T) {
+            const items = self.items.items;
+
+            const offset_self = try writer.appendAlloc(allocator, SafeList(T));
+
+            const slice = try writer.appendSlice(allocator, items);
+
+            offset_self.* = .{
+                .items = .{
+                    .items = slice,
+                    .capacity = items.len,
+                },
+            };
+
+            return @constCast(offset_self);
+        }
+
         /// Add the given offset to the memory addresses of all pointers in `self`.
         pub fn relocate(self: *SafeList(T), offset: isize) void {
             if (self.items.capacity == 0) return;
@@ -476,6 +501,56 @@ pub fn SafeMultiList(comptime T: type) type {
             };
         }
 
+        /// Returns a SafeMultiList that has had its pointers converted to offsets,
+        /// after appending pointers to the writer such that the result is only
+        /// the actual filled elements of the MultiList being written (plus possibly
+        /// some zeros for alignment padding), and none of its excess capacity
+        /// being written.
+        ///
+        /// It's only safe to serialize this return value; attempting to call
+        /// methods on it or dereference its internal "pointers" (which are now
+        /// offsets) is illegal behavior!
+        pub fn serialize(
+            self: *const SafeMultiList(T),
+            allocator: Allocator,
+            writer: *CompactWriter,
+        ) Allocator.Error!*const SafeMultiList(T) {
+            // Write only len elements, not capacity, to avoid storing garbage memory.
+            const data_offset = if (self.items.len > 0) blk: {
+                const slice = self.items.slice();
+                const fields = std.meta.fields(T);
+
+                // MultiArrayList lays out fields in order, with alignment padding as
+                // necessary between the end of one field's elements and the beginning of
+                // the next. So we need to append entries to the writer for all fields.
+                const first_field_offset = writer.total_bytes;
+
+                inline for (fields, 0..) |_, i| {
+                    const field_ptr = slice.items(@as(Field, @enumFromInt(i))).ptr;
+
+                    // Write the field data (only len elements' worth).
+                    // appendSlice will take care of alignment padding.
+                    _ = try writer.appendSlice(allocator, field_ptr[0..self.items.len]);
+                }
+
+                break :blk first_field_offset;
+            } else writer.total_bytes;
+
+            // Write the SafeMultiList struct
+            const offset_self = try writer.appendAlloc(allocator, SafeMultiList(T));
+
+            // Initialize with offsets
+            offset_self.* = .{
+                .items = .{
+                    .bytes = @ptrFromInt(data_offset),
+                    .len = self.items.len,
+                    .capacity = self.items.len, // capacity = len for compacted data
+                },
+            };
+
+            return @constCast(offset_self);
+        }
+
         /// Add the given offset to the memory addresses of all pointers in `self`.
         pub fn relocate(self: *SafeMultiList(T), offset: isize) void {
             if (self.items.capacity == 0) return;
@@ -690,11 +765,7 @@ test "SafeList empty list CompactWriter roundtrip" {
     defer file.close();
 
     // Serialize using CompactWriter
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-        .allocated_memory = .{},
-    };
+    var writer = CompactWriter.init();
     defer writer.deinit(gpa);
 
     // Allocate and serialize using SafeList.Serialized

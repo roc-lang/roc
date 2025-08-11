@@ -3,22 +3,25 @@ const Can = @import("can");
 const fs_mod = @import("fs");
 const base = @import("base");
 const parse = @import("parse");
-const compile = @import("compile");
+const can = @import("can");
+const collections = @import("collections");
 const reporting = @import("reporting");
 
-const DataSizeUnit = @import("cache_reporting.zig").DataSizeUnit;
-const CacheManager = @import("cache_manager.zig").CacheManager;
-const CacheConfig = @import("cache_config.zig").CacheConfig;
-const CacheModule = @import("cache_module.zig").CacheModule;
-const CacheStats = @import("cache_config.zig").CacheStats;
+const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
+
+const DataSizeUnit = @import("../cache_reporting.zig").DataSizeUnit;
+const CacheManager = @import("../cache_manager.zig").CacheManager;
+const CacheConfig = @import("../cache_config.zig").CacheConfig;
+const CacheModule = @import("../cache_module.zig").CacheModule;
+const CacheStats = @import("../cache_config.zig").CacheStats;
 const Filesystem = fs_mod.Filesystem;
-const ModuleEnv = compile.ModuleEnv;
+const ModuleEnv = can.ModuleEnv;
 const Severity = reporting.Severity;
-const CacheKey = @import("cache_key.zig").CacheKey;
+const CacheKey = @import("../cache_key.zig").CacheKey;
 const SExprTree = base.SExprTree;
-const Header = @import("cache_config.zig").Header;
+const Header = @import("../cache_config.zig").Header;
 const testing = std.testing;
-const formatDataSize = @import("cache_reporting.zig").formatDataSize;
+const formatDataSize = @import("../cache_reporting.zig").formatDataSize;
 
 test "cache module" {
     // Basic test to ensure module compiles and types are accessible
@@ -71,7 +74,7 @@ test "CacheConfig getEffectiveCacheDir with explicit dir" {
 }
 
 test "getCacheDirName platform specific" {
-    const name = @import("cache_config.zig").getCacheDirName();
+    const name = @import("../cache_config.zig").getCacheDirName();
 
     // Should be "roc" or "Roc" depending on platform
     try testing.expect(std.mem.eql(u8, name, "roc") or std.mem.eql(u8, name, "Roc"));
@@ -80,7 +83,7 @@ test "getCacheDirName platform specific" {
 test "getCompilerVersionDir" {
     const allocator = testing.allocator;
 
-    const version_dir = try @import("cache_config.zig").getCompilerVersionDir(allocator);
+    const version_dir = try @import("../cache_config.zig").getCompilerVersionDir(allocator);
     defer allocator.free(version_dir);
 
     // Should be 32 hex characters
@@ -527,41 +530,41 @@ test "cache filesystem roundtrip with in-memory storage" {
 }
 
 test "formatDataSize bytes" {
-    const result = @import("cache_reporting.zig").formatDataSize(512);
+    const result = @import("../cache_reporting.zig").formatDataSize(512);
     try testing.expectEqual(@as(f64, 512.0), result.value);
     try testing.expectEqual(DataSizeUnit.bytes, result.unit);
 }
 
 test "formatDataSize KB" {
-    const result = @import("cache_reporting.zig").formatDataSize(1536); // 1.5 KB
+    const result = @import("../cache_reporting.zig").formatDataSize(1536); // 1.5 KB
     try testing.expectApproxEqRel(@as(f64, 1.5), result.value, 0.01);
     try testing.expectEqual(DataSizeUnit.kb, result.unit);
 }
 
 test "formatDataSize MB" {
-    const result = @import("cache_reporting.zig").formatDataSize(2 * 1024 * 1024); // 2 MB
+    const result = @import("../cache_reporting.zig").formatDataSize(2 * 1024 * 1024); // 2 MB
     try testing.expectApproxEqRel(@as(f64, 2.0), result.value, 0.01);
     try testing.expectEqual(DataSizeUnit.mb, result.unit);
 }
 
 test "formatDataSize GB" {
-    const result = @import("cache_reporting.zig").formatDataSize(3 * 1024 * 1024 * 1024); // 3 GB
+    const result = @import("../cache_reporting.zig").formatDataSize(3 * 1024 * 1024 * 1024); // 3 GB
     try testing.expectApproxEqRel(@as(f64, 3.0), result.value, 0.01);
     try testing.expectEqual(DataSizeUnit.gb, result.unit);
 }
 
 test "getUnitString" {
-    try testing.expectEqualStrings("B", @import("cache_reporting.zig").getUnitString(.bytes));
-    try testing.expectEqualStrings("KB", @import("cache_reporting.zig").getUnitString(.kb));
-    try testing.expectEqualStrings("MB", @import("cache_reporting.zig").getUnitString(.mb));
-    try testing.expectEqualStrings("GB", @import("cache_reporting.zig").getUnitString(.gb));
+    try testing.expectEqualStrings("B", @import("../cache_reporting.zig").getUnitString(.bytes));
+    try testing.expectEqualStrings("KB", @import("../cache_reporting.zig").getUnitString(.kb));
+    try testing.expectEqualStrings("MB", @import("../cache_reporting.zig").getUnitString(.mb));
+    try testing.expectEqualStrings("GB", @import("../cache_reporting.zig").getUnitString(.gb));
 }
 
 test "createCacheStatsReport empty stats" {
     const allocator = testing.allocator;
     const stats = CacheStats{};
 
-    var report = try @import("cache_reporting.zig").createCacheStatsReport(allocator, stats);
+    var report = try @import("../cache_reporting.zig").createCacheStatsReport(allocator, stats);
     defer report.deinit();
 
     try testing.expectEqualStrings("CACHE STATISTICS", report.title);
@@ -575,7 +578,7 @@ test "createCacheStatsReport with operations" {
     stats.recordMiss();
     stats.recordStore(2048); // 2KB written
 
-    var report = try @import("cache_reporting.zig").createCacheStatsReport(allocator, stats);
+    var report = try @import("../cache_reporting.zig").createCacheStatsReport(allocator, stats);
     defer report.deinit();
 
     try testing.expectEqualStrings("CACHE STATISTICS", report.title);

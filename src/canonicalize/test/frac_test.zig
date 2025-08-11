@@ -5,16 +5,17 @@
 //! compiler's canonical internal representation (CIR).
 
 const std = @import("std");
-const testing = std.testing;
 const base = @import("base");
 const parse = @import("parse");
-const Can = @import("../Can.zig");
 const compile = @import("compile");
 const types = @import("types");
 const builtins = @import("builtins");
 
-const ModuleEnv = compile.ModuleEnv;
+const Can = @import("../Can.zig");
+const ModuleEnv = @import("../ModuleEnv.zig");
+
 const RocDec = builtins.dec.RocDec;
+const testing = std.testing;
 
 // Note: Each test should create its own GPA to avoid memory leak detection issues
 
@@ -22,7 +23,7 @@ fn parseAndCreateFrac(allocator: std.mem.Allocator, source: []const u8) !struct 
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
     can: *Can,
-    expr_idx: ModuleEnv.Expr.Idx,
+    expr_idx: CIR.Expr.Idx,
 } {
     const module_env = try allocator.create(ModuleEnv);
     module_env.* = try ModuleEnv.init(allocator, source);
@@ -46,7 +47,7 @@ fn parseAndCreateFrac(allocator: std.mem.Allocator, source: []const u8) !struct 
         const diagnostic_idx = try module_env.addDiagnostic(.{ .invalid_num_literal = .{
             .region = base.Region.zero(),
         } });
-        const error_expr_idx = try module_env.addExprAndTypeVar(ModuleEnv.Expr{ .e_runtime_error = .{ .diagnostic = diagnostic_idx } }, types.Content{ .err = {} }, base.Region.zero());
+        const error_expr_idx = try module_env.addExprAndTypeVar(CIR.Expr{ .e_runtime_error = .{ .diagnostic = diagnostic_idx } }, types.Content{ .err = {} }, base.Region.zero());
         return .{
             .module_env = module_env,
             .parse_ast = parse_ast,
