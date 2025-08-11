@@ -96,6 +96,7 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
 }
 
 test "collections tests" {
+    std.testing.refAllDecls(@import("CompactWriter.zig"));
     std.testing.refAllDecls(@import("ExposedItems.zig"));
     std.testing.refAllDecls(@import("safe_hash_map.zig"));
     std.testing.refAllDecls(@import("safe_list.zig"));

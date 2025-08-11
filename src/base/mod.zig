@@ -98,6 +98,7 @@ pub const NumLiteral = union(enum) {
 };
 
 test "base tests" {
+    std.testing.refAllDecls(@import("CommonEnv.zig"));
     std.testing.refAllDecls(@import("DataSpan.zig"));
     std.testing.refAllDecls(@import("Ident.zig"));
     std.testing.refAllDecls(@import("PackedDataSpan.zig"));
@@ -107,7 +108,6 @@ test "base tests" {
     std.testing.refAllDecls(@import("safe_memory.zig"));
     std.testing.refAllDecls(@import("Scratch.zig"));
     std.testing.refAllDecls(@import("SExprTree.zig"));
-    std.testing.refAllDecls(@import("SmallStringInterner.zig"));
     std.testing.refAllDecls(@import("SmallStringInterner.zig"));
     std.testing.refAllDecls(@import("StringLiteral.zig"));
     std.testing.refAllDecls(@import("target.zig"));
