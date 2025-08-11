@@ -110,3 +110,13 @@ fn parseStatementAndReturnIdx(parser: *Parser, gpa: std.mem.Allocator) Parser.Er
 pub fn parseStatement(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST {
     return try runParse(env, gpa, parseStatementAndReturnIdx);
 }
+
+test "parser tests" {
+    std.testing.refAllDecls(@import("AST.zig"));
+    std.testing.refAllDecls(@import("HTML.zig"));
+    std.testing.refAllDecls(@import("Node.zig"));
+    std.testing.refAllDecls(@import("NodeStore.zig"));
+    std.testing.refAllDecls(@import("Parser.zig"));
+    std.testing.refAllDecls(@import("tokenize.zig"));
+    std.testing.refAllDecls(@import("test/ast_node_store_test.zig"));
+}

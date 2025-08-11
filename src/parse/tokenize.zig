@@ -1563,12 +1563,12 @@ fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const
     var messages: [10]Diagnostic = undefined;
 
     var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
-    defer env.deinit();
+    defer env.deinit(gpa);
 
-    var tokenizer = try Tokenizer.init(&env, input, &messages);
-    defer tokenizer.deinit();
+    var tokenizer = try Tokenizer.init(&env, gpa, input, &messages);
+    defer tokenizer.deinit(gpa);
 
-    try tokenizer.tokenize();
+    try tokenizer.tokenize(gpa);
     const tokenizedBuffer = tokenizer.output;
     const tokens = tokenizedBuffer.tokens.items(.tag);
 
@@ -1581,14 +1581,14 @@ fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const
 /// Assert the invariants of the tokenizer are held.
 pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug: bool) std.mem.Allocator.Error!void {
     var env = try CommonEnv.init(gpa, gpa.dupe(u8, "") catch unreachable);
-    defer env.deinit();
+    defer env.deinit(gpa);
 
     // Initial tokenization.
     var messages: [32]Diagnostic = undefined;
-    var tokenizer = try Tokenizer.init(&env, input, &messages);
-    try tokenizer.tokenize();
-    var output = tokenizer.finishAndDeinit();
-    defer output.tokens.deinit();
+    var tokenizer = try Tokenizer.init(&env, gpa, input, &messages);
+    try tokenizer.tokenize(gpa);
+    var output = tokenizer.finishAndDeinit(gpa);
+    defer output.tokens.deinit(gpa);
 
     if (debug) {
         std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
@@ -1620,10 +1620,10 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     }
 
     // Second tokenization.
-    tokenizer = try Tokenizer.init(&env, buf2.items, &messages);
-    try tokenizer.tokenize();
-    var output2 = tokenizer.finishAndDeinit();
-    defer output2.tokens.deinit();
+    tokenizer = try Tokenizer.init(&env, gpa, buf2.items, &messages);
+    try tokenizer.tokenize(gpa);
+    var output2 = tokenizer.finishAndDeinit(gpa);
+    defer output2.tokens.deinit(gpa);
 
     if (debug) {
         std.debug.print("After:\n", .{});
@@ -2286,11 +2286,11 @@ test "tokenizer with invalid UTF-8" {
         var diagnostics: [10]Diagnostic = undefined;
 
         var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
-        defer env.deinit();
+        defer env.deinit(gpa);
 
-        var tokenizer = try Tokenizer.init(&env, &invalid_utf8, &diagnostics);
-        defer tokenizer.deinit();
-        try tokenizer.tokenize();
+        var tokenizer = try Tokenizer.init(&env, gpa, &invalid_utf8, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
 
         // Should have reported InvalidUtf8InSource
         const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
@@ -2304,11 +2304,11 @@ test "tokenizer with invalid UTF-8" {
         var diagnostics: [10]Diagnostic = undefined;
 
         var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
-        defer env.deinit();
+        defer env.deinit(gpa);
 
-        var tokenizer = try Tokenizer.init(&env, &incomplete_utf8, &diagnostics);
-        defer tokenizer.deinit();
-        try tokenizer.tokenize();
+        var tokenizer = try Tokenizer.init(&env, gpa, &incomplete_utf8, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
 
         // Should have reported InvalidUtf8InSource
         const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
@@ -2326,11 +2326,11 @@ test "non-printable characters in string literal" {
         var diagnostics: [10]Diagnostic = undefined;
 
         var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
-        defer env.deinit();
+        defer env.deinit(gpa);
 
-        var tokenizer = try Tokenizer.init(&env, &non_printable, &diagnostics);
-        defer tokenizer.deinit();
-        try tokenizer.tokenize();
+        var tokenizer = try Tokenizer.init(&env, gpa, &non_printable, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
 
         // Should have reported NonPrintableUnicodeInStrLiteral
         const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
@@ -2344,11 +2344,11 @@ test "non-printable characters in string literal" {
         var diagnostics: [10]Diagnostic = undefined;
 
         var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
-        defer env.deinit();
+        defer env.deinit(gpa);
 
-        var tokenizer = try Tokenizer.init(&env, &control_char, &diagnostics);
-        defer tokenizer.deinit();
-        try tokenizer.tokenize();
+        var tokenizer = try Tokenizer.init(&env, gpa, &control_char, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
 
         const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
         try std.testing.expect(messages.len > 0);
@@ -2361,11 +2361,11 @@ test "non-printable characters in string literal" {
         var diagnostics: [10]Diagnostic = undefined;
 
         var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
-        defer env.deinit();
+        defer env.deinit(gpa);
 
-        var tokenizer = try Tokenizer.init(&env, &valid_chars, &diagnostics);
-        defer tokenizer.deinit();
-        try tokenizer.tokenize();
+        var tokenizer = try Tokenizer.init(&env, gpa, &valid_chars, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
 
         const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
         try std.testing.expect(messages.len == 0);

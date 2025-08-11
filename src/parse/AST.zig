@@ -27,7 +27,6 @@ const Allocator = std.mem.Allocator;
 const CommonEnv = base.CommonEnv;
 const tokenize = @import("tokenize.zig");
 
-pub const toSExprHtml = @import("HTML.zig").toSExprHtml;
 pub const tokensToHtml = @import("HTML.zig").tokensToHtml;
 
 const AST = @This();
