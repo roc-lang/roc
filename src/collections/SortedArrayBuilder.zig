@@ -336,7 +336,8 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 const builder = @as(*SortedArrayBuilder(K, V), @ptrFromInt(@intFromPtr(self)));
 
                 // Apply the offset to convert from serialized offset to actual pointer
-                const entries_ptr: [*]Entry = @ptrFromInt(@as(usize, @intCast(self.entries_offset + offset)));
+                const entries_ptr_usize: usize = @intCast(self.entries_offset + offset);
+                const entries_ptr: [*]Entry = @ptrFromInt(entries_ptr_usize);
 
                 builder.* = SortedArrayBuilder(K, V){
                     .entries = .{
