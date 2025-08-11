@@ -292,6 +292,72 @@ pub const PathValidationError = struct {
     reason: PathValidationReason,
 };
 
+// We only do these validations on bundle, not on unbundle.
+//
+// The reason we do this validation is to prevent Windows users
+// from encountering unpleasant surprises when they try to
+// unbundle paths that bundled just fine on a non-Windows OS but.
+// which are invalid on Windows.
+//
+// We don't do the validation on unbundle because it's costly and
+// there's no security concern; if the OS doesn't accept the path,
+// it will give an error.
+pub fn validatePathForBundle(path: []const u8) ?PathValidationError {
+    // Start by doing the validation checks we'd do on unbundle.
+    // If unbundling would fail, then bundling should too!
+    try validatePath(path);
+
+    for (path) |byte| {
+        inline for (RESERVED_PATH_CHARS) |reserved| {
+            if (byte == reserved) {
+                return PathValidationError{
+                    .path = path,
+                    .reason = .{ .windows_reserved_char = reserved },
+                };
+            }
+        }
+    }
+
+    // Check for Windows reserved names (case-insensitive)
+    for (WINDOWS_RESERVED_NAMES) |reserved| {
+        // Check base name without extension
+        const dot_pos = std.mem.indexOfScalar(u8, component, '.');
+        const base_name = if (dot_pos) |pos| component[0..pos] else component;
+
+        if (base_name.len == reserved.len) {
+            var matches = true;
+            for (base_name, reserved) |a, b| {
+                if (std.ascii.toUpper(a) != b) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) {
+                return PathValidationError{
+                    .path = path,
+                    .reason = .windows_reserved_name,
+                };
+            }
+        }
+    }
+
+    // Reject components ending with space or period (Windows restriction)
+    if (component.len > 0) {
+        const last_char = component[component.len - 1];
+        if (last_char == ' ') {
+            return PathValidationError{
+                .path = path,
+                .reason = .component_ends_with_space,
+            };
+        } else if (last_char == '.') {
+            return PathValidationError{
+                .path = path,
+                .reason = .component_ends_with_period,
+            };
+        }
+    }
+}
+
 /// Validate a file path to prevent directory traversal attacks and other security issues.
 /// Returns null if the path is valid, or a PathValidationError describing the problem.
 pub fn validatePath(path: []const u8) ?PathValidationError {
@@ -311,91 +377,48 @@ pub fn validatePath(path: []const u8) ?PathValidationError {
         };
     }
 
-    // Check for reserved characters
-    for (RESERVED_PATH_CHARS) |reserved_char| {
-        if (std.mem.indexOfScalar(u8, path, reserved_char) != null) {
-            if (reserved_char == 0) {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .contains_nul,
-                };
-            } else if (reserved_char == '\\') {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .contains_backslash,
-                };
-            } else {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .{ .windows_reserved_char = reserved_char },
-                };
-            }
-        }
-    }
-
-    // Reject absolute paths
-    if (path[0] == '/') {
+    // Reject paths considered absolute on any OS we support
+    if (std.fs.path.isAbsolutePosix(path) or std.fs.path.isAbsoluteWindows(path)) {
         return PathValidationError{
             .path = path,
             .reason = .absolute_path,
         };
     }
 
-    // Check for ".." components and other dangerous patterns
-    var it = std.mem.tokenizeScalar(u8, path, '/');
-    while (it.next()) |component| {
-        // Reject ".." components
-        if (std.mem.eql(u8, component, "..")) {
-            return PathValidationError{
-                .path = path,
-                .reason = .path_traversal,
-            };
-        }
-        // Reject "." as a component (current directory)
-        if (std.mem.eql(u8, component, ".")) {
-            return PathValidationError{
-                .path = path,
-                .reason = .current_directory_reference,
-            };
-        }
+    // Reject ".." and "." path components, while considering both slash and backslash
+    // as path separators regardless of the current OS.
+    var idx = 0;
+    while (idx < path.len) {
+        if (path[idx] == '/' or path[idx] == '\\') {
+            idx += 1;
 
-        // Check for Windows reserved names (case-insensitive)
-        for (WINDOWS_RESERVED_NAMES) |reserved| {
-            // Check base name without extension
-            const dot_pos = std.mem.indexOfScalar(u8, component, '.');
-            const base_name = if (dot_pos) |pos| component[0..pos] else component;
+            if (idx < path.len and path[idx] == '.') {
+                // Component starts with "." but we don't know where it ends yet.
+                idx += 1;
 
-            if (base_name.len == reserved.len) {
-                var matches = true;
-                for (base_name, reserved) |a, b| {
-                    if (std.ascii.toUpper(a) != b) {
-                        matches = false;
-                        break;
-                    }
-                }
-                if (matches) {
+                if (path[idx] == '/' or path[idx] == '\\') {
+                    // This was a "." path component, which we disallow.
                     return PathValidationError{
                         .path = path,
-                        .reason = .windows_reserved_name,
+                        .reason = .current_directory_reference,
                     };
                 }
-            }
-        }
 
-        // Reject components ending with space or period (Windows restriction)
-        if (component.len > 0) {
-            const last_char = component[component.len - 1];
-            if (last_char == ' ') {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .component_ends_with_space,
-                };
-            } else if (last_char == '.') {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .component_ends_with_period,
-                };
+                // Is there a second '.' after the first?
+                if (idx < path.len and path[idx] == '.') {
+                    idx += 1;
+
+                    if (path[idx] == '/' or path[idx] == '\\') {
+                        // This was a ".." path component, which we disallow.
+                        return PathValidationError{
+                            .path = path,
+                            .reason = .path_traversal,
+                        };
+                    }
+                }
             }
+        } else {
+            idx += 1;
         }
     }
 
