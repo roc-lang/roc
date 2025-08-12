@@ -20,15 +20,17 @@ const parse = @import("parse");
 const reporting = @import("reporting");
 const types = @import("types");
 const compile = @import("compile");
-const Can = @import("can").Can;
-const Check = @import("check").Check;
+const can = @import("can");
+const check = @import("check");
 
 const WasmFilesystem = @import("playground/WasmFilesystem.zig");
 
+const Can = can.Can;
+const Check = check.Check;
 const SExprTree = base.SExprTree;
-const ModuleEnv = compile.ModuleEnv;
+const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
-const problem = Check.problem;
+const problem = check.problem;
 const AST = parse.AST;
 
 // A fixed-size buffer to act as the heap inside the WASM linear memory.
@@ -517,7 +519,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         // Return empty compiler stage data for completely empty input
         var module_env = try allocator.create(ModuleEnv);
         module_env.* = try ModuleEnv.init(allocator, source);
-        try module_env.calcLineStarts();
+        try module_env.common.calcLineStarts(module_env.gpa);
         return CompilerStageData.init(allocator, module_env);
     }
 
@@ -526,7 +528,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         // Return empty compiler stage data for whitespace-only input
         var module_env = try allocator.create(ModuleEnv);
         module_env.* = try ModuleEnv.init(allocator, source);
-        try module_env.calcLineStarts();
+        try module_env.common.calcLineStarts(module_env.gpa);
         return CompilerStageData.init(allocator, module_env);
     }
 
@@ -536,12 +538,12 @@ fn compileSource(source: []const u8) !CompilerStageData {
     // Initialize the ModuleEnv
     var module_env = try allocator.create(ModuleEnv);
     module_env.* = try ModuleEnv.init(allocator, source);
-    try module_env.calcLineStarts();
+    try module_env.common.calcLineStarts(module_env.gpa);
 
     var result = CompilerStageData.init(allocator, module_env);
 
     // Stage 1: Parse (includes tokenization)
-    var parse_ast = try parse.parse(module_env);
+    var parse_ast = try parse.parse(&module_env.common, module_env.gpa);
     result.parse_ast = parse_ast;
 
     // Generate and store HTML before canonicalization corrupts the AST/tokens
@@ -552,7 +554,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     // Generate Tokens HTML
     var tokens_html_buffer = std.ArrayList(u8).init(temp_alloc);
     const tokens_writer = tokens_html_buffer.writer().any();
-    AST.tokensToHtml(&parse_ast, module_env, tokens_writer) catch |err| {
+    AST.tokensToHtml(&parse_ast, &module_env.common, tokens_writer) catch |err| {
         logDebug("compileSource: tokensToHtml failed: {}\n", .{err});
     };
     result.tokens_html = allocator.dupe(u8, tokens_html_buffer.items) catch |err| {
@@ -569,7 +571,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         var tree = SExprTree.init(temp_alloc);
         defer tree.deinit();
 
-        try file.pushToSExprTree(module_env, &parse_ast, &tree);
+        try file.pushToSExprTree(module_env.gpa, &module_env.common, &parse_ast, &tree);
 
         try tree.toHtml(ast_writer);
     }
@@ -589,7 +591,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Collect parse diagnostics with additional error handling
     for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(module_env.*, diagnostic, allocator, "main.roc") catch {
+        const report = parse_ast.parseDiagnosticToReport(&module_env.common, diagnostic, allocator, "main.roc") catch {
             // Log the error and continue processing other diagnostics
             // This prevents crashes on malformed diagnostics or empty input
             continue;
@@ -962,8 +964,8 @@ fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, messag
         return;
     }
 
-    const source = data.module_env.source;
-    const line_starts = data.module_env.line_starts.items.items;
+    const source = data.module_env.common.source;
+    const line_starts = data.module_env.common.line_starts.items.items;
 
     if (line_num >= line_starts.len) {
         try writeErrorResponse(response_buffer, .ERROR, "Line number out of range");
@@ -1032,7 +1034,7 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
                     const ident_text = cir.getIdent(assign.ident);
                     if (std.mem.eql(u8, ident_text, identifier)) {
                         // 1. Get type string
-                        var type_writer = try compile.TypeWriter.init(local_allocator, @ptrCast(cir));
+                        var type_writer = try data.module_env.initTypeWriter();
                         defer type_writer.deinit();
 
                         const def_var = @as(types.Var, @enumFromInt(@intFromEnum(def_idx)));
