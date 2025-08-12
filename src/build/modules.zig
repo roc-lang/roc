@@ -72,8 +72,8 @@ pub const RocModules = struct {
             .compile = b.addModule("compile", .{ .root_source_file = b.path("src/compile/mod.zig") }),
             .reporting = b.addModule("reporting", .{ .root_source_file = b.path("src/reporting/mod.zig") }),
             .parse = b.addModule("parse", .{ .root_source_file = b.path("src/parse/mod.zig") }),
-            .can = b.addModule("can", .{ .root_source_file = b.path("src/canonicalize/Mod.zig") }),
-            .check = b.addModule("check", .{ .root_source_file = b.path("src/check/Mod.zig") }),
+            .can = b.addModule("can", .{ .root_source_file = b.path("src/canonicalize/mod.zig") }),
+            .check = b.addModule("check", .{ .root_source_file = b.path("src/check/mod.zig") }),
             .tracy = b.addModule("tracy", .{ .root_source_file = b.path("src/tracy.zig") }),
             .fs = b.addModule("fs", .{ .root_source_file = b.path("src/fs/mod.zig") }),
             .build_options = b.addModule(
