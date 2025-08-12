@@ -808,7 +808,7 @@ test "SafeList empty list CompactWriter roundtrip" {
     const file_size = try file.getEndPos();
     const serialized_size = @sizeOf(SafeList(u64).Serialized);
     const serialized_align = @alignOf(SafeList(u64).Serialized);
-    const buffer = try gpa.alignedAlloc(u8, serialized_align, file_size);
+    const buffer = try gpa.alignedAlloc(u8, serialized_align, @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -972,7 +972,7 @@ test "SafeList CompactWriter complete roundtrip example" {
     // Step 5: Read file into 16-byte aligned buffer
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, @alignOf(u32), file_size);
+    const buffer = try gpa.alignedAlloc(u8, @alignOf(u32), @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -1070,7 +1070,7 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     // Read back into aligned buffer
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, file_size);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -1236,7 +1236,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     // Read back and verify
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, file_size);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
     _ = try file.read(buffer);
 
@@ -1376,7 +1376,7 @@ test "SafeList CompactWriter brute-force alignment verification" {
             // Read back
             try file.seekTo(0);
             const file_size = try file.getEndPos();
-            const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, file_size);
+            const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
             defer gpa.free(buffer);
 
             _ = try file.read(buffer);
@@ -1474,7 +1474,7 @@ test "SafeMultiList CompactWriter roundtrip with file" {
     // Read back into aligned buffer
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, file_size);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -1543,7 +1543,7 @@ test "SafeMultiList empty list CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, file_size);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -1630,7 +1630,7 @@ test "SafeMultiList CompactWriter multiple lists different alignments" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, file_size);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -1727,7 +1727,7 @@ test "SafeMultiList CompactWriter brute-force alignment verification" {
         // Read back
         try file.seekTo(0);
         const file_size = try file.getEndPos();
-        const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, file_size);
+        const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
         defer gpa.free(buffer);
 
         _ = try file.read(buffer);
@@ -1823,7 +1823,7 @@ test "SafeMultiList CompactWriter various field alignments and sizes" {
             // Read back
             try file.seekTo(0);
             const file_size = try file.getEndPos();
-            const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, file_size);
+            const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
             defer gpa.free(buffer);
 
             _ = try file.read(buffer);
@@ -1983,7 +1983,7 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
         // Read back
         try file.seekTo(0);
         const file_size = try file.getEndPos();
-        const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, file_size);
+        const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
         defer gpa.free(buffer);
 
         _ = try file.read(buffer);
@@ -2075,7 +2075,7 @@ test "SafeMultiList CompactWriter stress test many field types" {
         // Read back
         try file.seekTo(0);
         const file_size = try file.getEndPos();
-        const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, file_size);
+        const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
         defer gpa.free(buffer);
 
         _ = try file.read(buffer);
@@ -2141,7 +2141,7 @@ test "SafeMultiList CompactWriter empty with capacity" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, file_size);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -2195,7 +2195,7 @@ test "SafeMultiList.Serialized roundtrip" {
 
     // Read back
     const file_size = try tmp_file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, file_size);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
     _ = try tmp_file.pread(buffer, 0);
 

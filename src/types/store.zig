@@ -1132,7 +1132,7 @@ test "Store empty CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -1189,7 +1189,7 @@ test "Store basic CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -1275,7 +1275,7 @@ test "Store basic CompactWriter roundtrip" {
 //     // Read back
 //     try file.seekTo(0);
 //     const file_size = try file.getEndPos();
-//     const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+//     const buffer = try gpa.alignedAlloc(u8, 16, @intCast(file_size));
 //     defer gpa.free(buffer);
 
 //     _ = try file.read(buffer);
@@ -1375,7 +1375,7 @@ test "SlotStore.Serialized roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @intCast(file_size));
     defer gpa.free(buffer);
     _ = try file.read(buffer);
 
@@ -1436,7 +1436,7 @@ test "SlotStore.Serialized roundtrip" {
 //     // Read back
 //     try file.seekTo(0);
 //     const file_size = try file.getEndPos();
-//     const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+//     const buffer = try gpa.alignedAlloc(u8, 16, @intCast(file_size));
 //     defer gpa.free(buffer);
 //     _ = try file.read(buffer);
 
@@ -1483,7 +1483,7 @@ test "SlotStore.Serialized roundtrip" {
 //     // Read back
 //     try file.seekTo(0);
 //     const file_size = try file.getEndPos();
-//     const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+//     const buffer = try gpa.alignedAlloc(u8, 16, @intCast(file_size));
 //     defer gpa.free(buffer);
 //     _ = try file.read(buffer);
 
@@ -1561,7 +1561,7 @@ test "SlotStore.Serialized roundtrip" {
 //     // Read back
 //     try file.seekTo(0);
 //     const file_size = try file.getEndPos();
-//     const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+//     const buffer = try gpa.alignedAlloc(u8, 16, @intCast(file_size));
 //     defer gpa.free(buffer);
 
 //     _ = try file.read(buffer);
@@ -1634,7 +1634,7 @@ test "SlotStore and DescStore serialization and deserialization" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    const buffer = try gpa.alignedAlloc(u8, 16, @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -1710,7 +1710,7 @@ test "SlotStore and DescStore serialization and deserialization" {
 //     // Read back
 //     try file.seekTo(0);
 //     const file_size = try file.getEndPos();
-//     const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+//     const buffer = try gpa.alignedAlloc(u8, 16, @intCast(file_size));
 //     defer gpa.free(buffer);
 
 //     _ = try file.read(buffer);

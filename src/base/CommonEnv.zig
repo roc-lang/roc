@@ -319,7 +319,7 @@ test "CommonEnv.Serialized roundtrip" {
 
     // Read back with proper alignment
     const file_size = try tmp_file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, file_size);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
     _ = try tmp_file.pread(buffer, 0);
 
@@ -369,7 +369,7 @@ test "CommonEnv.Serialized roundtrip with empty data" {
 
     // Read back with proper alignment
     const file_size = try tmp_file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, file_size);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
     _ = try tmp_file.pread(buffer, 0);
 
@@ -452,7 +452,7 @@ test "CommonEnv.Serialized roundtrip with large data" {
 
     // Read back with proper alignment
     const file_size = try tmp_file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, file_size);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
     _ = try tmp_file.pread(buffer, 0);
 
@@ -529,7 +529,7 @@ test "CommonEnv.Serialized roundtrip with special characters" {
 
     // Read back with proper alignment
     const file_size = try tmp_file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, file_size);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
     _ = try tmp_file.pread(buffer, 0);
 
