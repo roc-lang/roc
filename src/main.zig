@@ -784,17 +784,13 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     const basename = std.fs.path.basename(roc_file_path);
     const module_name = try shm_allocator.dupe(u8, basename);
 
-    var common_env = try base.CommonEnv.init(shm_allocator, source);
-    defer common_env.deinit(shm_allocator);
-
-    try common_env.calcLineStarts(shm_allocator);
-
-    var env = try ModuleEnv.init(shm_allocator, &common_env);
-    // env.source = source;
+    var env = try ModuleEnv.init(shm_allocator, source);
+    env.common.source = source;
     env.module_name = module_name;
+    try env.common.calcLineStarts(shm_allocator);
 
     // Parse the source code as a full module
-    var parse_ast = try parse.parse(&common_env, gpa);
+    var parse_ast = try parse.parse(&env.common, gpa);
 
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();

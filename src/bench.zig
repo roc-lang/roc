@@ -63,11 +63,8 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
 
     std.debug.print("Total: {} bytes, {} lines\n", .{ metrics.total_bytes, metrics.total_lines });
 
-    var common_env = try CommonEnv.init(gpa, "");
-    // Module env takes ownership of Common env -- no need to deinit here
-
     // Create a module environment for tokenization (reused for tokenizer, created per-iteration for parser)
-    var env: ?ModuleEnv = if (!is_parse) try ModuleEnv.init(gpa, &common_env) else null;
+    var env: ?ModuleEnv = if (!is_parse) try ModuleEnv.init(gpa, "") else null;
     defer if (env) |*e| e.deinit();
 
     // Benchmark parameters
@@ -91,10 +88,9 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
                 // ModuleEnv takes ownership of the source code, so we need to dupe it each iteration
                 const source_copy = try gpa.dupe(u8, roc_file.content);
 
-                var common_env1 = try CommonEnv.init(gpa, source_copy);
-                var parse_env = try ModuleEnv.init(gpa, &common_env1);
+                var parse_env = try ModuleEnv.init(gpa, source_copy);
 
-                var ir = try parse.parse(&common_env1, gpa);
+                var ir = try parse.parse(&parse_env.common, gpa);
                 iteration_tokens += ir.tokens.tokens.len;
                 ir.deinit(gpa);
                 parse_env.deinit();
@@ -103,7 +99,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
                 var messages: [128]tokenize.Diagnostic = undefined;
                 const msg_slice = messages[0..];
 
-                var tokenizer = try tokenize.Tokenizer.init(env.?.common, gpa, roc_file.content, msg_slice);
+                var tokenizer = try tokenize.Tokenizer.init(&env.?.common, gpa, roc_file.content, msg_slice);
                 try tokenizer.tokenize(gpa);
                 var result = tokenizer.finishAndDeinit(gpa);
                 iteration_tokens += result.tokens.tokens.len;

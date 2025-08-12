@@ -721,15 +721,12 @@ pub const BuildEnv = struct {
         const file_abs = try std.fs.path.resolve(self.gpa, &.{file_path});
         const src = try std.fs.cwd().readFileAlloc(self.gpa, file_abs, std.math.maxInt(usize));
 
-        var common_env = try base.CommonEnv.init(self.gpa, src);
-        defer common_env.deinit(self.gpa);
-
-        try common_env.calcLineStarts(self.gpa);
-
-        var env = try ModuleEnv.init(self.gpa, &common_env);
+        var env = try ModuleEnv.init(self.gpa, src);
         defer env.deinit();
 
-        var ast = try parse.parse(&common_env, self.gpa);
+        try env.common.calcLineStarts(self.gpa);
+
+        var ast = try parse.parse(&env.common, self.gpa);
         defer ast.deinit(self.gpa);
 
         const file = ast.store.getFile();

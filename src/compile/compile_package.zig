@@ -478,15 +478,13 @@ pub const PackageEnv = struct {
         var st = &self.modules.items[module_id];
         const src = try std.fs.cwd().readFileAlloc(self.gpa, st.path, std.math.maxInt(usize));
 
-        var common_env = try base.CommonEnv.init(self.gpa, src);
-        defer common_env.deinit(self.gpa);
-
         // line starts for diagnostics and consistent positions
-        try common_env.calcLineStarts(self.gpa);
 
-        var env = try ModuleEnv.init(self.gpa, &common_env);
+        var env = try ModuleEnv.init(self.gpa, src);
         // init CIR fields
         try env.initCIRFields(self.gpa, st.name);
+
+        try env.common.calcLineStarts(self.gpa);
 
         // replace env
         if (st.env) |*old| old.deinit();
@@ -502,7 +500,7 @@ pub const PackageEnv = struct {
 
         // Parse and canonicalize in one step to avoid double parsing
         const parse_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var parse_ast = try parse.parse(env.common, self.gpa);
+        var parse_ast = try parse.parse(&env.common, self.gpa);
         defer parse_ast.deinit(self.gpa);
         parse_ast.store.emptyScratch();
         const parse_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
