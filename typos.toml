@@ -9,7 +9,7 @@ extend-exclude = [
     "COPYRIGHT",
     "crates/compiler/checkmate/www/package-lock.json",
     "src/build/zig_llvm.h",
-    "src/snapshots/",
+    "test/snapshots/",
 ]
 
 [default]
