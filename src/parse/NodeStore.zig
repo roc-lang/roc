@@ -6,11 +6,10 @@
 const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
-const parse = @import("parse");
 
-const AST = parse.AST;
-const Node = parse.Node;
-const Token = parse.tokenize.Token;
+const AST = @import("AST.zig");
+const Node = @import("Node.zig");
+const Token = @import("tokenize.zig").Token;
 const Region = AST.TokenizedRegion;
 const Diagnostic = AST.Diagnostic;
 

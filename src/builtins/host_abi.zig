@@ -32,7 +32,7 @@ pub const RocCall = fn (
 ///
 /// This is used in both calls from actual hosts as well as evaluation of constants
 /// inside the Roc compiler itself.
-pub const RocOps = struct {
+pub const RocOps = extern struct {
     /// The host provides this pointer, and Roc passes it to each of the following
     /// function pointers as a second argument. This lets the host do things like use
     /// arena allocators for allocation and deallocation (by putting the arena in here).
@@ -63,6 +63,24 @@ pub const RocOps = struct {
             .len = msg.len,
         };
         self.roc_crashed(&roc_crashed_args, self.env);
+    }
+
+    pub fn alloc(self: *RocOps, alignment: usize, length: usize) *anyopaque {
+        var roc_alloc_args = RocAlloc{
+            .alignment = alignment,
+            .length = length,
+            .answer = self.env,
+        };
+        self.roc_alloc(&roc_alloc_args, self.env);
+        return roc_alloc_args.answer;
+    }
+
+    pub fn dealloc(self: *RocOps, ptr: *anyopaque, alignment: usize) void {
+        var roc_dealloc_args = RocDealloc{
+            .alignment = alignment,
+            .ptr = ptr,
+        };
+        self.roc_dealloc(&roc_dealloc_args, self.env);
     }
 };
 

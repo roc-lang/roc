@@ -1,7 +1,17 @@
 # Types
 
-Core type system definitions and utilities for representing, manipulating, and managing types throughout the Roc compiler.
+Core type system implementation for the Roc language.
 
-- [src/types/types.zig](./types.zig): Fundamental type definitions and core type system data structures including type variables, constraints, and type representations.
-- [src/types/store.zig](./store.zig): Type storage and management system for efficiently storing, retrieving, and deduplicating type information across compilation phases.
-- [src/types/writers.zig](./writers.zig): Type formatting and serialization utilities for converting type representations into human-readable strings and diagnostic output.
+## Overview
+
+The types module provides the foundational type system that underpins the entire Roc compiler. It defines the representation of all Roc types, including primitive types, algebraic data types, functions, and type variables used during type inference.
+
+## Purpose
+
+This module serves as the backbone for:
+- **Type Representation**: Defining how all Roc types are stored and manipulated in memory
+- **Type Operations**: Providing utilities for type comparison, substitution, and manipulation
+- **Type Variables**: Managing type variables used during Hindley-Milner type inference
+- **Built-in Types**: Implementing the core Roc type system (numbers, strings, lists, etc.)
+
+The types module is used extensively by the canonicalize, check, and eval stages of the compiler to ensure type safety and provide the necessary type information for compilation and execution.

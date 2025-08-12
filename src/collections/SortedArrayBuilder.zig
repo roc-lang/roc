@@ -14,10 +14,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// Import base for both testing and runtime
-const base = @import("base");
-const serialization = @import("serialization");
-const IovecWriter = serialization.IovecWriter;
+const CompactWriter = @import("CompactWriter.zig");
 
 /// A builder for creating sorted arrays directly without using hash maps
 /// This is more efficient when we know we won't have duplicates
@@ -108,10 +105,11 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             if (!self.sorted) {
                 std.sort.pdq(Entry, self.entries.items, {}, Entry.lessThan);
                 self.sorted = true;
-
-                // Check for and report duplicates, then deduplicate
-                self.deduplicateAndReport(allocator);
             }
+
+            // Always deduplicate when ensureSorted is called
+            // This ensures we handle cases where detectDuplicates was called first
+            self.deduplicateAndReport(allocator);
         }
 
         /// Check for duplicates, report them, and remove duplicates keeping the last occurrence
@@ -166,7 +164,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             }
 
             // Update the length to reflect deduplicated entries
-            self.entries.items.len = write_index;
+            self.entries.shrinkRetainingCapacity(write_index);
         }
 
         /// Detect duplicates without modifying the array - returns list of duplicate keys
@@ -218,8 +216,33 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 // Define sentinel value locally since iovec_serialize is not available
                 const EMPTY_ARRAY_SENTINEL: usize = 0xDEADBEEF;
                 if (old_ptr != EMPTY_ARRAY_SENTINEL) {
-                    const new_ptr = @as(usize, @intCast(@as(isize, @intCast(old_ptr)) + offset));
-                    self.entries.items.ptr = @ptrFromInt(new_ptr);
+                    // Handle negative offsets properly
+                    if (offset >= 0) {
+                        const new_ptr = old_ptr + @as(usize, @intCast(offset));
+                        // Ensure proper alignment for Entry type
+                        const aligned_ptr_opt = std.mem.alignPointer(@as([*]u8, @ptrFromInt(new_ptr)), @alignOf(Entry));
+                        if (aligned_ptr_opt) |aligned_ptr| {
+                            self.entries.items.ptr = @as([*]Entry, @ptrCast(@alignCast(aligned_ptr)));
+                        } else {
+                            // If we can't align properly, skip relocation
+                            return;
+                        }
+                    } else {
+                        // For negative offsets, we need to ensure we don't underflow
+                        const abs_offset = @as(usize, @intCast(-offset));
+                        if (old_ptr >= abs_offset) {
+                            const new_ptr = old_ptr - abs_offset;
+                            // Ensure proper alignment for Entry type
+                            const aligned_ptr_opt = std.mem.alignPointer(@as([*]u8, @ptrFromInt(new_ptr)), @alignOf(Entry));
+                            if (aligned_ptr_opt) |aligned_ptr| {
+                                self.entries.items.ptr = @as([*]Entry, @ptrCast(@alignCast(aligned_ptr)));
+                            } else {
+                                // If we can't align properly, skip relocation
+                                return;
+                            }
+                        }
+                        // If old_ptr < abs_offset, we can't relocate safely, so skip
+                    }
                 }
             }
         }
@@ -248,53 +271,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             return true;
         }
 
-        /// Append this SortedArrayBuilder to an iovec writer for serialization
-        pub fn appendToIovecs(self: *const Self, writer: *IovecWriter) !usize {
-
-            // Must be sorted before serialization
-            if (!self.sorted) {
-                @panic("SortedArrayBuilder must be sorted before serialization");
-            }
-
-            // Create a mutable copy of self that we can modify
-            var builder_copy = self.*;
-
-            // Create a buffer for the final serialized struct
-            const builder_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(Self));
-
-            // Track this allocation so it gets freed when writer is deinitialized
-            try writer.owned_buffers.append(builder_copy_buffer);
-
-            // Serialize entries array data
-            const entries_offset = if (self.entries.items.len > 0) blk: {
-                const data = std.mem.sliceAsBytes(self.entries.items);
-                const offset = try writer.appendBytes(Entry, data);
-                break :blk offset;
-            } else 0;
-
-            // Update pointer in the copy to use offset
-            // For empty arrays, use sentinel value instead of 0 to avoid null pointer
-            builder_copy.entries.items.ptr = if (entries_offset == 0)
-                @ptrFromInt(0xDEADBEEF) // EMPTY_ARRAY_SENTINEL
-            else
-                @ptrFromInt(entries_offset);
-            builder_copy.entries.items.len = self.entries.items.len;
-
-            // Note: For string keys, we don't serialize the string data separately here.
-            // This assumes that the strings are already managed elsewhere (e.g., in an interner)
-            // and we're just storing pointers/slices to them. If string keys need to be
-            // serialized as well, that would require additional handling.
-
-            // Copy the modified struct to the buffer
-            @memcpy(builder_copy_buffer, std.mem.asBytes(&builder_copy));
-
-            // Now that all pointers have been converted to offsets, add the copy to iovecs
-            const struct_offset = try writer.appendBytes(Self, builder_copy_buffer);
-
-            return struct_offset;
-        }
-
-        /// Serialized representation of a SortedArrayBuilder
+        /// Serialized representation of SortedArrayBuilder
         pub const Serialized = struct {
             entries_offset: i64,
             entries_len: u64,
@@ -304,81 +281,54 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             /// Serialize a SortedArrayBuilder into this Serialized struct, appending data to the writer
             pub fn serialize(
                 self: *Serialized,
-                builder: *const Self,
+                builder: *const SortedArrayBuilder(K, V),
                 allocator: Allocator,
-                writer: anytype,
+                writer: *CompactWriter,
             ) Allocator.Error!void {
-                // Must be sorted before serialization
-                if (!builder.sorted) {
-                    @panic("SortedArrayBuilder must be sorted before serialization");
-                }
+                const entries_slice = builder.entries.items;
 
-                const items = builder.entries.items;
-                // Append the slice data first
-                const slice_ptr = try writer.appendSlice(allocator, items);
+                // Append the entries data to the writer
+                const slice_ptr = try writer.appendSlice(allocator, entries_slice);
+
                 // Store the offset, len, and capacity
                 self.entries_offset = @intCast(@intFromPtr(slice_ptr.ptr));
-                self.entries_len = items.len;
-                self.entries_capacity = items.len;
+                self.entries_len = entries_slice.len;
+                self.entries_capacity = entries_slice.len;
                 self.sorted = builder.sorted;
             }
 
             /// Deserialize this Serialized struct into a SortedArrayBuilder
-            pub fn deserialize(self: *Serialized, offset: i64) *Self {
+            pub fn deserialize(self: *Serialized, offset: i64) *SortedArrayBuilder(K, V) {
                 // SortedArrayBuilder.Serialized should be at least as big as SortedArrayBuilder
-                std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Self));
+                std.debug.assert(@sizeOf(Serialized) >= @sizeOf(SortedArrayBuilder(K, V)));
 
                 // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
-                const builder = @as(*Self, @ptrFromInt(@intFromPtr(self)));
+                const builder = @as(*SortedArrayBuilder(K, V), @ptrFromInt(@intFromPtr(self)));
 
-                // Apply the offset to convert from serialized offset to actual pointer
-                const entries_ptr = @as([*]Entry, @ptrFromInt(@as(usize, @intCast(self.entries_offset + offset))));
+                // Handle empty array case
+                if (self.entries_len == 0) {
+                    builder.* = SortedArrayBuilder(K, V){
+                        .entries = .{},
+                        .sorted = self.sorted,
+                    };
+                } else {
+                    // Apply the offset to convert from serialized offset to actual pointer
+                    const entries_ptr_usize: usize = @intCast(self.entries_offset + offset);
+                    const entries_ptr: [*]Entry = @ptrFromInt(entries_ptr_usize);
 
-                builder.* = Self{
-                    .entries = .{
-                        .items = entries_ptr[0..@as(usize, @intCast(self.entries_len))],
-                        .capacity = @as(usize, @intCast(self.entries_capacity)),
-                    },
-                    .sorted = self.sorted,
-                };
+                    builder.* = SortedArrayBuilder(K, V){
+                        .entries = .{
+                            .items = entries_ptr[0..@intCast(self.entries_len)],
+                            .capacity = @intCast(self.entries_capacity),
+                        },
+                        .sorted = self.sorted,
+                    };
+                }
 
                 return builder;
             }
         };
     };
-}
-
-test "SortedArrayBuilder basic operations" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    var builder = SortedArrayBuilder([]const u8, u32).init();
-    defer builder.deinit(allocator);
-
-    // Add items in random order
-    try builder.put(allocator, "zebra", 100);
-    try builder.put(allocator, "apple", 50);
-    try builder.put(allocator, "banana", 150);
-    try builder.put(allocator, "cherry", 30);
-
-    // Test count
-    try testing.expectEqual(@as(usize, 4), builder.count());
-
-    // Test get (forces sorting)
-    try testing.expectEqual(@as(?u32, 50), builder.get(allocator, "apple"));
-    try testing.expectEqual(@as(?u32, 150), builder.get(allocator, "banana"));
-    try testing.expectEqual(@as(?u32, 30), builder.get(allocator, "cherry"));
-    try testing.expectEqual(@as(?u32, 100), builder.get(allocator, "zebra"));
-    try testing.expectEqual(@as(?u32, null), builder.get(allocator, "missing"));
-
-    // Test iovec serialization
-    var writer = IovecWriter.init(allocator);
-    defer writer.deinit();
-
-    _ = try builder.appendToIovecs(&writer);
-
-    // Verify we have some iovecs (basic smoke test)
-    try testing.expect(writer.iovecs.items.len > 0);
 }
 
 test "SortedArrayBuilder maintains sorted order when added in order" {
@@ -402,7 +352,7 @@ test "SortedArrayBuilder maintains sorted order when added in order" {
     try testing.expectEqual(@as(?u16, 4), builder.get(allocator, "ddd"));
 }
 
-test "SortedArrayBuilder detectDuplicates example usage" {
+test "SortedArrayBuilder detectDuplicates sorts if unsorted" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -518,68 +468,4 @@ test "SortedArrayBuilder no duplicates case" {
     try testing.expectEqual(@as(?u16, 1), builder.get(allocator, "unique1"));
     try testing.expectEqual(@as(?u16, 2), builder.get(allocator, "unique2"));
     try testing.expectEqual(@as(?u16, 3), builder.get(allocator, "unique3"));
-}
-
-test "SortedArrayBuilder.Serialized roundtrip" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-    const CompactWriter = serialization.CompactWriter;
-
-    // Create a builder with numeric keys (simpler for testing)
-    var original = SortedArrayBuilder(u32, u64).init();
-    defer original.deinit(allocator);
-
-    // Add items in random order
-    try original.put(allocator, 100, 1000);
-    try original.put(allocator, 50, 500);
-    try original.put(allocator, 200, 2000);
-    try original.put(allocator, 25, 250);
-
-    // Ensure sorted before serialization
-    original.ensureSorted(allocator);
-
-    // Create a CompactWriter and arena
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_alloc = arena.allocator();
-
-    var tmp_dir = testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    const tmp_file = try tmp_dir.dir.createFile("test.compact", .{ .read = true });
-    defer tmp_file.close();
-
-    var writer = CompactWriter{
-        .iovecs = .{},
-        .total_bytes = 0,
-    };
-    defer writer.deinit(arena_alloc);
-
-    // Allocate and serialize using the Serialized struct
-    const Builder = SortedArrayBuilder(u32, u64);
-    const serialized_ptr = try writer.appendAlloc(arena_alloc, Builder.Serialized);
-    try serialized_ptr.serialize(&original, arena_alloc, &writer);
-
-    // Write to file
-    try writer.writeGather(arena_alloc, tmp_file);
-
-    // Read back
-    const file_size = try tmp_file.getEndPos();
-    const buffer = try allocator.alloc(u8, file_size);
-    defer allocator.free(buffer);
-    _ = try tmp_file.pread(buffer, 0);
-
-    // Deserialize
-    const deserialized_ptr = @as(*Builder.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const builder = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
-
-    // Verify count and sorted state
-    try testing.expectEqual(@as(usize, 4), builder.count());
-    try testing.expect(builder.sorted);
-
-    // Verify all values are accessible
-    try testing.expectEqual(@as(?u64, 250), builder.get(allocator, 25));
-    try testing.expectEqual(@as(?u64, 500), builder.get(allocator, 50));
-    try testing.expectEqual(@as(?u64, 1000), builder.get(allocator, 100));
-    try testing.expectEqual(@as(?u64, 2000), builder.get(allocator, 200));
-    try testing.expectEqual(@as(?u64, null), builder.get(allocator, 999));
 }

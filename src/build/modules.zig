@@ -2,10 +2,61 @@ const std = @import("std");
 const Build = std.Build;
 const Module = Build.Module;
 const Step = Build.Step;
+const OptimizeMode = std.builtin.OptimizeMode;
+const ResolvedTarget = std.Build.ResolvedTarget;
 
-/// TODO
+/// Represents a test module with its compilation and execution steps.
+pub const ModuleTest = struct {
+    test_step: *Step.Compile,
+    run_step: *Step.Run,
+};
+
+/// Enumerates the different modules in the Roc compiler codebase.
+pub const ModuleType = enum {
+    collections,
+    base,
+    types,
+    builtins,
+    compile,
+    reporting,
+    parse,
+    can,
+    check,
+    tracy,
+    fs,
+    build_options,
+    layout,
+    eval,
+    ipc,
+    repl,
+    fmt,
+
+    /// Returns the dependencies for this module type
+    pub fn getDependencies(self: ModuleType) []const ModuleType {
+        return switch (self) {
+            .build_options => &.{},
+            .builtins => &.{},
+            .fs => &.{},
+            .tracy => &.{ .build_options, .builtins },
+            .collections => &.{},
+            .base => &.{.collections},
+            .types => &.{ .base, .collections },
+            .reporting => &.{ .collections, .base },
+            .parse => &.{ .tracy, .collections, .base, .reporting },
+            .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting },
+            .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
+            .layout => &.{ .collections, .base, .types, .builtins, .can },
+            .eval => &.{ .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options },
+            .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval },
+            .ipc => &.{},
+            .repl => &.{ .base, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval },
+            .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy },
+        };
+    }
+};
+
+/// Manages all Roc compiler modules and their dependencies
 pub const RocModules = struct {
-    serialization: *Module,
     collections: *Module,
     base: *Module,
     types: *Module,
@@ -16,86 +67,84 @@ pub const RocModules = struct {
     can: *Module,
     check: *Module,
     tracy: *Module,
+    fs: *Module,
     build_options: *Module,
+    layout: *Module,
+    eval: *Module,
+    ipc: *Module,
+    repl: *Module,
+    fmt: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options) RocModules {
         const self = RocModules{
-            .serialization = b.addModule("serialization", .{ .root_source_file = b.path("src/serialization/mod.zig") }),
-            .collections = b.addModule("collections", .{ .root_source_file = b.path("src/collections/mod.zig") }),
+            .collections = b.addModule(
+                "collections",
+                .{ .root_source_file = b.path("src/collections/mod.zig") },
+            ),
             .base = b.addModule("base", .{ .root_source_file = b.path("src/base/mod.zig") }),
             .types = b.addModule("types", .{ .root_source_file = b.path("src/types/mod.zig") }),
             .builtins = b.addModule("builtins", .{ .root_source_file = b.path("src/builtins/mod.zig") }),
             .compile = b.addModule("compile", .{ .root_source_file = b.path("src/compile/mod.zig") }),
             .reporting = b.addModule("reporting", .{ .root_source_file = b.path("src/reporting/mod.zig") }),
             .parse = b.addModule("parse", .{ .root_source_file = b.path("src/parse/mod.zig") }),
-            .can = b.addModule("can", .{ .root_source_file = b.path("src/canonicalize/Mod.zig") }),
-            .check = b.addModule("check", .{ .root_source_file = b.path("src/check/Mod.zig") }),
-            .tracy = b.addModule("tracy", .{ .root_source_file = b.path("src/tracy.zig") }),
-            .build_options = b.addModule("build_options", .{ .root_source_file = build_options_step.getOutput() }),
+            .can = b.addModule("can", .{ .root_source_file = b.path("src/canonicalize/mod.zig") }),
+            .check = b.addModule("check", .{ .root_source_file = b.path("src/check/mod.zig") }),
+            .tracy = b.addModule("tracy", .{ .root_source_file = b.path("src/build/tracy.zig") }),
+            .fs = b.addModule("fs", .{ .root_source_file = b.path("src/fs/mod.zig") }),
+            .build_options = b.addModule(
+                "build_options",
+                .{ .root_source_file = build_options_step.getOutput() },
+            ),
+            .layout = b.addModule("layout", .{ .root_source_file = b.path("src/layout/mod.zig") }),
+            .eval = b.addModule("eval", .{ .root_source_file = b.path("src/eval/mod.zig") }),
+            .ipc = b.addModule("ipc", .{ .root_source_file = b.path("src/ipc/mod.zig") }),
+            .repl = b.addModule("repl", .{ .root_source_file = b.path("src/repl/mod.zig") }),
+            .fmt = b.addModule("fmt", .{ .root_source_file = b.path("src/fmt/mod.zig") }),
         };
 
-        self.tracy.addImport("build_options", self.build_options);
-
-        self.collections.addImport("serialization", self.serialization);
-
-        self.base.addImport("serialization", self.serialization);
-        self.base.addImport("collections", self.collections);
-        self.base.addImport("types", self.types);
-
-        self.types.addImport("types", self.types);
-        self.types.addImport("serialization", self.serialization);
-        self.types.addImport("base", self.base);
-        self.types.addImport("collections", self.collections);
-        self.types.addImport("compile", self.compile);
-
-        self.compile.addImport("base", self.base);
-        self.compile.addImport("compile", self.compile);
-        self.compile.addImport("collections", self.collections);
-        self.compile.addImport("types", self.types);
-        self.compile.addImport("builtins", self.builtins);
-        self.compile.addImport("reporting", self.reporting);
-        self.compile.addImport("serialization", self.serialization);
-
-        self.reporting.addImport("reporting", self.reporting);
-        self.reporting.addImport("base", self.base);
-
-        self.parse.addImport("parse", self.parse);
-        self.parse.addImport("base", self.base);
-        self.parse.addImport("compile", self.compile);
-        self.parse.addImport("collections", self.collections);
-        self.parse.addImport("tracy", self.tracy);
-        self.parse.addImport("reporting", self.reporting);
-
-        self.tracy.addImport("builtins", self.builtins);
-
-        self.builtins.addImport("builtins", self.builtins);
-
-        self.can.addImport("base", self.base);
-        self.can.addImport("parse", self.parse);
-        self.can.addImport("collections", self.collections);
-        self.can.addImport("compile", self.compile);
-        self.can.addImport("types", self.types);
-        self.can.addImport("builtins", self.builtins);
-        self.can.addImport("tracy", self.tracy);
-
-        self.check.addImport("check", self.check);
-        self.check.addImport("base", self.base);
-        self.check.addImport("tracy", self.tracy);
-        self.check.addImport("collections", self.collections);
-        self.check.addImport("types", self.types);
-        self.check.addImport("can", self.can);
-        self.check.addImport("compile", self.compile);
-        self.check.addImport("builtins", self.builtins);
-        self.check.addImport("reporting", self.reporting);
+        // Setup module dependencies using our generic helper
+        self.setupModuleDependencies();
 
         return self;
+    }
+
+    fn setupModuleDependencies(self: RocModules) void {
+        const all_modules = [_]ModuleType{
+            .collections,
+            .base,
+            .types,
+            .builtins,
+            .compile,
+            .reporting,
+            .parse,
+            .can,
+            .check,
+            .tracy,
+            .fs,
+            .build_options,
+            .layout,
+            .eval,
+            .ipc,
+            .repl,
+            .fmt,
+        };
+
+        // Setup dependencies for each module
+        for (all_modules) |module_type| {
+            const module = self.getModule(module_type);
+            const dependencies = module_type.getDependencies();
+
+            for (dependencies) |dep_type| {
+                const dep_module = self.getModule(dep_type);
+                module.addImport(@tagName(dep_type), dep_module);
+            }
+        }
     }
 
     pub fn addAll(self: RocModules, step: *Step.Compile) void {
         step.root_module.addImport("base", self.base);
         step.root_module.addImport("collections", self.collections);
         step.root_module.addImport("types", self.types);
-        step.root_module.addImport("serialization", self.serialization);
         step.root_module.addImport("compile", self.compile);
         step.root_module.addImport("reporting", self.reporting);
         step.root_module.addImport("parse", self.parse);
@@ -103,21 +152,94 @@ pub const RocModules = struct {
         step.root_module.addImport("check", self.check);
         step.root_module.addImport("tracy", self.tracy);
         step.root_module.addImport("builtins", self.builtins);
+        step.root_module.addImport("fs", self.fs);
         step.root_module.addImport("build_options", self.build_options);
+        step.root_module.addImport("layout", self.layout);
+        step.root_module.addImport("eval", self.eval);
+        step.root_module.addImport("ipc", self.ipc);
+        step.root_module.addImport("repl", self.repl);
+        step.root_module.addImport("fmt", self.fmt);
     }
 
     pub fn addAllToTest(self: RocModules, step: *Step.Compile) void {
-        step.root_module.addImport("base", self.base);
-        step.root_module.addImport("collections", self.collections);
-        step.root_module.addImport("types", self.types);
-        step.root_module.addImport("serialization", self.serialization);
-        step.root_module.addImport("compile", self.compile);
-        step.root_module.addImport("reporting", self.reporting);
-        step.root_module.addImport("parse", self.parse);
-        step.root_module.addImport("can", self.can);
-        step.root_module.addImport("check", self.check);
-        step.root_module.addImport("tracy", self.tracy);
-        step.root_module.addImport("builtins", self.builtins);
-        step.root_module.addImport("build_options", self.build_options);
+        self.addAll(step);
+    }
+
+    /// Get a module by its type
+    pub fn getModule(self: RocModules, module_type: ModuleType) *Module {
+        return switch (module_type) {
+            .collections => self.collections,
+            .base => self.base,
+            .types => self.types,
+            .builtins => self.builtins,
+            .compile => self.compile,
+            .reporting => self.reporting,
+            .parse => self.parse,
+            .can => self.can,
+            .check => self.check,
+            .tracy => self.tracy,
+            .fs => self.fs,
+            .build_options => self.build_options,
+            .layout => self.layout,
+            .eval => self.eval,
+            .ipc => self.ipc,
+            .repl => self.repl,
+            .fmt => self.fmt,
+        };
+    }
+
+    /// Add dependencies for a specific module type to a compile step
+    pub fn addModuleDependencies(self: RocModules, step: *Step.Compile, module_type: ModuleType) void {
+        const dependencies = module_type.getDependencies();
+        for (dependencies) |dep_type| {
+            const dep_module = self.getModule(dep_type);
+            step.root_module.addImport(@tagName(dep_type), dep_module);
+        }
+    }
+
+    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode) [15]ModuleTest {
+        const test_configs = [_]ModuleType{
+            .collections,
+            .base,
+            .types,
+            .builtins,
+            .compile,
+            .reporting,
+            .parse,
+            .can,
+            .check,
+            .fs,
+            .layout,
+            .eval,
+            .ipc,
+            .repl,
+            .fmt,
+        };
+
+        var tests: [test_configs.len]ModuleTest = undefined;
+
+        inline for (test_configs, 0..) |module_type, i| {
+            const module = self.getModule(module_type);
+            const test_step = b.addTest(.{
+                .name = b.fmt("{s}_test", .{@tagName(module_type)}),
+                .root_source_file = module.root_source_file.?,
+                .target = target,
+                .optimize = optimize,
+                // IPC module needs libc for mmap, munmap, close on POSIX systems
+                .link_libc = (module_type == .ipc),
+            });
+
+            // Add only the necessary dependencies for each module test
+            self.addModuleDependencies(test_step, module_type);
+
+            const run_step = b.addRunArtifact(test_step);
+
+            tests[i] = .{
+                .test_step = test_step,
+                .run_step = run_step,
+            };
+        }
+
+        return tests;
     }
 };

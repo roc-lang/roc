@@ -11,7 +11,7 @@ Command Line Interface. The entrypoint of the compiler that brings together all
 functionality in the Roc toolset and makes it accessible to the user through the
 terminal, e.g. `roc build main.roc`.
 
-- new compiler: [src/main.zig](src/main.zig)
+- new compiler: [src/cli.main.zig](src/cli/main.zig)
 - old compiler: [crates/cli/src/main.rs](crates/cli/src/main.rs)
 
 ## Module
@@ -254,7 +254,7 @@ The AST is created by the [parser](#parsing).
 
 New compiler:
 - See the `Node` struct in [this file](src/parse/AST.zig).
-- You can see examples of ASTs in the .txt files in [this folder](src/snapshots).
+- You can see examples of ASTs in the .txt files in [this folder](test/snapshots).
 
 Old compiler:
 - See `FullAst` [here](crates/compiler/parse/src/ast.rs)
@@ -442,7 +442,7 @@ But the type annotation on take_first says it should be:
 
 Related definitions in the compiler:
 - old compiler: search "pub enum Content" in [types/src/subs.rs](crates/compiler/types/src/subs.rs)
-- new compiler: search "pub const Content" in [compile/CIR.zig](src/compile/CIR.zig)
+- new compiler: search "pub const Content" in [canonicalize/CIR.zig](src/canonicalize/CIR.zig)
 
 ## Flat Type
 
@@ -473,7 +473,7 @@ Canonicalization occurs on a single module (file) in isolation, so the work can 
 If the source code for a [module](#module) has not changed, the CanIR can simply be loaded from disk and used immediately.
 
 Implementation of Canonicalization:
-- new compiler: [canonicalize/Mod.zig](src/canonicalize/Mod.zig), [canonicalize folder](https://github.com/roc-lang/roc/tree/main/src/canonicalize)
+- new compiler: [canonicalize/mod.zig](src/canonicalize/mod.zig), [canonicalize folder](https://github.com/roc-lang/roc/tree/main/src/canonicalize)
 - old compiler: [can folder](crates/compiler/can)
 
 ## Lambda Set

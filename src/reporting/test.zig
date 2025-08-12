@@ -3,18 +3,17 @@
 
 const std = @import("std");
 const testing = std.testing;
-const reporting = @import("reporting");
 
 const Allocator = std.mem.Allocator;
-const Document = reporting.Document;
-const DocumentBuilder = reporting.DocumentBuilder;
-const Annotation = reporting.Annotation;
-const DocumentElement = reporting.DocumentElement;
-const SourceRegion = reporting.SourceRegion;
-const Report = reporting.Report;
-const Severity = reporting.Severity;
-const ReportingConfig = reporting.ReportingConfig;
-const ColorPalette = reporting.ColorPalette;
+const Document = @import("document.zig").Document;
+const DocumentBuilder = @import("document.zig").DocumentBuilder;
+const Annotation = @import("document.zig").Annotation;
+const DocumentElement = @import("document.zig").DocumentElement;
+const SourceRegion = @import("document.zig").SourceRegion;
+const Report = @import("report.zig").Report;
+const Severity = @import("severity.zig").Severity;
+const ReportingConfig = @import("config.zig").ReportingConfig;
+const ColorPalette = @import("style.zig").ColorPalette;
 
 // Test cases for canonicalize error reports
 
@@ -33,7 +32,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     try testing.expect(!r.document.isEmpty());
 
     // Markdown
-    try reporting.renderReportToMarkdown(&r, buffer.writer(), reporting.ReportingConfig.initMarkdown());
+    try reporting.renderReportToMarkdown(&r, buffer.writer(), @import("config.zig").ReportingConfig.initMarkdown());
 
     const expected =
         \\**SYNTAX PROBLEM**
@@ -53,7 +52,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     // HTML
     buffer.clearRetainingCapacity();
 
-    try reporting.renderReportToHtml(&r, buffer.writer(), reporting.ReportingConfig.initHtml());
+    try reporting.renderReportToHtml(&r, buffer.writer(), @import("config.zig").ReportingConfig.initHtml());
 
     const expected_html =
         \\<div class="report error">
@@ -70,7 +69,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     // Language Server Protocol
     buffer.clearRetainingCapacity();
 
-    try reporting.renderReportToLsp(&r, buffer.writer(), reporting.ReportingConfig.initLsp());
+    try reporting.renderReportToLsp(&r, buffer.writer(), @import("config.zig").ReportingConfig.initLsp());
 
     const expected_lsp =
         \\SYNTAX PROBLEM
@@ -85,7 +84,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     // Terminal (TTY)
     buffer.clearRetainingCapacity();
 
-    try reporting.renderReportToTerminal(&r, buffer.writer(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal());
+    try reporting.renderReportToTerminal(&r, buffer.writer(), ColorPalette.ANSI, @import("config.zig").ReportingConfig.initColorTerminal());
 
     // let's forget about comparing with ansi escape codes present... doesn't seem worth the effort.
     // we'll have to QA the old fashioned way.

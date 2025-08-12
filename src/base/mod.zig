@@ -1,4 +1,5 @@
 //! Basic types that are useful throughout the compiler.
+const std = @import("std");
 
 pub const SExprTree = @import("SExprTree.zig");
 pub const Ident = @import("Ident.zig");
@@ -12,10 +13,16 @@ pub const SmallStringInterner = @import("SmallStringInterner.zig");
 pub const safe_memory = @import("safe_memory.zig");
 
 pub const target = @import("target.zig");
-
+pub const DataSpan = @import("DataSpan.zig");
 pub const PackedDataSpan = @import("PackedDataSpan.zig").PackedDataSpan;
 pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
 pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;
+
+pub const CommonEnv = @import("CommonEnv.zig");
+
+test {
+    _ = @import("Ident.zig");
+}
 
 /// Whether a function calls itself.
 pub const Recursive = enum {
@@ -90,20 +97,18 @@ pub const NumLiteral = union(enum) {
     Frac: FracLiteral,
 };
 
-/// Just a small struct to take a span of data in an array
-pub const DataSpan = struct {
-    start: u32,
-    len: u32,
-
-    pub fn empty() DataSpan {
-        return DataSpan{ .start = 0, .len = 0 };
-    }
-
-    pub fn init(start: u32, len: u32) DataSpan {
-        return DataSpan{ .start = start, .len = len };
-    }
-
-    pub fn as(self: DataSpan, comptime T: type) T {
-        return @as(T, .{ .span = self });
-    }
-};
+test "base tests" {
+    std.testing.refAllDecls(@import("CommonEnv.zig"));
+    std.testing.refAllDecls(@import("DataSpan.zig"));
+    std.testing.refAllDecls(@import("Ident.zig"));
+    std.testing.refAllDecls(@import("PackedDataSpan.zig"));
+    std.testing.refAllDecls(@import("parallel.zig"));
+    std.testing.refAllDecls(@import("Region.zig"));
+    std.testing.refAllDecls(@import("RegionInfo.zig"));
+    std.testing.refAllDecls(@import("safe_memory.zig"));
+    std.testing.refAllDecls(@import("Scratch.zig"));
+    std.testing.refAllDecls(@import("SExprTree.zig"));
+    std.testing.refAllDecls(@import("SmallStringInterner.zig"));
+    std.testing.refAllDecls(@import("StringLiteral.zig"));
+    std.testing.refAllDecls(@import("target.zig"));
+}

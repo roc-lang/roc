@@ -2,13 +2,11 @@
 
 const std = @import("std");
 const base = @import("base");
-const parse = @import("parse");
-const compile = @import("compile");
 
-const AST = parse.AST;
+const AST = @import("AST.zig");
 const RegionInfo = base.RegionInfo;
-const ModuleEnv = compile.ModuleEnv;
-const Token = parse.Token;
+const CommonEnv = base.CommonEnv;
+const Token = @import("tokenize.zig").Token;
 
 /// Generate an interactive source range span for the playground
 fn writeSourceRangeSpan(writer: anytype, region: base.Region, source: []const u8, line_starts: []const u32) !void {
@@ -20,7 +18,7 @@ fn writeSourceRangeSpan(writer: anytype, region: base.Region, source: []const u8
 }
 
 /// Generate an HTML representation of the tokens in the AST
-pub fn tokensToHtml(ast: *const AST, env: *const ModuleEnv, writer: anytype) !void {
+pub fn tokensToHtml(ast: *const AST, env: *const CommonEnv, writer: anytype) !void {
     try writer.writeAll("<div class=\"token-list\">");
 
     const token_tags = ast.tokens.tokens.items(.tag);

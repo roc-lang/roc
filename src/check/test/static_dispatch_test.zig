@@ -3,7 +3,6 @@
 const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
-const check_types = @import(".check");
 const types_mod = @import("types");
 
 const testing = std.testing;
