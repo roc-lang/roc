@@ -764,7 +764,7 @@ pub fn main() !void {
         log("copying SOURCE from snapshots to: {s}", .{config.maybe_fuzz_corpus_path.?});
         try std.fs.cwd().makePath(config.maybe_fuzz_corpus_path.?);
     }
-    const snapshots_dir = "src/snapshots";
+    const snapshots_dir = "test/snapshots";
     var timer = std.time.Timer.start() catch unreachable;
 
     // Stage 1: Collect work items
@@ -813,7 +813,7 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
         .output_section_command = .check,
         .disable_updates = true,
     };
-    const snapshots_dir = "src/snapshots";
+    const snapshots_dir = "test/snapshots";
     var work_list = WorkList.init(gpa);
     defer {
         for (work_list.items) |work_item| {

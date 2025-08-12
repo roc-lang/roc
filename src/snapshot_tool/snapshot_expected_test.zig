@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const testing = std.testing;
-const snapshot_mod = @import("snapshot.zig");
+const snapshot_mod = @import("main.zig");
 
 test "snapshot validation" {
     const allocator = testing.allocator;

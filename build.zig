@@ -75,7 +75,7 @@ pub fn build(b: *std.Build) void {
     // Add snapshot tool
     const snapshot_exe = b.addExecutable(.{
         .name = "snapshot",
-        .root_source_file = b.path("src/snapshot.zig"),
+        .root_source_file = b.path("src/snapshot_tool/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
