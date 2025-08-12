@@ -270,37 +270,6 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             return true;
         }
 
-        // TODO FIXME
-        // /// Append this SortedArrayBuilder to an iovec writer for serialization
-        // pub fn appendToIovecs(self: *const Self, writer: *IovecWriter) !usize {
-
-        //     // Must be sorted before serialization
-        //     if (!self.sorted) {
-        //         @panic("SortedArrayBuilder must be sorted before serialization");
-        //     }
-
-        //     // Create a mutable copy of self that we can modify
-        //     var builder_copy = self.*;
-
-        //     // Create a buffer for the final serialized struct
-        //     const builder_copy_buffer = try writer.allocator.alloc(u8, @sizeOf(Self));
-
-        //     // Track this allocation so it gets freed when writer is deinitialized
-        //     try writer.owned_buffers.append(builder_copy_buffer);
-
-        //     // Copy the builder to the buffer
-        //     @memcpy(builder_copy_buffer, @as([*]const u8, @ptrCast(&builder_copy)));
-
-        //     // Relocate the buffer to be relative to the writer's base
-        //     const buffer_ptr = @as(*Self, @ptrCast(builder_copy_buffer.ptr));
-        //     buffer_ptr.relocate(@as(isize, @intCast(@intFromPtr(writer.base_ptr)));
-
-        //     // Append the buffer to the writer
-        //     try writer.append(buffer_copy_buffer);
-
-        //     return @sizeOf(Self);
-        // }
-
         /// Serialized representation of SortedArrayBuilder
         pub const Serialized = struct {
             entries_offset: i64,
@@ -360,40 +329,6 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         };
     };
 }
-
-// TODO FIXME
-// test "SortedArrayBuilder basic operations" {
-//     const testing = std.testing;
-//     const allocator = testing.allocator;
-
-//     var builder = SortedArrayBuilder([]const u8, u32).init();
-//     defer builder.deinit(allocator);
-
-//     // Add items in random order
-//     try builder.put(allocator, "zebra", 100);
-//     try builder.put(allocator, "apple", 50);
-//     try builder.put(allocator, "banana", 150);
-//     try builder.put(allocator, "cherry", 30);
-
-//     // Test count
-//     try testing.expectEqual(@as(usize, 4), builder.count());
-
-//     // Test get (forces sorting)
-//     try testing.expectEqual(@as(?u32, 50), builder.get(allocator, "apple"));
-//     try testing.expectEqual(@as(?u32, 150), builder.get(allocator, "banana"));
-//     try testing.expectEqual(@as(?u32, 30), builder.get(allocator, "cherry"));
-//     try testing.expectEqual(@as(?u32, 100), builder.get(allocator, "zebra"));
-//     try testing.expectEqual(@as(?u32, null), builder.get(allocator, "missing"));
-
-//     // Test iovec serialization
-//     var writer = IovecWriter.init(allocator);
-//     defer writer.deinit();
-
-//     _ = try builder.appendToIovecs(&writer);
-
-//     // Verify we have some iovecs (basic smoke test)
-//     try testing.expect(writer.iovecs.items.len > 0);
-// }
 
 test "SortedArrayBuilder maintains sorted order when added in order" {
     const testing = std.testing;
