@@ -442,7 +442,7 @@ But the type annotation on take_first says it should be:
 
 Related definitions in the compiler:
 - old compiler: search "pub enum Content" in [types/src/subs.rs](crates/compiler/types/src/subs.rs)
-- new compiler: search "pub const Content" in [compile/CIR.zig](src/compile/CIR.zig)
+- new compiler: search "pub const Content" in [canonicalize/CIR.zig](src/canonicalize/CIR.zig)
 
 ## Flat Type
 
