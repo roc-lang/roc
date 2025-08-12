@@ -225,6 +225,8 @@ pub const RocModules = struct {
                 .root_source_file = module.root_source_file.?,
                 .target = target,
                 .optimize = optimize,
+                // IPC module needs libc for mmap, munmap, close on POSIX systems
+                .link_libc = (module_type == .ipc),
             });
 
             // Add only the necessary dependencies for each module test
