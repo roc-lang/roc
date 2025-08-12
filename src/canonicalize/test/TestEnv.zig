@@ -18,12 +18,9 @@ pub const TestEnv = @This();
 pub fn init(source: []const u8) !TestEnv {
     const gpa = std.testing.allocator;
 
-    // Allocate our CommonEnv, ModuleEnv, AST, and Can on the heap
+    // Allocate our ModuleEnv, AST, and Can on the heap
     // so we can keep them around for testing purposes...
     // this is an unusual setup, but helps us with testing
-    const common_env: *CommonEnv = try gpa.create(base.CommonEnv);
-    errdefer gpa.destroy(common_env);
-
     const module_env: *ModuleEnv = try gpa.create(ModuleEnv);
     errdefer gpa.destroy(module_env);
 
@@ -67,11 +64,9 @@ pub fn deinit(self: *TestEnv) void {
     self.gpa.destroy(self.parse_ast);
 
     // ModuleEnv.deinit calls self.common.deinit() to clean up CommonEnv's internals
-    // But we still need to free the CommonEnv allocation itself since we created it
-    const common_env = self.module_env.common;
+    // Since common is now a value field, we don't need to free it separately
     self.module_env.deinit();
     self.gpa.destroy(self.module_env);
-    self.gpa.destroy(common_env);
 }
 
 pub fn canonicalizeExpr(self: *TestEnv) !?Can.CanonicalizedExpr {

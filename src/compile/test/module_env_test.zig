@@ -70,7 +70,7 @@ test "ModuleEnv.Serialized roundtrip" {
     const env = @as(*ModuleEnv, @ptrCast(@alignCast(deserialized_ptr)));
     env.* = ModuleEnv{
         .gpa = gpa,
-        .common = deserialized_ptr.common.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
+        .common = deserialized_ptr.common.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source).*,
         .types = deserialized_ptr.types.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
         .all_defs = deserialized_ptr.all_defs,
         .all_statements = deserialized_ptr.all_statements,
