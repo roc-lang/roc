@@ -8898,13 +8898,3 @@ const min_i128_negated: u128 = 170141183460469231731687303715884105728;
 // //         }
 // //     }
 // // }
-
-test "canonicalize tests" {
-    std.testing.refAllDecls(@import("Scope.zig"));
-    std.testing.refAllDecls(@import("test/bool_test.zig"));
-    std.testing.refAllDecls(@import("test/exposed_shadowing_test.zig"));
-    std.testing.refAllDecls(@import("test/frac_test.zig"));
-    std.testing.refAllDecls(@import("test/import_validation_test.zig"));
-    std.testing.refAllDecls(@import("test/int_test.zig"));
-    std.testing.refAllDecls(@import("test/node_store_test.zig"));
-}

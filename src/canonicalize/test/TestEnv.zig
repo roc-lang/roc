@@ -33,15 +33,11 @@ pub fn init(source: []const u8) !TestEnv {
     const can = try gpa.create(Can);
     errdefer gpa.destroy(can);
 
-    // Initialize the CommonEnv with the provided source
-    common_env.* = try base.CommonEnv.init(gpa, source);
-    errdefer common_env.deinit(gpa);
-
     // Initialize the ModuleEnv with the CommonEnv
-    module_env.* = try ModuleEnv.init(gpa, common_env);
+    module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
-    parse_ast.* = try parse.parseExpr(module_env.common, gpa);
+    parse_ast.* = try parse.parseExpr(&module_env.common, gpa);
     errdefer parse_ast.deinit(gpa);
 
     // Phase 4: AST Structure Validation

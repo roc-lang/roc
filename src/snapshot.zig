@@ -9,17 +9,20 @@
 const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
-const compile = @import("compile");
+const can = @import("can");
 const types = @import("types");
 const reporting = @import("reporting");
-const Can = @import("can").Can;
-const Check = @import("check").Check;
+const check = @import("check");
 const builtins = @import("builtins");
+const compile = @import("compile");
 
-const cache = @import("cache");
 const fmt = @import("fmt.zig");
 const repl = @import("repl/eval.zig");
 
+const CommonEnv = base.CommonEnv;
+const Check = check.Check;
+const CIR = can.CIR;
+const Can = can.Can;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
 const RocDealloc = builtins.host_abi.RocDealloc;
@@ -27,12 +30,13 @@ const RocRealloc = builtins.host_abi.RocRealloc;
 const RocAlloc = builtins.host_abi.RocAlloc;
 const RocOps = builtins.host_abi.RocOps;
 const RocDbg = builtins.host_abi.RocDbg;
-const ModuleEnv = compile.ModuleEnv;
+const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
+const CacheModule = compile.CacheModule;
 const AST = parse.AST;
 const Report = reporting.Report;
-const types_problem_mod = Check.problem;
+const types_problem_mod = check.problem;
 const tokenize = parse.tokenize;
 const parallel = base.parallel;
 
@@ -464,7 +468,7 @@ fn generateAllReports(
 
     // Generate parse reports
     for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(module_env.*, diagnostic, allocator, snapshot_path) catch |err| {
+        const report = parse_ast.parseDiagnosticToReport(&module_env.common, diagnostic, allocator, snapshot_path) catch |err| {
             std.debug.panic("Failed to create parse report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
         };
         try reports.append(report);
@@ -1048,13 +1052,13 @@ fn processSnapshotContent(
 
     // Parse the source code based on node type
     var parse_ast: AST = switch (content.meta.node_type) {
-        .file => try parse.parse(&module_env),
-        .header => try parse.parseHeader(&module_env),
-        .expr => try parse.parseExpr(&module_env),
-        .statement => try parse.parseStatement(&module_env),
-        .package => try parse.parse(&module_env),
-        .platform => try parse.parse(&module_env),
-        .app => try parse.parse(&module_env),
+        .file => try parse.parse(&module_env.common, allocator),
+        .header => try parse.parseHeader(&module_env.common, allocator),
+        .expr => try parse.parseExpr(&module_env.common, allocator),
+        .statement => try parse.parseStatement(&module_env.common, allocator),
+        .package => try parse.parse(&module_env.common, allocator),
+        .platform => try parse.parse(&module_env.common, allocator),
+        .app => try parse.parse(&module_env.common, allocator),
         .repl => unreachable, // Handled above
     };
     defer parse_ast.deinit(allocator);
@@ -1070,30 +1074,30 @@ fn processSnapshotContent(
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
     try can_ir.initCIRFields(allocator, module_name);
 
-    var can = try Can.init(can_ir, &parse_ast, null);
-    defer can.deinit();
+    var czer = try Can.init(can_ir, &parse_ast, null);
+    defer czer.deinit();
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
 
     switch (content.meta.node_type) {
-        .file => try can.canonicalizeFile(),
+        .file => try czer.canonicalizeFile(),
         .header => {
             // TODO: implement canonicalize_header when available
         },
         .expr => {
             const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-            maybe_expr_idx = try can.canonicalizeExpr(expr_idx);
+            maybe_expr_idx = try czer.canonicalizeExpr(expr_idx);
         },
         .statement => {
             // Manually track scratch statements because we aren't using the file entrypoint
             const stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
             const scratch_statements_start = can_ir.store.scratch_statements.top();
-            _ = try can.canonicalizeStatement(stmt_idx);
+            _ = try czer.canonicalizeStatement(stmt_idx);
             can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
         },
-        .package => try can.canonicalizeFile(),
-        .platform => try can.canonicalizeFile(),
-        .app => try can.canonicalizeFile(),
+        .package => try czer.canonicalizeFile(),
+        .platform => try czer.canonicalizeFile(),
+        .app => try czer.canonicalizeFile(),
         .repl => unreachable, // Handled above
     }
 
@@ -1136,11 +1140,11 @@ fn processSnapshotContent(
         defer cache_arena.deinit();
 
         // Create and serialize MmapCache
-        const cache_data = try cache.CacheModule.create(allocator, cache_arena.allocator(), &module_env, can_ir, 0, 0);
+        const cache_data = try CacheModule.create(allocator, cache_arena.allocator(), &module_env, can_ir, 0, 0);
         defer allocator.free(cache_data);
 
         // Deserialize back
-        var loaded_cache = try cache.CacheModule.fromMappedMemory(cache_data);
+        var loaded_cache = try CacheModule.fromMappedMemory(cache_data);
 
         // Restore ModuleEnv
         const restored_env = try loaded_cache.restore(allocator, module_name, content.source);
@@ -1193,7 +1197,7 @@ fn processSnapshotContent(
     success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
     try generateProblemsSection(&output, &generated_reports);
     try generateTokensSection(&output, &parse_ast, &content, &module_env);
-    try generateParseSection(&output, &content, &parse_ast, &module_env);
+    try generateParseSection(&output, &content, &parse_ast, &module_env.common);
     try generateFormattedSection(&output, &content, &parse_ast);
     try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
     try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
@@ -1947,7 +1951,7 @@ fn source_contains_newline_in_range(source: []const u8, start: usize, end: usize
 }
 
 /// Generate PARSE2 section using SExprTree for both markdown and HTML
-fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *ModuleEnv) !void {
+fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *CommonEnv) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
 
@@ -1955,31 +1959,31 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
     switch (content.meta.node_type) {
         .file => {
             const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(env, parse_ast, &tree);
+            try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .header => {
             const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
-            try header.pushToSExprTree(env, parse_ast, &tree);
+            try header.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .expr => {
             const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
-            try expr.pushToSExprTree(env, parse_ast, &tree);
+            try expr.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .statement => {
             const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
-            try stmt.pushToSExprTree(env, parse_ast, &tree);
+            try stmt.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .package => {
             const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(env, parse_ast, &tree);
+            try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .platform => {
             const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(env, parse_ast, &tree);
+            try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .app => {
             const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(env, parse_ast, &tree);
+            try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .repl => {
             // REPL doesn't use parse trees
@@ -2690,7 +2694,7 @@ fn generateReplCanonicalizeSection(output: *DualOutput, content: *const Content)
         defer module_env.deinit();
 
         // Parse the input as an expression
-        var parse_ast = parse.parseExpr(&module_env) catch |err| {
+        var parse_ast = parse.parseExpr(&module_env.common, output.gpa) catch |err| {
             try output.md_writer.print("Parse error: {s}\n", .{@errorName(err)});
             continue;
         };
@@ -2698,15 +2702,15 @@ fn generateReplCanonicalizeSection(output: *DualOutput, content: *const Content)
 
         // Initialize canonicalization
         try module_env.initCIRFields(output.gpa, "repl");
-        var can = Can.init(&module_env, &parse_ast, null) catch |err| {
+        var czer = Can.init(&module_env, &parse_ast, null) catch |err| {
             try output.md_writer.print("Can init error: {s}\n", .{@errorName(err)});
             continue;
         };
-        defer can.deinit();
+        defer czer.deinit();
 
         // Canonicalize the expression
         const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-        const maybe_canonical_expr = can.canonicalizeExpr(expr_idx) catch |err| {
+        const maybe_canonical_expr = czer.canonicalizeExpr(expr_idx) catch |err| {
             try output.md_writer.print("Canonicalize error: {s}\n", .{@errorName(err)});
             continue;
         };
@@ -2784,7 +2788,7 @@ fn generateReplTypesSection(output: *DualOutput, content: *const Content) !void 
         defer module_env.deinit();
 
         // Parse the input as an expression
-        var parse_ast = parse.parseExpr(&module_env) catch |err| {
+        var parse_ast = parse.parseExpr(&module_env.common, output.gpa) catch |err| {
             try output.md_writer.print("Parse error: {s}\n", .{@errorName(err)});
             continue;
         };
@@ -2792,15 +2796,15 @@ fn generateReplTypesSection(output: *DualOutput, content: *const Content) !void 
 
         // Initialize canonicalization
         try module_env.initCIRFields(output.gpa, "repl");
-        var can = Can.init(&module_env, &parse_ast, null) catch |err| {
+        var czer = Can.init(&module_env, &parse_ast, null) catch |err| {
             try output.md_writer.print("Can init error: {s}\n", .{@errorName(err)});
             continue;
         };
-        defer can.deinit();
+        defer czer.deinit();
 
         // Canonicalize the expression
         const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-        const maybe_canonical_expr = can.canonicalizeExpr(expr_idx) catch |err| {
+        const maybe_canonical_expr = czer.canonicalizeExpr(expr_idx) catch |err| {
             try output.md_writer.print("Canonicalize error: {s}\n", .{@errorName(err)});
             continue;
         };

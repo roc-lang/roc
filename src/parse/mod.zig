@@ -97,8 +97,8 @@ pub fn parseHeader(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST {
     return try runParse(env, gpa, parseHeaderAndReturnIdx);
 }
 
-fn parseStatementAndReturnIdx(parser: *Parser, gpa: std.mem.Allocator) Parser.Error!u32 {
-    const maybe_statement_idx = try parser.parseStmt(gpa);
+fn parseStatementAndReturnIdx(parser: *Parser) Parser.Error!u32 {
+    const maybe_statement_idx = try parser.parseStmt();
     if (maybe_statement_idx) |idx| {
         return @intFromEnum(idx);
     }

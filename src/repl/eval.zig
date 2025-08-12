@@ -5,7 +5,8 @@ const base = @import("base");
 const compile = @import("compile");
 const parse = @import("parse");
 const types = @import("types");
-const Can = @import("can").Can;
+const can = @import("can");
+const Can = can.Can;
 const Check = @import("check").Check;
 const builtins = @import("builtins");
 
@@ -17,7 +18,7 @@ const TestEnv = @import("repl_test_env.zig").TestEnv;
 
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
-const ModuleEnv = compile.ModuleEnv;
+const ModuleEnv = can.ModuleEnv;
 const RocDec = builtins.dec.RocDec;
 const RocOps = builtins.host_abi.RocOps;
 const types_store = types.store;
@@ -191,7 +192,7 @@ pub const Repl = struct {
         defer module_env.deinit();
 
         // Try statement parsing
-        if (parse.parseStatement(&module_env)) |ast_const| {
+        if (parse.parseStatement(&module_env.common, self.allocator)) |ast_const| {
             var ast = ast_const;
             defer ast.deinit(self.allocator);
 
@@ -220,7 +221,7 @@ pub const Repl = struct {
         } else |_| {}
 
         // Try expression parsing
-        if (parse.parseExpr(&module_env)) |ast_const| {
+        if (parse.parseExpr(&module_env.common, self.allocator)) |ast_const| {
             var ast = ast_const;
             defer ast.deinit(self.allocator);
             if (ast.root_node_idx != 0) {
@@ -272,7 +273,7 @@ pub const Repl = struct {
         defer module_env.deinit();
 
         // Parse as expression
-        var parse_ast = parse.parseExpr(&module_env) catch |err| {
+        var parse_ast = parse.parseExpr(&module_env.common, self.allocator) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
         };
         defer parse_ast.deinit(self.allocator);
@@ -286,14 +287,14 @@ pub const Repl = struct {
 
         // Create czer
         //
-        var can = Can.init(cir, &parse_ast, null) catch |err| {
+        var czer = Can.init(cir, &parse_ast, null) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
         };
-        defer can.deinit();
+        defer czer.deinit();
 
         // Canonicalize the expression
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-        const canonical_expr_idx = can.canonicalizeExpr(expr_idx) catch |err| {
+        const canonical_expr_idx = czer.canonicalizeExpr(expr_idx) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize expr error: {}", .{err});
         } orelse {
             return try self.allocator.dupe(u8, "Failed to canonicalize expression");
@@ -586,11 +587,11 @@ test "Repl - minimal interpreter integration" {
     try cir.initCIRFields(gpa, "test");
 
     // Step 4: Canonicalize
-    var can = try Can.init(cir, &parse_ast, null);
-    defer can.deinit();
+    var czer = try Can.init(cir, &parse_ast, null);
+    defer czer.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
+    const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx) orelse {
         return error.CanonicalizeError;
     };
 

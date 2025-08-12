@@ -31,8 +31,7 @@ const Self = @This();
 
 gpa: std.mem.Allocator,
 
-/// IMPORTANT takes ownership of the common environment... will deinit using the allocator
-common: *CommonEnv,
+common: CommonEnv,
 types: TypeStore,
 
 // ===== Module compilation fields =====
@@ -73,12 +72,12 @@ pub fn initModuleEnvFields(self: *Self, gpa: std.mem.Allocator, module_name: []c
 }
 
 /// Initialize the module environment.
-pub fn init(gpa: std.mem.Allocator, common_env: *CommonEnv) std.mem.Allocator.Error!Self {
+pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!Self {
     // TODO: maybe wire in smarter default based on the initial input text size.
 
     return Self{
         .gpa = gpa,
-        .common = common_env,
+        .common = try CommonEnv.init(gpa, source),
         .types = try TypeStore.initCapacity(gpa, 2048, 512),
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
@@ -1019,7 +1018,7 @@ pub fn serialize(
     // Then serialize the sub-structures and update the struct
     offset_self.* = .{
         .gpa = undefined, // Will be set when deserializing
-        .common = @constCast(try self.common.serialize(allocator, writer)),
+        .common = (try self.common.serialize(allocator, writer)).*,
         .types = (try self.types.serialize(allocator, writer)).*,
         .all_defs = self.all_defs,
         .all_statements = self.all_statements,
@@ -1080,7 +1079,7 @@ pub const Serialized = struct {
         // Set fields that will be provided during deserialization to zeros
         self.gpa = undefined; // Will be set to zeros below
 
-        try self.common.serialize(env.common, allocator, writer);
+        try self.common.serialize(&env.common, allocator, writer);
         try self.types.serialize(&env.types, allocator, writer);
 
         // Copy simple values directly
@@ -1114,12 +1113,9 @@ pub const Serialized = struct {
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
-        // Deserialize CommonEnv into the right location
-        const common_ptr = self.common.deserialize(offset, source);
-        
         env.* = Self{
             .gpa = gpa,
-            .common = common_ptr,
+            .common = self.common.deserialize(offset, source).*,
             .types = self.types.deserialize(offset).*,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
