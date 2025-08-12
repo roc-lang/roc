@@ -159,7 +159,7 @@ pub fn build(b: *std.Build) void {
     });
     roc_modules.addAll(snapshot_test);
     add_tracy(b, roc_modules.build_options, snapshot_test, target, false, flag_enable_tracy);
-    
+
     const run_snapshot_test = b.addRunArtifact(snapshot_test);
     test_step.dependOn(&run_snapshot_test.step);
 
@@ -173,7 +173,7 @@ pub fn build(b: *std.Build) void {
     });
     roc_modules.addAll(cli_test);
     add_tracy(b, roc_modules.build_options, cli_test, target, false, flag_enable_tracy);
-    
+
     const run_cli_test = b.addRunArtifact(cli_test);
     test_step.dependOn(&run_cli_test.step);
 
