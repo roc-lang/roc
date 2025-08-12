@@ -419,7 +419,10 @@ pub const BuildEnv = struct {
         // Clear back-pointer
         self.global_queue.build_env = null;
 
-        // Deinit roots (just the array, not the items - they're owned by packages)
+        // Deinit roots and free the duplicated strings
+        for (self.workspace_roots.items) |root| {
+            self.gpa.free(root);
+        }
         self.workspace_roots.deinit();
 
         self.sink.deinit();
@@ -454,9 +457,10 @@ pub const BuildEnv = struct {
         const root_abs = try self.makeAbsolute(root_file);
         defer self.gpa.free(root_abs);
         const root_dir = if (std.fs.path.dirname(root_abs)) |d| try std.fs.path.resolve(self.gpa, &.{d}) else try self.gpa.dupe(u8, ".");
+        defer self.gpa.free(root_dir);
         // NOTE: Do not sandbox the app header; the app may reference arbitrary paths.
         // We still record the root_dir for convenience in later checks.
-        try self.workspace_roots.append(root_dir);
+        try self.workspace_roots.append(try self.gpa.dupe(u8, root_dir));
 
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
@@ -719,7 +723,9 @@ pub const BuildEnv = struct {
     fn parseHeaderDeps(self: *BuildEnv, file_path: []const u8) !HeaderInfo {
         // Read source; ModuleEnv takes ownership of source
         const file_abs = try std.fs.path.resolve(self.gpa, &.{file_path});
+        defer self.gpa.free(file_abs);
         const src = try std.fs.cwd().readFileAlloc(self.gpa, file_abs, std.math.maxInt(usize));
+        defer self.gpa.free(src);
 
         var env = try ModuleEnv.init(self.gpa, src);
         defer env.deinit();
