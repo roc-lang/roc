@@ -272,7 +272,7 @@ fn addMainExe(
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = b.path("src/cli/main.zig"),
         .target = target,
         .optimize = optimize,
         .strip = strip,
@@ -334,7 +334,7 @@ fn addMainExe(
     // Create shim static library at build time
     const shim_lib = b.addStaticLibrary(.{
         .name = "roc_shim",
-        .root_source_file = b.path("src/roc_shim.zig"),
+        .root_source_file = b.path("src/interpreter_shim/main.zig"),
         .target = target,
         .optimize = optimize,
         .strip = strip,
@@ -357,7 +357,7 @@ fn addMainExe(
     // and zig doesn't permit embedding files from directories outside the source tree.
     const copy_shim = b.addUpdateSourceFiles();
     const shim_filename = if (target.result.os.tag == .windows) "roc_shim.lib" else "libroc_shim.a";
-    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src", shim_filename }));
+    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", shim_filename }));
     exe.step.dependOn(&copy_shim.step);
 
     const config = b.addOptions();
@@ -427,7 +427,7 @@ fn add_tracy(
 
         base.root_module.addIncludePath(.{ .cwd_relative = tracy_path });
         base.root_module.addCSourceFile(.{ .file = .{ .cwd_relative = client_cpp }, .flags = tracy_c_flags });
-        base.root_module.addCSourceFile(.{ .file = .{ .cwd_relative = "src/tracy-shutdown.cpp" }, .flags = tracy_c_flags });
+        base.root_module.addCSourceFile(.{ .file = .{ .cwd_relative = "src/build/tracy-shutdown.cpp" }, .flags = tracy_c_flags });
         if (!links_llvm) {
             base.root_module.linkSystemLibrary("c++", .{ .use_pkg_config = .no });
         }
@@ -556,7 +556,7 @@ fn addStaticLlvmOptionsToModule(mod: *std.Build.Module) !void {
 }
 
 const cpp_sources = [_][]const u8{
-    "src/zig_llvm.cpp",
+    "src/build/zig_llvm.cpp",
 };
 
 const exe_cflags = [_][]const u8{

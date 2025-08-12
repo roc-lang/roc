@@ -38,8 +38,9 @@
 
 const std = @import("std");
 const compile = @import("compile");
-const BuildEnv = compile.BuildEnv;
 const reporting = @import("reporting");
+
+const BuildEnv = compile.BuildEnv;
 
 /// Hook for AFL++ to initialize the fuzz test environment.
 pub export fn zig_fuzz_init() void {}
