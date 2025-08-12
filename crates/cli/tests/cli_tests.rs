@@ -394,7 +394,7 @@ mod cli_tests {
 
         #[test]
         #[cfg_attr(windows, ignore)]
-        // https://github.com/roc-lang/roc/issues/8111
+        // https://github.com/roc-lang/roc/issues/5514
         fn issue5514() {
             let cli_check = ExecCli::new(
                 CMD_CHECK,
