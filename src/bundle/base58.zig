@@ -13,11 +13,10 @@ const hash_bytes = 32;
 /// - So we need ceil(log58(MAX_HASH + 1)) characters
 /// - Which is ceil(log(MAX_HASH + 1) / log(58))
 /// - Since MAX_HASH is 2^256 - 1, we need ceil(256 * log(2) / log(58))
-/// - log(2) / log(58) ≈ 0.17329
-/// - 256 * 0.17329 ≈ 44.36
+/// - 256 * log(2) / log(58) ≈ 43.7
 ///
-/// So we need 45 characters.
-pub const base58_hash_bytes = 45;
+/// So we need 44 characters.
+pub const base58_hash_bytes = 44;
 
 /// Encode the given slice of 32 bytes as a base58 string and write it to the destination.
 /// Returns a slice of the destination containing the encoded string (1-45 characters).
