@@ -86,7 +86,7 @@ pub fn build(b: *std.Build) void {
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
-        .root_source_file = b.path("src/playground/main.zig"),
+        .root_source_file = b.path("src/playground_wasm/main.zig"),
         .target = b.resolveTargetQuery(.{
             .cpu_arch = .wasm32,
             .os_tag = .freestanding,
