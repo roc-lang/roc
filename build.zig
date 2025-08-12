@@ -222,7 +222,7 @@ fn add_fuzz_target(
 ) void {
     // We always include the repro scripts (no dependencies).
     // We only include the fuzzing scripts if `-Dfuzz` is set.
-    const root_source_file = b.path(b.fmt("src/fuzz-{s}.zig", .{name}));
+    const root_source_file = b.path(b.fmt("test/fuzzing/fuzz-{s}.zig", .{name}));
     const fuzz_obj = b.addObject(.{
         .name = b.fmt("{s}_obj", .{name}),
         .root_source_file = root_source_file,
@@ -238,7 +238,7 @@ fn add_fuzz_target(
     const repro_step = b.step(name_repro, b.fmt("run fuzz reproduction for {s}", .{name}));
     const repro_exe = b.addExecutable(.{
         .name = name_repro,
-        .root_source_file = b.path("src/fuzz-repro.zig"),
+        .root_source_file = b.path("test/fuzzing/fuzz-repro.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
