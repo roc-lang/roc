@@ -110,9 +110,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Only build playground integration tests in Debug mode to avoid Zig compiler issues
-    // with the large dependency tree in release builds on some platforms
-    const playground_test_install = if (optimize == .Debug) blk: {
+    // Build playground integration tests - now enabled for all optimization modes
+    const playground_test_install = blk: {
         const playground_integration_test_exe = b.addExecutable(.{
             .name = "playground_integration_test",
             .root_source_file = b.path("test/playground-integration/main.zig"),
@@ -136,10 +135,6 @@ pub fn build(b: *std.Build) void {
         playground_test_step.dependOn(&run_playground_test.step);
 
         break :blk install;
-    } else blk: {
-        // In release builds, playground tests are disabled due to compiler limitations
-        // Create a no-op install step that does nothing
-        break :blk null;
     };
 
     // Create and add module tests
@@ -178,7 +173,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_cli_test.step);
 
     b.default_step.dependOn(playground_step);
-    if (playground_test_install) |install| {
+    {
+        const install = playground_test_install;
         b.default_step.dependOn(&install.step);
     }
 

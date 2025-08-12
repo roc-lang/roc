@@ -757,10 +757,6 @@ fn runTests(arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []cons
         }
     }
 
-    if (stats.failed > 0) {
-        return error.TestsFailed;
-    }
-
     return stats;
 }
 
@@ -840,6 +836,7 @@ pub fn main() !void {
 
     // Functional Test
     var happy_path_steps = try allocator.alloc(MessageStep, 7);
+    // Check that INIT returns the compiler version (both test and WASM are built with same options)
     happy_path_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS", .expected_message_contains = build_options.compiler_version };
     const happy_path_code = try TestData.happyPathRocCode(allocator);
     happy_path_steps[1] = .{
@@ -984,4 +981,9 @@ pub fn main() !void {
 
     logDebug("\nAll Playground Integration Tests Completed!\n", .{});
     logDebug("Final Results: {}/{} passed ({d:0.}%)\n", .{ stats.passed, stats.total, stats.successRate() });
+    
+    // Exit with error if any tests failed
+    if (stats.failed > 0) {
+        return error.TestsFailed;
+    }
 }
