@@ -1105,121 +1105,111 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
 }
 
-// TODO: Fix serialization issues
-// test "Store empty CompactWriter roundtrip" {
-//     const gpa = std.testing.allocator;
-//     const CompactWriter = collections.CompactWriter;
+test "Store empty CompactWriter roundtrip" {
+    const gpa = std.testing.allocator;
+    const CompactWriter = collections.CompactWriter;
 
-//     // Create an empty Store
-//     var original = try Store.init(gpa);
-//     defer original.deinit();
+    // Create an empty Store
+    var original = try Store.init(gpa);
+    defer original.deinit();
 
-//     // Create a temp file
-//     var tmp_dir = std.testing.tmpDir(.{});
-//     defer tmp_dir.cleanup();
+    // Create a temp file
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
 
-//     const file = try tmp_dir.dir.createFile("test_empty_store.dat", .{ .read = true });
-//     defer file.close();
+    const file = try tmp_dir.dir.createFile("test_empty_store.dat", .{ .read = true });
+    defer file.close();
 
-//     // Serialize using CompactWriter
-//     var writer = CompactWriter{
-//         .iovecs = .{},
-//         .total_bytes = 0,
-//         .allocated_memory = .{},
-//     };
-//     defer writer.deinit(gpa);
+    // Serialize using CompactWriter
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
 
-//     _ = try original.serialize(gpa, &writer);
+    _ = try original.serialize(gpa, &writer);
 
-//     // Write to file
-//     try writer.writeGather(gpa, file);
+    // Write to file
+    try writer.writeGather(gpa, file);
 
-//     // Read back
-//     try file.seekTo(0);
-//     const file_size = try file.getEndPos();
-//     const buffer = try gpa.alignedAlloc(u8, 16, file_size);
-//     defer gpa.free(buffer);
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
 
-//     _ = try file.read(buffer);
+    _ = try file.read(buffer);
 
-//     // Cast and relocate
-//     const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Store))));
-//     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    // Cast and relocate
+    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
-//     // Verify empty
-//     try std.testing.expectEqual(@as(usize, 0), deserialized.len());
-// }
+    // Verify empty
+    try std.testing.expectEqual(@as(usize, 0), deserialized.len());
+}
 
-// TODO FIXME
-// test "Store basic CompactWriter roundtrip" {
-//     const gpa = std.testing.allocator;
-//     const CompactWriter = collections.CompactWriter;
+test "Store basic CompactWriter roundtrip" {
+    const gpa = std.testing.allocator;
+    const CompactWriter = collections.CompactWriter;
 
-//     // Create original Store and add some types
-//     var original = try Store.init(gpa);
-//     defer original.deinit();
+    // Create original Store and add some types
+    var original = try Store.init(gpa);
+    defer original.deinit();
 
-//     // Create some type variables
-//     const flex_var = try original.fresh();
-//     const rigid_var = try original.freshFromContent(Content{ .rigid_var = @bitCast(@as(u32, 42)) });
+    // Create some type variables
+    const flex_var = try original.fresh();
+    const rigid_var = try original.freshFromContent(Content{ .rigid_var = @bitCast(@as(u32, 42)) });
 
-//     // Create a redirect
-//     const redirect_var = try original.freshRedirect(flex_var);
+    // Create a redirect
+    const redirect_var = try original.freshRedirect(flex_var);
 
-//     // Verify original values
-//     const flex_resolved = original.resolveVar(flex_var);
-//     try std.testing.expectEqual(Content{ .flex_var = null }, flex_resolved.desc.content);
+    // Verify original values
+    const flex_resolved = original.resolveVar(flex_var);
+    try std.testing.expectEqual(Content{ .flex_var = null }, flex_resolved.desc.content);
 
-//     const rigid_resolved = original.resolveVar(rigid_var);
-//     try std.testing.expectEqual(Content{ .rigid_var = @bitCast(@as(u32, 42)) }, rigid_resolved.desc.content);
+    const rigid_resolved = original.resolveVar(rigid_var);
+    try std.testing.expectEqual(Content{ .rigid_var = @bitCast(@as(u32, 42)) }, rigid_resolved.desc.content);
 
-//     const redirect_resolved = original.resolveVar(redirect_var);
-//     try std.testing.expectEqual(flex_resolved.desc_idx, redirect_resolved.desc_idx);
+    const redirect_resolved = original.resolveVar(redirect_var);
+    try std.testing.expectEqual(flex_resolved.desc_idx, redirect_resolved.desc_idx);
 
-//     // Create a temp file
-//     var tmp_dir = std.testing.tmpDir(.{});
-//     defer tmp_dir.cleanup();
+    // Create a temp file
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
 
-//     const file = try tmp_dir.dir.createFile("test_basic_store.dat", .{ .read = true });
-//     defer file.close();
+    const file = try tmp_dir.dir.createFile("test_basic_store.dat", .{ .read = true });
+    defer file.close();
 
-//     // Serialize using CompactWriter
-//     var writer = CompactWriter{
-//         .iovecs = .{},
-//         .total_bytes = 0,
-//         .allocated_memory = .{},
-//     };
-//     defer writer.deinit(gpa);
+    // Serialize using CompactWriter
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
 
-//     _ = try original.serialize(gpa, &writer);
+    _ = try original.serialize(gpa, &writer);
 
-//     // Write to file
-//     try writer.writeGather(gpa, file);
+    // Write to file
+    try writer.writeGather(gpa, file);
 
-//     // Read back
-//     try file.seekTo(0);
-//     const file_size = try file.getEndPos();
-//     const buffer = try gpa.alignedAlloc(u8, 16, file_size);
-//     defer gpa.free(buffer);
+    // Read back
+    try file.seekTo(0);
+    const file_size = try file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, 16, file_size);
+    defer gpa.free(buffer);
 
-//     _ = try file.read(buffer);
+    _ = try file.read(buffer);
 
-//     // Cast and relocate
-//     const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(Store))));
-//     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    // Cast and relocate
+    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
-//     // Verify the types are accessible
-//     try std.testing.expectEqual(@as(usize, 3), deserialized.len());
+    // Verify the types are accessible
+    try std.testing.expectEqual(@as(usize, 3), deserialized.len());
 
-//     const deser_flex_resolved = deserialized.resolveVar(flex_var);
-//     try std.testing.expectEqual(Content{ .flex_var = null }, deser_flex_resolved.desc.content);
+    const deser_flex_resolved = deserialized.resolveVar(flex_var);
+    try std.testing.expectEqual(Content{ .flex_var = null }, deser_flex_resolved.desc.content);
 
-//     const deser_rigid_resolved = deserialized.resolveVar(rigid_var);
-//     try std.testing.expectEqual(Content{ .rigid_var = @bitCast(@as(u32, 42)) }, deser_rigid_resolved.desc.content);
+    const deser_rigid_resolved = deserialized.resolveVar(rigid_var);
+    try std.testing.expectEqual(Content{ .rigid_var = @bitCast(@as(u32, 42)) }, deser_rigid_resolved.desc.content);
 
-//     const deser_redirect_resolved = deserialized.resolveVar(redirect_var);
-//     try std.testing.expectEqual(deser_flex_resolved.desc_idx, deser_redirect_resolved.desc_idx);
-// }
+    const deser_redirect_resolved = deserialized.resolveVar(redirect_var);
+    try std.testing.expectEqual(deser_flex_resolved.desc_idx, deser_redirect_resolved.desc_idx);
+}
 
 // TODO FIXME
 // test "Store comprehensive CompactWriter roundtrip" {
