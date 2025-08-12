@@ -49,7 +49,11 @@ const InflightCounter = if (threads_available) struct {
     }
 } else struct {};
 
-fn freeSlice(gpa: Allocator, s: []const u8) void {
+fn freeSlice(gpa: Allocator, s: []u8) void {
+    gpa.free(s);
+}
+
+fn freeConstSlice(gpa: Allocator, s: []const u8) void {
     gpa.free(@constCast(s));
 }
 
@@ -57,8 +61,8 @@ fn freeSlice(gpa: Allocator, s: []const u8) void {
 
 const GlobalQueue = struct {
     const Task = struct {
-        pkg: []const u8,
-        module_name: []const u8,
+        pkg: []u8,
+        module_name: []u8,
     };
 
     gpa: Allocator,
@@ -403,7 +407,7 @@ pub const BuildEnv = struct {
             const mb_ptr: *PackageEnv = e.value_ptr.*;
             mb_ptr.deinit();
             self.gpa.destroy(mb_ptr);
-            freeSlice(self.gpa, e.key_ptr.*);
+            freeConstSlice(self.gpa, e.key_ptr.*);
         }
         self.schedulers.deinit(self.gpa);
 
@@ -412,7 +416,7 @@ pub const BuildEnv = struct {
         while (pit.next()) |e| {
             var p = e.value_ptr.*;
             p.deinit(self.gpa);
-            freeSlice(self.gpa, e.key_ptr.*);
+            freeConstSlice(self.gpa, e.key_ptr.*);
         }
         self.packages.deinit(self.gpa);
 
@@ -646,18 +650,18 @@ pub const BuildEnv = struct {
     };
 
     const Package = struct {
-        name: []const u8,
+        name: []u8,
         kind: PackageKind,
-        root_file: []const u8,
-        root_dir: []const u8,
+        root_file: []u8,
+        root_dir: []u8,
         shorthands: std.StringHashMapUnmanaged(PackageRef) = .{},
 
         fn deinit(self: *Package, gpa: Allocator) void {
             var it = self.shorthands.iterator();
             while (it.next()) |e| {
-                freeSlice(gpa, e.key_ptr.*);
-                freeSlice(gpa, e.value_ptr.name);
-                freeSlice(gpa, e.value_ptr.root_file);
+                freeConstSlice(gpa, e.key_ptr.*);
+                freeConstSlice(gpa, e.value_ptr.name);
+                freeConstSlice(gpa, e.value_ptr.root_file);
             }
             self.shorthands.deinit(gpa);
             freeSlice(gpa, self.name);
@@ -668,8 +672,8 @@ pub const BuildEnv = struct {
 
     const HeaderInfo = struct {
         kind: PackageKind,
-        platform_alias: ?[]const u8 = null,
-        platform_path: ?[]const u8 = null,
+        platform_alias: ?[]u8 = null,
+        platform_path: ?[]u8 = null,
         shorthands: std.StringHashMapUnmanaged([]const u8) = .{},
 
         fn deinit(self: *HeaderInfo, gpa: Allocator) void {
@@ -677,8 +681,8 @@ pub const BuildEnv = struct {
             if (self.platform_path) |p| freeSlice(gpa, p);
             var it = self.shorthands.iterator();
             while (it.next()) |e| {
-                freeSlice(gpa, e.key_ptr.*);
-                freeSlice(gpa, e.value_ptr.*);
+                freeConstSlice(gpa, e.key_ptr.*);
+                freeConstSlice(gpa, e.value_ptr.*);
             }
             self.shorthands.deinit(gpa);
         }
@@ -758,7 +762,7 @@ pub const BuildEnv = struct {
                 }
 
                 info.platform_alias = try self.gpa.dupe(u8, alias);
-                info.platform_path = plat_path;
+                info.platform_path = @constCast(plat_path);
                 // Seed allowed root for platform/package resolution
                 if (!PathUtils.isWithinRoot(plat_path, self.workspace_roots.items)) {
                     // app is allowed arbitrary, but platform/package resolving must be sandboxed; we enforced above
