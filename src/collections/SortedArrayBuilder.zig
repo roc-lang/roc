@@ -105,10 +105,11 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             if (!self.sorted) {
                 std.sort.pdq(Entry, self.entries.items, {}, Entry.lessThan);
                 self.sorted = true;
-
-                // Check for and report duplicates, then deduplicate
-                self.deduplicateAndReport(allocator);
             }
+
+            // Always deduplicate when ensureSorted is called
+            // This ensures we handle cases where detectDuplicates was called first
+            self.deduplicateAndReport(allocator);
         }
 
         /// Check for duplicates, report them, and remove duplicates keeping the last occurrence
@@ -163,7 +164,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             }
 
             // Update the length to reflect deduplicated entries
-            self.entries.items.len = write_index;
+            self.entries.shrinkRetainingCapacity(write_index);
         }
 
         /// Detect duplicates without modifying the array - returns list of duplicate keys
@@ -351,41 +352,40 @@ test "SortedArrayBuilder maintains sorted order when added in order" {
     try testing.expectEqual(@as(?u16, 4), builder.get(allocator, "ddd"));
 }
 
-// TODO FIXME
-// test "SortedArrayBuilder detectDuplicates example usage" {
-//     const testing = std.testing;
-//     const allocator = testing.allocator;
+test "SortedArrayBuilder detectDuplicates sorts if unsorted" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
 
-//     var builder = SortedArrayBuilder(u32, u16).init();
-//     defer builder.deinit(allocator);
+    var builder = SortedArrayBuilder(u32, u16).init();
+    defer builder.deinit(allocator);
 
-//     // Add some entries with duplicates
-//     try builder.put(allocator, 100, 1);
-//     try builder.put(allocator, 200, 2);
-//     try builder.put(allocator, 100, 3); // duplicate of 100
-//     try builder.put(allocator, 300, 4);
-//     try builder.put(allocator, 200, 5); // duplicate of 200
+    // Add some entries with duplicates
+    try builder.put(allocator, 100, 1);
+    try builder.put(allocator, 200, 2);
+    try builder.put(allocator, 100, 3); // duplicate of 100
+    try builder.put(allocator, 300, 4);
+    try builder.put(allocator, 200, 5); // duplicate of 200
 
-//     // Detect duplicates before sorting/deduplicating
-//     const duplicates = try builder.detectDuplicates(allocator);
-//     defer allocator.free(duplicates);
+    // Detect duplicates before sorting/deduplicating
+    const duplicates = try builder.detectDuplicates(allocator);
+    defer allocator.free(duplicates);
 
-//     // Example: Report duplicates (in real code, this would push diagnostics)
-//     for (duplicates) |duplicate_key| {
-//         // In a real compiler, you'd push a diagnostic here:
-//         // try cir.pushDiagnostic(CIR.Diagnostic{ .duplicate_exposed_item = ... });
-//         std.debug.print("Found duplicate key: {d}\n", .{duplicate_key});
-//     }
+    // Example: Report duplicates (in real code, this would push diagnostics)
+    for (duplicates) |duplicate_key| {
+        // In a real compiler, you'd push a diagnostic here:
+        // try cir.pushDiagnostic(CIR.Diagnostic{ .duplicate_exposed_item = ... });
+        std.debug.print("Found duplicate key: {d}\n", .{duplicate_key});
+    }
 
-//     // Verify we found the expected duplicates
-//     try testing.expectEqual(@as(usize, 2), duplicates.len);
+    // Verify we found the expected duplicates
+    try testing.expectEqual(@as(usize, 2), duplicates.len);
 
-//     // After detection, normal operations work as expected
-//     builder.ensureSorted(allocator);
-//     try testing.expectEqual(@as(usize, 3), builder.count()); // Deduplicated
-//     try testing.expectEqual(@as(?u16, 3), builder.get(allocator, 100)); // Last value kept
-//     try testing.expectEqual(@as(?u16, 5), builder.get(allocator, 200)); // Last value kept
-// }
+    // After detection, normal operations work as expected
+    builder.ensureSorted(allocator);
+    try testing.expectEqual(@as(usize, 3), builder.count()); // Deduplicated
+    try testing.expectEqual(@as(?u16, 3), builder.get(allocator, 100)); // Last value kept
+    try testing.expectEqual(@as(?u16, 5), builder.get(allocator, 200)); // Last value kept
+}
 
 test "SortedArrayBuilder handles duplicates with string keys" {
     const testing = std.testing;
