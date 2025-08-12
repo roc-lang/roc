@@ -14,17 +14,16 @@ const fs_mod = @import("fs");
 const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
-
-const SharedMemoryAllocator = @import("./SharedMemoryAllocator.zig");
-const platform = @import("ipc/platform.zig");
+const ipc = @import("ipc");
 const fmt = @import("fmt");
+
 const cli_args = @import("cli_args.zig");
 const bench = @import("bench.zig");
 const linker = @import("linker.zig");
 
 const Can = can.Can;
 const Check = check.Check;
-
+const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 const Filesystem = fs_mod.Filesystem;
 const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
@@ -529,8 +528,8 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     // Ensure we clean up shared memory resources on all exit paths
     defer {
         if (comptime is_windows) {
-            _ = platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+            _ = ipc.platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            _ = ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
             _ = posix.munmap(shm_handle.ptr, shm_handle.size);
             _ = c.close(shm_handle.fd);
@@ -612,8 +611,8 @@ fn runWithWindowsHandleInheritance(gpa: Allocator, exe_path: []const u8, shm_han
     }
 
     // Clean up process handles
-    _ = platform.windows.CloseHandle(process_info.hProcess);
-    _ = platform.windows.CloseHandle(process_info.hThread);
+    _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
+    _ = ipc.platform.windows.CloseHandle(process_info.hThread);
 }
 
 /// Run child process using POSIX file descriptor inheritance (existing approach for Unix)
@@ -705,10 +704,10 @@ pub fn writeToSharedMemory(data: []const u8) !SharedMemoryHandle {
 
 fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHandle {
     // Create anonymous shared memory object (no name for handle inheritance)
-    const shm_handle = platform.windows.CreateFileMappingW(
-        platform.windows.INVALID_HANDLE_VALUE,
+    const shm_handle = ipc.platform.windows.CreateFileMappingW(
+        ipc.platform.windows.INVALID_HANDLE_VALUE,
         null,
-        platform.windows.PAGE_READWRITE,
+        ipc.platform.windows.PAGE_READWRITE,
         0,
         @intCast(total_size),
         null, // Anonymous - no name needed for handle inheritance
@@ -718,15 +717,15 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
     };
 
     // Map the shared memory at a fixed address to avoid ASLR issues
-    const mapped_ptr = platform.windows.MapViewOfFileEx(
+    const mapped_ptr = ipc.platform.windows.MapViewOfFileEx(
         shm_handle,
-        platform.windows.FILE_MAP_ALL_ACCESS,
+        ipc.platform.windows.FILE_MAP_ALL_ACCESS,
         0,
         0,
         0,
-        platform.SHARED_MEMORY_BASE_ADDR,
+        ipc.platform.SHARED_MEMORY_BASE_ADDR,
     ) orelse {
-        _ = platform.windows.CloseHandle(shm_handle);
+        _ = ipc.platform.windows.CloseHandle(shm_handle);
         return error.SharedMemoryMapFailed;
     };
 

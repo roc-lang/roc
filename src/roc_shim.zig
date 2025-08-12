@@ -10,9 +10,9 @@ const can = @import("can");
 const types = @import("types");
 const eval = @import("eval");
 const layout = @import("layout");
+const ipc = @import("ipc");
 
-const SharedMemoryAllocator = @import("SharedMemoryAllocator.zig");
-
+const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 const Stack = eval.Stack;
 const LayoutStore = layout.Store;
 const CIR = can.CIR;

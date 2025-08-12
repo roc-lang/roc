@@ -31,8 +31,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const platform = @import("ipc/platform.zig");
-const coordination = @import("ipc/coordination.zig");
+const platform = @import("platform.zig");
+const coordination = @import("coordination.zig");
 
 const SharedMemoryAllocator = @This();
 
