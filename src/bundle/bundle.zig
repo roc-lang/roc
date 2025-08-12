@@ -14,6 +14,7 @@
 //! - Compress/Decompress large binary blobs (e.g. for host data, or static List(U8) imports) separately
 //!   using different compression params and dictionaries (e.g. make a .tar.zst inside the main .tar.zst)
 
+const builtin = @import("builtin");
 const std = @import("std");
 const base58 = @import("base58.zig");
 const streaming_writer = @import("streaming_writer.zig");
@@ -143,15 +144,6 @@ pub fn bundle(
 
     // Process files one at a time
     while (try file_path_iter.next()) |file_path| {
-        // First validate the input path
-        if (pathHasBundleErr(file_path)) |problem| {
-            if (error_context) |ctx| {
-                ctx.path = problem.path;
-                ctx.reason = problem.reason;
-            }
-            return error.InvalidPath;
-        }
-
         const file = base_dir.openFile(file_path, .{}) catch |err| switch (err) {
             error.FileNotFound => return error.FileNotFound,
             error.AccessDenied => return error.AccessDenied,
@@ -168,7 +160,7 @@ pub fn bundle(
         const file_size = std.math.cast(usize, stat.size) orelse return error.FileTooLarge;
 
         // Strip path prefix if provided
-        const tar_path = if (path_prefix) |prefix| blk: {
+        const unescaped_path = if (path_prefix) |prefix| blk: {
             if (std.mem.startsWith(u8, file_path, prefix)) {
                 break :blk file_path[prefix.len..];
             } else {
@@ -176,7 +168,25 @@ pub fn bundle(
             }
         } else file_path;
 
-        // Validate the tar path after prefix stripping
+        // Standardize on forward slashes for directory separators.
+        //
+        // Valid UNIX paths can technically contain backslashes; if one does, give an error.
+        const tar_path = if (builtin.target.os.tag == .windows) blk: {
+            // On Windows, replace backslashes with forward slashes
+            const path_buf = try allocator.alloc(u8, unescaped_path.len);
+            @memcpy(path_buf, unescaped_path);
+            std.mem.replaceScalar(u8, path_buf, '\\', '/');
+            break :blk path_buf;
+        } else if (std.mem.indexOf(u8, unescaped_path, "\\") == null) unescaped_path else {
+            if (error_context) |ctx| {
+                ctx.path = unescaped_path;
+                ctx.reason = .contained_backslash_on_unix;
+            }
+            return error.InvalidPath;
+        };
+        defer if (builtin.target.os.tag == .windows) allocator.free(tar_path);
+
+        // Validate the tar path after prefix stripping and forward-slash standardization.
         if (pathHasBundleErr(tar_path)) |validation_error| {
             if (error_context) |ctx| {
                 ctx.path = validation_error.path;
@@ -258,7 +268,6 @@ const RESERVED_PATH_CHARS = [_]u8{
     '<', // Redirection on Windows
     '>', // Redirection on Windows
     '|', // Pipe on Windows
-    '\\', // Backslash (Windows path separator, but we require forward slashes)
 };
 
 /// Windows reserved filenames (case-insensitive)
@@ -280,6 +289,7 @@ pub const PathValidationReason = union(enum) {
     path_traversal,
     current_directory_reference,
     windows_reserved_name,
+    contained_backslash_on_unix,
     component_ends_with_space,
     component_ends_with_period,
 };
@@ -291,6 +301,8 @@ pub const PathValidationError = struct {
 };
 
 // We only do these validations on bundle, not on unbundle.
+// Note that the path ALREADY should have all backslashes converted
+// to forward slashes.
 //
 // The reason we do this validation is to prevent Windows users
 // from encountering unpleasant surprises when they try to
@@ -301,6 +313,8 @@ pub const PathValidationError = struct {
 // there's no security concern; if the OS doesn't accept the path,
 // it will give an error.
 pub fn pathHasBundleErr(path: []const u8) ?PathValidationError {
+    std.debug.assert(std.mem.indexOf(u8, path, "\\") == null);
+
     // Start by doing the validation checks we'd do on unbundle.
     // If unbundling would fail, then bundling should too!
     if (pathHasUnbundleErr(path)) |err| {
@@ -320,67 +334,46 @@ pub fn pathHasBundleErr(path: []const u8) ?PathValidationError {
     }
 
     // Check each path component for Windows reserved names and trailing spaces/periods
-    var idx: usize = 0;
-    var component_start: usize = 0;
+    var component_iter = std.mem.tokenizeScalar(u8, path, '/');
 
-    while (idx <= path.len) {
-        // Check if we're at a separator or the end
-        const at_separator = idx < path.len and (path[idx] == '/' or path[idx] == '\\');
-        const at_end = idx == path.len;
+    while (component_iter.next()) |component| {
+        // Check for Windows reserved names (case-insensitive)
+        for (WINDOWS_RESERVED_NAMES) |reserved| {
+            // Check base name without extension
+            const dot_pos = std.mem.indexOfScalar(u8, component, '.');
+            const base_name = if (dot_pos) |pos| component[0..pos] else component;
 
-        if (at_separator or at_end) {
-            if (idx > component_start) {
-                const component = path[component_start..idx];
-
-                // Check for Windows reserved names (case-insensitive)
-                for (WINDOWS_RESERVED_NAMES) |reserved| {
-                    // Check base name without extension
-                    const dot_pos = std.mem.indexOfScalar(u8, component, '.');
-                    const base_name = if (dot_pos) |pos| component[0..pos] else component;
-
-                    if (base_name.len == reserved.len) {
-                        var matches = true;
-                        for (base_name, reserved) |a, b| {
-                            if (std.ascii.toUpper(a) != b) {
-                                matches = false;
-                                break;
-                            }
-                        }
-                        if (matches) {
-                            return PathValidationError{
-                                .path = path,
-                                .reason = .windows_reserved_name,
-                            };
-                        }
+            if (base_name.len == reserved.len) {
+                var matches = true;
+                for (base_name, reserved) |a, b| {
+                    if (std.ascii.toUpper(a) != b) {
+                        matches = false;
+                        break;
                     }
                 }
-
-                // Reject components ending with space or period (Windows restriction)
-                if (component.len > 0) {
-                    const last_char = component[component.len - 1];
-                    if (last_char == ' ') {
-                        return PathValidationError{
-                            .path = path,
-                            .reason = .component_ends_with_space,
-                        };
-                    } else if (last_char == '.') {
-                        return PathValidationError{
-                            .path = path,
-                            .reason = .component_ends_with_period,
-                        };
-                    }
+                if (matches) {
+                    return PathValidationError{
+                        .path = path,
+                        .reason = .windows_reserved_name,
+                    };
                 }
-            }
-
-            if (at_separator) {
-                component_start = idx + 1;
             }
         }
 
-        if (!at_end) {
-            idx += 1;
-        } else {
-            break;
+        // Reject components ending with space or period (Windows restriction)
+        if (component.len > 0) {
+            const last_char = component[component.len - 1];
+            if (last_char == ' ') {
+                return PathValidationError{
+                    .path = path,
+                    .reason = .component_ends_with_space,
+                };
+            } else if (last_char == '.') {
+                return PathValidationError{
+                    .path = path,
+                    .reason = .component_ends_with_period,
+                };
+            }
         }
     }
 

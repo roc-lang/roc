@@ -1056,6 +1056,7 @@ fn formatPathValidationReason(reason: bundle.PathValidationReason) []const u8 {
         .absolute_path => "Absolute paths are not allowed",
         .path_traversal => "Path traversal (..) is not allowed",
         .current_directory_reference => "Current directory reference (.) is not allowed",
+        .contained_backslash_on_unix => "Path contains a backslash, which is a directory separator on Windows.",
         .windows_reserved_name => "Path contains Windows reserved device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)",
         .component_ends_with_space => "Path components cannot end with space",
         .component_ends_with_period => "Path components cannot end with period",
