@@ -1,3 +1,5 @@
+//! Test file for package environment functionality (currently commented out/disabled).
+
 // const std = @import("std");
 // const cache = @import("cache");
 // const reporting = @import("reporting");

@@ -1,3 +1,5 @@
+//! Entry point for evaluation module tests, ensuring all evaluation-related modules are properly tested.
+
 const std = @import("std");
 
 test "eval tests" {

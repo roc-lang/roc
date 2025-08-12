@@ -1,3 +1,5 @@
+//! Test environment for canonicalization testing, providing utilities to parse, canonicalize, and inspect Roc expressions.
+
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
@@ -13,6 +15,7 @@ module_env: *ModuleEnv,
 parse_ast: *parse.AST,
 can: *Can,
 
+/// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 pub const TestEnv = @This();
 
 pub fn init(source: []const u8) !TestEnv {
@@ -69,6 +72,7 @@ pub fn deinit(self: *TestEnv) void {
     self.gpa.destroy(self.module_env);
 }
 
+/// Canonicalizes the root expression from the parsed AST, returning null if there are parse errors.
 pub fn canonicalizeExpr(self: *TestEnv) !?Can.CanonicalizedExpr {
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(self.parse_ast.root_node_idx);
 
@@ -81,19 +85,23 @@ pub fn canonicalizeExpr(self: *TestEnv) !?Can.CanonicalizedExpr {
     return try self.can.canonicalizeExpr(expr_idx);
 }
 
+/// Retrieves a canonical expression from the module store by its index.
 pub fn getCanonicalExpr(self: *TestEnv, idx: CIR.Expr.Idx) CIR.Expr {
     return self.module_env.store.getExpr(idx);
 }
 
+/// Gets the string representation of an identifier by its index.
 pub fn getIdent(self: *TestEnv, idx: base.Ident.Idx) []const u8 {
     return self.module_env.common.getIdent(idx);
 }
 
+/// Checks if there are any parse or tokenization errors in the AST.
 pub fn hasParseErrors(self: *TestEnv) bool {
     return self.parse_ast.parse_diagnostics.items.len > 0 or
         self.parse_ast.tokenize_diagnostics.items.len > 0;
 }
 
+/// Returns all diagnostics from the module environment.
 pub fn getDiagnostics(self: *TestEnv) ![]CIR.Diagnostic {
     return self.module_env.getDiagnostics();
 }

@@ -1,3 +1,5 @@
+//! Test file for cache functionality (currently commented out/disabled).
+
 // const std = @import("std");
 // const Can = @import("can");
 // const fs_mod = @import("fs");
