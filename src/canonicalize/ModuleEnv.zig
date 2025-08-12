@@ -1042,6 +1042,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     // IMPORTANT: gpa, and module_name are not relocated - they should be set manually before calling relocate
 
     // Relocate all sub-structures
+    self.common.relocate(offset);
     self.types.relocate(offset);
 
     // Note: all_defs and all_statements are just spans with numeric values, no pointers to relocate
@@ -1113,9 +1114,12 @@ pub const Serialized = struct {
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
+        // Deserialize CommonEnv into the right location
+        const common_ptr = self.common.deserialize(offset, source);
+        
         env.* = Self{
             .gpa = gpa,
-            .common = self.common.deserialize(offset, source),
+            .common = common_ptr,
             .types = self.types.deserialize(offset).*,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
@@ -1153,6 +1157,11 @@ pub fn setExposedNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u16)
 /// Retrieves the node index associated with an exposed identifier, if any.
 pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u16 {
     return self.common.getNodeIndexById(self.gpa, ident_idx);
+}
+
+/// Ensures that the exposed items are sorted by identifier index.
+pub fn ensureExposedSorted(self: *Self, allocator: std.mem.Allocator) void {
+    self.common.exposed_items.ensureSorted(allocator);
 }
 
 /// Checks whether the given identifier is exposed by this module.

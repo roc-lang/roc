@@ -9,88 +9,90 @@ const CompactWriter = collections.CompactWriter;
 const Ident = base.Ident;
 const Expr = can.CIR.Expr;
 
-// test "ModuleEnv.Serialized roundtrip" {
-//     const testing = std.testing;
-//     const gpa = testing.allocator;
+test "ModuleEnv.Serialized roundtrip" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
 
-//     var common_env = try base.CommonEnv.init(gpa, "");
-//     // Module env takes ownership of Common env -- no need to deinit here
+    const source = "hello world\ntest line 2\n";
 
-//     // Add some test data
-//     const hello_idx = try common_env.insertIdent(gpa, Ident.for_text("hello"));
-//     const world_idx = try common_env.insertIdent(gpa, Ident.for_text("world"));
+    var common_env = try base.CommonEnv.init(gpa, source);
+    // Module env takes ownership of Common env -- no need to deinit here
 
-//     _ = try common_env.insertString(gpa, "test string");
+    // Add some test data
+    const hello_idx = try common_env.insertIdent(gpa, Ident.for_text("hello"));
+    const world_idx = try common_env.insertIdent(gpa, Ident.for_text("world"));
 
-//     try common_env.addExposedById(gpa, hello_idx);
+    _ = try common_env.insertString(gpa, "test string");
 
-//     // Create original ModuleEnv with some data
-//     var original = try ModuleEnv.init(gpa, &common_env);
-//     defer original.deinit();
+    try common_env.addExposedById(gpa, hello_idx);
 
-//     // Initialize CIR fields to ensure imports are available
-//     try original.initCIRFields(gpa, "TestModule");
+    _ = try common_env.line_starts.append(gpa, 0);
+    _ = try common_env.line_starts.append(gpa, 10);
+    _ = try common_env.line_starts.append(gpa, 20);
 
-//     try original.exposed_items.setNodeIndexById(gpa, @as(u32, @bitCast(hello_idx)), 42);
-//     original.exposed_items.ensureSorted(gpa);
+    // Create original ModuleEnv with some data
+    var original = try ModuleEnv.init(gpa, &common_env);
+    defer original.deinit();
 
-//     _ = try original.line_starts.append(gpa, 0);
-//     _ = try original.line_starts.append(gpa, 10);
-//     _ = try original.line_starts.append(gpa, 20);
+    // Initialize CIR fields to ensure imports are available
+    try original.initCIRFields(gpa, "TestModule");
 
-//     const source = "hello world\ntest line 2\n";
-//     original.source = source;
-//     original.module_name = "TestModule";
+    try original.setExposedNodeIndexById(hello_idx, 42);
+    original.ensureExposedSorted(gpa);
+    original.module_name = "TestModule";
 
-//     // Create a CompactWriter and arena
-//     var arena = std.heap.ArenaAllocator.init(gpa);
-//     defer arena.deinit();
-//     const arena_alloc = arena.allocator();
+    // Create a CompactWriter and arena
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
 
-//     var tmp_dir = testing.tmpDir(.{});
-//     defer tmp_dir.cleanup();
-//     const tmp_file = try tmp_dir.dir.createFile("test.compact", .{ .read = true });
-//     defer tmp_file.close();
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_file = try tmp_dir.dir.createFile("test.compact", .{ .read = true });
+    defer tmp_file.close();
 
-//     var writer = CompactWriter.init();
-//     defer writer.deinit(arena_alloc);
+    var writer = CompactWriter.init();
+    defer writer.deinit(arena_alloc);
 
-//     // Allocate space for ModuleEnv (not Serialized) since deserialize requires enough space
-//     const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv);
-//     const env_start_offset = writer.total_bytes - @sizeOf(ModuleEnv);
-//     const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
-//     try serialized_ptr.serialize(&original, arena_alloc, &writer);
+    // Serialize using the proper Serialized struct pattern
+    const serialized = try writer.appendAlloc(arena_alloc, ModuleEnv.Serialized);
+    try serialized.serialize(&original, arena_alloc, &writer);
 
-//     // Write to file
-//     try writer.writeGather(arena_alloc, tmp_file);
+    // Write to file
+    try writer.writeGather(arena_alloc, tmp_file);
 
-//     // Read back
-//     const file_size = try tmp_file.getEndPos();
-//     const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), @intCast(file_size));
-//     defer gpa.free(buffer);
-//     _ = try tmp_file.pread(buffer, 0);
+    // Read back
+    const file_size = try tmp_file.getEndPos();
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
+    defer gpa.free(buffer);
+    _ = try tmp_file.pread(buffer, 0);
 
-//     // Find the ModuleEnv at the tracked offset
-//     const deserialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr + env_start_offset));
-//     const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, "TestModule");
+    // The Serialized struct is at the beginning of the buffer
+    const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
+    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule");
 
-//     // Verify the data was preserved
-//     // try testing.expectEqual(@as(usize, 2), env.ident_ids_for_slicing.len());
-//     try testing.expectEqualStrings("hello", env.getIdent(hello_idx));
-//     try testing.expectEqualStrings("world", env.getIdent(world_idx));
+    // Verify the data was preserved
+    // try testing.expectEqual(@as(usize, 2), env.ident_ids_for_slicing.len());
 
-//     try testing.expectEqual(@as(usize, 1), env.exposed_items.count());
-//     try testing.expectEqual(@as(?u16, 42), env.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
+    // Debug: print what we actually get
+    std.debug.print("\nActual hello: '{s}'\n", .{env.getIdent(hello_idx)});
+    std.debug.print("Actual world: '{s}'\n", .{env.getIdent(world_idx)});
 
-//     try testing.expectEqual(@as(usize, 3), env.line_starts.len());
-//     try testing.expectEqual(@as(u32, 0), env.line_starts.items.items[0]);
-//     try testing.expectEqual(@as(u32, 10), env.line_starts.items.items[1]);
-//     try testing.expectEqual(@as(u32, 20), env.line_starts.items.items[2]);
+    try testing.expectEqualStrings("hello", env.getIdent(hello_idx));
+    try testing.expectEqualStrings("world", env.getIdent(world_idx));
 
-//     // TODO restore source using CommonEnv
-//     // try testing.expectEqualStrings(source, env.source);
-//     try testing.expectEqualStrings("TestModule", env.module_name);
-// }
+    try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
+    try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
+
+    try testing.expectEqual(@as(usize, 3), env.common.line_starts.len());
+    try testing.expectEqual(@as(u32, 0), env.common.line_starts.items.items[0]);
+    try testing.expectEqual(@as(u32, 10), env.common.line_starts.items.items[1]);
+    try testing.expectEqual(@as(u32, 20), env.common.line_starts.items.items[2]);
+
+    // TODO restore source using CommonEnv
+    // try testing.expectEqualStrings(source, env.source);
+    try testing.expectEqualStrings("TestModule", env.module_name);
+}
 
 test "ModuleEnv with types CompactWriter roundtrip" {
     const testing = std.testing;
@@ -129,11 +131,9 @@ test "ModuleEnv with types CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_alloc);
 
-    // Allocate space for ModuleEnv (not Serialized) since deserialize requires enough space
-    const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv);
-    const env_start_offset = writer.total_bytes - @sizeOf(ModuleEnv);
-    const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
-    try serialized_ptr.serialize(&original, arena_alloc, &writer);
+    // Serialize using the proper Serialized struct pattern
+    const serialized = try writer.appendAlloc(arena_alloc, ModuleEnv.Serialized);
+    try serialized.serialize(&original, arena_alloc, &writer);
 
     // Write to file
     try writer.writeGather(arena_alloc, file);
@@ -141,13 +141,13 @@ test "ModuleEnv with types CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
 
-    // Find the ModuleEnv at the tracked offset
-    const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
+    // The Serialized struct is at the beginning of the buffer
+    const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
     const deserialized = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, "", "test.Types");
 
     // Verify module name
