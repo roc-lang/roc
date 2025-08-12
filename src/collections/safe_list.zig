@@ -266,7 +266,7 @@ pub fn SafeList(comptime T: type) type {
 
             const old_addr: isize = @intCast(@intFromPtr(self.items.items.ptr));
             const new_addr = @as(usize, @intCast(old_addr + offset));
-            self.items.items.ptr = @ptrFromInt(new_addr);
+            self.items.items.ptr = @as([*]T, @ptrFromInt(new_addr));
         }
 
         /// An iterator over all the indices in this list.
