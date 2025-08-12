@@ -12,6 +12,7 @@ const builtins = @import("builtins");
 const TestEnv = @import("TestEnv.zig");
 const eval = @import("../interpreter.zig");
 const stack = @import("../stack.zig");
+const StackValue = @import("../StackValue.zig");
 
 const Check = check.Check;
 const Can = can.Can;
@@ -324,7 +325,12 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 
                 const offset = layout_cache.getRecordFieldOffset(result.layout.data.record.idx, i);
                 const field_ptr = @as([*]u8, @ptrCast(result.ptr.?)) + offset;
-                const int_val = eval.readIntFromMemory(field_ptr, field_layout.data.scalar.data.int);
+                const field_value = StackValue{
+                    .layout = field_layout,
+                    .ptr = field_ptr,
+                    .is_initialized = true,
+                };
+                const int_val = field_value.asI128();
                 try std.testing.expectEqual(expected_field.value, int_val);
                 break;
             }
