@@ -1049,7 +1049,7 @@ fn processSnapshotContent(
     // Process the content through the compilation pipeline
     var module_env = try ModuleEnv.init(allocator, content.source);
     defer module_env.deinit();
-    
+
     // Calculate line starts for source location tracking
     try module_env.common.calcLineStarts(allocator);
 
@@ -2695,7 +2695,7 @@ fn generateReplCanonicalizeSection(output: *DualOutput, content: *const Content)
             continue;
         };
         defer module_env.deinit();
-        
+
         // Calculate line starts for source location tracking
         module_env.common.calcLineStarts(output.gpa) catch |err| {
             try output.md_writer.print("Error calculating line starts: {s}\n", .{@errorName(err)});
@@ -2795,7 +2795,7 @@ fn generateReplTypesSection(output: *DualOutput, content: *const Content) !void 
             continue;
         };
         defer module_env.deinit();
-        
+
         // Calculate line starts for source location tracking
         module_env.common.calcLineStarts(output.gpa) catch |err| {
             try output.md_writer.print("Error calculating line starts: {s}\n", .{@errorName(err)});
