@@ -478,7 +478,7 @@ pub const BuildEnv = struct {
         const pkg_name = if (header_info.kind == .module) "module" else "app";
         const key_pkg = try self.gpa.dupe(u8, pkg_name);
         const pkg_root_file = try self.gpa.dupe(u8, root_abs);
-        const pkg_root_dir = root_dir;
+        const pkg_root_dir = try self.gpa.dupe(u8, root_dir);
 
         try self.packages.put(self.gpa, key_pkg, .{
             .name = try self.gpa.dupe(u8, pkg_name),
