@@ -1827,7 +1827,7 @@ pub fn getSource(self: *const Self, region: Region) []const u8 {
 /// TODO this is a code smell... we should track down the places using this
 /// and replace with something more sensible -- need to refactor diagnostics a little.
 pub fn getSourceAll(self: *const Self) []const u8 {
-    return self.getSourceAll();
+    return self.common.getSourceAll();
 }
 
 /// TODO this is a code smell... we should track down the places using this
