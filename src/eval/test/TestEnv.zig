@@ -26,6 +26,7 @@ pub fn init(allocator: std.mem.Allocator) TestEnv {
     };
 }
 
+/// Set the interpreter instance for this test environment
 pub fn setInterpreter(self: *TestEnv, interp: *eval.Interpreter) void {
     self.interpreter = interp;
 }
@@ -44,6 +45,7 @@ pub fn deinit(self: *TestEnv) void {
     }
 }
 
+/// Get the RocOps instance for this test environment, initializing it if needed
 pub fn get_ops(self: *TestEnv) *RocOps {
     if (self.roc_ops == null) {
         self.roc_ops = RocOps{

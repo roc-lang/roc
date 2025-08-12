@@ -15,10 +15,9 @@ const reporting = @import("reporting");
 const check = @import("check");
 const builtins = @import("builtins");
 const compile = @import("compile");
+const fmt = @import("fmt");
 
-const fmt = @import("fmt.zig");
-const repl = @import("repl/eval.zig");
-
+const Repl = @import("repl").Repl;
 const CommonEnv = base.CommonEnv;
 const Check = check.Check;
 const CIR = can.CIR;
@@ -2502,7 +2501,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     defer snapshot_ops.deinit();
 
     // Initialize REPL
-    var repl_instance = try repl.Repl.init(output.gpa, snapshot_ops.get_ops());
+    var repl_instance = try Repl.init(output.gpa, snapshot_ops.get_ops());
     defer repl_instance.deinit();
 
     // Enable tracing if requested

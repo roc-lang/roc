@@ -2,8 +2,9 @@
 
 const std = @import("std");
 const builtins = @import("builtins");
-const interpreter = @import("../eval/interpreter.zig");
+const eval = @import("eval");
 
+const Interpreter = eval.Interpreter;
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
 const RocDealloc = builtins.host_abi.RocDealloc;
@@ -16,7 +17,7 @@ const RocCrashed = builtins.host_abi.RocCrashed;
 pub const TestEnv = struct {
     allocator: std.mem.Allocator,
     roc_ops: RocOps,
-    interpreter: ?*interpreter.Interpreter,
+    interpreter: ?*Interpreter,
 
     pub fn init(allocator: std.mem.Allocator) TestEnv {
         return TestEnv{
@@ -35,7 +36,7 @@ pub const TestEnv = struct {
         };
     }
 
-    pub fn setInterpreter(self: *TestEnv, interp: *interpreter.Interpreter) void {
+    pub fn setInterpreter(self: *TestEnv, interp: *Interpreter) void {
         self.interpreter = interp;
     }
 

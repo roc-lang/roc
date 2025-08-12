@@ -8,13 +8,13 @@ const builtins = @import("builtins");
 const base = @import("base");
 const can = @import("can");
 const types = @import("types");
-const eval = @import("eval/interpreter.zig");
-const stack = @import("eval/stack.zig");
-const layout_store = @import("layout/store.zig");
-const layout = @import("layout/layout.zig");
+const eval = @import("eval");
+const layout = @import("layout");
 
 const SharedMemoryAllocator = @import("SharedMemoryAllocator.zig");
 
+const Stack = eval.Stack;
+const LayoutStore = layout.Store;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const RocStr = builtins.str.RocStr;
@@ -143,26 +143,26 @@ fn createInterpreter(env_ptr: *ModuleEnv) ShimError!Interpreter {
     const allocator = std.heap.page_allocator;
 
     // Allocate stack on heap to ensure stable address
-    const eval_stack = allocator.create(stack.Stack) catch {
+    const eval_stack = allocator.create(Stack) catch {
         std.log.err("Stack allocation failed", .{});
         return error.InterpreterSetupFailed;
     };
     errdefer allocator.destroy(eval_stack);
 
-    eval_stack.* = stack.Stack.initCapacity(allocator, 64 * 1024) catch {
+    eval_stack.* = Stack.initCapacity(allocator, 64 * 1024) catch {
         std.log.err("Stack initialization failed", .{});
         return error.InterpreterSetupFailed;
     };
     errdefer eval_stack.deinit();
 
     // Allocate layout cache on heap to ensure stable address
-    const layout_cache = allocator.create(layout_store.Store) catch {
+    const layout_cache = allocator.create(LayoutStore) catch {
         std.log.err("Layout cache allocation failed", .{});
         return error.InterpreterSetupFailed;
     };
     errdefer allocator.destroy(layout_cache);
 
-    layout_cache.* = layout_store.Store.init(env_ptr, &env_ptr.types) catch {
+    layout_cache.* = LayoutStore.init(env_ptr, &env_ptr.types) catch {
         std.log.err("Layout cache initialization failed", .{});
         return error.InterpreterSetupFailed;
     };

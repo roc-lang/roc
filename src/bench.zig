@@ -7,7 +7,7 @@ const parse = @import("parse");
 const can = @import("can");
 
 const tracy = @import("tracy");
-const fmt = @import("fmt.zig");
+const fmt = @import("fmt");
 
 const tokenize = parse.tokenize;
 const ModuleEnv = can.ModuleEnv;

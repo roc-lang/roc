@@ -17,7 +17,7 @@ const check = @import("check");
 
 const SharedMemoryAllocator = @import("./SharedMemoryAllocator.zig");
 const platform = @import("ipc/platform.zig");
-const fmt = @import("fmt.zig");
+const fmt = @import("fmt");
 const cli_args = @import("cli_args.zig");
 const bench = @import("bench.zig");
 const linker = @import("linker.zig");

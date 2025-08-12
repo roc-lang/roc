@@ -2,10 +2,11 @@
 
 const std = @import("std");
 
-pub const interpreter = @import("interpreter.zig");
+pub const Interpreter = @import("interpreter.zig").Interpreter;
 pub const Stack = @import("stack.zig").Stack;
 pub const StackOverflow = @import("stack.zig").StackOverflow;
 pub const StackValue = @import("StackValue.zig");
+pub const EvalError = @import("interpreter.zig").EvalError;
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
