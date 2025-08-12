@@ -34,7 +34,7 @@ const can = @import("can");
 const builtins = @import("builtins");
 const collections = @import("collections");
 
-const layout = @import("../layout/layout.zig");
+const layout = @import("layout");
 const build_options = @import("build_options");
 const stack = @import("stack.zig");
 const StackValue = @import("StackValue.zig");
@@ -52,7 +52,7 @@ const Closure = layout.Closure;
 const Layout = layout.Layout;
 const Expr = CIR.Expr;
 const Ident = base.Ident;
-const LayoutStore = layout.store.Store;
+const LayoutStore = layout.Store;
 const TypeStore = types.store.Store;
 const target_usize = base.target.Target.native.target_usize;
 const target = base.target;

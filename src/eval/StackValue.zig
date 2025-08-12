@@ -10,11 +10,11 @@ const types = @import("types");
 const can = @import("can");
 const builtins = @import("builtins");
 const collections = @import("collections");
-const layout_mod = @import("../layout/layout.zig");
+const layout_mod = @import("layout");
 
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
-const LayoutStore = layout_mod.store.Store;
+const LayoutStore = layout_mod.Store;
 const Layout = layout_mod.Layout;
 const StringLiteral = base.StringLiteral;
 const RocOps = builtins.host_abi.RocOps;

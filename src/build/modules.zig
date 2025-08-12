@@ -25,6 +25,8 @@ pub const ModuleType = enum {
     tracy,
     fs,
     build_options,
+    layout,
+    eval,
 
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
@@ -40,7 +42,9 @@ pub const ModuleType = enum {
             .parse => &.{ .tracy, .collections, .base, .reporting },
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
-            .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting },
+            .layout => &.{ .collections, .base, .types, .builtins, .can },
+            .eval => &.{ .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options },
+            .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval },
         };
     }
 };
@@ -59,6 +63,8 @@ pub const RocModules = struct {
     tracy: *Module,
     fs: *Module,
     build_options: *Module,
+    layout: *Module,
+    eval: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options) RocModules {
         const self = RocModules{
@@ -80,6 +86,8 @@ pub const RocModules = struct {
                 "build_options",
                 .{ .root_source_file = build_options_step.getOutput() },
             ),
+            .layout = b.addModule("layout", .{ .root_source_file = b.path("src/layout/mod.zig") }),
+            .eval = b.addModule("eval", .{ .root_source_file = b.path("src/eval/mod.zig") }),
         };
 
         // Setup module dependencies using our generic helper
@@ -102,6 +110,8 @@ pub const RocModules = struct {
             .tracy,
             .fs,
             .build_options,
+            .layout,
+            .eval,
         };
 
         // Setup dependencies for each module
@@ -129,6 +139,8 @@ pub const RocModules = struct {
         step.root_module.addImport("builtins", self.builtins);
         step.root_module.addImport("fs", self.fs);
         step.root_module.addImport("build_options", self.build_options);
+        step.root_module.addImport("layout", self.layout);
+        step.root_module.addImport("eval", self.eval);
     }
 
     pub fn addAllToTest(self: RocModules, step: *Step.Compile) void {
@@ -150,6 +162,8 @@ pub const RocModules = struct {
             .tracy => self.tracy,
             .fs => self.fs,
             .build_options => self.build_options,
+            .layout => self.layout,
+            .eval => self.eval,
         };
     }
 
@@ -162,7 +176,7 @@ pub const RocModules = struct {
         }
     }
 
-    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode) [10]ModuleTest {
+    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode) [12]ModuleTest {
         const test_configs = [_]ModuleType{
             .collections,
             .base,
@@ -174,6 +188,8 @@ pub const RocModules = struct {
             .can,
             .check,
             .fs,
+            .layout,
+            .eval,
         };
 
         var tests: [test_configs.len]ModuleTest = undefined;

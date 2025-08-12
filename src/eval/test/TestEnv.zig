@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const builtins = @import("builtins");
-const interpreter = @import("interpreter.zig");
+const eval = @import("../interpreter.zig");
 
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
@@ -12,54 +12,53 @@ const RocDbg = builtins.host_abi.RocDbg;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
 
-/// An implementation of RocOps for testing purposes.
-pub const TestEnv = struct {
-    allocator: std.mem.Allocator,
-    interpreter: ?*interpreter.Interpreter,
-    roc_ops: ?RocOps,
+const TestEnv = @This();
 
-    pub fn init(allocator: std.mem.Allocator) TestEnv {
-        return TestEnv{
-            .allocator = allocator,
-            .interpreter = null,
-            .roc_ops = null,
-        };
-    }
+allocator: std.mem.Allocator,
+interpreter: ?*eval.Interpreter,
+roc_ops: ?RocOps,
 
-    pub fn setInterpreter(self: *TestEnv, interp: *interpreter.Interpreter) void {
-        self.interpreter = interp;
-    }
+pub fn init(allocator: std.mem.Allocator) TestEnv {
+    return TestEnv{
+        .allocator = allocator,
+        .interpreter = null,
+        .roc_ops = null,
+    };
+}
 
-    pub fn deinit(self: *TestEnv) void {
-        // Clean up crash message if we allocated it
-        if (self.interpreter) |interp| {
-            if (interp.crash_message) |msg| {
-                // Only free if we allocated it (not a string literal)
-                if (std.mem.eql(u8, msg, "Failed to store crash message")) {
-                    // Don't free string literals
-                } else {
-                    self.allocator.free(msg);
-                }
+pub fn setInterpreter(self: *TestEnv, interp: *eval.Interpreter) void {
+    self.interpreter = interp;
+}
+
+pub fn deinit(self: *TestEnv) void {
+    // Clean up crash message if we allocated it
+    if (self.interpreter) |interp| {
+        if (interp.crash_message) |msg| {
+            // Only free if we allocated it (not a string literal)
+            if (std.mem.eql(u8, msg, "Failed to store crash message")) {
+                // Don't free string literals
+            } else {
+                self.allocator.free(msg);
             }
         }
     }
+}
 
-    pub fn get_ops(self: *TestEnv) *RocOps {
-        if (self.roc_ops == null) {
-            self.roc_ops = RocOps{
-                .env = @ptrCast(self),
-                .roc_alloc = testRocAlloc,
-                .roc_dealloc = testRocDealloc,
-                .roc_realloc = testRocRealloc,
-                .roc_dbg = testRocDbg,
-                .roc_expect_failed = testRocExpectFailed,
-                .roc_crashed = testRocCrashed,
-                .host_fns = undefined, // Not used in tests
-            };
-        }
-        return &(self.roc_ops.?);
+pub fn get_ops(self: *TestEnv) *RocOps {
+    if (self.roc_ops == null) {
+        self.roc_ops = RocOps{
+            .env = @ptrCast(self),
+            .roc_alloc = testRocAlloc,
+            .roc_dealloc = testRocDealloc,
+            .roc_realloc = testRocRealloc,
+            .roc_dbg = testRocDbg,
+            .roc_expect_failed = testRocExpectFailed,
+            .roc_crashed = testRocCrashed,
+            .host_fns = undefined, // Not used in tests
+        };
     }
-};
+    return &(self.roc_ops.?);
+}
 
 fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const test_env: *TestEnv = @ptrCast(@alignCast(env));
