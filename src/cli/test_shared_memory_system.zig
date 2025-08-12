@@ -123,6 +123,21 @@ test "integration - shared memory setup and parsing" {
     // Test that we can set up shared memory with ModuleEnv
     const shm_handle = try main.setupSharedMemoryWithModuleEnv(allocator, roc_path);
 
+    // Clean up shared memory resources
+    defer {
+        if (comptime builtin.os.tag == .windows) {
+            _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+        } else {
+            const posix = struct {
+                extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
+                extern "c" fn close(fd: c_int) c_int;
+            };
+            _ = posix.munmap(shm_handle.ptr, shm_handle.size);
+            _ = posix.close(shm_handle.fd);
+        }
+    }
+
     // Verify that shared memory was set up correctly
     try testing.expect(shm_handle.size > 0);
     try testing.expect(@intFromPtr(shm_handle.ptr) != 0);
@@ -166,6 +181,21 @@ test "integration - compilation pipeline for different expressions" {
             continue;
         };
 
+        // Clean up shared memory resources
+        defer {
+            if (comptime builtin.os.tag == .windows) {
+                _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
+                _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+            } else {
+                const posix = struct {
+                    extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
+                    extern "c" fn close(fd: c_int) c_int;
+                };
+                _ = posix.munmap(shm_handle.ptr, shm_handle.size);
+                _ = posix.close(shm_handle.fd);
+            }
+        }
+
         // Verify shared memory was set up successfully
         try testing.expect(shm_handle.size > 0);
         std.log.info("Successfully compiled expression: '{s}' (shared memory size: {} bytes)\n", .{ roc_content, shm_handle.size });
@@ -200,6 +230,20 @@ test "integration - error handling in compilation" {
     // We expect this to either fail or succeed (depending on parser error handling)
     // The important thing is that it doesn't crash
     if (result) |shm_handle| {
+        // Clean up shared memory resources if successful
+        defer {
+            if (comptime builtin.os.tag == .windows) {
+                _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
+                _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+            } else {
+                const posix = struct {
+                    extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
+                    extern "c" fn close(fd: c_int) c_int;
+                };
+                _ = posix.munmap(shm_handle.ptr, shm_handle.size);
+                _ = posix.close(shm_handle.fd);
+            }
+        }
         std.log.info("Compilation succeeded even with invalid syntax (size: {} bytes)\n", .{shm_handle.size});
     } else |err| {
         std.log.info("Compilation failed as expected with error: {}\n", .{err});

@@ -833,11 +833,14 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     // Copy the ModuleEnv to the allocated space
     env_ptr.* = env;
 
-    // Clean up the canonicalizer (but keep parse_ast data since it's in shared memory)
+    // Clean up the canonicalizer and parsing structures
     canonicalizer.deinit();
-
-    // Don't deinit parse_ast since its data is in shared memory
-    // Don't deinit checker since its data is in shared memory
+    
+    // Clean up parse_ast since it was allocated with gpa, not shared memory
+    parse_ast.deinit(gpa);
+    
+    // Clean up checker since it was allocated with shared memory, but we need to clean up its gpa allocations
+    checker.deinit();
 
     // Update the header with used size
     shm.updateHeader();
@@ -1411,4 +1414,9 @@ pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
         tracy.waitForShutdown() catch unreachable;
     }
     std.process.exit(1);
+}
+
+// Include tests from other files
+test {
+    _ = @import("test_shared_memory_system.zig");
 }

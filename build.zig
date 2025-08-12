@@ -163,6 +163,20 @@ pub fn build(b: *std.Build) void {
     const run_snapshot_test = b.addRunArtifact(snapshot_test);
     test_step.dependOn(&run_snapshot_test.step);
 
+    // Add CLI test
+    const cli_test = b.addTest(.{
+        .name = "cli_test",
+        .root_source_file = b.path("src/cli/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    roc_modules.addAll(cli_test);
+    add_tracy(b, roc_modules.build_options, cli_test, target, false, flag_enable_tracy);
+    
+    const run_cli_test = b.addRunArtifact(cli_test);
+    test_step.dependOn(&run_cli_test.step);
+
     b.default_step.dependOn(playground_step);
     if (playground_test_install) |install| {
         b.default_step.dependOn(&install.step);
