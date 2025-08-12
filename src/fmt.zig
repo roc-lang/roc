@@ -2213,7 +2213,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
-    var parse_ast = try parse.parse(&module_env);
+    var parse_ast = try parse.parse(&module_env.common, module_env.gpa);
     defer parse_ast.deinit(gpa);
 
     // Currently disabled cause SExpr are missing a lot of IR coverage resulting in panics.
