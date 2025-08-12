@@ -391,6 +391,20 @@ mod cli_tests {
                 .run()
                 .assert_stdout_and_stderr_ends_with(expected_out);
         }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        // https://github.com/roc-lang/roc/issues/8111
+        fn issue5514() {
+            let cli_check = ExecCli::new(
+                CMD_CHECK,
+                file_from_root("crates/cli/tests/test-projects/", "issue5514.roc"),
+            );
+
+            let expected_out = "0 errors and 0 warnings found in <ignored for test> ms.\n\n";
+
+            cli_check.run().assert_clean_stdout(expected_out);
+        }
     }
 
     mod test_platform_basic_cli {
