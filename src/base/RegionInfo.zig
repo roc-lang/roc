@@ -8,6 +8,8 @@ const std = @import("std");
 const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 
+const SafeList = collections.SafeList;
+
 // byte indexes into the source text
 start_line_idx: u32,
 start_col_idx: u32,
@@ -109,4 +111,88 @@ pub fn position(source: []const u8, line_starts: []const u32, begin: u32, end: u
 /// Calculate line text for this region on demand
 pub fn calculateLineText(self: RegionInfo, source: []const u8, line_starts: []const u32) []const u8 {
     return getLineText(source, line_starts, self.start_line_idx, self.end_line_idx);
+}
+
+test "lineIdx" {
+    const gpa = std.testing.allocator;
+    var line_starts = try SafeList(u32).initCapacity(gpa, 256);
+    defer line_starts.deinit(gpa);
+
+    // Simple test case with lines at positions 0, 10, 20
+    _ = try line_starts.append(gpa, 0);
+    _ = try line_starts.append(gpa, 10);
+    _ = try line_starts.append(gpa, 20);
+    _ = try line_starts.append(gpa, 30);
+
+    try std.testing.expectEqual(0, RegionInfo.lineIdx(line_starts.items.items, 0));
+    try std.testing.expectEqual(0, RegionInfo.lineIdx(line_starts.items.items, 5));
+    try std.testing.expectEqual(0, RegionInfo.lineIdx(line_starts.items.items, 9));
+    try std.testing.expectEqual(1, RegionInfo.lineIdx(line_starts.items.items, 10));
+    try std.testing.expectEqual(1, RegionInfo.lineIdx(line_starts.items.items, 15));
+    try std.testing.expectEqual(1, RegionInfo.lineIdx(line_starts.items.items, 19));
+    try std.testing.expectEqual(2, RegionInfo.lineIdx(line_starts.items.items, 20));
+    try std.testing.expectEqual(2, RegionInfo.lineIdx(line_starts.items.items, 25));
+    try std.testing.expectEqual(2, RegionInfo.lineIdx(line_starts.items.items, 29));
+    try std.testing.expectEqual(3, RegionInfo.lineIdx(line_starts.items.items, 30));
+    try std.testing.expectEqual(3, RegionInfo.lineIdx(line_starts.items.items, 35));
+}
+
+test "columnIdx" {
+    const gpa = std.testing.allocator;
+    var line_starts = try SafeList(u32).initCapacity(gpa, 256);
+    defer line_starts.deinit(gpa);
+
+    _ = try line_starts.append(gpa, 0);
+    _ = try line_starts.append(gpa, 10);
+    _ = try line_starts.append(gpa, 20);
+
+    try std.testing.expectEqual(0, RegionInfo.columnIdx(line_starts.items.items, 0, 0));
+    try std.testing.expectEqual(5, RegionInfo.columnIdx(line_starts.items.items, 0, 5));
+    try std.testing.expectEqual(9, RegionInfo.columnIdx(line_starts.items.items, 0, 9));
+
+    try std.testing.expectEqual(0, RegionInfo.columnIdx(line_starts.items.items, 1, 10));
+    try std.testing.expectEqual(5, RegionInfo.columnIdx(line_starts.items.items, 1, 15));
+}
+
+test "getLineText" {
+    const gpa = std.testing.allocator;
+    var line_starts = try SafeList(u32).initCapacity(gpa, 256);
+    defer line_starts.deinit(gpa);
+
+    const source = "line0\nline1\nline2";
+
+    _ = try line_starts.append(gpa, 0);
+    _ = try line_starts.append(gpa, 6);
+    _ = try line_starts.append(gpa, 12);
+
+    try std.testing.expectEqualStrings("line0", RegionInfo.getLineText(source, line_starts.items.items, 0, 0));
+    try std.testing.expectEqualStrings("line1", RegionInfo.getLineText(source, line_starts.items.items, 1, 1));
+    try std.testing.expectEqualStrings("line0\nline1", RegionInfo.getLineText(source, line_starts.items.items, 0, 1));
+    try std.testing.expectEqualStrings("line2", RegionInfo.getLineText(source, line_starts.items.items, 2, 2));
+}
+
+test "get" {
+    const gpa = std.testing.allocator;
+    var line_starts = try SafeList(u32).initCapacity(gpa, 256);
+    defer line_starts.deinit(gpa);
+
+    const source = "line0\nline1\nline2";
+
+    _ = try line_starts.append(gpa, 0);
+    _ = try line_starts.append(gpa, 6);
+    _ = try line_starts.append(gpa, 12);
+
+    const info1 = try RegionInfo.position(source, line_starts.items.items, 2, 4);
+    try std.testing.expectEqual(0, info1.start_line_idx);
+    try std.testing.expectEqual(2, info1.start_col_idx);
+    try std.testing.expectEqual(0, info1.end_line_idx);
+    try std.testing.expectEqual(4, info1.end_col_idx);
+    try std.testing.expectEqualStrings("line0", info1.calculateLineText(source, line_starts.items.items));
+
+    const info2 = try RegionInfo.position(source, line_starts.items.items, 8, 10);
+    try std.testing.expectEqual(1, info2.start_line_idx);
+    try std.testing.expectEqual(2, info2.start_col_idx);
+    try std.testing.expectEqual(1, info2.end_line_idx);
+    try std.testing.expectEqual(4, info2.end_col_idx);
+    try std.testing.expectEqualStrings("line1", info2.calculateLineText(source, line_starts.items.items));
 }

@@ -1,22 +1,25 @@
 //! Tests for the expression evaluator
 const std = @import("std");
-const helpers = @import("helpers.zig");
-const eval = @import("../interpreter.zig");
-const test_env = @import("../test_env.zig");
-const compile = @import("compile");
 const parse = @import("parse");
 const types = @import("types");
 const base = @import("base");
-const Can = @import("can");
-const Check = @import("check");
-const stack = @import("../stack.zig");
-const layout_store = @import("../../layout/store.zig");
+const can = @import("can");
+const check = @import("check");
+const layout = @import("layout");
+const builtins = @import("builtins");
 const collections = @import("collections");
 const serialization = @import("serialization");
-const builtins = @import("builtins");
 
-const ModuleEnv = compile.ModuleEnv;
-const CompactWriter = serialization.CompactWriter;
+const helpers = @import("helpers.zig");
+const TestEnv = @import("TestEnv.zig");
+const eval = @import("../interpreter.zig");
+const stack = @import("../stack.zig");
+
+const LayoutStore = layout.Store;
+const Can = can.Can;
+const Check = check.Check;
+const ModuleEnv = can.ModuleEnv;
+const CompactWriter = collections.CompactWriter;
 const testing = std.testing;
 const test_allocator = testing.allocator;
 
@@ -292,10 +295,10 @@ test "crash message storage and retrieval - direct API test" {
     var eval_stack = try stack.Stack.initCapacity(testing.allocator, 1024);
     defer eval_stack.deinit();
 
-    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
-    var test_env_instance = test_env.TestEnv.init(testing.allocator);
+    var test_env_instance = TestEnv.init(testing.allocator);
     defer test_env_instance.deinit();
 
     var interpreter = try eval.Interpreter.init(
@@ -418,7 +421,7 @@ test "lambdas nested closures" {
 
 // Helper function to test that evaluation succeeds without checking specific values
 fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !void {
-    var test_env_instance = test_env.TestEnv.init(testing.allocator);
+    var test_env_instance = TestEnv.init(testing.allocator);
     defer test_env_instance.deinit();
 
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
@@ -427,7 +430,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     var eval_stack = try stack.Stack.initCapacity(std.testing.allocator, 1024);
     defer eval_stack.deinit();
 
-    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types);
+    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
     var interpreter = try eval.Interpreter.init(
@@ -648,19 +651,19 @@ test "ModuleEnv serialization and interpreter evaluation" {
     const source = "5 + 8";
 
     const gpa = test_allocator;
-    var test_env_instance = test_env.TestEnv.init(gpa);
+    var test_env_instance = TestEnv.init(gpa);
     defer test_env_instance.deinit();
 
     // Create original ModuleEnv
     var original_env = try ModuleEnv.init(gpa, source);
     defer original_env.deinit();
 
-    original_env.source = source;
+    original_env.common.source = source;
     original_env.module_name = "TestModule";
-    try original_env.calcLineStarts();
+    try original_env.common.calcLineStarts(original_env.gpa);
 
     // Parse the source code
-    var parse_ast = try parse.parseExpr(&original_env);
+    var parse_ast = try parse.parseExpr(&original_env.common, original_env.gpa);
     defer parse_ast.deinit(gpa);
 
     // Empty scratch space (required before canonicalization)
@@ -670,12 +673,12 @@ test "ModuleEnv serialization and interpreter evaluation" {
     try original_env.initCIRFields(gpa, "test");
 
     // Create canonicalizer
-    var can = try Can.init(&original_env, &parse_ast, null);
-    defer can.deinit();
+    var czer = try Can.init(&original_env, &parse_ast, null);
+    defer czer.deinit();
 
     // Canonicalize the expression
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonicalized_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
+    const canonicalized_expr_idx = try czer.canonicalizeExpr(expr_idx) orelse {
         return error.CanonicalizeFailure;
     };
 
@@ -690,7 +693,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         var eval_stack = try stack.Stack.initCapacity(gpa, 1024);
         defer eval_stack.deinit();
 
-        var layout_cache = try layout_store.Store.init(&original_env, &original_env.types);
+        var layout_cache = try LayoutStore.init(&original_env, &original_env.types);
         defer layout_cache.deinit();
 
         var interpreter = try eval.Interpreter.init(
@@ -721,6 +724,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         var writer = CompactWriter{
             .iovecs = .{},
             .total_bytes = 0,
+            .allocated_memory = .{},
         };
         defer writer.deinit(arena_alloc);
 
@@ -745,7 +749,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         // Verify basic deserialization worked
         try testing.expectEqualStrings("TestModule", deserialized_env.module_name);
-        try testing.expectEqualStrings(source, deserialized_env.source);
+        try testing.expectEqualStrings(source, deserialized_env.common.source);
 
         // Test 3: Verify the deserialized ModuleEnv has the correct structure
         try testing.expect(deserialized_env.types.len() > 0);
@@ -754,7 +758,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // Verify that the deserialized data matches the original data
         try testing.expectEqual(original_env.types.len(), deserialized_env.types.len());
         try testing.expectEqual(original_env.store.nodes.items.len, deserialized_env.store.nodes.items.len);
-        try testing.expectEqual(original_env.idents.interner.bytes.len(), deserialized_env.idents.interner.bytes.len());
+        try testing.expectEqual(original_env.common.idents.interner.bytes.len(), deserialized_env.common.idents.interner.bytes.len());
 
         // Test 4: Evaluate the same expression using the deserialized ModuleEnv
         // The original expression index should still be valid since the NodeStore structure is preserved
@@ -762,7 +766,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
             var eval_stack = try stack.Stack.initCapacity(gpa, 1024);
             defer eval_stack.deinit();
 
-            var layout_cache = try layout_store.Store.init(deserialized_env, &deserialized_env.types);
+            var layout_cache = try LayoutStore.init(deserialized_env, &deserialized_env.types);
             defer layout_cache.deinit();
 
             var interpreter = try eval.Interpreter.init(

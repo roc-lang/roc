@@ -19,6 +19,11 @@ pub const SafeStringHashMap = @import("safe_hash_map.zig").SafeStringHashMap;
 
 pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuilder;
 pub const ExposedItems = @import("ExposedItems.zig").ExposedItems;
+pub const CompactWriter = @import("CompactWriter.zig");
+
+/// Re-exported alignment constant from CompactWriter for convenience.
+/// This alignment is required for all serialization buffers to ensure proper memory access.
+pub const SERIALIZATION_ALIGNMENT = CompactWriter.SERIALIZATION_ALIGNMENT;
 
 /// A range that must have at least one element
 pub const NonEmptyRange = struct {
@@ -90,4 +95,12 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
             return self.get(key) != null;
         }
     };
+}
+
+test "collections tests" {
+    std.testing.refAllDecls(@import("CompactWriter.zig"));
+    std.testing.refAllDecls(@import("ExposedItems.zig"));
+    std.testing.refAllDecls(@import("safe_hash_map.zig"));
+    std.testing.refAllDecls(@import("safe_list.zig"));
+    std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
 }

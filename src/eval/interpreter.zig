@@ -30,28 +30,29 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const compile = @import("compile");
+const can = @import("can");
 const builtins = @import("builtins");
 const collections = @import("collections");
 
-const layout = @import("../layout/layout.zig");
+const layout = @import("layout");
 const build_options = @import("build_options");
 const stack = @import("stack.zig");
 const StackValue = @import("StackValue.zig");
 
+const CIR = can.CIR;
+const ModuleEnv = can.ModuleEnv;
 const StringLiteral = base.StringLiteral;
 const RocOps = builtins.host_abi.RocOps;
 const RocList = builtins.list.RocList;
-const ModuleEnv = compile.ModuleEnv;
 const RocStr = builtins.str.RocStr;
 const LayoutTag = layout.LayoutTag;
 const RocDec = builtins.dec.RocDec;
 const SExprTree = base.SExprTree;
 const Closure = layout.Closure;
 const Layout = layout.Layout;
-const Expr = ModuleEnv.Expr;
+const Expr = CIR.Expr;
 const Ident = base.Ident;
-const LayoutStore = layout.store.Store;
+const LayoutStore = layout.Store;
 const TypeStore = types.store.Store;
 const target_usize = base.target.Target.native.target_usize;
 const target = base.target;
@@ -161,7 +162,7 @@ pub const WorkItem = struct {
     /// The type of work to be performed
     kind: WorkKind,
     /// The expression index this work item operates on
-    expr_idx: ModuleEnv.Expr.Idx,
+    expr_idx: CIR.Expr.Idx,
     /// Optional extra data for e.g. if-expressions and lambda call
     extra: union {
         nothing: void,
@@ -169,7 +170,7 @@ pub const WorkItem = struct {
         arg_count: u32,
         current_field_idx: usize,
         bindings_stack_len: usize,
-        decl_pattern_idx: ModuleEnv.Pattern.Idx,
+        decl_pattern_idx: CIR.Pattern.Idx,
         dot_access_field_name: Ident.Idx,
         current_element_idx: usize,
         crash_msg: StringLiteral.Idx,
@@ -186,15 +187,15 @@ pub const WorkItem = struct {
 /// `if condition then body` clause.
 const BranchData = struct {
     /// Expression index for the branch condition (must evaluate to Bool)
-    cond: ModuleEnv.Expr.Idx,
+    cond: CIR.Expr.Idx,
     /// Expression index for the branch body (evaluated if condition is true)
-    body: ModuleEnv.Expr.Idx,
+    body: CIR.Expr.Idx,
 };
 
 /// Tracks execution context for function calls
 pub const CallFrame = struct {
     /// this function's body expression
-    body_idx: ModuleEnv.Expr.Idx,
+    body_idx: CIR.Expr.Idx,
     /// Offset into the `stack_memory` of the interpreter where this frame's values start
     stack_base: u32,
     /// Offset into the `layout_cache` of the interpreter where this frame's layouts start
@@ -223,7 +224,7 @@ pub const CallFrame = struct {
 /// The binding references the value in the interpreter's stack.
 const Binding = struct {
     /// Pattern index that this binding satisfies (for pattern matching)
-    pattern_idx: ModuleEnv.Pattern.Idx,
+    pattern_idx: CIR.Pattern.Idx,
     /// The bound value
     value: StackValue,
 
@@ -318,7 +319,7 @@ pub const Interpreter = struct {
     }
 
     /// Look up a binding in the local bindings stack
-    fn lookupBinding(self: *Interpreter, pattern_idx: ModuleEnv.Pattern.Idx) ?StackValue {
+    fn lookupBinding(self: *Interpreter, pattern_idx: CIR.Pattern.Idx) ?StackValue {
         var reversed = std.mem.reverseIterator(self.bindings_stack.items);
         while (reversed.next()) |binding| {
             if (binding.pattern_idx == pattern_idx) {
@@ -330,7 +331,7 @@ pub const Interpreter = struct {
     }
 
     /// Look up a capture in the current closure
-    fn lookupCapture(self: *Interpreter, pattern_idx: ModuleEnv.Pattern.Idx) !?StackValue {
+    fn lookupCapture(self: *Interpreter, pattern_idx: CIR.Pattern.Idx) !?StackValue {
         if (self.frame_stack.items.len == 0) return null;
 
         const frame = self.frame_stack.items[self.frame_stack.items.len - 1];
@@ -352,7 +353,7 @@ pub const Interpreter = struct {
             .assign => |a| a.ident,
             else => return error.LayoutError,
         };
-        const capture_name_text = self.env.idents.getText(ident_idx);
+        const capture_name_text = self.env.getIdent(ident_idx);
 
         if (captures_layout.tag == .record) {
             // Use RecordAccessor for safe field access
@@ -369,7 +370,7 @@ pub const Interpreter = struct {
     }
 
     /// Look up a global definition
-    fn lookupGlobal(self: *Interpreter, pattern_idx: ModuleEnv.Pattern.Idx) ?ModuleEnv.Expr.Idx {
+    fn lookupGlobal(self: *Interpreter, pattern_idx: CIR.Pattern.Idx) ?CIR.Expr.Idx {
         const defs = self.env.store.sliceDefs(self.env.all_defs);
         for (defs) |def_idx| {
             const def = self.env.store.getDef(def_idx);
@@ -401,7 +402,7 @@ pub const Interpreter = struct {
     ///
     /// This is the main entry point for expression evaluation. Uses an iterative
     /// work queue approach to evaluate complex expressions without recursion.
-    pub fn eval(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, roc_ops: *RocOps) EvalError!StackValue {
+    pub fn eval(self: *Interpreter, expr_idx: CIR.Expr.Idx, roc_ops: *RocOps) EvalError!StackValue {
         // Ensure work_stack and value_stack are empty before we start. (stack_memory might not be, and that's fine!)
         std.debug.assert(self.work_stack.items.len == 0);
         std.debug.assert(self.value_stack.items.len == 0);
@@ -442,7 +443,7 @@ pub const Interpreter = struct {
                     // The expr_idx encodes both the if expression and the branch index
                     // Lower 16 bits: if expression index
                     // Upper 16 bits: branch index
-                    const if_expr_idx: ModuleEnv.Expr.Idx = @enumFromInt(@intFromEnum(work.expr_idx) & 0xFFFF);
+                    const if_expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(work.expr_idx) & 0xFFFF);
                     const branch_index: u16 = @intCast((@intFromEnum(work.expr_idx) >> 16) & 0xFFFF);
                     try self.checkIfCondition(if_expr_idx, branch_index);
                 },
@@ -460,7 +461,7 @@ pub const Interpreter = struct {
                     work.extra.dot_access_field_name,
                 ),
                 .w_crash => {
-                    const msg = self.env.strings.get(work.extra.crash_msg);
+                    const msg = self.env.getString(work.extra.crash_msg);
                     roc_ops.crash(msg);
                     // The crash function will set has_crashed = true
                     // Clear the work stack to prevent further evaluation
@@ -475,7 +476,7 @@ pub const Interpreter = struct {
                     roc_ops,
                 ),
                 .w_let_bind => {
-                    const pattern_idx: ModuleEnv.Pattern.Idx = work.extra.decl_pattern_idx;
+                    const pattern_idx: CIR.Pattern.Idx = work.extra.decl_pattern_idx;
                     const value = try self.peekStackValue(1); // Don't pop!
 
                     try self.bindPattern(pattern_idx, value, roc_ops); // Value stays on stack for the block's lifetime
@@ -645,7 +646,7 @@ pub const Interpreter = struct {
     /// # Error Handling
     /// Malformed expressions result in runtime error placeholders rather
     /// than evaluation failure.
-    fn evalExpr(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, roc_ops: *RocOps, layout_idx: ?layout.Idx) EvalError!void {
+    fn evalExpr(self: *Interpreter, expr_idx: CIR.Expr.Idx, roc_ops: *RocOps, layout_idx: ?layout.Idx) EvalError!void {
         const expr = self.env.store.getExpr(expr_idx);
 
         self.traceEnter("evalExpr {s}", .{@tagName(expr)});
@@ -709,7 +710,7 @@ pub const Interpreter = struct {
 
                 std.debug.assert(result_value.ptr != null);
                 const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
-                const tag_name = self.env.idents.getText(tag.name);
+                const tag_name = self.env.getIdent(tag.name);
                 if (std.mem.eql(u8, tag_name, "True")) {
                     tag_ptr.* = 1;
                 } else if (std.mem.eql(u8, tag_name, "False")) {
@@ -866,7 +867,7 @@ pub const Interpreter = struct {
                         .structure => |flat_type| switch (flat_type) {
                             .nominal_type => {
                                 // Good - we have a nominal type
-                                const nominal_ident = self.env.idents.getText(flat_type.nominal_type.ident.ident_idx);
+                                const nominal_ident = self.env.getIdent(flat_type.nominal_type.ident.ident_idx);
                                 if (std.mem.eql(u8, nominal_ident, "Bool")) {
                                     // For Bool nominal types, verify we get boolean layout
                                     const nominal_layout = self.layout_cache.getLayout(nominal_layout_idx);
@@ -889,7 +890,7 @@ pub const Interpreter = struct {
                 const resolved = self.layout_cache.types_store.resolveVar(nominal_var);
                 const nominal_ident = switch (resolved.desc.content) {
                     .structure => |flat_type| switch (flat_type) {
-                        .nominal_type => |nt| self.env.idents.getText(nt.ident.ident_idx),
+                        .nominal_type => |nt| self.env.getIdent(nt.ident.ident_idx),
                         else => "unknown",
                     },
                     else => "unknown",
@@ -1124,7 +1125,7 @@ pub const Interpreter = struct {
 
             .e_str_segment => |str_seg| {
                 // Get the string literal content
-                const literal_content = self.env.strings.get(str_seg.literal);
+                const literal_content = self.env.getString(str_seg.literal);
                 self.traceInfo("Creating string literal: \"{s}\"", .{literal_content});
 
                 // Allocate stack space for RocStr
@@ -1423,7 +1424,7 @@ pub const Interpreter = struct {
 
     /// Handle boolean scalar tag expressions (True/False) by setting the appropriate boolean value
     fn handleBooleanScalarTag(self: *Interpreter, result_value: StackValue, tag_name: Ident.Idx) EvalError!void {
-        const tag_text = self.env.idents.getText(tag_name);
+        const tag_text = self.env.getIdent(tag_name);
         const bool_value: u8 = if (std.mem.eql(u8, tag_text, "True")) 1 else if (std.mem.eql(u8, tag_text, "False")) 0 else {
             self.traceError("Invalid boolean tag: {s}", .{tag_text});
             return error.InvalidBooleanTag;
@@ -1530,7 +1531,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn checkIfCondition(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, branch_index: u16) EvalError!void {
+    fn checkIfCondition(self: *Interpreter, expr_idx: CIR.Expr.Idx, branch_index: u16) EvalError!void {
         // Pop the condition layout
         const condition = try self.peekStackValue(1);
         const condition_layout = condition.layout;
@@ -1578,7 +1579,7 @@ pub const Interpreter = struct {
                 const next_branch = self.env.store.getIfBranch(branches[next_branch_idx]);
 
                 // Encode branch index in upper 16 bits
-                const encoded_idx: ModuleEnv.Expr.Idx = @enumFromInt(@intFromEnum(expr_idx) | (@as(u32, next_branch_idx) << 16));
+                const encoded_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(expr_idx) | (@as(u32, next_branch_idx) << 16));
 
                 // Push work to check next condition after it's evaluated
                 self.schedule_work(WorkItem{
@@ -1604,7 +1605,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn handleLambdaCall(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, arg_count: u32, roc_ops: *RocOps) !void {
+    fn handleLambdaCall(self: *Interpreter, expr_idx: CIR.Expr.Idx, arg_count: u32, roc_ops: *RocOps) !void {
         self.traceEnter("handleLambdaCall {}", .{expr_idx});
         defer self.traceExit("", .{});
 
@@ -1784,7 +1785,7 @@ pub const Interpreter = struct {
         self.traceInfo("Lambda return: stack cleaned with pre-allocated return slot", .{});
     }
 
-    fn handleRecordFields(self: *Interpreter, record_expr_idx: ModuleEnv.Expr.Idx, current_field_idx: usize) EvalError!void {
+    fn handleRecordFields(self: *Interpreter, record_expr_idx: CIR.Expr.Idx, current_field_idx: usize) EvalError!void {
         self.traceEnter(
             "handleRecordFields record_expr_idx={}, current_field_idx={}",
             .{ record_expr_idx, current_field_idx },
@@ -1822,7 +1823,7 @@ pub const Interpreter = struct {
                 const dest_field = try record_accessor.getFieldByIndex(prev_field_index_in_sorted);
                 prev_field_value.copyWithoutRefcount(dest_field, self.layout_cache);
 
-                self.traceInfo("Copied field '{s}' (size={}) to index {}", .{ self.env.idents.getText(prev_field_layout_info.name), prev_field_size, prev_field_index_in_sorted });
+                self.traceInfo("Copied field '{s}' (size={}) to index {}", .{ self.env.getIdent(prev_field_layout_info.name), prev_field_size, prev_field_index_in_sorted });
             }
         }
 
@@ -1847,8 +1848,8 @@ pub const Interpreter = struct {
                 else => unreachable, // Should only be called for e_record
             };
 
-            // Look for the current field ModuleEnv.Expr.Idx
-            var value_expr_idx: ?ModuleEnv.Expr.Idx = null;
+            // Look for the current field CIR.Expr.Idx
+            var value_expr_idx: ?CIR.Expr.Idx = null;
             for (cir_fields) |field_idx| {
                 const field = self.env.store.getRecordField(field_idx);
                 if (field.name == current_field_name) {
@@ -1859,7 +1860,7 @@ pub const Interpreter = struct {
 
             const current_field_value_expr_idx = value_expr_idx orelse {
                 // This should be impossible if the CIR and layout are consistent.
-                self.traceError("Could not find value for field '{s}'", .{self.env.idents.getText(current_field_name)});
+                self.traceError("Could not find value for field '{s}'", .{self.env.getIdent(current_field_name)});
                 return error.LayoutError;
             };
 
@@ -1884,7 +1885,7 @@ pub const Interpreter = struct {
         const record_value = try self.popStackValue();
 
         // Get the field name
-        const field_name = self.env.idents.getText(field_name_idx);
+        const field_name = self.env.getIdent(field_name_idx);
 
         // The record must have a record layout
         if (record_value.layout.tag != .record) {
@@ -2000,8 +2001,8 @@ pub const Interpreter = struct {
         }
     }
 
-    /// Helper to pretty print a ModuleEnv.Expression in a trace
-    pub fn traceExpression(self: *const Interpreter, expression_idx: ModuleEnv.Expr.Idx) void {
+    /// Helper to pretty print a CIR.Expression in a trace
+    pub fn traceExpression(self: *const Interpreter, expression_idx: CIR.Expr.Idx) void {
         if (self.trace_writer) |writer| {
             const expression = self.env.store.getExpr(expression_idx);
 
@@ -2018,8 +2019,8 @@ pub const Interpreter = struct {
         }
     }
 
-    /// Helper to pretty print a ModuleEnv.Pattern in a trace
-    pub fn tracePattern(self: *const Interpreter, pattern_idx: ModuleEnv.Pattern.Idx) void {
+    /// Helper to pretty print a CIR.Pattern in a trace
+    pub fn tracePattern(self: *const Interpreter, pattern_idx: CIR.Pattern.Idx) void {
         if (self.trace_writer) |writer| {
             const pattern = self.env.store.getPattern(pattern_idx);
 
@@ -2132,7 +2133,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn bindPattern(self: *Interpreter, pattern_idx: ModuleEnv.Pattern.Idx, value: StackValue, roc_ops: *RocOps) EvalError!void {
+    fn bindPattern(self: *Interpreter, pattern_idx: CIR.Pattern.Idx, value: StackValue, roc_ops: *RocOps) EvalError!void {
         const pattern = self.env.store.getPattern(pattern_idx);
         switch (pattern) {
             .assign => |assign_pattern| {
@@ -2141,7 +2142,7 @@ pub const Interpreter = struct {
                     .value = value.cloneForBinding(),
                 };
                 self.traceInfo("Binding '{s}' (pattern_idx={})", .{
-                    self.env.idents.getText(assign_pattern.ident),
+                    self.env.getIdent(assign_pattern.ident),
                     @intFromEnum(pattern_idx),
                 });
                 try self.traceValue("value", value);
@@ -2161,7 +2162,7 @@ pub const Interpreter = struct {
                 // For each field in the pattern
                 for (destructs) |destruct_idx| {
                     const destruct = self.env.store.getRecordDestruct(destruct_idx);
-                    const field_name = self.env.idents.getText(destruct.label);
+                    const field_name = self.env.getIdent(destruct.label);
 
                     // Find the field by name using RecordAccessor
                     const field_index = record_accessor.findFieldIndex(self.env, field_name) orelse return error.LayoutError;
@@ -2206,7 +2207,7 @@ pub const Interpreter = struct {
     /// Public method to call a closure with arguments already on the stack
     /// This method assumes the arguments are already pushed onto the stack in the correct order
     /// and schedules the necessary work items to evaluate the closure and call it
-    pub fn callClosureWithStackArgs(self: *Interpreter, closure_expr_idx: ModuleEnv.Expr.Idx, arg_count: u32, roc_ops: *RocOps) EvalError!StackValue {
+    pub fn callClosureWithStackArgs(self: *Interpreter, closure_expr_idx: CIR.Expr.Idx, arg_count: u32, roc_ops: *RocOps) EvalError!StackValue {
         // Schedule work items in reverse order (they execute LIFO)
 
         // 3. Lambda call (executed LAST after closure and args are on stack)
@@ -2295,7 +2296,7 @@ pub const Interpreter = struct {
 
             // Runtime errors
             .w_crash => {
-                const msg = self.env.strings.get(work.extra.crash_msg);
+                const msg = self.env.getString(work.extra.crash_msg);
                 std.log.err("Runtime crash: {s}", .{msg});
                 return error.RuntimeCrash;
             },
@@ -2309,7 +2310,7 @@ pub const Interpreter = struct {
     }
 
     /// Helper to handle block cleanup work items
-    fn handleBlockCleanup(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, bindings_to_keep: u32, roc_ops: *builtins.host_abi.RocOps) EvalError!void {
+    fn handleBlockCleanup(self: *Interpreter, expr_idx: CIR.Expr.Idx, bindings_to_keep: u32, roc_ops: *builtins.host_abi.RocOps) EvalError!void {
         const values_to_keep: u32 = @intFromEnum(expr_idx);
         self.traceInfo(
             "Block cleanup: resetting bindings from {} to {}, values from {} to {}",
@@ -2548,7 +2549,7 @@ pub const Interpreter = struct {
 
     /// Evaluate all segments of a string interpolation and combine them into a final string.
     /// DEPRECATED: This function is replaced by work queue-based evaluation
-    fn evaluateStringInterpolation(self: *Interpreter, segments: []const ModuleEnv.Expr.Idx, roc_ops: *builtins.host_abi.RocOps) EvalError!void {
+    fn evaluateStringInterpolation(self: *Interpreter, segments: []const CIR.Expr.Idx, roc_ops: *builtins.host_abi.RocOps) EvalError!void {
         self.traceEnter("evaluateStringInterpolation with {} segments", .{segments.len});
         defer self.traceExit("", .{});
 
@@ -2656,7 +2657,7 @@ pub const Interpreter = struct {
     }
 
     /// Creates a closure from a lambda expression with proper capture handling
-    fn createClosure(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, closure_expr: ModuleEnv.Expr.Closure) EvalError!void {
+    fn createClosure(self: *Interpreter, expr_idx: CIR.Expr.Idx, closure_expr: CIR.Expr.Closure) EvalError!void {
         self.traceEnter("createClosure for closure expr_idx={}", .{expr_idx});
         defer self.traceExit("", .{});
 
@@ -2670,7 +2671,7 @@ pub const Interpreter = struct {
         };
 
         // Collect and filter captures
-        var final_captures = std.ArrayList(ModuleEnv.Expr.Capture).init(self.allocator);
+        var final_captures = std.ArrayList(CIR.Expr.Capture).init(self.allocator);
         defer final_captures.deinit();
 
         try self.collectAndFilterCaptures(closure_expr, &final_captures);
@@ -2727,8 +2728,8 @@ pub const Interpreter = struct {
     /// It re-analyzes the lambda body to find all free variables.
     fn collectAndFilterCaptures(
         self: *Interpreter,
-        closure_expr: ModuleEnv.Expr.Closure,
-        final_captures: *std.ArrayList(ModuleEnv.Expr.Capture),
+        closure_expr: CIR.Expr.Closure,
+        final_captures: *std.ArrayList(CIR.Expr.Capture),
     ) EvalError!void {
         // The canonicalization step now provides the definitive list of captures.
         const captures = self.env.store.sliceCaptures(closure_expr.captures);
@@ -2741,7 +2742,7 @@ pub const Interpreter = struct {
     }
 
     /// Creates the layout for closure captures
-    fn createClosureLayout(self: *Interpreter, captures: []const ModuleEnv.Expr.Capture) EvalError!layout.Idx {
+    fn createClosureLayout(self: *Interpreter, captures: []const CIR.Expr.Capture) EvalError!layout.Idx {
         if (captures.len > MAX_CAPTURE_FIELDS) {
             self.traceError("Closure layout: too many captures ({}, max {})", .{ captures.len, MAX_CAPTURE_FIELDS });
             return error.TypeMismatch;
@@ -2769,11 +2770,11 @@ pub const Interpreter = struct {
 
     /// Interpreter-specific capture information that doesn't modify the CIR
     const CaptureBindingInfo = struct {
-        captures: []const ModuleEnv.Expr.Capture,
+        captures: []const CIR.Expr.Capture,
         layout_idx: layout.Idx,
 
-        pub fn init(allocator: std.mem.Allocator, captures: *const std.ArrayList(ModuleEnv.Expr.Capture), layout_idx: layout.Idx) !CaptureBindingInfo {
-            const captures_copy = try allocator.dupe(ModuleEnv.Expr.Capture, captures.items);
+        pub fn init(allocator: std.mem.Allocator, captures: *const std.ArrayList(CIR.Expr.Capture), layout_idx: layout.Idx) !CaptureBindingInfo {
+            const captures_copy = try allocator.dupe(CIR.Expr.Capture, captures.items);
             return CaptureBindingInfo{
                 .captures = captures_copy,
                 .layout_idx = layout_idx,
@@ -2786,11 +2787,11 @@ pub const Interpreter = struct {
     };
 
     /// Gets the variable name from a pattern (for assign patterns)
-    fn getPatternVariableName(self: *Interpreter, pattern_idx: ModuleEnv.Pattern.Idx) ?[]const u8 {
+    fn getPatternVariableName(self: *Interpreter, pattern_idx: CIR.Pattern.Idx) ?[]const u8 {
         const pattern = self.env.store.getPattern(pattern_idx);
         switch (pattern) {
             .assign => |assign_pattern| {
-                return self.env.idents.getText(assign_pattern.ident);
+                return self.env.getIdent(assign_pattern.ident);
             },
             else => return null,
         }
@@ -2800,7 +2801,7 @@ pub const Interpreter = struct {
     fn copyCapturesToClosure(
         self: *Interpreter,
         closure_ptr: *anyopaque,
-        captures: *const std.ArrayList(ModuleEnv.Expr.Capture),
+        captures: *const std.ArrayList(CIR.Expr.Capture),
         captures_record_layout: Layout,
     ) EvalError!void {
         // Calculate properly aligned offset for captures after Closure header
@@ -2889,7 +2890,7 @@ pub const Interpreter = struct {
     fn copyFromOuterClosures(
         self: *Interpreter,
         captures_ptr: [*]u8,
-        capture: ModuleEnv.Expr.Capture,
+        capture: CIR.Expr.Capture,
         captures_record_layout: Layout,
     ) EvalError!bool {
         var frame_idx = self.frame_stack.items.len;
@@ -2953,7 +2954,7 @@ pub const Interpreter = struct {
     /// Evaluate the expression and handle both closures and simple expressions
     pub fn evaluateExpression(
         self: *Interpreter,
-        expr_idx: ModuleEnv.Expr.Idx,
+        expr_idx: CIR.Expr.Idx,
         ret_ptr: *anyopaque,
         ops: *builtins.host_abi.RocOps,
         arg_ptr: ?*anyopaque,
@@ -2988,7 +2989,7 @@ pub const Interpreter = struct {
     }
 
     /// Push closure arguments onto the interpreter stack
-    fn pushClosureArguments(self: *Interpreter, expr_idx: ModuleEnv.Expr.Idx, arg_ptr: *anyopaque) !void {
+    fn pushClosureArguments(self: *Interpreter, expr_idx: CIR.Expr.Idx, arg_ptr: *anyopaque) !void {
 
         // Get closure parameter patterns from the expression
         const param_patterns = getClosureParameterPatterns(self.env, expr_idx) catch {
@@ -3091,7 +3092,7 @@ pub const Interpreter = struct {
     /// Evaluate a closure with arguments already on the stack
     fn evaluateClosure(
         self: *Interpreter,
-        expr_idx: ModuleEnv.Expr.Idx,
+        expr_idx: CIR.Expr.Idx,
         ret_ptr: *anyopaque,
         ops: *builtins.host_abi.RocOps,
     ) !void {
@@ -3117,7 +3118,7 @@ pub const Interpreter = struct {
     ///   - Subsequent calls: Copy previous element result, schedule next element
     ///   - Final call: Copy last element, tuple construction complete
     ///   This approach allows the interpreter to construct complex nested data structures without using recursion, maintaining all state in explicit work items on the work stack.
-    fn evaluateTuple(self: *Interpreter, tuple_expr_idx: ModuleEnv.Expr.Idx, current_element_idx: usize, roc_ops: *RocOps) EvalError!void {
+    fn evaluateTuple(self: *Interpreter, tuple_expr_idx: CIR.Expr.Idx, current_element_idx: usize, roc_ops: *RocOps) EvalError!void {
         self.traceInfo("evaluateTuple tuple_expr_idx={}, current_element_idx={}", .{ tuple_expr_idx, current_element_idx });
 
         const tuple_layout_idx = try self.getLayoutIdx(tuple_expr_idx);
@@ -3256,7 +3257,7 @@ test "stack-based comparisons" {
 }
 
 /// Get parameter patterns from a closure expression
-fn getClosureParameterPatterns(env_ptr: *const ModuleEnv, expr_idx: Expr.Idx) ![]const ModuleEnv.Pattern.Idx {
+fn getClosureParameterPatterns(env_ptr: *const ModuleEnv, expr_idx: Expr.Idx) ![]const CIR.Pattern.Idx {
     const closure_expr = env_ptr.store.getExpr(expr_idx);
     const lambda_expr = switch (closure_expr) {
         .e_closure => |closure_data| env_ptr.store.getExpr(closure_data.lambda_idx),

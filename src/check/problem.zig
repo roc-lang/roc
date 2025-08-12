@@ -5,15 +5,16 @@ const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
-const compile = @import("compile");
+const can = @import("can");
 const reporting = @import("reporting");
-const Check = @import("check");
+const Check = @import("Check.zig");
 
-const snapshot = Check.snapshot;
+const snapshot = @import("snapshot.zig");
 
 const Allocator = std.mem.Allocator;
 
-const ModuleEnv = compile.ModuleEnv;
+const CIR = can.CIR;
+const ModuleEnv = can.ModuleEnv;
 
 const Report = reporting.Report;
 const Document = reporting.Document;
@@ -99,15 +100,15 @@ pub const TypeMismatchDetail = union(enum) {
 
 /// Problem data for when list elements have incompatible types
 pub const IncompatibleListElements = struct {
-    last_elem_expr: ModuleEnv.Expr.Idx,
+    last_elem_expr: CIR.Expr.Idx,
     incompatible_elem_index: u32, // 0-based index of the incompatible element
     list_length: u32, // Total number of elements in the list
 };
 
 /// Problem data for cross-module import type mismatches
 pub const CrossModuleImport = struct {
-    import_region: ModuleEnv.Expr.Idx,
-    module_idx: ModuleEnv.Import.Idx,
+    import_region: CIR.Expr.Idx,
+    module_idx: CIR.Import.Idx,
 };
 
 /// Problem data when
@@ -120,15 +121,15 @@ pub const IncompatibleFnCallArg = struct {
 
 /// Problem data for when if branches have incompatible types
 pub const IncompatibleIfBranches = struct {
-    parent_if_expr: ModuleEnv.Expr.Idx,
-    last_if_branch: ModuleEnv.Expr.IfBranch.Idx,
+    parent_if_expr: CIR.Expr.Idx,
+    last_if_branch: CIR.Expr.IfBranch.Idx,
     num_branches: u32,
     problem_branch_index: u32,
 };
 
 /// Problem data for when match patterns have have incompatible types
 pub const IncompatibleMatchPatterns = struct {
-    match_expr: ModuleEnv.Expr.Idx,
+    match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
     num_patterns: u32,
@@ -137,14 +138,14 @@ pub const IncompatibleMatchPatterns = struct {
 
 /// Problem data for when match branches have have incompatible types
 pub const IncompatibleMatchBranches = struct {
-    match_expr: ModuleEnv.Expr.Idx,
+    match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
 };
 
 /// Problem data for when a bool binop (`and` or `or`) is invalid
 pub const InvalidBoolBinop = struct {
-    binop_expr: ModuleEnv.Expr.Idx,
+    binop_expr: CIR.Expr.Idx,
     problem_side: enum { lhs, rhs },
     binop: enum { @"and", @"or" },
 };
@@ -178,7 +179,7 @@ pub const ReportBuilder = struct {
 
     gpa: Allocator,
     buf: std.ArrayList(u8),
-    module_env: *const ModuleEnv,
+    module_env: *ModuleEnv,
     can_ir: *const ModuleEnv,
     snapshots: *const snapshot.Store,
     source: []const u8,
@@ -189,7 +190,7 @@ pub const ReportBuilder = struct {
     /// Only owned field is `buf`
     pub fn init(
         gpa: Allocator,
-        module_env: *const ModuleEnv,
+        module_env: *ModuleEnv,
         can_ir: *const ModuleEnv,
         snapshots: *const snapshot.Store,
         filename: []const u8,
@@ -201,7 +202,7 @@ pub const ReportBuilder = struct {
             .module_env = module_env,
             .can_ir = can_ir,
             .snapshots = snapshots,
-            .source = module_env.source,
+            .source = module_env.common.source,
             .filename = filename,
             .other_modules = other_modules,
         };
@@ -224,7 +225,7 @@ pub const ReportBuilder = struct {
         var snapshot_writer = snapshot.SnapshotWriter.initWithContext(
             self.buf.writer(),
             self.snapshots,
-            &self.module_env.idents,
+            self.module_env.getIdentStore(),
             self.can_ir.module_name,
             self.can_ir,
             self.other_modules,
@@ -315,7 +316,7 @@ pub const ReportBuilder = struct {
             .error_highlight,
             self.filename,
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
         );
         try report.document.addLineBreak();
 
@@ -407,7 +408,7 @@ pub const ReportBuilder = struct {
 
         const overall_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
             overall_start_offset,
             overall_end_offset,
         ) catch return report;
@@ -415,21 +416,21 @@ pub const ReportBuilder = struct {
         // Get region info for both elements
         const actual_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
             actual_region.start.offset,
             actual_region.end.offset,
         ) catch return report;
 
         const expected_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
             expected_region.start.offset,
             expected_region.end.offset,
         ) catch return report;
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
-            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.line_starts.items.items)) catch return report,
+            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
             .start_line = overall_region_info.start_line_idx + 1,
             .start_column = overall_region_info.start_col_idx + 1,
             .end_line = overall_region_info.end_line_idx + 1,
@@ -517,14 +518,14 @@ pub const ReportBuilder = struct {
         const actual_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
         const actual_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
             actual_region.start.offset,
             actual_region.end.offset,
         ) catch return report;
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
-            .line_text = self.gpa.dupe(u8, actual_region_info.calculateLineText(self.source, self.module_env.line_starts.items.items)) catch return report,
+            .line_text = self.gpa.dupe(u8, actual_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
             .start_line = actual_region_info.start_line_idx + 1,
             .start_column = actual_region_info.start_col_idx + 1,
             .end_line = actual_region_info.end_line_idx + 1,
@@ -629,7 +630,7 @@ pub const ReportBuilder = struct {
 
         const overall_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
             overall_start_offset,
             overall_end_offset,
         ) catch return report;
@@ -637,14 +638,14 @@ pub const ReportBuilder = struct {
         // Get region info for invalid branch
         const actual_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
             actual_region.start.offset,
             actual_region.end.offset,
         ) catch return report;
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
-            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.line_starts.items.items)) catch return report,
+            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
             .start_line = overall_region_info.start_line_idx + 1,
             .start_column = overall_region_info.start_col_idx + 1,
             .end_line = overall_region_info.end_line_idx + 1,
@@ -764,7 +765,7 @@ pub const ReportBuilder = struct {
         const match_expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
         const overall_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
             match_expr_region.start.offset,
             match_expr_region.end.offset,
         ) catch return report;
@@ -773,14 +774,14 @@ pub const ReportBuilder = struct {
         const invalid_var_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
         const invalid_var_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
             invalid_var_region.start.offset,
             invalid_var_region.end.offset,
         ) catch return report;
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
-            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.line_starts.items.items)) catch return report,
+            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
             .start_line = overall_region_info.start_line_idx + 1,
             .start_column = overall_region_info.start_col_idx + 1,
             .end_line = overall_region_info.end_line_idx + 1,
@@ -886,14 +887,14 @@ pub const ReportBuilder = struct {
 
         const overall_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
             overall_start_offset,
             overall_end_offset,
         ) catch return report;
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
-            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.line_starts.items.items)) catch return report,
+            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
             .start_line = overall_region_info.start_line_idx + 1,
             .start_column = overall_region_info.start_col_idx + 1,
             .end_line = overall_region_info.end_line_idx + 1,
@@ -905,7 +906,7 @@ pub const ReportBuilder = struct {
         // Create underline regions
         const this_branch_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
             this_branch_region.start.offset,
             this_branch_region.end.offset,
         ) catch return report;
@@ -988,14 +989,14 @@ pub const ReportBuilder = struct {
 
         const overall_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
             overall_start_offset,
             overall_end_offset,
         ) catch return report;
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
-            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.line_starts.items.items)) catch return report,
+            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
             .start_line = overall_region_info.start_line_idx + 1,
             .start_column = overall_region_info.start_col_idx + 1,
             .end_line = overall_region_info.end_line_idx + 1,
@@ -1007,7 +1008,7 @@ pub const ReportBuilder = struct {
         // Create underline regions
         const this_branch_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
             problem_side_region.start.offset,
             problem_side_region.end.offset,
         ) catch return report;
@@ -1087,7 +1088,7 @@ pub const ReportBuilder = struct {
             .error_highlight,
             self.filename,
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
         );
         try report.document.addLineBreak();
 
@@ -1122,11 +1123,11 @@ pub const ReportBuilder = struct {
 
             // Check if there's a tag with the same name in the list of possible tags
 
-            const actual_tag_name_str = self.can_ir.idents.getText(actual_tag.name);
+            const actual_tag_name_str = self.can_ir.getIdent(actual_tag.name);
             var iter = expected_content.structure.tag_union.tags.iterIndices();
             while (iter.next()) |tag_index| {
                 const cur_expected_tag = self.snapshots.tags.get(tag_index);
-                const expected_tag_name_str = self.can_ir.idents.getText(cur_expected_tag.name);
+                const expected_tag_name_str = self.can_ir.getIdent(cur_expected_tag.name);
 
                 if (std.mem.eql(u8, actual_tag_name_str, expected_tag_name_str)) {
                     snapshot_writer.resetContext();
@@ -1185,7 +1186,7 @@ pub const ReportBuilder = struct {
             .error_highlight,
             self.filename,
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
         );
         try report.document.addLineBreak();
 
@@ -1199,7 +1200,7 @@ pub const ReportBuilder = struct {
         try report.document.addReflowingText("But ");
         if (data.fn_name) |fn_name_ident| {
             self.buf.clearRetainingCapacity();
-            const fn_name = try report.addOwnedString(self.can_ir.idents.getText(fn_name_ident));
+            const fn_name = try report.addOwnedString(self.can_ir.getIdent(fn_name_ident));
             try report.document.addAnnotated(fn_name, .inline_code);
         } else {
             try report.document.addReflowingText("the function");
@@ -1233,7 +1234,7 @@ pub const ReportBuilder = struct {
         };
         var report = Report.init(self.gpa, title, .runtime_error);
 
-        const type_name = try report.addOwnedString(self.can_ir.idents.getText(data.type_name));
+        const type_name = try report.addOwnedString(self.can_ir.getIdent(data.type_name));
 
         self.buf.clearRetainingCapacity();
         try self.buf.writer().print("{d}", .{data.num_expected_args});
@@ -1262,7 +1263,7 @@ pub const ReportBuilder = struct {
             .error_highlight,
             self.filename,
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
         );
         try report.document.addLineBreak();
 
@@ -1299,7 +1300,7 @@ pub const ReportBuilder = struct {
             .error_highlight,
             self.filename,
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
         );
         try report.document.addLineBreak();
 
@@ -1341,7 +1342,7 @@ pub const ReportBuilder = struct {
             .error_highlight,
             self.filename,
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
         );
         try report.document.addLineBreak();
 
@@ -1377,14 +1378,14 @@ pub const ReportBuilder = struct {
         // Get region info for the import
         const import_region_info = base.RegionInfo.position(
             self.source,
-            self.module_env.line_starts.items.items,
+            self.module_env.getLineStarts(),
             import_region.start.offset,
             import_region.end.offset,
         ) catch return report;
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
-            .line_text = self.gpa.dupe(u8, import_region_info.calculateLineText(self.source, self.module_env.line_starts.items.items)) catch return report,
+            .line_text = self.gpa.dupe(u8, import_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
             .start_line = import_region_info.start_line_idx + 1,
             .start_column = import_region_info.start_col_idx + 1,
             .end_line = import_region_info.end_line_idx + 1,
@@ -1411,7 +1412,7 @@ pub const ReportBuilder = struct {
         const module_idx = @intFromEnum(data.module_idx);
         const module_name = if (module_idx < self.can_ir.imports.imports.len()) blk: {
             const import_string_idx = self.can_ir.imports.imports.items.items[module_idx];
-            const import_name = self.can_ir.strings.get(import_string_idx);
+            const import_name = self.can_ir.getString(import_string_idx);
             break :blk import_name;
         } else null;
 
@@ -1517,5 +1518,13 @@ pub const Store = struct {
         const idx: Problem.Idx = @enumFromInt(self.problems.items.len);
         try self.problems.append(gpa, problem);
         return idx;
+    }
+
+    pub fn get(self: *Self, idx: Problem.Idx) Problem {
+        return self.problems.items[@intFromEnum(idx)];
+    }
+
+    pub fn len(self: *Self) usize {
+        return self.problems.items.len;
     }
 };

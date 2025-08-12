@@ -2,6 +2,8 @@
 
 Runtime evaluation and interpretation system for executing Roc programs during compilation.
 
+The eval module is the fourth stage of the Roc compiler pipeline, responsible for interpreting and executing Roc programs. It provides a fast development experience by allowing code to run immediately after type checking, without needing to go through the full compilation and linking process.
+
 ## Validation and Testing
 
 The primary method for validating eval behavior is through **REPL snapshots**. These are comprehensive integration tests that capture the complete evaluation pipeline from source code to final output.

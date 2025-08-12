@@ -36,32 +36,6 @@ pub fn safeSlice(ptr: ?*anyopaque, offset: usize, length: usize, total_size: usi
     return base_ptr[offset .. offset + length];
 }
 
-/// Safely copy argument data with bounds checking
-/// For RocStr (24-byte) arguments, performs a simple copy since strings should be handled
-/// by the caller using appropriate RocStr methods when needed
-pub fn safeCopyArgument(
-    arg_ptr: ?*anyopaque,
-    dest_ptr: ?*anyopaque,
-    elem_offset: usize,
-    elem_size: usize,
-    max_arg_size: usize,
-) MemoryError!void {
-    if (arg_ptr == null or dest_ptr == null) {
-        return error.NullPointer;
-    }
-
-    if (elem_offset + elem_size > max_arg_size) {
-        std.log.err("Argument copy would overflow: offset={}, size={}, max={}", .{ elem_offset, elem_size, max_arg_size });
-        return error.BufferOverflow;
-    }
-
-    if (elem_size > 0) {
-        const src_slice = try safeSlice(arg_ptr, elem_offset, elem_size, max_arg_size);
-        const dst_slice = (@as([*]u8, @ptrCast(dest_ptr.?)))[0..elem_size];
-        @memcpy(dst_slice, src_slice);
-    }
-}
-
 /// Validate that an offset and size combination is within bounds
 pub fn validateBounds(offset: usize, size: usize, total_size: usize) MemoryError!void {
     if (offset >= total_size) {
@@ -95,4 +69,46 @@ pub fn safeRead(comptime T: type, ptr: ?*anyopaque, offset: usize, total_size: u
 pub fn safeWrite(comptime T: type, ptr: ?*anyopaque, offset: usize, total_size: usize, value: T) MemoryError!void {
     const typed_ptr = try safeCast(T, ptr, offset, total_size);
     typed_ptr.* = value;
+}
+
+test "safeCopy basic functionality" {
+    var dst: [10]u8 = undefined;
+    const src = "hello";
+
+    try safeCopy(&dst, src, 10);
+    try std.testing.expectEqualSlices(u8, "hello", dst[0..5]);
+}
+
+test "safeCopy buffer overflow detection" {
+    var dst: [3]u8 = undefined;
+    const src = "hello";
+
+    try std.testing.expectError(error.BufferOverflow, safeCopy(&dst, src, 10));
+}
+
+test "safeSlice basic functionality" {
+    var buffer = [_]u8{ 1, 2, 3, 4, 5 };
+    const ptr = @as(*anyopaque, @ptrCast(&buffer));
+
+    const slice = try safeSlice(ptr, 1, 3, 5);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 2, 3, 4 }, slice);
+}
+
+test "safeSlice bounds checking" {
+    var buffer = [_]u8{ 1, 2, 3, 4, 5 };
+    const ptr = @as(*anyopaque, @ptrCast(&buffer));
+
+    try std.testing.expectError(error.BufferOverflow, safeSlice(ptr, 3, 4, 5));
+    try std.testing.expectError(error.InvalidOffset, safeSlice(ptr, 6, 1, 5));
+}
+
+test "safeCast and safeRead" {
+    var buffer = [_]u8{ 0x12, 0x34, 0x56, 0x78 };
+    const ptr = @as(*anyopaque, @ptrCast(&buffer));
+
+    const value = try safeRead(u16, ptr, 0, 4);
+    // Endianness dependent, but should not crash
+    _ = value;
+
+    try std.testing.expectError(error.BufferOverflow, safeRead(u32, ptr, 1, 4));
 }

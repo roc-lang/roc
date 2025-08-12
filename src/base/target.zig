@@ -42,4 +42,9 @@ pub const TargetUsize = enum(u1) {
     pub fn all() [2]TargetUsize {
         return .{ .u32, .u64 };
     }
+
+    test "TargetUsize conversion to usize" {
+        try std.testing.expectEqual(TargetUsize.u32.size(), 4);
+        try std.testing.expectEqual(TargetUsize.u64.size(), 8);
+    }
 };

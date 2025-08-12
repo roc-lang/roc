@@ -6,12 +6,6 @@ This directory contains the Read-Eval-Print Loop (REPL) implementation for the R
 
 The REPL provides an interactive environment for evaluating Roc expressions and maintaining state across multiple evaluations. It uses the full Roc compiler pipeline including parsing, canonicalization, type checking, and interpretation.
 
-## Current Implementation
-
-The REPL implementation consists of:
-- `eval.zig` - Public interface that exports the Repl type
-- `repl_full.zig` - Complete implementation with state management and evaluation
-
 ### Features
 
 - **Expression Evaluation**: Evaluates simple expressions and literals through the full compiler pipeline
