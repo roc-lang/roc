@@ -11,7 +11,7 @@ Command Line Interface. The entrypoint of the compiler that brings together all
 functionality in the Roc toolset and makes it accessible to the user through the
 terminal, e.g. `roc build main.roc`.
 
-- new compiler: [src/main.zig](src/main.zig)
+- new compiler: [src/cli.main.zig](src/cli/main.zig)
 - old compiler: [crates/cli/src/main.rs](crates/cli/src/main.rs)
 
 ## Module
@@ -254,7 +254,7 @@ The AST is created by the [parser](#parsing).
 
 New compiler:
 - See the `Node` struct in [this file](src/parse/AST.zig).
-- You can see examples of ASTs in the .txt files in [this folder](src/snapshots).
+- You can see examples of ASTs in the .txt files in [this folder](test/snapshots).
 
 Old compiler:
 - See `FullAst` [here](crates/compiler/parse/src/ast.rs)
