@@ -1049,6 +1049,9 @@ fn processSnapshotContent(
     // Process the content through the compilation pipeline
     var module_env = try ModuleEnv.init(allocator, content.source);
     defer module_env.deinit();
+    
+    // Calculate line starts for source location tracking
+    try module_env.common.calcLineStarts(allocator);
 
     // Parse the source code based on node type
     var parse_ast: AST = switch (content.meta.node_type) {
@@ -2285,9 +2288,9 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
     defer gpa.free(file_content);
 
     // Check our file starts with the metadata section
-    if (!std.mem.startsWith(u8, file_content, Section.META)) {
+    if (!std.mem.startsWith(u8, file_content, "# META")) {
         std.log.err("file '{s}' is not a valid snapshot file", .{snapshot_path});
-        std.log.err("snapshot files must start with '~~~META'", .{});
+        std.log.err("snapshot files must start with '# META'", .{});
         if (file_content.len > 0) {
             const first_line_end = std.mem.indexOfScalar(u8, file_content, '\n') orelse @min(file_content.len, 50);
             const first_line = file_content[0..first_line_end];
@@ -2692,6 +2695,12 @@ fn generateReplCanonicalizeSection(output: *DualOutput, content: *const Content)
             continue;
         };
         defer module_env.deinit();
+        
+        // Calculate line starts for source location tracking
+        module_env.common.calcLineStarts(output.gpa) catch |err| {
+            try output.md_writer.print("Error calculating line starts: {s}\n", .{@errorName(err)});
+            continue;
+        };
 
         // Parse the input as an expression
         var parse_ast = parse.parseExpr(&module_env.common, output.gpa) catch |err| {
@@ -2786,6 +2795,12 @@ fn generateReplTypesSection(output: *DualOutput, content: *const Content) !void 
             continue;
         };
         defer module_env.deinit();
+        
+        // Calculate line starts for source location tracking
+        module_env.common.calcLineStarts(output.gpa) catch |err| {
+            try output.md_writer.print("Error calculating line starts: {s}\n", .{@errorName(err)});
+            return;
+        };
 
         // Parse the input as an expression
         var parse_ast = parse.parseExpr(&module_env.common, output.gpa) catch |err| {
