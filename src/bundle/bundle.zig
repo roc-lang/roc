@@ -144,10 +144,10 @@ pub fn bundle(
     // Process files one at a time
     while (try file_path_iter.next()) |file_path| {
         // First validate the input path
-        if (validatePath(file_path)) |validation_error| {
+        if (pathHasBundleErr(file_path)) |problem| {
             if (error_context) |ctx| {
-                ctx.path = validation_error.path;
-                ctx.reason = validation_error.reason;
+                ctx.path = problem.path;
+                ctx.reason = problem.reason;
             }
             return error.InvalidPath;
         }
@@ -177,7 +177,7 @@ pub fn bundle(
         } else file_path;
 
         // Validate the tar path after prefix stripping
-        if (validatePath(tar_path)) |validation_error| {
+        if (pathHasBundleErr(tar_path)) |validation_error| {
             if (error_context) |ctx| {
                 ctx.path = validation_error.path;
                 ctx.reason = validation_error.reason;
@@ -275,8 +275,6 @@ const WINDOWS_RESERVED_NAMES = [_][]const u8{
 pub const PathValidationReason = union(enum) {
     empty_path,
     path_too_long,
-    contains_nul,
-    contains_backslash,
     windows_reserved_char: u8,
     absolute_path,
     path_traversal,
@@ -302,11 +300,14 @@ pub const PathValidationError = struct {
 // We don't do the validation on unbundle because it's costly and
 // there's no security concern; if the OS doesn't accept the path,
 // it will give an error.
-pub fn validatePathForBundle(path: []const u8) ?PathValidationError {
+pub fn pathHasBundleErr(path: []const u8) ?PathValidationError {
     // Start by doing the validation checks we'd do on unbundle.
     // If unbundling would fail, then bundling should too!
-    try validatePath(path);
+    if (pathHasUnbundleErr(path)) |err| {
+        return err;
+    }
 
+    // Check for reserved characters
     for (path) |byte| {
         inline for (RESERVED_PATH_CHARS) |reserved| {
             if (byte == reserved) {
@@ -318,49 +319,77 @@ pub fn validatePathForBundle(path: []const u8) ?PathValidationError {
         }
     }
 
-    // Check for Windows reserved names (case-insensitive)
-    for (WINDOWS_RESERVED_NAMES) |reserved| {
-        // Check base name without extension
-        const dot_pos = std.mem.indexOfScalar(u8, component, '.');
-        const base_name = if (dot_pos) |pos| component[0..pos] else component;
+    // Check each path component for Windows reserved names and trailing spaces/periods
+    var idx: usize = 0;
+    var component_start: usize = 0;
 
-        if (base_name.len == reserved.len) {
-            var matches = true;
-            for (base_name, reserved) |a, b| {
-                if (std.ascii.toUpper(a) != b) {
-                    matches = false;
-                    break;
+    while (idx <= path.len) {
+        // Check if we're at a separator or the end
+        const at_separator = idx < path.len and (path[idx] == '/' or path[idx] == '\\');
+        const at_end = idx == path.len;
+
+        if (at_separator or at_end) {
+            if (idx > component_start) {
+                const component = path[component_start..idx];
+
+                // Check for Windows reserved names (case-insensitive)
+                for (WINDOWS_RESERVED_NAMES) |reserved| {
+                    // Check base name without extension
+                    const dot_pos = std.mem.indexOfScalar(u8, component, '.');
+                    const base_name = if (dot_pos) |pos| component[0..pos] else component;
+
+                    if (base_name.len == reserved.len) {
+                        var matches = true;
+                        for (base_name, reserved) |a, b| {
+                            if (std.ascii.toUpper(a) != b) {
+                                matches = false;
+                                break;
+                            }
+                        }
+                        if (matches) {
+                            return PathValidationError{
+                                .path = path,
+                                .reason = .windows_reserved_name,
+                            };
+                        }
+                    }
+                }
+
+                // Reject components ending with space or period (Windows restriction)
+                if (component.len > 0) {
+                    const last_char = component[component.len - 1];
+                    if (last_char == ' ') {
+                        return PathValidationError{
+                            .path = path,
+                            .reason = .component_ends_with_space,
+                        };
+                    } else if (last_char == '.') {
+                        return PathValidationError{
+                            .path = path,
+                            .reason = .component_ends_with_period,
+                        };
+                    }
                 }
             }
-            if (matches) {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .windows_reserved_name,
-                };
+
+            if (at_separator) {
+                component_start = idx + 1;
             }
+        }
+
+        if (!at_end) {
+            idx += 1;
+        } else {
+            break;
         }
     }
 
-    // Reject components ending with space or period (Windows restriction)
-    if (component.len > 0) {
-        const last_char = component[component.len - 1];
-        if (last_char == ' ') {
-            return PathValidationError{
-                .path = path,
-                .reason = .component_ends_with_space,
-            };
-        } else if (last_char == '.') {
-            return PathValidationError{
-                .path = path,
-                .reason = .component_ends_with_period,
-            };
-        }
-    }
+    return null;
 }
 
 /// Validate a file path to prevent directory traversal attacks and other security issues.
 /// Returns null if the path is valid, or a PathValidationError describing the problem.
-pub fn validatePath(path: []const u8) ?PathValidationError {
+pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
     // Reject empty paths
     if (path.len == 0) {
         return PathValidationError{
@@ -385,40 +414,45 @@ pub fn validatePath(path: []const u8) ?PathValidationError {
         };
     }
 
-    // Reject ".." and "." path components, while considering both slash and backslash
-    // as path separators regardless of the current OS.
-    var idx = 0;
-    while (idx < path.len) {
-        if (path[idx] == '/' or path[idx] == '\\') {
-            idx += 1;
+    // Check for ".." and "." path components
+    var idx: usize = 0;
+    var component_start: usize = 0;
 
-            if (idx < path.len and path[idx] == '.') {
-                // Component starts with "." but we don't know where it ends yet.
-                idx += 1;
+    while (idx <= path.len) {
+        // Check if we're at a separator or the end
+        const at_separator = idx < path.len and (path[idx] == '/' or path[idx] == '\\');
+        const at_end = idx == path.len;
 
-                if (path[idx] == '/' or path[idx] == '\\') {
-                    // This was a "." path component, which we disallow.
+        if (at_separator or at_end) {
+            if (idx > component_start) {
+                const component = path[component_start..idx];
+
+                // Check for "." component
+                if (std.mem.eql(u8, component, ".")) {
                     return PathValidationError{
                         .path = path,
                         .reason = .current_directory_reference,
                     };
                 }
 
-                // Is there a second '.' after the first?
-                if (idx < path.len and path[idx] == '.') {
-                    idx += 1;
-
-                    if (path[idx] == '/' or path[idx] == '\\') {
-                        // This was a ".." path component, which we disallow.
-                        return PathValidationError{
-                            .path = path,
-                            .reason = .path_traversal,
-                        };
-                    }
+                // Check for ".." component
+                if (std.mem.eql(u8, component, "..")) {
+                    return PathValidationError{
+                        .path = path,
+                        .reason = .path_traversal,
+                    };
                 }
             }
-        } else {
+
+            if (at_separator) {
+                component_start = idx + 1;
+            }
+        }
+
+        if (!at_end) {
             idx += 1;
+        } else {
+            break;
         }
     }
 
@@ -544,7 +578,7 @@ pub fn unbundleStream(
         const tar_file = file.?;
 
         // Validate path to prevent directory traversal and other security issues
-        if (validatePath(tar_file.name)) |validation_error| {
+        if (pathHasUnbundleErr(tar_file.name)) |validation_error| {
             if (error_context) |ctx| {
                 ctx.path = validation_error.path;
                 ctx.reason = validation_error.reason;

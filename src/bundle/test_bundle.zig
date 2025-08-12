@@ -18,9 +18,10 @@ const FilePathIterator = test_util.FilePathIterator;
 // Use fast compression for tests
 const TEST_COMPRESSION_LEVEL: c_int = 2;
 
-test "path validation prevents malicious paths" {
+test "path validation for unbundle prevents security issues" {
     const testing = std.testing;
 
+    // Test cases for validatePath (used in unbundle) - only security checks
     const test_cases = [_]struct {
         path: []const u8,
         should_fail: bool,
@@ -34,13 +35,59 @@ test "path validation prevents malicious paths" {
 
         // Absolute paths
         .{ .path = "/etc/passwd", .should_fail = true, .description = "Absolute path Unix" },
+        .{ .path = "C:/Windows/System32", .should_fail = true, .description = "Absolute path Windows" },
 
         // Current directory references
         .{ .path = "foo/./bar", .should_fail = true, .description = "Current directory reference" },
         .{ .path = ".", .should_fail = true, .description = "Single dot" },
         .{ .path = "./foo", .should_fail = true, .description = "Current directory prefix" },
 
-        // Reserved characters
+        // Edge cases
+        .{ .path = "", .should_fail = true, .description = "Empty path" },
+        .{ .path = "a" ** 256, .should_fail = true, .description = "Path too long (> 255 chars)" },
+
+        // Valid paths (these should work with validatePath)
+        .{ .path = "foo/bar.txt", .should_fail = false, .description = "Valid path" },
+        .{ .path = "src/main.zig", .should_fail = false, .description = "Valid source path" },
+        .{ .path = "a-b_c.123", .should_fail = false, .description = "Valid filename with special chars" },
+        .{ .path = "foo:bar.txt", .should_fail = false, .description = "Path with colon (allowed in unbundle)" },
+        .{ .path = "foo\\bar.txt", .should_fail = false, .description = "Path with backslash (allowed in unbundle)" },
+        .{ .path = "CON.txt", .should_fail = false, .description = "Windows reserved name (allowed in unbundle)" },
+        .{ .path = "file.txt ", .should_fail = false, .description = "Trailing space (allowed in unbundle)" },
+    };
+
+    for (test_cases) |tc| {
+        const validation_result = bundle.validatePath(tc.path);
+        const is_valid = validation_result == null;
+
+        if (tc.should_fail) {
+            try testing.expect(!is_valid);
+        } else {
+            if (validation_result) |err| {
+                std.debug.print("Unexpected validation failure for '{s}': {}\n", .{ tc.path, err.reason });
+            }
+            try testing.expect(is_valid);
+        }
+    }
+}
+
+test "path validation for bundle prevents Windows issues" {
+    const testing = std.testing;
+
+    // Test cases for validatePathForBundle - security + Windows compatibility
+    const test_cases = [_]struct {
+        path: []const u8,
+        should_fail: bool,
+        description: []const u8,
+    }{
+        // All the security checks from validatePath should still fail
+        .{ .path = "../../../etc/passwd", .should_fail = true, .description = "Directory traversal" },
+        .{ .path = "/etc/passwd", .should_fail = true, .description = "Absolute path" },
+        .{ .path = "./foo", .should_fail = true, .description = "Current directory reference" },
+        .{ .path = "", .should_fail = true, .description = "Empty path" },
+        .{ .path = "a" ** 256, .should_fail = true, .description = "Path too long" },
+
+        // Windows-specific checks (these fail in bundle but not unbundle)
         .{ .path = "foo:bar.txt", .should_fail = true, .description = "Colon character" },
         .{ .path = "foo*bar.txt", .should_fail = true, .description = "Asterisk character" },
         .{ .path = "foo?bar.txt", .should_fail = true, .description = "Question mark" },
@@ -66,10 +113,6 @@ test "path validation prevents malicious paths" {
         .{ .path = "folder/file.txt ", .should_fail = true, .description = "Filename ending with space" },
         .{ .path = "folder/file.txt.", .should_fail = true, .description = "Filename ending with period" },
 
-        // Edge cases
-        .{ .path = "", .should_fail = true, .description = "Empty path" },
-        .{ .path = "a" ** 256, .should_fail = true, .description = "Path too long (> 255 chars)" },
-
         // Valid paths
         .{ .path = "foo/bar.txt", .should_fail = false, .description = "Valid path" },
         .{ .path = "src/main.zig", .should_fail = false, .description = "Valid source path" },
@@ -78,7 +121,7 @@ test "path validation prevents malicious paths" {
     };
 
     for (test_cases) |tc| {
-        const validation_result = bundle.validatePath(tc.path);
+        const validation_result = bundle.validatePathForBundle(tc.path);
         const is_valid = validation_result == null;
 
         if (tc.should_fail) {
@@ -93,24 +136,44 @@ test "path validation prevents malicious paths" {
 
     // Test path with NUL byte separately since we can't put it in a string literal easily
     const nul_path = [_]u8{ 'f', 'o', 'o', 0, 'b', 'a', 'r' };
-    const nul_result = bundle.validatePath(&nul_path);
+    const nul_result = bundle.validatePathForBundle(&nul_path);
     try testing.expect(nul_result != null);
     if (nul_result) |err| {
-        try testing.expectEqual(bundle.PathValidationReason.contains_nul, err.reason);
+        try testing.expectEqual(bundle.PathValidationReason{ .windows_reserved_char = 0 }, err.reason);
     }
 }
 
 test "path validation returns correct error reasons" {
     const testing = std.testing;
 
-    // Test specific error reasons
-    const test_cases = [_]struct {
+    // Test specific error reasons for unbundle (validatePath)
+    const unbundle_test_cases = [_]struct {
         path: []const u8,
         expected_reason: bundle.PathValidationReason,
     }{
         .{ .path = "", .expected_reason = .empty_path },
         .{ .path = "a" ** 256, .expected_reason = .path_too_long },
-        .{ .path = "foo\\bar", .expected_reason = .contains_backslash },
+        .{ .path = "/etc/passwd", .expected_reason = .absolute_path },
+        .{ .path = "../etc/passwd", .expected_reason = .path_traversal },
+        .{ .path = "foo/./bar", .expected_reason = .current_directory_reference },
+    };
+
+    for (unbundle_test_cases) |tc| {
+        const result = bundle.validatePath(tc.path);
+        try testing.expect(result != null);
+        if (result) |err| {
+            try testing.expectEqual(tc.expected_reason, err.reason);
+        }
+    }
+
+    // Test specific error reasons for bundle (validatePathForBundle)
+    const bundle_test_cases = [_]struct {
+        path: []const u8,
+        expected_reason: bundle.PathValidationReason,
+    }{
+        .{ .path = "", .expected_reason = .empty_path },
+        .{ .path = "a" ** 256, .expected_reason = .path_too_long },
+        .{ .path = "foo\\bar", .expected_reason = .{ .windows_reserved_char = '\\' } },
         .{ .path = "foo:bar", .expected_reason = .{ .windows_reserved_char = ':' } },
         .{ .path = "foo*bar", .expected_reason = .{ .windows_reserved_char = '*' } },
         .{ .path = "foo?bar", .expected_reason = .{ .windows_reserved_char = '?' } },
@@ -124,8 +187,8 @@ test "path validation returns correct error reasons" {
         .{ .path = "foo.", .expected_reason = .component_ends_with_period },
     };
 
-    for (test_cases) |tc| {
-        const result = bundle.validatePath(tc.path);
+    for (bundle_test_cases) |tc| {
+        const result = bundle.validatePathForBundle(tc.path);
         try testing.expect(result != null);
         if (result) |err| {
             try testing.expectEqual(tc.expected_reason, err.reason);

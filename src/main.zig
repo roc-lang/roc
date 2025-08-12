@@ -1041,9 +1041,8 @@ fn formatPathValidationReason(reason: bundle.PathValidationReason) []const u8 {
     return switch (reason) {
         .empty_path => "Path cannot be empty",
         .path_too_long => "Path exceeds maximum length of 255 characters",
-        .contains_nul => "Path contains NUL byte (\\0)",
-        .contains_backslash => "Path contains backslash (\\). Use forward slashes (/) for all paths",
         .windows_reserved_char => |char| switch (char) {
+            0 => "Path contains NUL byte (\\0)",
             ':' => "Path contains colon (:) which is reserved on Windows",
             '*' => "Path contains asterisk (*) which is a wildcard on Windows",
             '?' => "Path contains question mark (?) which is a wildcard on Windows",
@@ -1051,6 +1050,7 @@ fn formatPathValidationReason(reason: bundle.PathValidationReason) []const u8 {
             '<' => "Path contains less-than (<) which is reserved on Windows",
             '>' => "Path contains greater-than (>) which is reserved on Windows",
             '|' => "Path contains pipe (|) which is reserved on Windows",
+            '\\' => "Path contains backslash (\\). Use forward slashes (/) for all paths",
             else => "Path contains reserved character",
         },
         .absolute_path => "Absolute paths are not allowed",
