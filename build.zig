@@ -149,6 +149,20 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&module_test.run_step.step);
     }
 
+    // Add snapshot tool test
+    const snapshot_test = b.addTest(.{
+        .name = "snapshot_tool_test",
+        .root_source_file = b.path("src/snapshot_tool/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    roc_modules.addAll(snapshot_test);
+    add_tracy(b, roc_modules.build_options, snapshot_test, target, false, flag_enable_tracy);
+    
+    const run_snapshot_test = b.addRunArtifact(snapshot_test);
+    test_step.dependOn(&run_snapshot_test.step);
+
     b.default_step.dependOn(playground_step);
     if (playground_test_install) |install| {
         b.default_step.dependOn(&install.step);
