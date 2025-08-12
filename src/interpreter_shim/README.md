@@ -1,5 +1,7 @@
-# interpreter shim
+# Interpreter Shim
 
-- the interpreter shim is compiled to an object file and linked with a roc platform host to create a "interpreter" host for the platform. This executable is cached, and is then used by the roc cli for fast execution of roc programs in a development loop.
-- the shim provides the functionality to execute roc programs using the roc interpreter
-- the interpreter host executable is spawned as a child of the roc cli, and communicates via shared memory for inter-process communication.
+The interpreter shim is a key component for providing a fast development experience with the `roc` CLI.
+
+It is compiled into an object file and linked with a Roc platform host to create an interpreter-host. This interpreter-host executable is cached and then used by the `roc` CLI to run Roc programs quickly during development.
+
+The shim enables the execution of Roc programs via the interpreter. The interpreter-host is spawned as a child process of the `roc` CLI, and it communicates with the CLI using shared memory for efficient inter-process communication.

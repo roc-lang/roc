@@ -1,6 +1,9 @@
-# ipc
+# IPC (Inter-Process Communication)
 
-TODO
+This directory contains helpers for communication between the `roc` CLI and the Roc interpreter, which is spawned as a child process.
 
-- helpers for communicating between the roc cli and the roc interpreter (spawned as a child process) using shared memory
-- the roc cli is responsible for managing the cached roc modules, processing these through the compiler pipeline (tokenize, parse, canonicalize, typecheck) and then provides the fully type-checked ModuleEnv's to the roc interpreter for evaluation.
+The communication is implemented using shared memory to ensure high performance.
+
+The `roc` CLI is responsible for managing cached Roc modules and processing them through the compiler pipeline (tokenize, parse, canonicalize, typecheck). The fully type-checked module environment is then sent to the Roc interpreter for evaluation.
+
+This allows for a very responsive CLI and a fast development loop.

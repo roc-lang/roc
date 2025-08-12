@@ -1,12 +1,18 @@
 # Reporting
 
-Error reporting and diagnostic formatting system for presenting Errors, Warnings, and Information to developers. Provides support for rendering to terminal (TTY), markdown, HTML, and Language Server Protocol (LSP) formats.
+Error reporting, diagnostics, and user feedback for the Roc compiler.
 
-- [src/reporting/report.zig](./report.zig): Core report generation and management for creating structured diagnostic messages with source code context.
-- [src/reporting/renderer.zig](./renderer.zig): Rendering system for formatting reports into human-readable output with syntax highlighting and visual formatting.
-- [src/reporting/document.zig](./document.zig): Document structure and layout utilities for organizing diagnostic content and managing multi-line error displays.
-- [src/reporting/source_region.zig](./source_region.zig) and [src/reporting/source_region/](./source_region/): Source code region handling for precise error location tracking and code snippet extraction.
-- [src/reporting/severity.zig](./severity.zig): Severity level definitions and classification for errors, warnings, notes, and informational messages.
-- [src/reporting/style.zig](./style.zig): Styling and color formatting for terminal output including ANSI color codes and formatting options.
-- [src/reporting/config.zig](./config.zig): Configuration settings for report formatting including output preferences and verbosity levels.
-- [src/reporting/test.zig](./test.zig): Unit tests for the reporting system ensuring accurate diagnostic formatting and output quality.
+## Overview
+
+The reporting module provides comprehensive error reporting and diagnostic information throughout the compilation process. It ensures that users receive clear, actionable feedback when things go wrong.
+
+## Purpose
+
+This module provides:
+- **Error Reporting**: Structured error messages with source locations and context
+- **Diagnostics**: Detailed information about compilation issues and warnings
+- **Source Location**: Precise tracking of where errors occur in source code
+- **User-Friendly Messages**: Clear explanations that help developers fix issues
+- **Consistent Formatting**: Uniform error presentation across all compiler stages
+
+The reporting module is used by parse, canonicalize, check, and other stages to provide consistent, helpful feedback to users when compilation fails or produces warnings.
