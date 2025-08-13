@@ -126,11 +126,22 @@ pub fn SafeList(comptime T: type) type {
             ) Allocator.Error!void {
                 const items = safe_list.items.items;
 
-                // Append the slice data first
-                const slice_ptr = try writer.appendSlice(allocator, items);
+                // Pad to the alignment of the slice elements.
+                try writer.padToAlignment(allocator, @alignOf(T));
 
-                // Store the offset, len, and capacity
-                self.offset = @intCast(@intFromPtr(slice_ptr.ptr));
+                // Now that we are aligned, this is the correct offset for our data.
+                const data_offset = writer.total_bytes;
+
+                // Append the raw data without further padding.
+                if (items.len > 0) {
+                    try writer.iovecs.append(allocator, .{
+                        .iov_base = @ptrCast(items.ptr),
+                        .iov_len = items.len * @sizeOf(T),
+                    });
+                    writer.total_bytes += items.len * @sizeOf(T);
+                }
+
+                self.offset = @intCast(data_offset);
                 self.len = items.len;
                 self.capacity = items.len;
             }
