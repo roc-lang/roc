@@ -1148,8 +1148,12 @@ fn processSnapshotContent(
         // Deserialize back
         var loaded_cache = try CacheModule.fromMappedMemory(cache_data);
 
+        // Create arena for restore operation to handle temporary allocations
+        var restore_arena = std.heap.ArenaAllocator.init(allocator);
+        defer restore_arena.deinit();
+
         // Restore ModuleEnv
-        const restored_env = try loaded_cache.restore(allocator, module_name, content.source);
+        const restored_env = try loaded_cache.restore(restore_arena.allocator(), module_name, content.source);
         // Note: restored_env points to data within the cache, so we don't free it
 
         // Generate S-expression from restored ModuleEnv
