@@ -2915,6 +2915,10 @@ pub fn canonicalizeExpr(
                 };
                 const value_idx = can_body.idx;
 
+                // Get the body region from the AST node
+                const body = self.parse_ir.store.getExpr(ast_branch.body);
+                const body_region = self.parse_ir.tokenizedRegionToRegion(body.to_tokenized_region());
+
                 const branch_idx = try self.env.addMatchBranchAndTypeVar(
                     Expr.Match.Branch{
                         .patterns = branch_pat_span,
@@ -2923,7 +2927,7 @@ pub fn canonicalizeExpr(
                         .redundant = @enumFromInt(0), // TODO
                     },
                     Content{ .flex_var = null },
-                    Region.zero(), // TODO fixme this was can_body
+                    body_region,
                 );
 
                 // Set the branch var
