@@ -15,6 +15,7 @@ const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
 const bundle = @import("bundle");
+const unbundle = @import("unbundle");
 const ipc = @import("ipc");
 const fmt = @import("fmt");
 
@@ -1046,7 +1047,7 @@ pub fn extractReadRocFilePathShimLibrary(gpa: Allocator, output_path: []const u8
 }
 
 /// Format a path validation reason into a user-friendly error message
-fn formatPathValidationReason(reason: bundle.PathValidationReason) []const u8 {
+fn formatPathValidationReason(reason: unbundle.PathValidationReason) []const u8 {
     return switch (reason) {
         .empty_path => "Path cannot be empty",
         .path_too_long => "Path exceeds maximum length of 255 characters",
@@ -1288,8 +1289,8 @@ fn rocUnbundle(gpa: Allocator, args: cli_args.UnbundleArgs) !void {
 
         // Unbundle the archive
         var allocator_copy2 = arena_allocator;
-        var error_ctx: bundle.ErrorContext = undefined;
-        bundle.unbundle(
+        var error_ctx: unbundle.ErrorContext = undefined;
+        unbundle.unbundleFiles(
             archive_file.reader(),
             output_dir,
             &allocator_copy2,
