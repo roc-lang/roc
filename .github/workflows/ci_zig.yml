@@ -138,14 +138,14 @@ jobs:
 
       - name: Check for snapshot changes
         run: |
-          git diff --exit-code src/snapshots || {
+          git diff --exit-code test/snapshots || {
             echo ""
             echo ""
-            echo "OOPS! It looks like the snapshots in 'src/snapshots' have changed.";
+            echo "OOPS! It looks like the snapshots in 'test/snapshots' have changed.";
             echo "Please run 'zig build snapshot' locally, review the updates, and commit the changes.";
-            echo "Here’s what changed:";
+            echo "Here's what changed:";
             echo ""
-            git diff src/snapshots;
+            git diff test/snapshots;
             exit 1;
           }
 

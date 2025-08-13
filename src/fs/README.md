@@ -1,5 +1,16 @@
-# Fs
+# FS
 
-Filesystem operations and file I/O utilities for the Roc compiler.
+File system utilities and abstractions for the Roc compiler.
 
-- [src/fs/Filesystem.zig](./Filesystem.zig): Filesystem abstraction layer providing cross-platform file and directory operations for reading source files, writing compilation artifacts, and managing compiler-related file I/O.
+## Overview
+
+The fs module provides cross-platform file system operations and abstractions that the Roc compiler needs for reading source files, managing build artifacts, and handling file-based operations.
+
+## Purpose
+
+This module provides:
+- **File Operations**: Reading, writing, and managing files across different platforms
+- **Path Handling**: Cross-platform path manipulation and normalization
+- **Directory Operations**: Creating, listing, and managing directories
+- **File Watching**: Monitoring file changes for incremental compilation
+- **Platform Abstraction**: Unified interface for different operating systems

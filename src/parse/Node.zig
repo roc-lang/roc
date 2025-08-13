@@ -6,10 +6,9 @@
 //! be interpreted.
 
 const collections = @import("collections");
-const parse = @import("parse");
 
-const AST = parse.AST;
-const TokenIdx = parse.tokenize.Token.Idx;
+const AST = @import("AST.zig");
+const TokenIdx = @import("tokenize.zig").Token.Idx;
 
 const Node = @This();
 

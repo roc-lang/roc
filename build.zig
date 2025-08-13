@@ -75,7 +75,7 @@ pub fn build(b: *std.Build) void {
     // Add snapshot tool
     const snapshot_exe = b.addExecutable(.{
         .name = "snapshot",
-        .root_source_file = b.path("src/snapshot.zig"),
+        .root_source_file = b.path("src/snapshot_tool/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
@@ -86,7 +86,7 @@ pub fn build(b: *std.Build) void {
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
-        .root_source_file = b.path("src/playground.zig"),
+        .root_source_file = b.path("src/playground_wasm/main.zig"),
         .target = b.resolveTargetQuery(.{
             .cpu_arch = .wasm32,
             .os_tag = .freestanding,
@@ -110,9 +110,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Only build playground integration tests in Debug mode to avoid Zig compiler issues
-    // with the large dependency tree in release builds on some platforms
-    const playground_test_install = if (optimize == .Debug) blk: {
+    // Build playground integration tests - now enabled for all optimization modes
+    const playground_test_install = blk: {
         const playground_integration_test_exe = b.addExecutable(.{
             .name = "playground_integration_test",
             .root_source_file = b.path("test/playground-integration/main.zig"),
@@ -136,39 +135,47 @@ pub fn build(b: *std.Build) void {
         playground_test_step.dependOn(&run_playground_test.step);
 
         break :blk install;
-    } else blk: {
-        // In release builds, playground tests are disabled due to compiler limitations
-        // Create a no-op install step that does nothing
-        break :blk null;
     };
 
-    const all_tests = b.addTest(.{
-        .root_source_file = b.path("src/test.zig"),
+    // Create and add module tests
+    const module_tests = roc_modules.createModuleTests(b, target, optimize);
+    for (module_tests) |module_test| {
+        b.default_step.dependOn(&module_test.test_step.step);
+        test_step.dependOn(&module_test.run_step.step);
+    }
+
+    // Add snapshot tool test
+    const snapshot_test = b.addTest(.{
+        .name = "snapshot_tool_test",
+        .root_source_file = b.path("src/snapshot_tool/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
-    roc_modules.addAllToTest(all_tests);
-    all_tests.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
+    roc_modules.addAll(snapshot_test);
+    add_tracy(b, roc_modules.build_options, snapshot_test, target, false, flag_enable_tracy);
 
-    b.default_step.dependOn(&all_tests.step);
+    const run_snapshot_test = b.addRunArtifact(snapshot_test);
+    test_step.dependOn(&run_snapshot_test.step);
+
+    // Add CLI test
+    const cli_test = b.addTest(.{
+        .name = "cli_test",
+        .root_source_file = b.path("src/cli/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    roc_modules.addAll(cli_test);
+    add_tracy(b, roc_modules.build_options, cli_test, target, false, flag_enable_tracy);
+
+    const run_cli_test = b.addRunArtifact(cli_test);
+    test_step.dependOn(&run_cli_test.step);
+
     b.default_step.dependOn(playground_step);
-    if (playground_test_install) |install| {
+    {
+        const install = playground_test_install;
         b.default_step.dependOn(&install.step);
-    }
-    if (no_bin) {
-        test_step.dependOn(&all_tests.step);
-    } else {
-        const run_tests = b.addRunArtifact(all_tests);
-        test_step.dependOn(&run_tests.step);
-
-        // Add success message after all tests complete (cross-platform)
-        const tests_passed_step = if (builtin.target.os.tag == .windows)
-            b.addSystemCommand(&.{ "cmd.exe", "/c", "echo", "All tests passed!" })
-        else
-            b.addSystemCommand(&.{ "echo", "All tests passed!" });
-        tests_passed_step.step.dependOn(&run_tests.step);
-        test_step.dependOn(&tests_passed_step.step);
     }
 
     // Fmt zig code.
@@ -223,6 +230,8 @@ pub fn build(b: *std.Build) void {
     }
 }
 
+const ModuleTest = modules.ModuleTest;
+
 fn add_fuzz_target(
     b: *std.Build,
     fuzz: bool,
@@ -237,7 +246,7 @@ fn add_fuzz_target(
 ) void {
     // We always include the repro scripts (no dependencies).
     // We only include the fuzzing scripts if `-Dfuzz` is set.
-    const root_source_file = b.path(b.fmt("src/fuzz-{s}.zig", .{name}));
+    const root_source_file = b.path(b.fmt("test/fuzzing/fuzz-{s}.zig", .{name}));
     const fuzz_obj = b.addObject(.{
         .name = b.fmt("{s}_obj", .{name}),
         .root_source_file = root_source_file,
@@ -253,7 +262,7 @@ fn add_fuzz_target(
     const repro_step = b.step(name_repro, b.fmt("run fuzz reproduction for {s}", .{name}));
     const repro_exe = b.addExecutable(.{
         .name = name_repro,
-        .root_source_file = b.path("src/fuzz-repro.zig"),
+        .root_source_file = b.path("test/fuzzing/fuzz-repro.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
@@ -287,7 +296,7 @@ fn addMainExe(
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = b.path("src/cli/main.zig"),
         .target = target,
         .optimize = optimize,
         .strip = strip,
@@ -349,7 +358,7 @@ fn addMainExe(
     // Create shim static library at build time
     const shim_lib = b.addStaticLibrary(.{
         .name = "roc_shim",
-        .root_source_file = b.path("src/roc_shim.zig"),
+        .root_source_file = b.path("src/interpreter_shim/main.zig"),
         .target = target,
         .optimize = optimize,
         .strip = strip,
@@ -372,7 +381,7 @@ fn addMainExe(
     // and zig doesn't permit embedding files from directories outside the source tree.
     const copy_shim = b.addUpdateSourceFiles();
     const shim_filename = if (target.result.os.tag == .windows) "roc_shim.lib" else "libroc_shim.a";
-    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src", shim_filename }));
+    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", shim_filename }));
     exe.step.dependOn(&copy_shim.step);
 
     const config = b.addOptions();
@@ -442,7 +451,7 @@ fn add_tracy(
 
         base.root_module.addIncludePath(.{ .cwd_relative = tracy_path });
         base.root_module.addCSourceFile(.{ .file = .{ .cwd_relative = client_cpp }, .flags = tracy_c_flags });
-        base.root_module.addCSourceFile(.{ .file = .{ .cwd_relative = "src/tracy-shutdown.cpp" }, .flags = tracy_c_flags });
+        base.root_module.addCSourceFile(.{ .file = .{ .cwd_relative = "src/build/tracy-shutdown.cpp" }, .flags = tracy_c_flags });
         if (!links_llvm) {
             base.root_module.linkSystemLibrary("c++", .{ .use_pkg_config = .no });
         }
@@ -571,7 +580,7 @@ fn addStaticLlvmOptionsToModule(mod: *std.Build.Module) !void {
 }
 
 const cpp_sources = [_][]const u8{
-    "src/zig_llvm.cpp",
+    "src/build/zig_llvm.cpp",
 };
 
 const exe_cflags = [_][]const u8{

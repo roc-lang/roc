@@ -5,90 +5,33 @@
 //! compiler's canonical internal representation (CIR).
 
 const std = @import("std");
-const testing = std.testing;
 const base = @import("base");
 const parse = @import("parse");
-const Can = @import("can");
 const compile = @import("compile");
 const types = @import("types");
 const builtins = @import("builtins");
 
-const ModuleEnv = compile.ModuleEnv;
+const Can = @import("../Can.zig");
+const CIR = @import("../CIR.zig");
+const TestEnv = @import("TestEnv.zig").TestEnv;
+
 const RocDec = builtins.dec.RocDec;
-
-// Note: Each test should create its own GPA to avoid memory leak detection issues
-
-fn parseAndCreateFrac(allocator: std.mem.Allocator, source: []const u8) !struct {
-    module_env: *ModuleEnv,
-    parse_ast: *parse.AST,
-    can: *Can,
-    expr_idx: ModuleEnv.Expr.Idx,
-} {
-    const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, source);
-
-    const parse_ast = try allocator.create(parse.AST);
-    parse_ast.* = try parse.parseExpr(module_env);
-
-    parse_ast.store.emptyScratch();
-
-    // Initialize CIR fields in ModuleEnv
-    try module_env.initCIRFields(allocator, "Test");
-
-    const can = try allocator.create(Can);
-    can.* = try Can.init(module_env, parse_ast, null);
-
-    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-
-    // Check if parsing produced an error
-    if (parse_ast.parse_diagnostics.items.len > 0 or parse_ast.tokenize_diagnostics.items.len > 0) {
-        // Parsing failed, create a runtime error
-        const diagnostic_idx = try module_env.addDiagnostic(.{ .invalid_num_literal = .{
-            .region = base.Region.zero(),
-        } });
-        const error_expr_idx = try module_env.addExprAndTypeVar(ModuleEnv.Expr{ .e_runtime_error = .{ .diagnostic = diagnostic_idx } }, types.Content{ .err = {} }, base.Region.zero());
-        return .{
-            .module_env = module_env,
-            .parse_ast = parse_ast,
-            .can = can,
-            .expr_idx = error_expr_idx,
-        };
-    }
-
-    const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse unreachable;
-
-    return .{
-        .module_env = module_env,
-        .parse_ast = parse_ast,
-        .can = can,
-        .expr_idx = (canonical_expr_idx.get_idx()),
-    };
-}
-
-fn cleanup(allocator: std.mem.Allocator, result: anytype) void {
-    result.can.deinit();
-    result.parse_ast.deinit(allocator);
-    result.module_env.deinit();
-    allocator.destroy(result.can);
-    allocator.destroy(result.parse_ast);
-    allocator.destroy(result.module_env);
-}
+const testing = std.testing;
 
 test "fractional literal - basic decimal" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "3.14";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "3.14");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 314);
             try testing.expectEqual(dec.denominator_power_of_ten, 2);
-            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(result.expr_idx));
-            const resolved = result.module_env.types.resolveVar(expr_as_type_var);
+            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr.get_idx()));
+            const resolved = test_env.module_env.types.resolveVar(expr_as_type_var);
             switch (resolved.desc.content) {
                 .structure => |structure| switch (structure) {
                     .num => |num| switch (num) {
@@ -115,8 +58,8 @@ test "fractional literal - basic decimal" {
         .e_frac_dec => |dec| {
             _ = dec;
             // Also accept e_frac_dec for decimal literals
-            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(result.expr_idx));
-            const resolved = result.module_env.types.resolveVar(expr_as_type_var);
+            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr.get_idx()));
+            const resolved = test_env.module_env.types.resolveVar(expr_as_type_var);
             switch (resolved.desc.content) {
                 .structure => |structure| switch (structure) {
                     .num => |num| switch (num) {
@@ -148,14 +91,13 @@ test "fractional literal - basic decimal" {
 }
 
 test "fractional literal - scientific notation small" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "1.23e-10";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "1.23e-10");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             // Very small numbers may round to zero when parsed as small decimal
@@ -163,8 +105,8 @@ test "fractional literal - scientific notation small" {
             try testing.expectEqual(dec.numerator, 0);
 
             // Still check type requirements
-            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(result.expr_idx));
-            const resolved = result.module_env.types.resolveVar(expr_as_type_var);
+            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr.get_idx()));
+            const resolved = test_env.module_env.types.resolveVar(expr_as_type_var);
             switch (resolved.desc.content) {
                 .structure => |structure| switch (structure) {
                     .num => |num| switch (num) {
@@ -188,8 +130,8 @@ test "fractional literal - scientific notation small" {
         },
         .e_frac_dec => |frac| {
             // Scientific notation can also be parsed as RocDec for exact representation
-            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(result.expr_idx));
-            const resolved = result.module_env.types.resolveVar(expr_as_type_var);
+            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr.get_idx()));
+            const resolved = test_env.module_env.types.resolveVar(expr_as_type_var);
             switch (resolved.desc.content) {
                 .structure => |structure| switch (structure) {
                     .num => |num| switch (num) {
@@ -218,8 +160,8 @@ test "fractional literal - scientific notation small" {
         },
         .e_frac_f64 => |frac| {
             // Or it might be parsed as f64
-            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(result.expr_idx));
-            const resolved = result.module_env.types.resolveVar(expr_as_type_var);
+            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr.get_idx()));
+            const resolved = test_env.module_env.types.resolveVar(expr_as_type_var);
             switch (resolved.desc.content) {
                 .structure => |structure| switch (structure) {
                     .num => |num| switch (num) {
@@ -253,18 +195,17 @@ test "fractional literal - scientific notation small" {
 }
 
 test "fractional literal - scientific notation large (near f64 max)" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "1e308";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "1e308");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_frac_f64 => |frac| {
-            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(result.expr_idx));
-            const resolved = result.module_env.types.resolveVar(expr_as_type_var);
+            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr.get_idx()));
+            const resolved = test_env.module_env.types.resolveVar(expr_as_type_var);
             switch (resolved.desc.content) {
                 .structure => |structure| switch (structure) {
                     .num => |num| switch (num) {
@@ -293,16 +234,13 @@ test "fractional literal - scientific notation large (near f64 max)" {
 }
 
 test "fractional literal - scientific notation at f32 boundary" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "3.5e38";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    // f32 max is approximately 3.4028235e38
-    // 3.4e38 is actually within the range, but let's test with 3.5e38 which is above
-    const result = try parseAndCreateFrac(gpa, "3.5e38");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_frac_f64 => |frac| {
             try testing.expect(true); // Infinity doesn't fit in Dec
@@ -316,14 +254,13 @@ test "fractional literal - scientific notation at f32 boundary" {
 }
 
 test "fractional literal - negative zero" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "-0.0";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "-0.0");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |small| {
             // dec_small doesn't preserve sign for -0.0
@@ -350,14 +287,13 @@ test "fractional literal - negative zero" {
 }
 
 test "fractional literal - positive zero" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "0.0";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "0.0");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |small| {
             try testing.expectEqual(small.numerator, 0);
@@ -372,15 +308,13 @@ test "fractional literal - positive zero" {
 }
 
 test "fractional literal - very small scientific notation" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "1e-40";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    // Test a value that's smaller than f32 min positive normal (approximately 1.2e-38)
-    const result = try parseAndCreateFrac(gpa, "1e-40");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_frac_f64 => |frac| {
             try testing.expect(true); // This test is for minimum f64 value
@@ -395,22 +329,14 @@ test "fractional literal - very small scientific notation" {
 }
 
 test "fractional literal - NaN handling" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "NaN";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
     // Note: NaN is not a valid numeric literal in Roc
     // The parser will fail before canonicalization
     // This test verifies that behavior
-    const module_env = try gpa.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(gpa, "NaN");
-    defer {
-        module_env.deinit();
-        gpa.destroy(module_env);
-    }
-
-    var parse_ast = try parse.parseExpr(module_env);
-    defer parse_ast.deinit(gpa);
+    const parse_ast = test_env.parse_ast;
 
     // Check if it parsed as an identifier instead of a number
     const expr: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
@@ -421,22 +347,14 @@ test "fractional literal - NaN handling" {
 }
 
 test "fractional literal - infinity handling" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "Infinity";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
     // Note: Infinity is not a valid numeric literal in Roc
     // The parser will fail before canonicalization
     // This test verifies that behavior
-    const module_env = try gpa.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(gpa, "Infinity");
-    defer {
-        module_env.deinit();
-        gpa.destroy(module_env);
-    }
-
-    var parse_ast = try parse.parseExpr(module_env);
-    defer parse_ast.deinit(gpa);
+    const parse_ast = test_env.parse_ast;
 
     // Check if it parsed as an identifier instead of a number
     const expr: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
@@ -447,14 +365,13 @@ test "fractional literal - infinity handling" {
 }
 
 test "fractional literal - scientific notation with capital E" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "2.5E10";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "2.5E10");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_frac_dec => |frac| {
             try testing.expect(true); // 1e7 fits in Dec
@@ -468,14 +385,13 @@ test "fractional literal - scientific notation with capital E" {
 }
 
 test "fractional literal - negative scientific notation" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "-1.5e-5";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "-1.5e-5");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_frac_dec => |frac| {
             try testing.expect(true); // 1e-7 fits in Dec
@@ -514,16 +430,13 @@ test "negative zero preservation in f64" {
 }
 
 test "negative zero forced to f64 parsing" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "-0.0e0";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    // Test that when we force parsing through f64 path (e.g., with scientific notation),
-    // negative zero now uses dec_small and loses sign
-    const result = try parseAndCreateFrac(gpa, "-0.0e0");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |small| {
             try testing.expectEqual(small.numerator, 0);
@@ -554,14 +467,13 @@ test "negative zero preservation in Dec" {
 }
 
 test "small dec - basic positive decimal" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "3.14";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "3.14");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 314);
@@ -575,14 +487,13 @@ test "small dec - basic positive decimal" {
 }
 
 test "negative zero preservation - uses f64" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "-0.0";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "-0.0");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |small| {
             try testing.expectEqual(small.numerator, 0);
@@ -603,15 +514,13 @@ test "negative zero preservation - uses f64" {
 }
 
 test "negative zero with scientific notation - preserves sign via f64" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "-0.0e0";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    // Scientific notation now uses dec_small for zero, loses sign
-    const result = try parseAndCreateFrac(gpa, "-0.0e0");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |small| {
             try testing.expectEqual(small.numerator, 0);
@@ -624,14 +533,13 @@ test "negative zero with scientific notation - preserves sign via f64" {
 }
 
 test "small dec - positive zero" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "0.0";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "0.0");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 0);
@@ -647,14 +555,13 @@ test "small dec - positive zero" {
 }
 
 test "small dec - precision preservation for 0.1" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "0.1";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "0.1");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 1);
@@ -667,14 +574,13 @@ test "small dec - precision preservation for 0.1" {
 }
 
 test "small dec - trailing zeros" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "1.100";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "1.100");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 1100);
@@ -687,14 +593,13 @@ test "small dec - trailing zeros" {
 }
 
 test "small dec - negative number" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "-5.25";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "-5.25");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, -525);
@@ -707,14 +612,13 @@ test "small dec - negative number" {
 }
 
 test "small dec - max i8 value" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "127.99";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "127.99");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 12799);
@@ -727,14 +631,13 @@ test "small dec - max i8 value" {
 }
 
 test "small dec - min i8 value" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "-128.0";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "-128.0");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, -1280);
@@ -747,14 +650,13 @@ test "small dec - min i8 value" {
 }
 
 test "small dec - 128.0 now fits with new representation" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "128.0";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "128.0");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             // With numerator/power representation, 128.0 = 1280/10^1 fits in i16
@@ -768,14 +670,13 @@ test "small dec - 128.0 now fits with new representation" {
 }
 
 test "small dec - exceeds i16 range falls back to Dec" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "32768.0";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "32768.0");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_frac_dec => {
             // Should fall back to Dec because 327680 > 32767 (max i16)
@@ -791,14 +692,13 @@ test "small dec - exceeds i16 range falls back to Dec" {
 }
 
 test "small dec - too many fractional digits falls back to Dec" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "1.234";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "1.234");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 1234);
@@ -811,14 +711,13 @@ test "small dec - too many fractional digits falls back to Dec" {
 }
 
 test "small dec - complex example 0.001" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "0.001";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "0.001");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 1);
@@ -831,14 +730,13 @@ test "small dec - complex example 0.001" {
 }
 
 test "small dec - negative example -0.05" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "-0.05";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "-0.05");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             // -0.05 = -5 / 10^2
@@ -852,15 +750,13 @@ test "small dec - negative example -0.05" {
 }
 
 test "negative zero with scientific notation preserves sign" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "-0.0e0";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    // Scientific notation now uses dec_small for zero, loses sign
-    const result = try parseAndCreateFrac(gpa, "-0.0e0");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |small| {
             // With scientific notation, now uses dec_small and loses sign
@@ -874,14 +770,13 @@ test "negative zero with scientific notation preserves sign" {
 }
 
 test "fractional literal - simple 1.0 uses small dec" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const source = "1.0";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    const result = try parseAndCreateFrac(gpa, "1.0");
-    defer cleanup(gpa, result);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    const expr = result.module_env.store.getExpr(result.expr_idx);
     switch (expr) {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 10);

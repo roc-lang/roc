@@ -1,50 +1,57 @@
-//! Compilation-related types and functionality.
+//! Compilation-related types and functionality, such as cache management and package building.
 
-pub const ModuleEnv = @import("ModuleEnv.zig");
-pub const type_writers = @import("type_writers.zig");
-pub const cir_types = @import("cir_types.zig");
-pub const CIR = @import("CIR.zig");
+const std = @import("std");
+
+pub const package = @import("compile_package.zig");
+pub const build = @import("compile_build.zig");
 pub const specialize = @import("specialize.zig");
 
-// Re-export CIR types from ModuleEnv
-/// Node type representing various AST elements
-pub const Node = ModuleEnv.Node;
-/// Store for all nodes in the CIR
-pub const NodeStore = ModuleEnv.NodeStore;
-/// Expression type for Roc expressions
-pub const Expr = ModuleEnv.Expr;
-/// Pattern type for pattern matching
-pub const Pattern = ModuleEnv.Pattern;
-/// Statement type for module-level statements
-pub const Statement = ModuleEnv.Statement;
-/// Type annotation representation
-pub const TypeAnno = ModuleEnv.TypeAnno;
-/// Diagnostic messages for compilation errors and warnings
-pub const Diagnostic = ModuleEnv.Diagnostic;
-/// Definition type for value and function definitions
-pub const Def = ModuleEnv.Def;
-/// Type header for type declarations
-pub const TypeHeader = ModuleEnv.TypeHeader;
-/// Where clause for type constraints
-pub const WhereClause = ModuleEnv.WhereClause;
-/// Type annotation with position information
-pub const Annotation = ModuleEnv.Annotation;
-/// Items exposed by a module
-pub const ExposedItem = ModuleEnv.ExposedItem;
-/// Fields in record patterns
-pub const PatternRecordField = ModuleEnv.PatternRecordField;
-/// Arbitrary precision integer values
-pub const IntValue = ModuleEnv.IntValue;
-/// Roc decimal type representation
-pub const RocDec = ModuleEnv.RocDec;
-/// Import statements
-pub const Import = ModuleEnv.Import;
-/// Fields in record expressions
-pub const RecordField = ModuleEnv.RecordField;
-/// External declarations from other modules
-pub const ExternalDecl = ModuleEnv.ExternalDecl;
-/// Compilation error reports
-pub const Report = ModuleEnv.Report;
-// isCastable is not exported, it's internal to ModuleEnv
-/// Cast function for index types
-pub const castIdx = ModuleEnv.castIdx;
+pub const module = @import("cache_module.zig");
+pub const key = @import("cache_key.zig");
+pub const config = @import("cache_config.zig");
+pub const reporting = @import("cache_reporting.zig");
+pub const manager = @import("cache_manager.zig");
+
+pub const Header = module.Header;
+pub const CacheModule = module.CacheModule;
+pub const Diagnostics = module.Diagnostics;
+pub const CacheManager = manager.CacheManager;
+pub const CacheResult = manager.CacheResult;
+pub const CacheConfig = config.CacheConfig;
+pub const CacheStats = config.CacheStats;
+pub const PackageEnv = package.PackageEnv;
+pub const BuildEnv = build.BuildEnv;
+
+// /// Global cache statistics (optional, for debugging)
+// var global_stats: Stats = .{};
+
+// /// Get reference to global stats
+// pub fn getGlobalStats() *Stats {
+//     return &global_stats;
+// }
+
+// /// Reset global stats
+// pub fn resetGlobalStats() void {
+//     global_stats.reset();
+// }
+
+// /// Print global stats to stderr
+// pub fn printGlobalStats() !void {
+//     const stderr = std.io.getStdErr().writer();
+//     try global_stats.print(stderr.any());
+// }
+
+test "compile tests" {
+    std.testing.refAllDecls(@import("cache_config.zig"));
+    std.testing.refAllDecls(@import("cache_key.zig"));
+    std.testing.refAllDecls(@import("cache_manager.zig"));
+    std.testing.refAllDecls(@import("cache_module.zig"));
+    std.testing.refAllDecls(@import("cache_reporting.zig"));
+    std.testing.refAllDecls(@import("compile_build.zig"));
+    std.testing.refAllDecls(@import("compile_package.zig"));
+
+    std.testing.refAllDecls(@import("test/cache_test.zig"));
+    std.testing.refAllDecls(@import("test/module_env_test.zig"));
+    std.testing.refAllDecls(@import("test/test_build_env.zig"));
+    std.testing.refAllDecls(@import("test/test_package_env.zig"));
+}

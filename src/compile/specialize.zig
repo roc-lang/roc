@@ -12,7 +12,7 @@ const testing = std.testing;
 const base = @import("base");
 const types = @import("types");
 
-const ModuleEnv = @import("ModuleEnv.zig");
+const ModuleEnv = @import("../canonicalize/ModuleEnv.zig");
 const NodeStore = ModuleEnv.NodeStore;
 const Expr = ModuleEnv.Expr;
 const Pattern = ModuleEnv.Pattern;

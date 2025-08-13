@@ -3,12 +3,14 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const layout_ = @import("./layout.zig");
 const collections = @import("collections");
-const work = @import("./work.zig");
-const ModuleEnv = @import("compile").ModuleEnv;
+const can = @import("can");
 const builtins = @import("builtins");
 
+const layout_ = @import("./layout.zig");
+const work = @import("./work.zig");
+
+const ModuleEnv = can.ModuleEnv;
 const types_store = types.store;
 const target = base.target;
 const Ident = base.Ident;
@@ -103,7 +105,7 @@ pub const Store = struct {
     ) std.mem.Allocator.Error!Self {
         // Get the number of variables from the type store's slots
         const capacity = type_store.slots.backing.len();
-        const layouts_by_var = try collections.ArrayListMap(Var, Idx).init(env.gpa, capacity);
+        const layouts_by_var = try collections.ArrayListMap(Var, Idx).init(env.gpa, @intCast(capacity));
 
         var layouts = collections.SafeMultiList(Layout){};
 
@@ -208,8 +210,8 @@ pub const Store = struct {
                 if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
                     return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
                 }
-                const lhs_str = ctx.env.idents.getText(lhs.name);
-                const rhs_str = ctx.env.idents.getText(rhs.name);
+                const lhs_str = ctx.env.getIdent(lhs.name);
+                const rhs_str = ctx.env.getIdent(rhs.name);
                 return std.mem.order(u8, lhs_str, rhs_str) == .lt;
             }
         };
@@ -310,7 +312,7 @@ pub const Store = struct {
 
             current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
 
-            const current_field_name = self.env.idents.getText(field.name);
+            const current_field_name = self.env.getIdent(field.name);
             if (std.mem.eql(u8, current_field_name, field_name)) {
                 return current_offset;
             }
@@ -541,8 +543,8 @@ pub const Store = struct {
                 }
 
                 // Then sort by name (ascending)
-                const lhs_str = ctx.env.idents.getText(lhs.name);
-                const rhs_str = ctx.env.idents.getText(rhs.name);
+                const lhs_str = ctx.env.getIdent(lhs.name);
+                const rhs_str = ctx.env.getIdent(rhs.name);
                 return std.mem.order(u8, lhs_str, rhs_str) == .lt;
             }
         };
@@ -1093,7 +1095,7 @@ pub const Store = struct {
                     // This is likely a bug in the type system.
                     if (std.debug.runtime_safety) {
                         std.debug.print("\nERROR: Encountered unboxed rigid_var in layout computation\n", .{});
-                        const name = self.env.idents.getText(ident);
+                        const name = self.env.getIdent(ident);
                         std.debug.print("  Rigid var name: {s}\n", .{name});
                         std.debug.print("  Variable: {}\n", .{current.var_});
                     }

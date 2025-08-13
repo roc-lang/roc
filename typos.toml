@@ -8,8 +8,8 @@ extend-exclude = [
     "examples/static-site-gen/input/",
     "COPYRIGHT",
     "crates/compiler/checkmate/www/package-lock.json",
-    "src/zig_llvm.h",
-    "src/snapshots/",
+    "src/build/zig_llvm.h",
+    "test/snapshots/",
 ]
 
 [default]

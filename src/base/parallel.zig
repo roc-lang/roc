@@ -146,3 +146,44 @@ pub fn process(
         }
     }
 }
+
+test "process basic functionality" {
+    const gpa = std.testing.allocator;
+
+    const MyContext = struct {
+        items: []const i32,
+        outputs: []i32,
+    };
+
+    const TestWorker = struct {
+        fn worker(worker_allocator: std.mem.Allocator, item: *MyContext, item_id: usize) void {
+            _ = worker_allocator; // unused in this test
+            const value = item.items[item_id];
+            if (value < 0) {
+                item.outputs[item_id] = -1;
+            } else {
+                item.outputs[item_id] = value * value;
+            }
+        }
+    };
+
+    var outputs: [5]i32 = undefined; // Preallocate output array
+
+    var context = MyContext{
+        .items = &[_]i32{ 1, 2, -3, 4, 5 },
+        .outputs = &outputs,
+    };
+
+    try process(
+        MyContext,
+        &context,
+        TestWorker.worker,
+        gpa,
+        outputs.len,
+        .{ .max_threads = 1, .use_per_thread_arenas = false },
+    );
+    try std.testing.expectEqual(
+        outputs,
+        [_]i32{ 1, 4, -1, 16, 25 },
+    );
+}

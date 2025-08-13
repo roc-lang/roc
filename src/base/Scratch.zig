@@ -2,7 +2,7 @@
 //! when working with recursive operations
 
 const std = @import("std");
-const base = @import("../base.zig");
+const DataSpan = @import("DataSpan.zig");
 
 /// A stack for easily adding and removing index types when doing recursive operations
 pub fn Scratch(comptime T: type) type {
@@ -45,7 +45,7 @@ pub fn Scratch(comptime T: type) type {
 
         /// Creates a new span starting at start.  Moves the items from scratch
         /// to extra_data as appropriate.
-        pub fn spanFromStart(self: *Self, start: u32, gpa: std.mem.Allocator, data: *std.ArrayListUnmanaged(u32)) std.mem.Allocator.Error!base.DataSpan {
+        pub fn spanFromStart(self: *Self, start: u32, gpa: std.mem.Allocator, data: *std.ArrayListUnmanaged(u32)) std.mem.Allocator.Error!DataSpan {
             const end = self.items.len;
             defer self.items.shrinkRetainingCapacity(start);
             var i = @as(usize, @intCast(start));

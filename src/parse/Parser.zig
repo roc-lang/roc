@@ -9,16 +9,15 @@ const std = @import("std");
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
-const parse = @import("parse");
 
-const AST = parse.AST;
-const Node = parse.Node;
-const NodeStore = parse.NodeStore;
+const AST = @import("AST.zig");
+const Node = @import("Node.zig");
+const NodeStore = @import("NodeStore.zig");
 const NodeList = AST.NodeList;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
 const TokenIdx = Token.Idx;
-const tokenize = parse.tokenize;
+const tokenize = @import("tokenize.zig");
 
 const MAX_PARSE_DIAGNOSTICS: usize = 1_000;
 const MAX_NESTING_LEVELS: u8 = 128;
@@ -36,12 +35,12 @@ cached_malformed_node: ?Node.Idx,
 nesting_counter: u8,
 
 /// init the parser from a buffer of tokens
-pub fn init(tokens: TokenizedBuffer) std.mem.Allocator.Error!Parser {
+pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.Error!Parser {
     const estimated_node_count = tokens.tokens.len;
-    const store = try NodeStore.initCapacity(tokens.env.gpa, estimated_node_count);
+    const store = try NodeStore.initCapacity(gpa, estimated_node_count);
 
     return Parser{
-        .gpa = tokens.env.gpa,
+        .gpa = gpa,
         .pos = 0,
         .tok_buf = tokens,
         .store = store,
@@ -254,7 +253,7 @@ fn debugToken(self: *Parser, window: usize) void {
         var extra: []u8 = "";
         if (tag == .LowerIdent or tag == .UpperIdent) {
             const e = tok_extra[i];
-            extra = self.tok_buf.env.idents.getText(e.interned);
+            extra = self.tok_buf.env.getIdent(e.interned);
         }
         std.debug.print("{s}{d}: {s} \"{s}\"\n", .{ if (i == current) "-->" else "   ", i, @tagName(tag), extra });
     }

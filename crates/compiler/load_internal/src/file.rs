@@ -5371,6 +5371,7 @@ fn canonicalize_and_constrain<'a>(
                         | ModuleId::SET
                         | ModuleId::HASH
                         | ModuleId::INSPECT
+                        | ModuleId::STR
                 );
 
                 if !name.is_builtin() || should_include_builtin {

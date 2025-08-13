@@ -7,23 +7,24 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const compile = @import("compile");
+const can = @import("can");
 const builtins = @import("builtins");
 const collections = @import("collections");
-const layout_mod = @import("../layout/layout.zig");
+const layout_mod = @import("layout");
 
-const LayoutStore = layout_mod.store.Store;
+const CIR = can.CIR;
+const ModuleEnv = can.ModuleEnv;
+const LayoutStore = layout_mod.Store;
 const Layout = layout_mod.Layout;
 const StringLiteral = base.StringLiteral;
 const RocOps = builtins.host_abi.RocOps;
 const RocList = builtins.list.RocList;
-const ModuleEnv = compile.ModuleEnv;
 const RocStr = builtins.str.RocStr;
 const LayoutTag = layout_mod.LayoutTag;
 const RocDec = builtins.dec.RocDec;
 const SExprTree = base.SExprTree;
 const Closure = layout_mod.Closure;
-const Expr = ModuleEnv.Expr;
+const Expr = CIR.Expr;
 const Ident = base.Ident;
 
 const StackValue = @This();
@@ -429,7 +430,7 @@ pub const RecordAccessor = struct {
     pub fn findFieldIndex(self: RecordAccessor, env: anytype, field_name: []const u8) ?usize {
         for (0..self.field_layouts.len) |idx| {
             const field = self.field_layouts.get(idx);
-            if (std.mem.eql(u8, env.idents.getText(field.name), field_name)) {
+            if (std.mem.eql(u8, env.getIdent(field.name), field_name)) {
                 return idx;
             }
         }
