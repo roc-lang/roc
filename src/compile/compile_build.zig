@@ -774,6 +774,10 @@ pub const BuildEnv = struct {
                 for (fields) |idx| {
                     const rf = ast.store.getRecordField(idx);
                     const k = ast.resolve(rf.name);
+                    if (rf.value == null) {
+                        // If no value is provided for an app field, skip it
+                        continue;
+                    }
                     const relp = try self.stringFromExpr(&ast, rf.value.?);
                     const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
                     const v = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
@@ -787,6 +791,10 @@ pub const BuildEnv = struct {
                 for (fields) |idx| {
                     const rf = ast.store.getRecordField(idx);
                     const k = ast.resolve(rf.name);
+                    if (rf.value == null) {
+                        // If no value is provided for a package field, skip it
+                        continue;
+                    }
                     const relp = try self.stringFromExpr(&ast, rf.value.?);
                     const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
                     const v = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
@@ -805,6 +813,10 @@ pub const BuildEnv = struct {
                 for (fields) |idx| {
                     const rf = ast.store.getRecordField(idx);
                     const k = ast.resolve(rf.name);
+                    if (rf.value == null) {
+                        // If no value is provided for a platform field, skip it
+                        continue;
+                    }
                     const relp = try self.stringFromExpr(&ast, rf.value.?);
                     const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
                     const v = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
