@@ -1,3 +1,5 @@
+//! Tests for Scopes
+
 const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");

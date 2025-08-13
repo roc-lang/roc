@@ -1766,6 +1766,7 @@ fn canonicalizeRecordField(
     return try self.env.addRecordFieldAndTypeVar(cir_field, Content{ .flex_var = null }, self.parse_ir.tokenizedRegionToRegion(field.region));
 }
 
+/// Parse an integer with underscores.
 pub fn parseIntWithUnderscores(comptime T: type, text: []const u8, int_base: u8) !T {
     var buf: [128]u8 = undefined;
     var len: usize = 0;
