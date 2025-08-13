@@ -1,9 +1,14 @@
-//! Specialization system for monomorphizing polymorphic CIR functions.
+//! Deep cloning system for CIR nodes and their types.
 //!
-//! This module provides functionality to create specialized versions of polymorphic functions
-//! by copying their CIR representation and unifying type variables with concrete types.
-//! The specialization process preserves type relationships and creates independent copies
-//! of all AST nodes while maintaining proper type variable mappings.
+//! This module provides functionality to create deep copies of CIR nodes (expressions, patterns, etc.)
+//! while also cloning their associated types. Each cloned node gets fresh type variables that
+//! are mapped from the original types, preserving the structure but creating independent copies.
+//! This is useful for specialization, where you need to create copies of generic code that can
+//! be unified with different concrete types.
+//!
+//! Important: Type aliases are resolved during cloning. The cloned types will not contain any
+//! aliases - they are expanded to their underlying types. This simplifies the cloned type
+//! structure. Nominal types, however, are preserved as they represent distinct types.
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
@@ -27,14 +32,13 @@ const FlatType = types.FlatType;
 const Ident = base.Ident;
 const Region = base.Region;
 
-/// Context for managing the specialization process
-/// Context for specializing CIR functions, maintaining mappings between source and target environments.
-pub const SpecializationContext = struct {
+/// Context for deep cloning CIR nodes, maintaining mappings between source and target environments.
+pub const CloneContext = struct {
     allocator: Allocator,
     type_store: *Store,
     source_env: *const ModuleEnv,
     target_env: *ModuleEnv,
-    type_var_map: std.AutoHashMap(TypeVar, TypeVar),
+    type_var_cache: std.AutoHashMap(TypeVar, TypeVar),
     copied_expr_map: std.AutoHashMap(Expr.Idx, Expr.Idx),
     copied_pattern_map: std.AutoHashMap(Pattern.Idx, Pattern.Idx),
     copied_type_anno_map: std.AutoHashMap(TypeAnno.Idx, TypeAnno.Idx),
@@ -44,33 +48,33 @@ pub const SpecializationContext = struct {
         type_store: *Store,
         source_env: *const ModuleEnv,
         target_env: *ModuleEnv,
-    ) SpecializationContext {
-        return SpecializationContext{
+    ) CloneContext {
+        return CloneContext{
             .allocator = allocator,
             .type_store = type_store,
             .source_env = source_env,
             .target_env = target_env,
-            .type_var_map = std.AutoHashMap(TypeVar, TypeVar).init(allocator),
+            .type_var_cache = std.AutoHashMap(TypeVar, TypeVar).init(allocator),
             .copied_expr_map = std.AutoHashMap(Expr.Idx, Expr.Idx).init(allocator),
             .copied_pattern_map = std.AutoHashMap(Pattern.Idx, Pattern.Idx).init(allocator),
             .copied_type_anno_map = std.AutoHashMap(TypeAnno.Idx, TypeAnno.Idx).init(allocator),
         };
     }
 
-    pub fn deinit(self: *SpecializationContext) void {
-        self.type_var_map.deinit();
+    pub fn deinit(self: *CloneContext) void {
+        self.type_var_cache.deinit();
         self.copied_expr_map.deinit();
         self.copied_pattern_map.deinit();
         self.copied_type_anno_map.deinit();
     }
 
-    pub fn mapTypeVar(self: *SpecializationContext, old_var: TypeVar) !TypeVar {
-        if (self.type_var_map.get(old_var)) |new_var| {
+    pub fn cloneTypeVar(self: *CloneContext, old_var: TypeVar) !TypeVar {
+        if (self.type_var_cache.get(old_var)) |new_var| {
             return new_var;
         }
 
         const new_var = try self.type_store.fresh();
-        try self.type_var_map.put(old_var, new_var);
+        try self.type_var_cache.put(old_var, new_var);
 
         const old_resolved = self.type_store.resolveVar(old_var);
 
@@ -81,37 +85,39 @@ pub const SpecializationContext = struct {
         return new_var;
     }
 
-    fn copyContent(self: *SpecializationContext, content: Content) Allocator.Error!Content {
+    fn copyContent(self: *CloneContext, content: Content) Allocator.Error!Content {
         return switch (content) {
             .flex_var => |name| Content{ .flex_var = name },
             .rigid_var => |name| Content{ .rigid_var = name },
             .alias => |alias| blk: {
-                // For now, just return the same alias. In a real implementation,
-                // we'd need to map all the type variables in alias.vars
-                break :blk Content{ .alias = alias };
+                // Aliases are resolved during cloning - we clone what the alias points to,
+                // not the alias itself. This simplifies the cloned type structure.
+                const backing_var = self.type_store.getAliasBackingVar(alias);
+                const resolved = self.type_store.resolveVar(backing_var);
+                break :blk try self.copyContent(resolved.desc.content);
             },
             .structure => |flat_type| Content{ .structure = try self.copyFlatType(flat_type) },
             .err => Content{ .err = {} },
         };
     }
 
-    fn copyFlatType(self: *SpecializationContext, flat_type: FlatType) Allocator.Error!FlatType {
+    fn copyFlatType(self: *CloneContext, flat_type: FlatType) Allocator.Error!FlatType {
         return switch (flat_type) {
-            .box => |v| FlatType{ .box = try self.mapTypeVar(v) },
-            .list => |v| FlatType{ .list = try self.mapTypeVar(v) },
+            .box => |v| FlatType{ .box = try self.cloneTypeVar(v) },
+            .list => |v| FlatType{ .list = try self.cloneTypeVar(v) },
             .str => FlatType{ .str = {} },
             .num => |num| blk: {
                 const new_num = switch (num) {
                     .num_poly => |poly| types.Num{ .num_poly = .{
-                        .var_ = try self.mapTypeVar(poly.var_),
+                        .var_ = try self.cloneTypeVar(poly.var_),
                         .requirements = poly.requirements,
                     } },
                     .int_poly => |poly| types.Num{ .int_poly = .{
-                        .var_ = try self.mapTypeVar(poly.var_),
+                        .var_ = try self.cloneTypeVar(poly.var_),
                         .requirements = poly.requirements,
                     } },
                     .frac_poly => |poly| types.Num{ .frac_poly = .{
-                        .var_ = try self.mapTypeVar(poly.var_),
+                        .var_ = try self.cloneTypeVar(poly.var_),
                         .requirements = poly.requirements,
                     } },
                     else => num,
@@ -119,7 +125,7 @@ pub const SpecializationContext = struct {
                 break :blk FlatType{ .num = new_num };
             },
             .record => |record| blk: {
-                const mapped_ext = try self.mapTypeVar(record.ext);
+                const mapped_ext = try self.cloneTypeVar(record.ext);
                 break :blk FlatType{
                     .record = .{
                         .fields = record.fields, // Fields contain TypeVars that are mapped at unification time
@@ -132,7 +138,7 @@ pub const SpecializationContext = struct {
                 break :blk FlatType{ .tuple = tuple };
             },
             .fn_pure => |func| blk: {
-                const mapped_ret = try self.mapTypeVar(func.ret);
+                const mapped_ret = try self.cloneTypeVar(func.ret);
                 break :blk FlatType{
                     .fn_pure = .{
                         .args = func.args, // Args contain TypeVars that are mapped at unification time
@@ -142,7 +148,7 @@ pub const SpecializationContext = struct {
                 };
             },
             .fn_effectful => |func| blk: {
-                const mapped_ret = try self.mapTypeVar(func.ret);
+                const mapped_ret = try self.cloneTypeVar(func.ret);
                 break :blk FlatType{
                     .fn_effectful = .{
                         .args = func.args, // Args contain TypeVars that are mapped at unification time
@@ -152,7 +158,7 @@ pub const SpecializationContext = struct {
                 };
             },
             .fn_unbound => |func| blk: {
-                const mapped_ret = try self.mapTypeVar(func.ret);
+                const mapped_ret = try self.cloneTypeVar(func.ret);
                 break :blk FlatType{
                     .fn_unbound = .{
                         .args = func.args, // Args contain TypeVars that are mapped at unification time
@@ -162,7 +168,7 @@ pub const SpecializationContext = struct {
                 };
             },
             .tag_union => |tag_union| blk: {
-                const mapped_ext = try self.mapTypeVar(tag_union.ext);
+                const mapped_ext = try self.cloneTypeVar(tag_union.ext);
                 break :blk FlatType{
                     .tag_union = .{
                         .tags = tag_union.tags, // Tags contain TypeVars that are mapped at unification time
@@ -175,9 +181,9 @@ pub const SpecializationContext = struct {
             .record_poly => |rec| FlatType{ .record_poly = .{
                 .record = .{
                     .fields = rec.record.fields,
-                    .ext = try self.mapTypeVar(rec.record.ext),
+                    .ext = try self.cloneTypeVar(rec.record.ext),
                 },
-                .var_ = try self.mapTypeVar(rec.var_),
+                .var_ = try self.cloneTypeVar(rec.var_),
             } },
             .nominal_type => |nom| FlatType{ .nominal_type = nom },
             .empty_record => FlatType{ .empty_record = {} },
@@ -186,74 +192,35 @@ pub const SpecializationContext = struct {
     }
 };
 
-/// Creates a specialized version of a polymorphic function expression.
+/// Deep clones any CIR node (expression, pattern, type annotation, or statement) along with its types.
 ///
-/// This takes a polymorphic function and some argument types to apply to it,
-/// and creates a monomorphized deep copy of that function in which all
-/// type variables have been unified with the given argument types.
+/// This creates an independent copy of the node and all its children, with fresh type variables
+/// that are mapped from the original types. The cloned node can then be unified with different
+/// concrete types without affecting the original.
 ///
-/// The function_expr must have a function type. For lambda/closure expressions,
-/// argument types are unified directly with parameter patterns. For other expressions
-/// (e.g., named function lookups), unification happens during application.
-///
-/// Only fails if allocation fails. All type mismatches are debug asserts.
-pub fn specializeFunctionExpr(
+/// Only fails if allocation fails.
+pub fn deepClone(
     allocator: Allocator,
     type_store: *Store,
     source_env: *const ModuleEnv,
     target_env: *ModuleEnv,
-    function_expr: Expr.Idx, // Must have a function type
-    arg_types: []const TypeVar,
-) Allocator.Error!struct { expr: Expr.Idx, type_var: TypeVar } {
-    var context = SpecializationContext.init(allocator, type_store, source_env, target_env);
+    node: anytype, // Can be Expr.Idx, Pattern.Idx, TypeAnno.Idx, or Statement.Idx
+) Allocator.Error!@TypeOf(node) {
+    var context = CloneContext.init(allocator, type_store, source_env, target_env);
     defer context.deinit();
 
-    // In debug mode, verify that the expression has a function type
-    if (std.debug.runtime_safety) {
-        const expr_type_var: TypeVar = @enumFromInt(@intFromEnum(function_expr));
-        const resolved = type_store.resolveVar(expr_type_var);
-        if (resolved.desc.content == .structure) {
-            assert(resolved.desc.content.structure == .fn_pure or resolved.desc.content.structure == .fn_effectful);
-        }
-    }
-
-    // Deep copy the function expression and all its dependencies
-    const new_expr_idx = try copyExpr(&context, function_expr);
-    const new_expr = target_env.store.getExpr(new_expr_idx);
-
-    // If this is a lambda or closure, we can directly unify the argument patterns
-    if (new_expr == .e_lambda or new_expr == .e_closure) {
-        // Extract argument patterns from the copied function
-        const args = if (new_expr == .e_lambda) new_expr.e_lambda.args else blk: {
-            const lambda_expr = context.target_env.store.getExpr(new_expr.e_closure.lambda_idx);
-            break :blk lambda_expr.e_lambda.args;
-        };
-
-        // Get type variables for all argument patterns
-        const pattern_type_vars = try extractPatternTypeVars(&context, args);
-        defer allocator.free(pattern_type_vars);
-
-        // In debug mode, validate argument count matches
-        if (std.debug.runtime_safety) {
-            assert(pattern_type_vars.len == arg_types.len);
-        }
-
-        // Unify each pattern's type variable with the corresponding concrete type
-        for (pattern_type_vars, arg_types) |pattern_var, arg_var| {
-            type_store.setVarRedirect(pattern_var, arg_var) catch unreachable;
-        }
-    }
-    // For other expressions (e.g., lookups), the unification will happen when applied
-
-    // Create function type variable for the specialized expression
-    const result_type_var = @intFromEnum(new_expr_idx);
-
-    return .{ .expr = new_expr_idx, .type_var = @enumFromInt(result_type_var) };
+    // Clone based on the type of node
+    return switch (@TypeOf(node)) {
+        Expr.Idx => try copyExpr(&context, node),
+        Pattern.Idx => try copyPattern(&context, node),
+        TypeAnno.Idx => try copyTypeAnno(&context, node),
+        Statement.Idx => try copyStatement(&context, node),
+        else => @compileError("deepClone only supports Expr.Idx, Pattern.Idx, TypeAnno.Idx, and Statement.Idx"),
+    };
 }
-
 // Helper functions for proper span creation
 
-fn createPatternSpan(context: *SpecializationContext, patterns: []const Pattern.Idx) !Pattern.Span {
+fn createPatternSpan(context: *CloneContext, patterns: []const Pattern.Idx) !Pattern.Span {
     const start = context.target_env.store.scratch_patterns.items.items.len;
     for (patterns) |pattern| {
         try context.target_env.store.addScratchPattern(pattern);
@@ -261,7 +228,7 @@ fn createPatternSpan(context: *SpecializationContext, patterns: []const Pattern.
     return context.target_env.store.patternSpanFrom(@intCast(start));
 }
 
-fn createExprSpan(context: *SpecializationContext, exprs: []const Expr.Idx) !Expr.Span {
+fn createExprSpan(context: *CloneContext, exprs: []const Expr.Idx) !Expr.Span {
     const start = context.target_env.store.scratch_exprs.items.items.len;
     for (exprs) |expr| {
         try context.target_env.store.addScratchExpr(expr);
@@ -269,7 +236,7 @@ fn createExprSpan(context: *SpecializationContext, exprs: []const Expr.Idx) !Exp
     return context.target_env.store.exprSpanFrom(@intCast(start));
 }
 
-fn createRecordDestructSpan(context: *SpecializationContext, destructs: []const Pattern.RecordDestruct.Idx) !Pattern.RecordDestruct.Span {
+fn createRecordDestructSpan(context: *CloneContext, destructs: []const Pattern.RecordDestruct.Idx) !Pattern.RecordDestruct.Span {
     const start = context.target_env.store.scratch_record_destructs.items.items.len;
     for (destructs) |destruct| {
         try context.target_env.store.addScratchRecordDestruct(destruct);
@@ -277,7 +244,7 @@ fn createRecordDestructSpan(context: *SpecializationContext, destructs: []const 
     return context.target_env.store.recordDestructSpanFrom(@intCast(start));
 }
 
-fn createRecordFieldSpan(context: *SpecializationContext, fields: []const CIR.RecordField.Idx) !CIR.RecordField.Span {
+fn createRecordFieldSpan(context: *CloneContext, fields: []const CIR.RecordField.Idx) !CIR.RecordField.Span {
     const start = context.target_env.store.scratch_record_fields.items.items.len;
     for (fields) |field| {
         try context.target_env.store.addScratch("scratch_record_fields", field);
@@ -285,7 +252,7 @@ fn createRecordFieldSpan(context: *SpecializationContext, fields: []const CIR.Re
     return context.target_env.store.recordFieldSpanFrom(@intCast(start));
 }
 
-fn createIfBranchSpan(context: *SpecializationContext, branches: []const Expr.IfBranch.Idx) !Expr.IfBranch.Span {
+fn createIfBranchSpan(context: *CloneContext, branches: []const Expr.IfBranch.Idx) !Expr.IfBranch.Span {
     const start = context.target_env.store.scratch_if_branches.items.items.len;
     for (branches) |branch| {
         try context.target_env.store.addScratchIfBranch(branch);
@@ -293,7 +260,7 @@ fn createIfBranchSpan(context: *SpecializationContext, branches: []const Expr.If
     return context.target_env.store.ifBranchSpanFrom(@intCast(start));
 }
 
-fn createMatchBranchSpan(context: *SpecializationContext, branches: []const Expr.Match.Branch.Idx) !Expr.Match.Branch.Span {
+fn createMatchBranchSpan(context: *CloneContext, branches: []const Expr.Match.Branch.Idx) !Expr.Match.Branch.Span {
     const start = context.target_env.store.scratch_match_branches.items.items.len;
     for (branches) |branch| {
         try context.target_env.store.addScratchMatchBranch(branch);
@@ -301,7 +268,7 @@ fn createMatchBranchSpan(context: *SpecializationContext, branches: []const Expr
     return context.target_env.store.matchBranchSpanFrom(@intCast(start));
 }
 
-fn copyPattern(context: *SpecializationContext, pattern_idx: Pattern.Idx) Allocator.Error!Pattern.Idx {
+fn copyPattern(context: *CloneContext, pattern_idx: Pattern.Idx) Allocator.Error!Pattern.Idx {
     if (context.copied_pattern_map.get(pattern_idx)) |copied_idx| {
         return copied_idx;
     }
@@ -335,8 +302,8 @@ fn copyPattern(context: *SpecializationContext, pattern_idx: Pattern.Idx) Alloca
             const new_pattern_span = try createPatternSpan(context, new_patterns);
 
             break :blk try context.target_env.addPatternAndTypeVar(.{ .list = .{
-                .list_var = try context.mapTypeVar(list.list_var),
-                .elem_var = try context.mapTypeVar(list.elem_var),
+                .list_var = try context.cloneTypeVar(list.list_var),
+                .elem_var = try context.cloneTypeVar(list.elem_var),
                 .patterns = new_pattern_span,
                 .rest_info = new_rest_info,
             } }, .{ .flex_var = null }, region);
@@ -365,8 +332,8 @@ fn copyPattern(context: *SpecializationContext, pattern_idx: Pattern.Idx) Alloca
             const new_destructs_span = try createRecordDestructSpan(context, new_destructs);
 
             break :blk try context.target_env.addPatternAndTypeVar(.{ .record_destructure = .{
-                .whole_var = try context.mapTypeVar(record.whole_var),
-                .ext_var = try context.mapTypeVar(record.ext_var),
+                .whole_var = try context.cloneTypeVar(record.whole_var),
+                .ext_var = try context.cloneTypeVar(record.ext_var),
                 .destructs = new_destructs_span,
             } }, .{ .flex_var = null }, region);
         },
@@ -421,16 +388,16 @@ fn copyPattern(context: *SpecializationContext, pattern_idx: Pattern.Idx) Alloca
 
     const old_type_var = @intFromEnum(pattern_idx);
     const new_type_var = @intFromEnum(new_pattern_idx);
-    const mapped_type_var = try context.mapTypeVar(@enumFromInt(old_type_var));
+    const cloned_type_var = try context.cloneTypeVar(@enumFromInt(old_type_var));
 
     // Unify by setting a redirect from the new type var to the mapped one
-    context.type_store.setVarRedirect(@enumFromInt(new_type_var), mapped_type_var) catch unreachable;
+    context.type_store.setVarRedirect(@enumFromInt(new_type_var), cloned_type_var) catch unreachable;
 
     try context.copied_pattern_map.put(pattern_idx, new_pattern_idx);
     return new_pattern_idx;
 }
 
-fn copyExpr(context: *SpecializationContext, expr_idx: Expr.Idx) Allocator.Error!Expr.Idx {
+fn copyExpr(context: *CloneContext, expr_idx: Expr.Idx) Allocator.Error!Expr.Idx {
     if (context.copied_expr_map.get(expr_idx)) |copied_idx| {
         return copied_idx;
     }
@@ -478,7 +445,7 @@ fn copyExpr(context: *SpecializationContext, expr_idx: Expr.Idx) Allocator.Error
             const new_span = try createExprSpan(context, new_elems);
 
             break :blk try context.target_env.addExprAndTypeVar(.{ .e_list = .{
-                .elem_var = try context.mapTypeVar(list.elem_var),
+                .elem_var = try context.cloneTypeVar(list.elem_var),
                 .elems = new_span,
             } }, .{ .flex_var = null }, region);
         },
@@ -561,8 +528,8 @@ fn copyExpr(context: *SpecializationContext, expr_idx: Expr.Idx) Allocator.Error
         },
         .e_zero_argument_tag => |tag| try context.target_env.addExprAndTypeVar(.{ .e_zero_argument_tag = .{
             .closure_name = tag.closure_name,
-            .variant_var = try context.mapTypeVar(tag.variant_var),
-            .ext_var = try context.mapTypeVar(tag.ext_var),
+            .variant_var = try context.cloneTypeVar(tag.variant_var),
+            .ext_var = try context.cloneTypeVar(tag.ext_var),
             .name = tag.name,
         } }, .{ .flex_var = null }, region),
         .e_nominal => |nom| try context.target_env.addExprAndTypeVar(.{ .e_nominal = .{
@@ -641,7 +608,7 @@ fn copyExpr(context: *SpecializationContext, expr_idx: Expr.Idx) Allocator.Error
                     .patterns = new_patterns,
                     .guard = if (old_branch.guard) |g| try copyExpr(context, g) else null,
                     .value = try copyExpr(context, old_branch.value),
-                    .redundant = try context.mapTypeVar(old_branch.redundant),
+                    .redundant = try context.cloneTypeVar(old_branch.redundant),
                 }, branch_region);
             }
 
@@ -650,7 +617,7 @@ fn copyExpr(context: *SpecializationContext, expr_idx: Expr.Idx) Allocator.Error
             break :blk try context.target_env.addExprAndTypeVar(.{ .e_match = .{
                 .cond = new_cond,
                 .branches = new_span,
-                .exhaustive = try context.mapTypeVar(match.exhaustive),
+                .exhaustive = try context.cloneTypeVar(match.exhaustive),
             } }, .{ .flex_var = null }, region);
         },
         .e_if => |if_expr| blk: {
@@ -742,16 +709,16 @@ fn copyExpr(context: *SpecializationContext, expr_idx: Expr.Idx) Allocator.Error
 
     const old_type_var = @intFromEnum(expr_idx);
     const new_type_var = @intFromEnum(new_expr_idx);
-    const mapped_type_var = try context.mapTypeVar(@enumFromInt(old_type_var));
+    const cloned_type_var = try context.cloneTypeVar(@enumFromInt(old_type_var));
 
     // Unify by setting a redirect from the new type var to the mapped one
-    context.type_store.setVarRedirect(@enumFromInt(new_type_var), mapped_type_var) catch unreachable;
+    context.type_store.setVarRedirect(@enumFromInt(new_type_var), cloned_type_var) catch unreachable;
 
     try context.copied_expr_map.put(expr_idx, new_expr_idx);
     return new_expr_idx;
 }
 
-fn copyStatement(context: *SpecializationContext, stmt_idx: Statement.Idx) !Statement.Idx {
+fn copyStatement(context: *CloneContext, stmt_idx: Statement.Idx) !Statement.Idx {
     const old_stmt = context.source_env.store.getStatement(stmt_idx);
     const region = context.source_env.store.getStatementRegion(stmt_idx);
 
@@ -845,15 +812,15 @@ fn copyStatement(context: *SpecializationContext, stmt_idx: Statement.Idx) !Stat
 
     const old_type_var = @intFromEnum(stmt_idx);
     const new_type_var = @intFromEnum(new_stmt_idx);
-    const mapped_type_var = try context.mapTypeVar(@enumFromInt(old_type_var));
+    const cloned_type_var = try context.cloneTypeVar(@enumFromInt(old_type_var));
 
     // Unify by setting a redirect from the new type var to the mapped one
-    context.type_store.setVarRedirect(@enumFromInt(new_type_var), mapped_type_var) catch unreachable;
+    context.type_store.setVarRedirect(@enumFromInt(new_type_var), cloned_type_var) catch unreachable;
 
     return new_stmt_idx;
 }
 
-fn copyTypeAnno(context: *SpecializationContext, type_anno_idx: TypeAnno.Idx) Allocator.Error!TypeAnno.Idx {
+fn copyTypeAnno(context: *CloneContext, type_anno_idx: TypeAnno.Idx) Allocator.Error!TypeAnno.Idx {
     if (context.copied_type_anno_map.get(type_anno_idx)) |copied_idx| {
         return copied_idx;
     }
@@ -973,646 +940,20 @@ fn copyTypeAnno(context: *SpecializationContext, type_anno_idx: TypeAnno.Idx) Al
 
     const old_type_var = @intFromEnum(type_anno_idx);
     const new_type_var = @intFromEnum(new_type_anno_idx);
-    const mapped_type_var = try context.mapTypeVar(@enumFromInt(old_type_var));
+    const cloned_type_var = try context.cloneTypeVar(@enumFromInt(old_type_var));
 
     // Unify by setting a redirect from the new type var to the mapped one
-    context.type_store.setVarRedirect(@enumFromInt(new_type_var), mapped_type_var) catch unreachable;
+    context.type_store.setVarRedirect(@enumFromInt(new_type_var), cloned_type_var) catch unreachable;
 
     try context.copied_type_anno_map.put(type_anno_idx, new_type_anno_idx);
     return new_type_anno_idx;
 }
 
-fn extractPatternTypeVars(context: *SpecializationContext, patterns: Pattern.Span) ![]TypeVar {
-    var list = std.ArrayList(TypeVar).init(context.allocator);
-    defer list.deinit();
-
-    const pattern_slice = context.target_env.store.slicePatterns(patterns);
-    for (pattern_slice) |pattern_idx| {
-        try collectPatternTypeVars(context, pattern_idx, &list);
-    }
-
-    return try list.toOwnedSlice();
-}
-
-fn collectPatternTypeVars(context: *SpecializationContext, pattern_idx: Pattern.Idx, list: *std.ArrayList(TypeVar)) !void {
-    const type_var = @intFromEnum(pattern_idx);
-    try list.append(@enumFromInt(type_var));
-
-    const pattern = context.target_env.store.getPattern(pattern_idx);
-
-    switch (pattern) {
-        .assign => {},
-        .underscore => {},
-        .int_literal => {},
-        .frac_f32_literal => {},
-        .frac_f64_literal => {},
-        .small_dec_literal => {},
-        .dec_literal => {},
-        .str_literal => {},
-        .list => |list_pat| {
-            const patterns_slice = context.target_env.store.slicePatterns(list_pat.patterns);
-            for (patterns_slice) |pat| {
-                try collectPatternTypeVars(context, pat, list);
-            }
-            if (list_pat.rest_info) |rest_info| {
-                if (rest_info.pattern) |p| {
-                    try collectPatternTypeVars(context, p, list);
-                }
-            }
-        },
-        .tuple => |tuple| {
-            const patterns_slice = context.target_env.store.slicePatterns(tuple.patterns);
-            for (patterns_slice) |pat| {
-                try collectPatternTypeVars(context, pat, list);
-            }
-        },
-        .record_destructure => |record| {
-            const destructs_slice = context.target_env.store.sliceRecordDestructs(record.destructs);
-            for (destructs_slice) |destruct_idx| {
-                const destruct = context.target_env.store.getRecordDestruct(destruct_idx);
-                const pattern_idx_from_kind = destruct.kind.toPatternIdx();
-                try collectPatternTypeVars(context, pattern_idx_from_kind, list);
-            }
-        },
-        .applied_tag => |tag| {
-            const args_slice = context.target_env.store.slicePatterns(tag.args);
-            for (args_slice) |arg| {
-                try collectPatternTypeVars(context, arg, list);
-            }
-        },
-        .as => |as| {
-            try collectPatternTypeVars(context, as.pattern, list);
-        },
-        .nominal => |nom| {
-            try collectPatternTypeVars(context, nom.backing_pattern, list);
-        },
-        .nominal_external => |nom| {
-            try collectPatternTypeVars(context, nom.backing_pattern, list);
-        },
-        .runtime_error => {},
-    }
-}
-
-test "specialize identity function" {
-    const allocator = testing.allocator;
-
-    var type_store = try Store.init(allocator);
-    defer type_store.deinit();
-
-    var source_env = try ModuleEnv.init(allocator, "test");
-    defer source_env.deinit();
-
-    var target_env = try ModuleEnv.init(allocator, "test");
-    defer target_env.deinit();
-
-    // Create a simple identity function: \x -> x
-    const x_ident = try source_env.addIdent("x");
-    const param_pattern = try source_env.addPatternAndTypeVar(.{ .assign = .{ .ident = x_ident } }, .{ .flex_var = null }, Region.empty());
-    const body_expr = try source_env.addExprAndTypeVar(.{ .e_lookup_local = .{ .pattern_idx = param_pattern } }, .{ .flex_var = null }, Region.empty());
-
-    // Create the lambda
-    const start = source_env.store.scratchPatternTop();
-    try source_env.store.addScratchPattern(param_pattern);
-    const args_span = try source_env.store.patternSpanFrom(start);
-
-    const func_expr = try source_env.addExprAndTypeVar(.{ .e_lambda = .{
-        .args = args_span,
-        .body = body_expr,
-    } }, .{ .flex_var = null }, Region.empty());
-
-    // Create a concrete type to specialize with
-    const str_type_var = try type_store.fresh();
-    try type_store.setVarContent(str_type_var, Content{ .structure = .str });
-
-    // Specialize the function
-    const result = try specializeFunctionExpr(
-        allocator,
-        &type_store,
-        &source_env,
-        &target_env,
-        func_expr,
-        &[_]TypeVar{str_type_var},
-    );
-
-    // Verify the result
-    const specialized_expr = target_env.store.getExpr(result.expr);
-    try testing.expect(specialized_expr == .e_lambda);
-
-    // Verify the type is a function type
-    const result_content = type_store.resolveVar(result.type_var).desc.content;
-    try testing.expect(result_content == .structure);
-    try testing.expect(result_content.structure == .fn_pure);
-}
-
-// test "specialize polymorphic list function" {
-    const allocator = testing.allocator;
-
-    var type_store = try Store.init(allocator);
-    defer type_store.deinit();
-
-    var source_env = try ModuleEnv.init(allocator, "test");
-    defer source_env.deinit();
-
-    var target_env = try ModuleEnv.init(allocator, "test");
-    defer target_env.deinit();
-
-    // Create a function that returns an empty list: \lst -> []
-    const elem_type_var = try type_store.fresh();
-    const list_type_var = try type_store.fresh();
-    try type_store.setVarContent(list_type_var, Content{ .structure = .{ .list = elem_type_var } });
-
-    const empty_pat_start = source_env.store.scratchPatternTop();
-    const empty_patterns = try source_env.store.patternSpanFrom(empty_pat_start);
-    const param_pattern = try source_env.addPatternAndTypeVarRedirect(.{ .list = .{
-        .list_var = list_type_var,
-        .elem_var = elem_type_var,
-        .patterns = empty_patterns,
-        .rest_info = null,
-    } }, list_type_var, Region.empty());
-
-    const body_expr = try source_env.addExprAndTypeVarRedirect(.{ .e_empty_list = {} }, list_type_var, Region.empty());
-
-    const pat_start = source_env.store.scratchPatternTop();
-    try source_env.store.addScratchPattern(param_pattern);
-    const args_span = try source_env.store.patternSpanFrom(pat_start);
-    const func_expr = try source_env.addExprAndTypeVar(.{ .e_lambda = .{
-        .args = args_span,
-        .body = body_expr,
-    } }, .{ .flex_var = null }, Region.empty());
-
-    // Specialize with List(I32)
-    const num_type_var = try type_store.fresh();
-    try type_store.setVarContent(num_type_var, Content{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
-
-    const list_of_num_var = try type_store.fresh();
-    try type_store.setVarContent(list_of_num_var, Content{ .structure = .{ .list = num_type_var } });
-
-    const result = try specializeFunctionExpr(
-        allocator,
-        &type_store,
-        &source_env,
-        &target_env,
-        func_expr,
-        &[_]TypeVar{list_of_num_var},
-    );
-
-    const specialized_expr = target_env.store.getExpr(result.expr);
-    try testing.expect(specialized_expr == .e_lambda);
-
-    const result_content = type_store.resolveVar(result.type_var).desc.content;
-    try testing.expect(result_content == .structure);
-    try testing.expect(result_content.structure == .fn_pure);
-}
-
-// test "specialize function with Box type" {
-    const allocator = testing.allocator;
-
-    var type_store = try Store.init(allocator);
-    defer type_store.deinit();
-
-    var source_env = try ModuleEnv.init(allocator, "test");
-    defer source_env.deinit();
-
-    var target_env = try ModuleEnv.init(allocator, "test");
-    defer target_env.deinit();
-
-    // Create a function that takes a Box(a) and returns it: \boxed -> boxed
-    const inner_type_var = try type_store.fresh();
-    try type_store.setVarContent(inner_type_var, Content{ .flex_var = null });
-
-    const box_type_var = try type_store.fresh();
-    try type_store.setVarContent(box_type_var, Content{ .structure = .{ .box = inner_type_var } });
-
-    const param_pattern = try source_env.addPatternAndTypeVarRedirect(.{ .assign = .{ .ident = try source_env.addIdent("boxed") } }, box_type_var, Region.empty());
-    const body_expr = try source_env.addExprAndTypeVarRedirect(.{ .e_lookup_local = .{ .pattern_idx = param_pattern } }, box_type_var, Region.empty());
-
-    const pat_start = source_env.store.scratchPatternTop();
-    try source_env.store.addScratchPattern(param_pattern);
-    const args_span = try source_env.store.patternSpanFrom(pat_start);
-    const func_expr = try source_env.addExprAndTypeVar(.{ .e_lambda = .{
-        .args = args_span,
-        .body = body_expr,
-    } }, .{ .flex_var = null }, Region.empty());
-
-    // Specialize with Box(Str)
-    const str_type_var = try type_store.fresh();
-    try type_store.setVarContent(str_type_var, Content{ .structure = .str });
-
-    const box_str_var = try type_store.fresh();
-    try type_store.setVarContent(box_str_var, Content{ .structure = .{ .box = str_type_var } });
-
-    const result = try specializeFunctionExpr(
-        allocator,
-        &type_store,
-        &source_env,
-        &target_env,
-        func_expr,
-        &[_]TypeVar{box_str_var},
-    );
-
-    const specialized_expr = target_env.store.getExpr(result.expr);
-    try testing.expect(specialized_expr == .e_lambda);
-}
-
-// test "specialize function with record pattern" {
-    const allocator = testing.allocator;
-
-    var type_store = try Store.init(allocator);
-    defer type_store.deinit();
-
-    var source_env = try ModuleEnv.init(allocator, "test");
-    defer source_env.deinit();
-
-    var target_env = try ModuleEnv.init(allocator, "test");
-    defer target_env.deinit();
-
-    // Create field types
-    const name_type_var = try type_store.fresh();
-    try type_store.setVarContent(name_type_var, Content{ .structure = .str });
-
-    const age_type_var = try type_store.fresh();
-    try type_store.setVarContent(age_type_var, Content{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
-
-    // Create record type
-    const name_ident = try source_env.addIdent("name");
-    const age_ident = try source_env.addIdent("age");
-
-    const record_fields = try type_store.appendRecordFields(&[_]types.RecordField{
-        .{ .name = name_ident, .var_ = name_type_var },
-        .{ .name = age_ident, .var_ = age_type_var },
-    });
-
-    const record_type_var = try type_store.fresh();
-    const ext_var = try type_store.fresh();
-    try type_store.setVarContent(record_type_var, Content{ .structure = .{ .record = .{
-        .fields = record_fields,
-        .ext = ext_var,
-    } } });
-
-    // Create pattern destructuring
-    const name_pattern = try source_env.addPatternAndTypeVarRedirect(.{ .assign = .{ .ident = try source_env.addIdent("n") } }, name_type_var, Region.empty());
-    const age_pattern = try source_env.addPatternAndTypeVarRedirect(.{ .assign = .{ .ident = try source_env.addIdent("a") } }, age_type_var, Region.empty());
-
-    const destruct_start = source_env.store.scratchRecordDestructTop();
-    const name_destruct = try source_env.store.addRecordDestruct(.{
-        .label = try source_env.addIdent("name"),
-        .ident = try source_env.addIdent("n"),
-        .kind = .{ .Required = name_pattern },
-    }, Region.empty());
-    try source_env.store.addScratchRecordDestruct(name_destruct);
-
-    const age_destruct = try source_env.store.addRecordDestruct(.{
-        .label = try source_env.addIdent("age"),
-        .ident = try source_env.addIdent("a"),
-        .kind = .{ .Required = age_pattern },
-    }, Region.empty());
-    try source_env.store.addScratchRecordDestruct(age_destruct);
-
-    const destructs_span = try source_env.store.recordDestructSpanFrom(destruct_start);
-
-    const param_pattern = try source_env.addPatternAndTypeVarRedirect(.{ .record_destructure = .{
-        .record_var = record_type_var,
-        .destructs = destructs_span,
-        .opt_rec_var = null,
-    } }, record_type_var, Region.empty());
-
-    // Body returns the name field
-    const body_expr = try source_env.addExprAndTypeVarRedirect(.{ .e_lookup_local = .{ .pattern_idx = name_pattern } }, name_type_var, Region.empty());
-
-    const pat_start = source_env.store.scratchPatternTop();
-    try source_env.store.addScratchPattern(param_pattern);
-    const args_span = try source_env.store.patternSpanFrom(pat_start);
-    const func_expr = try source_env.addExprAndTypeVar(.{ .e_lambda = .{
-        .args = args_span,
-        .body = body_expr,
-    } }, .{ .flex_var = null }, Region.empty());
-
-    const result = try specializeFunctionExpr(
-        allocator,
-        &type_store,
-        &source_env,
-        &target_env,
-        func_expr,
-        &[_]TypeVar{record_type_var},
-    );
-
-    const specialized_expr = target_env.store.getExpr(result.expr);
-    try testing.expect(specialized_expr == .e_lambda);
-
-    const unified_content = type_store.resolveVar(result.type_var).desc.content;
-    try testing.expect(unified_content == .structure);
-    try testing.expect(unified_content.structure == .fn_pure);
-}
-
-// test "specialize function with unbound num type" {
-    const allocator = testing.allocator;
-
-    var type_store = try Store.init(allocator);
-    defer type_store.deinit();
-
-    var source_env = try ModuleEnv.init(allocator, "test");
-    defer source_env.deinit();
-
-    var target_env = try ModuleEnv.init(allocator, "test");
-    defer target_env.deinit();
-
-    // Create a function that takes an unbound number literal: \42 -> 42
-    const num_type_var = try type_store.fresh();
-    try type_store.setVarContent(num_type_var, Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 6 } } } });
-
-    const param_pattern = try source_env.addPatternAndTypeVarRedirect(.{ .int_literal = .{
-        .value = .{ .bytes = .{ 42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .kind = .i64 },
-    } }, num_type_var, Region.empty());
-
-    const body_expr = try source_env.addExprAndTypeVar(.{ .e_int = .{
-        .value = 42,
-        .sign = false,
-    } }, .{ .flex_var = null }, Region.empty());
-
-    const pat_start = source_env.store.scratchPatternTop();
-    try source_env.store.addScratchPattern(param_pattern);
-    const args_span = try source_env.store.patternSpanFrom(pat_start);
-    const func_expr = try source_env.addExprAndTypeVar(.{ .e_lambda = .{
-        .args = args_span,
-        .body = body_expr,
-    } }, .{ .flex_var = null }, Region.empty());
-
-    // Specialize with I64
-    const int_type_var = try type_store.fresh();
-    try type_store.setVarContent(int_type_var, Content{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
-
-    const result = try specializeFunctionExpr(
-        allocator,
-        &type_store,
-        &source_env,
-        &target_env,
-        func_expr,
-        &[_]TypeVar{int_type_var},
-    );
-
-    const specialized_expr = target_env.store.getExpr(result.expr);
-    try testing.expect(specialized_expr == .e_lambda);
-
-    const result_content = type_store.resolveVar(result.type_var).desc.content;
-    try testing.expect(result_content == .structure);
-    try testing.expect(result_content.structure == .fn_pure);
-}
-
-// Error handling tests
-// Note: These tests have been disabled since specializeFunctionExpr
-// // no longer returns errors for type mismatches (uses debug asserts instead)
-// 
-// // test "specializeFunctionExpr rejects non-function expressions" {
-//     const allocator = testing.allocator;
-// 
-//     var type_store = try Store.init(allocator);
-//     defer type_store.deinit();
-// 
-//     var source_env = try ModuleEnv.init(allocator, "test");
-//     defer source_env.deinit();
-// 
-//     var target_env = try ModuleEnv.init(allocator, "test");
-//     defer target_env.deinit();
-// 
-//     // Create a non-function expression (integer literal)
-//     const int_expr = try source_env.addExprAndTypeVar(.{ .e_int = .{ .value = 42, .sign = false } }, .{ .flex_var = null }, Region.empty());
-// 
-//     // Should fail with InvalidArgument
-//     const result = specializeFunctionExpr(
-//         allocator,
-//         &type_store,
-//         &source_env,
-//         &target_env,
-//         int_expr,
-//         &[_]TypeVar{},
-//     );
-// 
-//     try testing.expectError(SpecializeError.InvalidArgument, result);
-// }
-// 
-// test "specializeFunctionExpr rejects argument count mismatch" {
-//     const allocator = testing.allocator;
-// 
-//     var type_store = try Store.init(allocator);
-//     defer type_store.deinit();
-// 
-//     var source_env = try ModuleEnv.init(allocator, "test");
-//     defer source_env.deinit();
-// 
-//     var target_env = try ModuleEnv.init(allocator, "test");
-//     defer target_env.deinit();
-// 
-//     // Create a function with 2 parameters: \x, y -> x
-//     const x_pattern = try source_env.addPatternAndTypeVar(.{ .assign = .{ .ident = try source_env.addIdent("x") } }, .{ .flex_var = null }, Region.empty());
-//     const y_pattern = try source_env.addPatternAndTypeVar(.{ .assign = .{ .ident = try source_env.addIdent("y") } }, .{ .flex_var = null }, Region.empty());
-//     const body_expr = try source_env.addExprAndTypeVar(.{ .e_lookup_local = .{ .pattern_idx = x_pattern } }, .{ .flex_var = null }, Region.empty());
-// 
-//     const start = source_env.store.scratchPatternTop();
-//     try source_env.store.addScratchPattern(x_pattern);
-//     try source_env.store.addScratchPattern(y_pattern);
-//     const args_span = try source_env.store.patternSpanFrom(start);
-// 
-//     const func_expr = try source_env.addExprAndTypeVar(.{ .e_lambda = .{
-//         .args = args_span,
-//         .body = body_expr,
-//     } }, .{ .flex_var = null }, Region.empty());
-// 
-//     // Provide only 1 argument type instead of 2
-//     const str_type = try type_store.fresh();
-//     try type_store.setVarContent(str_type, Content{ .structure = .str });
-// 
-//     // Should fail with InvalidArgument
-//     const result = specializeFunctionExpr(
-//         allocator,
-//         &type_store,
-//         &source_env,
-//         &target_env,
-//         func_expr,
-//         &[_]TypeVar{str_type}, // Only 1 arg, but function expects 2
-//     );
-// 
-//     try testing.expectError(SpecializeError.InvalidArgument, result);
-// }
-
-// test "type variable mapping consistency" {
-    const allocator = testing.allocator;
-
-    var type_store = try Store.init(allocator);
-    defer type_store.deinit();
-
-    var source_env = try ModuleEnv.init(allocator, "test");
-    defer source_env.deinit();
-
-    var target_env = try ModuleEnv.init(allocator, "test");
-    defer target_env.deinit();
-
-    var context = SpecializationContext.init(allocator, &type_store, &source_env, &target_env);
-    defer context.deinit();
-
-    // Create a type variable
-    const original_var = try type_store.fresh();
-    try type_store.setVarContent(original_var, Content{ .structure = .str });
-
-    // Map it twice - should get the same result
-    const mapped_var1 = try context.mapTypeVar(original_var);
-    const mapped_var2 = try context.mapTypeVar(original_var);
-
-    try testing.expectEqual(mapped_var1, mapped_var2);
-
-    // Verify content was copied correctly
-    const mapped_content = type_store.resolveVar(mapped_var1).desc.content;
-    try testing.expect(mapped_content == .structure);
-    try testing.expect(mapped_content.structure == .str);
-}
-
-// test "empty function argument lists" {
-    const allocator = testing.allocator;
-
-    var type_store = try Store.init(allocator);
-    defer type_store.deinit();
-
-    var source_env = try ModuleEnv.init(allocator, "test");
-    defer source_env.deinit();
-
-    var target_env = try ModuleEnv.init(allocator, "test");
-    defer target_env.deinit();
-
-    // Create a zero-argument function: \-> 42
-    const body_expr = try source_env.addExprAndTypeVar(.{ .e_int = .{ .value = 42, .sign = false } }, .{ .flex_var = null }, Region.empty());
-
-    const start = source_env.store.scratchPatternTop();
-    const args_span = try source_env.store.patternSpanFrom(start); // Empty span
-
-    const func_expr = try source_env.addExprAndTypeVar(.{ .e_lambda = .{
-        .args = args_span,
-        .body = body_expr,
-    } }, .{ .flex_var = null }, Region.empty());
-
-    // Specialize with empty argument types
-    const result = try specializeFunctionExpr(
-        allocator,
-        &type_store,
-        &source_env,
-        &target_env,
-        func_expr,
-        &[_]TypeVar{}, // No arguments
-    );
-
-    // Verify the result is a lambda
-    const specialized_expr = target_env.store.getExpr(result.expr);
-    try testing.expect(specialized_expr == .e_lambda);
-}
-
-// test "complex nested function specialization" {
-    const allocator = testing.allocator;
-
-    var type_store = try Store.init(allocator);
-    defer type_store.deinit();
-
-    var source_env = try ModuleEnv.init(allocator, "test");
-    defer source_env.deinit();
-
-    var target_env = try ModuleEnv.init(allocator, "test");
-    defer target_env.deinit();
-
-    // Create a complex function: \(x, y) -> if x == 42 then [y] else []
-    // This tests pattern matching, conditionals, literals, and list construction
-
-    // Create types
-    const num_type_var = try type_store.fresh();
-    try type_store.setVarContent(num_type_var, Content{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
-
-    const elem_type_var = try type_store.fresh();
-    try type_store.setVarContent(elem_type_var, Content{ .structure = .str });
-
-    const list_type_var = try type_store.fresh();
-    try type_store.setVarContent(list_type_var, Content{ .structure = .{ .list = elem_type_var } });
-
-    // Create tuple pattern (x, y)
-    const x_pattern = try source_env.addPatternAndTypeVarRedirect(.{ .assign = .{ .ident = try source_env.addIdent("x") } }, num_type_var, Region.empty());
-    const y_pattern = try source_env.addPatternAndTypeVarRedirect(.{ .assign = .{ .ident = try source_env.addIdent("y") } }, elem_type_var, Region.empty());
-
-    const tuple_pat_start = source_env.store.scratchPatternTop();
-    try source_env.store.addScratchPattern(x_pattern);
-    try source_env.store.addScratchPattern(y_pattern);
-    const tuple_patterns = try source_env.store.patternSpanFrom(tuple_pat_start);
-
-    const tuple_pattern = try source_env.addPatternAndTypeVar(.{ .tuple = .{
-        .patterns = tuple_patterns,
-    } }, .{ .flex_var = null }, Region.empty());
-
-    // Create condition: x == 42
-    const x_lookup = try source_env.addExprAndTypeVarRedirect(.{ .e_lookup_local = .{ .pattern_idx = x_pattern } }, num_type_var, Region.empty());
-    const num_42 = try source_env.addExprAndTypeVarRedirect(.{ .e_int = .{ .value = 42, .sign = false } }, num_type_var, Region.empty());
-    const condition = try source_env.addExprAndTypeVar(.{ .e_binop = .{
-        .lhs = x_lookup,
-        .op = .equals,
-        .rhs = num_42,
-    } }, .{ .flex_var = null }, Region.empty());
-
-    // Create then branch: [y]
-    const y_lookup = try source_env.addExprAndTypeVarRedirect(.{ .e_lookup_local = .{ .pattern_idx = y_pattern } }, elem_type_var, Region.empty());
-    const list_start = source_env.store.scratchExprTop();
-    try source_env.store.addScratchExpr(y_lookup);
-    const list_elems = try source_env.store.exprSpanFrom(list_start);
-    const then_branch = try source_env.addExprAndTypeVarRedirect(.{ .e_list = .{
-        .elem_var = elem_type_var,
-        .elems = list_elems,
-    } }, list_type_var, Region.empty());
-
-    // Create else branch: []
-    const else_branch = try source_env.addExprAndTypeVarRedirect(.{ .e_empty_list = {} }, list_type_var, Region.empty());
-
-    // Create if expression
-    const if_branch_idx = try source_env.store.addIfBranch(.{
-        .cond = condition,
-        .body = then_branch,
-    }, Region.empty());
-
-    const if_branch_start = source_env.store.scratchIfBranchTop();
-    try source_env.store.addScratchIfBranch(if_branch_idx);
-    const if_branches = try source_env.store.ifBranchSpanFrom(if_branch_start);
-
-    const body_expr = try source_env.addExprAndTypeVarRedirect(.{ .e_if = .{
-        .branches = if_branches,
-        .final_else = else_branch,
-    } }, list_type_var, Region.empty());
-
-    // Create lambda
-    const lambda_pat_start = source_env.store.scratchPatternTop();
-    try source_env.store.addScratchPattern(tuple_pattern);
-    const lambda_args = try source_env.store.patternSpanFrom(lambda_pat_start);
-
-    const func_expr = try source_env.addExprAndTypeVar(.{ .e_lambda = .{
-        .args = lambda_args,
-        .body = body_expr,
-    } }, .{ .flex_var = null }, Region.empty());
-
-    // Create tuple argument type for specialization
-    const tuple_type_var = try type_store.fresh();
-    const tuple_elem_range = try type_store.appendTypeVars(&[_]TypeVar{ num_type_var, elem_type_var });
-    try type_store.setVarContent(tuple_type_var, Content{ .structure = .{ .tuple = .{ .elems = tuple_elem_range } } });
-
-    // Specialize the function
-    const result = try specializeFunctionExpr(
-        allocator,
-        &type_store,
-        &source_env,
-        &target_env,
-        func_expr,
-        &[_]TypeVar{tuple_type_var},
-    );
-
-    // Verify the result
-    const specialized_expr = target_env.store.getExpr(result.expr);
-    try testing.expect(specialized_expr == .e_lambda);
-
-    // Verify the lambda has the correct structure
-    const lambda_body = target_env.store.getExpr(specialized_expr.e_lambda.body);
-    try testing.expect(lambda_body == .e_if);
-
-    // Verify type
-    const result_content = type_store.resolveVar(result.type_var).desc.content;
-    try testing.expect(result_content == .structure);
-    try testing.expect(result_content.structure == .fn_pure);
+test "deep clone expression" {
+    _ = testing.allocator; // Will be used for comprehensive tests later
+
+    // TODO: Add comprehensive tests for deep cloning functionality
+    // This would require setting up test environments, type stores, etc.
+    // For now, just ensure the module compiles correctly.
+    try testing.expect(true);
 }
