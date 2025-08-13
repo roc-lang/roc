@@ -126,22 +126,86 @@ pub const CloneContext = struct {
             },
             .record => |record| blk: {
                 const mapped_ext = try self.cloneTypeVar(record.ext);
+
+                // Clone all field type variables
+                const fields_slice = self.type_store.record_fields.sliceRange(record.fields);
+                var new_fields = try self.allocator.alloc(types.RecordField, fields_slice.len);
+                defer self.allocator.free(new_fields);
+
+                for (fields_slice.items(.name), fields_slice.items(.var_), 0..) |name, var_, i| {
+                    new_fields[i] = .{
+                        .name = name,
+                        .var_ = try self.cloneTypeVar(var_),
+                    };
+                }
+
+                // Add to the type store
+                const start_idx = self.type_store.record_fields.items.len;
+                for (new_fields) |field| {
+                    _ = try self.type_store.record_fields.append(self.allocator, field);
+                }
+
+                const new_range = types.RecordField.SafeMultiList.Range{
+                    .start = @enumFromInt(start_idx),
+                    .count = @intCast(new_fields.len),
+                };
+
                 break :blk FlatType{
                     .record = .{
-                        .fields = record.fields, // Fields contain TypeVars that are mapped at unification time
+                        .fields = new_range,
                         .ext = mapped_ext,
                     },
                 };
             },
             .tuple => |tuple| blk: {
-                // Tuple elements are TypeVars that get mapped during unification
-                break :blk FlatType{ .tuple = tuple };
+                // Clone all tuple element type variables
+                const elems_slice = self.type_store.vars.sliceRange(tuple.elems);
+                var new_elems = try self.allocator.alloc(TypeVar, elems_slice.len);
+                defer self.allocator.free(new_elems);
+
+                for (elems_slice, 0..) |elem, i| {
+                    new_elems[i] = try self.cloneTypeVar(elem);
+                }
+
+                // Add to the type store
+                const start_idx = self.type_store.vars.items.items.len;
+                for (new_elems) |elem| {
+                    _ = try self.type_store.vars.append(self.allocator, elem);
+                }
+
+                const new_range = types.Var.SafeList.Range{
+                    .start = @enumFromInt(start_idx),
+                    .count = @intCast(new_elems.len),
+                };
+
+                break :blk FlatType{ .tuple = .{ .elems = new_range } };
             },
             .fn_pure => |func| blk: {
                 const mapped_ret = try self.cloneTypeVar(func.ret);
+
+                // Clone all argument type variables
+                const args_slice = self.type_store.vars.sliceRange(func.args);
+                var new_args = try self.allocator.alloc(TypeVar, args_slice.len);
+                defer self.allocator.free(new_args);
+
+                for (args_slice, 0..) |arg, i| {
+                    new_args[i] = try self.cloneTypeVar(arg);
+                }
+
+                // Add to the type store
+                const start_idx = self.type_store.vars.items.items.len;
+                for (new_args) |arg| {
+                    _ = try self.type_store.vars.append(self.allocator, arg);
+                }
+
+                const new_range = types.Var.SafeList.Range{
+                    .start = @enumFromInt(start_idx),
+                    .count = @intCast(new_args.len),
+                };
+
                 break :blk FlatType{
                     .fn_pure = .{
-                        .args = func.args, // Args contain TypeVars that are mapped at unification time
+                        .args = new_range,
                         .ret = mapped_ret,
                         .needs_instantiation = func.needs_instantiation,
                     },
@@ -149,9 +213,30 @@ pub const CloneContext = struct {
             },
             .fn_effectful => |func| blk: {
                 const mapped_ret = try self.cloneTypeVar(func.ret);
+
+                // Clone all argument type variables
+                const args_slice = self.type_store.vars.sliceRange(func.args);
+                var new_args = try self.allocator.alloc(TypeVar, args_slice.len);
+                defer self.allocator.free(new_args);
+
+                for (args_slice, 0..) |arg, i| {
+                    new_args[i] = try self.cloneTypeVar(arg);
+                }
+
+                // Add to the type store
+                const start_idx = self.type_store.vars.items.items.len;
+                for (new_args) |arg| {
+                    _ = try self.type_store.vars.append(self.allocator, arg);
+                }
+
+                const new_range = types.Var.SafeList.Range{
+                    .start = @enumFromInt(start_idx),
+                    .count = @intCast(new_args.len),
+                };
+
                 break :blk FlatType{
                     .fn_effectful = .{
-                        .args = func.args, // Args contain TypeVars that are mapped at unification time
+                        .args = new_range,
                         .ret = mapped_ret,
                         .needs_instantiation = func.needs_instantiation,
                     },
@@ -159,9 +244,30 @@ pub const CloneContext = struct {
             },
             .fn_unbound => |func| blk: {
                 const mapped_ret = try self.cloneTypeVar(func.ret);
+
+                // Clone all argument type variables
+                const args_slice = self.type_store.vars.sliceRange(func.args);
+                var new_args = try self.allocator.alloc(TypeVar, args_slice.len);
+                defer self.allocator.free(new_args);
+
+                for (args_slice, 0..) |arg, i| {
+                    new_args[i] = try self.cloneTypeVar(arg);
+                }
+
+                // Add to the type store
+                const start_idx = self.type_store.vars.items.items.len;
+                for (new_args) |arg| {
+                    _ = try self.type_store.vars.append(self.allocator, arg);
+                }
+
+                const new_range = types.Var.SafeList.Range{
+                    .start = @enumFromInt(start_idx),
+                    .count = @intCast(new_args.len),
+                };
+
                 break :blk FlatType{
                     .fn_unbound = .{
-                        .args = func.args, // Args contain TypeVars that are mapped at unification time
+                        .args = new_range,
                         .ret = mapped_ret,
                         .needs_instantiation = func.needs_instantiation,
                     },
@@ -169,9 +275,53 @@ pub const CloneContext = struct {
             },
             .tag_union => |tag_union| blk: {
                 const mapped_ext = try self.cloneTypeVar(tag_union.ext);
+
+                // Clone all tag fields
+                const tags_slice = self.type_store.tags.sliceRange(tag_union.tags);
+                var new_tags = try self.allocator.alloc(types.Tag, tags_slice.len);
+                defer self.allocator.free(new_tags);
+
+                for (tags_slice.items(.name), tags_slice.items(.args), 0..) |name, args, i| {
+                    // Clone the tag's argument type variables
+                    const tag_args_slice = self.type_store.vars.sliceRange(args);
+                    var new_tag_args = try self.allocator.alloc(TypeVar, tag_args_slice.len);
+                    defer self.allocator.free(new_tag_args);
+
+                    for (tag_args_slice, 0..) |arg, j| {
+                        new_tag_args[j] = try self.cloneTypeVar(arg);
+                    }
+
+                    // Add args to the type store
+                    const args_start_idx = self.type_store.vars.items.items.len;
+                    for (new_tag_args) |arg| {
+                        _ = try self.type_store.vars.append(self.allocator, arg);
+                    }
+
+                    const new_args_range = types.Var.SafeList.Range{
+                        .start = @enumFromInt(args_start_idx),
+                        .count = @intCast(new_tag_args.len),
+                    };
+
+                    new_tags[i] = .{
+                        .name = name,
+                        .args = new_args_range,
+                    };
+                }
+
+                // Add tags to the type store
+                const start_idx = self.type_store.tags.items.len;
+                for (new_tags) |tag| {
+                    _ = try self.type_store.tags.append(self.allocator, tag);
+                }
+
+                const new_range = types.Tag.SafeMultiList.Range{
+                    .start = @enumFromInt(start_idx),
+                    .count = @intCast(new_tags.len),
+                };
+
                 break :blk FlatType{
                     .tag_union = .{
-                        .tags = tag_union.tags, // Tags contain TypeVars that are mapped at unification time
+                        .tags = new_range,
                         .ext = mapped_ext,
                     },
                 };
@@ -266,6 +416,22 @@ fn createMatchBranchSpan(context: *CloneContext, branches: []const Expr.Match.Br
         try context.target_env.store.addScratchMatchBranch(branch);
     }
     return context.target_env.store.matchBranchSpanFrom(@intCast(start));
+}
+
+fn createCaptureSpan(context: *CloneContext, captures: []const Expr.Capture.Idx) !Expr.Capture.Span {
+    const start = context.target_env.store.scratch_captures.items.items.len;
+    for (captures) |capture| {
+        try context.target_env.store.addScratchCapture(capture);
+    }
+    return context.target_env.store.capturesSpanFrom(@intCast(start));
+}
+
+fn createBranchPatternSpan(context: *CloneContext, patterns: []const Expr.Match.BranchPattern.Idx) !Expr.Match.BranchPattern.Span {
+    const start = context.target_env.store.scratch_match_branch_patterns.items.items.len;
+    for (patterns) |pattern| {
+        try context.target_env.store.addScratchMatchBranchPattern(pattern);
+    }
+    return .{ .span = .{ .start = @intCast(start), .len = @intCast(patterns.len) } };
 }
 
 fn copyPattern(context: *CloneContext, pattern_idx: Pattern.Idx) Allocator.Error!Pattern.Idx {
@@ -580,13 +746,26 @@ fn copyExpr(context: *CloneContext, expr_idx: Expr.Idx) Allocator.Error!Expr.Idx
             // Copy the lambda expression that this closure references
             const new_lambda_idx = try copyExpr(context, closure.lambda_idx);
 
-            // TODO: Properly handle captures
-            // For now, we'll just use an empty span for captures
-            const new_captures = Expr.Capture.Span{ .span = .{ .start = 0, .len = 0 } };
+            // Copy all captures
+            const captures_slice = context.source_env.store.sliceCaptures(closure.captures);
+            var new_captures = try context.allocator.alloc(Expr.Capture.Idx, captures_slice.len);
+            defer context.allocator.free(new_captures);
+
+            for (captures_slice, 0..) |capture_idx, i| {
+                const old_capture = context.source_env.store.getCapture(capture_idx);
+                const capture_region = context.source_env.store.getPatternRegion(old_capture.pattern_idx);
+                new_captures[i] = try context.target_env.store.addCapture(.{
+                    .name = old_capture.name,
+                    .pattern_idx = try copyPattern(context, old_capture.pattern_idx),
+                    .scope_depth = old_capture.scope_depth,
+                }, capture_region);
+            }
+
+            const new_captures_span = try createCaptureSpan(context, new_captures);
 
             break :blk try context.target_env.addExprAndTypeVar(.{ .e_closure = .{
                 .lambda_idx = new_lambda_idx,
-                .captures = new_captures,
+                .captures = new_captures_span,
             } }, .{ .flex_var = null }, region);
         },
         .e_match => |match| blk: {
@@ -600,12 +779,24 @@ fn copyExpr(context: *CloneContext, expr_idx: Expr.Idx) Allocator.Error!Expr.Idx
                 const old_branch = context.source_env.store.getMatchBranch(branch_idx);
                 const branch_region = context.source_env.store.getExprRegion(old_branch.value);
 
-                // TODO: Properly handle branch patterns
-                // For now, we'll just use an empty span
-                const new_patterns = Expr.Match.BranchPattern.Span{ .span = .{ .start = 0, .len = 0 } };
+                // Copy all branch patterns
+                const patterns_slice = context.source_env.store.sliceMatchBranchPatterns(old_branch.patterns);
+                var new_patterns = try context.allocator.alloc(Expr.Match.BranchPattern.Idx, patterns_slice.len);
+                defer context.allocator.free(new_patterns);
+
+                for (patterns_slice, 0..) |pattern_idx, j| {
+                    const old_pattern = context.source_env.store.getMatchBranchPattern(pattern_idx);
+                    const pattern_region = context.source_env.store.getPatternRegion(old_pattern.pattern);
+                    new_patterns[j] = try context.target_env.store.addMatchBranchPattern(.{
+                        .pattern = try copyPattern(context, old_pattern.pattern),
+                        .degenerate = old_pattern.degenerate,
+                    }, pattern_region);
+                }
+
+                const new_patterns_span = try createBranchPatternSpan(context, new_patterns);
 
                 new_branches[i] = try context.target_env.store.addMatchBranch(.{
-                    .patterns = new_patterns,
+                    .patterns = new_patterns_span,
                     .guard = if (old_branch.guard) |g| try copyExpr(context, g) else null,
                     .value = try copyExpr(context, old_branch.value),
                     .redundant = try context.cloneTypeVar(old_branch.redundant),
@@ -949,11 +1140,103 @@ fn copyTypeAnno(context: *CloneContext, type_anno_idx: TypeAnno.Idx) Allocator.E
     return new_type_anno_idx;
 }
 
-test "deep clone expression" {
-    _ = testing.allocator; // Will be used for comprehensive tests later
+test "deep clone basic functionality" {
+    const allocator = testing.allocator;
 
-    // TODO: Add comprehensive tests for deep cloning functionality
-    // This would require setting up test environments, type stores, etc.
-    // For now, just ensure the module compiles correctly.
+    // Test that the module compiles and basic structure works
+    var context = CloneContext.init(allocator, undefined, undefined, undefined);
+    defer context.deinit();
+
+    // Basic test to ensure the module compiles correctly
     try testing.expect(true);
+}
+
+test "clone context type var mapping" {
+    const allocator = testing.allocator;
+
+    // Create a minimal type store for testing
+    var type_store = try Store.init(allocator);
+    defer type_store.deinit();
+
+    var context = CloneContext{
+        .allocator = allocator,
+        .type_store = &type_store,
+        .source_env = undefined,
+        .target_env = undefined,
+        .type_var_cache = std.AutoHashMap(TypeVar, TypeVar).init(allocator),
+        .copied_expr_map = std.AutoHashMap(Expr.Idx, Expr.Idx).init(allocator),
+        .copied_pattern_map = std.AutoHashMap(Pattern.Idx, Pattern.Idx).init(allocator),
+        .copied_type_anno_map = std.AutoHashMap(TypeAnno.Idx, TypeAnno.Idx).init(allocator),
+    };
+    defer context.deinit();
+
+    // Create a type variable and clone it
+    const original_var = try type_store.fresh();
+    try type_store.setVarContent(original_var, .{ .structure = .{ .str = {} } });
+
+    const cloned_var = try context.cloneTypeVar(original_var);
+
+    // Verify we got a different variable
+    try testing.expect(original_var != cloned_var);
+
+    // Verify the content was cloned
+    const original_content = type_store.resolveVar(original_var);
+    const cloned_content = type_store.resolveVar(cloned_var);
+
+    try testing.expect(original_content.desc.content == .structure);
+    try testing.expect(cloned_content.desc.content == .structure);
+    try testing.expect(original_content.desc.content.structure == .str);
+    try testing.expect(cloned_content.desc.content.structure == .str);
+
+    // Verify caching works
+    const cloned_again = try context.cloneTypeVar(original_var);
+    try testing.expectEqual(cloned_var, cloned_again);
+}
+
+test "clone context resolves aliases" {
+    const allocator = testing.allocator;
+
+    var type_store = try Store.init(allocator);
+    defer type_store.deinit();
+
+    var context = CloneContext{
+        .allocator = allocator,
+        .type_store = &type_store,
+        .source_env = undefined,
+        .target_env = undefined,
+        .type_var_cache = std.AutoHashMap(TypeVar, TypeVar).init(allocator),
+        .copied_expr_map = std.AutoHashMap(Expr.Idx, Expr.Idx).init(allocator),
+        .copied_pattern_map = std.AutoHashMap(Pattern.Idx, Pattern.Idx).init(allocator),
+        .copied_type_anno_map = std.AutoHashMap(TypeAnno.Idx, TypeAnno.Idx).init(allocator),
+    };
+    defer context.deinit();
+
+    // Create a type alias that points to Str
+    const str_var = try type_store.fresh();
+    try type_store.setVarContent(str_var, .{ .structure = .{ .str = {} } });
+
+    const alias_backing_var = try type_store.fresh();
+    try type_store.setVarRedirect(alias_backing_var, str_var);
+
+    // Add the backing var to the store
+    _ = try type_store.vars.append(allocator, alias_backing_var);
+    const alias_start = type_store.vars.items.items.len - 1;
+
+    // Create the alias
+    const alias_content = Content{
+        .alias = .{
+            .ident = .{ .ident_idx = .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 } }, // Dummy identifier
+            .vars = .{ .nonempty = .{
+                .start = @enumFromInt(alias_start),
+                .count = 1,
+            } },
+        },
+    };
+
+    // Clone the alias content
+    const cloned_content = try context.copyContent(alias_content);
+
+    // Verify it was resolved to the underlying type
+    try testing.expect(cloned_content == .structure);
+    try testing.expect(cloned_content.structure == .str);
 }
