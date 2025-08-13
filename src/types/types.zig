@@ -546,11 +546,17 @@ pub const Num = union(enum) {
         var is_hex_or_bin = false;
         var start_index: usize = 0;
 
-        if (text.len > 2 and text[0] == '0') {
-            switch (text[1]) {
+        // Check for negative prefix
+        var prefix_offset: usize = 0;
+        if (text.len > 0 and text[0] == '-') {
+            prefix_offset = 1;
+        }
+
+        if (text.len > prefix_offset + 2 and text[prefix_offset] == '0') {
+            switch (text[prefix_offset + 1]) {
                 'x', 'X', 'b', 'B', 'o', 'O' => {
                     is_hex_or_bin = true;
-                    start_index = 2; // Skip the "0x", "0b", or "0o" prefix
+                    start_index = prefix_offset + 2; // Skip the "0x", "0b", or "0o" prefix
                 },
                 else => {},
             }

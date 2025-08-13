@@ -1766,7 +1766,7 @@ fn canonicalizeRecordField(
     return try self.env.addRecordFieldAndTypeVar(cir_field, Content{ .flex_var = null }, self.parse_ir.tokenizedRegionToRegion(field.region));
 }
 
-fn parseIntWithUnderscores(comptime T: type, text: []const u8, int_base: u8) !T {
+pub fn parseIntWithUnderscores(comptime T: type, text: []const u8, int_base: u8) !T {
     var buf: [128]u8 = undefined;
     var len: usize = 0;
     for (text) |char| {
@@ -7015,3 +7015,13 @@ fn createUnknownIdent(self: *Self) std.mem.Allocator.Error!Ident.Idx {
 // take std.math.minInt(i128), drop the minus sign, and convert it to u128
 // all at comptime. Instead we just have a test that verifies its correctness.
 const min_i128_negated: u128 = 170141183460469231731687303715884105728;
+
+test "min_i128_negated is actually the minimum i128, negated" {
+    var min_i128_buf: [64]u8 = undefined;
+    const min_i128_str = std.fmt.bufPrint(&min_i128_buf, "{}", .{std.math.minInt(i128)}) catch unreachable;
+
+    var negated_buf: [64]u8 = undefined;
+    const negated_str = std.fmt.bufPrint(&negated_buf, "-{}", .{min_i128_negated}) catch unreachable;
+
+    try std.testing.expectEqualStrings(min_i128_str, negated_str);
+}
