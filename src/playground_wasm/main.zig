@@ -22,7 +22,7 @@ const types = @import("types");
 const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
-
+const unbundle = @import("unbundle");
 const WasmFilesystem = @import("WasmFilesystem.zig");
 
 const Can = can.Can;
@@ -1297,4 +1297,21 @@ export fn getCurrentState() u32 {
         .READY => 1,
         .LOADED => 2,
     };
+}
+
+/// Placeholder function to validate a base58 hash string (for bundle/unbundle functionality)
+/// (This is just to make sure the unbundle module is successfully linked in the playground build,
+/// so that when we're ready to actually use it, we know it will be building successfully on wasm.)
+export fn validateBase58Hash(hash_ptr: [*]const u8, hash_len: usize) bool {
+    const hash_str = hash_ptr[0..hash_len];
+
+    // Try to validate the hash using unbundle's validation function
+    const result = unbundle.validateBase58Hash(hash_str) catch return false;
+
+    // If we got a valid hash back, return 1
+    if (result) |_| {
+        return true;
+    } else {
+        return false;
+    }
 }
