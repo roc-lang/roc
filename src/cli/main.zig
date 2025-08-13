@@ -1110,7 +1110,7 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
 
     // If no paths provided, default to "main.roc"
     const paths_to_use = if (args.paths.len == 0) &[_][]const u8{"main.roc"} else args.paths;
-    
+
     // Remember the first path from CLI args (before sorting)
     const first_cli_path = paths_to_use[0];
 

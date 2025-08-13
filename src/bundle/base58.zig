@@ -1,5 +1,5 @@
 //! Base58 encoding and decoding for BLAKE3 hashes
-//! 
+//!
 //! This module provides base58 encoding/decoding specifically optimized for 256-bit BLAKE3 hashes.
 //! The base58 alphabet excludes visually similar characters (0, O, I, l) to prevent confusion.
 

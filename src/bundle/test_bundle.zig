@@ -1413,7 +1413,7 @@ test "download from local server" {
             // Read HTTP request
             var request_buf: [4096]u8 = undefined;
             const bytes_read = try connection.stream.read(&request_buf);
-            
+
             // Parse request line to get the path
             const request = request_buf[0..bytes_read];
             if (std.mem.indexOf(u8, request, " ")) |first_space| {
@@ -1424,11 +1424,7 @@ test "download from local server" {
             }
 
             // Send HTTP response with bundle data
-            const response_header = try std.fmt.allocPrint(
-                ctx.allocator,
-                "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
-                .{ctx.bundle_data.len}
-            );
+            const response_header = try std.fmt.allocPrint(ctx.allocator, "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n", .{ctx.bundle_data.len});
             defer ctx.allocator.free(response_header);
 
             try connection.stream.writeAll(response_header);
@@ -1462,7 +1458,7 @@ test "download from local server" {
 
     // Wait for server to complete
     server_ctx.response_sent.wait();
-    
+
     // Check if server had any errors
     if (server_ctx.error_occurred) |err| {
         return err;

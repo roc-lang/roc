@@ -31,7 +31,7 @@ const TAR_PATH_MAX_LENGTH: usize = 255; // Maximum path length for tar compatibi
 pub const STREAM_BUFFER_SIZE: usize = 64 * 1024;
 const TAR_EXTENSION = ".tar.zst";
 /// Default compression level for zstd (22 = maximum compression)
-pub const DEFAULT_COMPRESSION_LEVEL: c_int = 22; 
+pub const DEFAULT_COMPRESSION_LEVEL: c_int = 22;
 
 /// Custom allocator function for zstd that adds extra bytes to store allocation size
 pub fn allocForZstd(opaque_ptr: ?*anyopaque, size: usize) callconv(.C) ?*anyopaque {
