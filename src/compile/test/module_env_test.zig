@@ -39,7 +39,7 @@ test "ModuleEnv.Serialized roundtrip" {
     const import1 = try original.imports.getOrPut(gpa, &original.common.strings, "json.Json");
     const import2 = try original.imports.getOrPut(gpa, &original.common.strings, "core.List");
     const import3 = try original.imports.getOrPut(gpa, &original.common.strings, "json.Json"); // duplicate - should return same as import1
-    
+
     _ = import2; // Mark as used
 
     try original.setExposedNodeIndexById(hello_idx, 42);
@@ -101,7 +101,7 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(u32, 2), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
-    
+
     // Verify imports before serialization
     try testing.expectEqual(import1, import3); // Deduplication should work
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
@@ -120,29 +120,29 @@ test "ModuleEnv.Serialized roundtrip" {
     // TODO restore source using CommonEnv
     // try testing.expectEqualStrings(source, env.source);
     try testing.expectEqualStrings("TestModule", env.module_name);
-    
+
     // Verify imports were preserved after deserialization
     try testing.expectEqual(@as(usize, 2), env.imports.imports.len());
-    
+
     // Verify the import strings are correct (they reference string indices in the string store)
     const import_str1 = env.common.strings.get(env.imports.imports.items.items[0]);
     const import_str2 = env.common.strings.get(env.imports.imports.items.items[1]);
-    
+
     try testing.expectEqualStrings("json.Json", import_str1);
     try testing.expectEqualStrings("core.List", import_str2);
-    
+
     // Verify that the map was repopulated correctly
     try testing.expectEqual(@as(usize, 2), env.imports.map.count());
-    
+
     // Test that deduplication still works after deserialization
     // Use arena allocator for these operations to avoid memory issues
     var test_arena = std.heap.ArenaAllocator.init(gpa);
     defer test_arena.deinit();
     const test_alloc = test_arena.allocator();
-    
+
     const import4 = try env.imports.getOrPut(test_alloc, &env.common.strings, "json.Json");
     const import5 = try env.imports.getOrPut(test_alloc, &env.common.strings, "new.Module");
-    
+
     // Should find existing json.Json
     try testing.expectEqual(@as(u32, 0), @intFromEnum(import4));
     // Should create new entry for new.Module
