@@ -731,7 +731,7 @@ pub const BuildEnv = struct {
         const src = try std.fs.cwd().readFileAlloc(self.gpa, file_abs, std.math.maxInt(usize));
         defer self.gpa.free(src);
 
-        var env = try ModuleEnv.init(self.gpa, src);
+        var env = try ModuleEnv.init(self.gpa, src, null, null);
         defer env.deinit();
 
         try env.common.calcLineStarts(self.gpa);

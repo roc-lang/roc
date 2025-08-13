@@ -783,7 +783,7 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     const basename = std.fs.path.basename(roc_file_path);
     const module_name = try shm_allocator.dupe(u8, basename);
 
-    var env = try ModuleEnv.init(shm_allocator, source);
+    var env = try ModuleEnv.init(shm_allocator, source, null, null);
     env.common.source = source;
     env.module_name = module_name;
     try env.common.calcLineStarts(shm_allocator);

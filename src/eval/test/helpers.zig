@@ -349,7 +349,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 } {
     // Initialize the ModuleEnv
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, source);
+    module_env.* = try ModuleEnv.init(allocator, source, null, null);
 
     module_env.common.source = source;
     try module_env.common.calcLineStarts(module_env.gpa);

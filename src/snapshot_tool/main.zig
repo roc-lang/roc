@@ -1046,7 +1046,7 @@ fn processSnapshotContent(
     }
 
     // Process the content through the compilation pipeline
-    var module_env = try ModuleEnv.init(allocator, content.source);
+    var module_env = try ModuleEnv.init(allocator, content.source, null, null);
     defer module_env.deinit();
 
     // Calculate line starts for source location tracking
@@ -2689,7 +2689,7 @@ fn generateReplCanonicalizeSection(output: *DualOutput, content: *const Content)
         }
 
         // Create a temporary ModuleEnv for this input
-        var module_env = ModuleEnv.init(output.gpa, input) catch |err| {
+        var module_env = ModuleEnv.init(output.gpa, input, null, null) catch |err| {
             try output.md_writer.print("Error creating module env: {s}\n", .{@errorName(err)});
             continue;
         };
@@ -2789,7 +2789,7 @@ fn generateReplTypesSection(output: *DualOutput, content: *const Content) !void 
         }
 
         // Create a temporary ModuleEnv for this input
-        var module_env = ModuleEnv.init(output.gpa, input) catch |err| {
+        var module_env = ModuleEnv.init(output.gpa, input, null, null) catch |err| {
             try output.md_writer.print("Error creating module env: {s}\n", .{@errorName(err)});
             continue;
         };

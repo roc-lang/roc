@@ -157,6 +157,54 @@ pub const BUILTIN_SET: Pattern.Idx = @enumFromInt(10);
 /// The idx of the builtin Str
 pub const BUILTIN_STR: Pattern.Idx = @enumFromInt(11);
 
+/// Extract a string literal value from an expression, if it is a string
+/// Returns null if the expression is not a string or contains interpolation
+fn extractStringFromExpr(self: *Self, expr_idx: AST.Expr.Idx) !?[]const u8 {
+    const expr = self.parse_ir.store.getExpr(expr_idx);
+    switch (expr) {
+        .string => |str_expr| {
+            // Handle simple string literals
+            const parts = self.parse_ir.store.exprSlice(str_expr.parts);
+
+            // Handle empty strings
+            if (parts.len == 0) {
+                return "";
+            }
+
+            // We only support simple string literals for file paths
+            // String interpolation in file paths is not supported
+            if (parts.len > 1) {
+                // Multiple parts means string interpolation - not supported for file paths
+                return null;
+            }
+
+            // Single part string
+            const part = self.parse_ir.store.getExpr(parts[0]);
+            switch (part) {
+                .string_part => |string_part| {
+                    // Get the string content from the token
+                    const token = self.parse_ir.tokens.tokens.items(.tag)[string_part.token];
+                    if (token == .StringPart) {
+                        const token_str = self.parse_ir.tokens.resolve(string_part.token);
+                        // Note: This returns the raw string content including any escape sequences
+                        // For file paths, this is typically what we want
+                        return self.env.common.source[token_str.start.offset..token_str.end.offset];
+                    }
+                },
+                else => {
+                    // Not a string part (shouldn't happen for well-formed strings)
+                    return null;
+                },
+            }
+        },
+        else => {
+            // Not a string expression
+            return null;
+        },
+    }
+    return null;
+}
+
 /// Deinitialize canonicalizer resources
 pub fn deinit(
     self: *Self,
@@ -567,12 +615,56 @@ pub fn canonicalizeFile(
     const header = self.parse_ir.store.getHeader(file.header);
     switch (header) {
         .module => |h| try self.createExposedScope(h.exposes),
-        .package => |h| try self.createExposedScope(h.exposes),
-        .platform => |h| try self.createExposedScope(h.exposes),
+        .package => |h| {
+            try self.createExposedScope(h.exposes);
+            // Report package dependencies
+            const coll = self.parse_ir.store.getCollection(h.packages);
+            const fields = self.parse_ir.store.recordFieldSlice(.{ .span = coll.span });
+            for (fields) |idx| {
+                const rf = self.parse_ir.store.getRecordField(idx);
+                if (rf.value) |value_expr| {
+                    // Extract the string value from the expression
+                    const file_path = try self.extractStringFromExpr(value_expr);
+                    if (file_path) |path| {
+                        self.env.reportFileEncountered(path);
+                    }
+                }
+            }
+        },
+        .platform => |h| {
+            try self.createExposedScope(h.exposes);
+            // Report platform package dependencies
+            const coll = self.parse_ir.store.getCollection(h.packages);
+            const fields = self.parse_ir.store.recordFieldSlice(.{ .span = coll.span });
+            for (fields) |idx| {
+                const rf = self.parse_ir.store.getRecordField(idx);
+                if (rf.value) |value_expr| {
+                    // Extract the string value from the expression
+                    const file_path = try self.extractStringFromExpr(value_expr);
+                    if (file_path) |path| {
+                        self.env.reportFileEncountered(path);
+                    }
+                }
+            }
+        },
         .hosted => |h| try self.createExposedScope(h.exposes),
-        .app => {
+        .app => |h| {
             // App headers have 'provides' instead of 'exposes'
-            // TODO: Handle app provides differently
+            // The provides handling is done elsewhere in the canonicalization process
+
+            // Report app package dependencies
+            const coll = self.parse_ir.store.getCollection(h.packages);
+            const fields = self.parse_ir.store.recordFieldSlice(.{ .span = coll.span });
+            for (fields) |idx| {
+                const rf = self.parse_ir.store.getRecordField(idx);
+                if (rf.value) |value_expr| {
+                    // Extract the string value from the expression
+                    const file_path = try self.extractStringFromExpr(value_expr);
+                    if (file_path) |path| {
+                        self.env.reportFileEncountered(path);
+                    }
+                }
+            }
         },
         .malformed => {
             // Skip malformed headers
@@ -1308,7 +1400,13 @@ fn canonicalizeImportStatement(
             }
         } else {
             // No qualifier, just use the module name directly
-            break :blk self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok).?;
+            const module_ident = self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok).?;
+
+            // Report the file encounter for non-package-qualified imports
+            const module_text = self.env.getIdent(module_ident);
+            self.env.reportFileEncountered(module_text);
+
+            break :blk module_ident;
         }
     };
 
@@ -7020,7 +7118,7 @@ const ScopeTestContext = struct {
     fn init(gpa: std.mem.Allocator) !ScopeTestContext {
         // heap allocate ModuleEnv for testing
         const module_env = try gpa.create(ModuleEnv);
-        module_env.* = try ModuleEnv.init(gpa, "");
+        module_env.* = try ModuleEnv.init(gpa, "", null, null);
         try module_env.initCIRFields(gpa, "test");
 
         return ScopeTestContext{

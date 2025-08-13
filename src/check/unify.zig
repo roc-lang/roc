@@ -2808,7 +2808,7 @@ const TestEnv = struct {
     /// slight more verbose setup for each test
     fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
         const module_env = try gpa.create(ModuleEnv);
-        module_env.* = try ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        module_env.* = try ModuleEnv.init(gpa, try gpa.dupe(u8, ""), null, null);
         try module_env.initCIRFields(gpa, "Test");
         return .{
             .module_env = module_env,

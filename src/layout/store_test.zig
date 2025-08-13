@@ -19,7 +19,7 @@ test "addTypeVar - str" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -46,7 +46,7 @@ test "addTypeVar - bool" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -72,7 +72,7 @@ test "addTypeVar - list of strings" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -104,7 +104,7 @@ test "addTypeVar - list of box of strings" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -143,7 +143,7 @@ test "addTypeVar - box of flex_var compiles to box of opaque_ptr" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -175,7 +175,7 @@ test "addTypeVar - num u32" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -202,7 +202,7 @@ test "addTypeVar - num f64" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -229,7 +229,7 @@ test "addTypeVar - list of num i128" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -262,7 +262,7 @@ test "addTypeVar - num dec" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -289,7 +289,7 @@ test "addTypeVar - flex num var defaults to i128" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -321,7 +321,7 @@ test "addTypeVar - flex int var defaults to i128" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -353,7 +353,7 @@ test "addTypeVar - flex frac var defaults to dec" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -385,7 +385,7 @@ test "addTypeVar - list of flex num var defaults to list of i128" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -423,7 +423,7 @@ test "addTypeVar - box of flex frac var defaults to box of dec" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -461,7 +461,7 @@ test "addTypeVar - box of rigid_var compiles to box of opaque_ptr" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -494,7 +494,7 @@ test "addTypeVar - box of empty record compiles to box_of_zst" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -523,7 +523,7 @@ test "addTypeVar - list of empty tag union compiles to list_of_zst" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -552,7 +552,7 @@ test "alignment - record alignment is max of field alignments" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -620,7 +620,7 @@ test "alignment - deeply nested record alignment (non-recursive)" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -684,7 +684,7 @@ test "addTypeVar - bare empty record returns error" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -707,7 +707,7 @@ test "addTypeVar - bare empty tag union returns error" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -730,7 +730,7 @@ test "addTypeVar - simple record" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -793,7 +793,7 @@ test "record size calculation" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -847,7 +847,7 @@ test "addTypeVar - nested record" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -935,7 +935,7 @@ test "addTypeVar - list of records" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -1000,7 +1000,7 @@ test "addTypeVar - record with extension" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -1079,7 +1079,7 @@ test "addTypeVar - record extension with str type fails" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -1110,7 +1110,7 @@ test "addTypeVar - record extension with num type fails" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -1141,7 +1141,7 @@ test "addTypeVar - deeply nested containers with zero-sized inner type" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -1181,7 +1181,7 @@ test "addTypeVar - record with single zero-sized field in container" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -1216,7 +1216,7 @@ test "addTypeVar - record field ordering stability" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -1321,7 +1321,7 @@ test "addTypeVar - empty record in different contexts" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -1367,7 +1367,7 @@ test "addTypeVar - record alignment edge cases" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -1427,7 +1427,7 @@ test "addTypeVar - record with duplicate field in extension (matching types)" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -1501,7 +1501,7 @@ test "addTypeVar - record with duplicate field in extension (mismatched types)" 
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -1568,7 +1568,7 @@ test "addTypeVar - record with invalid extension type" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -1599,7 +1599,7 @@ test "addTypeVar - record with chained extensions" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -1693,7 +1693,7 @@ test "addTypeVar - record with zero-sized fields dropped" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -1758,7 +1758,7 @@ test "addTypeVar - record with all zero-sized fields becomes empty" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -1794,7 +1794,7 @@ test "addTypeVar - box of record with all zero-sized fields" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -1840,7 +1840,7 @@ test "addTypeVar - comprehensive nested record combinations" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -2022,7 +2022,7 @@ test "addTypeVar - nested record with inner record having all zero-sized fields"
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -2072,7 +2072,7 @@ test "addTypeVar - list of record with all zero-sized fields" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -2109,7 +2109,7 @@ test "alignment - record with log2 alignment representation" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -2220,7 +2220,7 @@ test "record fields sorted by alignment then name" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -2300,7 +2300,7 @@ test "record fields with same alignment sorted by name" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     // Create type store
@@ -2371,7 +2371,7 @@ test "addTypeVar - maximum nesting depth" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -2410,7 +2410,7 @@ test "addTypeVar - record with maximum fields" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -2465,7 +2465,7 @@ test "addTypeVar - record field alignments differ between targets" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -2557,7 +2557,7 @@ test "addTypeVar - record field sorting follows alignment then name order" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -2643,7 +2643,7 @@ test "addTypeVar - pointer types have target-dependent alignment" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -2685,7 +2685,7 @@ test "addTypeVar - record with very long field names" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -2727,7 +2727,7 @@ test "addTypeVar - alternating zero-sized and non-zero-sized fields" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -2784,7 +2784,7 @@ test "addTypeVar - record field type changes through alias" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -2834,7 +2834,7 @@ test "addTypeVar - mixed container types" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -2917,7 +2917,7 @@ test "addTypeVar - record size calculation with padding" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -2990,7 +2990,7 @@ test "addTypeVar - all scalar types use scalar optimization" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -3056,7 +3056,7 @@ test "addTypeVar - list of scalar types uses scalar optimization" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -3122,7 +3122,7 @@ test "addTypeVar - box and list of non-scalar types use indexed approach" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -3189,7 +3189,7 @@ test "addTypeVar - host opaque types use scalar optimization" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -3228,7 +3228,7 @@ test "addTypeVar - mixed scalar optimization in nested structures" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -3258,7 +3258,7 @@ test "addTypeVar - all integer precisions use scalar optimization" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -3308,7 +3308,7 @@ test "addTypeVar - all boolean precisions use scalar optimization" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -3354,7 +3354,7 @@ test "addTypeVar - all frac precisions use scalar optimization" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -3397,7 +3397,7 @@ test "layouts_by_var uses ArrayListMap with pre-allocation" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -3522,7 +3522,7 @@ test "putRecord and getRecordFieldOffsetByName" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var module_env = try ModuleEnv.init(gpa, "");
+    var module_env = try ModuleEnv.init(gpa, "", null, null);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);

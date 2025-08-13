@@ -190,7 +190,7 @@ const ParseResult = union(enum) {
 
 /// Try to parse input as a statement
 fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
-    var module_env = try ModuleEnv.init(self.allocator, input);
+    var module_env = try ModuleEnv.init(self.allocator, input, null, null);
     defer module_env.deinit();
 
     // Try statement parsing
@@ -271,7 +271,7 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
     }
 
     // Create module environment for the expression
-    var module_env = try ModuleEnv.init(self.allocator, expr_source);
+    var module_env = try ModuleEnv.init(self.allocator, expr_source, null, null);
     defer module_env.deinit();
 
     // Parse as expression
@@ -573,7 +573,7 @@ test "Repl - minimal interpreter integration" {
 
     // Step 1: Create module environment
     const source = "42";
-    var module_env = try ModuleEnv.init(gpa, source);
+    var module_env = try ModuleEnv.init(gpa, source, null, null);
     defer module_env.deinit();
 
     // Step 2: Parse as expression

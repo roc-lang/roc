@@ -655,7 +655,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     defer test_env_instance.deinit();
 
     // Create original ModuleEnv
-    var original_env = try ModuleEnv.init(gpa, source);
+    var original_env = try ModuleEnv.init(gpa, source, null, null);
     defer original_env.deinit();
 
     original_env.common.source = source;
@@ -745,7 +745,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         // Deserialize the ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
-        const deserialized_env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule");
+        const deserialized_env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule", null, null);
 
         // Verify basic deserialization worked
         try testing.expectEqualStrings("TestModule", deserialized_env.module_name);

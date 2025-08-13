@@ -179,7 +179,7 @@ pub const CacheModule = struct {
         const offset = @as(i64, @intCast(buffer_start));
 
         // Deserialize the ModuleEnv
-        const module_env_ptr: *ModuleEnv = deserialized_ptr.deserialize(offset, allocator, source, module_name);
+        const module_env_ptr: *ModuleEnv = deserialized_ptr.deserialize(offset, allocator, source, module_name, null, null);
 
         return module_env_ptr;
     }

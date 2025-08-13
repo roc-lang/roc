@@ -29,10 +29,32 @@ const TypeStore = types_mod.Store;
 
 const Self = @This();
 
+/// Callback function type for when a file is encountered during parsing.
+///
+/// This callback is invoked when the parser encounters file dependencies:
+/// - Non-package-qualified imports (e.g., `import Foo` reports "Foo")
+/// - Package dependencies in headers (e.g., `{ cli: "path/to/cli.roc" }` reports "path/to/cli.roc")
+///
+/// The callback is NOT invoked for:
+/// - Package-qualified imports (e.g., `import cli.Stdout` does NOT report anything)
+///
+/// Parameters:
+/// - context: User-provided opaque pointer passed through from init
+/// - file_path: The file path or module name encountered
+///
+/// Note: The callback should not panic or return errors. Any errors should be
+/// handled internally by the callback implementation.
+pub const FileEncounteredFn = *const fn (context: *anyopaque, file_path: []const u8) void;
+
 gpa: std.mem.Allocator,
 
 common: CommonEnv,
 types: TypeStore,
+
+/// Callback function to notify when a file is encountered during parsing
+file_encountered_fn: ?FileEncounteredFn,
+/// Opaque context passed to the file encountered callback
+file_encountered_context: ?*anyopaque,
 
 // ===== Module compilation fields =====
 // NOTE: These fields are populated during canonicalization and preserved for later use
@@ -72,13 +94,20 @@ pub fn initModuleEnvFields(self: *Self, gpa: std.mem.Allocator, module_name: []c
 }
 
 /// Initialize the module environment.
-pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!Self {
+pub fn init(
+    gpa: std.mem.Allocator,
+    source: []const u8,
+    file_encountered_fn: ?FileEncounteredFn,
+    file_encountered_context: ?*anyopaque,
+) std.mem.Allocator.Error!Self {
     // TODO: maybe wire in smarter default based on the initial input text size.
 
     return Self{
         .gpa = gpa,
         .common = try CommonEnv.init(gpa, source),
         .types = try TypeStore.initCapacity(gpa, 2048, 512),
+        .file_encountered_fn = file_encountered_fn,
+        .file_encountered_context = file_encountered_context,
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
@@ -87,6 +116,19 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
     };
+}
+
+/// Call the file encountered callback if it exists
+/// Note: Callbacks should not panic or throw errors. Any errors in the callback
+/// are silently ignored to prevent disrupting the compilation process.
+pub fn reportFileEncountered(self: *Self, file_path: []const u8) void {
+    if (self.file_encountered_fn) |callback| {
+        if (self.file_encountered_context) |context| {
+            // Callbacks are expected to handle their own errors
+            // We don't propagate errors from callbacks to avoid disrupting compilation
+            callback(context, file_path);
+        }
+    }
 }
 
 /// Deinitialize the module environment.
@@ -1020,6 +1062,8 @@ pub fn serialize(
         .gpa = undefined, // Will be set when deserializing
         .common = (try self.common.serialize(allocator, writer)).*,
         .types = (try self.types.serialize(allocator, writer)).*,
+        .file_encountered_fn = null, // Will be set when deserializing
+        .file_encountered_context = null, // Will be set when deserializing
         .all_defs = self.all_defs,
         .all_statements = self.all_statements,
         .external_decls = (try self.external_decls.serialize(allocator, writer)).*,
@@ -1029,16 +1073,18 @@ pub fn serialize(
         .store = (try self.store.serialize(allocator, writer)).*,
     };
 
-    // set gpa to all zeros, so that what we write to the file is deterministic
+    // set gpa and callback fields to all zeros, so that what we write to the file is deterministic
     @memset(@as([*]u8, @ptrCast(&offset_self.gpa))[0..@sizeOf(@TypeOf(offset_self.gpa))], 0);
+    @memset(@as([*]u8, @ptrCast(&offset_self.file_encountered_fn))[0..@sizeOf(@TypeOf(offset_self.file_encountered_fn))], 0);
+    @memset(@as([*]u8, @ptrCast(&offset_self.file_encountered_context))[0..@sizeOf(@TypeOf(offset_self.file_encountered_context))], 0);
 
     return @constCast(offset_self);
 }
 
 /// Add the given offset to the memory addresses of all pointers in `self`.
-/// IMPORTANT: The gpa, source, and module_name fields must be manually set before calling this function.
+/// IMPORTANT: The gpa, source, module_name, and callback fields must be manually set before calling this function.
 pub fn relocate(self: *Self, offset: isize) void {
-    // IMPORTANT: gpa, and module_name are not relocated - they should be set manually before calling relocate
+    // IMPORTANT: gpa, module_name, and callback fields are not relocated - they should be set manually before calling relocate
 
     // Relocate all sub-structures
     self.common.relocate(offset);
@@ -1061,6 +1107,8 @@ pub const Serialized = struct {
     gpa: std.mem.Allocator, // Serialized as zeros, provided during deserialization
     common: CommonEnv.Serialized,
     types: TypeStore.Serialized,
+    file_encountered_fn: ?FileEncounteredFn, // Serialized as zeros, provided during deserialization
+    file_encountered_context: u64, // Always serialized as zero, never stored
     all_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
@@ -1078,6 +1126,8 @@ pub const Serialized = struct {
     ) !void {
         // Set fields that will be provided during deserialization to zeros
         self.gpa = undefined; // Will be set to zeros below
+        self.file_encountered_fn = null;
+        self.file_encountered_context = 0;
 
         try self.common.serialize(&env.common, allocator, writer);
         try self.types.serialize(&env.types, allocator, writer);
@@ -1094,9 +1144,11 @@ pub const Serialized = struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
-        // Set gpa to all zeros; the space needs to be here,
-        // but the value will be set separately during deserialization.
+        // Set gpa and callback fields to all zeros; the space needs to be here,
+        // but the values will be set separately during deserialization.
         @memset(@as([*]u8, @ptrCast(&self.gpa))[0..@sizeOf(@TypeOf(self.gpa))], 0);
+        @memset(@as([*]u8, @ptrCast(&self.file_encountered_fn))[0..@sizeOf(@TypeOf(self.file_encountered_fn))], 0);
+        // file_encountered_context is already set to 0 above
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1106,6 +1158,8 @@ pub const Serialized = struct {
         gpa: std.mem.Allocator,
         source: []const u8,
         module_name: []const u8,
+        file_encountered_fn: ?FileEncounteredFn,
+        file_encountered_context: ?*anyopaque,
     ) *Self {
         // ModuleEnv.Serialized should be at least as big as ModuleEnv
         std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Self));
@@ -1117,6 +1171,8 @@ pub const Serialized = struct {
             .gpa = gpa,
             .common = self.common.deserialize(offset, source).*,
             .types = self.types.deserialize(offset).*,
+            .file_encountered_fn = file_encountered_fn,
+            .file_encountered_context = file_encountered_context,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .external_decls = self.external_decls.deserialize(offset).*,
