@@ -1,6 +1,6 @@
-//! Specialization system for monomorphizing generic CIR functions.
+//! Specialization system for monomorphizing polymorphic CIR functions.
 //!
-//! This module provides functionality to create specialized versions of generic functions
+//! This module provides functionality to create specialized versions of polymorphic functions
 //! by copying their CIR representation and unifying type variables with concrete types.
 //! The specialization process preserves type relationships and creates independent copies
 //! of all AST nodes while maintaining proper type variable mappings.
@@ -195,9 +195,9 @@ pub const SpecializationContext = struct {
     }
 };
 
-/// Creates a specialized version of a generic function expression.
+/// Creates a specialized version of a polymorphic function expression.
 ///
-/// This function takes a generic lambda or closure and creates a monomorphized
+/// This function takes a polymorphic lambda or closure and creates a monomorphized
 /// copy where all type variables are unified with concrete argument types.
 ///
 /// Args:
