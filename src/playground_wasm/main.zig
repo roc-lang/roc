@@ -537,7 +537,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Initialize the ModuleEnv
     var module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, source);
+    module_env.* = try ModuleEnv.init(allocator, source, null, null);
     try module_env.common.calcLineStarts(module_env.gpa);
 
     var result = CompilerStageData.init(allocator, module_env);
