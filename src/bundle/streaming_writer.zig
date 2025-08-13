@@ -1,3 +1,8 @@
+//! Streaming writer for compressing data with zstd and hash computation
+//!
+//! This module provides a writer that compresses data streams using zstd compression while
+//! simultaneously computing BLAKE3 hashes for data integrity verification.
+
 const std = @import("std");
 const c = @cImport({
     @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");

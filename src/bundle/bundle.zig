@@ -27,11 +27,13 @@ const c = @cImport({
 // Constants for magic numbers
 const SIZE_STORAGE_BYTES: usize = 16; // Extra bytes for storing allocation size; use 16 to preserve alignment.
 const TAR_PATH_MAX_LENGTH: usize = 255; // Maximum path length for tar compatibility
-pub const STREAM_BUFFER_SIZE: usize = 64 * 1024; // 64KB buffer for streaming operations
+/// Size of the buffer used for streaming operations (in bytes)
+pub const STREAM_BUFFER_SIZE: usize = 64 * 1024;
 const TAR_EXTENSION = ".tar.zst";
-pub const DEFAULT_COMPRESSION_LEVEL: c_int = 22; // Maximum compression
+/// Default compression level for zstd (22 = maximum compression)
+pub const DEFAULT_COMPRESSION_LEVEL: c_int = 22; 
 
-// zstd's C library does custom allocations using a slightly different format from Zig's allocator API.
+/// Custom allocator function for zstd that adds extra bytes to store allocation size
 pub fn allocForZstd(opaque_ptr: ?*anyopaque, size: usize) callconv(.C) ?*anyopaque {
     const allocator = @as(*std.mem.Allocator, @ptrCast(@alignCast(opaque_ptr.?)));
     // Allocate extra bytes to store the size
@@ -46,6 +48,7 @@ pub fn allocForZstd(opaque_ptr: ?*anyopaque, size: usize) callconv(.C) ?*anyopaq
     return @ptrFromInt(@intFromPtr(mem.ptr) + SIZE_STORAGE_BYTES);
 }
 
+/// Custom free function for zstd that retrieves the original allocation size
 pub fn freeForZstd(opaque_ptr: ?*anyopaque, address: ?*anyopaque) callconv(.C) void {
     if (address == null) return;
     const allocator = @as(*std.mem.Allocator, @ptrCast(@alignCast(opaque_ptr.?)));
@@ -301,18 +304,20 @@ pub const PathValidationError = struct {
     reason: PathValidationReason,
 };
 
-// We only do these validations on bundle, not on unbundle.
-// Note that the path ALREADY should have all backslashes converted
-// to forward slashes.
-//
-// The reason we do this validation is to prevent Windows users
-// from encountering unpleasant surprises when they try to
-// unbundle paths that bundled just fine on a non-Windows OS but.
-// which are invalid on Windows.
-//
-// We don't do the validation on unbundle because it's costly and
-// there's no security concern; if the OS doesn't accept the path,
-// it will give an error.
+/// Validates a path for bundling, checking for cross-platform compatibility issues
+///
+/// We only do these validations on bundle, not on unbundle.
+/// Note that the path ALREADY should have all backslashes converted
+/// to forward slashes.
+///
+/// The reason we do this validation is to prevent Windows users
+/// from encountering unpleasant surprises when they try to
+/// unbundle paths that bundled just fine on a non-Windows OS but.
+/// which are invalid on Windows.
+///
+/// We don't do the validation on unbundle because it's costly and
+/// there's no security concern; if the OS doesn't accept the path,
+/// it will give an error.
 pub fn pathHasBundleErr(path: []const u8) ?PathValidationError {
     std.debug.assert(std.mem.indexOf(u8, path, "\\") == null);
 

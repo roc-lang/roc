@@ -1,3 +1,8 @@
+//! Tests for streaming compression and decompression functionality
+//!
+//! This module contains tests that verify the correct operation of the streaming
+//! compression/decompression with hash verification functionality.
+
 const std = @import("std");
 const bundle = @import("bundle.zig");
 const streaming_writer = @import("streaming_writer.zig");

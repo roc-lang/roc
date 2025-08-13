@@ -1,3 +1,8 @@
+//! Streaming reader for decompressing zstd data with hash verification
+//!
+//! This module provides a reader that decompresses zstd-compressed data streams while
+//! simultaneously computing and verifying BLAKE3 hashes for data integrity.
+
 const std = @import("std");
 const c = @cImport({
     @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");

@@ -1072,6 +1072,7 @@ fn formatPathValidationReason(reason: bundle.PathValidationReason) []const u8 {
     };
 }
 
+/// Bundles a roc package and its dependencies into a compressed tar archive
 pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
