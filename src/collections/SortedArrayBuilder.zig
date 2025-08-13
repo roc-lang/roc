@@ -370,13 +370,6 @@ test "SortedArrayBuilder detectDuplicates sorts if unsorted" {
     const duplicates = try builder.detectDuplicates(allocator);
     defer allocator.free(duplicates);
 
-    // Example: Report duplicates (in real code, this would push diagnostics)
-    // for (duplicates) |duplicate_key| {
-    //     // In a real compiler, you'd push a diagnostic here:
-    //     // try cir.pushDiagnostic(CIR.Diagnostic{ .duplicate_exposed_item = ... });
-    //     std.debug.print("Found duplicate key: {d}\n", .{duplicate_key});
-    // }
-
     // Verify we found the expected duplicates
     try testing.expectEqual(@as(usize, 2), duplicates.len);
 
