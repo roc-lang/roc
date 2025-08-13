@@ -29,12 +29,11 @@ const Region = base.Region;
 
 /// Error types that can occur during function specialization.
 pub const SpecializeError = error{
-    OutOfMemory,
     UnificationFailed,
-    InvalidArgument,
     TypeMismatch,
     InvalidSpan,
-};
+    InvalidArgument,
+} || Allocator.Error;
 
 /// Context for managing the specialization process
 /// Context for specializing CIR functions, maintaining mappings between source and target environments.
@@ -197,67 +196,65 @@ pub const SpecializationContext = struct {
 
 /// Creates a specialized version of a polymorphic function expression.
 ///
-/// This function takes a polymorphic lambda or closure and creates a monomorphized
-/// copy where all type variables are unified with concrete argument types.
+/// This takes a polymorphic function and some argument types to apply to it,
+/// and creates a monomorphized deep copy of that function in which all
+/// type variables have been unified with the given argument types.
 ///
-/// Args:
-///   - allocator: Memory allocator for temporary allocations
-///   - type_store: Type storage system for managing type variables
-///   - source_env: Module environment containing the original function
-///   - target_env: Module environment where the specialized function will be created
-///   - function_expr: Index of the function expression to specialize (must be lambda or closure)
-///   - arg_types: Array of concrete types to unify with function arguments
-///
-/// Returns:
-///   - A struct containing the specialized expression index and its type variable
+/// The function_expr must have a function type. For lambda/closure expressions,
+/// argument types are unified directly with parameter patterns. For other expressions
+/// (e.g., named function lookups), unification happens during application.
 ///
 /// Errors:
-///   - InvalidArgument: If function_expr is not a lambda/closure or arg count mismatch
+///   - InvalidArgument: If arg count mismatches lambda/closure parameter count
 ///   - UnificationFailed: If argument types cannot be unified with function parameters
 ///   - OutOfMemory: If allocation fails during copying process
-/// Specializes a CIR function expression for specific argument types.
-/// Creates a deep copy of the function with type variables mapped to concrete types.
-/// Returns the specialized expression index and its type variable.
 pub fn specializeFunctionExpr(
     allocator: Allocator,
     type_store: *Store,
     source_env: *const ModuleEnv,
     target_env: *ModuleEnv,
-    function_expr: Expr.Idx,
+    function_expr: Expr.Idx, // Must have a function type
     arg_types: []const TypeVar,
 ) !struct { expr: Expr.Idx, type_var: TypeVar } {
     var context = SpecializationContext.init(allocator, type_store, source_env, target_env);
     defer context.deinit();
 
-    const original_expr = source_env.store.getExpr(function_expr);
-
-    if (original_expr != .e_lambda and original_expr != .e_closure) {
-        return SpecializeError.InvalidArgument;
+    // In debug mode, verify that the expression has a function type
+    if (std.debug.runtime_safety) {
+        const expr_type_var: TypeVar = @enumFromInt(@intFromEnum(function_expr));
+        const resolved = type_store.resolveVar(expr_type_var);
+        if (resolved.desc.content == .structure) {
+            assert(resolved.desc.content.structure == .function);
+        }
     }
 
     // Deep copy the function expression and all its dependencies
     const new_expr_idx = try copyExpr(&context, function_expr);
     const new_expr = target_env.store.getExpr(new_expr_idx);
 
-    // Extract argument patterns from the copied function
-    const args = if (new_expr == .e_lambda) new_expr.e_lambda.args else blk: {
-        const lambda_expr = context.target_env.store.getExpr(new_expr.e_closure.lambda_idx);
-        break :blk lambda_expr.e_lambda.args;
-    };
+    // If this is a lambda or closure, we can directly unify the argument patterns
+    if (new_expr == .e_lambda or new_expr == .e_closure) {
+        // Extract argument patterns from the copied function
+        const args = if (new_expr == .e_lambda) new_expr.e_lambda.args else blk: {
+            const lambda_expr = context.target_env.store.getExpr(new_expr.e_closure.lambda_idx);
+            break :blk lambda_expr.e_lambda.args;
+        };
 
-    // Get type variables for all argument patterns
-    const pattern_type_vars = try extractPatternTypeVars(&context, args);
-    defer allocator.free(pattern_type_vars);
+        // Get type variables for all argument patterns
+        const pattern_type_vars = try extractPatternTypeVars(&context, args);
+        defer allocator.free(pattern_type_vars);
 
-    // Validate argument count matches
-    if (pattern_type_vars.len != arg_types.len) {
-        return SpecializeError.InvalidArgument;
+        // Validate argument count matches
+        if (pattern_type_vars.len != arg_types.len) {
+            return SpecializeError.InvalidArgument;
+        }
+
+        // Unify each pattern's type variable with the corresponding concrete type
+        for (pattern_type_vars, arg_types) |pattern_var, arg_var| {
+            try type_store.setVarRedirect(pattern_var, arg_var);
+        }
     }
-
-    // Unify each pattern's type variable with the corresponding concrete type
-    for (pattern_type_vars, arg_types) |pattern_var, arg_var| {
-        try type_store.setVarRedirect(pattern_var, arg_var);
-    }
+    // For other expressions (e.g., lookups), the unification will happen when applied
 
     // Create function type variable for the specialized expression
     const result_type_var = @intFromEnum(new_expr_idx);
@@ -1070,7 +1067,7 @@ fn collectPatternTypeVars(context: *SpecializationContext, pattern_idx: Pattern.
 test "specialize identity function" {
     const allocator = testing.allocator;
 
-    var type_store = Store.init(allocator);
+    var type_store = try Store.init(allocator);
     defer type_store.deinit();
 
     var source_env = try ModuleEnv.init(allocator, "test");
@@ -1121,7 +1118,7 @@ test "specialize identity function" {
 test "specialize polymorphic list function" {
     const allocator = testing.allocator;
 
-    var type_store = Store.init(allocator);
+    var type_store = try Store.init(allocator);
     defer type_store.deinit();
 
     var source_env = try ModuleEnv.init(allocator, "test");
@@ -1181,7 +1178,7 @@ test "specialize polymorphic list function" {
 test "specialize function with Box type" {
     const allocator = testing.allocator;
 
-    var type_store = Store.init(allocator);
+    var type_store = try Store.init(allocator);
     defer type_store.deinit();
 
     var source_env = try ModuleEnv.init(allocator, "test");
@@ -1231,7 +1228,7 @@ test "specialize function with Box type" {
 test "specialize function with record pattern" {
     const allocator = testing.allocator;
 
-    var type_store = Store.init(allocator);
+    var type_store = try Store.init(allocator);
     defer type_store.deinit();
 
     var source_env = try ModuleEnv.init(allocator, "test");
@@ -1321,7 +1318,7 @@ test "specialize function with record pattern" {
 test "specialize function with unbound num type" {
     const allocator = testing.allocator;
 
-    var type_store = Store.init(allocator);
+    var type_store = try Store.init(allocator);
     defer type_store.deinit();
 
     var source_env = try ModuleEnv.init(allocator, "test");
@@ -1377,7 +1374,7 @@ test "specialize function with unbound num type" {
 test "specializeFunctionExpr rejects non-function expressions" {
     const allocator = testing.allocator;
 
-    var type_store = Store.init(allocator);
+    var type_store = try Store.init(allocator);
     defer type_store.deinit();
 
     var source_env = try ModuleEnv.init(allocator, "test");
@@ -1405,7 +1402,7 @@ test "specializeFunctionExpr rejects non-function expressions" {
 test "specializeFunctionExpr rejects argument count mismatch" {
     const allocator = testing.allocator;
 
-    var type_store = Store.init(allocator);
+    var type_store = try Store.init(allocator);
     defer type_store.deinit();
 
     var source_env = try ModuleEnv.init(allocator, "test");
@@ -1449,7 +1446,7 @@ test "specializeFunctionExpr rejects argument count mismatch" {
 test "type variable mapping consistency" {
     const allocator = testing.allocator;
 
-    var type_store = Store.init(allocator);
+    var type_store = try Store.init(allocator);
     defer type_store.deinit();
 
     var source_env = try ModuleEnv.init(allocator, "test");
@@ -1480,7 +1477,7 @@ test "type variable mapping consistency" {
 test "empty function argument lists" {
     const allocator = testing.allocator;
 
-    var type_store = Store.init(allocator);
+    var type_store = try Store.init(allocator);
     defer type_store.deinit();
 
     var source_env = try ModuleEnv.init(allocator, "test");
@@ -1518,7 +1515,7 @@ test "empty function argument lists" {
 test "complex nested function specialization" {
     const allocator = testing.allocator;
 
-    var type_store = Store.init(allocator);
+    var type_store = try Store.init(allocator);
     defer type_store.deinit();
 
     var source_env = try ModuleEnv.init(allocator, "test");

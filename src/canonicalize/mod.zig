@@ -32,4 +32,5 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/import_validation_test.zig"));
     std.testing.refAllDecls(@import("test/int_test.zig"));
     std.testing.refAllDecls(@import("test/node_store_test.zig"));
+    std.testing.refAllDecls(@import("specialize.zig"));
 }
