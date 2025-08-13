@@ -65,13 +65,13 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "enable_tracy_allocation", flag_tracy_allocation);
     build_options.addOption(u32, "tracy_callstack_depth", flag_tracy_callstack_depth);
 
-    const roc_modules = modules.RocModules.create(b, build_options);
-
     // We use zstd for `roc bundle` and `roc unbundle` and downloading .tar.zst bundles.
     const zstd = b.dependency("zstd", .{
         .target = target,
         .optimize = optimize,
     });
+
+    const roc_modules = modules.RocModules.create(b, build_options, zstd);
 
     // add main roc exe
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd) orelse return;
@@ -173,7 +173,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     roc_modules.addAll(cli_test);
-    cli_test.linkSystemLibrary("zstd");
+    cli_test.linkLibrary(zstd.artifact("zstd"));
     add_tracy(b, roc_modules.build_options, cli_test, target, false, flag_enable_tracy);
 
     const run_cli_test = b.addRunArtifact(cli_test);
@@ -574,7 +574,6 @@ fn addStaticLlvmOptionsToModule(mod: *std.Build.Module) !void {
     }
 
     mod.linkSystemLibrary("z", link_static);
-    mod.linkSystemLibrary("zstd", link_static);
 
     if (mod.resolved_target.?.result.os.tag != .windows or mod.resolved_target.?.result.abi != .msvc) {
         // TODO: Can this just be `mod.link_libcpp = true`? Does that make a difference?

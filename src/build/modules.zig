@@ -79,7 +79,7 @@ pub const RocModules = struct {
     fmt: *Module,
     bundle: *Module,
 
-    pub fn create(b: *Build, build_options_step: *Step.Options) RocModules {
+    pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
             .collections = b.addModule(
                 "collections",
@@ -106,6 +106,11 @@ pub const RocModules = struct {
             .fmt = b.addModule("fmt", .{ .root_source_file = b.path("src/fmt/mod.zig") }),
             .bundle = b.addModule("bundle", .{ .root_source_file = b.path("src/bundle/mod.zig") }),
         };
+
+        // Link zstd to bundle module if available
+        if (zstd) |z| {
+            self.bundle.linkLibrary(z.artifact("zstd"));
+        }
 
         // Setup module dependencies using our generic helper
         self.setupModuleDependencies();
