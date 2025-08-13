@@ -5915,13 +5915,13 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
 }
 
 /// Enter a new scope level
-fn scopeEnter(self: *Self, gpa: std.mem.Allocator, is_function_boundary: bool) std.mem.Allocator.Error!void {
+pub fn scopeEnter(self: *Self, gpa: std.mem.Allocator, is_function_boundary: bool) std.mem.Allocator.Error!void {
     const scope = Scope.init(is_function_boundary);
     try self.scopes.append(gpa, scope);
 }
 
 /// Exit the current scope level
-fn scopeExit(self: *Self, gpa: std.mem.Allocator) Scope.Error!void {
+pub fn scopeExit(self: *Self, gpa: std.mem.Allocator) Scope.Error!void {
     if (self.scopes.items.len <= 1) {
         return Scope.Error.ExitedTopScopeLevel;
     }
@@ -5990,7 +5990,7 @@ fn scopeContains(
 }
 
 /// Look up an identifier in the scope
-fn scopeLookup(
+pub fn scopeLookup(
     self: *Self,
     comptime item_kind: Scope.ItemKind,
     name: base.Ident.Idx,
@@ -6188,7 +6188,7 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
 }
 
 /// Introduce a new identifier to the current scope level
-fn scopeIntroduceInternal(
+pub fn scopeIntroduceInternal(
     self: *Self,
     gpa: std.mem.Allocator,
     comptime item_kind: Scope.ItemKind,

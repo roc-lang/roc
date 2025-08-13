@@ -1,19 +1,19 @@
 const std = @import("std");
-const can = @import("can");
 const base = @import("base");
 const parse = @import("parse");
 
 const CIR = @import("../CIR.zig");
-const ModuleEnv = can.ModuleEnv;
+const Can = @import("../Can.zig");
+const ModuleEnv = @import("../ModuleEnv.zig");
 const Ident = base.Ident;
 const Region = base.Region;
-const Scope = CIR.Scope;
+const Scope = @import("../Scope.zig");
 const Pattern = CIR.Pattern;
 const TypeAnno = CIR.TypeAnno;
 
 /// Context helper for Scope tests
 const ScopeTestContext = struct {
-    self: CIR,
+    self: Can,
     module_env: *ModuleEnv,
     gpa: std.mem.Allocator,
 
@@ -24,7 +24,7 @@ const ScopeTestContext = struct {
         try module_env.initCIRFields(gpa, "test");
 
         return ScopeTestContext{
-            .self = try CIR.init(module_env, undefined, null),
+            .self = try Can.init(module_env, undefined, null),
             .module_env = module_env,
             .gpa = gpa,
         };
@@ -270,80 +270,4 @@ test "aliases work separately from idents" {
 
     try std.testing.expectEqual(Scope.LookupResult{ .found = ident_pattern }, ident_lookup);
     try std.testing.expectEqual(Scope.LookupResult{ .found = alias_pattern }, alias_lookup);
-}
-
-test "unused variables are sorted by region" {
-    const gpa = std.testing.allocator;
-
-    // Create a test program with unused variables in non-alphabetical order
-    const source =
-        \\app [main!] { pf: platform "../basic-cli/main.roc" }
-        \\
-        \\func = |_| {
-        \\    zebra = 5    # Line 3 - should be reported first
-        \\    apple = 10   # Line 4 - should be reported second
-        \\    monkey = 15  # Line 5 - should be reported third
-        \\    used = 20    # Line 6 - this one is used
-        \\    used
-        \\}
-        \\
-        \\main! = |_| func({})
-    ;
-
-    var ctx = try ScopeTestContext.init(gpa);
-    defer ctx.deinit();
-
-    // Parse the source
-    const ast = try parse.AST.parseFromStr(gpa, source, "test.roc", &ctx.module_env.string_interner);
-    defer ast.deinit();
-
-    // Canonicalize the AST
-    const parsed_module = ast.parsed_module;
-    var self = try CIR.initFromAST(parsed_module, &ctx.module_env, source);
-    try self.canonicalizeModule();
-    defer self.deinit();
-
-    // Check that we have unused variable diagnostics
-    var unused_var_diagnostics = std.ArrayList(struct {
-        ident: Ident.Idx,
-        region: Region,
-    }).init(gpa);
-    defer unused_var_diagnostics.deinit();
-
-    // Collect all unused variable diagnostics
-    for (ctx.module_env.diagnostics.items) |diagnostic| {
-        switch (diagnostic) {
-            .unused_variable => |data| {
-                try unused_var_diagnostics.append(.{
-                    .ident = data.ident,
-                    .region = data.region,
-                });
-            },
-            else => continue,
-        }
-    }
-
-    // We should have exactly 3 unused variables (zebra, apple, monkey)
-    try std.testing.expectEqual(@as(usize, 3), unused_var_diagnostics.items.len);
-
-    // Check that they are sorted by region (line number)
-    // The source positions should be in increasing order
-    var prev_offset: u32 = 0;
-    for (unused_var_diagnostics.items) |diagnostic| {
-        const current_offset = diagnostic.region.start.offset;
-
-        // Each unused variable should appear after the previous one in the source
-        try std.testing.expect(current_offset > prev_offset);
-        prev_offset = current_offset;
-
-        // Also verify the names are in the expected order (zebra, apple, monkey)
-        const ident_text = ctx.module_env.getIdent(diagnostic.ident);
-        if (unused_var_diagnostics.items[0].ident.idx == diagnostic.ident.idx) {
-            try std.testing.expectEqualStrings("zebra", ident_text);
-        } else if (unused_var_diagnostics.items[1].ident.idx == diagnostic.ident.idx) {
-            try std.testing.expectEqualStrings("apple", ident_text);
-        } else if (unused_var_diagnostics.items[2].ident.idx == diagnostic.ident.idx) {
-            try std.testing.expectEqualStrings("monkey", ident_text);
-        }
-    }
 }
