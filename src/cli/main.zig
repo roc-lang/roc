@@ -14,7 +14,7 @@ const fs_mod = @import("fs");
 const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
-const bundle = @import("bundle/bundle.zig");
+const bundle = @import("bundle");
 const ipc = @import("ipc");
 const fmt = @import("fmt");
 
@@ -34,6 +34,10 @@ const CacheConfig = compile.CacheConfig;
 const tokenize = parse.tokenize;
 
 const roc_shim_lib = if (builtin.is_test) &[_]u8{} else if (builtin.target.os.tag == .windows) @embedFile("roc_shim.lib") else @embedFile("libroc_shim.a");
+
+test {
+    _ = @import("test_bundle_logic.zig");
+}
 
 // Workaround for Zig standard library compilation issue on macOS ARM64.
 //
@@ -1068,9 +1072,14 @@ fn formatPathValidationReason(reason: bundle.PathValidationReason) []const u8 {
     };
 }
 
-fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
+pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
+
+    // Use arena allocator for all bundle operations
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
 
     // Start timing
     const start_time = std.time.nanoTimestamp();
@@ -1093,13 +1102,19 @@ fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     }
 
     // Collect all files to bundle
-    var file_paths = std.ArrayList([]const u8).init(gpa);
+    var file_paths = std.ArrayList([]const u8).init(arena_allocator);
     defer file_paths.deinit();
 
     var uncompressed_size: u64 = 0;
 
+    // If no paths provided, default to "main.roc"
+    const paths_to_use = if (args.paths.len == 0) &[_][]const u8{"main.roc"} else args.paths;
+    
+    // Remember the first path from CLI args (before sorting)
+    const first_cli_path = paths_to_use[0];
+
     // Check that all files exist and collect their sizes
-    for (args.paths) |path| {
+    for (paths_to_use) |path| {
         const file = cwd.openFile(path, .{}) catch |err| {
             try stderr.print("Error: Could not open file '{s}': {}\n", .{ path, err });
             return err;
@@ -1110,6 +1125,44 @@ fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
         uncompressed_size += stat.size;
 
         try file_paths.append(path);
+    }
+
+    // Sort and deduplicate paths
+    std.mem.sort([]const u8, file_paths.items, {}, struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lessThan);
+
+    // Remove duplicates by keeping only unique consecutive elements
+    var unique_count: usize = 0;
+    for (file_paths.items, 0..) |path, i| {
+        if (i == 0 or !std.mem.eql(u8, path, file_paths.items[i - 1])) {
+            file_paths.items[unique_count] = path;
+            unique_count += 1;
+        }
+    }
+    file_paths.items.len = unique_count;
+
+    // If we have more than one file, ensure the first CLI arg stays first
+    if (file_paths.items.len > 1) {
+        // Find the first CLI path in the sorted array
+        var found_index: ?usize = null;
+        for (file_paths.items, 0..) |path, i| {
+            if (std.mem.eql(u8, path, first_cli_path)) {
+                found_index = i;
+                break;
+            }
+        }
+
+        // Swap the found item with the first position if needed
+        if (found_index) |idx| {
+            if (idx != 0) {
+                const temp = file_paths.items[0];
+                file_paths.items[0] = file_paths.items[idx];
+                file_paths.items[idx] = temp;
+            }
+        }
     }
 
     // Create temporary output file
@@ -1133,9 +1186,9 @@ fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     var iter = FilePathIterator{ .paths = file_paths.items };
 
     // Bundle the files
-    var allocator_copy = gpa;
+    var allocator_copy = arena_allocator;
     var error_ctx: bundle.ErrorContext = undefined;
-    const final_filename = bundle.bundle(
+    const final_filename = bundle.bundleFiles(
         &iter,
         @intCast(args.compression_level),
         &allocator_copy,
@@ -1150,7 +1203,7 @@ fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
         }
         return err;
     };
-    defer gpa.free(final_filename);
+    // No need to free when using arena allocator
 
     // Get the compressed file size
     const compressed_stat = try temp_file.stat();
@@ -1168,8 +1221,8 @@ fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     const display_path = if (args.output_dir == null)
         final_filename
     else
-        try std.fs.path.join(gpa, &.{ args.output_dir.?, final_filename });
-    defer if (args.output_dir != null) gpa.free(display_path);
+        try std.fs.path.join(arena_allocator, &.{ args.output_dir.?, final_filename });
+    // No need to free when using arena allocator
 
     // Print results
     try stdout.print("Created: {s}\n", .{display_path});
@@ -1183,6 +1236,11 @@ fn rocUnbundle(gpa: Allocator, args: cli_args.UnbundleArgs) !void {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
     const cwd = std.fs.cwd();
+
+    // Use arena allocator for all unbundle operations
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
 
     var had_errors = false;
 
@@ -1228,7 +1286,7 @@ fn rocUnbundle(gpa: Allocator, args: cli_args.UnbundleArgs) !void {
         defer archive_file.close();
 
         // Unbundle the archive
-        var allocator_copy2 = gpa;
+        var allocator_copy2 = arena_allocator;
         var error_ctx: bundle.ErrorContext = undefined;
         bundle.unbundle(
             archive_file.reader(),

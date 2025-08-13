@@ -4,6 +4,7 @@ const Module = Build.Module;
 const Step = Build.Step;
 const OptimizeMode = std.builtin.OptimizeMode;
 const ResolvedTarget = std.Build.ResolvedTarget;
+const Dependency = std.Build.Dependency;
 
 /// Represents a test module with its compilation and execution steps.
 pub const ModuleTest = struct {
@@ -30,6 +31,7 @@ pub const ModuleType = enum {
     ipc,
     repl,
     fmt,
+    bundle,
 
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
@@ -51,6 +53,7 @@ pub const ModuleType = enum {
             .ipc => &.{},
             .repl => &.{ .base, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval },
             .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy },
+            .bundle => &.{ .base, .collections },
         };
     }
 };
@@ -74,6 +77,7 @@ pub const RocModules = struct {
     ipc: *Module,
     repl: *Module,
     fmt: *Module,
+    bundle: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options) RocModules {
         const self = RocModules{
@@ -100,6 +104,7 @@ pub const RocModules = struct {
             .ipc = b.addModule("ipc", .{ .root_source_file = b.path("src/ipc/mod.zig") }),
             .repl = b.addModule("repl", .{ .root_source_file = b.path("src/repl/mod.zig") }),
             .fmt = b.addModule("fmt", .{ .root_source_file = b.path("src/fmt/mod.zig") }),
+            .bundle = b.addModule("bundle", .{ .root_source_file = b.path("src/bundle/mod.zig") }),
         };
 
         // Setup module dependencies using our generic helper
@@ -127,6 +132,7 @@ pub const RocModules = struct {
             .ipc,
             .repl,
             .fmt,
+            .bundle,
         };
 
         // Setup dependencies for each module
@@ -159,6 +165,7 @@ pub const RocModules = struct {
         step.root_module.addImport("ipc", self.ipc);
         step.root_module.addImport("repl", self.repl);
         step.root_module.addImport("fmt", self.fmt);
+        step.root_module.addImport("bundle", self.bundle);
     }
 
     pub fn addAllToTest(self: RocModules, step: *Step.Compile) void {
@@ -185,6 +192,7 @@ pub const RocModules = struct {
             .ipc => self.ipc,
             .repl => self.repl,
             .fmt => self.fmt,
+            .bundle => self.bundle,
         };
     }
 
@@ -197,7 +205,7 @@ pub const RocModules = struct {
         }
     }
 
-    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode) [15]ModuleTest {
+    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode, zstd: ?*Dependency) [16]ModuleTest {
         const test_configs = [_]ModuleType{
             .collections,
             .base,
@@ -214,6 +222,7 @@ pub const RocModules = struct {
             .ipc,
             .repl,
             .fmt,
+            .bundle,
         };
 
         var tests: [test_configs.len]ModuleTest = undefined;
@@ -226,11 +235,19 @@ pub const RocModules = struct {
                 .target = target,
                 .optimize = optimize,
                 // IPC module needs libc for mmap, munmap, close on POSIX systems
-                .link_libc = (module_type == .ipc),
+                // Bundle module needs libc for zstd
+                .link_libc = (module_type == .ipc or module_type == .bundle),
             });
 
             // Add only the necessary dependencies for each module test
             self.addModuleDependencies(test_step, module_type);
+
+            // Link zstd for bundle module
+            if (module_type == .bundle) {
+                if (zstd) |z| {
+                    test_step.linkLibrary(z.artifact("zstd"));
+                }
+            }
 
             const run_step = b.addRunArtifact(test_step);
 

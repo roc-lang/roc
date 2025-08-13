@@ -1339,160 +1339,165 @@ test "download from local server" {
     const testing = std.testing;
     var allocator = testing.allocator;
 
-    // Create test files in memory
-    var src_files = MemoryFileSystem.init(allocator);
-    defer src_files.deinit();
+    // Create a temp directory for test files
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
 
-    try src_files.files.put(try allocator.dupe(u8, "README.md"), std.ArrayList(u8).init(allocator));
-    try src_files.files.getPtr("README.md").?.appendSlice("# Test Project\n\nThis is a test README.");
+    // Create test files
+    {
+        const file = try tmp.dir.createFile("README.md", .{});
+        defer file.close();
+        try file.writeAll("# Test Project\n\nThis is a test README.");
+    }
+    {
+        try tmp.dir.makePath("src");
+        const file = try tmp.dir.createFile("src/main.roc", .{});
+        defer file.close();
+        try file.writeAll("app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"");
+    }
+    {
+        const file = try tmp.dir.createFile("src/lib.roc", .{});
+        defer file.close();
+        try file.writeAll("module [helper]\n\nhelper = \\x -> x * 2");
+    }
 
-    try src_files.files.put(try allocator.dupe(u8, "src/main.roc"), std.ArrayList(u8).init(allocator));
-    try src_files.files.getPtr("src/main.roc").?.appendSlice("app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"");
-
-    try src_files.files.put(try allocator.dupe(u8, "src/lib.roc"), std.ArrayList(u8).init(allocator));
-    try src_files.files.getPtr("src/lib.roc").?.appendSlice("module [helper]\n\nhelper = \\x -> x * 2");
-
-    try src_files.files.put(try allocator.dupe(u8, "test/test1.roc"), std.ArrayList(u8).init(allocator));
-    try src_files.files.getPtr("test/test1.roc").?.appendSlice("# Test file 1\nexpect 2 + 2 == 4");
-
-    try src_files.files.put(try allocator.dupe(u8, "docs/guide.md"), std.ArrayList(u8).init(allocator));
-    try src_files.files.getPtr("docs/guide.md").?.appendSlice("# User Guide\n\n## Getting Started\n\nWelcome to the guide!");
-
-    // Create bundle in memory
+    // Bundle the files
     var bundle_data = std.ArrayList(u8).init(allocator);
     defer bundle_data.deinit();
 
-    // Create file path iterator from memory files
     const file_paths = [_][]const u8{
         "README.md",
         "src/main.roc",
         "src/lib.roc",
-        "test/test1.roc",
-        "docs/guide.md",
     };
     var file_iter = FilePathIterator{ .paths = &file_paths };
 
-    // Create a temp directory to serve as the source for bundling
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    // Write memory files to temp dir for bundling
-    var src_iter = src_files.files.iterator();
-    while (src_iter.next()) |entry| {
-        if (std.fs.path.dirname(entry.key_ptr.*)) |dir| {
-            try tmp.dir.makePath(dir);
-        }
-        const file = try tmp.dir.createFile(entry.key_ptr.*, .{});
-        defer file.close();
-        try file.writeAll(entry.value_ptr.items);
-    }
-
-    // Bundle the files
     const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), tmp.dir, null, null);
     defer allocator.free(filename);
 
     // Extract hash from filename
-    const base58_hash = filename[0 .. filename.len - 8];
+    const base58_hash = filename[0 .. filename.len - 8]; // Remove .tar.zst
 
-    // Try to find an available port
-    var port: u16 = 0;
-    var server: std.net.Server = undefined;
-    var attempts: u8 = 0;
-    while (attempts < 30) : (attempts += 1) {
-        // Generate random port between 20000 and 60000
-        port = 20000 + @as(u16, @intCast(std.crypto.random.int(u32) % 40000));
-
-        const addr = try std.net.Address.parseIp("127.0.0.1", port);
-        server = std.net.Address.listen(addr, .{ .reuse_port = true }) catch |err| {
-            if (err == error.AddressInUse) continue;
-            return err;
-        };
-        break;
-    }
+    // Create HTTP server on port 0 (let OS assign available port)
+    const loopback = try std.net.Address.parseIp("127.0.0.1", 0);
+    var server = try loopback.listen(.{ .reuse_port = true });
     defer server.deinit();
 
-    if (attempts >= 30) {
-        return error.NoAvailablePort;
-    }
+    // Get the actual port assigned by the OS
+    const port = blk: {
+        // The server's address includes the actual port assigned
+        const server_addr = server.listen_address;
+        break :blk server_addr.getPort();
+    };
 
-    // Create server thread
+    // Server context for thread communication
     const ServerContext = struct {
         server: *std.net.Server,
         bundle_data: []const u8,
-        served: std.Thread.ResetEvent = .{},
+        request_path: ?[]const u8 = null,
+        response_sent: std.Thread.Semaphore = .{},
+        allocator: std.mem.Allocator,
+        error_occurred: ?anyerror = null,
 
-        fn run(ctx: *@This()) !void {
+        fn run(ctx: *@This()) void {
+            ctx.runImpl() catch |err| {
+                ctx.error_occurred = err;
+                ctx.response_sent.post();
+            };
+        }
+
+        fn runImpl(ctx: *@This()) !void {
             const connection = try ctx.server.accept();
             defer connection.stream.close();
 
-            // Read HTTP request (we don't really parse it, just consume it)
+            // Read HTTP request
             var request_buf: [4096]u8 = undefined;
-            _ = try connection.stream.read(&request_buf);
+            const bytes_read = try connection.stream.read(&request_buf);
+            
+            // Parse request line to get the path
+            const request = request_buf[0..bytes_read];
+            if (std.mem.indexOf(u8, request, " ")) |first_space| {
+                if (std.mem.indexOf(u8, request[first_space + 1 ..], " ")) |second_space| {
+                    const path = request[first_space + 1 ..][0..second_space];
+                    ctx.request_path = try ctx.allocator.dupe(u8, path);
+                }
+            }
 
             // Send HTTP response with bundle data
-            const response = try std.fmt.allocPrint(std.heap.page_allocator, "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nContent-Type: application/octet-stream\r\n\r\n", .{ctx.bundle_data.len});
-            defer std.heap.page_allocator.free(response);
+            const response_header = try std.fmt.allocPrint(
+                ctx.allocator,
+                "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                .{ctx.bundle_data.len}
+            );
+            defer ctx.allocator.free(response_header);
 
-            try connection.stream.writeAll(response);
+            try connection.stream.writeAll(response_header);
             try connection.stream.writeAll(ctx.bundle_data);
 
-            ctx.served.set();
+            ctx.response_sent.post();
         }
     };
 
     var server_ctx = ServerContext{
         .server = &server,
         .bundle_data = bundle_data.items,
+        .allocator = allocator,
     };
 
+    // Start server thread
     const server_thread = try std.Thread.spawn(.{}, ServerContext.run, .{&server_ctx});
     defer server_thread.join();
 
-    // Download and extract to memory
-    var extracted_files = MemoryFileSystem.init(allocator);
-    defer extracted_files.deinit();
+    // Create download destination
+    var extract_tmp = testing.tmpDir(.{});
+    defer extract_tmp.cleanup();
 
-    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/{s}.tar.zst", .{ port, base58_hash });
-    defer allocator.free(url);
-
-    // Download (with memory extract writer)
+    // Download and extract
     {
-        const expected_hash = (try bundle.validateBase58Hash(base58_hash)).?;
+        const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/{s}.tar.zst", .{ port, base58_hash });
+        defer allocator.free(url);
 
-        var client = std.http.Client{ .allocator = allocator };
-        defer client.deinit();
-
-        const uri = try std.Uri.parse(url);
-
-        var server_header_buffer: [16 * 1024]u8 = undefined;
-        var request = try client.open(.GET, uri, .{
-            .server_header_buffer = &server_header_buffer,
-            .redirect_behavior = .unhandled,
-        });
-        defer request.deinit();
-
-        try request.send();
-        try request.finish();
-        try request.wait();
-
-        try testing.expectEqual(std.http.Status.ok, request.response.status);
-
-        const reader = request.reader();
-        try bundle.unbundleStream(reader, extracted_files.extractWriter(), &allocator, &expected_hash, null);
+        try download.download(&allocator, url, extract_tmp.dir);
     }
 
-    // Wait for server to finish
-    server_ctx.served.wait();
+    // Wait for server to complete
+    server_ctx.response_sent.wait();
+    
+    // Check if server had any errors
+    if (server_ctx.error_occurred) |err| {
+        return err;
+    }
 
-    // Verify all files were extracted with correct content
-    try testing.expectEqualStrings("# Test Project\n\nThis is a test README.", extracted_files.getFileContent("README.md").?);
-    try testing.expectEqualStrings("app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"", extracted_files.getFileContent("src/main.roc").?);
-    try testing.expectEqualStrings("module [helper]\n\nhelper = \\x -> x * 2", extracted_files.getFileContent("src/lib.roc").?);
-    try testing.expectEqualStrings("# Test file 1\nexpect 2 + 2 == 4", extracted_files.getFileContent("test/test1.roc").?);
-    try testing.expectEqualStrings("# User Guide\n\n## Getting Started\n\nWelcome to the guide!", extracted_files.getFileContent("docs/guide.md").?);
+    // Verify request path
+    try testing.expect(server_ctx.request_path != null);
+    if (server_ctx.request_path) |path| {
+        defer allocator.free(path);
+        const expected_path = try std.fmt.allocPrint(allocator, "/{s}.tar.zst", .{base58_hash});
+        defer allocator.free(expected_path);
+        try testing.expectEqualStrings(expected_path, path);
+    }
 
-    // Verify directories were created
-    try testing.expect(extracted_files.directories.contains("src"));
-    try testing.expect(extracted_files.directories.contains("test"));
-    try testing.expect(extracted_files.directories.contains("docs"));
+    // Verify files were extracted correctly
+    {
+        const content = try extract_tmp.dir.readFileAlloc(allocator, "README.md", 1024);
+        defer allocator.free(content);
+        try testing.expectEqualStrings("# Test Project\n\nThis is a test README.", content);
+    }
+    {
+        const content = try extract_tmp.dir.readFileAlloc(allocator, "src/main.roc", 1024);
+        defer allocator.free(content);
+        try testing.expectEqualStrings("app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"", content);
+    }
+    {
+        const content = try extract_tmp.dir.readFileAlloc(allocator, "src/lib.roc", 1024);
+        defer allocator.free(content);
+        try testing.expectEqualStrings("module [helper]\n\nhelper = \\x -> x * 2", content);
+    }
+
+    // Verify directory structure
+    {
+        var src_dir = try extract_tmp.dir.openDir("src", .{});
+        defer src_dir.close();
+        // If we got here, src directory exists
+    }
 }
