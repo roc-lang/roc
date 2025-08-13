@@ -913,7 +913,6 @@ test "SafeList edge cases serialization" {
     }
 }
 
-// TODO FIXME
 test "SafeList CompactWriter verify offset calculation" {
     const gpa = testing.allocator;
 
