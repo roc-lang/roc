@@ -12,13 +12,15 @@ const testing = std.testing;
 const base = @import("base");
 const types = @import("types");
 
-const ModuleEnv = @import("../canonicalize/ModuleEnv.zig");
-const NodeStore = ModuleEnv.NodeStore;
-const Expr = ModuleEnv.Expr;
-const Pattern = ModuleEnv.Pattern;
-const TypeAnno = ModuleEnv.TypeAnno;
-const Statement = ModuleEnv.Statement;
+const ModuleEnv = @import("ModuleEnv.zig");
+const CIR = @import("CIR.zig");
+const NodeStore = CIR.NodeStore;
+const Expr = CIR.Expr;
+const Pattern = CIR.Pattern;
+const TypeAnno = CIR.TypeAnno;
+const Statement = CIR.Statement;
 const Store = types.Store;
+const TypeStore = types.Store;
 const TypeVar = types.Var;
 const Content = types.Content;
 const FlatType = types.FlatType;
@@ -289,7 +291,7 @@ fn createRecordDestructSpan(context: *SpecializationContext, destructs: []const 
     return context.target_env.store.recordDestructSpanFrom(@intCast(start));
 }
 
-fn createRecordFieldSpan(context: *SpecializationContext, fields: []const ModuleEnv.RecordField.Idx) !ModuleEnv.RecordField.Span {
+fn createRecordFieldSpan(context: *SpecializationContext, fields: []const CIR.RecordField.Idx) !CIR.RecordField.Span {
     const start = context.target_env.store.scratch_record_fields.items.items.len;
     for (fields) |field| {
         try context.target_env.store.addScratch("scratch_record_fields", field);
@@ -497,7 +499,7 @@ fn copyExpr(context: *SpecializationContext, expr_idx: Expr.Idx) SpecializeError
         .e_empty_list => try context.target_env.addExprAndTypeVar(.{ .e_empty_list = .{} }, .{ .flex_var = null }, region),
         .e_record => |record| blk: {
             const fields = context.source_env.store.sliceRecordFields(record.fields);
-            var new_fields = try context.allocator.alloc(ModuleEnv.RecordField.Idx, fields.len);
+            var new_fields = try context.allocator.alloc(CIR.RecordField.Idx, fields.len);
             defer context.allocator.free(new_fields);
 
             for (fields, 0..) |field_idx, i| {
@@ -1071,10 +1073,10 @@ test "specialize identity function" {
     var type_store = Store.init(allocator);
     defer type_store.deinit();
 
-    var source_env = try ModuleEnv.init(allocator, &type_store);
+    var source_env = try ModuleEnv.init(allocator, "test");
     defer source_env.deinit();
 
-    var target_env = try ModuleEnv.init(allocator, &type_store);
+    var target_env = try ModuleEnv.init(allocator, "test");
     defer target_env.deinit();
 
     // Create a simple identity function: \x -> x
@@ -1122,10 +1124,10 @@ test "specialize polymorphic list function" {
     var type_store = Store.init(allocator);
     defer type_store.deinit();
 
-    var source_env = try ModuleEnv.init(allocator, &type_store);
+    var source_env = try ModuleEnv.init(allocator, "test");
     defer source_env.deinit();
 
-    var target_env = try ModuleEnv.init(allocator, &type_store);
+    var target_env = try ModuleEnv.init(allocator, "test");
     defer target_env.deinit();
 
     // Create a function that returns an empty list: \lst -> []
@@ -1182,10 +1184,10 @@ test "specialize function with Box type" {
     var type_store = Store.init(allocator);
     defer type_store.deinit();
 
-    var source_env = try ModuleEnv.init(allocator, &type_store);
+    var source_env = try ModuleEnv.init(allocator, "test");
     defer source_env.deinit();
 
-    var target_env = try ModuleEnv.init(allocator, &type_store);
+    var target_env = try ModuleEnv.init(allocator, "test");
     defer target_env.deinit();
 
     // Create a function that takes a Box(a) and returns it: \boxed -> boxed
@@ -1232,10 +1234,10 @@ test "specialize function with record pattern" {
     var type_store = Store.init(allocator);
     defer type_store.deinit();
 
-    var source_env = try ModuleEnv.init(allocator, &type_store);
+    var source_env = try ModuleEnv.init(allocator, "test");
     defer source_env.deinit();
 
-    var target_env = try ModuleEnv.init(allocator, &type_store);
+    var target_env = try ModuleEnv.init(allocator, "test");
     defer target_env.deinit();
 
     // Create field types
@@ -1322,10 +1324,10 @@ test "specialize function with unbound num type" {
     var type_store = Store.init(allocator);
     defer type_store.deinit();
 
-    var source_env = try ModuleEnv.init(allocator, &type_store);
+    var source_env = try ModuleEnv.init(allocator, "test");
     defer source_env.deinit();
 
-    var target_env = try ModuleEnv.init(allocator, &type_store);
+    var target_env = try ModuleEnv.init(allocator, "test");
     defer target_env.deinit();
 
     // Create a function that takes an unbound number literal: \42 -> 42
@@ -1378,10 +1380,10 @@ test "specializeFunctionExpr rejects non-function expressions" {
     var type_store = Store.init(allocator);
     defer type_store.deinit();
 
-    var source_env = try ModuleEnv.init(allocator, &type_store);
+    var source_env = try ModuleEnv.init(allocator, "test");
     defer source_env.deinit();
 
-    var target_env = try ModuleEnv.init(allocator, &type_store);
+    var target_env = try ModuleEnv.init(allocator, "test");
     defer target_env.deinit();
 
     // Create a non-function expression (integer literal)
@@ -1406,10 +1408,10 @@ test "specializeFunctionExpr rejects argument count mismatch" {
     var type_store = Store.init(allocator);
     defer type_store.deinit();
 
-    var source_env = try ModuleEnv.init(allocator, &type_store);
+    var source_env = try ModuleEnv.init(allocator, "test");
     defer source_env.deinit();
 
-    var target_env = try ModuleEnv.init(allocator, &type_store);
+    var target_env = try ModuleEnv.init(allocator, "test");
     defer target_env.deinit();
 
     // Create a function with 2 parameters: \x, y -> x
@@ -1450,10 +1452,10 @@ test "type variable mapping consistency" {
     var type_store = Store.init(allocator);
     defer type_store.deinit();
 
-    var source_env = try ModuleEnv.init(allocator, &type_store);
+    var source_env = try ModuleEnv.init(allocator, "test");
     defer source_env.deinit();
 
-    var target_env = try ModuleEnv.init(allocator, &type_store);
+    var target_env = try ModuleEnv.init(allocator, "test");
     defer target_env.deinit();
 
     var context = SpecializationContext.init(allocator, &type_store, &source_env, &target_env);
@@ -1481,10 +1483,10 @@ test "empty function argument lists" {
     var type_store = Store.init(allocator);
     defer type_store.deinit();
 
-    var source_env = try ModuleEnv.init(allocator, &type_store);
+    var source_env = try ModuleEnv.init(allocator, "test");
     defer source_env.deinit();
 
-    var target_env = try ModuleEnv.init(allocator, &type_store);
+    var target_env = try ModuleEnv.init(allocator, "test");
     defer target_env.deinit();
 
     // Create a zero-argument function: \-> 42
@@ -1519,10 +1521,10 @@ test "complex nested function specialization" {
     var type_store = Store.init(allocator);
     defer type_store.deinit();
 
-    var source_env = try ModuleEnv.init(allocator, &type_store);
+    var source_env = try ModuleEnv.init(allocator, "test");
     defer source_env.deinit();
 
-    var target_env = try ModuleEnv.init(allocator, &type_store);
+    var target_env = try ModuleEnv.init(allocator, "test");
     defer target_env.deinit();
 
     // Create a complex function: \(x, y) -> if x == 42 then [y] else []

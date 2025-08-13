@@ -8,12 +8,17 @@ pub const Can = @import("Can.zig");
 pub const CIR = @import("CIR.zig");
 /// The Module Environment after canonicalization (used also for type checking and serialization)
 pub const ModuleEnv = @import("ModuleEnv.zig");
+/// Function specialization for monomorphizing generic CIR functions
+pub const specialize = @import("specialize.zig");
 
 test "compile tests" {
+    std.testing.refAllDecls(@import("Can.zig"));
+    std.testing.refAllDecls(@import("CIR.zig"));
     std.testing.refAllDecls(@import("Diagnostic.zig"));
     std.testing.refAllDecls(@import("Expression.zig"));
     std.testing.refAllDecls(@import("ExternalDecl.zig"));
     std.testing.refAllDecls(@import("Import.zig"));
+    std.testing.refAllDecls(@import("ModuleEnv.zig"));
     std.testing.refAllDecls(@import("Node.zig"));
     std.testing.refAllDecls(@import("NodeStore.zig"));
     std.testing.refAllDecls(@import("Pattern.zig"));

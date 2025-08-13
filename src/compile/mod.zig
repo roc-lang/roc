@@ -4,7 +4,6 @@ const std = @import("std");
 
 pub const package = @import("compile_package.zig");
 pub const build = @import("compile_build.zig");
-pub const specialize = @import("specialize.zig");
 
 pub const module = @import("cache_module.zig");
 pub const key = @import("cache_key.zig");
