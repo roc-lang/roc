@@ -6,7 +6,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
-const base58 = @import("base58.zig");
+const base58 = @import("base58");
 
 // Constants
 const TAR_EXTENSION = ".tar.zst";

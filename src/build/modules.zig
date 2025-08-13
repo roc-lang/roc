@@ -33,6 +33,7 @@ pub const ModuleType = enum {
     fmt,
     bundle,
     unbundle,
+    base58,
 
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
@@ -54,8 +55,9 @@ pub const ModuleType = enum {
             .ipc => &.{},
             .repl => &.{ .base, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval },
             .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy },
-            .bundle => &.{ .base, .collections },
-            .unbundle => &.{ .base, .collections },
+            .bundle => &.{ .base, .collections, .base58 },
+            .unbundle => &.{ .base, .collections, .base58 },
+            .base58 => &.{},
         };
     }
 };
@@ -81,6 +83,7 @@ pub const RocModules = struct {
     fmt: *Module,
     bundle: *Module,
     unbundle: *Module,
+    base58: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
@@ -109,6 +112,7 @@ pub const RocModules = struct {
             .fmt = b.addModule("fmt", .{ .root_source_file = b.path("src/fmt/mod.zig") }),
             .bundle = b.addModule("bundle", .{ .root_source_file = b.path("src/bundle/mod.zig") }),
             .unbundle = b.addModule("unbundle", .{ .root_source_file = b.path("src/unbundle/mod.zig") }),
+            .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
         };
 
         // Link zstd to bundle module if available (for compression)
@@ -144,6 +148,7 @@ pub const RocModules = struct {
             .fmt,
             .bundle,
             .unbundle,
+            .base58,
         };
 
         // Setup dependencies for each module
@@ -178,6 +183,7 @@ pub const RocModules = struct {
         step.root_module.addImport("fmt", self.fmt);
         step.root_module.addImport("bundle", self.bundle);
         step.root_module.addImport("unbundle", self.unbundle);
+        step.root_module.addImport("base58", self.base58);
     }
 
     pub fn addAllToTest(self: RocModules, step: *Step.Compile) void {
@@ -204,6 +210,7 @@ pub const RocModules = struct {
         step.root_module.addImport("repl", self.repl);
         step.root_module.addImport("fmt", self.fmt);
         step.root_module.addImport("unbundle", self.unbundle);
+        step.root_module.addImport("base58", self.base58);
         // Intentionally omitting bundle module (requires C zstd library)
     }
 
@@ -229,6 +236,7 @@ pub const RocModules = struct {
             .fmt => self.fmt,
             .bundle => self.bundle,
             .unbundle => self.unbundle,
+            .base58 => self.base58,
         };
     }
 
@@ -241,7 +249,7 @@ pub const RocModules = struct {
         }
     }
 
-    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode, zstd: ?*Dependency) [17]ModuleTest {
+    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode, zstd: ?*Dependency) [18]ModuleTest {
         const test_configs = [_]ModuleType{
             .collections,
             .base,
@@ -260,6 +268,7 @@ pub const RocModules = struct {
             .fmt,
             .bundle,
             .unbundle,
+            .base58,
         };
 
         var tests: [test_configs.len]ModuleTest = undefined;

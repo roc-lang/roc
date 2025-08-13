@@ -11,7 +11,6 @@
 
 pub const unbundle = @import("unbundle.zig");
 pub const download = @import("download.zig");
-pub const base58 = @import("base58.zig");
 
 // Re-export commonly used functions and types
 pub const unbundleFiles = unbundle.unbundle;

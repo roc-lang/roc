@@ -16,7 +16,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
-const base58 = @import("base58.zig");
+const base58 = @import("base58");
 const streaming_writer = @import("streaming_writer.zig");
 const streaming_reader = @import("streaming_reader.zig");
 const c = @cImport({

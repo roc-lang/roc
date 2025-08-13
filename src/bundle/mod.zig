@@ -10,7 +10,6 @@
 
 pub const bundle = @import("bundle.zig");
 pub const streaming_writer = @import("streaming_writer.zig");
-pub const base58 = @import("base58.zig");
 
 // Re-export commonly used functions and types
 pub const bundleFiles = bundle.bundle;
@@ -41,5 +40,4 @@ test {
     _ = @import("test_bundle.zig");
     _ = @import("test_streaming.zig");
     _ = bundle;
-    _ = base58;
 }
