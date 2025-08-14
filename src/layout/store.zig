@@ -396,7 +396,7 @@ pub const Store = struct {
             },
             .box, .box_of_zst => target_usize.size(), // a Box is just a pointer to refcounted memory
             .list => switch (target_usize) {
-                .u32 => 12, // 3 * 4 bytes (pointer + length + capacity)  
+                .u32 => 12, // 3 * 4 bytes (pointer + length + capacity)
                 .u64 => 24, // 3 * 8 bytes (pointer + length + capacity)
             },
             .list_of_zst => target_usize.size(), // Zero-sized lists might be different

@@ -144,6 +144,13 @@ pub const Store = struct {
         return Self.slotIdxToVar(slot_idx);
     }
 
+    /// Create a new variable with the given content and rank
+    pub fn freshFromContentWithRank(self: *Self, content: Content, rank: Rank) std.mem.Allocator.Error!Var {
+        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = rank, .mark = Mark.none });
+        const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
+        return Self.slotIdxToVar(slot_idx);
+    }
+
     /// Create a variable redirecting to the provided var
     /// Used in tests
     pub fn freshRedirect(self: *Self, var_: Var) std.mem.Allocator.Error!Var {
@@ -520,7 +527,7 @@ pub const Store = struct {
         desc.mark = mark;
         self.descs.set(desc_idx, desc);
     }
-    
+
     /// Set the rank for a descriptor
     pub fn setDescRank(self: *Self, desc_idx: DescStore.Idx, rank: Rank) void {
         var desc = self.descs.get(desc_idx);

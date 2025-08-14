@@ -263,12 +263,12 @@ test "let-polymorphism with numeric literal" {
 
 test "let-polymorphism with identity function" {
     const source =
-        \\identity = |x| x
+        \\id = |x| x
         \\
         \\main = |_| {
-        \\    str = identity("hello")
-        \\    num = identity(42)
-        \\    list = identity([1, 2, 3])
+        \\    str = id("hello")
+        \\    num = id(42)
+        \\    list = id([1, 2, 3])
         \\
         \\    { str, num, list }
         \\}
@@ -277,7 +277,7 @@ test "let-polymorphism with identity function" {
     const result = try typeCheckStatement(test_allocator, source);
     defer cleanup(result, test_allocator);
 
-    // Verify no type errors - polymorphic identity function should work with different types
+    // Verify no type errors - polymorphic id function should work with different types
     try testing.expect(!result.has_type_errors);
 }
 

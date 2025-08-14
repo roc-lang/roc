@@ -570,17 +570,17 @@ test "nested polymorphic functions" {
     // The inner function 'identity' is polymorphic and used multiple times
     const code =
         \\{
-        \\    identity = |x| x
-        \\    apply = |f, val| f(val)
+        \\    id = |x| x
+        \\    app = |f, val| f(val)
         \\
         \\    # First call to apply with identity and a number
-        \\    num1 = apply(identity, 10)
+        \\    num1 = app(id, 10)
         \\
         \\    # Second call to apply with identity and a string
-        \\    str1 = apply(identity, "Test")
+        \\    str1 = app(id, "Test")
         \\
         \\    # Third call to apply with identity and another number
-        \\    num2 = apply(identity, 20)
+        \\    num2 = app(id, 20)
         \\
         \\    # Verify all values are correct
         \\    if (num1 == 10)
@@ -602,16 +602,16 @@ test "deeply nested polymorphic functions" {
     // identity returns its input unchanged
     const code =
         \\{
-        \\    identity = |x| x
-        \\    apply = |f, val| f(val)
+        \\    id = |x| x
+        \\    app = |f, val| f(val)
         \\    twice = |f, val| f(f(val))
         \\
         \\    # Use twice with identity (should return the same value)
-        \\    num1 = twice(identity, 42)
-        \\    str1 = twice(identity, "Hello")
+        \\    num1 = twice(id, 42)
+        \\    str1 = twice(id, "Hello")
         \\
         \\    # Use apply inside another apply
-        \\    num2 = apply(|x| apply(identity, x), 100)
+        \\    num2 = app(|x| app(id, x), 100)
         \\
         \\    # Verify all results
         \\    if (num1 == 42)

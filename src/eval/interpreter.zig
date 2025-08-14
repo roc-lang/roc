@@ -1551,7 +1551,7 @@ pub const Interpreter = struct {
                     }
                     return;
                 }
-                
+
                 // For structured types, we need to recursively match
                 switch (param_structure) {
                     .list => |param_elem_var| {
@@ -1626,7 +1626,7 @@ pub const Interpreter = struct {
                             for (self.type_scope.scopes.items, 0..) |scope, i| {
                                 self.traceInfo("  Scope {}: {} mappings", .{ i, scope.count() });
                             }
-                            
+
                             // Try to infer the return type from the function body
                             // For now, default to i128 for unresolved types
                             // This is a temporary workaround until we fix the type system
@@ -1674,7 +1674,7 @@ pub const Interpreter = struct {
                             for (self.type_scope.scopes.items, 0..) |scope, i| {
                                 self.traceInfo("  Scope {}: {} mappings", .{ i, scope.count() });
                             }
-                            
+
                             // Try to infer the return type from the function body
                             // For now, default to i128 for unresolved types
                             // This is a temporary workaround until we fix the type system
@@ -1728,7 +1728,7 @@ pub const Interpreter = struct {
                             for (self.type_scope.scopes.items, 0..) |scope, i| {
                                 self.traceInfo("  Scope {}: {} mappings", .{ i, scope.count() });
                             }
-                            
+
                             // Try to infer the return type from the function body
                             // For now, default to i128 for unresolved types
                             // This is a temporary workaround until we fix the type system

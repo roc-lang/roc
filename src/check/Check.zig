@@ -165,21 +165,84 @@ pub fn freshVarFromContent(self: *Self, content: types_mod.Content) std.mem.Allo
     });
 }
 
+/// Update a variable's rank to the current rank if it's at top_level.
+/// This is needed because variables are created at top_level during canonicalization,
+/// but should get the rank of the scope where they're first used.
+fn updateVarRankIfNeeded(self: *Self, var_: Var) void {
+    const resolved = self.types.resolveVar(var_);
+    if (resolved.desc.rank == types_mod.Rank.top_level) {
+        // Update to current rank
+        self.types.setDescRank(resolved.desc_idx, self.current_rank);
+
+        // Recursively update nested types
+        self.updateContentRank(resolved.desc.content) catch {};
+    }
+}
+
+/// Recursively update ranks of nested type variables
+fn updateContentRank(self: *Self, content: types_mod.Content) std.mem.Allocator.Error!void {
+    switch (content) {
+        .structure => |flat_type| {
+            try self.updateFlatTypeRank(flat_type);
+        },
+        else => {},
+    }
+}
+
+/// Update ranks in flat type structures
+fn updateFlatTypeRank(self: *Self, flat_type: types_mod.FlatType) std.mem.Allocator.Error!void {
+    switch (flat_type) {
+        .fn_pure, .fn_effectful, .fn_unbound => |func| {
+            const args = self.types.sliceVars(func.args);
+            for (args) |arg_var| {
+                self.updateVarRankIfNeeded(arg_var);
+            }
+            self.updateVarRankIfNeeded(func.ret);
+        },
+        else => {},
+    }
+}
+
 /// Generalize a type variable by converting unbound type variables at the current rank to rank 0.
 /// This is the key operation for let-polymorphism - it makes a type polymorphic.
 pub fn generalize(self: *Self, var_: Var) std.mem.Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
+
+    // if (builtin.mode == .Debug) {
+    //     std.debug.print("  Generalizing var {} with rank {} (current_rank={})\n", .{
+    //         @intFromEnum(var_),
+    //         resolved.desc.rank,
+    //         self.current_rank,
+    //     });
+    // }
+
     try self.generalizeContent(resolved.desc_idx, resolved.desc.content);
+
+    // if (builtin.mode == .Debug) {
+    //     const after = self.types.resolveVar(var_);
+    //     std.debug.print("  After generalization: rank={}\n", .{after.desc.rank});
+    // }
 }
 
 /// Generalize the content of a type, recursively generalizing nested types.
 fn generalizeContent(self: *Self, desc_idx: types_mod.DescStoreIdx, content: types_mod.Content) std.mem.Allocator.Error!void {
     switch (content) {
         .flex_var => {
-            // Check if this flex_var is at the current rank
+            // Check if this flex_var should be generalized
+            // We generalize variables with rank >= current rank
             const desc = self.types.getDesc(desc_idx);
-            if (desc.rank == self.current_rank) {
-                // Convert to generalized rank (rank 0)
+            const rank_value = switch (desc.rank) {
+                .generalized => 0,
+                .top_level => 1,
+                else => |n| @intFromEnum(n),
+            };
+            const current_rank_value = switch (self.current_rank) {
+                .generalized => 0,
+                .top_level => 1,
+                else => |n| @intFromEnum(n),
+            };
+            if (rank_value >= current_rank_value) {
+                // Convert to generalized rank
                 self.types.setDescRank(desc_idx, types_mod.Rank.generalized);
             }
         },
@@ -193,7 +256,7 @@ fn generalizeContent(self: *Self, desc_idx: types_mod.DescStoreIdx, content: typ
             // Generalize the aliased type (backing var and args)
             const backing_var = self.types.getAliasBackingVar(alias);
             try self.generalize(backing_var);
-            
+
             // Also generalize the type arguments
             const args = self.types.sliceAliasArgs(alias);
             for (args) |arg_var| {
@@ -346,6 +409,7 @@ fn instantiateVar(
     var instantiate = Instantiate.init(self.types, self.cir.getIdentStore(), &self.var_map);
     var instantiate_ctx = Instantiate.Ctx{
         .rigid_var_subs = rigid_to_flex_subs,
+        .current_rank = self.current_rank,
     };
     const instantiated_var = try instantiate.instantiateVar(var_to_instantiate, &instantiate_ctx);
 
@@ -893,22 +957,37 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             // The lookup expression should have the same type as the pattern it refers to
             const lookup_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
             const pattern_var = @as(Var, @enumFromInt(@intFromEnum(local.pattern_idx)));
-            
+
             // Check if the pattern variable needs instantiation (is polymorphic)
             // This ensures that polymorphic functions get fresh type variables each time they're used
-            const resolved = self.types.resolveVar(pattern_var);
-            const needs_inst = self.types.needsInstantiation(pattern_var);
-            
-            // Debug: Check if we're looking at a generalized variable
-            if (builtin.mode == .Debug) {
-                if (resolved.desc.rank == types_mod.Rank.generalized) {
-                    // This is a generalized (polymorphic) variable
-                }
-            }
-            
-            if (needs_inst) {
+            if (self.types.needsInstantiation(pattern_var)) {
+                // if (builtin.mode == .Debug) {
+                //     std.debug.print("  Instantiating at current_rank={}\n", .{self.current_rank});
+                // }
                 const instantiated_var = try self.instantiateVarAnon(pattern_var, .{ .explicit = expr_region });
+
+                // Debug: Print when we instantiate
+                // if (builtin.mode == .Debug) {
+                //     const resolved_before = self.types.resolveVar(pattern_var);
+                //     const resolved_after = self.types.resolveVar(instantiated_var);
+                //     std.debug.print("INSTANTIATED lookup at expr {}: pattern_var={} (rank={}) -> instantiated_var={} (rank={})\n", .{
+                //         @intFromEnum(expr_idx),
+                //         @intFromEnum(pattern_var),
+                //         resolved_before.desc.rank,
+                //         @intFromEnum(instantiated_var),
+                //         resolved_after.desc.rank,
+                //     });
+
+                //     _ = try self.unify(lookup_var, instantiated_var);
+
+                //     const resolved_lookup_after = self.types.resolveVar(lookup_var);
+                //     std.debug.print("  After unify: lookup_var={} rank={}\n", .{
+                //         @intFromEnum(lookup_var),
+                //         resolved_lookup_after.desc.rank,
+                //     });
+                // } else {
                 _ = try self.unify(lookup_var, instantiated_var);
+                // }
             } else {
                 // Direct unification for non-polymorphic types
                 _ = try self.unify(lookup_var, pattern_var);
@@ -1018,6 +1097,16 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             for (call_args) |arg_expr_idx| {
                 // Each arg could also be effectful, e.g. `fn(mk_arg!(), mk_arg!())`
                 does_fx = try self.checkExpr(arg_expr_idx) or does_fx;
+
+                // if (builtin.mode == .Debug) {
+                //     const arg_var = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
+                //     const resolved_arg = self.types.resolveVar(arg_var);
+                //     std.debug.print("  Checked arg {}: var={} rank={}\n", .{
+                //         @intFromEnum(arg_expr_idx),
+                //         @intFromEnum(arg_var),
+                //         resolved_arg.desc.rank,
+                //     });
+                // }
             }
 
             // Don't try to unify with the function if the function is a runtime error.
@@ -1207,11 +1296,11 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                 }
                 break :blk false;
             };
-            
+
             if (has_declarations) {
                 self.enterScope();
             }
-            
+
             // Check all statements in the block
             const statements = self.cir.store.sliceStatements(block.stmts);
             for (statements) |stmt_idx| {
@@ -1220,14 +1309,36 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                     .s_decl => |decl_stmt| {
                         // Check pattern and expression, then unify
                         try self.checkPattern(decl_stmt.pattern);
+
+                        // Update the expression variable's rank if needed before checking
+                        const expr_var: Var = @enumFromInt(@intFromEnum(decl_stmt.expr));
+                        self.updateVarRankIfNeeded(expr_var);
+
+                        // if (builtin.mode == .Debug) {
+                        //     std.debug.print("  Checking let-binding expr {} at rank {}\n", .{
+                        //         @intFromEnum(decl_stmt.expr),
+                        //         self.current_rank,
+                        //     });
+                        // }
+
                         does_fx = try self.checkExpr(decl_stmt.expr) or does_fx;
+
+                        // if (builtin.mode == .Debug) {
+                        //     std.debug.print("  After checking expr, rank is {}\n", .{self.current_rank});
+                        // }
 
                         // Unify the pattern with the expression
                         const pattern_var: Var = @enumFromInt(@intFromEnum(decl_stmt.pattern));
-                        const expr_var: Var = @enumFromInt(@intFromEnum(decl_stmt.expr));
                         _ = try self.unify(pattern_var, expr_var);
-                        
+
                         // Generalize the pattern variable after unification
+                        // We need to be at the correct rank for generalization
+                        // if (builtin.mode == .Debug) {
+                        //     std.debug.print("GENERALIZING pattern_var={} after let-binding (current_rank={})\n", .{
+                        //         @intFromEnum(pattern_var),
+                        //         self.current_rank,
+                        //     });
+                        // }
                         try self.generalize(pattern_var);
                     },
                     .s_reassign => |reassign| {
@@ -1250,7 +1361,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                 @enumFromInt(@intFromEnum(expr_idx)),
                 @enumFromInt(@intFromEnum(block.final_expr)),
             );
-            
+
             // Exit the scope if we entered one
             if (has_declarations) {
                 self.exitScope();

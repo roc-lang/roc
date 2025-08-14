@@ -1,4 +1,4 @@
-//! Debug test to understand why polymorphic types aren't working correctly
+//! Simplified test for the apply pattern issue
 
 const std = @import("std");
 const base = @import("base");
@@ -11,13 +11,14 @@ const testing = std.testing;
 const test_allocator = testing.allocator;
 const ModuleEnv = can.ModuleEnv;
 
-test "debug: identity function polymorphism" {
+test "identity used twice directly" {
+    // This should definitely work
     const source =
         \\{
         \\    id = |x| x
-        \\    num = id(42)
-        \\    str = id("hello")
-        \\    { num, str }
+        \\    a = id(1)
+        \\    b = id("x")
+        \\    { a, b }
         \\}
     ;
 
@@ -43,26 +44,18 @@ test "debug: identity function polymorphism" {
         _ = try checker.checkExpr(expr.get_idx());
     }
 
-    // Debug output
-    // std.debug.print("\n=== Debug: Identity Function Polymorphism ===\n", .{});
-    // std.debug.print("Number of type errors: {}\n", .{checker.problems.problems.items.len});
-
-    // if (checker.problems.problems.items.len > 0) {
-    //     std.debug.print("Type errors found:\n", .{});
-    //     for (checker.problems.problems.items) |problem| {
-    //         std.debug.print("  Problem: {any}\n", .{problem});
-    //     }
-    // }
-
-    // The test should pass with no type errors
+    // This should pass
     try testing.expect(checker.problems.problems.items.len == 0);
 }
 
-test "debug: simple identity usage" {
+test "apply used once" {
+    // Single use of apply - should work
     const source =
         \\{
         \\    id = |x| x
-        \\    id(42)
+        \\    app = |f, v| f(v)
+        \\    a = app(id, 1)
+        \\    a
         \\}
     ;
 
@@ -88,21 +81,19 @@ test "debug: simple identity usage" {
         _ = try checker.checkExpr(expr.get_idx());
     }
 
-    // std.debug.print("\n=== Debug: Simple Identity Usage ===\n", .{});
-    // std.debug.print("Number of type errors: {}\n", .{checker.problems.problems.items.len});
-
-    // Should have no errors
+    // This should pass
     try testing.expect(checker.problems.problems.items.len == 0);
 }
 
-test "debug: apply with identity" {
+test "apply used twice - the problem case" {
+    // This is the failing case
     const source =
         \\{
         \\    id = |x| x
-        \\    app = |f, val| f(val)
-        \\    num = app(id, 42)
-        \\    str = app(id, "hello")
-        \\    { num, str }
+        \\    app = |f, v| f(v)
+        \\    a = app(id, 1)
+        \\    b = app(id, "x")
+        \\    { a, b }
         \\}
     ;
 
@@ -128,15 +119,6 @@ test "debug: apply with identity" {
         _ = try checker.checkExpr(expr.get_idx());
     }
 
-    // std.debug.print("\n=== Debug: Apply with Identity ===\n", .{});
-    // std.debug.print("Number of type errors: {}\n", .{checker.problems.problems.items.len});
-
-    // if (checker.problems.problems.items.len > 0) {
-    //     std.debug.print("First error details:\n", .{});
-    //     const problem = checker.problems.problems.items[0];
-    //     std.debug.print("  Problem type: {any}\n", .{problem});
-    // }
-
-    // Should have no errors
+    // This SHOULD pass but currently fails
     try testing.expect(checker.problems.problems.items.len == 0);
 }
