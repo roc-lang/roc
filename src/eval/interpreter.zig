@@ -1282,42 +1282,99 @@ pub const Interpreter = struct {
 
         // Perform the operation and write to our result_value
         switch (kind) {
-            // Arithmetic operations - require integer operands
+            // Arithmetic operations - support both integer and fractional operands
             .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem => {
-                if (lhs_scalar.tag != .int or rhs_scalar.tag != .int) {
-                    self.traceError("arithmetic operations require integer operands", .{});
+                // Check if both operands are integers
+                if (lhs_scalar.tag == .int and rhs_scalar.tag == .int) {
+                    const lhs_val = lhs.asI128();
+                    const rhs_val = rhs.asI128();
+
+                    const result_layout = lhs.layout;
+                    var result_value = try self.pushStackValue(result_layout);
+
+                    const result_val: i128 = result_val: switch (kind) {
+                        .w_binop_add => {
+                            self.traceInfo("Integer addition: {} + {} = {}", .{ lhs_val, rhs_val, lhs_val + rhs_val });
+                            break :result_val lhs_val + rhs_val;
+                        },
+                        .w_binop_sub => break :result_val lhs_val - rhs_val,
+                        .w_binop_mul => break :result_val lhs_val * rhs_val,
+                        .w_binop_div => {
+                            if (rhs_val == 0) return error.DivisionByZero;
+                            break :result_val @divTrunc(lhs_val, rhs_val);
+                        },
+                        .w_binop_div_trunc => {
+                            if (rhs_val == 0) return error.DivisionByZero;
+                            break :result_val @divTrunc(lhs_val, rhs_val);
+                        },
+                        .w_binop_rem => {
+                            if (rhs_val == 0) return error.DivisionByZero;
+                            break :result_val @rem(lhs_val, rhs_val);
+                        },
+                        else => unreachable,
+                    };
+
+                    result_value.setInt(result_val);
+                }
+                // Check if both operands are decimals (frac with .dec precision)
+                else if (lhs_scalar.tag == .frac and rhs_scalar.tag == .frac) {
+                    // For now, only support .dec precision decimals
+                    const lhs_frac = lhs_scalar.data.frac;
+                    const rhs_frac = rhs_scalar.data.frac;
+                    
+                    if (lhs_frac == .dec and rhs_frac == .dec) {
+                        // Get RocDec values from memory
+                        const lhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(lhs.ptr.?)));
+                        const rhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(rhs.ptr.?)));
+                        const lhs_dec = lhs_ptr.*;
+                        const rhs_dec = rhs_ptr.*;
+
+                        const result_layout = lhs.layout;
+                        var result_value = try self.pushStackValue(result_layout);
+
+                        const result_dec: RocDec = switch (kind) {
+                            .w_binop_add => result_dec: {
+                                self.traceInfo("Decimal addition: {} + {} = {}", .{ lhs_dec.num, rhs_dec.num, lhs_dec.num + rhs_dec.num });
+                                break :result_dec RocDec{ .num = lhs_dec.num + rhs_dec.num };
+                            },
+                            .w_binop_sub => RocDec{ .num = lhs_dec.num - rhs_dec.num },
+                            .w_binop_mul => result_dec: {
+                                // For multiplication, we need to adjust for the decimal places
+                                // Both numbers are already scaled by 10^18, so multiplying gives us 10^36
+                                // We need to divide by 10^18 to get back to 10^18 scale
+                                const product = lhs_dec.num * rhs_dec.num;
+                                break :result_dec RocDec{ .num = @divTrunc(product, RocDec.one_point_zero_i128) };
+                            },
+                            .w_binop_div => result_dec: {
+                                if (rhs_dec.num == 0) return error.DivisionByZero;
+                                // For division, we need to scale the numerator by 10^18 first
+                                const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
+                                break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
+                            },
+                            .w_binop_div_trunc => result_dec: {
+                                if (rhs_dec.num == 0) return error.DivisionByZero;
+                                const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
+                                break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
+                            },
+                            .w_binop_rem => result_dec: {
+                                if (rhs_dec.num == 0) return error.DivisionByZero;
+                                break :result_dec RocDec{ .num = @rem(lhs_dec.num, rhs_dec.num) };
+                            },
+                            else => unreachable,
+                        };
+
+                        // Store the result in memory
+                        const result_ptr = @as(*RocDec, @ptrCast(@alignCast(result_value.ptr.?)));
+                        result_ptr.* = result_dec;
+                        result_value.is_initialized = true;
+                    } else {
+                        self.traceError("arithmetic operations on fractional types only support Dec precision", .{});
+                        return error.TypeMismatch;
+                    }
+                } else {
+                    self.traceError("arithmetic operations require operands of the same type (both integers or both decimals)", .{});
                     return error.TypeMismatch;
                 }
-
-                const lhs_val = lhs.asI128();
-                const rhs_val = rhs.asI128();
-
-                const result_layout = lhs.layout;
-                var result_value = try self.pushStackValue(result_layout);
-
-                const result_val: i128 = result_val: switch (kind) {
-                    .w_binop_add => {
-                        self.traceInfo("Addition operation: {} + {} = {}", .{ lhs_val, rhs_val, lhs_val + rhs_val });
-                        break :result_val lhs_val + rhs_val;
-                    },
-                    .w_binop_sub => break :result_val lhs_val - rhs_val,
-                    .w_binop_mul => break :result_val lhs_val * rhs_val,
-                    .w_binop_div => {
-                        if (rhs_val == 0) return error.DivisionByZero;
-                        break :result_val @divTrunc(lhs_val, rhs_val);
-                    },
-                    .w_binop_div_trunc => {
-                        if (rhs_val == 0) return error.DivisionByZero;
-                        break :result_val @divTrunc(lhs_val, rhs_val);
-                    },
-                    .w_binop_rem => {
-                        if (rhs_val == 0) return error.DivisionByZero;
-                        break :result_val @rem(lhs_val, rhs_val);
-                    },
-                    else => unreachable,
-                };
-
-                result_value.setInt(result_val);
             },
 
             // Comparison operations - require integer operands
