@@ -21,8 +21,9 @@ const ModuleEnv = can.ModuleEnv;
 const Layout = layout.Layout;
 const Closure = eval.Closure;
 const LayoutStore = layout.Store;
-const ParseError = parse.Parser.Error;
 const test_allocator = std.testing.allocator;
+
+const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError };
 
 /// Helper function to run an expression and expect a specific error.
 pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_trace: enum { trace, no_trace }) !void {
@@ -340,7 +341,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 }
 
 /// Parse and canonicalize an expression.
-pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) ParseError!struct {
+pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) TestParseError!struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
     can: *Can,
@@ -357,6 +358,24 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Parse the source code as an expression
     const parse_ast = try allocator.create(parse.AST);
     parse_ast.* = try parse.parseExpr(&module_env.common, module_env.gpa);
+
+    // Check for parse errors in test code
+    // NOTE: This is TEST-ONLY behavior! In production, the parser continues and collects
+    // diagnostics to provide better error messages. But for tests, we want to fail early
+    // on syntax errors to catch issues like semicolons that shouldn't be in Roc code.
+    if (parse_ast.tokenize_diagnostics.items.len > 0) {
+        // Found tokenization errors in test code
+        const first_diagnostic = parse_ast.tokenize_diagnostics.items[0];
+        std.debug.print("Test failed due to tokenization error: {}\n", .{first_diagnostic});
+        return error.TokenizeError;
+    }
+
+    if (parse_ast.parse_diagnostics.items.len > 0) {
+        // Found parse errors in test code
+        const first_diagnostic = parse_ast.parse_diagnostics.items[0];
+        std.debug.print("Test failed due to parse error: {} at token {}-{}\n", .{ first_diagnostic.tag, first_diagnostic.region.start, first_diagnostic.region.end });
+        return error.SyntaxError;
+    }
 
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
