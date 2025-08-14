@@ -450,11 +450,11 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
                 switch (precision) {
                     .f32 => {
                         const float_ptr: *f32 = @ptrCast(@alignCast(result.ptr.?));
-                        return try std.fmt.allocPrint(self.allocator, "{}", .{float_ptr.*});
+                        return try std.fmt.allocPrint(self.allocator, "{d}", .{float_ptr.*});
                     },
                     .f64 => {
                         const float_ptr: *f64 = @ptrCast(@alignCast(result.ptr.?));
-                        return try std.fmt.allocPrint(self.allocator, "{}", .{float_ptr.*});
+                        return try std.fmt.allocPrint(self.allocator, "{d}", .{float_ptr.*});
                     },
                     .dec => {
                         const dec_ptr: *RocDec = @ptrCast(@alignCast(result.ptr.?));
@@ -462,7 +462,7 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
                         const raw_value = dec_ptr.num;
                         const scale_factor = std.math.pow(f64, 10, RocDec.decimal_places);
                         const decimal_value = @as(f64, @floatFromInt(raw_value)) / scale_factor;
-                        return try std.fmt.allocPrint(self.allocator, "{}", .{decimal_value});
+                        return try std.fmt.allocPrint(self.allocator, "{d}", .{decimal_value});
                     },
                 }
             },

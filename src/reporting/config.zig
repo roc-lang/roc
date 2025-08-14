@@ -74,12 +74,11 @@ pub const ReportingConfig = struct {
 
         // Check if output is TTY
         config.is_tty = isTty: {
-            if (comptime builtin.target.os.tag != .freestanding) {
-                break :isTty false;
-                // break :isTty std.io.getStdOut().isTty();
-            } else {
+            if (comptime builtin.target.os.tag == .freestanding and builtin.target.abi == .wasm32) {
                 // can't use stdio in WASM
                 break :isTty false;
+            } else {
+                break :isTty std.io.getStdOut().isTty();
             }
         };
 

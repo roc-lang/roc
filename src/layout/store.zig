@@ -1,6 +1,7 @@
 //! Stores Layout values by index.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
@@ -737,8 +738,7 @@ pub const Store = struct {
         outer: while (true) {
             iterations += 1;
             if (iterations > max_iterations) {
-                // Layout computation exceeded iteration limit - possible infinite loop
-                unreachable;
+                @panic("Layout computation exceeded iteration limit - possible infinite loop");
             }
 
             var layout = switch (current.desc.content) {
@@ -790,10 +790,10 @@ pub const Store = struct {
                         .int_precision => |precision| Layout.int(precision),
                         .frac_precision => |precision| Layout.frac(precision),
                         // For polymorphic types, use default precision
-                        .num_unbound => Layout.int(types.Num.Int.Precision.default),
+                        .num_unbound => Layout.frac(types.Num.Frac.Precision.default),
                         .int_unbound => Layout.int(types.Num.Int.Precision.default),
                         .frac_unbound => Layout.frac(types.Num.Frac.Precision.default),
-                        .num_poly => Layout.int(types.Num.Int.Precision.default),
+                        .num_poly => Layout.frac(types.Num.Frac.Precision.default),
                         .int_poly => Layout.int(types.Num.Int.Precision.default),
                         .frac_poly => Layout.frac(types.Num.Frac.Precision.default),
                     },
@@ -1095,14 +1095,7 @@ pub const Store = struct {
 
                     // Rigid vars should not appear unboxed in layout computation.
                     // This is likely a bug in the type system.
-
-                    // if (comptime std.debug.runtime_safety and builtin.os.tag != .freestanding) {
-                    //     std.debug.print("\nERROR: Encountered unboxed rigid_var in layout computation\n", .{});
-                    //     const name = self.env.idents.getText(ident);
-                    //     std.debug.print("  Rigid var name: {s}\n", .{name});
-                    //     std.debug.print("  Variable: {}\n", .{current.var_});
-                    // }
-
+                    //
                     // Unlike flex vars, rigid vars represent type parameters that should
                     // have been instantiated. This is a bug that should be fixed.
                     return LayoutError.BugUnboxedRigidVar;

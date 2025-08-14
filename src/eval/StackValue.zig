@@ -528,6 +528,7 @@ pub fn incref(self: StackValue) void {
     }
     // TODO: Add support for other refcounted types (lists, boxes) when implemented
     // Called incref on a non-refcounted value
+    std.debug.assert(false);
     unreachable;
 }
 
@@ -540,6 +541,7 @@ pub fn decref(self: StackValue, ops: *RocOps) void {
     }
     // TODO: Add support for other refcounted types (lists, boxes) when implemented
     // Called decref on a non-refcounted value
+    std.debug.assert(false);
     unreachable;
 }
 

@@ -2587,12 +2587,10 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                     for (actual_outputs.items, expected_outputs.items, 0..) |actual, expected_output, i| {
                         if (!std.mem.eql(u8, actual, expected_output)) {
                             success = success and !emit_error;
-                            if (comptime builtin.target.os.tag != .freestanding) {
-                                std.debug.print(
-                                    "REPL output mismatch at index {}: got '{s}', expected '{s}' in {s}\n",
-                                    .{ i, actual, expected_output, snapshot_path },
-                                );
-                            }
+                            std.debug.print(
+                                "REPL output mismatch at index {}: got '{s}', expected '{s}' in {s}\n",
+                                .{ i, actual, expected_output, snapshot_path },
+                            );
                         }
                     }
                 }
