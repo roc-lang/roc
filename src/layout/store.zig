@@ -7,7 +7,7 @@ const collections = @import("collections");
 const can = @import("can");
 const builtins = @import("builtins");
 
-const layout_ = @import("./layout.zig");
+const layout_mod = @import("layout.zig");
 const work = @import("./work.zig");
 
 const ModuleEnv = can.ModuleEnv;
@@ -16,17 +16,17 @@ const target = base.target;
 const Ident = base.Ident;
 const Region = base.Region;
 const Var = types.Var;
-const Layout = layout_.Layout;
-const Idx = layout_.Idx;
-const RecordField = layout_.RecordField;
-const Scalar = layout_.Scalar;
-const ScalarTag = layout_.ScalarTag;
-const RecordData = layout_.RecordData;
-const RecordIdx = layout_.RecordIdx;
-const TupleField = layout_.TupleField;
-const TupleData = layout_.TupleData;
-const TupleIdx = layout_.TupleIdx;
-const SizeAlign = layout_.SizeAlign;
+const Layout = layout_mod.Layout;
+const Idx = layout_mod.Idx;
+const RecordField = layout_mod.RecordField;
+const Scalar = layout_mod.Scalar;
+const ScalarTag = layout_mod.ScalarTag;
+const RecordData = layout_mod.RecordData;
+const RecordIdx = layout_mod.RecordIdx;
+const TupleField = layout_mod.TupleField;
+const TupleData = layout_mod.TupleData;
+const TupleIdx = layout_mod.TupleIdx;
+const SizeAlign = layout_mod.SizeAlign;
 const Work = work.Work;
 
 /// Errors that can occur during layout computation
@@ -397,7 +397,7 @@ pub const Store = struct {
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
             .closure => {
                 // Closure layout: header + aligned capture data
-                const header_size = @sizeOf(layout_.Closure);
+                const header_size = @sizeOf(layout_mod.Closure);
                 const captures_layout = self.getLayout(layout.data.closure.captures_layout_idx);
                 const captures_alignment = captures_layout.alignment(self.targetUsize());
                 const aligned_captures_offset = std.mem.alignForward(u32, header_size, @intCast(captures_alignment.toByteUnits()));

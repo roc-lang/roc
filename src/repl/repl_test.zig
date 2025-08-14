@@ -1,16 +1,19 @@
 //! Tests for the REPL
 const std = @import("std");
-const compile = @import("compile");
-const Can = @import("can");
-const Check = @import("check");
+const eval = @import("eval");
+const can = @import("can");
+const check = @import("check");
 const parse = @import("parse");
-const ModuleEnv = compile.ModuleEnv;
-const Repl = @import("eval.zig").Repl;
+const layout = @import("layout");
+
+const Repl = @import("Repl.zig");
+
+const LayoutStore = layout.Store;
+const Can = can.Can;
+const Check = check.Check;
+const ModuleEnv = can.ModuleEnv;
+const Stack = eval.Stack;
 const TestEnv = @import("repl_test_env.zig").TestEnv;
-const stack = @import("../eval/stack.zig");
-const layout_store = @import("../layout/store.zig");
-const layout = @import("../layout/layout.zig");
-const eval = @import("../eval/interpreter.zig");
 
 // Tests
 const testing = std.testing;
@@ -185,7 +188,7 @@ test "Repl - minimal interpreter integration" {
     defer module_env.deinit();
 
     // Step 2: Parse as expression
-    var parse_ast = try parse.parseExpr(&module_env);
+    var parse_ast = try parse.parseExpr(&module_env.common, module_env.gpa);
     defer parse_ast.deinit(gpa);
 
     // Empty scratch space (required before canonicalization)
@@ -196,11 +199,11 @@ test "Repl - minimal interpreter integration" {
     try cir.initCIRFields(gpa, "test");
 
     // Step 4: Canonicalize
-    var can = try Can.init(cir, &parse_ast, null);
-    defer can.deinit();
+    var czer = try Can.init(cir, &parse_ast, null);
+    defer czer.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
+    const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx) orelse {
         return error.CanonicalizeError;
     };
 
@@ -211,11 +214,11 @@ test "Repl - minimal interpreter integration" {
     _ = try checker.checkExpr(canonical_expr_idx.get_idx());
 
     // Step 6: Create evaluation stack
-    var eval_stack = try stack.Stack.initCapacity(gpa, 1024);
+    var eval_stack = try Stack.initCapacity(gpa, 1024);
     defer eval_stack.deinit();
 
     // Step 7: Create layout cache
-    var layout_cache = try layout_store.Store.init(&module_env, &module_env.types);
+    var layout_cache = try LayoutStore.init(&module_env, &module_env.types);
     defer layout_cache.deinit();
 
     // Step 8: Create interpreter

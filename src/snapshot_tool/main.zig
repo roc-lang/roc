@@ -17,8 +17,9 @@ const check = @import("check");
 const builtins = @import("builtins");
 const compile = @import("compile");
 const fmt = @import("fmt");
+const repl = @import("repl");
 
-const Repl = @import("repl").EvalRepl;
+const Repl = repl.Repl;
 const CommonEnv = base.CommonEnv;
 const Check = check.Check;
 const CIR = can.CIR;
