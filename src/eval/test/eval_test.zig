@@ -273,8 +273,13 @@ test "error test - divide by zero" {
 }
 
 test "error test - crash statement" {
-    // Test simple crash statement
-    try runExpectError("crash \"test\"", EvalError.Crash, .no_trace);
+    // Test crash statement in a block (crash is a statement, not an expression)
+    try runExpectError(
+        \\{
+        \\    crash "test"
+        \\    0
+        \\}
+    , EvalError.Crash, .no_trace);
 
     // Test crash in block with final expression
     try runExpectError(
@@ -389,17 +394,17 @@ test "lambdas closures" {
 test "lambdas with capture" {
     try runExpectInt(
         \\{
-        \\    x = 10;
-        \\    f = |y| x + y;
+        \\    x = 10
+        \\    f = |y| x + y
         \\    f(5)
         \\}
     , 15, .no_trace);
 
     try runExpectInt(
         \\{
-        \\    x = 20;
-        \\    y = 30;
-        \\    f = |z| x + y + z;
+        \\    x = 20
+        \\    y = 30
+        \\    f = |z| x + y + z
         \\    f(10)
         \\}
     , 60, .no_trace);
@@ -534,8 +539,8 @@ test "string literals and interpolation" {
     // Test string interpolation
     try runExpectSuccess(
         \\{
-        \\    hello = "Hello";
-        \\    world = "World";
+        \\    hello = "Hello"
+        \\    world = "World"
         \\    "${hello} ${world}"
         \\}
     , .no_trace);
