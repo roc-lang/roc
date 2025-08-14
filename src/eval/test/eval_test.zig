@@ -555,9 +555,9 @@ test "polymorphic identity function" {
     // Test the identity function with different types
     const code =
         \\{
-        \\    identity = |val| val;
-        \\    num = identity(5);
-        \\    str = identity("Hello");
+        \\    identity = |val| val
+        \\    num = identity(5)
+        \\    str = identity("Hello")
         \\    if (num > 0) str else ""
         \\}
     ;
