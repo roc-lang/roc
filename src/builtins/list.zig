@@ -533,6 +533,89 @@ fn listAppend(
     return listAppendUnsafe(with_capacity, element, element_width, copy);
 }
 
+pub fn push_in_place(
+    list: RocList,
+    element_size: usize,
+    element: *anyopaque,
+    roc_ops: *RocOps,
+) callconv(.C) RocList {
+    const old_length = list.len();
+    const old_capacity = list.getCapacity();
+
+    if (old_capacity > old_length) {
+        var output = list;
+        output.length += 1;
+
+        if (output.bytes) |bytes| {
+            const target = bytes + old_length * element_size;
+            @memcpy(target[0..element_size], @as([*]const u8, @ptrCast(element))[0..element_size]);
+        }
+
+        return output;
+    } else {
+        const new_length = old_length + 1;
+        const alignment = 8;
+
+        const resized_list = list.reallocate(
+            alignment,
+            new_length,
+            element_size,
+            false,
+            rcNone,
+            roc_ops,
+        );
+
+        if (resized_list.bytes) |bytes| {
+            const target = bytes + old_length * element_size;
+            @memcpy(target[0..element_size], @as([*]const u8, @ptrCast(element))[0..element_size]);
+        }
+
+        return resized_list;
+    }
+}
+
+pub fn append(
+    list: RocList,
+    element_size: usize,
+    element: *anyopaque,
+    roc_ops: *RocOps,
+) callconv(.C) RocList {
+    const old_length = list.len();
+
+    if (list.refcount() == 1) {
+        return push_in_place(list, element_size, element, roc_ops);
+    } else {
+        const new_length = old_length + 1;
+        const new_capacity = old_length + 1;
+        const alignment = 8;
+
+        const new_list = RocList.list_allocate(
+            alignment,
+            new_capacity,
+            element_size,
+            false,
+            roc_ops,
+        );
+
+        if (list.bytes) |source_bytes| {
+            if (new_list.bytes) |dest_bytes| {
+                const copy_size = old_length * element_size;
+                @memcpy(dest_bytes[0..copy_size], source_bytes[0..copy_size]);
+
+                const target = dest_bytes + old_length * element_size;
+                @memcpy(target[0..element_size], @as([*]const u8, @ptrCast(element))[0..element_size]);
+            }
+        } else if (new_list.bytes) |dest_bytes| {
+            const target = dest_bytes + old_length * element_size;
+            @memcpy(target[0..element_size], @as([*]const u8, @ptrCast(element))[0..element_size]);
+        }
+
+        var result = new_list;
+        result.length = new_length;
+        return result;
+    }
+}
+
 /// Add element to beginning of list, shifting existing elements.
 pub fn listPrepend(
     list: RocList,
@@ -2924,4 +3007,503 @@ test "memory management: multiple reserve operations" {
     const elements = elements_ptr.?[0..list.len()];
     try std.testing.expectEqual(@as(u8, 1), elements[0]);
     try std.testing.expectEqual(@as(u8, 2), elements[1]);
+}
+
+test "push: basic functionality with empty list" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Start with an empty list
+    var list = RocList.empty();
+
+    // Push first element
+    const element1: u8 = 42;
+    list = push(list, @sizeOf(u8), @ptrCast(@constCast(&element1)), test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 1), list.len());
+    try std.testing.expect(list.getCapacity() >= 1);
+
+    // Verify the element
+    const elements_ptr = list.elements(u8);
+    try std.testing.expect(elements_ptr != null);
+    try std.testing.expectEqual(@as(u8, 42), elements_ptr.?[0]);
+
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+}
+
+test "push: multiple elements with reallocation" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var list = RocList.empty();
+
+    // Push multiple elements to trigger reallocation
+    const values = [_]u8{ 10, 20, 30, 40, 50 };
+    for (values) |value| {
+        list = push(list, @sizeOf(u8), @ptrCast(@constCast(&value)), test_env.getOps());
+    }
+
+    try std.testing.expectEqual(@as(usize, 5), list.len());
+    try std.testing.expect(list.getCapacity() >= 5);
+
+    // Verify all elements
+    const elements_ptr = list.elements(u8);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..list.len()];
+
+    for (values, 0..) |expected, i| {
+        try std.testing.expectEqual(expected, elements[i]);
+    }
+
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+}
+
+test "push: with pre-existing capacity" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Create a list with capacity but no elements
+    var list = listWithCapacity(10, @alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+
+    const initial_capacity = list.getCapacity();
+    try std.testing.expect(initial_capacity >= 10);
+
+    // Push elements without triggering reallocation
+    const value1: u32 = 100;
+    list = push(list, @sizeOf(u32), @ptrCast(@constCast(&value1)), test_env.getOps());
+
+    const value2: u32 = 200;
+    list = push(list, @sizeOf(u32), @ptrCast(@constCast(&value2)), test_env.getOps());
+
+    // Capacity should remain the same
+    try std.testing.expectEqual(initial_capacity, list.getCapacity());
+    try std.testing.expectEqual(@as(usize, 2), list.len());
+
+    // Verify elements
+    const elements_ptr = list.elements(u32);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..list.len()];
+    try std.testing.expectEqual(@as(u32, 100), elements[0]);
+    try std.testing.expectEqual(@as(u32, 200), elements[1]);
+
+    defer list.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+}
+
+test "push: different sized elements" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Test with u64 elements
+    var list = RocList.empty();
+
+    const value1: u64 = 0xDEADBEEF;
+    list = push(list, @sizeOf(u64), @ptrCast(@constCast(&value1)), test_env.getOps());
+
+    const value2: u64 = 0xCAFEBABE;
+    list = push(list, @sizeOf(u64), @ptrCast(@constCast(&value2)), test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 2), list.len());
+
+    const elements_ptr = list.elements(u64);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..list.len()];
+    try std.testing.expectEqual(@as(u64, 0xDEADBEEF), elements[0]);
+    try std.testing.expectEqual(@as(u64, 0xCAFEBABE), elements[1]);
+
+    defer list.decref(@alignOf(u64), @sizeOf(u64), false, rcNone, test_env.getOps());
+}
+
+test "push: stress test with many elements" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var list = RocList.empty();
+
+    // Push many elements to test multiple reallocations
+    const count: u16 = 100;
+    var i: u16 = 0;
+    while (i < count) : (i += 1) {
+        list = push(list, @sizeOf(u16), @ptrCast(@constCast(&i)), test_env.getOps());
+    }
+
+    try std.testing.expectEqual(@as(usize, count), list.len());
+    try std.testing.expect(list.getCapacity() >= count);
+
+    // Verify all elements
+    const elements_ptr = list.elements(u16);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..list.len()];
+
+    i = 0;
+    while (i < count) : (i += 1) {
+        try std.testing.expectEqual(i, elements[i]);
+    }
+
+    defer list.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+}
+
+test "append: with unique list (refcount 1)" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var list = RocList.empty();
+
+    // Add one element to make it unique
+    const value1: u8 = 10;
+    list = push(list, @sizeOf(u8), @ptrCast(@constCast(&value1)), test_env.getOps());
+
+    // Verify it's unique
+    try std.testing.expectEqual(@as(usize, 1), list.refcount());
+
+    // Append should mutate in place
+    const value2: u8 = 20;
+    const result = append(list, @sizeOf(u8), @ptrCast(@constCast(&value2)), test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 2), result.len());
+
+    const elements_ptr = result.elements(u8);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..result.len()];
+    try std.testing.expectEqual(@as(u8, 10), elements[0]);
+    try std.testing.expectEqual(@as(u8, 20), elements[1]);
+
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+}
+
+test "append: with shared list (refcount > 1)" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Create a list with some elements
+    var list = RocList.empty();
+    const value1: u8 = 100;
+    list = push(list, @sizeOf(u8), @ptrCast(@constCast(&value1)), test_env.getOps());
+    const value2: u8 = 200;
+    list = push(list, @sizeOf(u8), @ptrCast(@constCast(&value2)), test_env.getOps());
+
+    // Increment refcount to simulate sharing
+    list.incref(1, false);
+    try std.testing.expect(list.refcount() > 1);
+
+    // Append should clone
+    const value3: u8 = 50;
+    const result = append(list, @sizeOf(u8), @ptrCast(@constCast(&value3)), test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 3), result.len());
+    try std.testing.expectEqual(@as(usize, 2), list.len()); // Original unchanged
+
+    const result_elements_ptr = result.elements(u8);
+    try std.testing.expect(result_elements_ptr != null);
+    const result_elements = result_elements_ptr.?[0..result.len()];
+    try std.testing.expectEqual(@as(u8, 100), result_elements[0]);
+    try std.testing.expectEqual(@as(u8, 200), result_elements[1]);
+    try std.testing.expectEqual(@as(u8, 50), result_elements[2]);
+
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+}
+
+test "append: with empty list" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const list = RocList.empty();
+
+    const value: u32 = 42;
+    const result = append(list, @sizeOf(u32), @ptrCast(@constCast(&value)), test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 1), result.len());
+
+    const elements_ptr = result.elements(u32);
+    try std.testing.expect(elements_ptr != null);
+    try std.testing.expectEqual(@as(u32, 42), elements_ptr.?[0]);
+
+    defer result.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+}
+
+test "push: large element types" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Test with larger struct-like elements
+    const LargeElement = extern struct {
+        a: u64,
+        b: u64,
+        c: u64,
+        d: u64,
+    };
+
+    var list = RocList.empty();
+
+    const elem1 = LargeElement{ .a = 1, .b = 2, .c = 3, .d = 4 };
+    list = push(list, @sizeOf(LargeElement), @ptrCast(@constCast(&elem1)), test_env.getOps());
+
+    const elem2 = LargeElement{ .a = 5, .b = 6, .c = 7, .d = 8 };
+    list = push(list, @sizeOf(LargeElement), @ptrCast(@constCast(&elem2)), test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 2), list.len());
+
+    const elements_ptr = list.elements(LargeElement);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..list.len()];
+
+    try std.testing.expectEqual(@as(u64, 1), elements[0].a);
+    try std.testing.expectEqual(@as(u64, 2), elements[0].b);
+    try std.testing.expectEqual(@as(u64, 5), elements[1].a);
+    try std.testing.expectEqual(@as(u64, 6), elements[1].b);
+
+    defer list.decref(@alignOf(LargeElement), @sizeOf(LargeElement), false, rcNone, test_env.getOps());
+}
+
+test "push: with exact capacity boundary" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Create list with exact capacity of 3
+    var list = listWithCapacity(3, @alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+
+    const initial_capacity = list.getCapacity();
+    try std.testing.expect(initial_capacity >= 3);
+
+    // Fill exactly to capacity
+    const val1: u16 = 111;
+    list = push(list, @sizeOf(u16), @ptrCast(@constCast(&val1)), test_env.getOps());
+    const val2: u16 = 222;
+    list = push(list, @sizeOf(u16), @ptrCast(@constCast(&val2)), test_env.getOps());
+    const val3: u16 = 333;
+    list = push(list, @sizeOf(u16), @ptrCast(@constCast(&val3)), test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 3), list.len());
+    try std.testing.expectEqual(initial_capacity, list.getCapacity());
+
+    // Next push should trigger reallocation
+    const val4: u16 = 444;
+    list = push(list, @sizeOf(u16), @ptrCast(@constCast(&val4)), test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 4), list.len());
+    try std.testing.expect(list.getCapacity() > initial_capacity);
+
+    const elements_ptr = list.elements(u16);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..list.len()];
+    try std.testing.expectEqual(@as(u16, 111), elements[0]);
+    try std.testing.expectEqual(@as(u16, 222), elements[1]);
+    try std.testing.expectEqual(@as(u16, 333), elements[2]);
+    try std.testing.expectEqual(@as(u16, 444), elements[3]);
+
+    defer list.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+}
+
+test "push: single byte elements" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var list = RocList.empty();
+
+    // Push ASCII characters
+    const chars = "Hello";
+    for (chars) |ch| {
+        list = push(list, @sizeOf(u8), @ptrCast(@constCast(&ch)), test_env.getOps());
+    }
+
+    try std.testing.expectEqual(@as(usize, 5), list.len());
+
+    const elements_ptr = list.elements(u8);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..list.len()];
+
+    try std.testing.expectEqual(@as(u8, 'H'), elements[0]);
+    try std.testing.expectEqual(@as(u8, 'e'), elements[1]);
+    try std.testing.expectEqual(@as(u8, 'l'), elements[2]);
+    try std.testing.expectEqual(@as(u8, 'l'), elements[3]);
+    try std.testing.expectEqual(@as(u8, 'o'), elements[4]);
+
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+}
+
+test "append: refcount transitions" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Start with unique list
+    var list = RocList.empty();
+    const val1: u8 = 10;
+    list = push(list, @sizeOf(u8), @ptrCast(@constCast(&val1)), test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 1), list.refcount());
+
+    // Append while unique (should use push)
+    const val2: u8 = 20;
+    const result1 = append(list, @sizeOf(u8), @ptrCast(@constCast(&val2)), test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 2), result1.len());
+
+    // Increment refcount
+    result1.incref(1, false);
+    try std.testing.expect(result1.refcount() > 1);
+
+    // Append while shared (should clone)
+    const val3: u8 = 30;
+    const result2 = append(result1, @sizeOf(u8), @ptrCast(@constCast(&val3)), test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 3), result2.len());
+    try std.testing.expectEqual(@as(usize, 2), result1.len()); // Original unchanged
+
+    // Verify contents
+    const result2_elements = result2.elements(u8).?[0..result2.len()];
+    try std.testing.expectEqual(@as(u8, 10), result2_elements[0]);
+    try std.testing.expectEqual(@as(u8, 20), result2_elements[1]);
+    try std.testing.expectEqual(@as(u8, 30), result2_elements[2]);
+
+    defer result1.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer result2.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+}
+
+test "append: exact capacity cloning" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Create list with specific content
+    var list = RocList.empty();
+    const values = [_]u32{ 100, 200, 300 };
+    for (values) |val| {
+        list = push(list, @sizeOf(u32), @ptrCast(@constCast(&val)), test_env.getOps());
+    }
+
+    // Make it shared
+    list.incref(1, false);
+
+    // Append should create new list with exactly old_length + 1 capacity
+    const new_val: u32 = 400;
+    const result = append(list, @sizeOf(u32), @ptrCast(@constCast(&new_val)), test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 4), result.len());
+    try std.testing.expectEqual(@as(usize, 4), result.getCapacity()); // Exact capacity
+
+    // Verify all elements copied correctly
+    const result_elements = result.elements(u32).?[0..result.len()];
+    try std.testing.expectEqual(@as(u32, 100), result_elements[0]);
+    try std.testing.expectEqual(@as(u32, 200), result_elements[1]);
+    try std.testing.expectEqual(@as(u32, 300), result_elements[2]);
+    try std.testing.expectEqual(@as(u32, 400), result_elements[3]);
+
+    defer list.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+    defer result.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
+}
+
+test "append: mixed with push operations" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var list = RocList.empty();
+
+    // Start with push
+    const val1: u8 = 1;
+    list = push(list, @sizeOf(u8), @ptrCast(@constCast(&val1)), test_env.getOps());
+
+    // Append while unique
+    const val2: u8 = 2;
+    list = append(list, @sizeOf(u8), @ptrCast(@constCast(&val2)), test_env.getOps());
+
+    // More pushes
+    const val3: u8 = 3;
+    list = push(list, @sizeOf(u8), @ptrCast(@constCast(&val3)), test_env.getOps());
+
+    // Make shared
+    list.incref(1, false);
+
+    // Append while shared (should clone)
+    const val4: u8 = 4;
+    const result = append(list, @sizeOf(u8), @ptrCast(@constCast(&val4)), test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 3), list.len());
+    try std.testing.expectEqual(@as(usize, 4), result.len());
+
+    const result_elements = result.elements(u8).?[0..result.len()];
+    try std.testing.expectEqual(@as(u8, 1), result_elements[0]);
+    try std.testing.expectEqual(@as(u8, 2), result_elements[1]);
+    try std.testing.expectEqual(@as(u8, 3), result_elements[2]);
+    try std.testing.expectEqual(@as(u8, 4), result_elements[3]);
+
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+}
+
+test "push and append: large scale alternating operations" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var list = RocList.empty();
+
+    // Alternate between push and append operations
+    var i: u16 = 0;
+    while (i < 50) : (i += 1) {
+        if (i % 2 == 0) {
+            list = push(list, @sizeOf(u16), @ptrCast(@constCast(&i)), test_env.getOps());
+        } else {
+            list = append(list, @sizeOf(u16), @ptrCast(@constCast(&i)), test_env.getOps());
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 50), list.len());
+
+    // Verify all elements are correct
+    const elements = list.elements(u16).?[0..list.len()];
+    i = 0;
+    while (i < 50) : (i += 1) {
+        try std.testing.expectEqual(i, elements[i]);
+    }
+
+    defer list.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+}
+
+test "append: stress test with cloning" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var original = RocList.empty();
+
+    // Build up original list
+    var i: u8 = 0;
+    while (i < 20) : (i += 1) {
+        original = push(original, @sizeOf(u8), @ptrCast(@constCast(&i)), test_env.getOps());
+    }
+
+    // Make it shared
+    original.incref(1, false);
+
+    // Create multiple clones via append
+    var clones: [10]RocList = undefined;
+    i = 0;
+    while (i < 10) : (i += 1) {
+        const append_val: u8 = 100 + i;
+        clones[i] = append(original, @sizeOf(u8), @ptrCast(@constCast(&append_val)), test_env.getOps());
+    }
+
+    // Verify original is unchanged
+    try std.testing.expectEqual(@as(usize, 20), original.len());
+
+    // Verify each clone
+    i = 0;
+    while (i < 10) : (i += 1) {
+        try std.testing.expectEqual(@as(usize, 21), clones[i].len());
+
+        const elements = clones[i].elements(u8).?[0..clones[i].len()];
+
+        // Check original elements are preserved
+        var j: u8 = 0;
+        while (j < 20) : (j += 1) {
+            try std.testing.expectEqual(j, elements[j]);
+        }
+
+        // Check appended element
+        try std.testing.expectEqual(100 + i, elements[20]);
+    }
+
+    // Cleanup
+    defer original.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    i = 0;
+    while (i < 10) : (i += 1) {
+        defer clones[i].decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
+    }
 }
