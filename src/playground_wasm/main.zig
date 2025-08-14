@@ -679,12 +679,13 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
         },
         .CLEAR_REPL => {
             // Clear REPL definitions but keep REPL active
-            // First deinit all past definitions to free their memory
-            for (repl_ptr.past_defs.items) |*def| {
-                def.deinit(repl_ptr.allocator);
+            // Clear all definitions from the hashmap
+            var iterator = repl_ptr.definitions.iterator();
+            while (iterator.next()) |kv| {
+                repl_ptr.allocator.free(kv.key_ptr.*);
+                repl_ptr.allocator.free(kv.value_ptr.*);
             }
-            // Then clear the array list
-            repl_ptr.past_defs.clearRetainingCapacity();
+            repl_ptr.definitions.clearRetainingCapacity();
             try writeReplClearResponse(response_buffer);
         },
         .RESET => {
