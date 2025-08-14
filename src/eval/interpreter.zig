@@ -1422,30 +1422,62 @@ pub const Interpreter = struct {
                 }
             },
 
-            // Comparison operations - require integer operands
+            // Comparison operations - support both integer and decimal operands
             .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le => {
-                if (lhs_scalar.tag != .int or rhs_scalar.tag != .int) {
-                    self.traceError("comparison operations require integer operands", .{});
+                // Check if both operands are integers
+                if (lhs_scalar.tag == .int and rhs_scalar.tag == .int) {
+                    const lhs_val = lhs.asI128();
+                    const rhs_val = rhs.asI128();
+
+                    const result_layout = Layout.boolType();
+                    var result_value = try self.pushStackValue(result_layout);
+
+                    const bool_result: u8 = switch (kind) {
+                        .w_binop_eq => if (lhs_val == rhs_val) 1 else 0,
+                        .w_binop_ne => if (lhs_val != rhs_val) 1 else 0,
+                        .w_binop_gt => if (lhs_val > rhs_val) 1 else 0,
+                        .w_binop_lt => if (lhs_val < rhs_val) 1 else 0,
+                        .w_binop_ge => if (lhs_val >= rhs_val) 1 else 0,
+                        .w_binop_le => if (lhs_val <= rhs_val) 1 else 0,
+                        else => unreachable,
+                    };
+
+                    result_value.setBool(bool_result);
+                }
+                // Check if both operands are decimals
+                else if (lhs_scalar.tag == .frac and rhs_scalar.tag == .frac) {
+                    const lhs_frac = lhs_scalar.data.frac;
+                    const rhs_frac = rhs_scalar.data.frac;
+
+                    if (lhs_frac == .dec and rhs_frac == .dec) {
+                        const lhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(lhs.ptr.?)));
+                        const rhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(rhs.ptr.?)));
+                        const lhs_dec = lhs_ptr.*;
+                        const rhs_dec = rhs_ptr.*;
+
+                        const result_layout = Layout.boolType();
+                        var result_value = try self.pushStackValue(result_layout);
+
+                        const bool_result: u8 = switch (kind) {
+                            .w_binop_eq => if (lhs_dec.num == rhs_dec.num) 1 else 0,
+                            .w_binop_ne => if (lhs_dec.num != rhs_dec.num) 1 else 0,
+                            .w_binop_gt => if (lhs_dec.num > rhs_dec.num) 1 else 0,
+                            .w_binop_lt => if (lhs_dec.num < rhs_dec.num) 1 else 0,
+                            .w_binop_ge => if (lhs_dec.num >= rhs_dec.num) 1 else 0,
+                            .w_binop_le => if (lhs_dec.num <= rhs_dec.num) 1 else 0,
+                            else => unreachable,
+                        };
+
+                        result_value.setBool(bool_result);
+                        self.traceInfo("Decimal comparison: {} {s} {} = {}", .{ lhs_dec.num, @tagName(kind), rhs_dec.num, bool_result });
+                    } else {
+                        self.traceError("comparison operations on fractional types only support Dec precision", .{});
+                        return error.TypeMismatch;
+                    }
+                } else {
+                    self.traceError("comparison operations require operands of the same type (both integers or both decimals)", .{});
                     return error.TypeMismatch;
                 }
-
-                const lhs_val = lhs.asI128();
-                const rhs_val = rhs.asI128();
-
-                const result_layout = Layout.boolType();
-                var result_value = try self.pushStackValue(result_layout);
-
-                const bool_result: u8 = switch (kind) {
-                    .w_binop_eq => if (lhs_val == rhs_val) 1 else 0,
-                    .w_binop_ne => if (lhs_val != rhs_val) 1 else 0,
-                    .w_binop_gt => if (lhs_val > rhs_val) 1 else 0,
-                    .w_binop_lt => if (lhs_val < rhs_val) 1 else 0,
-                    .w_binop_ge => if (lhs_val >= rhs_val) 1 else 0,
-                    .w_binop_le => if (lhs_val <= rhs_val) 1 else 0,
-                    else => unreachable,
-                };
-
-                result_value.setBool(bool_result);
             },
 
             // Logical operations - require boolean operands
