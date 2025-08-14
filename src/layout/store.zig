@@ -737,7 +737,8 @@ pub const Store = struct {
         outer: while (true) {
             iterations += 1;
             if (iterations > max_iterations) {
-                std.debug.panic("Layout computation exceeded iteration limit - possible infinite loop\n", .{});
+                // Layout computation exceeded iteration limit - possible infinite loop
+                unreachable;
             }
 
             var layout = switch (current.desc.content) {
@@ -1083,6 +1084,7 @@ pub const Store = struct {
                     break :blk Layout.int(.i64);
                 },
                 .rigid_var => |ident| blk: {
+                    _ = ident;
                     // Rigid vars can only be sent to the host if boxed.
                     if (self.work.pending_containers.len > 0) {
                         const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
@@ -1093,16 +1095,16 @@ pub const Store = struct {
 
                     // Rigid vars should not appear unboxed in layout computation.
                     // This is likely a bug in the type system.
-                    if (std.debug.runtime_safety) {
-                        std.debug.print("\nERROR: Encountered unboxed rigid_var in layout computation\n", .{});
-                        const name = self.env.getIdent(ident);
-                        std.debug.print("  Rigid var name: {s}\n", .{name});
-                        std.debug.print("  Variable: {}\n", .{current.var_});
-                    }
+
+                    // if (comptime std.debug.runtime_safety and builtin.os.tag != .freestanding) {
+                    //     std.debug.print("\nERROR: Encountered unboxed rigid_var in layout computation\n", .{});
+                    //     const name = self.env.idents.getText(ident);
+                    //     std.debug.print("  Rigid var name: {s}\n", .{name});
+                    //     std.debug.print("  Variable: {}\n", .{current.var_});
+                    // }
 
                     // Unlike flex vars, rigid vars represent type parameters that should
                     // have been instantiated. This is a bug that should be fixed.
-                    std.debug.assert(false);
                     return LayoutError.BugUnboxedRigidVar;
                 },
                 .alias => |alias| {

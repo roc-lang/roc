@@ -6,6 +6,7 @@
 //! 1. START: Initialize module, return compiler version
 //! 2. READY: Receive Roc source, compile through all stages, return "LOADED" with diagnostics
 //! 3. LOADED: Handle queries for tokens, AST, CIR, types, etc. Handle reset to go back to READY
+//! 4. REPL_ACTIVE: Handle REPL interactions with stateful evaluation
 //!
 //! "Keep going" Strategy:
 //! The playground uses a "keep going" approach - all compiler stages run even when there
@@ -15,9 +16,11 @@
 
 const std = @import("std");
 const base = @import("base");
+const builtins = @import("builtins");
 const build_options = @import("build_options");
 const parse = @import("parse");
 const reporting = @import("reporting");
+const repl = @import("repl");
 const types = @import("types");
 const compile = @import("compile");
 const can = @import("can");
@@ -32,6 +35,8 @@ const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const problem = check.problem;
 const AST = parse.AST;
+const Repl = repl.Repl;
+const RocOps = builtins.host_abi.RocOps;
 
 // A fixed-size buffer to act as the heap inside the WASM linear memory.
 var wasm_heap_memory: [64 * 1024 * 1024]u8 = undefined; // 64MB heap
@@ -42,6 +47,7 @@ const State = enum {
     START,
     READY,
     LOADED,
+    REPL_ACTIVE,
 };
 
 /// Message types for communication with the host
@@ -54,6 +60,9 @@ const MessageType = enum {
     QUERY_TYPES,
     GET_HOVER_INFO,
     RESET,
+    INIT_REPL,
+    REPL_STEP,
+    CLEAR_REPL,
 
     pub fn fromString(str: []const u8) ?MessageType {
         if (std.mem.eql(u8, str, "INIT")) return .INIT;
@@ -64,6 +73,9 @@ const MessageType = enum {
         if (std.mem.eql(u8, str, "QUERY_TYPES")) return .QUERY_TYPES;
         if (std.mem.eql(u8, str, "GET_HOVER_INFO")) return .GET_HOVER_INFO;
         if (std.mem.eql(u8, str, "RESET")) return .RESET;
+        if (std.mem.eql(u8, str, "INIT_REPL")) return .INIT_REPL;
+        if (std.mem.eql(u8, str, "REPL_STEP")) return .REPL_STEP;
+        if (std.mem.eql(u8, str, "CLEAR_REPL")) return .CLEAR_REPL;
         return null;
     }
 };
@@ -174,6 +186,10 @@ const CompilerStageData = struct {
 var current_state: State = .START;
 var compiler_data: ?CompilerStageData = null;
 
+/// REPL state management
+var repl_instance: ?*Repl = null;
+var repl_roc_ops: ?*RocOps = null;
+
 /// Host-managed buffers for better memory management
 var host_message_buffer: ?[]u8 = null;
 var host_response_buffer: ?[]u8 = null;
@@ -267,6 +283,89 @@ const ResponseWriteError = error{
     OutOfBufferSpace,
 };
 
+/// Clean up REPL state and free associated memory.
+/// This function safely deallocates the REPL instance and RocOps, then sets them to null.
+/// It's called during RESET operations and module initialization.
+fn cleanupReplState() void {
+    if (repl_instance) |repl_ptr| {
+        repl_ptr.deinit();
+        allocator.destroy(repl_ptr);
+        repl_instance = null;
+    }
+    if (repl_roc_ops) |roc_ops| {
+        allocator.destroy(roc_ops);
+        repl_roc_ops = null;
+    }
+}
+
+/// Create WASM-compatible RocOps for REPL initialization.
+/// This function allocates and initializes a RocOps structure with WASM-specific
+/// memory management functions. The returned pointer must be freed by the caller.
+/// Returns an error if allocation fails.
+fn createWasmRocOps() !*RocOps {
+    const roc_ops = try allocator.create(RocOps);
+    roc_ops.* = RocOps{
+        .env = undefined, // Not used in playground
+        .roc_alloc = wasmRocAlloc,
+        .roc_dealloc = wasmRocDealloc,
+        .roc_realloc = wasmRocRealloc,
+        .roc_dbg = wasmRocDbg,
+        .roc_expect_failed = wasmRocExpectFailed,
+        .roc_crashed = wasmRocCrashed,
+        .host_fns = undefined, // Not used in playground
+    };
+    return roc_ops;
+}
+
+fn wasmRocAlloc(alloc_args: *builtins.host_abi.RocAlloc, _: *anyopaque) callconv(.C) void {
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
+    const result = allocator.rawAlloc(alloc_args.length, align_enum, @returnAddress());
+    if (result) |ptr| {
+        alloc_args.answer = ptr;
+    } else {
+        // In WASM, we can't use null pointers, so we'll just crash
+        // This is a limitation of the WASM target
+        unreachable;
+    }
+}
+
+fn wasmRocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, _: *anyopaque) callconv(.C) void {
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(dealloc_args.alignment)));
+    // For WASM, we need to handle this carefully since we can't create slices from raw pointers
+    // We'll use a dummy slice for now - this is a limitation of the WASM target
+    const dummy_slice = @as([*]u8, @ptrCast(dealloc_args.ptr))[0..0];
+    allocator.rawFree(dummy_slice, align_enum, @returnAddress());
+}
+
+fn wasmRocRealloc(realloc_args: *builtins.host_abi.RocRealloc, _: *anyopaque) callconv(.C) void {
+    // For WASM, we'll just allocate new memory for now
+    // A proper implementation would need to handle reallocation carefully
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(realloc_args.alignment)));
+    const result = allocator.rawAlloc(realloc_args.new_length, align_enum, @returnAddress());
+    if (result) |ptr| {
+        realloc_args.answer = ptr;
+    } else {
+        // In WASM, we can't use null pointers, so we'll just crash
+        // This is a limitation of the WASM target
+        unreachable;
+    }
+}
+
+fn wasmRocDbg(dbg_args: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.C) void {
+    // No-op in WASM playground
+    _ = dbg_args;
+}
+
+fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.C) void {
+    // No-op in WASM playground
+    _ = expect_failed_args;
+}
+
+fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, _: *anyopaque) callconv(.C) void {
+    // No-op in WASM playground
+    _ = crashed_args;
+}
+
 /// Initialize the WASM module in START state
 export fn init() void {
     fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
@@ -276,6 +375,9 @@ export fn init() void {
         data.deinit();
         compiler_data = null;
     }
+
+    // Clean up REPL state
+    cleanupReplState();
 
     // Clean up any existing buffers
     if (host_message_buffer) |buf| {
@@ -376,6 +478,7 @@ export fn processMessage(message_ptr: [*]const u8, message_len: usize, response_
         .START => handleStartState(message_type, root, response_slice),
         .READY => handleReadyState(message_type, root, response_slice),
         .LOADED => handleLoadedState(message_type, root, response_slice),
+        .REPL_ACTIVE => handleReplState(message_type, root, response_slice),
     };
 
     return if (result) |_| @intFromEnum(WasmError.success) else |err| switch (err) {
@@ -427,6 +530,35 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             // Return success with diagnostics
             try writeLoadedResponse(response_buffer, result);
         },
+        .INIT_REPL => {
+            // Clean up any existing REPL state
+            cleanupReplState();
+
+            // Initialize new WASM-compatible RocOps and REPL instance
+            const roc_ops = createWasmRocOps() catch |err| {
+                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
+                return;
+            };
+
+            repl_instance = allocator.create(Repl) catch |err| {
+                allocator.destroy(roc_ops);
+                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
+                return;
+            };
+            repl_instance.?.* = Repl.init(allocator, roc_ops) catch |err| {
+                allocator.destroy(roc_ops);
+                allocator.destroy(repl_instance.?);
+                repl_instance = null;
+                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
+                return;
+            };
+
+            repl_roc_ops = roc_ops;
+            current_state = .REPL_ACTIVE;
+
+            // Return success with REPL info
+            try writeReplInitResponse(response_buffer);
+        },
         .RESET => {
             // A RESET message should clean up all compilation-related memory.
             if (compiler_data) |*old_data| {
@@ -442,6 +574,9 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
                 allocator.free(buf);
                 host_response_buffer = null;
             }
+
+            // Clean up REPL state
+            cleanupReplState();
 
             // Now, fully reset the allocator to prevent fragmentation.
             fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
@@ -508,6 +643,79 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
         },
         else => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
+        },
+    }
+}
+
+/// Handle messages in REPL_ACTIVE state.
+/// This function processes REPL-specific messages including REPL_STEP, CLEAR_REPL,
+/// RESET, and compiler queries (QUERY_CIR, QUERY_TYPES, GET_HOVER_INFO).
+/// The REPL instance must be initialized before calling this function.
+/// Returns an error if the response buffer is too small or if internal errors occur.
+fn handleReplState(message_type: MessageType, root: std.json.Value, response_buffer: []u8) ResponseWriteError!void {
+    const repl_ptr = repl_instance orelse {
+        try writeErrorResponse(response_buffer, .ERROR, "REPL not initialized");
+        return;
+    };
+
+    switch (message_type) {
+        .REPL_STEP => {
+            const input_value = root.object.get("input") orelse {
+                try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Missing input for REPL_STEP");
+                return;
+            };
+            const input = input_value.string;
+
+            const result = repl_ptr.step(input) catch |err| {
+                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
+                return;
+            };
+            defer allocator.free(result);
+
+            // Determine result type based on output
+            const result_type = if (std.mem.startsWith(u8, result, "assigned")) "definition" else "expression";
+
+            try writeReplStepResponse(response_buffer, result, result_type, null);
+        },
+        .CLEAR_REPL => {
+            // Clear REPL definitions but keep REPL active
+            // First deinit all past definitions to free their memory
+            for (repl_ptr.past_defs.items) |*def| {
+                def.deinit(repl_ptr.allocator);
+            }
+            // Then clear the array list
+            repl_ptr.past_defs.clearRetainingCapacity();
+            try writeReplClearResponse(response_buffer);
+        },
+        .RESET => {
+            // Clean up REPL state
+            cleanupReplState();
+
+            // Also free the host-managed buffers, as they are part of the old state.
+            if (host_message_buffer) |buf| {
+                allocator.free(buf);
+                host_message_buffer = null;
+            }
+            if (host_response_buffer) |buf| {
+                allocator.free(buf);
+                host_response_buffer = null;
+            }
+
+            // Now, fully reset the allocator to prevent fragmentation.
+            fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
+            allocator = fba.allocator();
+
+            current_state = .READY;
+
+            const compiler_version = build_options.compiler_version;
+            try writeSuccessResponse(response_buffer, compiler_version, null);
+        },
+        .QUERY_CIR, .QUERY_TYPES, .GET_HOVER_INFO => {
+            // Compiler queries are not available in REPL mode with the current Repl implementation
+            try writeErrorResponse(response_buffer, .ERROR, "Compiler queries not available in REPL mode");
+        },
+        else => {
+            try writeErrorResponse(response_buffer, .INVALID_STATE, "Invalid message type for REPL state");
         },
     }
 }
@@ -826,6 +1034,58 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
     const html_content = html_stream.getWritten();
     try writeJsonString(w, html_content);
     try w.writeAll("\"}}");
+
+    try resp_writer.finalize();
+}
+
+/// Write REPL initialization response
+fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
+    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    resp_writer.pos = @sizeOf(u32);
+    const w = resp_writer.writer();
+
+    try w.writeAll("{\"status\":\"SUCCESS\",\"message\":\"REPL initialized\",\"repl_info\":{");
+    try w.print("\"compiler_version\":\"{s}\",", .{build_options.compiler_version});
+    try w.writeAll("\"state\":\"REPL_ACTIVE\"");
+    try w.writeAll("}}");
+
+    try resp_writer.finalize();
+}
+
+/// Write REPL step response
+fn writeReplStepResponse(response_buffer: []u8, output: []const u8, result_type: []const u8, diagnostics: ?[]const u8) ResponseWriteError!void {
+    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    resp_writer.pos = @sizeOf(u32);
+    const w = resp_writer.writer();
+
+    try w.writeAll("{\"status\":\"SUCCESS\",\"result\":{");
+    try w.writeAll("\"output\":\"");
+    try writeJsonString(w, output);
+    try w.writeAll("\",\"type\":\"");
+    try writeJsonString(w, result_type);
+    try w.writeAll("\"");
+
+    if (diagnostics) |diag| {
+        try w.writeAll(",\"diagnostics\":");
+        try w.writeAll(diag);
+    }
+
+    try w.writeAll(",\"compiler_available\":true");
+    try w.writeAll("}}");
+
+    try resp_writer.finalize();
+}
+
+/// Write REPL clear response
+fn writeReplClearResponse(response_buffer: []u8) ResponseWriteError!void {
+    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    resp_writer.pos = @sizeOf(u32);
+    const w = resp_writer.writer();
+
+    try w.writeAll("{\"status\":\"SUCCESS\",\"message\":\"REPL cleared\",\"repl_info\":{");
+    try w.print("\"compiler_version\":\"{s}\",", .{build_options.compiler_version});
+    try w.writeAll("\"state\":\"REPL_ACTIVE\"");
+    try w.writeAll("}}");
 
     try resp_writer.finalize();
 }
@@ -1296,5 +1556,6 @@ export fn getCurrentState() u32 {
         .START => 0,
         .READY => 1,
         .LOADED => 2,
+        .REPL_ACTIVE => 3,
     };
 }

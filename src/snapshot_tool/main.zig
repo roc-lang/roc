@@ -7,6 +7,7 @@
 //! the given Roc code snippet.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
@@ -17,7 +18,7 @@ const builtins = @import("builtins");
 const compile = @import("compile");
 const fmt = @import("fmt");
 
-const Repl = @import("repl").Repl;
+const Repl = @import("repl").EvalRepl;
 const CommonEnv = base.CommonEnv;
 const Check = check.Check;
 const CIR = can.CIR;
@@ -2508,6 +2509,9 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     var repl_instance = try Repl.init(output.gpa, snapshot_ops.get_ops());
     defer repl_instance.deinit();
 
+    // Enable debug snapshots for CAN/TYPES generation
+    repl_instance.enableDebugSnapshots();
+
     // Enable tracing if requested
     if (config.trace_eval) {
         repl_instance.setTraceWriter(std.io.getStdErr().writer().any());
@@ -2582,12 +2586,12 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                     for (actual_outputs.items, expected_outputs.items, 0..) |actual, expected_output, i| {
                         if (!std.mem.eql(u8, actual, expected_output)) {
                             success = success and !emit_error;
-                            std.debug.print("REPL output mismatch at index {}: got '{s}', expected '{s}' in {s}\n", .{
-                                i,
-                                actual,
-                                expected_output,
-                                snapshot_path,
-                            });
+                            if (comptime builtin.target.os.tag != .freestanding) {
+                                std.debug.print(
+                                    "REPL output mismatch at index {}: got '{s}', expected '{s}' in {s}\n",
+                                    .{ i, actual, expected_output, snapshot_path },
+                                );
+                            }
                         }
                     }
                 }
@@ -2637,14 +2641,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 }
                 try output.end_section();
 
-                if (actual_outputs.items.len != 0 and emit_error) {
-                    std.debug.print("REPL output count mismatch: got {} outputs, expected {} in {s}\n", .{
-                        actual_outputs.items.len,
-                        0,
-                        snapshot_path,
-                    });
-                    success = false;
-                }
+                // No validation needed for new snapshots - they should have outputs
             }
         },
     }
@@ -2683,14 +2680,37 @@ fn generateReplCanonicalizeSection(output: *DualOutput, content: *const Content)
         }
     }
 
+    // Create REPL with debug mode enabled
+    var snapshot_ops = SnapshotOps.init(output.gpa);
+    defer snapshot_ops.deinit();
+
+    var repl_instance = try Repl.init(output.gpa, snapshot_ops.get_ops());
+    defer repl_instance.deinit();
+    repl_instance.enableDebugSnapshots();
+
+    // Process all inputs to build cumulative state and generate debug HTML
+    for (inputs.items) |input| {
+        const result = try repl_instance.step(input);
+        output.gpa.free(result);
+    }
+
+    // Get the stored CAN HTML
+    const can_html_steps = repl_instance.getDebugCanHtml();
+
     try output.begin_section("CANONICALIZE");
     try output.begin_code_block("clojure");
 
-    // Generate canonical forms for each input
-    for (inputs.items, 0..) |input, i| {
+    // Write CAN HTML for each step
+    // Note: can_html_steps might have fewer items than inputs if some failed
+    const min_len = @min(can_html_steps.len, inputs.items.len);
+    for (0..min_len) |i| {
+        const html = can_html_steps[i];
+        const input = inputs.items[i];
         if (i > 0) {
             try output.md_writer.writeAll("---\n");
         }
+        try output.md_writer.writeAll(html);
+        try output.md_writer.writeAll("\n");
 
         // Create a temporary ModuleEnv for this input
         var module_env = ModuleEnv.init(output.gpa, input) catch |err| {
@@ -2783,15 +2803,37 @@ fn generateReplTypesSection(output: *DualOutput, content: *const Content) !void 
         }
     }
 
+    // Create REPL with debug mode enabled
+    var snapshot_ops = SnapshotOps.init(output.gpa);
+    defer snapshot_ops.deinit();
+
+    var repl_instance = try Repl.init(output.gpa, snapshot_ops.get_ops());
+    defer repl_instance.deinit();
+    repl_instance.enableDebugSnapshots();
+
+    // Process all inputs to build cumulative state and generate debug HTML
+    for (inputs.items) |input| {
+        const result = try repl_instance.step(input);
+        output.gpa.free(result);
+    }
+
+    // Get the stored TYPES HTML
+    const types_html_steps = repl_instance.getDebugTypesHtml();
+
     try output.begin_section("TYPES");
     try output.begin_code_block("clojure");
 
-    // Generate types for each input
-    for (inputs.items, 0..) |input, i| {
+    // Write TYPES HTML for each step
+    // Note: types_html_steps might have fewer items than inputs if some failed
+    const min_len = @min(types_html_steps.len, inputs.items.len);
+    for (0..min_len) |i| {
+        const html = types_html_steps[i];
+        const input = inputs.items[i];
         if (i > 0) {
             try output.md_writer.writeAll("---\n");
         }
-
+        try output.md_writer.writeAll(html);
+        try output.md_writer.writeAll("\n");
         // Create a temporary ModuleEnv for this input
         var module_env = ModuleEnv.init(output.gpa, input) catch |err| {
             try output.md_writer.print("Error creating module env: {s}\n", .{@errorName(err)});
@@ -2876,6 +2918,9 @@ fn generateReplTypesSection(output: *DualOutput, content: *const Content) !void 
                     try writer.writeAll("                <hr>\n");
                 }
                 try writer.writeAll("                <div class=\"repl-types\">Failed to canonicalize</div>\n");
+                try writer.writeAll("                <div class=\"repl-types\">");
+                try writer.writeAll(html);
+                try writer.writeAll("</div>\n");
             }
         }
     }

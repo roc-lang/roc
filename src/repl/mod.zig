@@ -6,6 +6,7 @@
 const std = @import("std");
 
 pub const Repl = @import("Repl.zig");
+pub const EvalRepl = @import("eval.zig").Repl;
 
 test "repl tests" {
     std.testing.refAllDecls(@This());

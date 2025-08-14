@@ -28,6 +28,7 @@
 //! 5. **Clean up / copy**: After the function is evaluated, we need to copy the result and clean up the stack.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const types = @import("types");
 const can = @import("can");
@@ -83,6 +84,7 @@ pub const EvalError = error{
     BugUnboxedFlexVar,
     DivisionByZero,
     InvalidStackState,
+    NullStackPointer,
     NoCapturesProvided,
     CaptureBindingFailed,
     CaptureNotFound,
@@ -860,7 +862,7 @@ pub const Interpreter = struct {
                 };
 
                 // Debug assertions to catch regressions
-                if (std.debug.runtime_safety) {
+                if (std.debug.runtime_safety and builtin.target.os.tag != .freestanding) {
                     // Verify we have a nominal type
                     const resolved = self.layout_cache.types_store.resolveVar(nominal_var);
                     switch (resolved.desc.content) {
@@ -872,16 +874,19 @@ pub const Interpreter = struct {
                                     // For Bool nominal types, verify we get boolean layout
                                     const nominal_layout = self.layout_cache.getLayout(nominal_layout_idx);
                                     if (!(nominal_layout.tag == .scalar and nominal_layout.data.scalar.tag == .bool)) {
-                                        std.debug.panic("REGRESSION: Bool nominal type should have boolean layout, got: {}\n", .{nominal_layout.tag});
+                                        // REGRESSION: Bool nominal type should have boolean layout
+                                        unreachable;
                                     }
                                 }
                             },
                             else => {
-                                std.debug.panic("REGRESSION: e_nominal should have nominal_type, got: {}\n", .{flat_type});
+                                // REGRESSION: e_nominal should have nominal_type
+                                unreachable;
                             },
                         },
                         else => {
-                            std.debug.panic("REGRESSION: e_nominal should have structure content, got: {}\n", .{resolved.desc.content});
+                            // REGRESSION: e_nominal should have structure content
+                            unreachable;
                         },
                     }
                 }
@@ -2984,7 +2989,7 @@ pub const Interpreter = struct {
                 return error.EvaluationFailed;
             };
 
-            result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
+            try result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
         }
     }
 
@@ -3108,7 +3113,7 @@ pub const Interpreter = struct {
         const result_value = try self.callClosureWithStackArgs(expr_idx, arg_count, ops);
 
         // Copy the result
-        result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
+        try result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
     }
 
     /// This function handles the incremental construction of tuples by processing one element at a time using a work queue to avoid recursion.
