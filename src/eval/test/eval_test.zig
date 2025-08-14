@@ -564,6 +564,68 @@ test "polymorphic identity function" {
     try runExpectStr(code, "Hello", .no_trace);
 }
 
+test "nested polymorphic functions" {
+    // Test nested polymorphic function calls to ensure TypeScope is properly managed
+    // The outer function 'apply' takes a function and a value and applies the function
+    // The inner function 'identity' is polymorphic and used multiple times
+    const code =
+        \\{
+        \\    identity = |x| x
+        \\    apply = |f, val| f(val)
+        \\
+        \\    # First call to apply with identity and a number
+        \\    num1 = apply(identity, 10)
+        \\
+        \\    # Second call to apply with identity and a string
+        \\    str1 = apply(identity, "Test")
+        \\
+        \\    # Third call to apply with identity and another number
+        \\    num2 = apply(identity, 20)
+        \\
+        \\    # Verify all values are correct
+        \\    if (num1 == 10)
+        \\        if (num2 == 20)
+        \\            str1
+        \\        else
+        \\            "Failed2"
+        \\    else
+        \\        "Failed1"
+        \\}
+    ;
+    try runExpectStr(code, "Test", .trace);
+}
+
+test "deeply nested polymorphic functions" {
+    // Test more complex nesting with multiple polymorphic functions
+    // compose takes two functions and returns their composition
+    // apply takes a function and applies it to a value
+    // identity returns its input unchanged
+    const code =
+        \\{
+        \\    identity = |x| x
+        \\    apply = |f, val| f(val)
+        \\    twice = |f, val| f(f(val))
+        \\
+        \\    # Use twice with identity (should return the same value)
+        \\    num1 = twice(identity, 42)
+        \\    str1 = twice(identity, "Hello")
+        \\
+        \\    # Use apply inside another apply
+        \\    num2 = apply(|x| apply(identity, x), 100)
+        \\
+        \\    # Verify all results
+        \\    if (num1 == 42)
+        \\        if (num2 == 100)
+        \\            str1
+        \\        else
+        \\            "Failed2"
+        \\    else
+        \\        "Failed1"
+        \\}
+    ;
+    try runExpectStr(code, "Hello", .no_trace);
+}
+
 test "string refcount - large string literal" {
     // Test large string that requires heap allocation and reference counting
     // This string is longer than SMALL_STR_MAX_LENGTH to trigger heap allocation

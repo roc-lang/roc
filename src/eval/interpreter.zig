@@ -1440,9 +1440,15 @@ pub const Interpreter = struct {
         self.traceInfo("Boolean scalar tag: {s} = {}", .{ tag_text, bool_value });
     }
 
-    /// Get the return layout of a closure by resolving its lambda expression's type
-    /// Build TypeScope mappings by matching function parameter types with argument types
-    fn buildTypeScopeForCall(self: *Interpreter, call_expr_idx: CIR.Expr.Idx, closure: *const Closure, arg_count: u32, scope_map: *types.VarMap) !void {
+    /// Get the return layout of a closure by resolving its lambda expression's type,
+    /// while building TypeScope mappings by matching function parameter types with argument types.
+    fn buildTypeScopeForCall(
+        self: *Interpreter,
+        call_expr_idx: CIR.Expr.Idx,
+        closure: *const Closure,
+        arg_count: u32,
+        scope_map: *types.VarMap,
+    ) !void {
         // Get the lambda's function type
         const lambda_var = ModuleEnv.varFrom(closure.lambda_expr_idx);
         const lambda_resolved = self.env.types.resolveVar(lambda_var);
@@ -1485,9 +1491,7 @@ pub const Interpreter = struct {
             try self.traverseAndMatchTypes(param_type_var, arg_type_var, scope_map);
         }
 
-        // Also handle the return type - for the identity function, the return type
-        // is the same polymorphic variable as the parameter type
-        // We need to traverse the return type to pick up any polymorphic variables
+        // Traverse the return type to match it up and handle any polymorphic variables
         const call_result_type_var = ModuleEnv.varFrom(call_expr_idx);
         try self.traverseAndMatchTypes(func_type.ret, call_result_type_var, scope_map);
     }
@@ -1578,11 +1582,14 @@ pub const Interpreter = struct {
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
                         .flex_var, .rigid_var => {
-                            self.traceInfo("LAYOUT SYSTEM NOT READY: Lambda return type is still unresolved ({}).", .{ret_resolved.desc.content});
-                            self.traceInfo("This means the type system hasn't finished constraint solving before layout computation.", .{});
-                            self.traceInfo("The type system shows the correct type in TYPES section, but the type variables", .{});
-                            self.traceInfo("passed to layout computation are still flex_var/rigid_var instead of concrete types.", .{});
-                            self.traceInfo("This will be fixed when the type system implementation is completed.", .{});
+                            self.traceInfo("Lambda return type is still unresolved after TypeScope lookup", .{});
+                            self.traceInfo("  Original var: {}", .{func.ret});
+                            self.traceInfo("  After TypeScope: {}", .{return_type_var});
+                            self.traceInfo("  Resolved content: {}", .{ret_resolved.desc.content});
+                            self.traceInfo("  TypeScope has {} scopes", .{self.type_scope.scopes.items.len});
+                            for (self.type_scope.scopes.items, 0..) |scope, i| {
+                                self.traceInfo("  Scope {}: {} mappings", .{ i, scope.count() });
+                            }
                             return error.NotImplemented;
                         },
                         else => {
@@ -1610,11 +1617,14 @@ pub const Interpreter = struct {
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
                         .flex_var, .rigid_var => {
-                            self.traceInfo("LAYOUT SYSTEM NOT READY: Lambda return type is still unresolved ({}).", .{ret_resolved.desc.content});
-                            self.traceInfo("This means the type system hasn't finished constraint solving before layout computation.", .{});
-                            self.traceInfo("The type system shows the correct type in TYPES section, but the type variables", .{});
-                            self.traceInfo("passed to layout computation are still flex_var/rigid_var instead of concrete types.", .{});
-                            self.traceInfo("This will be fixed when the type system implementation is completed.", .{});
+                            self.traceInfo("Lambda return type is still unresolved after TypeScope lookup", .{});
+                            self.traceInfo("  Original var: {}", .{func.ret});
+                            self.traceInfo("  After TypeScope: {}", .{return_type_var});
+                            self.traceInfo("  Resolved content: {}", .{ret_resolved.desc.content});
+                            self.traceInfo("  TypeScope has {} scopes", .{self.type_scope.scopes.items.len});
+                            for (self.type_scope.scopes.items, 0..) |scope, i| {
+                                self.traceInfo("  Scope {}: {} mappings", .{ i, scope.count() });
+                            }
                             return error.NotImplemented;
                         },
                         else => {
@@ -1642,11 +1652,14 @@ pub const Interpreter = struct {
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
                         .flex_var, .rigid_var => {
-                            self.traceInfo("LAYOUT SYSTEM NOT READY: Lambda return type is still unresolved ({}).", .{ret_resolved.desc.content});
-                            self.traceInfo("This means the type system hasn't finished constraint solving before layout computation.", .{});
-                            self.traceInfo("The type system shows the correct type in TYPES section, but the type variables", .{});
-                            self.traceInfo("passed to layout computation are still flex_var/rigid_var instead of concrete types.", .{});
-                            self.traceInfo("This will be fixed when the type system implementation is completed.", .{});
+                            self.traceInfo("Lambda return type is still unresolved after TypeScope lookup", .{});
+                            self.traceInfo("  Original var: {}", .{func.ret});
+                            self.traceInfo("  After TypeScope: {}", .{return_type_var});
+                            self.traceInfo("  Resolved content: {}", .{ret_resolved.desc.content});
+                            self.traceInfo("  TypeScope has {} scopes", .{self.type_scope.scopes.items.len});
+                            for (self.type_scope.scopes.items, 0..) |scope, i| {
+                                self.traceInfo("  Scope {}: {} mappings", .{ i, scope.count() });
+                            }
                             return error.NotImplemented;
                         },
                         else => {
@@ -1763,27 +1776,29 @@ pub const Interpreter = struct {
         const value_base: usize = self.value_stack.items.len - @as(usize, arg_count) - 1; // -1 for closure
 
         // Build TypeScope for polymorphic type resolution
-        var local_type_scope = types.TypeScope.init(self.allocator);
-
-        // Add a new HashMap for this function call's scope
+        // We need to push a new scope onto the existing scope stack
         var scope_map = types.VarMap.init(self.allocator);
 
         // Match function parameter types with argument types and build mappings
         try self.buildTypeScopeForCall(expr_idx, closure, arg_count, &scope_map);
 
-        // Add the scope map to our type scope if it has any mappings
-        if (scope_map.count() > 0) {
-            try local_type_scope.scopes.append(scope_map.move());
+        // Push the new scope onto the stack if it has mappings
+        const scope_was_pushed = scope_map.count() > 0;
+        if (scope_was_pushed) {
+            try self.type_scope.scopes.append(scope_map.move());
         } else {
             scope_map.deinit();
         }
 
-        // Save the current type scope and replace with the new one for this call
-        const saved_type_scope = self.type_scope;
-        self.type_scope = local_type_scope;
+        // Pop the scope when we're done (if we pushed one)
         defer {
-            self.type_scope.deinit();
-            self.type_scope = saved_type_scope;
+            if (scope_was_pushed) {
+                // Pop the scope we pushed and clean it up
+                if (self.type_scope.scopes.pop()) |popped_scope| {
+                    var mutable_scope = popped_scope;
+                    mutable_scope.deinit();
+                }
+            }
         }
 
         // Pre-allocate return slot with the correct return type layout using the new TypeScope
