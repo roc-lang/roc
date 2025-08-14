@@ -520,6 +520,13 @@ pub const Store = struct {
         desc.mark = mark;
         self.descs.set(desc_idx, desc);
     }
+    
+    /// Set the rank for a descriptor
+    pub fn setDescRank(self: *Self, desc_idx: DescStore.Idx, rank: Rank) void {
+        var desc = self.descs.get(desc_idx);
+        desc.rank = rank;
+        self.descs.set(desc_idx, desc);
+    }
 
     // resolvers //
 

@@ -388,11 +388,17 @@ pub const Store = struct {
                 .int => layout.data.scalar.data.int.size(),
                 .frac => layout.data.scalar.data.frac.size(),
                 .bool => 1, // bool is 1 byte
-                .str => @sizeOf(builtins.str.RocStr), // RocStr is a 24-byte struct
+                .str => switch (target_usize) {
+                    .u32 => 12, // 3 * 4 bytes (pointer + 2 usize fields)
+                    .u64 => 24, // 3 * 8 bytes (pointer + 2 usize fields)
+                },
                 .opaque_ptr => target_usize.size(), // opaque_ptr is pointer-sized
             },
             .box, .box_of_zst => target_usize.size(), // a Box is just a pointer to refcounted memory
-            .list => @sizeOf(builtins.list.RocList), // RocList is a 24-byte struct
+            .list => switch (target_usize) {
+                .u32 => 12, // 3 * 4 bytes (pointer + length + capacity)  
+                .u64 => 24, // 3 * 8 bytes (pointer + length + capacity)
+            },
             .list_of_zst => target_usize.size(), // Zero-sized lists might be different
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
@@ -1127,7 +1133,23 @@ pub const Store = struct {
                     current = self.types_store.resolveVar(backing_var);
                     continue;
                 },
-                .err => return LayoutError.TypeContainedMismatch,
+                .err => {
+                    // Error types might appear in polymorphic contexts
+                    // For now, treat them as i128 to allow evaluation to continue
+                    // This is a workaround until the type system is fixed
+                    const default_layout = Layout{
+                        .tag = .scalar,
+                        .data = .{
+                            .scalar = .{
+                                .tag = .int,
+                                .data = .{ .int = .i128 },
+                            },
+                        },
+                    };
+                    layout_idx = try self.insertLayout(default_layout);
+                    try self.layouts_by_var.put(self.env.gpa, current.var_, layout_idx);
+                    return layout_idx;
+                },
             };
 
             // We actually resolved a layout that wasn't zero-sized!

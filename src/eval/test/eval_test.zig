@@ -592,7 +592,7 @@ test "nested polymorphic functions" {
         \\        "Failed1"
         \\}
     ;
-    try runExpectStr(code, "Test", .trace);
+    try runExpectStr(code, "Test", .no_trace);
 }
 
 test "deeply nested polymorphic functions" {

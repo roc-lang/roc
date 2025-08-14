@@ -34,7 +34,13 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/cross_module_test.zig"));
     std.testing.refAllDecls(@import("test/let_polymorphism_integration_test.zig"));
     std.testing.refAllDecls(@import("test/let_polymorphism_test.zig"));
+    std.testing.refAllDecls(@import("test/let_polymorphism_rank_test.zig"));
+    std.testing.refAllDecls(@import("test/let_polymorphism_generalize_test.zig"));
     std.testing.refAllDecls(@import("test/literal_size_test.zig"));
     std.testing.refAllDecls(@import("test/nominal_type_origin_test.zig"));
+    std.testing.refAllDecls(@import("test/polymorphic_bug_test.zig"));
+    std.testing.refAllDecls(@import("test/polymorphic_bug_demo.zig"));
+    std.testing.refAllDecls(@import("test/polymorphic_debug_test.zig"));
+    std.testing.refAllDecls(@import("test/simple_polymorphic_bug_test.zig"));
     std.testing.refAllDecls(@import("test/static_dispatch_test.zig"));
 }

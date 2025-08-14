@@ -83,6 +83,9 @@ anonymous_rigid_var_subs: Instantiate.RigidToFlexSubs,
 /// Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
+/// Current rank level for let-polymorphism. Tracks nesting depth of let-bindings.
+/// Starts at Rank.top_level (1) and increments when entering let-binding scopes.
+current_rank: types_mod.Rank,
 
 /// Init type solver
 /// Does *not* own types_store or cir, but *does* own other fields
@@ -107,6 +110,7 @@ pub fn init(
         .annotation_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
         .anonymous_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
         .import_cache = ImportCache{},
+        .current_rank = types_mod.Rank.top_level,
     };
 }
 
@@ -120,6 +124,168 @@ pub fn deinit(self: *Self) void {
     self.annotation_rigid_var_subs.deinit(self.gpa);
     self.anonymous_rigid_var_subs.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
+}
+
+/// Enter a new scope, incrementing the rank level.
+/// Called when entering let-binding blocks.
+pub fn enterScope(self: *Self) void {
+    // Increment rank, but ensure we don't overflow
+    const current_int = @intFromEnum(self.current_rank);
+    if (current_int < 15) { // Rank is a u4, max value is 15
+        self.current_rank = @enumFromInt(current_int + 1);
+    }
+}
+
+/// Exit a scope, decrementing the rank level.
+/// Called when exiting let-binding blocks.
+pub fn exitScope(self: *Self) void {
+    // Decrement rank, but ensure we don't go below top_level
+    const current_int = @intFromEnum(self.current_rank);
+    if (current_int > @intFromEnum(types_mod.Rank.top_level)) {
+        self.current_rank = @enumFromInt(current_int - 1);
+    }
+}
+
+/// Create a fresh type variable with the current rank.
+/// This is used during type checking to ensure variables have the correct rank.
+pub fn freshVar(self: *Self) std.mem.Allocator.Error!Var {
+    return try self.types.register(.{
+        .content = .{ .flex_var = null },
+        .rank = self.current_rank,
+        .mark = .none,
+    });
+}
+
+/// Create a fresh type variable with specific content and current rank.
+pub fn freshVarFromContent(self: *Self, content: types_mod.Content) std.mem.Allocator.Error!Var {
+    return try self.types.register(.{
+        .content = content,
+        .rank = self.current_rank,
+        .mark = .none,
+    });
+}
+
+/// Generalize a type variable by converting unbound type variables at the current rank to rank 0.
+/// This is the key operation for let-polymorphism - it makes a type polymorphic.
+pub fn generalize(self: *Self, var_: Var) std.mem.Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    try self.generalizeContent(resolved.desc_idx, resolved.desc.content);
+}
+
+/// Generalize the content of a type, recursively generalizing nested types.
+fn generalizeContent(self: *Self, desc_idx: types_mod.DescStoreIdx, content: types_mod.Content) std.mem.Allocator.Error!void {
+    switch (content) {
+        .flex_var => {
+            // Check if this flex_var is at the current rank
+            const desc = self.types.getDesc(desc_idx);
+            if (desc.rank == self.current_rank) {
+                // Convert to generalized rank (rank 0)
+                self.types.setDescRank(desc_idx, types_mod.Rank.generalized);
+            }
+        },
+        .rigid_var => {
+            // Rigid variables are already generalized, nothing to do
+        },
+        .structure => |flat_type| {
+            try self.generalizeFlatType(flat_type);
+        },
+        .alias => |alias| {
+            // Generalize the aliased type (backing var and args)
+            const backing_var = self.types.getAliasBackingVar(alias);
+            try self.generalize(backing_var);
+            
+            // Also generalize the type arguments
+            const args = self.types.sliceAliasArgs(alias);
+            for (args) |arg_var| {
+                try self.generalize(arg_var);
+            }
+        },
+        .err => {
+            // Error types don't need generalization
+        },
+    }
+}
+
+/// Generalize a flat type structure, recursively generalizing nested types.
+fn generalizeFlatType(self: *Self, flat_type: types_mod.FlatType) std.mem.Allocator.Error!void {
+    switch (flat_type) {
+        .fn_pure, .fn_effectful, .fn_unbound => |func| {
+            // Generalize argument types
+            const args = self.types.sliceVars(func.args);
+            for (args) |arg_var| {
+                try self.generalize(arg_var);
+            }
+            // Generalize return type
+            try self.generalize(func.ret);
+        },
+        .record => |record| {
+            // Generalize field types
+            const fields = self.types.getRecordFieldsSlice(record.fields);
+            for (fields.items(.var_)) |field_var| {
+                try self.generalize(field_var);
+            }
+            // Generalize extension variable
+            try self.generalize(record.ext);
+        },
+        .tag_union => |tag_union| {
+            // Generalize tag argument types
+            const tags = self.types.getTagsSlice(tag_union.tags);
+            for (tags.items(.args)) |tag_args| {
+                const args = self.types.sliceVars(tag_args);
+                for (args) |arg_var| {
+                    try self.generalize(arg_var);
+                }
+            }
+            // Generalize extension variable
+            try self.generalize(tag_union.ext);
+        },
+        .list => |elem_var| {
+            try self.generalize(elem_var);
+        },
+        .box => |elem_var| {
+            try self.generalize(elem_var);
+        },
+        .tuple => |tuple| {
+            const elems = self.types.sliceVars(tuple.elems);
+            for (elems) |elem_var| {
+                try self.generalize(elem_var);
+            }
+        },
+        .num => |num| {
+            switch (num) {
+                .num_poly => |poly| try self.generalize(poly.var_),
+                .int_poly => |poly| try self.generalize(poly.var_),
+                .frac_poly => |poly| try self.generalize(poly.var_),
+                else => {}, // Concrete number types don't need generalization
+            }
+        },
+        .record_unbound => |fields| {
+            // Generalize field types
+            const fields_slice = self.types.getRecordFieldsSlice(fields);
+            for (fields_slice.items(.var_)) |field_var| {
+                try self.generalize(field_var);
+            }
+        },
+        .record_poly => |poly| {
+            // Generalize the record and the variable
+            const fields = self.types.getRecordFieldsSlice(poly.record.fields);
+            for (fields.items(.var_)) |field_var| {
+                try self.generalize(field_var);
+            }
+            try self.generalize(poly.record.ext);
+            try self.generalize(poly.var_);
+        },
+        .nominal_type => |nominal| {
+            // Generalize the nominal type variables
+            const vars_slice = self.types.sliceVars(nominal.vars.nonempty);
+            for (vars_slice) |var_| {
+                try self.generalize(var_);
+            }
+        },
+        .str, .list_unbound, .empty_record, .empty_tag_union => {
+            // These types don't contain type variables
+        },
+    }
 }
 
 /// Assert that type vars and regions in sync
@@ -289,7 +455,7 @@ fn setRegionAt(self: *Self, target_var: Var, new_region: Region) void {
 
 /// The the region for a variable
 fn fresh(self: *Self, new_region: Region) Allocator.Error!Var {
-    const var_ = try self.types.fresh();
+    const var_ = try self.freshVar();
     try self.fillInRegionsThrough(var_);
     self.setRegionAt(var_, new_region);
     return var_;
@@ -297,7 +463,7 @@ fn fresh(self: *Self, new_region: Region) Allocator.Error!Var {
 
 /// The the region for a variable
 fn freshFromContent(self: *Self, content: Content, new_region: Region) Allocator.Error!Var {
-    const var_ = try self.types.freshFromContent(content);
+    const var_ = try self.freshVarFromContent(content);
     try self.fillInRegionsThrough(var_);
     self.setRegionAt(var_, new_region);
     return var_;
@@ -727,7 +893,26 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             // The lookup expression should have the same type as the pattern it refers to
             const lookup_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
             const pattern_var = @as(Var, @enumFromInt(@intFromEnum(local.pattern_idx)));
-            _ = try self.unify(lookup_var, pattern_var);
+            
+            // Check if the pattern variable needs instantiation (is polymorphic)
+            // This ensures that polymorphic functions get fresh type variables each time they're used
+            const resolved = self.types.resolveVar(pattern_var);
+            const needs_inst = self.types.needsInstantiation(pattern_var);
+            
+            // Debug: Check if we're looking at a generalized variable
+            if (builtin.mode == .Debug) {
+                if (resolved.desc.rank == types_mod.Rank.generalized) {
+                    // This is a generalized (polymorphic) variable
+                }
+            }
+            
+            if (needs_inst) {
+                const instantiated_var = try self.instantiateVarAnon(pattern_var, .{ .explicit = expr_region });
+                _ = try self.unify(lookup_var, instantiated_var);
+            } else {
+                // Direct unification for non-polymorphic types
+                _ = try self.unify(lookup_var, pattern_var);
+            }
         },
         .e_lookup_external => |e| {
             const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
@@ -1012,6 +1197,21 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             does_fx = try self.checkUnaryNotExpr(expr_idx, expr_region, unary);
         },
         .e_block => |block| {
+            // Enter a new scope when processing a block with declarations
+            // This increases the rank for let-polymorphism
+            const has_declarations = blk: {
+                const statements = self.cir.store.sliceStatements(block.stmts);
+                for (statements) |stmt_idx| {
+                    const stmt = self.cir.store.getStatement(stmt_idx);
+                    if (stmt == .s_decl) break :blk true;
+                }
+                break :blk false;
+            };
+            
+            if (has_declarations) {
+                self.enterScope();
+            }
+            
             // Check all statements in the block
             const statements = self.cir.store.sliceStatements(block.stmts);
             for (statements) |stmt_idx| {
@@ -1026,6 +1226,9 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         const pattern_var: Var = @enumFromInt(@intFromEnum(decl_stmt.pattern));
                         const expr_var: Var = @enumFromInt(@intFromEnum(decl_stmt.expr));
                         _ = try self.unify(pattern_var, expr_var);
+                        
+                        // Generalize the pattern variable after unification
+                        try self.generalize(pattern_var);
                     },
                     .s_reassign => |reassign| {
                         does_fx = try self.checkExpr(reassign.expr) or does_fx;
@@ -1047,6 +1250,11 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                 @enumFromInt(@intFromEnum(expr_idx)),
                 @enumFromInt(@intFromEnum(block.final_expr)),
             );
+            
+            // Exit the scope if we entered one
+            if (has_declarations) {
+                self.exitScope();
+            }
         },
         .e_closure => |closure| {
             // The type of a closure is the type of the lambda it wraps.
@@ -1380,7 +1588,10 @@ fn checkLambdaWithAnno(
     }
 
     // STEP 2: NOW check the body (with constrained parameters)
+    // Enter a new scope for the lambda body to increase rank
+    self.enterScope();
     const is_effectful = try self.checkExpr(lambda.body);
+    self.exitScope();
 
     // STEP 3: Build the function type
     const fn_var = ModuleEnv.varFrom(expr_idx);
