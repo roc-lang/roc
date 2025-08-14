@@ -711,9 +711,19 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             const compiler_version = build_options.compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
-        .QUERY_CIR, .QUERY_TYPES, .GET_HOVER_INFO => {
-            // Compiler queries are not available in REPL mode with the current Repl implementation
-            try writeErrorResponse(response_buffer, .ERROR, "Compiler queries not available in REPL mode");
+        .QUERY_CIR => {
+            // For REPL mode, we need to generate CIR from the REPL's last module env
+            const module_env = repl_ptr.getLastModuleEnv() orelse {
+                try writeErrorResponse(response_buffer, .ERROR, "No REPL evaluation has occurred yet");
+                return;
+            };
+            
+            // Write CIR response directly using the REPL's module env
+            try writeReplCanCirResponse(response_buffer, module_env);
+        },
+        .QUERY_TYPES, .GET_HOVER_INFO => {
+            // These queries need type information which isn't readily available in REPL mode
+            try writeErrorResponse(response_buffer, .ERROR, "Type queries not available in REPL mode");
         },
         else => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "Invalid message type for REPL state");
@@ -1123,6 +1133,43 @@ fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) Respons
         try writeJsonString(w, "Parse AST not available");
     }
 
+    try w.writeAll("\"}");
+    try resp_writer.finalize();
+}
+
+/// Write canonicalized CIR response for REPL mode using ModuleEnv directly
+fn writeReplCanCirResponse(response_buffer: []u8, module_env: *ModuleEnv) ResponseWriteError!void {
+    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    resp_writer.pos = @sizeOf(u32);
+    const w = resp_writer.writer();
+
+    try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
+
+    var local_arena = std.heap.ArenaAllocator.init(allocator);
+    defer local_arena.deinit();
+    var sexpr_buffer = std.ArrayList(u8).init(local_arena.allocator());
+    defer sexpr_buffer.deinit();
+    const sexpr_writer = sexpr_buffer.writer().any();
+
+    var tree = SExprTree.init(local_arena.allocator());
+    defer tree.deinit();
+
+    const defs_count = module_env.store.sliceDefs(module_env.all_defs).len;
+    const stmts_count = module_env.store.sliceStatements(module_env.all_statements).len;
+
+    if (defs_count == 0 and stmts_count == 0) {
+        const debug_begin = tree.beginNode();
+        tree.pushStaticAtom("empty-cir-debug") catch {};
+        tree.pushStaticAtom("no-defs-or-statements") catch {};
+        const debug_attrs = tree.beginNode();
+        tree.endNode(debug_begin, debug_attrs) catch {};
+    }
+
+    const mutable_cir = @constCast(module_env);
+    ModuleEnv.pushToSExprTree(mutable_cir, null, &tree) catch {};
+    tree.toHtml(sexpr_writer) catch {};
+
+    try writeJsonString(w, sexpr_buffer.items);
     try w.writeAll("\"}");
     try resp_writer.finalize();
 }
