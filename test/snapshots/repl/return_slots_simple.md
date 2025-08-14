@@ -9,7 +9,7 @@ type=repl
 » (|x| x + 1)(5)
 ~~~
 # OUTPUT
-Evaluation error: error.NotImplemented
+5
 ---
 6
 # PROBLEMS

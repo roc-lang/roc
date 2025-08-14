@@ -8,7 +8,7 @@ type=repl
 » (|s| s)("Test")
 ~~~
 # OUTPUT
-Evaluation error: error.NotImplemented
+"Test"
 # PROBLEMS
 NIL
 # CANONICALIZE

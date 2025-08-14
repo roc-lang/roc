@@ -551,6 +551,19 @@ test "string refcount - basic literal" {
     try runExpectStr("\"Hello, World!\"", "Hello, World!", .no_trace);
 }
 
+test "polymorphic identity function" {
+    // Test the identity function with different types
+    const code =
+        \\{
+        \\    identity = |val| val;
+        \\    num = identity(5);
+        \\    str = identity("Hello");
+        \\    if (num > 0) str else ""
+        \\}
+    ;
+    try runExpectStr(code, "Hello", .no_trace);
+}
+
 test "string refcount - large string literal" {
     // Test large string that requires heap allocation and reference counting
     // This string is longer than SMALL_STR_MAX_LENGTH to trigger heap allocation

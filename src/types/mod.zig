@@ -32,6 +32,7 @@ pub const TwoTags = types.TwoTags;
 pub const Rank = types.Rank;
 pub const Mark = types.Mark;
 pub const TypeScope = types.TypeScope;
+pub const VarMap = types.VarMap;
 
 pub const Slot = store.Slot;
 pub const ResolvedVarDesc = store.ResolvedVarDesc;

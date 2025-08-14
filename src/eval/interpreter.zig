@@ -1441,6 +1441,118 @@ pub const Interpreter = struct {
     }
 
     /// Get the return layout of a closure by resolving its lambda expression's type
+    /// Build TypeScope mappings by matching function parameter types with argument types
+    fn buildTypeScopeForCall(self: *Interpreter, call_expr_idx: CIR.Expr.Idx, closure: *const Closure, arg_count: u32, scope_map: *types.VarMap) !void {
+        // Get the lambda's function type
+        const lambda_var = ModuleEnv.varFrom(closure.lambda_expr_idx);
+        const lambda_resolved = self.env.types.resolveVar(lambda_var);
+
+        const func_type = switch (lambda_resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .fn_pure => |func| func,
+                .fn_effectful => |func| func,
+                .fn_unbound => |func| func,
+                else => return error.TypeMismatch,
+            },
+            else => return error.TypeMismatch,
+        };
+
+        // Get the argument expressions from the call
+        const call_expr = self.env.store.getExpr(call_expr_idx);
+        const call = switch (call_expr) {
+            .e_call => |c| c,
+            else => return error.TypeMismatch,
+        };
+
+        const all_exprs = self.env.store.sliceExpr(call.args);
+        if (all_exprs.len == 0) {
+            return error.TypeMismatch;
+        }
+        const arg_exprs = all_exprs[1..]; // Skip the function expression
+
+        // Get parameter types
+        const param_types = self.env.types.sliceVars(func_type.args);
+        if (param_types.len != arg_count or arg_exprs.len != arg_count) {
+            return error.TypeMismatch;
+        }
+
+        // For each parameter, match it with the corresponding argument type
+        for (param_types, arg_exprs) |param_type_var, arg_expr_idx| {
+            // Get the argument's actual type
+            const arg_type_var = ModuleEnv.varFrom(arg_expr_idx);
+
+            // Traverse and match the parameter type with the argument type
+            try self.traverseAndMatchTypes(param_type_var, arg_type_var, scope_map);
+        }
+
+        // Also handle the return type - for the identity function, the return type
+        // is the same polymorphic variable as the parameter type
+        // We need to traverse the return type to pick up any polymorphic variables
+        const call_result_type_var = ModuleEnv.varFrom(call_expr_idx);
+        try self.traverseAndMatchTypes(func_type.ret, call_result_type_var, scope_map);
+    }
+
+    /// Traverse and match function parameter types with argument types
+    fn traverseAndMatchTypes(
+        self: *Interpreter,
+        param_type_var: types.Var,
+        arg_type_var: types.Var,
+        scope_map: *types.VarMap,
+    ) !void {
+        const param_resolved = self.env.types.resolveVar(param_type_var);
+        const arg_resolved = self.env.types.resolveVar(arg_type_var);
+
+        switch (param_resolved.desc.content) {
+            .flex_var, .rigid_var => {
+                // This is a polymorphic variable - map it to the concrete argument type
+                if (!scope_map.contains(param_type_var)) {
+                    // Add mapping from the polymorphic parameter to the concrete argument type
+                    try scope_map.put(param_type_var, arg_type_var);
+                    self.traceInfo("Added TypeScope mapping: {} -> {}", .{ param_type_var, arg_type_var });
+                }
+            },
+            .structure => |param_structure| {
+                // For structured types, we need to recursively match
+                switch (param_structure) {
+                    .list => |param_elem_var| {
+                        // The argument must also be a list
+                        switch (arg_resolved.desc.content) {
+                            .structure => |arg_structure| switch (arg_structure) {
+                                .list => |arg_elem_var| {
+                                    // Recursively match element types
+                                    try self.traverseAndMatchTypes(param_elem_var, arg_elem_var, scope_map);
+                                },
+                                else => return error.TypeMismatch,
+                            },
+                            else => return error.TypeMismatch,
+                        }
+                    },
+                    .box => |param_elem_var| {
+                        // The argument must also be a box
+                        switch (arg_resolved.desc.content) {
+                            .structure => |arg_structure| switch (arg_structure) {
+                                .box => |arg_elem_var| {
+                                    // Recursively match element types
+                                    try self.traverseAndMatchTypes(param_elem_var, arg_elem_var, scope_map);
+                                },
+                                else => return error.TypeMismatch,
+                            },
+                            else => return error.TypeMismatch,
+                        }
+                    },
+                    else => {
+                        // Other structured types should match exactly
+                        // No polymorphic variables to map
+                    },
+                }
+            },
+            else => {
+                // Other content types don't need special handling
+                // They should match exactly
+            },
+        }
+    }
+
     fn getClosureReturnLayout(self: *Interpreter, closure: *const Closure) EvalError!Layout {
         // Get the type Var for the lambda expression
         const lambda_var = ModuleEnv.varFrom(closure.lambda_expr_idx);
@@ -1452,8 +1564,16 @@ pub const Interpreter = struct {
         switch (lambda_resolved.desc.content) {
             .structure => |structure| switch (structure) {
                 .fn_pure => |func| {
+                    // First check if the return type is mapped in our TypeScope
+                    var return_type_var = func.ret;
+                    if (self.type_scope.lookup(func.ret)) |mapped_var| {
+                        // Use the mapped type instead of the polymorphic one
+                        return_type_var = mapped_var;
+                        self.traceInfo("Resolved return type via TypeScope: {} -> {}", .{ func.ret, mapped_var });
+                    }
+
                     // Ensure the return type variable is fully resolved before getting layout
-                    const ret_resolved = self.env.types.resolveVar(func.ret);
+                    const ret_resolved = self.env.types.resolveVar(return_type_var);
 
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
@@ -1467,7 +1587,7 @@ pub const Interpreter = struct {
                         },
                         else => {
                             // Type is resolved to a concrete type, use layout cache
-                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret, &self.type_scope) catch |err| {
+                            const ret_layout_idx = self.layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
                                 self.traceError("Failed to get layout for closure return type: {}", .{err});
                                 return error.TypeMismatch;
                             };
@@ -1476,8 +1596,16 @@ pub const Interpreter = struct {
                     }
                 },
                 .fn_effectful => |func| {
+                    // First check if the return type is mapped in our TypeScope
+                    var return_type_var = func.ret;
+                    if (self.type_scope.lookup(func.ret)) |mapped_var| {
+                        // Use the mapped type instead of the polymorphic one
+                        return_type_var = mapped_var;
+                        self.traceInfo("Resolved return type via TypeScope: {} -> {}", .{ func.ret, mapped_var });
+                    }
+
                     // Ensure the return type variable is fully resolved before getting layout
-                    const ret_resolved = self.env.types.resolveVar(func.ret);
+                    const ret_resolved = self.env.types.resolveVar(return_type_var);
 
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
@@ -1491,7 +1619,7 @@ pub const Interpreter = struct {
                         },
                         else => {
                             // Type is resolved to a concrete type, use layout cache
-                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret, &self.type_scope) catch |err| {
+                            const ret_layout_idx = self.layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
                                 self.traceError("Failed to get layout for closure return type: {}", .{err});
                                 return error.TypeMismatch;
                             };
@@ -1500,8 +1628,16 @@ pub const Interpreter = struct {
                     }
                 },
                 .fn_unbound => |func| {
+                    // First check if the return type is mapped in our TypeScope
+                    var return_type_var = func.ret;
+                    if (self.type_scope.lookup(func.ret)) |mapped_var| {
+                        // Use the mapped type instead of the polymorphic one
+                        return_type_var = mapped_var;
+                        self.traceInfo("Resolved return type via TypeScope: {} -> {}", .{ func.ret, mapped_var });
+                    }
+
                     // Ensure the return type variable is fully resolved before getting layout
-                    const ret_resolved = self.env.types.resolveVar(func.ret);
+                    const ret_resolved = self.env.types.resolveVar(return_type_var);
 
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
@@ -1515,7 +1651,7 @@ pub const Interpreter = struct {
                         },
                         else => {
                             // Type is resolved to a concrete type, use layout cache
-                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret, &self.type_scope) catch |err| {
+                            const ret_layout_idx = self.layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
                                 self.traceError("Failed to get layout for closure return type: {}", .{err});
                                 return error.TypeMismatch;
                             };
@@ -1626,7 +1762,31 @@ pub const Interpreter = struct {
         // Calculate value_base before allocating return slot
         const value_base: usize = self.value_stack.items.len - @as(usize, arg_count) - 1; // -1 for closure
 
-        // Pre-allocate return slot with the correct return type layout
+        // Build TypeScope for polymorphic type resolution
+        var local_type_scope = types.TypeScope.init(self.allocator);
+
+        // Add a new HashMap for this function call's scope
+        var scope_map = types.VarMap.init(self.allocator);
+
+        // Match function parameter types with argument types and build mappings
+        try self.buildTypeScopeForCall(expr_idx, closure, arg_count, &scope_map);
+
+        // Add the scope map to our type scope if it has any mappings
+        if (scope_map.count() > 0) {
+            try local_type_scope.scopes.append(scope_map.move());
+        } else {
+            scope_map.deinit();
+        }
+
+        // Save the current type scope and replace with the new one for this call
+        const saved_type_scope = self.type_scope;
+        self.type_scope = local_type_scope;
+        defer {
+            self.type_scope.deinit();
+            self.type_scope = saved_type_scope;
+        }
+
+        // Pre-allocate return slot with the correct return type layout using the new TypeScope
         const return_layout = try self.getClosureReturnLayout(closure);
         self.traceInfo("getClosureReturnLayout returned: {}", .{return_layout});
         const return_layout_idx = try self.layout_cache.insertLayout(return_layout);

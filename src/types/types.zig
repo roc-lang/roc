@@ -43,15 +43,18 @@ pub const Var = enum(u32) {
     }
 };
 
+/// A mapping from polymorphic type variables to concrete type variables
+pub const VarMap = std.hash_map.HashMap(Var, Var, std.hash_map.AutoContext(Var), 80);
+
 /// TypeScope represents nested type scopes for resolving polymorphic type variables.
 /// Each HashMap in the list represents a scope level, mapping polymorphic type variables
 /// to their resolved monomorphic equivalents.
 pub const TypeScope = struct {
-    scopes: std.ArrayList(std.hash_map.HashMap(Var, Var, std.hash_map.AutoContext(Var), 80)),
+    scopes: std.ArrayList(VarMap),
 
     pub fn init(allocator: std.mem.Allocator) TypeScope {
         return .{
-            .scopes = std.ArrayList(std.hash_map.HashMap(Var, Var, std.hash_map.AutoContext(Var), 80)).init(allocator),
+            .scopes = std.ArrayList(VarMap).init(allocator),
         };
     }
 

@@ -10,9 +10,9 @@ type=repl
 » (|x| !x)(True)
 ~~~
 # OUTPUT
-Evaluation error: error.NotImplemented
+"Test"
 ---
-Evaluation error: error.NotImplemented
+42
 ---
 False
 # PROBLEMS
