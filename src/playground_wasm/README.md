@@ -283,6 +283,8 @@ All communication uses JSON messages. Each message must have a `type` field.
   "result": {
     "output": "Evaluation error: error.ZeroSizedType",
     "type": "error",
+    "error_stage": "evaluation",
+    "error_details": "error.ZeroSizedType",
     "compiler_available": false
   }
 }
@@ -292,6 +294,18 @@ All communication uses JSON messages. Each message must have a `type` field.
 - `"definition"`: Input was a variable assignment (e.g., `x = 42`)
 - `"expression"`: Input was an expression that was evaluated
 - `"error"`: Input caused a compilation or evaluation error
+
+**Error Information** (when `type` is `"error"`):
+- `error_stage`: Indicates which compiler stage produced the error
+  - `"parse"`: Syntax/parsing error
+  - `"canonicalize"`: Canonicalization error
+  - `"typecheck"`: Type checking error
+  - `"layout"`: Layout computation error
+  - `"evaluation"`: Runtime evaluation error
+  - `"interpreter"`: Interpreter initialization error
+  - `"runtime"`: General runtime error
+  - `"unknown"`: Error stage could not be determined
+- `error_details`: Additional error details, typically the specific error name or message
 
 **Compiler Availability**:
 - `compiler_available: true`: Compiler queries (QUERY_CIR, QUERY_TYPES, GET_HOVER_INFO) are available
@@ -433,19 +447,101 @@ const cirResponse = await sendMessage({type: "QUERY_CIR"});
 ### Error Handling and Recovery
 
 ```javascript
-// Submit invalid syntax
-const errorResponse = await sendMessage({
+// Submit invalid syntax - Parse error
+const parseError = await sendMessage({
     type: "REPL_STEP", 
     input: "x = = 42"  // Invalid syntax
 });
-// Response: {result: {output: "Parse error: Expected expression", type: "error"}}
+// Response: {
+//   result: {
+//     output: "Parse error: Expected expression",
+//     type: "error",
+//     error_stage: "parse",
+//     error_details: "Expected expression",
+//     compiler_available: false
+//   }
+// }
 
-// REPL state remains intact, continue with valid input
+// Submit type error
+const typeError = await sendMessage({
+    type: "REPL_STEP",
+    input: "\"hello\" + 42"  // Type mismatch
+});
+// Response: {
+//   result: {
+//     output: "Type check expr error: TypeMismatch",
+//     type: "error",
+//     error_stage: "typecheck",
+//     error_details: "TypeMismatch",
+//     compiler_available: false
+//   }
+// }
+
+// Submit evaluation error
+const evalError = await sendMessage({
+    type: "REPL_STEP",
+    input: "x +"  // Incomplete expression
+});
+// Response: {
+//   result: {
+//     output: "Evaluation error: error.ZeroSizedType",
+//     type: "error",
+//     error_stage: "evaluation",
+//     error_details: "error.ZeroSizedType",
+//     compiler_available: false
+//   }
+// }
+
+// REPL state remains intact after errors, continue with valid input
 const validResponse = await sendMessage({
     type: "REPL_STEP", 
     input: "x = 42"  // Should still work
 });
 // Response: {result: {output: "assigned `x`", type: "definition"}}
+```
+
+### Using Error Information for Better UX
+
+```javascript
+// Process REPL response with enhanced error handling
+function handleReplResponse(response) {
+    const result = response.result;
+    
+    if (result.type === "error") {
+        // Use error_stage to provide stage-specific help
+        switch (result.error_stage) {
+            case "parse":
+                console.error("Syntax error:", result.output);
+                showSyntaxHighlight(result.error_details);
+                break;
+            
+            case "typecheck":
+                console.error("Type error:", result.output);
+                showTypeHints(result.error_details);
+                break;
+            
+            case "evaluation":
+                console.error("Runtime error:", result.output);
+                showDebugInfo(result.error_details);
+                break;
+            
+            default:
+                console.error("Error:", result.output);
+        }
+        
+        // Check if compiler is still available for queries
+        if (result.compiler_available) {
+            // Can still query CIR, types, etc.
+            enableCompilerQueries();
+        } else {
+            disableCompilerQueries();
+        }
+    } else if (result.type === "definition") {
+        console.log("Defined:", result.output);
+    } else if (result.type === "expression") {
+        console.log("Result:", result.output);
+    }
+}
 ```
 
 ### Dependency Updates

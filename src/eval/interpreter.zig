@@ -1321,7 +1321,7 @@ pub const Interpreter = struct {
                     // For now, only support .dec precision decimals
                     const lhs_frac = lhs_scalar.data.frac;
                     const rhs_frac = rhs_scalar.data.frac;
-                    
+
                     if (lhs_frac == .dec and rhs_frac == .dec) {
                         // Get RocDec values from memory
                         const lhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(lhs.ptr.?)));

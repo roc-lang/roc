@@ -13,6 +13,23 @@ type=repl
 NIL
 # CANONICALIZE
 ~~~clojure
+(e-if @1.1-1.1
+	(if-branches
+		(if-branch
+			(e-binop @1.1-1.1 (op "gt")
+				(e-int @1.1-1.1 (value "5"))
+				(e-int @1.1-1.1 (value "3")))
+			(e-if @1.1-1.1
+				(if-branches
+					(if-branch
+						(e-binop @1.1-1.1 (op "gt")
+							(e-int @1.1-1.1 (value "1"))
+							(e-int @1.1-1.1 (value "2")))
+						(e-int @1.1-1.1 (value "3"))))
+				(if-else
+					(e-int @1.1-1.1 (value "4"))))))
+	(if-else
+		(e-int @1.1-1.1 (value "5"))))
 (e-if @1.2-1.37
 	(if-branches
 		(if-branch
@@ -33,5 +50,6 @@ NIL
 ~~~
 # TYPES
 ~~~clojure
+(expr @1.1-1.1 (type "Num(_size)"))
 (expr @1.2-1.37 (type "Num(_size)"))
 ~~~

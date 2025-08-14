@@ -190,6 +190,46 @@ var compiler_data: ?CompilerStageData = null;
 var repl_instance: ?*Repl = null;
 var repl_roc_ops: ?*RocOps = null;
 
+/// REPL result types
+const ReplResultType = enum {
+    expression,
+    definition,
+    @"error",
+
+    pub fn jsonStringify(self: ReplResultType, writer: anytype) !void {
+        try writer.writeAll("\"");
+        try writer.writeAll(@tagName(self));
+        try writer.writeAll("\"");
+    }
+};
+
+/// REPL error stages
+const ReplErrorStage = enum {
+    parse,
+    canonicalize,
+    typecheck,
+    layout,
+    evaluation,
+    interpreter,
+    runtime,
+    unknown,
+
+    pub fn jsonStringify(self: ReplErrorStage, writer: anytype) !void {
+        try writer.writeAll("\"");
+        try writer.writeAll(@tagName(self));
+        try writer.writeAll("\"");
+    }
+};
+
+/// Structured REPL result
+const ReplStepResult = struct {
+    output: []const u8,
+    result_type: ReplResultType,
+    error_stage: ?ReplErrorStage = null,
+    error_details: ?[]const u8 = null,
+    compiler_available: bool = true,
+};
+
 /// Host-managed buffers for better memory management
 var host_message_buffer: ?[]u8 = null;
 var host_response_buffer: ?[]u8 = null;
@@ -667,15 +707,23 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             const input = input_value.string;
 
             const result = repl_ptr.step(input) catch |err| {
-                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
+                // Handle hard errors (like OOM) that aren't caught by the REPL
+                // Create a static error message to avoid allocation issues
+                const error_msg = @errorName(err);
+                const step_result = ReplStepResult{
+                    .output = error_msg,
+                    .result_type = .@"error",
+                    .error_stage = .runtime,
+                    .error_details = error_msg,
+                };
+                try writeReplStepResultJson(response_buffer, step_result);
                 return;
             };
             defer allocator.free(result);
 
-            // Determine result type based on output
-            const result_type = if (std.mem.startsWith(u8, result, "assigned")) "definition" else "expression";
-
-            try writeReplStepResponse(response_buffer, result, result_type, null);
+            // Parse the result to determine type and extract error information
+            const step_result = parseReplResult(result);
+            try writeReplStepResultJson(response_buffer, step_result);
         },
         .CLEAR_REPL => {
             // Clear REPL definitions but keep REPL active
@@ -717,7 +765,7 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
                 try writeErrorResponse(response_buffer, .ERROR, "No REPL evaluation has occurred yet");
                 return;
             };
-            
+
             // Write CIR response directly using the REPL's module env
             try writeReplCanCirResponse(response_buffer, module_env);
         },
@@ -1063,27 +1111,107 @@ fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
     try resp_writer.finalize();
 }
 
-/// Write REPL step response
-fn writeReplStepResponse(response_buffer: []u8, output: []const u8, result_type: []const u8, diagnostics: ?[]const u8) ResponseWriteError!void {
+/// Parse REPL result string to determine type and extract error information
+fn parseReplResult(result: []const u8) ReplStepResult {
+    // Check for known error patterns
+    if (std.mem.startsWith(u8, result, "Parse error:")) {
+        return ReplStepResult{
+            .output = result,
+            .result_type = .@"error",
+            .error_stage = .parse,
+            .error_details = if (result.len > 13) result[13..] else null,
+        };
+    } else if (std.mem.indexOf(u8, result, "Canonicalize") != null) {
+        return ReplStepResult{
+            .output = result,
+            .result_type = .@"error",
+            .error_stage = .canonicalize,
+            .error_details = extractErrorDetails(result),
+        };
+    } else if (std.mem.indexOf(u8, result, "Type check") != null) {
+        return ReplStepResult{
+            .output = result,
+            .result_type = .@"error",
+            .error_stage = .typecheck,
+            .error_details = extractErrorDetails(result),
+        };
+    } else if (std.mem.indexOf(u8, result, "Layout") != null) {
+        return ReplStepResult{
+            .output = result,
+            .result_type = .@"error",
+            .error_stage = .layout,
+            .error_details = extractErrorDetails(result),
+        };
+    } else if (std.mem.startsWith(u8, result, "Evaluation error:")) {
+        return ReplStepResult{
+            .output = result,
+            .result_type = .@"error",
+            .error_stage = .evaluation,
+            .error_details = if (result.len > 17) result[17..] else null,
+        };
+    } else if (std.mem.indexOf(u8, result, "Interpreter") != null) {
+        return ReplStepResult{
+            .output = result,
+            .result_type = .@"error",
+            .error_stage = .interpreter,
+            .error_details = extractErrorDetails(result),
+        };
+    } else if (std.mem.startsWith(u8, result, "assigned")) {
+        // Definition success
+        return ReplStepResult{
+            .output = result,
+            .result_type = .definition,
+        };
+    } else {
+        // Expression result
+        return ReplStepResult{
+            .output = result,
+            .result_type = .expression,
+        };
+    }
+}
+
+/// Extract error details from an error message (part after ": ")
+fn extractErrorDetails(message: []const u8) ?[]const u8 {
+    if (std.mem.indexOf(u8, message, ": ")) |idx| {
+        return message[idx + 2 ..];
+    }
+    return null;
+}
+
+/// Write REPL step result as JSON
+fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) ResponseWriteError!void {
     var resp_writer = ResponseWriter{ .buffer = response_buffer };
     resp_writer.pos = @sizeOf(u32);
     const w = resp_writer.writer();
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"result\":{");
+
+    // Output field
     try w.writeAll("\"output\":\"");
-    try writeJsonString(w, output);
-    try w.writeAll("\",\"type\":\"");
-    try writeJsonString(w, result_type);
+    try writeJsonString(w, result.output);
     try w.writeAll("\"");
 
-    if (diagnostics) |diag| {
-        try w.writeAll(",\"diagnostics\":");
-        try w.writeAll(diag);
+    // Type field (using enum's jsonStringify)
+    try w.writeAll(",\"type\":");
+    try result.result_type.jsonStringify(w);
+
+    // Error-specific fields
+    if (result.error_stage) |stage| {
+        try w.writeAll(",\"error_stage\":");
+        try stage.jsonStringify(w);
     }
 
-    try w.writeAll(",\"compiler_available\":true");
-    try w.writeAll("}}");
+    if (result.error_details) |details| {
+        try w.writeAll(",\"error_details\":\"");
+        try writeJsonString(w, details);
+        try w.writeAll("\"");
+    }
 
+    // Compiler availability
+    try w.print(",\"compiler_available\":{}", .{result.compiler_available});
+
+    try w.writeAll("}}");
     try resp_writer.finalize();
 }
 
@@ -1556,17 +1684,16 @@ export fn processAndRespond(message_ptr: [*]const u8, message_len: usize) ?[*:0]
 export fn freeWasmString(ptr: [*]u8) void {
     // The received pointer `ptr` points to the start of the data.
     // The actual allocation starts `sizeOf(u32)` bytes before it.
-    const len_ptr: [*]const u32 = @ptrCast(@alignCast(ptr - @sizeOf(u32)));
-    const original_alloc_ptr: [*]u8 = @ptrCast(@constCast(len_ptr));
+    const prefix_ptr = ptr - @sizeOf(u32);
 
-    // Read the length of the JSON data.
-    const json_len = len_ptr[0];
+    // Read the length as individual bytes to avoid alignment issues
+    const json_len = std.mem.readInt(u32, @ptrCast(prefix_ptr), .little);
 
     // Calculate the total allocated size: [u32 length] + [data] + [u8 null terminator]
     const total_len = @sizeOf(u32) + json_len + 1;
 
     // Reconstruct the original slice that was allocated.
-    const original_slice = original_alloc_ptr[0..total_len];
+    const original_slice = prefix_ptr[0..total_len];
 
     // Free the original slice.
     allocator.free(original_slice);

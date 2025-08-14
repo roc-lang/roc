@@ -103,11 +103,13 @@ const WasmResponse = struct {
 
     const ReplResult = struct {
         output: []const u8,
-        type: []const u8,  // "definition", "expression", "error"
+        type: []const u8,
         compiler_available: ?bool = null,
         variable_name: ?[]const u8 = null,
         source: ?[]const u8 = null,
         evaluated_source: ?[]const u8 = null,
+        error_stage: ?[]const u8 = null,
+        error_details: ?[]const u8 = null,
     };
 };
 
@@ -157,6 +159,10 @@ const MessageStep = struct {
     expected_hover_info_contains: ?[]const u8 = null,
     /// An optional substring expected to be in the REPL result `output`.
     expected_result_output_contains: ?[]const u8 = null,
+    /// Expected REPL result type ("expression", "definition", "error").
+    expected_result_type: ?[]const u8 = null,
+    /// Expected error stage for REPL errors.
+    expected_result_error_stage: ?[]const u8 = null,
     /// Optional expectations for diagnostic content.
     expected_diagnostics: ?DiagnosticExpectation = null,
     /// If true, the step is expected to result in a Wasm invocation error.
@@ -706,6 +712,35 @@ fn runTestSteps(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, te
             }
         }
 
+        if (step.expected_result_type) |expected_type| {
+            if (response.result) |result| {
+                if (!std.mem.eql(u8, result.type, expected_type)) {
+                    logDebug("  Step {}: Expected result type '{s}', got '{s}'\n", .{ i + 1, expected_type, result.type });
+                    return StepExecutionResult{ .result = .failed, .failure_message = "Assertion failed: REPL result type mismatch" };
+                }
+            } else {
+                logDebug("  Step {}: Expected result type '{s}', but result is null\n", .{ i + 1, expected_type });
+                return StepExecutionResult{ .result = .failed, .failure_message = "Assertion failed: REPL result is null" };
+            }
+        }
+
+        if (step.expected_result_error_stage) |expected_stage| {
+            if (response.result) |result| {
+                if (result.error_stage) |stage| {
+                    if (!std.mem.eql(u8, stage, expected_stage)) {
+                        logDebug("  Step {}: Expected error stage '{s}', got '{s}'\n", .{ i + 1, expected_stage, stage });
+                        return StepExecutionResult{ .result = .failed, .failure_message = "Assertion failed: REPL error stage mismatch" };
+                    }
+                } else {
+                    logDebug("  Step {}: Expected error stage '{s}', but error_stage is null\n", .{ i + 1, expected_stage });
+                    return StepExecutionResult{ .result = .failed, .failure_message = "Assertion failed: REPL error_stage is null" };
+                }
+            } else {
+                logDebug("  Step {}: Expected error stage '{s}', but result is null\n", .{ i + 1, expected_stage });
+                return StepExecutionResult{ .result = .failed, .failure_message = "Assertion failed: REPL result is null" };
+            }
+        }
+
         if (step.expected_diagnostics) |expected_diag| {
             if (expectDiagnostics(&response, expected_diag)) |_| {} else |_| {
                 logDebug("  Step {}: Assertions failed. Printing WASM internal debug log:\n", .{i + 1});
@@ -1024,27 +1059,15 @@ pub fn main() !void {
     });
 
     // ====== REPL Test Cases ======
-    
+
     // Test: REPL Lifecycle - Init, Step, Clear, Reset
     var repl_lifecycle_steps = try allocator.alloc(MessageStep, 5);
     repl_lifecycle_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    repl_lifecycle_steps[1] = .{ 
-        .message = .{ .type = "INIT_REPL" }, 
-        .expected_status = "SUCCESS",
-        .expected_message_contains = "REPL initialized"
-    };
-    repl_lifecycle_steps[2] = .{
-        .message = .{ .type = "REPL_STEP", .input = "x = 42" },
-        .expected_status = "SUCCESS",
-        .expected_result_output_contains = "assigned `x`"
-    };
-    repl_lifecycle_steps[3] = .{
-        .message = .{ .type = "CLEAR_REPL" },
-        .expected_status = "SUCCESS",
-        .expected_message_contains = "REPL cleared"
-    };
+    repl_lifecycle_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS", .expected_message_contains = "REPL initialized" };
+    repl_lifecycle_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 42" }, .expected_status = "SUCCESS", .expected_result_output_contains = "assigned `x`" };
+    repl_lifecycle_steps[3] = .{ .message = .{ .type = "CLEAR_REPL" }, .expected_status = "SUCCESS", .expected_message_contains = "REPL cleared" };
     repl_lifecycle_steps[4] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
-    
+
     try test_cases.append(.{
         .name = "REPL Lifecycle - Init, Step, Clear, Reset",
         .steps = repl_lifecycle_steps,
@@ -1054,23 +1077,11 @@ pub fn main() !void {
     var repl_core_steps = try allocator.alloc(MessageStep, 6);
     repl_core_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
     repl_core_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS" };
-    repl_core_steps[2] = .{
-        .message = .{ .type = "REPL_STEP", .input = "x = 10" },
-        .expected_status = "SUCCESS",
-        .expected_result_output_contains = "assigned `x`"
-    };
-    repl_core_steps[3] = .{
-        .message = .{ .type = "REPL_STEP", .input = "y = x + 5" },
-        .expected_status = "SUCCESS",
-        .expected_result_output_contains = "assigned `y`"
-    };
-    repl_core_steps[4] = .{
-        .message = .{ .type = "REPL_STEP", .input = "y" },
-        .expected_status = "SUCCESS",
-        .expected_result_output_contains = "15"
-    };
+    repl_core_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 10" }, .expected_status = "SUCCESS", .expected_result_output_contains = "assigned `x`" };
+    repl_core_steps[3] = .{ .message = .{ .type = "REPL_STEP", .input = "y = x + 5" }, .expected_status = "SUCCESS", .expected_result_output_contains = "assigned `y`" };
+    repl_core_steps[4] = .{ .message = .{ .type = "REPL_STEP", .input = "y" }, .expected_status = "SUCCESS", .expected_result_output_contains = "15" };
     repl_core_steps[5] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
-    
+
     try test_cases.append(.{
         .name = "REPL Core - Definitions and Expressions",
         .steps = repl_core_steps,
@@ -1080,30 +1091,17 @@ pub fn main() !void {
     var repl_redefinition_steps = try allocator.alloc(MessageStep, 8);
     repl_redefinition_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
     repl_redefinition_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS" };
-    repl_redefinition_steps[2] = .{
-        .message = .{ .type = "REPL_STEP", .input = "x = 10" },
-        .expected_status = "SUCCESS"
-    };
-    repl_redefinition_steps[3] = .{
-        .message = .{ .type = "REPL_STEP", .input = "y = x + 5" },
-        .expected_status = "SUCCESS"
-    };
-    repl_redefinition_steps[4] = .{
-        .message = .{ .type = "REPL_STEP", .input = "y" },
-        .expected_status = "SUCCESS",
-        .expected_result_output_contains = "15"
-    };
-    repl_redefinition_steps[5] = .{
-        .message = .{ .type = "REPL_STEP", .input = "x = 20" },
-        .expected_status = "SUCCESS"
-    };
+    repl_redefinition_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 10" }, .expected_status = "SUCCESS" };
+    repl_redefinition_steps[3] = .{ .message = .{ .type = "REPL_STEP", .input = "y = x + 5" }, .expected_status = "SUCCESS" };
+    repl_redefinition_steps[4] = .{ .message = .{ .type = "REPL_STEP", .input = "y" }, .expected_status = "SUCCESS", .expected_result_output_contains = "15" };
+    repl_redefinition_steps[5] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 20" }, .expected_status = "SUCCESS" };
     repl_redefinition_steps[6] = .{
         .message = .{ .type = "REPL_STEP", .input = "y" },
         .expected_status = "SUCCESS",
-        .expected_result_output_contains = "25"  // Should reflect new x value
+        .expected_result_output_contains = "25", // Should reflect new x value
     };
     repl_redefinition_steps[7] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
-    
+
     try test_cases.append(.{
         .name = "REPL Variable Redefinition - Dependency Updates",
         .steps = repl_redefinition_steps,
@@ -1113,22 +1111,21 @@ pub fn main() !void {
     var repl_error_steps = try allocator.alloc(MessageStep, 6);
     repl_error_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
     repl_error_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS" };
-    repl_error_steps[2] = .{
-        .message = .{ .type = "REPL_STEP", .input = "x = 42" },
-        .expected_status = "SUCCESS"
-    };
+    repl_error_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 42" }, .expected_status = "SUCCESS" };
     repl_error_steps[3] = .{
-        .message = .{ .type = "REPL_STEP", .input = "x +" },  // Invalid syntax - incomplete expression
+        .message = .{ .type = "REPL_STEP", .input = "x +" }, // Invalid syntax - incomplete expression
         .expected_status = "SUCCESS",
-        .expected_result_output_contains = "Evaluation error"
+        .expected_result_output_contains = "Evaluation error",
+        .expected_result_type = "error",
+        .expected_result_error_stage = "evaluation",
     };
     repl_error_steps[4] = .{
-        .message = .{ .type = "REPL_STEP", .input = "x" },  // Should still work
+        .message = .{ .type = "REPL_STEP", .input = "x" }, // Should still work
         .expected_status = "SUCCESS",
-        .expected_result_output_contains = "42"  // Previous definition should still be valid
+        .expected_result_output_contains = "42", // Previous definition should still be valid
     };
     repl_error_steps[5] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
-    
+
     try test_cases.append(.{
         .name = "REPL Error Handling - Invalid Syntax Recovery",
         .steps = repl_error_steps,
@@ -1138,21 +1135,14 @@ pub fn main() !void {
     var repl_compiler_steps = try allocator.alloc(MessageStep, 5);
     repl_compiler_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
     repl_compiler_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS" };
-    repl_compiler_steps[2] = .{
-        .message = .{ .type = "REPL_STEP", .input = "x = 42" },
-        .expected_status = "SUCCESS"
-    };
-    repl_compiler_steps[3] = .{
-        .message = .{ .type = "REPL_STEP", .input = "x + 10" },
-        .expected_status = "SUCCESS",
-        .expected_result_output_contains = "52"
-    };
+    repl_compiler_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 42" }, .expected_status = "SUCCESS" };
+    repl_compiler_steps[3] = .{ .message = .{ .type = "REPL_STEP", .input = "x + 10" }, .expected_status = "SUCCESS", .expected_result_output_contains = "52" };
     repl_compiler_steps[4] = .{
-        .message = .{ .type = "QUERY_CIR" },  // Should work in REPL mode
+        .message = .{ .type = "QUERY_CIR" }, // Should work in REPL mode
         .expected_status = "SUCCESS",
-        .expected_data_contains = "can-ir"
+        .expected_data_contains = "can-ir",
     };
-    
+
     try test_cases.append(.{
         .name = "REPL Compiler Integration - Query After Evaluation",
         .steps = repl_compiler_steps,
@@ -1162,10 +1152,7 @@ pub fn main() !void {
     var repl_isolation_steps = try allocator.alloc(MessageStep, 6);
     repl_isolation_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
     repl_isolation_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS" };
-    repl_isolation_steps[2] = .{
-        .message = .{ .type = "REPL_STEP", .input = "x = 42" },
-        .expected_status = "SUCCESS"
-    };
+    repl_isolation_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 42" }, .expected_status = "SUCCESS" };
     repl_isolation_steps[3] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
     // After reset, should be back to single-file mode
     const simple_source = try TestData.happyPathRocCode(allocator);
@@ -1175,11 +1162,8 @@ pub fn main() !void {
         .expected_message_contains = "LOADED",
         .owned_source = simple_source,
     };
-    repl_isolation_steps[5] = .{
-        .message = .{ .type = "QUERY_TYPES" },
-        .expected_status = "SUCCESS"
-    };
-    
+    repl_isolation_steps[5] = .{ .message = .{ .type = "QUERY_TYPES" }, .expected_status = "SUCCESS" };
+
     try test_cases.append(.{
         .name = "REPL State Isolation - Mode Switching",
         .steps = repl_isolation_steps,
@@ -1192,7 +1176,7 @@ pub fn main() !void {
 
     logDebug("\nAll Playground Integration Tests Completed!\n", .{});
     logDebug("Final Results: {}/{} passed ({d:0.}%)\n", .{ stats.passed, stats.total, stats.successRate() });
-    
+
     // Exit with error if any tests failed
     if (stats.failed > 0) {
         return error.TestsFailed;
