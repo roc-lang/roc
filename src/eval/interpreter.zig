@@ -261,6 +261,8 @@ pub const Interpreter = struct {
     layout_cache: *LayoutStore,
     /// Type information store from the type checker
     type_store: *TypeStore,
+    /// Type scope for resolving polymorphic type variables
+    type_scope: types.TypeScope,
     /// Work queue for iterative expression evaluation (LIFO stack)
     work_stack: std.ArrayList(WorkItem),
     /// Parallel stack tracking type layouts of values in `stack_memory`
@@ -297,6 +299,7 @@ pub const Interpreter = struct {
             .stack_memory = stack_memory,
             .layout_cache = layout_cache,
             .type_store = type_store,
+            .type_scope = types.TypeScope.init(allocator),
             .work_stack = try std.ArrayList(WorkItem).initCapacity(allocator, 128),
             .value_stack = try std.ArrayList(InternalStackValue).initCapacity(allocator, 128),
             .bindings_stack = try std.ArrayList(Binding).initCapacity(allocator, 128),
@@ -392,6 +395,7 @@ pub const Interpreter = struct {
         // it points to string data that lives in the string table
         // so we don't need to free it here
 
+        self.type_scope.deinit();
         self.work_stack.deinit();
         self.value_stack.deinit();
         self.bindings_stack.deinit();
@@ -628,7 +632,7 @@ pub const Interpreter = struct {
     /// Helper to get the layout for an expression
     fn getLayoutIdx(self: *Interpreter, expr_idx: anytype) EvalError!layout.Idx {
         const expr_var: types.Var = @enumFromInt(@intFromEnum(expr_idx));
-        const layout_idx = self.layout_cache.addTypeVar(expr_var) catch |err| switch (err) {
+        const layout_idx = self.layout_cache.addTypeVar(expr_var, &self.type_scope) catch |err| switch (err) {
             error.ZeroSizedType => return error.ZeroSizedType,
             error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
             else => |e| return e,
@@ -853,7 +857,7 @@ pub const Interpreter = struct {
                 // CRITICAL: Use the nominal type for layout, not the backing expression's type
                 // Get the nominal type's layout directly
                 const nominal_var: types.Var = @enumFromInt(@intFromEnum(expr_idx));
-                const nominal_layout_idx = self.layout_cache.addTypeVar(nominal_var) catch |err| switch (err) {
+                const nominal_layout_idx = self.layout_cache.addTypeVar(nominal_var, &self.type_scope) catch |err| switch (err) {
                     error.ZeroSizedType => return error.ZeroSizedType,
                     error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
                     else => |e| return e,
@@ -1463,7 +1467,7 @@ pub const Interpreter = struct {
                         },
                         else => {
                             // Type is resolved to a concrete type, use layout cache
-                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret) catch |err| {
+                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret, &self.type_scope) catch |err| {
                                 self.traceError("Failed to get layout for closure return type: {}", .{err});
                                 return error.TypeMismatch;
                             };
@@ -1487,7 +1491,7 @@ pub const Interpreter = struct {
                         },
                         else => {
                             // Type is resolved to a concrete type, use layout cache
-                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret) catch |err| {
+                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret, &self.type_scope) catch |err| {
                                 self.traceError("Failed to get layout for closure return type: {}", .{err});
                                 return error.TypeMismatch;
                             };
@@ -1511,7 +1515,7 @@ pub const Interpreter = struct {
                         },
                         else => {
                             // Type is resolved to a concrete type, use layout cache
-                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret) catch |err| {
+                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret, &self.type_scope) catch |err| {
                                 self.traceError("Failed to get layout for closure return type: {}", .{err});
                                 return error.TypeMismatch;
                             };

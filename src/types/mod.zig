@@ -31,6 +31,7 @@ pub const TwoRecordFields = types.TwoRecordFields;
 pub const TwoTags = types.TwoTags;
 pub const Rank = types.Rank;
 pub const Mark = types.Mark;
+pub const TypeScope = types.TypeScope;
 
 pub const Slot = store.Slot;
 pub const ResolvedVarDesc = store.ResolvedVarDesc;

@@ -16,6 +16,7 @@ const target = base.target;
 const Ident = base.Ident;
 const Region = base.Region;
 const Var = types.Var;
+const TypeScope = types.TypeScope;
 const Layout = layout_.Layout;
 const Idx = layout_.Idx;
 const RecordField = layout_.RecordField;
@@ -718,6 +719,7 @@ pub const Store = struct {
     pub fn addTypeVar(
         self: *Self,
         unresolved_var: Var,
+        type_scope: *const TypeScope,
     ) (LayoutError || std.mem.Allocator.Error)!Idx {
         var current = self.types_store.resolveVar(unresolved_var);
 
@@ -1069,6 +1071,13 @@ pub const Store = struct {
                     },
                 },
                 .flex_var => |_| blk: {
+                    // First, check if this flex var is mapped in the TypeScope
+                    if (type_scope.lookup(current.var_)) |mapped_var| {
+                        // Found a mapping, resolve the mapped variable and continue
+                        current = self.types_store.resolveVar(mapped_var);
+                        continue :outer;
+                    }
+
                     // Flex vars can only be sent to the host if boxed.
                     if (self.work.pending_containers.len > 0) {
                         const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
@@ -1083,6 +1092,13 @@ pub const Store = struct {
                     break :blk Layout.int(.i64);
                 },
                 .rigid_var => |ident| blk: {
+                    // First, check if this rigid var is mapped in the TypeScope
+                    if (type_scope.lookup(current.var_)) |mapped_var| {
+                        // Found a mapping, resolve the mapped variable and continue
+                        current = self.types_store.resolveVar(mapped_var);
+                        continue :outer;
+                    }
+
                     // Rigid vars can only be sent to the host if boxed.
                     if (self.work.pending_containers.len > 0) {
                         const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
