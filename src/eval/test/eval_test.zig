@@ -383,8 +383,8 @@ test "lambdas with unary minus" {
 }
 
 test "lambdas closures" {
+    // Curried functions still have interpreter issues with TypeMismatch
     return error.SkipZigTest;
-    // Not implemented yet -- the closure return type is still flex var
     // try runExpectInt("(|a| |b| a * b)(5)(10)", 50, .no_trace);
     // try runExpectInt("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
     // try runExpectInt("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
@@ -411,13 +411,13 @@ test "lambdas with capture" {
 }
 
 test "lambdas nested closures" {
+    // Nested closures still have interpreter issues with TypeMismatch
     return error.SkipZigTest;
-    // Not implemented yet -- the closure return type is still flex var
     // try runExpectInt(
     //     \\(((|a| {
-    //     \\    a_loc = a * 2;
+    //     \\    a_loc = a * 2
     //     \\    |b| {
-    //     \\        b_loc = a_loc + b;
+    //     \\        b_loc = a_loc + b
     //     \\        |c| b_loc + c
     //     \\    }
     //     \\})(100))(20))(3)
@@ -693,16 +693,14 @@ test "string refcount - record with empty string" {
 }
 
 test "string refcount - simple integer closure" {
-    return error.SkipZigTest;
-    // Not implemented yet -- the closure return type is still flex var
+    // Testing if closure return types are now working
     // Test basic closure with integer first to see if the issue is closure-specific
-    // try runExpectInt("(|x| x)(42)", 42, .no_trace);
+    try runExpectInt("(|x| x)(42)", 42, .no_trace);
 }
 
 test "string refcount - simple string closure" {
-    return error.SkipZigTest;
-    // Not implemented yet -- the closure return type is still flex var
-    // try runExpectStr("(|s| s)(\"Test\")", "Test", .trace);
+    // Testing if closure return types are now working
+    try runExpectStr("(|s| s)(\"Test\")", "Test", .trace);
 }
 
 test "ModuleEnv serialization and interpreter evaluation" {
