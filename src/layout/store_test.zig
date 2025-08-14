@@ -29,8 +29,6 @@ test "addTypeVar - str" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -60,8 +58,6 @@ test "addTypeVar - bool" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -90,8 +86,6 @@ test "addTypeVar - list of strings" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -126,8 +120,6 @@ test "addTypeVar - list of box of strings" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -169,8 +161,6 @@ test "addTypeVar - box of flex_var compiles to box of opaque_ptr" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -205,8 +195,6 @@ test "addTypeVar - num u32" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -236,8 +224,6 @@ test "addTypeVar - num f64" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -267,8 +253,6 @@ test "addTypeVar - list of num i128" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -304,8 +288,6 @@ test "addTypeVar - num dec" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -335,8 +317,6 @@ test "addTypeVar - flex num var defaults to i128" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -371,8 +351,6 @@ test "addTypeVar - flex int var defaults to i128" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -407,8 +385,6 @@ test "addTypeVar - flex frac var defaults to dec" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -443,8 +419,6 @@ test "addTypeVar - list of flex num var defaults to list of i128" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -485,8 +459,6 @@ test "addTypeVar - box of flex frac var defaults to box of dec" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -525,8 +497,6 @@ test "addTypeVar - box of rigid_var compiles to box of opaque_ptr" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -564,8 +534,6 @@ test "addTypeVar - box of empty record compiles to box_of_zst" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -597,8 +565,6 @@ test "addTypeVar - list of empty tag union compiles to list_of_zst" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -630,8 +596,6 @@ test "alignment - record alignment is max of field alignments" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -702,8 +666,6 @@ test "alignment - deeply nested record alignment (non-recursive)" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -770,8 +732,6 @@ test "addTypeVar - bare empty record returns error" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -797,8 +757,6 @@ test "addTypeVar - bare empty tag union returns error" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -824,8 +782,6 @@ test "addTypeVar - simple record" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -891,8 +847,6 @@ test "record size calculation" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -949,8 +903,6 @@ test "addTypeVar - nested record" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -1041,8 +993,6 @@ test "addTypeVar - list of records" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -1110,8 +1060,6 @@ test "addTypeVar - record with extension" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -1191,8 +1139,6 @@ test "addTypeVar - record extension with str type fails" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -1226,8 +1172,6 @@ test "addTypeVar - record extension with num type fails" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -1261,8 +1205,6 @@ test "addTypeVar - deeply nested containers with zero-sized inner type" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -1305,8 +1247,6 @@ test "addTypeVar - record with single zero-sized field in container" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -1344,8 +1284,6 @@ test "addTypeVar - record field ordering stability" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -1453,8 +1391,6 @@ test "addTypeVar - empty record in different contexts" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -1503,8 +1439,6 @@ test "addTypeVar - record alignment edge cases" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -1569,8 +1503,6 @@ test "addTypeVar - record with duplicate field in extension (matching types)" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -1647,8 +1579,6 @@ test "addTypeVar - record with duplicate field in extension (mismatched types)" 
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -1718,8 +1648,6 @@ test "addTypeVar - record with invalid extension type" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -1753,8 +1681,6 @@ test "addTypeVar - record with chained extensions" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -1851,8 +1777,6 @@ test "addTypeVar - record with zero-sized fields dropped" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -1920,8 +1844,6 @@ test "addTypeVar - record with all zero-sized fields becomes empty" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -1960,8 +1882,6 @@ test "addTypeVar - box of record with all zero-sized fields" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -2010,8 +1930,6 @@ test "addTypeVar - comprehensive nested record combinations" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -2196,8 +2114,6 @@ test "addTypeVar - nested record with inner record having all zero-sized fields"
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -2250,8 +2166,6 @@ test "addTypeVar - list of record with all zero-sized fields" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -2291,8 +2205,6 @@ test "alignment - record with log2 alignment representation" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -2406,8 +2318,6 @@ test "record fields sorted by alignment then name" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -2490,8 +2400,6 @@ test "record fields with same alignment sorted by name" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -2563,8 +2471,6 @@ test "addTypeVar - maximum nesting depth" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -2606,8 +2512,6 @@ test "addTypeVar - record with maximum fields" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -2665,8 +2569,6 @@ test "addTypeVar - record field alignments differ between targets" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -2761,8 +2663,6 @@ test "addTypeVar - record field sorting follows alignment then name order" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -2851,8 +2751,6 @@ test "addTypeVar - pointer types have target-dependent alignment" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -2897,8 +2795,6 @@ test "addTypeVar - record with very long field names" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -2943,8 +2839,6 @@ test "addTypeVar - alternating zero-sized and non-zero-sized fields" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -3004,8 +2898,6 @@ test "addTypeVar - record field type changes through alias" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -3058,8 +2950,6 @@ test "addTypeVar - mixed container types" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -3145,8 +3035,6 @@ test "addTypeVar - record size calculation with padding" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -3222,8 +3110,6 @@ test "addTypeVar - all scalar types use scalar optimization" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -3292,8 +3178,6 @@ test "addTypeVar - list of scalar types uses scalar optimization" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -3362,8 +3246,6 @@ test "addTypeVar - box and list of non-scalar types use indexed approach" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -3433,8 +3315,6 @@ test "addTypeVar - host opaque types use scalar optimization" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -3476,8 +3356,6 @@ test "addTypeVar - mixed scalar optimization in nested structures" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -3510,8 +3388,6 @@ test "addTypeVar - all integer precisions use scalar optimization" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -3564,8 +3440,6 @@ test "addTypeVar - all boolean precisions use scalar optimization" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -3614,8 +3488,6 @@ test "addTypeVar - all frac precisions use scalar optimization" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -3662,8 +3534,6 @@ test "layouts_by_var uses ArrayListMap with pre-allocation" {
 
     // Create layout store with types store
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
@@ -3790,8 +3660,6 @@ test "putRecord and getRecordFieldOffsetByName" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-
-    // Create empty type scope
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
     defer layout_store.deinit();
