@@ -97,3 +97,24 @@ test "direct polymorphic usage works" {
 
     try testing.expect(checker.problems.problems.items.len == 0);
 }
+
+test "comments parsing with function calls" {
+    const source =
+        \\{
+        \\    id = |x| x
+        \\    apply = |f, val| f(val)
+        \\
+        \\    # First call to apply with identity and a number
+        \\    num1 = apply(id, 10)
+        \\}
+    ;
+
+    var module_env = try ModuleEnv.init(test_allocator, source);
+    defer module_env.deinit();
+
+    var parse_ast = try parse.parseExpr(&module_env.common, test_allocator);
+    defer parse_ast.deinit(test_allocator);
+
+    try testing.expect(parse_ast.parse_diagnostics.items.len == 0);
+    try testing.expect(parse_ast.tokenize_diagnostics.items.len == 0);
+}

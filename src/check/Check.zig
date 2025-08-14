@@ -1583,7 +1583,7 @@ fn unifyFunctionCall(
             if (self.types.needsInstantiation(actual_arg)) {
                 arg_to_unify = try self.instantiateVarAnon(actual_arg, .{ .explicit = region });
             }
-            
+
             const arg_result = try self.unify(expected_arg, arg_to_unify);
             self.setDetailIfTypeMismatch(arg_result, .{
                 .incompatible_fn_call_arg = .{

@@ -346,12 +346,12 @@ pub const Store = struct {
     // Helper to check if a type variable needs instantiation
     pub fn needsInstantiation(self: *const Self, var_: Var) bool {
         const resolved = self.resolveVar(var_);
-        
+
         // Generalized variables (rank 0) always need instantiation
         if (resolved.desc.rank == Rank.generalized) {
             return true;
         }
-        
+
         return self.needsInstantiationContent(resolved.desc.content);
     }
 
