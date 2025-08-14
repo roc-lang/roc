@@ -462,7 +462,12 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype
 }
 
 test "eval runtime error - returns crash error" {
-    const source = "crash \"test feature\"";
+    const source =
+        \\{
+        \\    crash "test feature"
+        \\    0
+        \\}
+    ;
 
     const resources = try parseAndCanonicalizeExpr(test_allocator, source);
     defer cleanupParseAndCanonical(test_allocator, resources);
