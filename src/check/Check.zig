@@ -961,33 +961,9 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             // Check if the pattern variable needs instantiation (is polymorphic)
             // This ensures that polymorphic functions get fresh type variables each time they're used
             if (self.types.needsInstantiation(pattern_var)) {
-                // if (builtin.mode == .Debug) {
-                //     std.debug.print("  Instantiating at current_rank={}\n", .{self.current_rank});
-                // }
                 const instantiated_var = try self.instantiateVarAnon(pattern_var, .{ .explicit = expr_region });
 
-                // Debug: Print when we instantiate
-                // if (builtin.mode == .Debug) {
-                //     const resolved_before = self.types.resolveVar(pattern_var);
-                //     const resolved_after = self.types.resolveVar(instantiated_var);
-                //     std.debug.print("INSTANTIATED lookup at expr {}: pattern_var={} (rank={}) -> instantiated_var={} (rank={})\n", .{
-                //         @intFromEnum(expr_idx),
-                //         @intFromEnum(pattern_var),
-                //         resolved_before.desc.rank,
-                //         @intFromEnum(instantiated_var),
-                //         resolved_after.desc.rank,
-                //     });
-
-                //     _ = try self.unify(lookup_var, instantiated_var);
-
-                //     const resolved_lookup_after = self.types.resolveVar(lookup_var);
-                //     std.debug.print("  After unify: lookup_var={} rank={}\n", .{
-                //         @intFromEnum(lookup_var),
-                //         resolved_lookup_after.desc.rank,
-                //     });
-                // } else {
                 _ = try self.unify(lookup_var, instantiated_var);
-                // }
             } else {
                 // Direct unification for non-polymorphic types
                 _ = try self.unify(lookup_var, pattern_var);
@@ -1333,12 +1309,6 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
                         // Generalize the pattern variable after unification
                         // We need to be at the correct rank for generalization
-                        // if (builtin.mode == .Debug) {
-                        //     std.debug.print("GENERALIZING pattern_var={} after let-binding (current_rank={})\n", .{
-                        //         @intFromEnum(pattern_var),
-                        //         self.current_rank,
-                        //     });
-                        // }
                         try self.generalize(pattern_var);
                     },
                     .s_reassign => |reassign| {
@@ -1607,11 +1577,18 @@ fn unifyFunctionCall(
     if (expected_args.len == actual_arg_vars.len) {
         var arg_index: u32 = 0;
         for (expected_args, actual_arg_vars) |expected_arg, actual_arg| {
-            const arg_result = try self.unify(expected_arg, actual_arg);
+            // For polymorphic arguments, instantiate them fresh at each call site
+            // This is essential for correct higher-order polymorphism in Hindley-Milner
+            var arg_to_unify = actual_arg;
+            if (self.types.needsInstantiation(actual_arg)) {
+                arg_to_unify = try self.instantiateVarAnon(actual_arg, .{ .explicit = region });
+            }
+            
+            const arg_result = try self.unify(expected_arg, arg_to_unify);
             self.setDetailIfTypeMismatch(arg_result, .{
                 .incompatible_fn_call_arg = .{
                     .fn_name = null, // Get function name for better error message
-                    .arg_var = actual_arg,
+                    .arg_var = arg_to_unify,
                     .incompatible_arg_index = arg_index,
                     .num_args = @intCast(actual_arg_vars.len),
                 },

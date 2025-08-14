@@ -100,20 +100,6 @@ test "double apply pattern trace" {
         _ = try checker.checkExpr(expr.get_idx());
     }
 
-    // std.debug.print("Problems: {}\n", .{checker.problems.problems.items.len});
-    // for (checker.problems.problems.items, 0..) |problem, i| {
-    //     std.debug.print("  Problem {}: ", .{i});
-    //     switch (problem) {
-    //         .type_mismatch => |tm| {
-    //             std.debug.print("Type mismatch: expected var {} actual var {}\n", .{
-    //                 @intFromEnum(tm.types.expected_var),
-    //                 @intFromEnum(tm.types.actual_var),
-    //             });
-    //         },
-    //         else => std.debug.print("{any}\n", .{problem}),
-    //     }
-    // }
-
     // This should pass but currently fails
     try testing.expect(checker.problems.problems.items.len == 0);
 }
