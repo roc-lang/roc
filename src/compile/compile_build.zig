@@ -860,7 +860,15 @@ pub const BuildEnv = struct {
                     }
                 }
 
-                break :blk try buf.toOwnedSlice();
+                const result = try buf.toOwnedSlice();
+
+                // Check for null bytes in the string, which are invalid in file paths
+                if (std.mem.indexOfScalar(u8, result, 0) != null) {
+                    self.gpa.free(result);
+                    return error.InvalidNullByteInPath;
+                }
+
+                break :blk result;
             },
             else => error.ExpectedString,
         };

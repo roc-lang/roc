@@ -1210,6 +1210,7 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     InvalidDependency,
     TooNested,
     InvalidPackageName,
+    InvalidNullByteInPath,
     // Additional errors from std library that might be missing
     Unseekable,
     CurrentWorkingDirectoryUnlinked,
