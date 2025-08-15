@@ -304,9 +304,7 @@ pub fn unbundleStream(
     const decompressed_reader = zstd_stream.reader();
 
     // Create tar reader
-    var tar_iterator = std.tar.iterator(decompressed_reader, .{
-        .max_file_size = std.math.maxInt(usize), // No limit on file size
-    });
+    var tar_iterator = std.tar.iterator(decompressed_reader, .{});
 
     var data_extracted = false;
 
