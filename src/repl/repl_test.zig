@@ -184,7 +184,7 @@ test "Repl - minimal interpreter integration" {
 
     // Step 1: Create module environment
     const source = "42";
-    var module_env = try ModuleEnv.init(gpa, source);
+    var module_env = try ModuleEnv.init(gpa, source, null, null);
     defer module_env.deinit();
 
     // Step 2: Parse as expression

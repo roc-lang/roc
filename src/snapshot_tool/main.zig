@@ -1048,7 +1048,7 @@ fn processSnapshotContent(
     }
 
     // Process the content through the compilation pipeline
-    var module_env = try ModuleEnv.init(allocator, content.source);
+    var module_env = try ModuleEnv.init(allocator, content.source, null, null);
     defer module_env.deinit();
 
     // Calculate line starts for source location tracking

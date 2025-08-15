@@ -499,7 +499,7 @@ test "hexadecimal integer literals" {
     const gpa = gpa_state.allocator();
 
     for (test_cases) |tc| {
-        var env = try ModuleEnv.init(gpa, tc.literal);
+        var env = try ModuleEnv.init(gpa, tc.literal, null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -588,7 +588,7 @@ test "binary integer literals" {
     const gpa = gpa_state.allocator();
 
     for (test_cases) |tc| {
-        var env = try ModuleEnv.init(gpa, tc.literal);
+        var env = try ModuleEnv.init(gpa, tc.literal, null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -677,7 +677,7 @@ test "octal integer literals" {
     const gpa = gpa_state.allocator();
 
     for (test_cases) |tc| {
-        var env = try ModuleEnv.init(gpa, tc.literal);
+        var env = try ModuleEnv.init(gpa, tc.literal, null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -766,7 +766,7 @@ test "integer literals with uppercase base prefixes" {
     const gpa = gpa_state.allocator();
 
     for (test_cases) |tc| {
-        var env = try ModuleEnv.init(gpa, tc.literal);
+        var env = try ModuleEnv.init(gpa, tc.literal, null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -827,7 +827,7 @@ test "numeric literal patterns use pattern idx as type var" {
 
     // Test that int literal patterns work and use the pattern index as the type variable
     {
-        var env = try ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "", null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -871,7 +871,7 @@ test "numeric literal patterns use pattern idx as type var" {
 
     // Test that f64 literal patterns work
     {
-        var env = try ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "", null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -922,7 +922,7 @@ test "numeric pattern types: unbound vs polymorphic" {
 
     // Test int_unbound pattern
     {
-        var env = try ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "", null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -959,7 +959,7 @@ test "numeric pattern types: unbound vs polymorphic" {
 
     // Test int_poly pattern (polymorphic integer that can be different int types)
     {
-        var env = try ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "", null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -1008,7 +1008,7 @@ test "numeric pattern types: unbound vs polymorphic" {
 
     // Test num_unbound pattern (can be int or frac)
     {
-        var env = try ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "", null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -1045,7 +1045,7 @@ test "numeric pattern types: unbound vs polymorphic" {
 
     // Test num_poly pattern (polymorphic num that can be int or frac)
     {
-        var env = try ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "", null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -1090,7 +1090,7 @@ test "numeric pattern types: unbound vs polymorphic" {
 
     // Test frac_unbound pattern
     {
-        var env = try ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "", null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -1131,7 +1131,7 @@ test "numeric pattern types: unbound vs polymorphic - frac" {
 
     // Test frac_poly pattern
     {
-        var env = try ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "", null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -1186,7 +1186,7 @@ test "pattern numeric literal value edge cases" {
 
     // Test max/min integer values
     {
-        var env = try ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "", null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -1214,7 +1214,7 @@ test "pattern numeric literal value edge cases" {
 
     // Test small decimal pattern
     {
-        var env = try ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "", null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -1237,7 +1237,7 @@ test "pattern numeric literal value edge cases" {
 
     // Test dec literal pattern
     {
-        var env = try ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "", null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -1258,7 +1258,7 @@ test "pattern numeric literal value edge cases" {
 
     // Test special float values
     {
-        var env = try ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "", null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -1283,7 +1283,7 @@ test "pattern literal type transitions" {
 
     // Test transitioning from unbound to concrete type
     {
-        var env = try ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "", null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -1328,7 +1328,7 @@ test "pattern literal type transitions" {
 
     // Test hex/binary/octal patterns must be integers
     {
-        var env = try ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "", null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -1373,7 +1373,7 @@ test "pattern type inference with numeric literals" {
 
     // Test that pattern indices work correctly as type variables with type inference
     {
-        var env = try ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "", null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -1441,7 +1441,7 @@ test "pattern type inference with numeric literals" {
 
     // Test patterns with type constraints from context
     {
-        var env = try ModuleEnv.init(gpa, "");
+        var env = try ModuleEnv.init(gpa, "", null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");

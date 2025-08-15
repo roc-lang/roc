@@ -34,7 +34,7 @@ pub fn init(source: []const u8) !TestEnv {
     errdefer gpa.destroy(can);
 
     // Initialize the ModuleEnv with the CommonEnv
-    module_env.* = try ModuleEnv.init(gpa, source);
+    module_env.* = try ModuleEnv.init(gpa, source, null, null);
     errdefer module_env.deinit();
 
     parse_ast.* = try parse.parseExpr(&module_env.common, gpa);

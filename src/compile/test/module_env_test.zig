@@ -17,7 +17,7 @@ test "ModuleEnv.Serialized roundtrip" {
     const source = "hello world\ntest line 2\n";
 
     // Create original ModuleEnv with some data
-    var original = try ModuleEnv.init(gpa, source);
+    var original = try ModuleEnv.init(gpa, source, null, null);
     defer original.deinit();
 
     // Add some test data
@@ -85,6 +85,8 @@ test "ModuleEnv.Serialized roundtrip" {
         .gpa = gpa,
         .common = deserialized_ptr.common.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source).*,
         .types = deserialized_ptr.types.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
+        .file_encountered_fn = null,
+        .file_encountered_context = null,
         .all_defs = deserialized_ptr.all_defs,
         .all_statements = deserialized_ptr.all_statements,
         .external_decls = deserialized_ptr.external_decls.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
@@ -158,7 +160,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //     // Module env takes ownership of Common env -- no need to deinit here
 
 //     // Create ModuleEnv with some types
-//     var original = try ModuleEnv.init(gpa, &common_env);
+//     var original = try ModuleEnv.init(gpa, &common_env, null, null);
 //     defer original.deinit();
 
 //     // Initialize CIR fields
@@ -254,7 +256,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //     // Module env takes ownership of Common env -- no need to deinit here
 
 //     // Create empty ModuleEnv
-//     var original = try ModuleEnv.init(gpa, &common_env);
+//     var original = try ModuleEnv.init(gpa, &common_env, null, null);
 //     defer original.deinit();
 
 //     // Don't initialize CIR fields to keep it truly empty
@@ -323,7 +325,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //     try common_env.calcLineStarts(gpa);
 
 //     // Create ModuleEnv with source
-//     var original = try ModuleEnv.init(gpa, &common_env);
+//     var original = try ModuleEnv.init(gpa, &common_env, null, null);
 //     defer original.deinit();
 
 //     // Initialize CIR fields
@@ -379,7 +381,7 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     const gpa = testing.allocator;
 
     // Create a simple ModuleEnv
-    var env = try ModuleEnv.init(gpa, "hello");
+    var env = try ModuleEnv.init(gpa, "hello", null, null);
     defer env.deinit();
 
     // First add a string literal

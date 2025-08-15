@@ -24,7 +24,7 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, source);
+    module_env.* = try ModuleEnv.init(allocator, source, null, null);
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);
@@ -90,7 +90,7 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, source);
+    module_env.* = try ModuleEnv.init(allocator, source, null, null);
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);
@@ -162,7 +162,7 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
 } {
     // Set up module environment
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, source);
+    module_env.* = try ModuleEnv.init(allocator, source, null, null);
 
     // Parse
     const parse_ast = try allocator.create(parse.AST);

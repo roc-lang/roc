@@ -25,7 +25,7 @@
 //         \\foo = 42
 //     ;
 
-//     var env = try ModuleEnv.init(allocator, source);
+//     var env = try ModuleEnv.init(allocator, source, null, null);
 //     defer env.deinit();
 //     try env.initCIRFields(allocator, "Test");
 
@@ -64,7 +64,7 @@
 //         \\MyType : [A, B]
 //     ;
 
-//     var env = try ModuleEnv.init(allocator, source);
+//     var env = try ModuleEnv.init(allocator, source, null, null);
 //     defer env.deinit();
 //     try env.initCIRFields(allocator, "Test");
 
@@ -105,7 +105,7 @@
 //         \\MyType : [A, B]
 //     ;
 
-//     var env = try ModuleEnv.init(allocator, source);
+//     var env = try ModuleEnv.init(allocator, source, null, null);
 //     defer env.deinit();
 //     try env.initCIRFields(allocator, "Test");
 
@@ -154,7 +154,7 @@
 //         \\y = "second"
 //     ;
 
-//     var env = try ModuleEnv.init(allocator, source);
+//     var env = try ModuleEnv.init(allocator, source, null, null);
 //     defer env.deinit();
 //     try env.initCIRFields(allocator, "Test");
 
@@ -193,7 +193,7 @@
 //         \\# Shadowing is allowed for non-exposed items
 //     ;
 
-//     var env = try ModuleEnv.init(allocator, source);
+//     var env = try ModuleEnv.init(allocator, source, null, null);
 //     defer env.deinit();
 //     try env.initCIRFields(allocator, "Test");
 
@@ -239,7 +239,7 @@
 //         \\# z is exposed but never defined
 //     ;
 
-//     var env = try ModuleEnv.init(allocator, source);
+//     var env = try ModuleEnv.init(allocator, source, null, null);
 //     defer env.deinit();
 //     try env.initCIRFields(allocator, "Test");
 
@@ -304,7 +304,7 @@
 //         \\c = 100
 //     ;
 
-//     var env = try ModuleEnv.init(allocator, source);
+//     var env = try ModuleEnv.init(allocator, source, null, null);
 //     defer env.deinit();
 //     try env.initCIRFields(allocator, "Test");
 
@@ -364,7 +364,7 @@
 //         \\MyType : [A, B]
 //     ;
 
-//     var env = try ModuleEnv.init(allocator, source);
+//     var env = try ModuleEnv.init(allocator, source, null, null);
 //     defer env.deinit();
 //     try env.initCIRFields(allocator, "Test");
 
@@ -405,7 +405,7 @@
 //         \\# z is not defined
 //     ;
 
-//     var env = try ModuleEnv.init(allocator, source);
+//     var env = try ModuleEnv.init(allocator, source, null, null);
 //     defer env.deinit();
 //     try env.initCIRFields(allocator, "Test");
 
@@ -443,7 +443,7 @@
 //         \\baz = 3.14
 //     ;
 
-//     var env = try ModuleEnv.init(allocator, source);
+//     var env = try ModuleEnv.init(allocator, source, null, null);
 //     defer env.deinit();
 //     try env.initCIRFields(allocator, "Test");
 
@@ -484,7 +484,7 @@
 //         \\foo! = \x -> x + 1
 //     ;
 
-//     var env = try ModuleEnv.init(allocator, source);
+//     var env = try ModuleEnv.init(allocator, source, null, null);
 //     defer env.deinit();
 //     try env.initCIRFields(allocator, "Test");
 
