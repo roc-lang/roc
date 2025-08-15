@@ -178,15 +178,10 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
     };
     defer gpa.free(canonical_path);
 
-    const stat = std.fs.cwd().statFile(canonical_path) catch |err| {
-        std.log.err("failed to stat path '{s}': {s}", .{ canonical_path, @errorName(err) });
-        return 0;
-    };
-
-    if (stat.kind == .directory) {
-        var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
-        defer dir.close();
-
+    // Try to open as directory first
+    if (std.fs.cwd().openDir(canonical_path, .{ .iterate = true })) |dir| {
+        var opened = dir;
+        defer opened.close();
         var dir_iterator = dir.iterate();
         while (try dir_iterator.next()) |entry| {
 
@@ -206,7 +201,8 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
                 }
             }
         }
-    } else if (stat.kind == .file) {
+    } else |_| {
+        // Probably not a directory, try to process as file
         if (isSnapshotFile(canonical_path)) {
             if (try processSnapshotFile(gpa, canonical_path, maybe_fuzz_corpus_path)) {
                 processed_count += 1;
