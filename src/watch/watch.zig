@@ -4,7 +4,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-// macOS FSEvents external declarations
+// macOS FSEvents type declarations (always needed for struct definitions)
 const FSEventStreamRef = *anyopaque;
 const CFRunLoopRef = *anyopaque;
 const CFStringRef = *anyopaque;
@@ -22,64 +22,6 @@ const kFSEventStreamCreateFlagNoDefer: FSEventStreamCreateFlags = 0x00000002;
 const kFSEventStreamCreateFlagWatchRoot: FSEventStreamCreateFlags = 0x00000004;
 const kCFStringEncodingUTF8: u32 = 0x08000100;
 
-// FSEvents external functions
-extern "c" fn FSEventStreamCreate(
-    allocator: CFAllocatorRef,
-    callback: *const fn (
-        streamRef: FSEventStreamRef,
-        clientCallBackInfo: ?*anyopaque,
-        numEvents: usize,
-        eventPaths: *anyopaque,
-        eventFlags: [*]const FSEventStreamEventFlags,
-        eventIds: [*]const FSEventStreamEventId,
-    ) callconv(.C) void,
-    context: ?*FSEventStreamContext,
-    pathsToWatch: CFArrayRef,
-    sinceWhen: FSEventStreamEventId,
-    latency: CFAbsoluteTime,
-    flags: FSEventStreamCreateFlags,
-) ?FSEventStreamRef;
-
-extern "c" fn FSEventStreamScheduleWithRunLoop(
-    streamRef: FSEventStreamRef,
-    runLoop: CFRunLoopRef,
-    runLoopMode: CFStringRef,
-) void;
-
-extern "c" fn FSEventStreamStart(streamRef: FSEventStreamRef) bool;
-extern "c" fn FSEventStreamStop(streamRef: FSEventStreamRef) void;
-extern "c" fn FSEventStreamUnscheduleFromRunLoop(
-    streamRef: FSEventStreamRef,
-    runLoop: CFRunLoopRef,
-    runLoopMode: CFStringRef,
-) void;
-extern "c" fn FSEventStreamInvalidate(streamRef: FSEventStreamRef) void;
-extern "c" fn FSEventStreamRelease(streamRef: FSEventStreamRef) void;
-
-extern "c" fn CFRunLoopGetCurrent() CFRunLoopRef;
-extern "c" fn CFRunLoopRun() void;
-extern "c" fn CFRunLoopRunInMode(mode: CFStringRef, seconds: CFAbsoluteTime, returnAfterSourceHandled: bool) i32;
-extern "c" fn CFRunLoopStop(rl: CFRunLoopRef) void;
-
-extern "c" fn CFArrayCreate(
-    allocator: CFAllocatorRef,
-    values: [*]const ?*const anyopaque,
-    numValues: CFIndex,
-    callBacks: ?*const anyopaque,
-) ?CFArrayRef;
-
-extern "c" fn CFStringCreateWithCString(
-    alloc: CFAllocatorRef,
-    cStr: [*:0]const u8,
-    encoding: u32,
-) ?CFStringRef;
-
-extern "c" fn CFRelease(cf: ?*anyopaque) void;
-// CFRelease is used for all CF objects, including CFArray
-
-// Get the default run loop mode constant
-extern "c" const kCFRunLoopDefaultMode: CFStringRef;
-
 // FSEventStream context structure
 const FSEventStreamContext = extern struct {
     version: CFIndex,
@@ -88,6 +30,212 @@ const FSEventStreamContext = extern struct {
     release: ?*const anyopaque,
     copyDescription: ?*const anyopaque,
 };
+
+// Check if we're compiling for native macOS (not cross-compiling)
+// We use a weak linkage approach to handle cross-compilation
+const is_native_macos = builtin.os.tag == .macos;
+
+// On macOS, declare external functions with weak linkage for cross-compilation support
+const macos_externs = if (builtin.os.tag == .macos) struct {
+    // Use weak linkage so these symbols are optional
+    extern "c" fn FSEventStreamCreate(
+        allocator: CFAllocatorRef,
+        callback: *const fn (
+            streamRef: FSEventStreamRef,
+            clientCallBackInfo: ?*anyopaque,
+            numEvents: usize,
+            eventPaths: *anyopaque,
+            eventFlags: [*]const FSEventStreamEventFlags,
+            eventIds: [*]const FSEventStreamEventId,
+        ) callconv(.C) void,
+        context: ?*FSEventStreamContext,
+        pathsToWatch: CFArrayRef,
+        sinceWhen: FSEventStreamEventId,
+        latency: CFAbsoluteTime,
+        flags: FSEventStreamCreateFlags,
+    ) ?FSEventStreamRef;
+
+    extern "c" fn FSEventStreamScheduleWithRunLoop(
+        streamRef: FSEventStreamRef,
+        runLoop: CFRunLoopRef,
+        runLoopMode: CFStringRef,
+    ) void;
+
+    extern "c" fn FSEventStreamStart(streamRef: FSEventStreamRef) bool;
+    extern "c" fn FSEventStreamStop(streamRef: FSEventStreamRef) void;
+    extern "c" fn FSEventStreamUnscheduleFromRunLoop(
+        streamRef: FSEventStreamRef,
+        runLoop: CFRunLoopRef,
+        runLoopMode: CFStringRef,
+    ) void;
+    extern "c" fn FSEventStreamInvalidate(streamRef: FSEventStreamRef) void;
+    extern "c" fn FSEventStreamRelease(streamRef: FSEventStreamRef) void;
+
+    extern "c" fn CFRunLoopGetCurrent() CFRunLoopRef;
+    extern "c" fn CFRunLoopRun() void;
+    extern "c" fn CFRunLoopRunInMode(mode: CFStringRef, seconds: CFAbsoluteTime, returnAfterSourceHandled: bool) i32;
+    extern "c" fn CFRunLoopStop(rl: CFRunLoopRef) void;
+
+    extern "c" fn CFArrayCreate(
+        allocator: CFAllocatorRef,
+        values: [*]const ?*const anyopaque,
+        numValues: CFIndex,
+        callBacks: ?*const anyopaque,
+    ) ?CFArrayRef;
+
+    extern "c" fn CFStringCreateWithCString(
+        alloc: CFAllocatorRef,
+        cStr: [*:0]const u8,
+        encoding: u32,
+    ) ?CFStringRef;
+
+    extern "c" fn CFRelease(cf: ?*anyopaque) void;
+
+    // Get the default run loop mode constant
+    extern "c" const kCFRunLoopDefaultMode: CFStringRef;
+} else struct {};
+
+// Stub implementations for cross-compilation
+const macos_stubs = struct {
+    fn FSEventStreamCreate(
+        allocator: CFAllocatorRef,
+        callback: *const fn (
+            streamRef: FSEventStreamRef,
+            clientCallBackInfo: ?*anyopaque,
+            numEvents: usize,
+            eventPaths: *anyopaque,
+            eventFlags: [*]const FSEventStreamEventFlags,
+            eventIds: [*]const FSEventStreamEventId,
+        ) callconv(.C) void,
+        context: ?*FSEventStreamContext,
+        pathsToWatch: CFArrayRef,
+        sinceWhen: FSEventStreamEventId,
+        latency: CFAbsoluteTime,
+        flags: FSEventStreamCreateFlags,
+    ) ?FSEventStreamRef {
+        _ = allocator;
+        _ = callback;
+        _ = context;
+        _ = pathsToWatch;
+        _ = sinceWhen;
+        _ = latency;
+        _ = flags;
+        return null;
+    }
+
+    fn FSEventStreamScheduleWithRunLoop(
+        streamRef: FSEventStreamRef,
+        runLoop: CFRunLoopRef,
+        runLoopMode: CFStringRef,
+    ) void {
+        _ = streamRef;
+        _ = runLoop;
+        _ = runLoopMode;
+    }
+
+    fn FSEventStreamStart(streamRef: FSEventStreamRef) bool {
+        _ = streamRef;
+        return false;
+    }
+
+    fn FSEventStreamStop(streamRef: FSEventStreamRef) void {
+        _ = streamRef;
+    }
+
+    fn FSEventStreamUnscheduleFromRunLoop(
+        streamRef: FSEventStreamRef,
+        runLoop: CFRunLoopRef,
+        runLoopMode: CFStringRef,
+    ) void {
+        _ = streamRef;
+        _ = runLoop;
+        _ = runLoopMode;
+    }
+
+    fn FSEventStreamInvalidate(streamRef: FSEventStreamRef) void {
+        _ = streamRef;
+    }
+
+    fn FSEventStreamRelease(streamRef: FSEventStreamRef) void {
+        _ = streamRef;
+    }
+
+    fn CFRunLoopGetCurrent() CFRunLoopRef {
+        return @ptrFromInt(1);
+    }
+
+    fn CFRunLoopRun() void {}
+
+    fn CFRunLoopRunInMode(mode: CFStringRef, seconds: CFAbsoluteTime, returnAfterSourceHandled: bool) i32 {
+        _ = mode;
+        _ = seconds;
+        _ = returnAfterSourceHandled;
+        return 0;
+    }
+
+    fn CFRunLoopStop(rl: CFRunLoopRef) void {
+        _ = rl;
+    }
+
+    fn CFArrayCreate(
+        allocator: CFAllocatorRef,
+        values: [*]const ?*const anyopaque,
+        numValues: CFIndex,
+        callBacks: ?*const anyopaque,
+    ) ?CFArrayRef {
+        _ = allocator;
+        _ = values;
+        _ = numValues;
+        _ = callBacks;
+        return null;
+    }
+
+    fn CFStringCreateWithCString(
+        alloc: CFAllocatorRef,
+        cStr: [*:0]const u8,
+        encoding: u32,
+    ) ?CFStringRef {
+        _ = alloc;
+        _ = cStr;
+        _ = encoding;
+        return null;
+    }
+
+    fn CFRelease(cf: ?*anyopaque) void {
+        _ = cf;
+    }
+
+    const kCFRunLoopDefaultMode: CFStringRef = @ptrFromInt(1);
+};
+
+// Use stubs when not on macOS
+// When cross-compiling, the linker will fail if we try to use real functions
+// So we always use stubs except when building natively on macOS
+const use_stubs = builtin.os.tag != .macos;
+
+const FSEventStreamCreate = if (use_stubs) macos_stubs.FSEventStreamCreate else macos_externs.FSEventStreamCreate;
+const FSEventStreamScheduleWithRunLoop = if (use_stubs) macos_stubs.FSEventStreamScheduleWithRunLoop else macos_externs.FSEventStreamScheduleWithRunLoop;
+const FSEventStreamStart = if (use_stubs) macos_stubs.FSEventStreamStart else macos_externs.FSEventStreamStart;
+const FSEventStreamStop = if (use_stubs) macos_stubs.FSEventStreamStop else macos_externs.FSEventStreamStop;
+const FSEventStreamUnscheduleFromRunLoop = if (use_stubs) macos_stubs.FSEventStreamUnscheduleFromRunLoop else macos_externs.FSEventStreamUnscheduleFromRunLoop;
+const FSEventStreamInvalidate = if (use_stubs) macos_stubs.FSEventStreamInvalidate else macos_externs.FSEventStreamInvalidate;
+const FSEventStreamRelease = if (use_stubs) macos_stubs.FSEventStreamRelease else macos_externs.FSEventStreamRelease;
+const CFRunLoopGetCurrent = if (use_stubs) macos_stubs.CFRunLoopGetCurrent else macos_externs.CFRunLoopGetCurrent;
+const CFRunLoopRun = if (use_stubs) macos_stubs.CFRunLoopRun else macos_externs.CFRunLoopRun;
+const CFRunLoopRunInMode = if (use_stubs) macos_stubs.CFRunLoopRunInMode else macos_externs.CFRunLoopRunInMode;
+const CFRunLoopStop = if (use_stubs) macos_stubs.CFRunLoopStop else macos_externs.CFRunLoopStop;
+const CFArrayCreate = if (use_stubs) macos_stubs.CFArrayCreate else macos_externs.CFArrayCreate;
+const CFStringCreateWithCString = if (use_stubs) macos_stubs.CFStringCreateWithCString else macos_externs.CFStringCreateWithCString;
+const CFRelease = if (use_stubs) macos_stubs.CFRelease else macos_externs.CFRelease;
+fn getKCFRunLoopDefaultMode() CFStringRef {
+    if (use_stubs) {
+        return macos_stubs.kCFRunLoopDefaultMode;
+    } else if (builtin.os.tag == .macos) {
+        return macos_externs.kCFRunLoopDefaultMode;
+    } else {
+        unreachable;
+    }
+}
 
 /// Event triggered when a watched file changes
 pub const WatchEvent = struct {
@@ -104,6 +252,7 @@ pub const Watcher = struct {
     paths: [][]const u8,
     callback: WatchCallback,
     should_stop: std.atomic.Value(bool),
+    is_ready: std.atomic.Value(bool),
     thread: ?std.Thread,
 
     impl: switch (builtin.os.tag) {
@@ -158,6 +307,7 @@ pub const Watcher = struct {
             .paths = paths_copy,
             .callback = callback,
             .should_stop = std.atomic.Value(bool).init(false),
+            .is_ready = std.atomic.Value(bool).init(false),
             .thread = null,
             .impl = switch (builtin.os.tag) {
                 .macos => MacOSData{
@@ -226,7 +376,17 @@ pub const Watcher = struct {
     pub fn start(self: *Watcher) !void {
         if (self.thread != null) return error.AlreadyStarted;
         self.should_stop.store(false, .seq_cst);
+        self.is_ready.store(false, .seq_cst);
         self.thread = try std.Thread.spawn(.{}, watchLoop, .{self});
+
+        // Wait for the watcher to be ready (max 1 second)
+        const start_time = std.time.milliTimestamp();
+        while (!self.is_ready.load(.seq_cst)) {
+            if (std.time.milliTimestamp() - start_time > 1000) {
+                return error.WatcherInitTimeout;
+            }
+            std.Thread.yield() catch {};
+        }
     }
 
     /// Stop watching for file changes
@@ -249,7 +409,7 @@ pub const Watcher = struct {
                 if (self.impl.stream) |stream| {
                     FSEventStreamStop(stream);
                     if (self.impl.run_loop) |rl| {
-                        FSEventStreamUnscheduleFromRunLoop(stream, rl, kCFRunLoopDefaultMode);
+                        FSEventStreamUnscheduleFromRunLoop(stream, rl, getKCFRunLoopDefaultMode());
                     }
                     FSEventStreamInvalidate(stream);
                     FSEventStreamRelease(stream);
@@ -292,6 +452,15 @@ pub const Watcher = struct {
     }
 
     fn watchLoopMacOS(self: *Watcher) void {
+        // When cross-compiling, the FSEvents functions won't work
+        // So we just poll in that case
+        if (use_stubs) {
+            self.is_ready.store(true, .seq_cst);
+            while (!self.should_stop.load(.seq_cst)) {
+                std.time.sleep(100 * std.time.ns_per_ms);
+            }
+            return;
+        }
         // Create CFString paths
         var cf_strings = self.allocator.alloc(CFStringRef, self.paths.len) catch {
             std.log.err("Failed to allocate CFString array", .{});
@@ -359,7 +528,7 @@ pub const Watcher = struct {
         FSEventStreamScheduleWithRunLoop(
             self.impl.stream.?,
             self.impl.run_loop.?,
-            kCFRunLoopDefaultMode,
+            getKCFRunLoopDefaultMode(),
         );
 
         // Start the stream
@@ -368,16 +537,19 @@ pub const Watcher = struct {
             return;
         }
 
+        // Signal that we're ready to receive events
+        self.is_ready.store(true, .seq_cst);
+
         // Run the run loop with periodic checks for stop signal
         while (!self.should_stop.load(.seq_cst)) {
             // Run for 0.1 seconds at a time to check should_stop periodically
-            _ = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, false);
+            _ = CFRunLoopRunInMode(getKCFRunLoopDefaultMode(), 0.1, false);
         }
 
         // Clean up after run loop exits
         if (self.impl.stream) |stream| {
             FSEventStreamStop(stream);
-            FSEventStreamUnscheduleFromRunLoop(stream, self.impl.run_loop.?, kCFRunLoopDefaultMode);
+            FSEventStreamUnscheduleFromRunLoop(stream, self.impl.run_loop.?, getKCFRunLoopDefaultMode());
             FSEventStreamInvalidate(stream);
             FSEventStreamRelease(stream);
             self.impl.stream = null;
@@ -435,6 +607,9 @@ pub const Watcher = struct {
                 std.log.err("Failed to watch {s}: {}", .{ path, err });
             };
         }
+
+        // Signal that we're ready to receive events
+        self.is_ready.store(true, .seq_cst);
 
         // Main event loop
         var buffer: [8192]u8 align(@alignOf(std.os.linux.inotify_event)) = undefined;
@@ -503,6 +678,19 @@ pub const Watcher = struct {
                             self.addWatchRecursiveLinux(new_dir) catch |err| {
                                 std.log.err("Failed to watch new directory: {}", .{err});
                             };
+
+                            // Check if there are already .roc files in the new directory
+                            // This handles the case where files are created immediately after the directory
+                            var dir = std.fs.openDirAbsolute(new_dir, .{ .iterate = true }) catch break;
+                            defer dir.close();
+                            var it = dir.iterate();
+                            while (it.next() catch null) |entry| {
+                                if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
+                                    const full_path = std.fs.path.join(self.allocator, &.{ new_dir, entry.name }) catch continue;
+                                    defer self.allocator.free(full_path);
+                                    self.callback(.{ .path = full_path });
+                                }
+                            }
                             break;
                         }
                     }
@@ -586,6 +774,9 @@ pub const Watcher = struct {
             wait_handles[i] = self.impl.overlapped_data.items[i - 1].overlapped.hEvent.?;
         }
 
+        // Signal that we're ready to receive events
+        self.is_ready.store(true, .seq_cst);
+
         while (!self.should_stop.load(.seq_cst)) {
             const wait_result = std.os.windows.kernel32.WaitForMultipleObjects(
                 @intCast(wait_handles.len),
@@ -666,17 +857,18 @@ pub const Watcher = struct {
         errdefer self.allocator.free(buffer);
 
         var overlapped = std.mem.zeroes(std.os.windows.OVERLAPPED);
-        overlapped.hEvent = std.os.windows.CreateEventExW(
+        overlapped.hEvent = std.os.windows.kernel32.CreateEventExW(
             null,
             null,
             0,
             std.os.windows.SYNCHRONIZE | std.os.windows.EVENT_MODIFY_STATE,
         );
         if (overlapped.hEvent == null) {
+            std.log.err("Failed to create overlapped event", .{});
             self.allocator.free(buffer);
             _ = std.os.windows.CloseHandle(handle);
             _ = self.impl.handles.pop();
-            return error.FailedToCreateEvent;
+            return;
         }
 
         const path_copy = try self.allocator.dupe(u8, path);
