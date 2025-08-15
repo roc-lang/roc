@@ -273,8 +273,13 @@ test "error test - divide by zero" {
 }
 
 test "error test - crash statement" {
-    // Test simple crash statement
-    try runExpectError("crash \"test\"", EvalError.Crash, .no_trace);
+    // Test crash statement in a block (crash is a statement, not an expression)
+    try runExpectError(
+        \\{
+        \\    crash "test"
+        \\    0
+        \\}
+    , EvalError.Crash, .no_trace);
 
     // Test crash in block with final expression
     try runExpectError(
@@ -378,8 +383,8 @@ test "lambdas with unary minus" {
 }
 
 test "lambdas closures" {
+    // Curried functions still have interpreter issues with TypeMismatch
     return error.SkipZigTest;
-    // Not implemented yet -- the closure return type is still flex var
     // try runExpectInt("(|a| |b| a * b)(5)(10)", 50, .no_trace);
     // try runExpectInt("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
     // try runExpectInt("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
@@ -389,30 +394,30 @@ test "lambdas closures" {
 test "lambdas with capture" {
     try runExpectInt(
         \\{
-        \\    x = 10;
-        \\    f = |y| x + y;
+        \\    x = 10
+        \\    f = |y| x + y
         \\    f(5)
         \\}
     , 15, .no_trace);
 
     try runExpectInt(
         \\{
-        \\    x = 20;
-        \\    y = 30;
-        \\    f = |z| x + y + z;
+        \\    x = 20
+        \\    y = 30
+        \\    f = |z| x + y + z
         \\    f(10)
         \\}
     , 60, .no_trace);
 }
 
 test "lambdas nested closures" {
+    // Nested closures still have interpreter issues with TypeMismatch
     return error.SkipZigTest;
-    // Not implemented yet -- the closure return type is still flex var
     // try runExpectInt(
     //     \\(((|a| {
-    //     \\    a_loc = a * 2;
+    //     \\    a_loc = a * 2
     //     \\    |b| {
-    //     \\        b_loc = a_loc + b;
+    //     \\        b_loc = a_loc + b
     //     \\        |c| b_loc + c
     //     \\    }
     //     \\})(100))(20))(3)
@@ -534,8 +539,8 @@ test "string literals and interpolation" {
     // Test string interpolation
     try runExpectSuccess(
         \\{
-        \\    hello = "Hello";
-        \\    world = "World";
+        \\    hello = "Hello"
+        \\    world = "World"
         \\    "${hello} ${world}"
         \\}
     , .no_trace);
@@ -544,6 +549,69 @@ test "string literals and interpolation" {
 test "string refcount - basic literal" {
     // Test basic string literal creation and cleanup
     try runExpectStr("\"Hello, World!\"", "Hello, World!", .no_trace);
+}
+
+test "polymorphic identity function" {
+    // Test the identity function with different types
+    const code =
+        \\{
+        \\    identity = |val| val
+        \\    num = identity(5)
+        \\    str = identity("Hello")
+        \\    if (num > 0) str else ""
+        \\}
+    ;
+    try runExpectStr(code, "Hello", .no_trace);
+}
+
+test "direct polymorphic function usage" {
+    // Test that polymorphic functions work correctly when used directly
+    // This is valid in rank-1 Hindley-Milner type systems
+    const code =
+        \\{
+        \\    id = |x| x
+        \\
+        \\    # Direct calls to identity with different types
+        \\    num1 = id(10)
+        \\    str1 = id("Test")
+        \\    num2 = id(20)
+        \\
+        \\    # Verify all values are correct
+        \\    if (num1 == 10)
+        \\        if (num2 == 20)
+        \\            str1
+        \\        else
+        \\            "Failed2"
+        \\    else
+        \\        "Failed1"
+        \\}
+    ;
+    try runExpectStr(code, "Test", .no_trace);
+}
+
+test "multiple polymorphic instantiations" {
+    // Test that let-bound polymorphic values can be instantiated multiple times
+    // This tests valid rank-1 polymorphism patterns
+    const code =
+        \\{
+        \\    id = |x| x
+        \\
+        \\    # Test polymorphic identity with different types
+        \\    num1 = id(42)
+        \\    str1 = id("Hello")
+        \\    num2 = id(100)
+        \\
+        \\    # Verify all results
+        \\    if (num1 == 42)
+        \\        if (num2 == 100)
+        \\            str1
+        \\        else
+        \\            "Failed2"
+        \\    else
+        \\        "Failed1"
+        \\}
+    ;
+    try runExpectStr(code, "Hello", .no_trace);
 }
 
 test "string refcount - large string literal" {
@@ -625,16 +693,12 @@ test "string refcount - record with empty string" {
 }
 
 test "string refcount - simple integer closure" {
-    return error.SkipZigTest;
-    // Not implemented yet -- the closure return type is still flex var
     // Test basic closure with integer first to see if the issue is closure-specific
-    // try runExpectInt("(|x| x)(42)", 42, .no_trace);
+    try runExpectInt("(|x| x)(42)", 42, .no_trace);
 }
 
 test "string refcount - simple string closure" {
-    return error.SkipZigTest;
-    // Not implemented yet -- the closure return type is still flex var
-    // try runExpectStr("(|s| s)(\"Test\")", "Test", .trace);
+    try runExpectStr("(|s| s)(\"Test\")", "Test", .no_trace);
 }
 
 test "ModuleEnv serialization and interpreter evaluation" {

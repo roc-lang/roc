@@ -1093,7 +1093,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     // Note: all_defs and all_statements are just spans with numeric values, no pointers to relocate
 
     self.external_decls.relocate(offset);
-    self.imports.relocate(offset);
+    // self.imports is deserialized separately, so no need to relocate here
 
     // Note: module_name is not relocated - it should be set manually
 
@@ -1176,7 +1176,7 @@ pub const Serialized = struct {
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .external_decls = self.external_decls.deserialize(offset).*,
-            .imports = self.imports.deserialize(offset).*,
+            .imports = self.imports.deserialize(offset, gpa).*,
             .module_name = module_name,
             .diagnostics = self.diagnostics,
             .store = self.store.deserialize(offset, gpa).*,

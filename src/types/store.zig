@@ -144,6 +144,13 @@ pub const Store = struct {
         return Self.slotIdxToVar(slot_idx);
     }
 
+    /// Create a new variable with the given content and rank
+    pub fn freshFromContentWithRank(self: *Self, content: Content, rank: Rank) std.mem.Allocator.Error!Var {
+        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = rank, .mark = Mark.none });
+        const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
+        return Self.slotIdxToVar(slot_idx);
+    }
+
     /// Create a variable redirecting to the provided var
     /// Used in tests
     pub fn freshRedirect(self: *Self, var_: Var) std.mem.Allocator.Error!Var {
@@ -339,6 +346,12 @@ pub const Store = struct {
     // Helper to check if a type variable needs instantiation
     pub fn needsInstantiation(self: *const Self, var_: Var) bool {
         const resolved = self.resolveVar(var_);
+
+        // Generalized variables (rank 0) always need instantiation
+        if (resolved.desc.rank == Rank.generalized) {
+            return true;
+        }
+
         return self.needsInstantiationContent(resolved.desc.content);
     }
 
@@ -518,6 +531,13 @@ pub const Store = struct {
     pub fn setDescMark(self: *Self, desc_idx: DescStore.Idx, mark: Mark) void {
         var desc = self.descs.get(desc_idx);
         desc.mark = mark;
+        self.descs.set(desc_idx, desc);
+    }
+
+    /// Set the rank for a descriptor
+    pub fn setDescRank(self: *Self, desc_idx: DescStore.Idx, rank: Rank) void {
+        var desc = self.descs.get(desc_idx);
+        desc.rank = rank;
         self.descs.set(desc_idx, desc);
     }
 

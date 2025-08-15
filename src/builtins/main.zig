@@ -292,7 +292,7 @@ fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
 /// This function handles runtime errors and panics in a way that's compatible
 /// with the C ABI and doesn't interfere with LLVM verification.
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace, _: ?usize) noreturn {
-    if (builtin.target.cpu.arch != .wasm32) {
+    if (comptime builtin.target.cpu.arch != .wasm32) {
         std.debug.print("\nSomehow in unreachable zig panic!\nThis is a roc standard library bug\n{s}: {?}", .{ message, stacktrace });
         std.process.abort();
     } else {

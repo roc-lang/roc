@@ -21,6 +21,7 @@ const Tag = @import("types.zig").Tag;
 const Num = @import("types.zig").Num;
 const NominalType = @import("types.zig").NominalType;
 const Tuple = @import("types.zig").Tuple;
+const Rank = @import("types.zig").Rank;
 const Ident = base.Ident;
 
 /// Type to manage instantiation.
@@ -71,6 +72,7 @@ pub const Instantiate = struct {
 
     pub const Ctx = struct {
         rigid_var_subs: *RigidToFlexSubs,
+        current_rank: Rank = Rank.top_level,
     };
 
     // instantiation //
@@ -99,7 +101,7 @@ pub const Instantiate = struct {
                     return existing_flex_var;
                 } else {
                     // Create a new flex variable for this rigid variable name
-                    const fresh_var = try self.store.freshFromContent(Content{ .flex_var = ident });
+                    const fresh_var = try self.store.freshFromContentWithRank(Content{ .flex_var = ident }, ctx.current_rank);
                     try ctx.rigid_var_subs.append(self.store.gpa, .{ .ident = ident_bytes, .var_ = fresh_var });
 
                     // Remember this substitution for recursive references
@@ -112,7 +114,7 @@ pub const Instantiate = struct {
                 const fresh_content = try self.instantiateContent(resolved.desc.content, ctx);
 
                 // Create a fresh variable with the instantiated content
-                const fresh_var = try self.store.freshFromContent(fresh_content);
+                const fresh_var = try self.store.freshFromContentWithRank(fresh_content, ctx.current_rank);
 
                 // Remember this substitution for recursive references
                 try self.seen_vars_subs.put(resolved_var, fresh_var);

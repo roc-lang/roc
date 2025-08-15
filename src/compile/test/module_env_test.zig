@@ -8,6 +8,7 @@ const ModuleEnv = can.ModuleEnv;
 const CompactWriter = collections.CompactWriter;
 const Ident = base.Ident;
 const Expr = can.CIR.Expr;
+const CIR = can.CIR;
 
 test "ModuleEnv.Serialized roundtrip" {
     const testing = std.testing;
@@ -33,6 +34,13 @@ test "ModuleEnv.Serialized roundtrip" {
 
     // Initialize CIR fields to ensure imports are available
     try original.initCIRFields(gpa, "TestModule");
+
+    // Add some imports to test serialization/deserialization
+    const import1 = try original.imports.getOrPut(gpa, &original.common.strings, "json.Json");
+    const import2 = try original.imports.getOrPut(gpa, &original.common.strings, "core.List");
+    const import3 = try original.imports.getOrPut(gpa, &original.common.strings, "json.Json"); // duplicate - should return same as import1
+
+    _ = import2; // Mark as used
 
     try original.setExposedNodeIndexById(hello_idx, 42);
     original.ensureExposedSorted(gpa);
@@ -66,6 +74,11 @@ test "ModuleEnv.Serialized roundtrip" {
 
     const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
 
+    // Create an arena for deserialization to avoid memory leaks
+    var deser_arena = std.heap.ArenaAllocator.init(gpa);
+    defer deser_arena.deinit();
+    const deser_alloc = deser_arena.allocator();
+
     // Now manually construct the ModuleEnv using the deserialized CommonEnv
     const env = @as(*ModuleEnv, @ptrCast(@alignCast(deserialized_ptr)));
     env.* = ModuleEnv{
@@ -77,10 +90,10 @@ test "ModuleEnv.Serialized roundtrip" {
         .all_defs = deserialized_ptr.all_defs,
         .all_statements = deserialized_ptr.all_statements,
         .external_decls = deserialized_ptr.external_decls.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
-        .imports = deserialized_ptr.imports.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
+        .imports = deserialized_ptr.imports.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc).*,
         .module_name = "TestModule",
         .diagnostics = deserialized_ptr.diagnostics,
-        .store = deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa).*,
+        .store = deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc).*,
     };
 
     // Verify the data was preserved
@@ -90,6 +103,10 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(u32, 2), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
+
+    // Verify imports before serialization
+    try testing.expectEqual(import1, import3); // Deduplication should work
+    try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
     try testing.expectEqual(@as(u32, 2), env.common.idents.interner.entry_count);
@@ -105,6 +122,34 @@ test "ModuleEnv.Serialized roundtrip" {
     // TODO restore source using CommonEnv
     // try testing.expectEqualStrings(source, env.source);
     try testing.expectEqualStrings("TestModule", env.module_name);
+
+    // Verify imports were preserved after deserialization
+    try testing.expectEqual(@as(usize, 2), env.imports.imports.len());
+
+    // Verify the import strings are correct (they reference string indices in the string store)
+    const import_str1 = env.common.strings.get(env.imports.imports.items.items[0]);
+    const import_str2 = env.common.strings.get(env.imports.imports.items.items[1]);
+
+    try testing.expectEqualStrings("json.Json", import_str1);
+    try testing.expectEqualStrings("core.List", import_str2);
+
+    // Verify that the map was repopulated correctly
+    try testing.expectEqual(@as(usize, 2), env.imports.map.count());
+
+    // Test that deduplication still works after deserialization
+    // Use arena allocator for these operations to avoid memory issues
+    var test_arena = std.heap.ArenaAllocator.init(gpa);
+    defer test_arena.deinit();
+    const test_alloc = test_arena.allocator();
+
+    const import4 = try env.imports.getOrPut(test_alloc, &env.common.strings, "json.Json");
+    const import5 = try env.imports.getOrPut(test_alloc, &env.common.strings, "new.Module");
+
+    // Should find existing json.Json
+    try testing.expectEqual(@as(u32, 0), @intFromEnum(import4));
+    // Should create new entry for new.Module
+    try testing.expectEqual(@as(u32, 2), @intFromEnum(import5));
+    try testing.expectEqual(@as(usize, 3), env.imports.imports.len());
 }
 
 // test "ModuleEnv with types CompactWriter roundtrip" {
@@ -183,7 +228,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //         .all_defs = deserialized_ptr.all_defs,
 //         .all_statements = deserialized_ptr.all_statements,
 //         .external_decls = deserialized_ptr.external_decls.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
-//         .imports = deserialized_ptr.imports.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
+//         .imports = (try deserialized_ptr.imports.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa)).*,
 //         .module_name = "test.Types",
 //         .diagnostics = deserialized_ptr.diagnostics,
 //         .store = deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa).*,

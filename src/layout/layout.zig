@@ -10,7 +10,6 @@ const collections = @import("collections");
 
 const CIR = @import("can").CIR;
 
-/// **Layout Store**
 pub const store = @import("store.zig");
 
 const Ident = base.Ident;

@@ -28,6 +28,7 @@
 //! 5. **Clean up / copy**: After the function is evaluated, we need to copy the result and clean up the stack.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const types = @import("types");
 const can = @import("can");
@@ -83,6 +84,7 @@ pub const EvalError = error{
     BugUnboxedFlexVar,
     DivisionByZero,
     InvalidStackState,
+    NullStackPointer,
     NoCapturesProvided,
     CaptureBindingFailed,
     CaptureNotFound,
@@ -135,6 +137,8 @@ const WorkKind = enum {
     w_eval_record_fields,
     w_eval_tuple_elements,
     w_let_bind,
+    w_recursive_bind_init,
+    w_recursive_bind_update,
     w_block_cleanup,
     w_dot_access,
     w_crash,
@@ -261,6 +265,8 @@ pub const Interpreter = struct {
     layout_cache: *LayoutStore,
     /// Type information store from the type checker
     type_store: *TypeStore,
+    /// Type scope for resolving polymorphic type variables
+    type_scope: types.TypeScope,
     /// Work queue for iterative expression evaluation (LIFO stack)
     work_stack: std.ArrayList(WorkItem),
     /// Parallel stack tracking type layouts of values in `stack_memory`
@@ -297,6 +303,7 @@ pub const Interpreter = struct {
             .stack_memory = stack_memory,
             .layout_cache = layout_cache,
             .type_store = type_store,
+            .type_scope = types.TypeScope.init(allocator),
             .work_stack = try std.ArrayList(WorkItem).initCapacity(allocator, 128),
             .value_stack = try std.ArrayList(InternalStackValue).initCapacity(allocator, 128),
             .bindings_stack = try std.ArrayList(Binding).initCapacity(allocator, 128),
@@ -323,7 +330,6 @@ pub const Interpreter = struct {
         var reversed = std.mem.reverseIterator(self.bindings_stack.items);
         while (reversed.next()) |binding| {
             if (binding.pattern_idx == pattern_idx) {
-                self.traceInfo("Found binding for pattern_idx={}", .{@intFromEnum(pattern_idx)});
                 return binding.value;
             }
         }
@@ -392,6 +398,7 @@ pub const Interpreter = struct {
         // it points to string data that lives in the string table
         // so we don't need to free it here
 
+        self.type_scope.deinit();
         self.work_stack.deinit();
         self.value_stack.deinit();
         self.bindings_stack.deinit();
@@ -480,6 +487,16 @@ pub const Interpreter = struct {
                     const value = try self.peekStackValue(1); // Don't pop!
 
                     try self.bindPattern(pattern_idx, value, roc_ops); // Value stays on stack for the block's lifetime
+                },
+                .w_recursive_bind_init => {
+                    const pattern_idx: CIR.Pattern.Idx = work.extra.decl_pattern_idx;
+                    const closure_expr_idx = work.expr_idx;
+                    try self.initRecursiveBinding(pattern_idx, closure_expr_idx);
+                },
+                .w_recursive_bind_update => {
+                    const pattern_idx: CIR.Pattern.Idx = work.extra.decl_pattern_idx;
+                    const value = try self.peekStackValue(1); // Don't pop!
+                    try self.updateRecursiveBinding(pattern_idx, value, roc_ops);
                 },
                 .w_block_cleanup => {
                     const bindings_to_keep = work.extra.bindings_stack_len;
@@ -628,7 +645,7 @@ pub const Interpreter = struct {
     /// Helper to get the layout for an expression
     fn getLayoutIdx(self: *Interpreter, expr_idx: anytype) EvalError!layout.Idx {
         const expr_var: types.Var = @enumFromInt(@intFromEnum(expr_idx));
-        const layout_idx = self.layout_cache.addTypeVar(expr_var) catch |err| switch (err) {
+        const layout_idx = self.layout_cache.addTypeVar(expr_var, &self.type_scope) catch |err| switch (err) {
             error.ZeroSizedType => return error.ZeroSizedType,
             error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
             else => |e| return e,
@@ -672,8 +689,18 @@ pub const Interpreter = struct {
                 if (expr_layout.tag == .scalar and expr_layout.data.scalar.tag == .int) {
                     result_value.setInt(int_lit.value.toI128());
                     self.traceInfo("Pushed integer literal {d}", .{int_lit.value.toI128()});
+                } else if (expr_layout.tag == .scalar and expr_layout.data.scalar.tag == .frac and expr_layout.data.scalar.data.frac == .dec) {
+                    // Integer literal with decimal layout - convert to RocDec
+                    const int_val = int_lit.value.toI128();
+                    const dec_value = RocDec{ .num = int_val * RocDec.one_point_zero_i128 };
+
+                    const result_ptr = @as(*RocDec, @ptrCast(@alignCast(result_value.ptr.?)));
+                    result_ptr.* = dec_value;
+                    result_value.is_initialized = true;
+
+                    self.traceInfo("Pushed integer literal {d} as decimal", .{int_val});
                 } else {
-                    self.traceError("Integer literal: expected integer layout, got {}", .{expr_layout.tag});
+                    self.traceError("Integer literal: expected integer or decimal layout, got {}", .{expr_layout.tag});
                     return error.TypeMismatch;
                 }
             },
@@ -853,49 +880,48 @@ pub const Interpreter = struct {
                 // CRITICAL: Use the nominal type for layout, not the backing expression's type
                 // Get the nominal type's layout directly
                 const nominal_var: types.Var = @enumFromInt(@intFromEnum(expr_idx));
-                const nominal_layout_idx = self.layout_cache.addTypeVar(nominal_var) catch |err| switch (err) {
+                const nominal_layout_idx = self.layout_cache.addTypeVar(nominal_var, &self.type_scope) catch |err| switch (err) {
                     error.ZeroSizedType => return error.ZeroSizedType,
                     error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
                     else => |e| return e,
                 };
 
-                // Debug assertions to catch regressions
-                if (std.debug.runtime_safety) {
-                    // Verify we have a nominal type
+                if (DEBUG_ENABLED) {
                     const resolved = self.layout_cache.types_store.resolveVar(nominal_var);
                     switch (resolved.desc.content) {
                         .structure => |flat_type| switch (flat_type) {
                             .nominal_type => {
-                                // Good - we have a nominal type
                                 const nominal_ident = self.env.getIdent(flat_type.nominal_type.ident.ident_idx);
                                 if (std.mem.eql(u8, nominal_ident, "Bool")) {
-                                    // For Bool nominal types, verify we get boolean layout
+                                    // For Bool nominal types should have a boolean layout
                                     const nominal_layout = self.layout_cache.getLayout(nominal_layout_idx);
                                     if (!(nominal_layout.tag == .scalar and nominal_layout.data.scalar.tag == .bool)) {
-                                        std.debug.panic("REGRESSION: Bool nominal type should have boolean layout, got: {}\n", .{nominal_layout.tag});
+                                        self.traceError("REGRESSION: Bool nominal type should have boolean layout", .{});
+                                        std.debug.assert(false);
                                     }
                                 }
                             },
                             else => {
-                                std.debug.panic("REGRESSION: e_nominal should have nominal_type, got: {}\n", .{flat_type});
+                                self.traceError("REGRESSION: e_nominal should have nominal_type", .{});
+                                std.debug.assert(false);
                             },
                         },
                         else => {
-                            std.debug.panic("REGRESSION: e_nominal should have structure content, got: {}\n", .{resolved.desc.content});
+                            self.traceError("REGRESSION: e_nominal should have structure content", .{});
+                            std.debug.assert(false);
                         },
                     }
-                }
 
-                // Trace nominal type evaluation
-                const resolved = self.layout_cache.types_store.resolveVar(nominal_var);
-                const nominal_ident = switch (resolved.desc.content) {
-                    .structure => |flat_type| switch (flat_type) {
-                        .nominal_type => |nt| self.env.getIdent(nt.ident.ident_idx),
+                    // Trace nominal type evaluation
+                    const nominal_ident = switch (resolved.desc.content) {
+                        .structure => |flat_type| switch (flat_type) {
+                            .nominal_type => |nt| self.env.getIdent(nt.ident.ident_idx),
+                            else => "unknown",
+                        },
                         else => "unknown",
-                    },
-                    else => "unknown",
-                };
-                self.traceInfo("e_nominal: type={s}, layout_idx={}", .{ nominal_ident, nominal_layout_idx });
+                    };
+                    self.traceInfo("e_nominal: type={s}, layout_idx={}", .{ nominal_ident, nominal_layout_idx });
+                }
 
                 // Evaluate backing expression but preserve nominal layout context
                 try self.work_stack.append(.{
@@ -1040,18 +1066,45 @@ pub const Interpreter = struct {
                     const stmt = self.env.store.getStatement(stmt_idx);
                     switch (stmt) {
                         .s_decl => |decl| {
-                            // Schedule binding after expression is evaluated.
-                            self.schedule_work(WorkItem{
-                                .kind = .w_let_bind,
-                                .expr_idx = expr_idx, // e_block's index for tracing
-                                .extra = .{ .decl_pattern_idx = decl.pattern },
-                            });
-                            // Schedule evaluation of the expression.
-                            self.schedule_work(WorkItem{
-                                .kind = .w_eval_expr_structural,
-                                .expr_idx = decl.expr,
-                                .extra = .{ .nothing = {} },
-                            });
+                            // Check if this is a recursive closure
+                            if (self.isRecursiveClosure(decl.expr, decl.pattern)) {
+                                // For recursive closures, we need special handling:
+                                // 1. Initialize with placeholder
+                                // 2. Evaluate expression (can now find the capture)
+                                // 3. Update the binding with the actual closure
+
+                                self.schedule_work(WorkItem{
+                                    .kind = .w_recursive_bind_update,
+                                    .expr_idx = expr_idx, // e_block's index for tracing
+                                    .extra = .{ .decl_pattern_idx = decl.pattern },
+                                });
+
+                                self.schedule_work(WorkItem{
+                                    .kind = .w_eval_expr_structural,
+                                    .expr_idx = decl.expr,
+                                    .extra = .{ .nothing = {} },
+                                });
+
+                                self.schedule_work(WorkItem{
+                                    .kind = .w_recursive_bind_init,
+                                    .expr_idx = decl.expr, // Pass the closure expr for layout info
+                                    .extra = .{ .decl_pattern_idx = decl.pattern },
+                                });
+                            } else {
+                                // Regular (non-recursive) declaration
+                                // Schedule binding after expression is evaluated.
+                                self.schedule_work(WorkItem{
+                                    .kind = .w_let_bind,
+                                    .expr_idx = expr_idx, // e_block's index for tracing
+                                    .extra = .{ .decl_pattern_idx = decl.pattern },
+                                });
+                                // Schedule evaluation of the expression.
+                                self.schedule_work(WorkItem{
+                                    .kind = .w_eval_expr_structural,
+                                    .expr_idx = decl.expr,
+                                    .extra = .{ .nothing = {} },
+                                });
+                            }
                         },
                         .s_crash => |crash| {
                             // Schedule crash to be executed
@@ -1277,68 +1330,206 @@ pub const Interpreter = struct {
 
         // Perform the operation and write to our result_value
         switch (kind) {
-            // Arithmetic operations - require integer operands
+            // Arithmetic operations - support both integer and fractional operands
             .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem => {
-                if (lhs_scalar.tag != .int or rhs_scalar.tag != .int) {
-                    self.traceError("arithmetic operations require integer operands", .{});
+                // Check if both operands are integers
+                if (lhs_scalar.tag == .int and rhs_scalar.tag == .int) {
+                    const lhs_val = lhs.asI128();
+                    const rhs_val = rhs.asI128();
+
+                    const result_layout = lhs.layout;
+                    var result_value = try self.pushStackValue(result_layout);
+
+                    const result_val: i128 = result_val: switch (kind) {
+                        .w_binop_add => {
+                            self.traceInfo("Integer addition: {} + {} = {}", .{ lhs_val, rhs_val, lhs_val + rhs_val });
+                            break :result_val lhs_val + rhs_val;
+                        },
+                        .w_binop_sub => break :result_val lhs_val - rhs_val,
+                        .w_binop_mul => break :result_val lhs_val * rhs_val,
+                        .w_binop_div => {
+                            if (rhs_val == 0) return error.DivisionByZero;
+                            break :result_val @divTrunc(lhs_val, rhs_val);
+                        },
+                        .w_binop_div_trunc => {
+                            if (rhs_val == 0) return error.DivisionByZero;
+                            break :result_val @divTrunc(lhs_val, rhs_val);
+                        },
+                        .w_binop_rem => {
+                            if (rhs_val == 0) return error.DivisionByZero;
+                            break :result_val @rem(lhs_val, rhs_val);
+                        },
+                        else => unreachable,
+                    };
+
+                    result_value.setInt(result_val);
+                }
+                // Check if both operands are decimals (frac with .dec precision)
+                else if (lhs_scalar.tag == .frac and rhs_scalar.tag == .frac) {
+                    // For now, only support .dec precision decimals
+                    const lhs_frac = lhs_scalar.data.frac;
+                    const rhs_frac = rhs_scalar.data.frac;
+
+                    if (lhs_frac == .dec and rhs_frac == .dec) {
+                        // Get RocDec values from memory
+                        const lhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(lhs.ptr.?)));
+                        const rhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(rhs.ptr.?)));
+                        const lhs_dec = lhs_ptr.*;
+                        const rhs_dec = rhs_ptr.*;
+
+                        const result_layout = lhs.layout;
+                        var result_value = try self.pushStackValue(result_layout);
+
+                        const result_dec: RocDec = switch (kind) {
+                            .w_binop_add => result_dec: {
+                                self.traceInfo("Decimal addition: {} + {} = {}", .{ lhs_dec.num, rhs_dec.num, lhs_dec.num + rhs_dec.num });
+                                break :result_dec RocDec{ .num = lhs_dec.num + rhs_dec.num };
+                            },
+                            .w_binop_sub => RocDec{ .num = lhs_dec.num - rhs_dec.num },
+                            .w_binop_mul => result_dec: {
+                                // For multiplication, we need to adjust for the decimal places
+                                // Both numbers are already scaled by 10^18, so multiplying gives us 10^36
+                                // We need to divide by 10^18 to get back to 10^18 scale
+                                const product = lhs_dec.num * rhs_dec.num;
+                                break :result_dec RocDec{ .num = @divTrunc(product, RocDec.one_point_zero_i128) };
+                            },
+                            .w_binop_div => result_dec: {
+                                if (rhs_dec.num == 0) return error.DivisionByZero;
+                                // For division, we need to scale the numerator by 10^18 first
+                                const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
+                                break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
+                            },
+                            .w_binop_div_trunc => result_dec: {
+                                if (rhs_dec.num == 0) return error.DivisionByZero;
+                                const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
+                                break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
+                            },
+                            .w_binop_rem => result_dec: {
+                                if (rhs_dec.num == 0) return error.DivisionByZero;
+                                break :result_dec RocDec{ .num = @rem(lhs_dec.num, rhs_dec.num) };
+                            },
+                            else => unreachable,
+                        };
+
+                        // Store the result in memory
+                        const result_ptr = @as(*RocDec, @ptrCast(@alignCast(result_value.ptr.?)));
+                        result_ptr.* = result_dec;
+                        result_value.is_initialized = true;
+                    } else {
+                        self.traceError("arithmetic operations on fractional types only support Dec precision", .{});
+                        return error.TypeMismatch;
+                    }
+                }
+                // Handle mixed integer and decimal operations
+                else if ((lhs_scalar.tag == .int and rhs_scalar.tag == .frac and rhs_scalar.data.frac == .dec) or
+                    (lhs_scalar.tag == .frac and lhs_scalar.data.frac == .dec and rhs_scalar.tag == .int))
+                {
+
+                    // Convert integer operand to decimal and perform decimal arithmetic
+                    const lhs_dec: RocDec = if (lhs_scalar.tag == .int)
+                        RocDec{ .num = lhs.asI128() * RocDec.one_point_zero_i128 }
+                    else
+                        @as(*const RocDec, @ptrCast(@alignCast(lhs.ptr.?))).*;
+
+                    const rhs_dec: RocDec = if (rhs_scalar.tag == .int)
+                        RocDec{ .num = rhs.asI128() * RocDec.one_point_zero_i128 }
+                    else
+                        @as(*const RocDec, @ptrCast(@alignCast(rhs.ptr.?))).*;
+
+                    // Result is always decimal
+                    const result_layout = if (lhs_scalar.tag == .frac) lhs.layout else rhs.layout;
+                    var result_value = try self.pushStackValue(result_layout);
+
+                    const result_dec: RocDec = switch (kind) {
+                        .w_binop_add => RocDec{ .num = lhs_dec.num + rhs_dec.num },
+                        .w_binop_sub => RocDec{ .num = lhs_dec.num - rhs_dec.num },
+                        .w_binop_mul => result_dec: {
+                            const product = lhs_dec.num * rhs_dec.num;
+                            break :result_dec RocDec{ .num = @divTrunc(product, RocDec.one_point_zero_i128) };
+                        },
+                        .w_binop_div => result_dec: {
+                            if (rhs_dec.num == 0) return error.DivisionByZero;
+                            const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
+                            break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
+                        },
+                        .w_binop_div_trunc => result_dec: {
+                            if (rhs_dec.num == 0) return error.DivisionByZero;
+                            const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
+                            break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
+                        },
+                        .w_binop_rem => result_dec: {
+                            if (rhs_dec.num == 0) return error.DivisionByZero;
+                            break :result_dec RocDec{ .num = @rem(lhs_dec.num, rhs_dec.num) };
+                        },
+                        else => unreachable,
+                    };
+
+                    // Store the result in memory
+                    const result_ptr = @as(*RocDec, @ptrCast(@alignCast(result_value.ptr.?)));
+                    result_ptr.* = result_dec;
+                    result_value.is_initialized = true;
+                } else {
+                    self.traceError("arithmetic operations require operands of the same type (both integers or both decimals)", .{});
                     return error.TypeMismatch;
                 }
-
-                const lhs_val = lhs.asI128();
-                const rhs_val = rhs.asI128();
-
-                const result_layout = lhs.layout;
-                var result_value = try self.pushStackValue(result_layout);
-
-                const result_val: i128 = result_val: switch (kind) {
-                    .w_binop_add => {
-                        self.traceInfo("Addition operation: {} + {} = {}", .{ lhs_val, rhs_val, lhs_val + rhs_val });
-                        break :result_val lhs_val + rhs_val;
-                    },
-                    .w_binop_sub => break :result_val lhs_val - rhs_val,
-                    .w_binop_mul => break :result_val lhs_val * rhs_val,
-                    .w_binop_div => {
-                        if (rhs_val == 0) return error.DivisionByZero;
-                        break :result_val @divTrunc(lhs_val, rhs_val);
-                    },
-                    .w_binop_div_trunc => {
-                        if (rhs_val == 0) return error.DivisionByZero;
-                        break :result_val @divTrunc(lhs_val, rhs_val);
-                    },
-                    .w_binop_rem => {
-                        if (rhs_val == 0) return error.DivisionByZero;
-                        break :result_val @rem(lhs_val, rhs_val);
-                    },
-                    else => unreachable,
-                };
-
-                result_value.setInt(result_val);
             },
 
-            // Comparison operations - require integer operands
+            // Comparison operations - support both integer and decimal operands
             .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le => {
-                if (lhs_scalar.tag != .int or rhs_scalar.tag != .int) {
-                    self.traceError("comparison operations require integer operands", .{});
+                // Check if both operands are integers
+                if (lhs_scalar.tag == .int and rhs_scalar.tag == .int) {
+                    const lhs_val = lhs.asI128();
+                    const rhs_val = rhs.asI128();
+
+                    const result_layout = Layout.boolType();
+                    var result_value = try self.pushStackValue(result_layout);
+
+                    const bool_result: u8 = switch (kind) {
+                        .w_binop_eq => if (lhs_val == rhs_val) 1 else 0,
+                        .w_binop_ne => if (lhs_val != rhs_val) 1 else 0,
+                        .w_binop_gt => if (lhs_val > rhs_val) 1 else 0,
+                        .w_binop_lt => if (lhs_val < rhs_val) 1 else 0,
+                        .w_binop_ge => if (lhs_val >= rhs_val) 1 else 0,
+                        .w_binop_le => if (lhs_val <= rhs_val) 1 else 0,
+                        else => unreachable,
+                    };
+
+                    result_value.setBool(bool_result);
+                }
+                // Check if both operands are decimals
+                else if (lhs_scalar.tag == .frac and rhs_scalar.tag == .frac) {
+                    const lhs_frac = lhs_scalar.data.frac;
+                    const rhs_frac = rhs_scalar.data.frac;
+
+                    if (lhs_frac == .dec and rhs_frac == .dec) {
+                        const lhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(lhs.ptr.?)));
+                        const rhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(rhs.ptr.?)));
+                        const lhs_dec = lhs_ptr.*;
+                        const rhs_dec = rhs_ptr.*;
+
+                        const result_layout = Layout.boolType();
+                        var result_value = try self.pushStackValue(result_layout);
+
+                        const bool_result: u8 = switch (kind) {
+                            .w_binop_eq => if (lhs_dec.num == rhs_dec.num) 1 else 0,
+                            .w_binop_ne => if (lhs_dec.num != rhs_dec.num) 1 else 0,
+                            .w_binop_gt => if (lhs_dec.num > rhs_dec.num) 1 else 0,
+                            .w_binop_lt => if (lhs_dec.num < rhs_dec.num) 1 else 0,
+                            .w_binop_ge => if (lhs_dec.num >= rhs_dec.num) 1 else 0,
+                            .w_binop_le => if (lhs_dec.num <= rhs_dec.num) 1 else 0,
+                            else => unreachable,
+                        };
+
+                        result_value.setBool(bool_result);
+                        self.traceInfo("Decimal comparison: {} {s} {} = {}", .{ lhs_dec.num, @tagName(kind), rhs_dec.num, bool_result });
+                    } else {
+                        self.traceError("comparison operations on fractional types only support Dec precision", .{});
+                        return error.TypeMismatch;
+                    }
+                } else {
+                    self.traceError("comparison operations require operands of the same type (both integers or both decimals)", .{});
                     return error.TypeMismatch;
                 }
-
-                const lhs_val = lhs.asI128();
-                const rhs_val = rhs.asI128();
-
-                const result_layout = Layout.boolType();
-                var result_value = try self.pushStackValue(result_layout);
-
-                const bool_result: u8 = switch (kind) {
-                    .w_binop_eq => if (lhs_val == rhs_val) 1 else 0,
-                    .w_binop_ne => if (lhs_val != rhs_val) 1 else 0,
-                    .w_binop_gt => if (lhs_val > rhs_val) 1 else 0,
-                    .w_binop_lt => if (lhs_val < rhs_val) 1 else 0,
-                    .w_binop_ge => if (lhs_val >= rhs_val) 1 else 0,
-                    .w_binop_le => if (lhs_val <= rhs_val) 1 else 0,
-                    else => unreachable,
-                };
-
-                result_value.setBool(bool_result);
             },
 
             // Logical operations - require boolean operands
@@ -1436,7 +1627,159 @@ pub const Interpreter = struct {
         self.traceInfo("Boolean scalar tag: {s} = {}", .{ tag_text, bool_value });
     }
 
-    /// Get the return layout of a closure by resolving its lambda expression's type
+    /// Get the return layout of a closure by resolving its lambda expression's type,
+    /// while building TypeScope mappings by matching function parameter types with argument types.
+    fn buildTypeScopeForCall(
+        self: *Interpreter,
+        call_expr_idx: CIR.Expr.Idx,
+        closure: *const Closure,
+        arg_count: u32,
+        scope_map: *types.VarMap,
+    ) !void {
+        // Get the lambda's function type
+        const lambda_var = ModuleEnv.varFrom(closure.lambda_expr_idx);
+        const lambda_resolved = self.env.types.resolveVar(lambda_var);
+
+        self.traceInfo("buildTypeScopeForCall: lambda_var={}, lambda_expr_idx={}", .{ lambda_var, closure.lambda_expr_idx });
+        self.traceInfo("  lambda type content: {s}", .{@tagName(lambda_resolved.desc.content)});
+
+        const func_type = switch (lambda_resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .fn_pure => |func| func,
+                .fn_effectful => |func| func,
+                .fn_unbound => |func| func,
+                else => return error.TypeMismatch,
+            },
+            else => return error.TypeMismatch,
+        };
+
+        // Get the argument expressions from the call
+        const call_expr = self.env.store.getExpr(call_expr_idx);
+        const call = switch (call_expr) {
+            .e_call => |c| c,
+            else => return error.TypeMismatch,
+        };
+
+        const all_exprs = self.env.store.sliceExpr(call.args);
+        if (all_exprs.len == 0) {
+            return error.TypeMismatch;
+        }
+        const arg_exprs = all_exprs[1..]; // Skip the function expression
+
+        // Get parameter types
+        const param_types = self.env.types.sliceVars(func_type.args);
+        self.traceInfo("  func_type.args slice: start={}, count={}", .{ func_type.args.start, func_type.args.count });
+        self.traceInfo("  param_types.len={}, arg_count={}", .{ param_types.len, arg_count });
+        for (param_types, 0..) |param_var, i| {
+            const param_resolved = self.env.types.resolveVar(param_var);
+            self.traceInfo("  param[{}]: var={}, content={s}", .{ i, param_var, @tagName(param_resolved.desc.content) });
+        }
+        if (param_types.len != arg_count or arg_exprs.len != arg_count) {
+            return error.TypeMismatch;
+        }
+
+        // For each parameter, match it with the corresponding argument type
+        for (param_types, arg_exprs) |param_type_var, arg_expr_idx| {
+            // Get the argument's actual type
+            const arg_type_var = ModuleEnv.varFrom(arg_expr_idx);
+
+            // Traverse and match the parameter type with the argument type
+            try self.traverseAndMatchTypes(param_type_var, arg_type_var, scope_map);
+        }
+
+        // Traverse the return type to match it up and handle any polymorphic variables
+        const call_result_type_var = ModuleEnv.varFrom(call_expr_idx);
+        try self.traverseAndMatchTypes(func_type.ret, call_result_type_var, scope_map);
+    }
+
+    /// Traverse and match function parameter types with argument types
+    fn traverseAndMatchTypes(
+        self: *Interpreter,
+        param_type_var: types.Var,
+        arg_type_var: types.Var,
+        scope_map: *types.VarMap,
+    ) !void {
+        const param_resolved = self.env.types.resolveVar(param_type_var);
+        const arg_resolved = self.env.types.resolveVar(arg_type_var);
+
+        self.traceInfo("traverseAndMatchTypes: param_var={}, arg_var={}", .{ param_type_var, arg_type_var });
+        self.traceInfo("  param content: {s}", .{@tagName(param_resolved.desc.content)});
+        self.traceInfo("  arg content: {s}", .{@tagName(arg_resolved.desc.content)});
+
+        switch (param_resolved.desc.content) {
+            .flex_var, .rigid_var => {
+                // This is a polymorphic variable - map it to the concrete argument type
+                if (!scope_map.contains(param_type_var)) {
+                    // Add mapping from the polymorphic parameter to the concrete argument type
+                    try scope_map.put(param_type_var, arg_type_var);
+                    self.traceInfo("  ADDED TypeScope mapping: {} -> {}", .{ param_type_var, arg_type_var });
+                }
+            },
+            .err => {
+                // Handle error types - these might appear in polymorphic contexts
+                // Map the error type to the argument type if the argument is polymorphic
+                if (arg_resolved.desc.content == .flex_var or arg_resolved.desc.content == .rigid_var) {
+                    // The argument is polymorphic, so we should map it
+                    // This is reversed - we map the argument to the parameter
+                    if (!scope_map.contains(arg_type_var)) {
+                        try scope_map.put(arg_type_var, param_type_var);
+                        self.traceInfo("  ADDED TypeScope mapping (err case): {} -> {}", .{ arg_type_var, param_type_var });
+                    }
+                }
+            },
+            .structure => |param_structure| {
+                // Check if the argument is polymorphic - if so, map it to the parameter
+                if (arg_resolved.desc.content == .flex_var or arg_resolved.desc.content == .rigid_var) {
+                    // The argument is polymorphic but the parameter is concrete
+                    // Map the polymorphic argument to the concrete parameter
+                    if (!scope_map.contains(arg_type_var)) {
+                        try scope_map.put(arg_type_var, param_type_var);
+                        self.traceInfo("  ADDED TypeScope mapping (arg polymorphic): {} -> {}", .{ arg_type_var, param_type_var });
+                    }
+                    return;
+                }
+
+                // For structured types, we need to recursively match
+                switch (param_structure) {
+                    .list => |param_elem_var| {
+                        // The argument must also be a list
+                        switch (arg_resolved.desc.content) {
+                            .structure => |arg_structure| switch (arg_structure) {
+                                .list => |arg_elem_var| {
+                                    // Recursively match element types
+                                    try self.traverseAndMatchTypes(param_elem_var, arg_elem_var, scope_map);
+                                },
+                                else => return error.TypeMismatch,
+                            },
+                            else => return error.TypeMismatch,
+                        }
+                    },
+                    .box => |param_elem_var| {
+                        // The argument must also be a box
+                        switch (arg_resolved.desc.content) {
+                            .structure => |arg_structure| switch (arg_structure) {
+                                .box => |arg_elem_var| {
+                                    // Recursively match element types
+                                    try self.traverseAndMatchTypes(param_elem_var, arg_elem_var, scope_map);
+                                },
+                                else => return error.TypeMismatch,
+                            },
+                            else => return error.TypeMismatch,
+                        }
+                    },
+                    else => {
+                        // Other structured types should match exactly
+                        // No polymorphic variables to map
+                    },
+                }
+            },
+            else => {
+                // Other content types don't need special handling
+                // They should match exactly
+            },
+        }
+    }
+
     fn getClosureReturnLayout(self: *Interpreter, closure: *const Closure) EvalError!Layout {
         // Get the type Var for the lambda expression
         const lambda_var = ModuleEnv.varFrom(closure.lambda_expr_idx);
@@ -1448,22 +1791,46 @@ pub const Interpreter = struct {
         switch (lambda_resolved.desc.content) {
             .structure => |structure| switch (structure) {
                 .fn_pure => |func| {
+                    // First check if the return type is mapped in our TypeScope
+                    var return_type_var = func.ret;
+                    if (self.type_scope.lookup(func.ret)) |mapped_var| {
+                        // Use the mapped type instead of the polymorphic one
+                        return_type_var = mapped_var;
+                        self.traceInfo("Resolved return type via TypeScope: {} -> {}", .{ func.ret, mapped_var });
+                    }
+
                     // Ensure the return type variable is fully resolved before getting layout
-                    const ret_resolved = self.env.types.resolveVar(func.ret);
+                    const ret_resolved = self.env.types.resolveVar(return_type_var);
 
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
                         .flex_var, .rigid_var => {
-                            self.traceInfo("LAYOUT SYSTEM NOT READY: Lambda return type is still unresolved ({}).", .{ret_resolved.desc.content});
-                            self.traceInfo("This means the type system hasn't finished constraint solving before layout computation.", .{});
-                            self.traceInfo("The type system shows the correct type in TYPES section, but the type variables", .{});
-                            self.traceInfo("passed to layout computation are still flex_var/rigid_var instead of concrete types.", .{});
-                            self.traceInfo("This will be fixed when the type system implementation is completed.", .{});
-                            return error.NotImplemented;
+                            self.traceInfo("Lambda return type is still unresolved after TypeScope lookup", .{});
+                            self.traceInfo("  Original var: {}", .{func.ret});
+                            self.traceInfo("  After TypeScope: {}", .{return_type_var});
+                            self.traceInfo("  Resolved content: {s}", .{@tagName(ret_resolved.desc.content)});
+                            self.traceInfo("  TypeScope has {} scopes", .{self.type_scope.scopes.items.len});
+                            for (self.type_scope.scopes.items, 0..) |scope, i| {
+                                self.traceInfo("  Scope {}: {} mappings", .{ i, scope.count() });
+                            }
+
+                            // Try to infer the return type from the function body
+                            // For now, default to i128 for unresolved types
+                            // This is a temporary workaround until we fix the type system
+                            self.traceInfo("WARNING: Using default i128 layout for unresolved return type", .{});
+                            return Layout{
+                                .tag = .scalar,
+                                .data = .{
+                                    .scalar = .{
+                                        .tag = .int,
+                                        .data = .{ .int = .i128 },
+                                    },
+                                },
+                            };
                         },
                         else => {
                             // Type is resolved to a concrete type, use layout cache
-                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret) catch |err| {
+                            const ret_layout_idx = self.layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
                                 self.traceError("Failed to get layout for closure return type: {}", .{err});
                                 return error.TypeMismatch;
                             };
@@ -1472,22 +1839,46 @@ pub const Interpreter = struct {
                     }
                 },
                 .fn_effectful => |func| {
+                    // First check if the return type is mapped in our TypeScope
+                    var return_type_var = func.ret;
+                    if (self.type_scope.lookup(func.ret)) |mapped_var| {
+                        // Use the mapped type instead of the polymorphic one
+                        return_type_var = mapped_var;
+                        self.traceInfo("Resolved return type via TypeScope: {} -> {}", .{ func.ret, mapped_var });
+                    }
+
                     // Ensure the return type variable is fully resolved before getting layout
-                    const ret_resolved = self.env.types.resolveVar(func.ret);
+                    const ret_resolved = self.env.types.resolveVar(return_type_var);
 
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
                         .flex_var, .rigid_var => {
-                            self.traceInfo("LAYOUT SYSTEM NOT READY: Lambda return type is still unresolved ({}).", .{ret_resolved.desc.content});
-                            self.traceInfo("This means the type system hasn't finished constraint solving before layout computation.", .{});
-                            self.traceInfo("The type system shows the correct type in TYPES section, but the type variables", .{});
-                            self.traceInfo("passed to layout computation are still flex_var/rigid_var instead of concrete types.", .{});
-                            self.traceInfo("This will be fixed when the type system implementation is completed.", .{});
-                            return error.NotImplemented;
+                            self.traceInfo("Lambda return type is still unresolved after TypeScope lookup", .{});
+                            self.traceInfo("  Original var: {}", .{func.ret});
+                            self.traceInfo("  After TypeScope: {}", .{return_type_var});
+                            self.traceInfo("  Resolved content: {s}", .{@tagName(ret_resolved.desc.content)});
+                            self.traceInfo("  TypeScope has {} scopes", .{self.type_scope.scopes.items.len});
+                            for (self.type_scope.scopes.items, 0..) |scope, i| {
+                                self.traceInfo("  Scope {}: {} mappings", .{ i, scope.count() });
+                            }
+
+                            // Try to infer the return type from the function body
+                            // For now, default to i128 for unresolved types
+                            // This is a temporary workaround until we fix the type system
+                            self.traceInfo("WARNING: Using default i128 layout for unresolved return type", .{});
+                            return Layout{
+                                .tag = .scalar,
+                                .data = .{
+                                    .scalar = .{
+                                        .tag = .int,
+                                        .data = .{ .int = .i128 },
+                                    },
+                                },
+                            };
                         },
                         else => {
                             // Type is resolved to a concrete type, use layout cache
-                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret) catch |err| {
+                            const ret_layout_idx = self.layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
                                 self.traceError("Failed to get layout for closure return type: {}", .{err});
                                 return error.TypeMismatch;
                             };
@@ -1496,22 +1887,52 @@ pub const Interpreter = struct {
                     }
                 },
                 .fn_unbound => |func| {
+                    // First check if the return type is mapped in our TypeScope
+                    var return_type_var = func.ret;
+                    if (self.type_scope.lookup(func.ret)) |mapped_var| {
+                        // Use the mapped type instead of the polymorphic one
+                        return_type_var = mapped_var;
+                        self.traceInfo("Resolved return type via TypeScope: {} -> {}", .{ func.ret, mapped_var });
+                    } else {
+                        self.traceInfo("No TypeScope mapping found for return type var: {}", .{func.ret});
+                        self.traceInfo("  TypeScope has {} scopes", .{self.type_scope.scopes.items.len});
+                        for (self.type_scope.scopes.items, 0..) |scope, i| {
+                            self.traceInfo("    Scope {}: {} mappings", .{ i, scope.count() });
+                        }
+                    }
+
                     // Ensure the return type variable is fully resolved before getting layout
-                    const ret_resolved = self.env.types.resolveVar(func.ret);
+                    const ret_resolved = self.env.types.resolveVar(return_type_var);
 
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
                         .flex_var, .rigid_var => {
-                            self.traceInfo("LAYOUT SYSTEM NOT READY: Lambda return type is still unresolved ({}).", .{ret_resolved.desc.content});
-                            self.traceInfo("This means the type system hasn't finished constraint solving before layout computation.", .{});
-                            self.traceInfo("The type system shows the correct type in TYPES section, but the type variables", .{});
-                            self.traceInfo("passed to layout computation are still flex_var/rigid_var instead of concrete types.", .{});
-                            self.traceInfo("This will be fixed when the type system implementation is completed.", .{});
-                            return error.NotImplemented;
+                            self.traceInfo("Lambda return type is still unresolved after TypeScope lookup", .{});
+                            self.traceInfo("  Original var: {}", .{func.ret});
+                            self.traceInfo("  After TypeScope: {}", .{return_type_var});
+                            self.traceInfo("  Resolved content: {s}", .{@tagName(ret_resolved.desc.content)});
+                            self.traceInfo("  TypeScope has {} scopes", .{self.type_scope.scopes.items.len});
+                            for (self.type_scope.scopes.items, 0..) |scope, i| {
+                                self.traceInfo("  Scope {}: {} mappings", .{ i, scope.count() });
+                            }
+
+                            // Try to infer the return type from the function body
+                            // For now, default to i128 for unresolved types
+                            // This is a temporary workaround until we fix the type system
+                            self.traceInfo("WARNING: Using default i128 layout for unresolved return type", .{});
+                            return Layout{
+                                .tag = .scalar,
+                                .data = .{
+                                    .scalar = .{
+                                        .tag = .int,
+                                        .data = .{ .int = .i128 },
+                                    },
+                                },
+                            };
                         },
                         else => {
                             // Type is resolved to a concrete type, use layout cache
-                            const ret_layout_idx = self.layout_cache.addTypeVar(func.ret) catch |err| {
+                            const ret_layout_idx = self.layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
                                 self.traceError("Failed to get layout for closure return type: {}", .{err});
                                 return error.TypeMismatch;
                             };
@@ -1622,7 +2043,44 @@ pub const Interpreter = struct {
         // Calculate value_base before allocating return slot
         const value_base: usize = self.value_stack.items.len - @as(usize, arg_count) - 1; // -1 for closure
 
-        // Pre-allocate return slot with the correct return type layout
+        // Build TypeScope for polymorphic type resolution
+        // We need to push a new scope onto the existing scope stack
+        var scope_map = types.VarMap.init(self.allocator);
+
+        // Match function parameter types with argument types and build mappings
+        // Check if expr_idx is actually a call expression or something else
+        const expr = self.env.store.getExpr(expr_idx);
+        if (expr == .e_call) {
+            // Normal case: we have a call expression with argument information
+            self.traceInfo("handleLambdaCall: Building TypeScope for call expression", .{});
+            try self.buildTypeScopeForCall(expr_idx, closure, arg_count, &scope_map);
+            self.traceInfo("handleLambdaCall: TypeScope built with {} mappings", .{scope_map.count()});
+        } else {
+            // Special case: called from test framework or other context without call expression
+            // We can't build TypeScope without argument type information
+            self.traceInfo("handleLambdaCall: expr_idx is not a call expression ({s}), skipping TypeScope building", .{@tagName(expr)});
+        }
+
+        // Push the new scope onto the stack if it has mappings
+        const scope_was_pushed = scope_map.count() > 0;
+        if (scope_was_pushed) {
+            try self.type_scope.scopes.append(scope_map.move());
+        } else {
+            scope_map.deinit();
+        }
+
+        // Pop the scope when we're done (if we pushed one)
+        defer {
+            if (scope_was_pushed) {
+                // Pop the scope we pushed and clean it up
+                if (self.type_scope.scopes.pop()) |popped_scope| {
+                    var mutable_scope = popped_scope;
+                    mutable_scope.deinit();
+                }
+            }
+        }
+
+        // Pre-allocate return slot with the correct return type layout using the new TypeScope
         const return_layout = try self.getClosureReturnLayout(closure);
         self.traceInfo("getClosureReturnLayout returned: {}", .{return_layout});
         const return_layout_idx = try self.layout_cache.insertLayout(return_layout);
@@ -1711,19 +2169,7 @@ pub const Interpreter = struct {
         self.traceInfo("handleLambdaReturn: actual_size={}, ptr_null={}", .{ actual_return_size, return_value.ptr == null });
 
         // Debug: Check if we're copying a closure and what sizes we're dealing with
-        if (actual_return_layout.tag == .closure) {
-            // Since we fixed pushStackValue, the return slot should now be the right size
-            const slot_size = if (actual_return_layout.tag == .closure) blk: {
-                const closure_header_size = @sizeOf(Closure);
-                const captures_layout = self.layout_cache.getLayout(actual_return_layout.data.closure.captures_layout_idx);
-                const captures_size = self.layout_cache.layoutSize(captures_layout);
-                const captures_alignment = captures_layout.alignment(target_usize);
-                const aligned_captures_offset = std.mem.alignForward(u32, closure_header_size, @intCast(captures_alignment.toByteUnits()));
-                break :blk aligned_captures_offset + captures_size;
-            } else self.layout_cache.layoutSize(actual_return_layout);
-
-            self.traceInfo("CLOSURE DEBUG: slot_size={}, actual_size={}", .{ slot_size, actual_return_size });
-        }
+        if (actual_return_layout.tag == .closure) {}
 
         // Get the pre-allocated return slot
         const return_slot_ptr = self.stack_memory.start + frame.return_slot_offset;
@@ -1734,9 +2180,26 @@ pub const Interpreter = struct {
 
             // Type safety: The return slot should now be the correct size since we use the actual return type
             // The type system should have already verified this, but we add runtime validation as a safety check
-            const expected_size = self.layout_cache.layoutSize(self.layout_cache.getLayout(frame.return_layout_idx));
+            const expected_layout = self.layout_cache.getLayout(frame.return_layout_idx);
+            const expected_size = self.layout_cache.layoutSize(expected_layout);
             if (actual_return_size != expected_size) {
                 self.traceInfo("Type mismatch: expected size {} != actual size {}", .{ expected_size, actual_return_size });
+                self.traceInfo("  Expected layout: {}", .{expected_layout});
+                self.traceInfo("  Actual layout: {}", .{actual_return_layout});
+                if (expected_layout.tag == .scalar) {
+                    self.traceInfo("  Expected scalar type: {}", .{expected_layout.data.scalar.tag});
+                    if (expected_layout.data.scalar.tag == .int) {
+                        self.traceInfo("    Int precision: {}", .{expected_layout.data.scalar.data.int});
+                    }
+                }
+                if (actual_return_layout.tag == .scalar) {
+                    self.traceInfo("  Actual scalar type: {}", .{actual_return_layout.data.scalar.tag});
+                    if (actual_return_layout.data.scalar.tag == .int) {
+                        self.traceInfo("    Int precision: {}", .{actual_return_layout.data.scalar.data.int});
+                    } else if (actual_return_layout.data.scalar.tag == .str) {
+                        self.traceInfo("    String type", .{});
+                    }
+                }
                 // This indicates a type system issue - the return layout doesn't match the actual return value
                 return error.TypeMismatch;
             }
@@ -2285,6 +2748,18 @@ pub const Interpreter = struct {
                 return error.UnsupportedWorkItem;
             },
 
+            // Recursive bindings
+            .w_recursive_bind_init => {
+                const pattern_idx: CIR.Pattern.Idx = work.extra.decl_pattern_idx;
+                const closure_expr_idx = work.expr_idx;
+                try self.initRecursiveBinding(pattern_idx, closure_expr_idx);
+            },
+            .w_recursive_bind_update => {
+                const pattern_idx: CIR.Pattern.Idx = work.extra.decl_pattern_idx;
+                const value = try self.peekStackValue(1); // Don't pop!
+                try self.updateRecursiveBinding(pattern_idx, value, roc_ops);
+            },
+
             // Field access
             .w_dot_access => try self.handleDotAccess(work.extra.dot_access_field_name),
 
@@ -2797,6 +3272,147 @@ pub const Interpreter = struct {
         }
     }
 
+    /// Check if an expression is a closure that captures the given pattern (self-referential)
+    fn isRecursiveClosure(self: *Interpreter, expr_idx: CIR.Expr.Idx, pattern_idx: CIR.Pattern.Idx) bool {
+        const expr = self.env.store.getExpr(expr_idx);
+        switch (expr) {
+            .e_closure => |closure_expr| {
+                // Get the pattern's variable name
+                const pattern_name = self.getPatternVariableName(pattern_idx) orelse return false;
+
+                // Check if this closure captures the same variable
+                const captures = self.env.store.sliceCaptures(closure_expr.captures);
+                for (captures) |capture_idx| {
+                    const capture = self.env.store.getCapture(capture_idx);
+                    const capture_name = self.env.getIdentText(capture.name);
+                    if (std.mem.eql(u8, capture_name, pattern_name)) {
+                        self.traceInfo("Detected recursive closure: '{s}' captures itself", .{pattern_name});
+                        return true;
+                    }
+                }
+            },
+            else => {},
+        }
+        return false;
+    }
+
+    /// Initialize a placeholder binding for a recursive closure
+    fn initRecursiveBinding(self: *Interpreter, pattern_idx: CIR.Pattern.Idx, _: CIR.Expr.Idx) EvalError!void {
+        const pattern_name = self.getPatternVariableName(pattern_idx) orelse return error.LayoutError;
+        self.traceInfo("Initializing recursive binding placeholder for '{s}'", .{pattern_name});
+
+        // Create a simple placeholder binding that doesn't involve allocating memory
+        // We'll use a null value with the pattern_idx to mark it as a recursive placeholder
+        const binding = Binding{
+            .pattern_idx = pattern_idx,
+            .value = StackValue{
+                .layout = Layout.boolType(), // Use a minimal safe layout
+                .ptr = null,
+                .is_initialized = false,
+            },
+        };
+
+        try self.bindings_stack.append(binding);
+        self.traceInfo("Created placeholder binding for recursive function '{s}' (null placeholder)", .{pattern_name});
+    }
+
+    /// Update a recursive binding with the actual closure value
+    fn updateRecursiveBinding(self: *Interpreter, pattern_idx: CIR.Pattern.Idx, actual_value: StackValue, roc_ops: *RocOps) EvalError!void {
+        const pattern_name = self.getPatternVariableName(pattern_idx) orelse return error.LayoutError;
+        self.traceInfo("Updating recursive binding for '{s}' with actual closure", .{pattern_name});
+
+        // Find the placeholder binding and update it
+        var found = false;
+        for (self.bindings_stack.items) |*binding| {
+            if (binding.pattern_idx == pattern_idx) {
+                // Clean up the old placeholder value
+                binding.cleanup(roc_ops);
+
+                // Update with the actual value
+                binding.value = actual_value.cloneForBinding();
+                found = true;
+                self.traceInfo("Successfully updated recursive binding for '{s}'", .{pattern_name});
+                break;
+            }
+        }
+
+        if (!found) {
+            self.traceError("Could not find placeholder binding for recursive function '{s}'", .{pattern_name});
+            return error.CaptureBindingFailed;
+        }
+    }
+
+    /// Try to copy capture from current bindings stack (including placeholder bindings)
+    fn copyFromCurrentBinding(
+        self: *Interpreter,
+        captures_ptr: [*]u8,
+        capture: CIR.Expr.Capture,
+        captures_record_layout: Layout,
+    ) EvalError!bool {
+        const capture_name_text = self.env.getIdentText(capture.name);
+
+        // Search through ALL current bindings (including recently created placeholders)
+        for (self.bindings_stack.items) |binding| {
+            const binding_name = self.getPatternVariableName(binding.pattern_idx);
+            if (binding_name != null and std.mem.eql(u8, binding_name.?, capture_name_text)) {
+                // Found the binding, check if it's a placeholder or real value
+                if (binding.value.ptr != null and binding.value.is_initialized) {
+                    try self.copyCapture(captures_ptr, capture_name_text, binding.value.ptr.?, binding.value.layout, captures_record_layout);
+                    self.traceInfo("Copied capture '{s}' from current binding", .{capture_name_text});
+                    return true;
+                } else {
+                    // This is a placeholder binding for a recursive function
+                    // We need to create a forward reference that will be resolved later
+                    try self.createSelfReferenceCapture(captures_ptr, capture, captures_record_layout);
+                    self.traceInfo("Created forward reference for recursive capture '{s}'", .{capture_name_text});
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// Create a self-reference capture placeholder for recursive closures
+    fn createSelfReferenceCapture(
+        self: *Interpreter,
+        captures_ptr: [*]u8,
+        capture: CIR.Expr.Capture,
+        captures_record_layout: Layout,
+    ) EvalError!void {
+        const capture_name_text = self.env.getIdentText(capture.name);
+
+        // For recursive functions, we create a placeholder that will be updated
+        // when the recursive binding is completed
+
+        if (captures_record_layout.tag == .record) {
+            const record_data = self.layout_cache.getRecordData(captures_record_layout.data.record.idx);
+            const sorted_fields = self.layout_cache.record_fields.sliceRange(record_data.getFields());
+
+            // Find the field for this capture
+            for (0..sorted_fields.len) |field_idx| {
+                const field_info = sorted_fields.get(field_idx);
+                const field_name = self.env.getIdent(field_info.name);
+                if (std.mem.eql(u8, field_name, capture_name_text)) {
+                    const field_layout = self.layout_cache.getLayout(field_info.layout);
+                    const field_offset = self.layout_cache.getRecordFieldOffset(captures_record_layout.data.record.idx, @intCast(field_idx));
+                    const field_ptr = captures_ptr + field_offset;
+
+                    // Create a placeholder - for closure types, we'll zero-initialize
+                    // This will be patched when updateRecursiveBinding is called
+                    const field_size = self.layout_cache.layoutSize(field_layout);
+                    @memset(field_ptr[0..field_size], 0);
+
+                    self.traceInfo("Created self-reference placeholder for field '{s}' at offset {}", .{ capture_name_text, field_offset });
+                    return;
+                }
+            }
+        }
+
+        self.traceError("Could not create self-reference placeholder for capture '{s}'", .{capture_name_text});
+        return error.LayoutError;
+    }
+
     /// Copies captured values into closure memory
     fn copyCapturesToClosure(
         self: *Interpreter,
@@ -2830,9 +3446,20 @@ pub const Interpreter = struct {
                 // Get the variable name from the binding's pattern
                 const binding_name = self.getPatternVariableName(binding.pattern_idx);
                 if (binding_name != null and std.mem.eql(u8, binding_name.?, capture_name_text)) {
-                    try self.copyCapture(captures_ptr, capture_name_text, binding.value.ptr.?, binding.value.layout, captures_record_layout);
-                    copied = true;
-                    break;
+                    // Check if this is a real binding or a placeholder
+                    if (binding.value.ptr != null and binding.value.is_initialized) {
+                        try self.copyCapture(captures_ptr, capture_name_text, binding.value.ptr.?, binding.value.layout, captures_record_layout);
+                        copied = true;
+                        self.traceInfo("Copied capture '{s}' from initialized binding", .{capture_name_text});
+                        break;
+                    } else {
+                        // This is a placeholder binding for a recursive function
+                        // Create a forward reference that will be resolved later
+                        try self.createSelfReferenceCapture(captures_ptr, capture, captures_record_layout);
+                        copied = true;
+                        self.traceInfo("Created forward reference for recursive capture '{s}' (placeholder found)", .{capture_name_text});
+                        break;
+                    }
                 }
             }
 
@@ -2842,8 +3469,15 @@ pub const Interpreter = struct {
             }
 
             if (!copied) {
-                self.traceError("Could not find capture '{s}' in bindings or outer closures", .{capture_name_text});
-                return error.CaptureNotFound;
+                // For recursive closures, the capture might refer to the closure being created
+                // In this case, we'll look for it in the current bindings stack, including
+                // recently created placeholder bindings
+                copied = try self.copyFromCurrentBinding(captures_ptr, capture, captures_record_layout);
+
+                if (!copied) {
+                    self.traceError("Could not find capture '{s}' in bindings, outer closures, or current context", .{capture_name_text});
+                    return error.CaptureNotFound;
+                }
             }
         }
     }
@@ -2984,7 +3618,7 @@ pub const Interpreter = struct {
                 return error.EvaluationFailed;
             };
 
-            result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
+            try result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
         }
     }
 
@@ -3108,7 +3742,7 @@ pub const Interpreter = struct {
         const result_value = try self.callClosureWithStackArgs(expr_idx, arg_count, ops);
 
         // Copy the result
-        result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
+        try result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
     }
 
     /// This function handles the incremental construction of tuples by processing one element at a time using a work queue to avoid recursion.

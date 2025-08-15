@@ -43,6 +43,39 @@ pub const Var = enum(u32) {
     }
 };
 
+/// A mapping from polymorphic type variables to concrete type variables
+pub const VarMap = std.hash_map.HashMap(Var, Var, std.hash_map.AutoContext(Var), 80);
+
+/// TypeScope represents nested type scopes for resolving polymorphic type variables.
+/// Each HashMap in the list represents a scope level, mapping polymorphic type variables
+/// to their resolved monomorphic equivalents.
+pub const TypeScope = struct {
+    scopes: std.ArrayList(VarMap),
+
+    pub fn init(allocator: std.mem.Allocator) TypeScope {
+        return .{
+            .scopes = std.ArrayList(VarMap).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *TypeScope) void {
+        for (self.scopes.items) |*scope| {
+            scope.deinit();
+        }
+        self.scopes.deinit();
+    }
+
+    /// Look up a type variable in all nested scopes, returning the mapped variable if found
+    pub fn lookup(self: *const TypeScope, var_to_find: Var) ?Var {
+        for (self.scopes.items) |*scope| {
+            if (scope.get(var_to_find)) |mapped_var| {
+                return mapped_var;
+            }
+        }
+        return null;
+    }
+};
+
 /// A type descriptor
 pub const Descriptor = struct { content: Content, rank: Rank, mark: Mark };
 
@@ -546,11 +579,17 @@ pub const Num = union(enum) {
         var is_hex_or_bin = false;
         var start_index: usize = 0;
 
-        if (text.len > 2 and text[0] == '0') {
-            switch (text[1]) {
+        // Check for negative prefix
+        var prefix_offset: usize = 0;
+        if (text.len > 0 and text[0] == '-') {
+            prefix_offset = 1;
+        }
+
+        if (text.len > prefix_offset + 2 and text[prefix_offset] == '0') {
+            switch (text[prefix_offset + 1]) {
                 'x', 'X', 'b', 'B', 'o', 'O' => {
                     is_hex_or_bin = true;
-                    start_index = 2; // Skip the "0x", "0b", or "0o" prefix
+                    start_index = prefix_offset + 2; // Skip the "0x", "0b", or "0o" prefix
                 },
                 else => {},
             }
