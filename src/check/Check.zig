@@ -1540,16 +1540,15 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
             const rhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.rhs)));
             const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
 
-            // Create a fresh number variable for the operation
+            // Create a SINGLE fresh number variable for the operation
+            // All operands and the result must be the same numeric type
             const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
-            const num_var_lhs = try self.freshFromContent(num_content, expr_region);
-            const num_var_rhs = try self.freshFromContent(num_content, expr_region);
-            const num_var_result = try self.freshFromContent(num_content, expr_region);
+            const num_var = try self.freshFromContent(num_content, expr_region);
 
-            // Unify lhs, rhs, and result with the number type
-            _ = try self.unify(num_var_lhs, lhs_var);
-            _ = try self.unify(num_var_rhs, rhs_var);
-            _ = try self.unify(result_var, num_var_result);
+            // Unify lhs, rhs, and result with the SAME number type
+            _ = try self.unify(num_var, lhs_var);
+            _ = try self.unify(num_var, rhs_var);
+            _ = try self.unify(num_var, result_var);
 
             return does_fx;
         },

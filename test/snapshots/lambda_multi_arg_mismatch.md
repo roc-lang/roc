@@ -79,10 +79,10 @@ The first and third arguments to `multi_arg_fn` must have compatible types, but 
     ^^^^^^^
 
 The first argument is of type:
-    _Str_
+    _Num(_size)_
 
 But the third argument is of type:
-    _Num(_size)_
+    _Str_
 
 `multi_arg_fn` needs these arguments to have compatible types.
 

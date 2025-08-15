@@ -227,7 +227,7 @@ UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
-TYPE MISMATCH - fuzz_crash_027.md:99:9:99:38
+TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -920,11 +920,58 @@ But you are trying to use it as:
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**fuzz_crash_027.md:99:9:99:38:**
+**fuzz_crash_027.md:100:9:148:2:**
 ```roc
-main! : List(String) -> Result({}, _)
+main! = |_| { # Yeah Ie
+	world = "World"
+	var number = 123
+	expect blah == 1
+	tag = Blue
+	return # Comd
+		tag
+
+	# Jusnt!
+
+	...
+	match_time(
+		..., #
+	)
+	some_func(
+		dbg # bug
+			42, # Aft expr
+	)
+	crash "Unreachtement
+	tag_with = Ok(number)
+	ited = "Hello, ${world}"
+	list = [
+		add_one(
+			dbg # Afin list
+e[, # afarg
+		),	456, # ee
+	]
+	for n in list {
+	line!("Adding ${n} to ${number}")
+		number = number + n
+	}
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+	m_tuple = (
+		123,
+		"World",
+		tag1,
+		Ok(world), # Thisnt
+		(nested, tuple),
+		[1, 2, 3],
+	)
+	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+	Stdoline!(
+		"How about ${ #
+			Num.toStr(number) # on expr
+		} as a",
+	)
+} # Commenl decl
 ```
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The type annotation says it should have the type:
     _List(Error) -> Result({  }, _d)_

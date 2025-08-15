@@ -23,7 +23,7 @@ goodValue = "test"
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
-TYPE MISMATCH - underscore_error_propagation.md:14:13:14:24
+TYPE MISMATCH - underscore_error_propagation.md:15:13:15:19
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -38,11 +38,11 @@ Underscores in type annotations mean "I don't care about this type", which doesn
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**underscore_error_propagation.md:14:13:14:24:**
+**underscore_error_propagation.md:15:13:15:19:**
 ```roc
-goodValue : GoodDerived
+goodValue = "test"
 ```
-            ^^^^^^^^^^^
+            ^^^^^^
 
 The type annotation says it should have the type:
     _GoodDerived_

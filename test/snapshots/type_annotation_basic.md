@@ -35,6 +35,7 @@ main! = |_| {
 ~~~
 # EXPECTED
 UNUSED VARIABLE - type_annotation_basic.md:21:5:21:9
+TYPE MISMATCH - type_annotation_basic.md:13:18:13:19
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `pair` is not used anywhere in your code.
@@ -47,6 +48,20 @@ The unused variable is declared here:
 ```
     ^^^^
 
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_annotation_basic.md:13:18:13:19:**
+```roc
+addOne = |n| n + 1
+```
+                 ^
+
+It is of type:
+    _Num(_size)_
+
+But you are trying to use it as:
+    _U64_
 
 # TOKENS
 ~~~zig
@@ -276,11 +291,11 @@ main! = |_| {
 	(defs
 		(patt @5.1-5.9 (type "a -> a"))
 		(patt @9.1-9.8 (type "a, b -> (a, b)"))
-		(patt @13.1-13.7 (type "U64 -> U64"))
-		(patt @15.1-15.6 (type "_arg -> U64")))
+		(patt @13.1-13.7 (type "Error -> Error"))
+		(patt @15.1-15.6 (type "_arg -> Error")))
 	(expressions
 		(expr @5.12-5.17 (type "a -> a"))
 		(expr @9.11-9.42 (type "a, b -> (a, b)"))
-		(expr @13.10-13.19 (type "U64 -> U64"))
-		(expr @15.9-27.2 (type "_arg -> U64"))))
+		(expr @13.10-13.19 (type "Error -> Error"))
+		(expr @15.9-27.2 (type "_arg -> Error"))))
 ~~~

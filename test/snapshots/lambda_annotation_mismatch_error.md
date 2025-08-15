@@ -17,6 +17,7 @@ wrong_type_function = |x| x * 3.14
 ~~~
 # EXPECTED
 TYPE MISMATCH - lambda_annotation_mismatch_error.md:5:23:5:24
+TYPE MISMATCH - lambda_annotation_mismatch_error.md:9:31:9:35
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -31,6 +32,20 @@ It is of type:
 
 But you are trying to use it as:
     _Num(_size)_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_annotation_mismatch_error.md:9:31:9:35:**
+```roc
+wrong_type_function = |x| x * 3.14
+```
+                              ^^^^
+
+It is of type:
+    _Frac(_size)_
+
+But you are trying to use it as:
+    _I64_
 
 # TOKENS
 ~~~zig
@@ -116,8 +131,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @5.1-5.16 (type "Error -> Error"))
-		(patt @9.1-9.20 (type "I64 -> I64")))
+		(patt @9.1-9.20 (type "Error -> Error")))
 	(expressions
 		(expr @5.19-5.29 (type "Error -> Error"))
-		(expr @9.23-9.35 (type "I64 -> I64"))))
+		(expr @9.23-9.35 (type "Error -> Error"))))
 ~~~

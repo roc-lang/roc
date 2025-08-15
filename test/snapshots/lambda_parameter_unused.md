@@ -34,6 +34,7 @@ main! = |_| {
 # EXPECTED
 UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
 UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
+TYPE MISMATCH - lambda_parameter_unused.md:9:32:9:33
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `unused` is not used anywhere in your code.
@@ -58,6 +59,20 @@ multiply = |_factor| _factor * 2
 ```
                      ^^^^^^^
 
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_parameter_unused.md:9:32:9:33:**
+```roc
+multiply = |_factor| _factor * 2
+```
+                               ^
+
+It is of type:
+    _Num(_size)_
+
+But you are trying to use it as:
+    _U64_
 
 # TOKENS
 ~~~zig
@@ -305,15 +320,15 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.4 (type "U64 -> U64"))
-		(patt @9.1-9.9 (type "U64 -> U64"))
-		(patt @13.1-13.8 (type "U64 -> U64"))
-		(patt @17.1-17.7 (type "U64 -> U64"))
-		(patt @19.1-19.6 (type "_arg -> Num(_size)")))
+		(patt @5.1-5.4 (type "Error -> Error"))
+		(patt @9.1-9.9 (type "Error -> Error"))
+		(patt @13.1-13.8 (type "Error -> Error"))
+		(patt @17.1-17.7 (type "Error -> Error"))
+		(patt @19.1-19.6 (type "_arg -> Error")))
 	(expressions
-		(expr @5.7-5.18 (type "U64 -> U64"))
-		(expr @9.12-9.33 (type "U64 -> U64"))
-		(expr @13.11-13.23 (type "U64 -> U64"))
-		(expr @17.10-17.27 (type "U64 -> U64"))
-		(expr @19.9-25.2 (type "_arg -> Num(_size)"))))
+		(expr @5.7-5.18 (type "Error -> Error"))
+		(expr @9.12-9.33 (type "Error -> Error"))
+		(expr @13.11-13.23 (type "Error -> Error"))
+		(expr @17.10-17.27 (type "Error -> Error"))
+		(expr @19.9-25.2 (type "_arg -> Error"))))
 ~~~

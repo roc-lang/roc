@@ -320,7 +320,11 @@ pub const ReportBuilder = struct {
         try snapshot_writer.write(types.expected_snapshot);
         const owned_expected = try report.addOwnedString(self.buf.items[0..]);
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        // For annotation mismatches, we want to highlight the expression that doesn't match,
+        // not the annotation itself. When from_annotation is true and we're showing 
+        // "The type annotation says...", the expression is in expected_var.
+        const region_var = if (types.from_annotation) types.expected_var else types.actual_var;
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(region_var)));
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
@@ -1252,12 +1256,14 @@ pub const ReportBuilder = struct {
         try appendOrdinal(&self.buf, data.second_arg_index + 1);
         const second_arg_index = try report.addOwnedString(self.buf.items);
 
+        // The types from unification already have the correct snapshots
+        // expected = first argument, actual = second argument
         self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.actual_snapshot);
+        try snapshot_writer.write(types.expected_snapshot);
         const first_type = try report.addOwnedString(self.buf.items);
 
         self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.expected_snapshot);
+        try snapshot_writer.write(types.actual_snapshot);
         const second_type = try report.addOwnedString(self.buf.items);
 
         try report.document.addText("The ");

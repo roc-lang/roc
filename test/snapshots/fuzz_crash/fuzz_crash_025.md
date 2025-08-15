@@ -41,7 +41,7 @@ PARSE ERROR - fuzz_crash_025.md:14:48:14:49
 PARSE ERROR - fuzz_crash_025.md:15:1:15:2
 PARSE ERROR - fuzz_crash_025.md:15:3:15:4
 PARSE ERROR - fuzz_crash_025.md:15:4:15:5
-TYPE MISMATCH - fuzz_crash_025.md:13:5:13:9
+TYPE MISMATCH - fuzz_crash_025.md:14:5:14:48
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.
@@ -153,11 +153,11 @@ f =8
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**fuzz_crash_025.md:13:5:13:9:**
+**fuzz_crash_025.md:14:5:14:48:**
 ```roc
-e : U128
+e = 3402823669209384634633746074317682114553.14: I8
 ```
-    ^^^^
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The type annotation says it should have the type:
     _U128_

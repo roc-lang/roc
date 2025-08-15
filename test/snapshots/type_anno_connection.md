@@ -14,9 +14,22 @@ my_number : U64
 my_number = add_one(42)
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - type_anno_connection.md:4:19:4:20
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_anno_connection.md:4:19:4:20:**
+```roc
+add_one = |x| x + 1
+```
+                  ^
+
+It is of type:
+    _Num(_size)_
+
+But you are trying to use it as:
+    _U64_
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:16),Comma(1:16-1:17),LowerIdent(1:18-1:27),CloseSquare(1:27-1:28),
@@ -90,9 +103,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "U64 -> U64"))
-		(patt @7.1-7.10 (type "U64")))
+		(patt @4.1-4.8 (type "Error -> Error"))
+		(patt @7.1-7.10 (type "Error")))
 	(expressions
-		(expr @4.11-4.20 (type "U64 -> U64"))
-		(expr @7.13-7.24 (type "U64"))))
+		(expr @4.11-4.20 (type "Error -> Error"))
+		(expr @7.13-7.24 (type "Error"))))
 ~~~
