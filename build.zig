@@ -65,10 +65,16 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "enable_tracy_allocation", flag_tracy_allocation);
     build_options.addOption(u32, "tracy_callstack_depth", flag_tracy_callstack_depth);
 
-    const roc_modules = modules.RocModules.create(b, build_options);
+    // We use zstd for `roc bundle` and `roc unbundle` and downloading .tar.zst bundles.
+    const zstd = b.dependency("zstd", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const roc_modules = modules.RocModules.create(b, build_options, zstd);
 
     // add main roc exe
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy) orelse return;
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd) orelse return;
     roc_modules.addAll(roc_exe);
     install_and_run(b, no_bin, roc_exe, roc_step, run_step);
 
@@ -138,7 +144,7 @@ pub fn build(b: *std.Build) void {
     };
 
     // Create and add module tests
-    const module_tests = roc_modules.createModuleTests(b, target, optimize);
+    const module_tests = roc_modules.createModuleTests(b, target, optimize, zstd);
     for (module_tests) |module_test| {
         b.default_step.dependOn(&module_test.test_step.step);
         test_step.dependOn(&module_test.run_step.step);
@@ -167,6 +173,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     roc_modules.addAll(cli_test);
+    cli_test.linkLibrary(zstd.artifact("zstd"));
     add_tracy(b, roc_modules.build_options, cli_test, target, false, flag_enable_tracy);
 
     const run_cli_test = b.addRunArtifact(cli_test);
@@ -293,6 +300,7 @@ fn addMainExe(
     use_system_llvm: bool,
     user_llvm_path: ?[]const u8,
     tracy: ?[]const u8,
+    zstd: *Dependency,
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
@@ -398,6 +406,9 @@ fn addMainExe(
     }
 
     add_tracy(b, roc_modules.build_options, exe, target, enable_llvm, tracy);
+
+    exe.linkLibrary(zstd.artifact("zstd"));
+
     return exe;
 }
 
@@ -563,7 +574,6 @@ fn addStaticLlvmOptionsToModule(mod: *std.Build.Module) !void {
     }
 
     mod.linkSystemLibrary("z", link_static);
-    mod.linkSystemLibrary("zstd", link_static);
 
     if (mod.resolved_target.?.result.os.tag != .windows or mod.resolved_target.?.result.abi != .msvc) {
         // TODO: Can this just be `mod.link_libcpp = true`? Does that make a difference?
