@@ -101,7 +101,7 @@ pub fn build(b: *std.Build) void {
     });
     playground_exe.entry = .disabled;
     playground_exe.rdynamic = true;
-    roc_modules.addAllExceptBundle(playground_exe);
+    roc_modules.addAll(playground_exe);
 
     add_tracy(b, roc_modules.build_options, playground_exe, b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
@@ -126,7 +126,7 @@ pub fn build(b: *std.Build) void {
         });
         playground_integration_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
         playground_integration_test_exe.root_module.addImport("build_options", build_options.createModule());
-        roc_modules.addAllExceptBundle(playground_integration_test_exe);
+        roc_modules.addAll(playground_integration_test_exe);
 
         const install = b.addInstallArtifact(playground_integration_test_exe, .{});
         // Ensure playground WASM is built before running the integration test

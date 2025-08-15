@@ -181,37 +181,18 @@ pub const RocModules = struct {
         step.root_module.addImport("ipc", self.ipc);
         step.root_module.addImport("repl", self.repl);
         step.root_module.addImport("fmt", self.fmt);
-        step.root_module.addImport("bundle", self.bundle);
+
+        // Don't add bundle module for WASM targets (zstd C library not available)
+        if (step.rootModuleTarget().cpu.arch != .wasm32) {
+            step.root_module.addImport("bundle", self.bundle);
+        }
+
         step.root_module.addImport("unbundle", self.unbundle);
         step.root_module.addImport("base58", self.base58);
     }
 
     pub fn addAllToTest(self: RocModules, step: *Step.Compile) void {
         self.addAll(step);
-    }
-
-    /// Add all modules except bundle (useful for wasm32 targets where zstd isn't available)
-    pub fn addAllExceptBundle(self: RocModules, step: *Step.Compile) void {
-        step.root_module.addImport("base", self.base);
-        step.root_module.addImport("collections", self.collections);
-        step.root_module.addImport("types", self.types);
-        step.root_module.addImport("compile", self.compile);
-        step.root_module.addImport("reporting", self.reporting);
-        step.root_module.addImport("parse", self.parse);
-        step.root_module.addImport("can", self.can);
-        step.root_module.addImport("check", self.check);
-        step.root_module.addImport("tracy", self.tracy);
-        step.root_module.addImport("builtins", self.builtins);
-        step.root_module.addImport("fs", self.fs);
-        step.root_module.addImport("build_options", self.build_options);
-        step.root_module.addImport("layout", self.layout);
-        step.root_module.addImport("eval", self.eval);
-        step.root_module.addImport("ipc", self.ipc);
-        step.root_module.addImport("repl", self.repl);
-        step.root_module.addImport("fmt", self.fmt);
-        step.root_module.addImport("unbundle", self.unbundle);
-        step.root_module.addImport("base58", self.base58);
-        // Intentionally omitting bundle module (requires C zstd library)
     }
 
     /// Get a module by its type
