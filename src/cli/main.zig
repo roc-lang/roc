@@ -455,14 +455,21 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         };
         defer gpa.free(shim_path);
 
-        // Only extract if the shim doesn't already exist in cache
-        std.fs.cwd().access(shim_path, .{}) catch {
-            // Shim not found in cache, extract it
+        // Extract shim if not cached or if --no-cache is used
+        const shim_exists = if (args.no_cache) false else blk: {
+            std.fs.cwd().access(shim_path, .{}) catch {
+                break :blk false;
+            };
+            break :blk true;
+        };
+
+        if (!shim_exists) {
+            // Shim not found in cache or cache disabled, extract it
             extractReadRocFilePathShimLibrary(gpa, shim_path) catch |err| {
                 std.log.err("Failed to extract read roc file path shim library: {}\n", .{err});
                 std.process.exit(1);
             };
-        };
+        }
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, fallback to clang if LLVM is not available
