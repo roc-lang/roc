@@ -2315,6 +2315,7 @@ pub fn parseMultiLineStringExpr(self: *Parser) Error!AST.Expr.Idx {
     while (self.peek() != .EndOfFile) {
         switch (self.peek()) {
             .MultilineStringEnd => {
+                self.advance();
                 break;
             },
             .MultilineStringStart => {
