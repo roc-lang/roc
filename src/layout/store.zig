@@ -1127,23 +1127,7 @@ pub const Store = struct {
                     current = self.types_store.resolveVar(backing_var);
                     continue;
                 },
-                .err => {
-                    // Error types might appear in polymorphic contexts
-                    // For now, treat them as i128 to allow evaluation to continue
-                    // This is a workaround until the type system is fixed
-                    const default_layout = Layout{
-                        .tag = .scalar,
-                        .data = .{
-                            .scalar = .{
-                                .tag = .int,
-                                .data = .{ .int = .i128 },
-                            },
-                        },
-                    };
-                    layout_idx = try self.insertLayout(default_layout);
-                    try self.layouts_by_var.put(self.env.gpa, current.var_, layout_idx);
-                    return layout_idx;
-                },
+                .err => return LayoutError.TypeContainedMismatch,
             };
 
             // We actually resolved a layout that wasn't zero-sized!
