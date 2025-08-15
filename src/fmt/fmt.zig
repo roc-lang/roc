@@ -812,6 +812,50 @@ const Formatter = struct {
                 }
                 try fmt.push('"');
             },
+            .multiline_string => |s| {
+                var add_newline = true;
+                for (fmt.ast.store.exprSlice(s.parts)) |idx| {
+                    const e = fmt.ast.store.getExpr(idx);
+                    switch (e) {
+                        .string_part => |str| {
+                            if (add_newline) {
+                                try fmt.ensureNewline();
+                                try fmt.pushIndent();
+                                try fmt.pushAll("\"\"\"");
+                            }
+                            add_newline = true;
+                            try fmt.pushTokenText(str.token);
+                        },
+                        else => {
+                            add_newline = false;
+                            try fmt.pushAll("${");
+                            const part_region = fmt.nodeRegion(@intFromEnum(idx));
+                            // Parts don't include the StringInterpolationStart and StringInterpolationEnd tokens
+                            // That means they won't include any of the newlines between them and the actual expr.
+                            // So we'll widen the region by one token for calculating multliline.
+                            // Ideally, we'd also check if the expr itself is multiline, and if we will end up flushing, but
+                            // we'll leave it as is for now
+                            const part_is_multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = part_region.start - 1, .end = part_region.end + 1 }) or
+                                fmt.nodeWillBeMultiline(AST.Expr.Idx, idx);
+
+                            if (part_is_multiline) {
+                                _ = try fmt.flushCommentsBefore(part_region.start);
+                                try fmt.ensureNewline();
+                                fmt.curr_indent += 1;
+                                try fmt.pushIndent();
+                            }
+                            _ = try fmt.formatExpr(idx);
+                            if (part_is_multiline) {
+                                _ = try fmt.flushCommentsBefore(part_region.end);
+                                try fmt.ensureNewline();
+                                fmt.curr_indent -= 1;
+                                try fmt.pushIndent();
+                            }
+                            try fmt.push('}');
+                        },
+                    }
+                }
+            },
             .single_quote => |s| {
                 try fmt.pushTokenText(s.token);
             },
