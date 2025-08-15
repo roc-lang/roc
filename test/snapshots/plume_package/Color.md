@@ -115,7 +115,7 @@ I'm having trouble with this nominal tag:
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The tag is:
-    _RGBA(U8, U8, U8, Num(_size))_
+    _RGBA(U8, U8, U8, Frac(_size))_
 
 But it should be one of:
     _[Hex(Str), Named(Str), RGB(U8, U8, U8), RGBA(U8, U8, U8, Dec)]_

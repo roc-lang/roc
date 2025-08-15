@@ -16,21 +16,36 @@ wrongTypeFunction : I64 -> I64
 wrongTypeFunction = |x| x * 3.14
 ~~~
 # EXPECTED
-TYPE MISMATCH - lambda_annotation_mismatch_error.md:4:25:4:28
+TYPE MISMATCH - lambda_annotation_mismatch_error.md:5:26:5:28
+TYPE MISMATCH - lambda_annotation_mismatch_error.md:9:29:9:33
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**lambda_annotation_mismatch_error.md:4:25:4:28:**
+**lambda_annotation_mismatch_error.md:5:26:5:28:**
 ```roc
-stringFunction : Str -> Str
+stringFunction = |x| x + 42
 ```
-                        ^^^
+                         ^^
 
 It is of type:
-    _Str_
+    _Num(_size)_
 
 But you are trying to use it as:
-    _Num(_size)_
+    _Str_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_annotation_mismatch_error.md:9:29:9:33:**
+```roc
+wrongTypeFunction = |x| x * 3.14
+```
+                            ^^^^
+
+It is of type:
+    _Frac(_size)_
+
+But you are trying to use it as:
+    _I64_
 
 # TOKENS
 ~~~zig
@@ -116,8 +131,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @5.1-5.15 (type "Error -> Error"))
-		(patt @9.1-9.18 (type "I64 -> I64")))
+		(patt @9.1-9.18 (type "Error -> Error")))
 	(expressions
 		(expr @5.18-5.28 (type "Error -> Error"))
-		(expr @9.21-9.33 (type "I64 -> I64"))))
+		(expr @9.21-9.33 (type "Error -> Error"))))
 ~~~

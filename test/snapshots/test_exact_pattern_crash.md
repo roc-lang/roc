@@ -57,7 +57,7 @@ This expression is used in an unexpected way:
          ^^^^^^^^
 
 It is of type:
-    _Num(_size), Num(_size2), _arg -> Num(_size3), _arg2 -> Num(_size4) -> _ret_
+    _Num(_size), Num(_size2), Num(_size3) -> Num(_size4), Num(_size5) -> Num(_size6) -> _ret_
 
 But you are trying to use it as:
     _Pair(a, b), a -> c, b -> d -> Pair(c, d)_

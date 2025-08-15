@@ -450,7 +450,7 @@ main = |_| {
 		(patt @17.1-17.10 (type "_arg -> List(_elem)"))
 		(patt @20.1-20.15 (type "List(_elem)"))
 		(patt @21.1-21.15 (type "List(_elem)"))
-		(patt @23.1-23.5 (type "_arg -> Num(_size)")))
+		(patt @23.1-23.5 (type "_arg -> _ret")))
 	(expressions
 		(expr @4.17-4.19 (type "List(_elem)"))
 		(expr @7.12-7.21 (type "List(Num(_size))"))
@@ -462,5 +462,5 @@ main = |_| {
 		(expr @17.13-17.19 (type "_arg -> List(_elem)"))
 		(expr @20.18-20.31 (type "List(_elem)"))
 		(expr @21.18-21.35 (type "List(_elem)"))
-		(expr @23.8-29.2 (type "_arg -> Num(_size)"))))
+		(expr @23.8-29.2 (type "_arg -> _ret"))))
 ~~~

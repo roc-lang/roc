@@ -87,5 +87,5 @@ match list {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "Num(_size)"))
+(expr @1.1-4.2 (type "_a"))
 ~~~

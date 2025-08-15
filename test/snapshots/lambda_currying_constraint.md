@@ -28,7 +28,6 @@ PARSE ERROR - lambda_currying_constraint.md:12:22:12:23
 PARSE ERROR - lambda_currying_constraint.md:12:24:12:25
 PARSE ERROR - lambda_currying_constraint.md:12:26:12:28
 PARSE ERROR - lambda_currying_constraint.md:12:29:12:30
-TYPE MISMATCH - lambda_currying_constraint.md:4:18:4:26
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
@@ -77,20 +76,6 @@ applyTwice : (a -> a), a -> a
 ```
                             ^
 
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**lambda_currying_constraint.md:4:18:4:26:**
-```roc
-makeAdder : a -> (a -> a)
-```
-                 ^^^^^^^^
-
-It is of type:
-    _a -> a_
-
-But you are trying to use it as:
-    _a -> Num(_size)_
 
 # TOKENS
 ~~~zig
@@ -283,13 +268,13 @@ addThreeTwice = |n| applyTwice(|x| x + 3, n)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.10 (type "a -> Error"))
-		(patt @9.1-9.11 (type "Error"))
+		(patt @5.1-5.10 (type "a -> a -> a"))
+		(patt @9.1-9.11 (type "I64 -> I64"))
 		(patt @13.1-13.11 (type "_arg -> _ret, _arg2 -> _ret2"))
 		(patt @17.1-17.14 (type "I64 -> I64")))
 	(expressions
-		(expr @5.13-5.26 (type "a -> Error"))
-		(expr @9.14-9.26 (type "Error"))
+		(expr @5.13-5.26 (type "a -> a -> a"))
+		(expr @9.14-9.26 (type "I64 -> I64"))
 		(expr @13.14-13.28 (type "_arg -> _ret, _arg2 -> _ret2"))
 		(expr @17.17-17.45 (type "I64 -> I64"))))
 ~~~

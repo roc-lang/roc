@@ -153,12 +153,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.9 (type "_arg, _arg2 -> Num(_size)"))
+		(patt @6.1-6.9 (type "_arg, _arg2 -> _ret"))
 		(patt @9.1-9.14 (type "_arg -> _ret"))
 		(patt @12.1-12.9 (type "_arg -> _ret"))
 		(patt @14.1-14.6 (type "_a")))
 	(expressions
-		(expr @6.12-6.24 (type "_arg, _arg2 -> Num(_size)"))
+		(expr @6.12-6.24 (type "_arg, _arg2 -> _ret"))
 		(expr @9.17-9.36 (type "_arg -> _ret"))
 		(expr @12.12-12.45 (type "_arg -> _ret"))
 		(expr @14.9-14.21 (type "_a"))))

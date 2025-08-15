@@ -1443,19 +1443,20 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
 
     switch (binop.op) {
         .add, .sub, .mul, .div, .rem, .pow, .div_trunc => {
-            // For arithmetic operations, create a shared number type for operands and result
+            // For arithmetic operations, check operands normally first, then unify
+            var does_fx = try self.checkExpr(binop.lhs);
+            does_fx = try self.checkExpr(binop.rhs) or does_fx;
+
+            // Get operand variables
+            const lhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.lhs)));
+            const rhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.rhs)));
             const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
 
-            // Create a fresh number variable that all operands should match
-            const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
-            const shared_num_var = try self.freshFromContent(num_content, expr_region);
+            // Unify operands - they must be the same type
+            _ = try self.unify(lhs_var, rhs_var);
 
-            // Check operands with the shared numeric type as expected
-            var does_fx = try self.checkExprWithExpected(binop.lhs, shared_num_var);
-            does_fx = try self.checkExprWithExpected(binop.rhs, shared_num_var) or does_fx;
-
-            // Result should also be of the same numeric type
-            _ = try self.unify(result_var, shared_num_var);
+            // Result should have the same type as the operands
+            _ = try self.unify(result_var, lhs_var);
 
             return does_fx;
         },

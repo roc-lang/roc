@@ -14,20 +14,20 @@ my_number : U64
 my_number = add_one(42)
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_anno_connection.md:7:21:7:23
+TYPE MISMATCH - type_anno_connection.md:4:19:4:20
 # PROBLEMS
 **TYPE MISMATCH**
-The first argument to this function is not what I expect:
-**type_anno_connection.md:7:21:7:23:**
+This expression is used in an unexpected way:
+**type_anno_connection.md:4:19:4:20:**
 ```roc
-my_number = add_one(42)
+add_one = |x| x + 1
 ```
-                    ^^
+                  ^
 
-This argument is of type:
+It is of type:
     _Num(_size)_
 
-But the function needs the first argumument to be:
+But you are trying to use it as:
     _U64_
 
 # TOKENS

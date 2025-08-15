@@ -15,7 +15,7 @@ main = |_, _| helper 5
 ~~~
 # EXPECTED
 PARSE ERROR - lambda_ret_constraint_bug.md:7:22:7:23
-TYPE MISMATCH - lambda_ret_constraint_bug.md:6:8:6:23
+TYPE MISMATCH - lambda_ret_constraint_bug.md:4:18:4:19
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
@@ -31,17 +31,17 @@ main = |_, _| helper 5
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**lambda_ret_constraint_bug.md:6:8:6:23:**
+**lambda_ret_constraint_bug.md:4:18:4:19:**
 ```roc
-main : I64, I64 -> I64
+helper = |n| n * 2
 ```
-       ^^^^^^^^^^^^^^^
+                 ^
 
 It is of type:
-    _I64, I64 -> I64_
+    _Num(_size)_
 
 But you are trying to use it as:
-    _I64, I64 -> I64 -> I64_
+    _I64_
 
 # TOKENS
 ~~~zig
@@ -142,9 +142,9 @@ main = |_, _| helper
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.7 (type "I64 -> I64"))
-		(patt @7.1-7.5 (type "Error")))
+		(patt @4.1-4.7 (type "Error"))
+		(patt @7.1-7.5 (type "Error, Error -> Error")))
 	(expressions
-		(expr @4.10-4.19 (type "I64 -> I64"))
-		(expr @7.8-7.21 (type "Error"))))
+		(expr @4.10-4.19 (type "Error"))
+		(expr @7.8-7.21 (type "Error, Error -> Error"))))
 ~~~
