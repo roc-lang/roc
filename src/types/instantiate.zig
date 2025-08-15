@@ -21,6 +21,7 @@ const Tag = @import("types.zig").Tag;
 const Num = @import("types.zig").Num;
 const NominalType = @import("types.zig").NominalType;
 const Tuple = @import("types.zig").Tuple;
+const Rank = @import("types.zig").Rank;
 const Ident = base.Ident;
 
 /// Type to manage instantiation.
@@ -71,7 +72,7 @@ pub const Instantiate = struct {
 
     pub const Ctx = struct {
         rigid_var_subs: *RigidToFlexSubs,
-        current_rank: @import("types.zig").Rank = @import("types.zig").Rank.top_level,
+        current_rank: Rank = Rank.top_level,
     };
 
     // instantiation //
