@@ -11,9 +11,3 @@ type=repl
 Evaluation error: error.NotImplemented
 # PROBLEMS
 NIL
-# CANONICALIZE
-~~~clojure
-~~~
-# TYPES
-~~~clojure
-~~~

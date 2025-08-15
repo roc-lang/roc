@@ -11,9 +11,3 @@ type=repl
 Evaluation error: error.TypeMismatch
 # PROBLEMS
 NIL
-# CANONICALIZE
-~~~clojure
-~~~
-# TYPES
-~~~clojure
-~~~
