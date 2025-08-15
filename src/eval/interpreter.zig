@@ -2254,10 +2254,10 @@ pub const Interpreter = struct {
 
     /// Print trace information (data/state)
     pub fn traceInfo(self: *const Interpreter, comptime fmt: []const u8, args: anytype) void {
-        _ = self;
-        _ = fmt;
-        _ = args;
-        // Tracing disabled to clean up test output
+        if (self.trace_writer) |writer| {
+            self.printTraceIndent();
+            writer.print("  " ++ fmt ++ "\n", args) catch {};
+        }
     }
 
     /// Print trace warning
