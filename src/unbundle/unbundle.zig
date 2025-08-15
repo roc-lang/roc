@@ -118,7 +118,7 @@ pub const DirExtractWriter = struct {
         // For file writers, we need to close the file
         // In Zig 0.14, we need to properly cast the context
         const file_writer = writer.context;
-        const file = @as(*std.fs.File, @ptrCast(@alignCast(file_writer)));
+        const file = @as(*std.fs.File, @ptrCast(@alignCast(@constCast(file_writer))));
         file.close();
     }
 
@@ -259,7 +259,6 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
 pub fn unbundleStream(
     input_reader: anytype,
     extract_writer: ExtractWriter,
-    allocator: *std.mem.Allocator,
     expected_hash: *const [32]u8,
     error_context: ?*ErrorContext,
 ) UnbundleError!void {
@@ -291,8 +290,7 @@ pub fn unbundleStream(
     };
 
     // Create zstandard decompressor
-    var zstd_stream = std.compress.zstandard.decompressStream(allocator.*, hashing_reader.reader());
-    defer zstd_stream.deinit();
+    var zstd_stream = std.compress.zstd.decompressor(hashing_reader.reader(), .{});
     const decompressed_reader = zstd_stream.reader();
 
     // Create tar reader
@@ -365,7 +363,6 @@ pub fn unbundleStream(
 pub fn unbundle(
     input_reader: anytype,
     extract_dir: std.fs.Dir,
-    allocator: *std.mem.Allocator,
     filename: []const u8,
     error_context: ?*ErrorContext,
 ) UnbundleError!void {
@@ -379,5 +376,5 @@ pub fn unbundle(
     };
 
     var dir_writer = DirExtractWriter.init(extract_dir);
-    return unbundleStream(input_reader, dir_writer.extractWriter(), allocator, &expected_hash, error_context);
+    return unbundleStream(input_reader, dir_writer.extractWriter(), &expected_hash, error_context);
 }

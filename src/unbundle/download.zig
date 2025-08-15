@@ -172,7 +172,7 @@ pub fn downloadAndExtract(
     var dir_writer = unbundle.DirExtractWriter.init(extract_dir);
 
     // Stream and extract the content
-    try unbundle.unbundleStream(reader, dir_writer.extractWriter(), allocator, &expected_hash, null);
+    try unbundle.unbundleStream(reader, dir_writer.extractWriter(), &expected_hash, null);
 }
 
 /// Download and extract a bundled tar.zst file to memory buffers.
@@ -221,7 +221,7 @@ pub fn downloadAndExtractToBuffer(
     errdefer buffer_writer.deinit();
 
     // Stream and extract the content
-    try unbundle.unbundleStream(reader, buffer_writer.extractWriter(), allocator, &expected_hash, null);
+    try unbundle.unbundleStream(reader, buffer_writer.extractWriter(), &expected_hash, null);
 
     return buffer_writer;
 }

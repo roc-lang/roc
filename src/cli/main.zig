@@ -1046,8 +1046,35 @@ pub fn extractReadRocFilePathShimLibrary(gpa: Allocator, output_path: []const u8
     try shim_file.writeAll(roc_shim_lib);
 }
 
-/// Format a path validation reason into a user-friendly error message
-fn formatPathValidationReason(reason: unbundle.PathValidationReason) []const u8 {
+/// Format a bundle path validation reason into a user-friendly error message
+fn formatBundlePathValidationReason(reason: bundle.PathValidationReason) []const u8 {
+    return switch (reason) {
+        .empty_path => "Path cannot be empty",
+        .path_too_long => "Path exceeds maximum length of 255 characters",
+        .windows_reserved_char => |char| switch (char) {
+            0 => "Path contains NUL byte (\\0)",
+            ':' => "Path contains colon (:) which is reserved on Windows",
+            '*' => "Path contains asterisk (*) which is a wildcard on Windows",
+            '?' => "Path contains question mark (?) which is a wildcard on Windows",
+            '"' => "Path contains quote (\") which is reserved on Windows",
+            '<' => "Path contains less-than (<) which is reserved on Windows",
+            '>' => "Path contains greater-than (>) which is reserved on Windows",
+            '|' => "Path contains pipe (|) which is reserved on Windows",
+            '\\' => "Path contains backslash (\\). Use forward slashes (/) for all paths",
+            else => "Path contains reserved character",
+        },
+        .absolute_path => "Absolute paths are not allowed",
+        .path_traversal => "Path traversal (..) is not allowed",
+        .current_directory_reference => "Current directory reference (.) is not allowed",
+        .contained_backslash_on_unix => "Path contains a backslash, which is a directory separator on Windows.",
+        .windows_reserved_name => "Path contains Windows reserved device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)",
+        .component_ends_with_space => "Path components cannot end with space",
+        .component_ends_with_period => "Path components cannot end with period",
+    };
+}
+
+/// Format an unbundle path validation reason into a user-friendly error message
+fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []const u8 {
     return switch (reason) {
         .empty_path => "Path cannot be empty",
         .path_too_long => "Path exceeds maximum length of 255 characters",
@@ -1200,7 +1227,7 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
         &error_ctx,
     ) catch |err| {
         if (err == error.InvalidPath) {
-            try stderr.print("Error: Invalid file path - {s}\n", .{formatPathValidationReason(error_ctx.reason)});
+            try stderr.print("Error: Invalid file path - {s}\n", .{formatBundlePathValidationReason(error_ctx.reason)});
             try stderr.print("Path: {s}\n", .{error_ctx.path});
         }
         return err;
@@ -1234,16 +1261,12 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     try stdout.print("Time: {} ms\n", .{elapsed_ms});
 }
 
-fn rocUnbundle(gpa: Allocator, args: cli_args.UnbundleArgs) !void {
+fn rocUnbundle(_: Allocator, args: cli_args.UnbundleArgs) !void {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
     const cwd = std.fs.cwd();
 
     // Use arena allocator for all unbundle operations
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
     var had_errors = false;
 
     for (args.paths) |archive_path| {
@@ -1288,12 +1311,10 @@ fn rocUnbundle(gpa: Allocator, args: cli_args.UnbundleArgs) !void {
         defer archive_file.close();
 
         // Unbundle the archive
-        var allocator_copy2 = arena_allocator;
         var error_ctx: unbundle.ErrorContext = undefined;
         unbundle.unbundleFiles(
             archive_file.reader(),
             output_dir,
-            &allocator_copy2,
             basename,
             &error_ctx,
         ) catch |err| {
@@ -1307,7 +1328,7 @@ fn rocUnbundle(gpa: Allocator, args: cli_args.UnbundleArgs) !void {
                     had_errors = true;
                 },
                 error.InvalidPath => {
-                    try stderr.print("Error: Invalid path in archive - {s}\n", .{formatPathValidationReason(error_ctx.reason)});
+                    try stderr.print("Error: Invalid path in archive - {s}\n", .{formatUnbundlePathValidationReason(error_ctx.reason)});
                     try stderr.print("Path: {s}\n", .{error_ctx.path});
                     try stderr.print("Archive: {s}\n", .{archive_path});
                     had_errors = true;
