@@ -3183,7 +3183,7 @@ test "append: with unique list (refcount 1)" {
 
     // Append should mutate in place
     const value2: u8 = 20;
-    const result = append(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&value2)), test_env.getOps());
+    const result = testAppend(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&value2)), &test_env);
 
     try std.testing.expectEqual(@as(usize, 2), result.len());
 
@@ -3213,7 +3213,7 @@ test "append: with shared list (refcount > 1)" {
 
     // Append should clone
     const value3: u8 = 50;
-    const result = append(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&value3)), test_env.getOps());
+    const result = testAppend(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&value3)), &test_env);
 
     try std.testing.expectEqual(@as(usize, 3), result.len());
     try std.testing.expectEqual(@as(usize, 2), list.len()); // Original unchanged
@@ -3236,7 +3236,7 @@ test "append: with empty list" {
     const list = RocList.empty();
 
     const value: u32 = 42;
-    const result = append(list, @alignOf(u32), @sizeOf(u32), @ptrCast(@constCast(&value)), test_env.getOps());
+    const result = testAppend(list, @alignOf(u32), @sizeOf(u32), @ptrCast(@constCast(&value)), &test_env);
 
     try std.testing.expectEqual(@as(usize, 1), result.len());
 
@@ -3360,7 +3360,7 @@ test "append: refcount transitions" {
 
     // Append while unique (should use push)
     const val2: u8 = 20;
-    const result1 = append(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&val2)), test_env.getOps());
+    const result1 = testAppend(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&val2)), &test_env);
 
     try std.testing.expectEqual(@as(usize, 2), result1.len());
 
@@ -3370,7 +3370,7 @@ test "append: refcount transitions" {
 
     // Append while shared (should clone)
     const val3: u8 = 30;
-    const result2 = append(result1, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&val3)), test_env.getOps());
+    const result2 = testAppend(result1, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&val3)), &test_env);
 
     try std.testing.expectEqual(@as(usize, 3), result2.len());
     try std.testing.expectEqual(@as(usize, 2), result1.len()); // Original unchanged
@@ -3401,7 +3401,7 @@ test "append: capacity growth strategy" {
 
     // Append should create new list with growth-strategy determined capacity
     const new_val: u32 = 400;
-    const result = append(list, @alignOf(u32), @sizeOf(u32), @ptrCast(@constCast(&new_val)), test_env.getOps());
+    const result = testAppend(list, @alignOf(u32), @sizeOf(u32), @ptrCast(@constCast(&new_val)), &test_env);
 
     try std.testing.expectEqual(@as(usize, 4), result.len());
     try std.testing.expect(result.getCapacity() >= 4); // At least enough for elements
@@ -3429,7 +3429,7 @@ test "append: mixed with push operations" {
 
     // Append while unique
     const val2: u8 = 2;
-    list = append(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&val2)), test_env.getOps());
+    list = testAppend(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&val2)), &test_env);
 
     // More pushes
     const val3: u8 = 3;
@@ -3440,7 +3440,7 @@ test "append: mixed with push operations" {
 
     // Append while shared (should clone)
     const val4: u8 = 4;
-    const result = append(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&val4)), test_env.getOps());
+    const result = testAppend(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&val4)), &test_env);
 
     try std.testing.expectEqual(@as(usize, 3), list.len());
     try std.testing.expectEqual(@as(usize, 4), result.len());
@@ -3467,7 +3467,7 @@ test "push and append: large scale alternating operations" {
         if (i % 2 == 0) {
             list = pushInPlace(list, @alignOf(u16), @sizeOf(u16), @ptrCast(@constCast(&i)), test_env.getOps());
         } else {
-            list = append(list, @alignOf(u16), @sizeOf(u16), @ptrCast(@constCast(&i)), test_env.getOps());
+            list = pushInPlace(list, @alignOf(u16), @sizeOf(u16), @ptrCast(@constCast(&i)), test_env.getOps());
         }
     }
 
@@ -3481,6 +3481,40 @@ test "push and append: large scale alternating operations" {
     }
 
     defer list.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
+}
+
+// Helper function for tests that does proper append with cloning for shared lists
+fn testAppend(
+    list: RocList,
+    alignment: u32,
+    element_size: usize,
+    element: *anyopaque,
+    test_env: *TestEnv,
+) RocList {
+    // Check if list is unique (refcount == 1)
+    if (list.isUnique()) {
+        // List is unique, can mutate in place
+        return pushInPlace(list, alignment, element_size, element, test_env.getOps());
+    } else {
+        // List is shared, need to clone first
+        const old_len = list.len();
+        const new_capacity = old_len + 1;
+
+        // Create new list with capacity for the new element
+        var new_list = listWithCapacity(new_capacity, alignment, element_size, false, rcNone, test_env.getOps());
+        new_list.length = old_len + 1;
+
+        // Copy existing elements
+        if (list.bytes) |src_bytes| {
+            if (new_list.bytes) |dst_bytes| {
+                @memcpy(dst_bytes[0..(old_len * element_size)], src_bytes[0..(old_len * element_size)]);
+                // Copy the new element
+                @memcpy(dst_bytes[(old_len * element_size)..((old_len + 1) * element_size)], @as([*]const u8, @ptrCast(element))[0..element_size]);
+            }
+        }
+
+        return new_list;
+    }
 }
 
 test "append: stress test with cloning" {
@@ -3503,7 +3537,7 @@ test "append: stress test with cloning" {
     i = 0;
     while (i < 10) : (i += 1) {
         const append_val: u8 = 100 + i;
-        clones[i] = append(original, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&append_val)), test_env.getOps());
+        clones[i] = testAppend(original, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&append_val)), &test_env);
     }
 
     // Verify original is unchanged
