@@ -321,7 +321,7 @@ pub const ReportBuilder = struct {
         const owned_expected = try report.addOwnedString(self.buf.items[0..]);
 
         // For annotation mismatches, we want to highlight the expression that doesn't match,
-        // not the annotation itself. When from_annotation is true and we're showing 
+        // not the annotation itself. When from_annotation is true and we're showing
         // "The type annotation says...", the expression is in expected_var.
         const region_var = if (types.from_annotation) types.expected_var else types.actual_var;
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(region_var)));

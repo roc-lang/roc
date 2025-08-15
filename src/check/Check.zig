@@ -1032,7 +1032,7 @@ pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type:
         },
         .e_zero_argument_tag => |_| {},
         .e_binop => |binop| {
-            does_fx = try self.checkBinopExpr(expr_idx, expr_region, binop);
+            does_fx = try self.checkBinopExpr(expr_idx, expr_region, binop, expected_type);
         },
         .e_unary_minus => |unary| {
             does_fx = try self.checkUnaryMinusExpr(expr_idx, expr_region, unary);
@@ -1523,8 +1523,8 @@ fn checkLambdaWithAnno(
 
 // binop //
 
-/// Check the types for an if-else expr
-fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, binop: CIR.Expr.Binop) Allocator.Error!bool {
+/// Check the types for a binary operation expression
+fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, binop: CIR.Expr.Binop, expected_type: ?Var) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1540,15 +1540,27 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
             const rhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.rhs)));
             const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
 
-            // Create a SINGLE fresh number variable for the operation
-            // All operands and the result must be the same numeric type
-            const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
-            const num_var = try self.freshFromContent(num_content, expr_region);
+            // For bidirectional type checking: if we have an expected type,
+            // we need to unify all operands and result with it.
+            // This ensures literals like `2` in `|x| x + 2` get properly constrained
+            // when the lambda has a type annotation like `I64 -> I64`.
+            if (expected_type) |expected| {
+                // All three must be the same type for arithmetic operations
+                _ = try self.unify(lhs_var, expected);
+                _ = try self.unify(rhs_var, expected);
+                _ = try self.unify(result_var, expected);
+            } else {
+                // No expected type - use fresh number variables to maintain polymorphism
+                const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
+                const num_var_lhs = try self.freshFromContent(num_content, expr_region);
+                const num_var_rhs = try self.freshFromContent(num_content, expr_region);
+                const num_var_result = try self.freshFromContent(num_content, expr_region);
 
-            // Unify lhs, rhs, and result with the SAME number type
-            _ = try self.unify(num_var, lhs_var);
-            _ = try self.unify(num_var, rhs_var);
-            _ = try self.unify(num_var, result_var);
+                // Unify lhs, rhs, and result with the number type
+                _ = try self.unify(num_var_lhs, lhs_var);
+                _ = try self.unify(num_var_rhs, rhs_var);
+                _ = try self.unify(result_var, num_var_result);
+            }
 
             return does_fx;
         },

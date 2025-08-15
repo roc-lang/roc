@@ -16,16 +16,16 @@ wrong_type_function : I64 -> I64
 wrong_type_function = |x| x * 3.14
 ~~~
 # EXPECTED
-TYPE MISMATCH - lambda_annotation_mismatch_error.md:5:23:5:24
-TYPE MISMATCH - lambda_annotation_mismatch_error.md:9:31:9:35
+TYPE MISMATCH - lambda_annotation_mismatch_error.md:4:26:4:29
+TYPE MISMATCH - lambda_annotation_mismatch_error.md:8:30:8:33
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**lambda_annotation_mismatch_error.md:5:23:5:24:**
+**lambda_annotation_mismatch_error.md:4:26:4:29:**
 ```roc
-string_function = |x| x + 42
+string_function : Str -> Str
 ```
-                      ^
+                         ^^^
 
 It is of type:
     _Str_
@@ -35,17 +35,17 @@ But you are trying to use it as:
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**lambda_annotation_mismatch_error.md:9:31:9:35:**
+**lambda_annotation_mismatch_error.md:8:30:8:33:**
 ```roc
-wrong_type_function = |x| x * 3.14
+wrong_type_function : I64 -> I64
 ```
-                              ^^^^
+                             ^^^
 
 It is of type:
-    _Frac(_size)_
+    _I64_
 
 But you are trying to use it as:
-    _I64_
+    _Frac(_size)_
 
 # TOKENS
 ~~~zig
