@@ -80,5 +80,5 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "Result(ok, err)"))
+(expr @1.1-6.2 (type "_a"))
 ~~~

@@ -16,22 +16,9 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - test_instantiated_return_crash.md:6:20:6:36
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-The first argument to this function is not what I expect:
-**test_instantiated_return_crash.md:6:26:6:35:**
-```roc
-    needs_string = |f| f(["hello"])
-```
-                         ^^^^^^^^^
-
-This argument is of type:
-    _List(Str)_
-
-But the function needs the first argumument to be:
-    _Str_
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),
@@ -130,5 +117,5 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-9.2 (type "Error"))
+(expr @1.1-9.2 (type "List(Str)"))
 ~~~

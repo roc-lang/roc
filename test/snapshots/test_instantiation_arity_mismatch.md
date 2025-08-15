@@ -13,21 +13,21 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - test_instantiation_arity_mismatch.md:5:5:5:13
+TYPE MISMATCH - test_instantiation_arity_mismatch.md:5:5:5:19
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**test_instantiation_arity_mismatch.md:5:5:5:13:**
+**test_instantiation_arity_mismatch.md:5:5:5:19:**
 ```roc
     identity(1, 2)
 ```
-    ^^^^^^^^
+    ^^^^^^^^^^^^^^
 
 It is of type:
     _Num(_size), Num(_size2) -> _ret_
 
 But you are trying to use it as:
-    _(a, b) -> (a, b)_
+    __arg -> _ret2_
 
 # TOKENS
 ~~~zig

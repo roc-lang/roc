@@ -127,16 +127,19 @@ NO CHANGE
 					(ty @4.19-4.22 (name "I32"))))))
 	(d-let
 		(p-assign @9.1-9.7 (ident "double"))
-		(e-lambda @9.10-9.23
-			(args
-				(p-assign @9.11-9.12 (ident "x")))
-			(e-call @9.14-9.23
-				(e-lookup-local @9.14-9.17
-					(p-assign @5.1-5.4 (ident "add")))
-				(e-lookup-local @9.18-9.19
+		(e-closure @9.10-9.23
+			(captures
+				(capture @5.1-5.4 (ident "add")))
+			(e-lambda @9.10-9.23
+				(args
 					(p-assign @9.11-9.12 (ident "x")))
-				(e-lookup-local @9.21-9.22
-					(p-assign @9.11-9.12 (ident "x")))))
+				(e-call @9.14-9.23
+					(e-lookup-local @9.14-9.17
+						(p-assign @5.1-5.4 (ident "add")))
+					(e-lookup-local @9.18-9.19
+						(p-assign @9.11-9.12 (ident "x")))
+					(e-lookup-local @9.21-9.22
+						(p-assign @9.11-9.12 (ident "x"))))))
 		(annotation @9.1-9.7
 			(declared-type
 				(ty-fn @8.10-8.20 (effectful false)

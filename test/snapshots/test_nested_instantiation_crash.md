@@ -21,21 +21,21 @@ composed = |n| get_value(make_record(n))
 answer = composed([42])
 ~~~
 # EXPECTED
-TYPE MISMATCH - test_nested_instantiation_crash.md:11:23:11:26
+TYPE MISMATCH - test_nested_instantiation_crash.md:11:12:11:26
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**test_nested_instantiation_crash.md:11:23:11:26:**
+**test_nested_instantiation_crash.md:11:12:11:26:**
 ```roc
 composed : List(a) -> Str
 ```
-                      ^^^
+           ^^^^^^^^^^^^^^
 
 It is of type:
-    _Str_
+    _List(a) -> Str_
 
 But you are trying to use it as:
-    _List(a)_
+    _List(a) -> List(a)_
 
 # TOKENS
 ~~~zig
@@ -183,17 +183,21 @@ answer = composed([42])
 					(ty-var @8.39-8.40 (name "a"))))))
 	(d-let
 		(p-assign @12.1-12.9 (ident "composed"))
-		(e-lambda @12.12-12.41
-			(args
-				(p-assign @12.13-12.14 (ident "n")))
-			(e-call @12.16-12.41
-				(e-lookup-local @12.16-12.25
-					(p-assign @9.1-9.10 (ident "get_value")))
-				(e-call @12.26-12.40
-					(e-lookup-local @12.26-12.37
-						(p-assign @6.1-6.12 (ident "make_record")))
-					(e-lookup-local @12.38-12.39
-						(p-assign @12.13-12.14 (ident "n"))))))
+		(e-closure @12.12-12.41
+			(captures
+				(capture @6.1-6.12 (ident "make_record"))
+				(capture @9.1-9.10 (ident "get_value")))
+			(e-lambda @12.12-12.41
+				(args
+					(p-assign @12.13-12.14 (ident "n")))
+				(e-call @12.16-12.41
+					(e-lookup-local @12.16-12.25
+						(p-assign @9.1-9.10 (ident "get_value")))
+					(e-call @12.26-12.40
+						(e-lookup-local @12.26-12.37
+							(p-assign @6.1-6.12 (ident "make_record")))
+						(e-lookup-local @12.38-12.39
+							(p-assign @12.13-12.14 (ident "n")))))))
 		(annotation @12.1-12.9
 			(declared-type
 				(ty-fn @11.12-11.26 (effectful false)
@@ -213,13 +217,13 @@ answer = composed([42])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.12 (type "a -> { tag: Error, value: a }"))
-		(patt @9.1-9.10 (type "{ tag: Error, value: a } -> a"))
-		(patt @12.1-12.9 (type "List(a) -> Error"))
-		(patt @14.1-14.7 (type "Error")))
+		(patt @6.1-6.12 (type "a -> { tag: Str, value: a }"))
+		(patt @9.1-9.10 (type "{ tag: Str, value: a } -> a"))
+		(patt @12.1-12.9 (type "Error"))
+		(patt @14.1-14.7 (type "_b")))
 	(expressions
-		(expr @6.15-6.44 (type "a -> { tag: Error, value: a }"))
-		(expr @9.13-9.24 (type "{ tag: Error, value: a } -> a"))
-		(expr @12.12-12.41 (type "List(a) -> Error"))
-		(expr @14.10-14.24 (type "Error"))))
+		(expr @6.15-6.44 (type "a -> { tag: Str, value: a }"))
+		(expr @9.13-9.24 (type "{ tag: Str, value: a } -> a"))
+		(expr @12.12-12.41 (type "Error"))
+		(expr @14.10-14.24 (type "_b"))))
 ~~~

@@ -124,6 +124,20 @@ But it should be one of:
 
     _RGBA(U8, U8, U8, Dec)_
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Color.md:26:7:26:46:**
+```roc
+hex : Str -> Result(Color, [InvalidHex(Str)])
+```
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It is of type:
+    _Str -> Result(Error, [InvalidHex(Str)])_
+
+But you are trying to use it as:
+    _{ to_utf8: List(Num(_size)) } -> Result(Error, [InvalidHex(Str)]_others)_
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),
@@ -866,6 +880,7 @@ is_named_color = |str| {
 				(capture @50.18-50.19 (ident "g"))
 				(capture @52.17-52.22 (ident "inner"))
 				(capture @50.21-50.22 (ident "b"))
+				(capture @49.1-49.7 (ident "to_str"))
 				(capture @51.19-51.20 (ident "g"))
 				(capture @50.15-50.16 (ident "r"))
 				(capture @51.16-51.17 (ident "r"))
@@ -1093,7 +1108,7 @@ is_named_color = |str| {
 	(defs
 		(patt @18.1-18.4 (type "U8, U8, U8 -> Error"))
 		(patt @21.1-21.5 (type "U8, U8, U8, U8 -> Error"))
-		(patt @27.1-27.4 (type "Str -> Result(Error, [InvalidHex(Str)])"))
+		(patt @27.1-27.4 (type "Error"))
 		(patt @49.1-49.7 (type "Error -> Str"))
 		(patt @61.1-61.6 (type "Str -> Result(Error, [UnknownColor(Str)])"))
 		(patt @67.1-67.15 (type "_arg -> _ret")))
@@ -1103,7 +1118,7 @@ is_named_color = |str| {
 	(expressions
 		(expr @18.7-18.35 (type "U8, U8, U8 -> Error"))
 		(expr @21.8-24.2 (type "U8, U8, U8, U8 -> Error"))
-		(expr @27.7-46.2 (type "Str -> Result(Error, [InvalidHex(Str)])"))
+		(expr @27.7-46.2 (type "Error"))
 		(expr @49.10-54.2 (type "Error -> Str"))
 		(expr @61.9-65.50 (type "Str -> Result(Error, [UnknownColor(Str)])"))
 		(expr @67.18-71.2 (type "_arg -> _ret"))))

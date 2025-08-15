@@ -13,22 +13,9 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - tuple_type.md:5:7:5:13
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-The first argument to this function is not what I expect:
-**tuple_type.md:5:7:5:13:**
-```roc
-    f((1, 2))
-```
-      ^^^^^^
-
-This argument is of type:
-    _(Num(_size), Num(_size2))_
-
-But the function needs the first argumument to be:
-    _(Str, Str)_
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),
@@ -98,5 +85,5 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "Error"))
+(expr @1.1-6.2 (type "(Num(_size), Num(_size2))"))
 ~~~

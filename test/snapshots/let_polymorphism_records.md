@@ -383,19 +383,23 @@ main = |_| {
 					(e-int @31.38-31.39 (value "3"))))))
 	(d-let
 		(p-assign @33.1-33.5 (ident "main"))
-		(e-lambda @33.8-36.2
-			(args
-				(p-underscore @33.9-33.10))
-			(e-block @33.12-36.2
-				(e-binop @35.5-35.46 (op "add")
-					(e-dot-access @35.5-35.24 (field "count")
-						(receiver
-							(e-lookup-local @35.5-35.18
-								(p-assign @14.1-14.14 (ident "int_container")))))
-					(e-dot-access @35.27-35.46 (field "count")
-						(receiver
-							(e-lookup-local @35.27-35.40
-								(p-assign @15.1-15.14 (ident "str_container"))))))))))
+		(e-closure @33.8-36.2
+			(captures
+				(capture @14.1-14.14 (ident "int_container"))
+				(capture @15.1-15.14 (ident "str_container")))
+			(e-lambda @33.8-36.2
+				(args
+					(p-underscore @33.9-33.10))
+				(e-block @33.12-36.2
+					(e-binop @35.5-35.46 (op "add")
+						(e-dot-access @35.5-35.24 (field "count")
+							(receiver
+								(e-lookup-local @35.5-35.18
+									(p-assign @14.1-14.14 (ident "int_container")))))
+						(e-dot-access @35.27-35.46 (field "count")
+							(receiver
+								(e-lookup-local @35.27-35.40
+									(p-assign @15.1-15.14 (ident "str_container")))))))))))
 ~~~
 # TYPES
 ~~~clojure

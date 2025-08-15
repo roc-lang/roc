@@ -110,19 +110,22 @@ main! = |_| getName({ name: "luke", age: 21 })
 					(ty @3.38-3.41 (name "Str"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
-		(e-lambda @6.9-6.44
-			(args
-				(p-underscore @6.10-6.11))
-			(e-call @6.13-6.44
-				(e-lookup-local @6.13-6.20
-					(p-assign @4.1-4.8 (ident "getName")))
-				(e-record @6.21-6.43
-					(fields
-						(field (name "name")
-							(e-string @6.28-6.34
-								(e-literal @6.29-6.33 (string "luke"))))
-						(field (name "age")
-							(e-int @6.40-6.42 (value "21")))))))))
+		(e-closure @6.9-6.44
+			(captures
+				(capture @4.1-4.8 (ident "getName")))
+			(e-lambda @6.9-6.44
+				(args
+					(p-underscore @6.10-6.11))
+				(e-call @6.13-6.44
+					(e-lookup-local @6.13-6.20
+						(p-assign @4.1-4.8 (ident "getName")))
+					(e-record @6.21-6.43
+						(fields
+							(field (name "name")
+								(e-string @6.28-6.34
+									(e-literal @6.29-6.33 (string "luke"))))
+							(field (name "age")
+								(e-int @6.40-6.42 (value "21"))))))))))
 ~~~
 # TYPES
 ~~~clojure

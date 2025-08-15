@@ -1815,7 +1815,7 @@ fn generateExpectedSection(
                 std.debug.print("Mismatch in EXPECTED section for {s}\n", .{snapshot_path});
                 std.debug.print("Expected:\n{s}\n", .{expected_content.?});
                 std.debug.print("Generated:\n{s}\n", .{new_content});
-                std.debug.print("Hint: use `--update-expected` to automatically update the expectations", .{});
+                std.debug.print("Hint: use `zig build snapshot -- --update-expected` to automatically update the expectations", .{});
 
                 success = false;
             }

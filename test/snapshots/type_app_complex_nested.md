@@ -323,21 +323,24 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-var @12.55-12.56 (name "a"))))))
 	(d-let
 		(p-assign @20.1-20.6 (ident "main!"))
-		(e-lambda @20.9-20.49
-			(args
-				(p-underscore @20.10-20.11))
-			(e-call @20.13-20.49
-				(e-lookup-local @20.13-20.27
-					(p-assign @5.1-5.15 (ident "processComplex")))
-				(e-nominal @20.28-20.48 (nominal "Result")
-					(e-tag @20.28-20.48 (name "Ok")
-						(args
-							(e-list @20.31-20.47
-								(elems
-									(e-tag @20.32-20.40 (name "Some")
-										(args
-											(e-int @20.37-20.39 (value "42"))))
-									(e-tag @20.42-20.46 (name "None"))))))))))
+		(e-closure @20.9-20.49
+			(captures
+				(capture @5.1-5.15 (ident "processComplex")))
+			(e-lambda @20.9-20.49
+				(args
+					(p-underscore @20.10-20.11))
+				(e-call @20.13-20.49
+					(e-lookup-local @20.13-20.27
+						(p-assign @5.1-5.15 (ident "processComplex")))
+					(e-nominal @20.28-20.48 (nominal "Result")
+						(e-tag @20.28-20.48 (name "Ok")
+							(args
+								(e-list @20.31-20.47
+									(elems
+										(e-tag @20.32-20.40 (name "Some")
+											(args
+												(e-int @20.37-20.39 (value "42"))))
+										(e-tag @20.42-20.46 (name "None")))))))))))
 	(s-alias-decl @18.1-18.64
 		(ty-header @18.1-18.18 (name "ComplexType")
 			(ty-args
