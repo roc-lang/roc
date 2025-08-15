@@ -12,6 +12,13 @@ const base58 = @import("base58");
 const TAR_EXTENSION = ".tar.zst";
 const STREAM_BUFFER_SIZE: usize = 64 * 1024; // 64KB buffer for streaming operations
 
+/// Size of the decompression window buffer for zstd.
+/// 8MB (2^23 bytes) is the default and recommended size for zstd decompression.
+/// This matches zstd's default maximum window size, allowing us to decompress
+/// any standard zstd stream. Smaller buffers would fail on streams compressed
+/// with larger window sizes.
+const ZSTD_WINDOW_BUFFER_SIZE: usize = 1 << 23; // 8MB
+
 /// Errors that can occur during the unbundle operation.
 pub const UnbundleError = error{
     DecompressionFailed,
@@ -290,7 +297,10 @@ pub fn unbundleStream(
     };
 
     // Create zstandard decompressor
-    var zstd_stream = std.compress.zstd.decompressor(hashing_reader.reader(), .{});
+    var window_buffer: [ZSTD_WINDOW_BUFFER_SIZE]u8 = undefined;
+    var zstd_stream = std.compress.zstd.decompressor(hashing_reader.reader(), .{
+        .window_buffer = &window_buffer,
+    });
     const decompressed_reader = zstd_stream.reader();
 
     // Create tar reader
