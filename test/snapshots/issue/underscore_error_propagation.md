@@ -44,7 +44,7 @@ goodValue : GoodDerived
 ```
             ^^^^^^^^^^^
 
-It is of type:
+The type annotation says it should have the type:
     _GoodDerived_
 
 But you are trying to use it as:

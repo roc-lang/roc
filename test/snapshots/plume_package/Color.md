@@ -132,7 +132,7 @@ hex : Str -> Result(Color, [InvalidHex(Str)])
 ```
       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-It is of type:
+The type annotation says it should have the type:
     _Str -> Result(Error, [InvalidHex(Str)])_
 
 But you are trying to use it as:

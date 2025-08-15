@@ -335,7 +335,7 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
 
-        try report.document.addText("It is of type:");
+        try report.document.addText("The type annotation says it should have the type:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_actual, .type_variable);

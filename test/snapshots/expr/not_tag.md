@@ -18,7 +18,7 @@ This expression is used in an unexpected way:
 ```
 ^^^^^^^
 
-It is of type:
+The type annotation says it should have the type:
     _Bool_
 
 But you are trying to use it as:

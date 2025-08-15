@@ -25,7 +25,7 @@ main! = |_| swapPair(1, 2)
 ```
             ^^^^^^^^
 
-It is of type:
+The type annotation says it should have the type:
     _Num(_size), Num(_size2) -> _ret_
 
 But you are trying to use it as:

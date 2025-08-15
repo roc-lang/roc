@@ -23,7 +23,7 @@ This expression is used in an unexpected way:
 ```
     ^^^^^^^^^^^^^^
 
-It is of type:
+The type annotation says it should have the type:
     _Num(_size), Num(_size2) -> _ret_
 
 But you are trying to use it as:

@@ -912,7 +912,7 @@ This expression is used in an unexpected way:
 	)
 ```
 
-It is of type:
+The type annotation says it should have the type:
     __arg -> _ret_
 
 But you are trying to use it as:
@@ -926,7 +926,7 @@ main! : List(String) -> Result({}, _)
 ```
         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-It is of type:
+The type annotation says it should have the type:
     _List(Error) -> Result({  }, _d)_
 
 But you are trying to use it as:

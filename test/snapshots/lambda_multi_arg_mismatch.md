@@ -26,36 +26,63 @@ result = multi_arg_fn(
 )
 ~~~
 # EXPECTED
-TYPE MISMATCH - lambda_multi_arg_mismatch.md:12:8:12:8
+UNUSED VARIABLE - lambda_multi_arg_mismatch.md:5:25:5:27
+UNUSED VARIABLE - lambda_multi_arg_mismatch.md:5:33:5:35
+UNUSED VARIABLE - lambda_multi_arg_mismatch.md:5:41:5:43
+TYPE MISMATCH - lambda_multi_arg_mismatch.md:11:5:11:5
 # PROBLEMS
-**TYPE MISMATCH**
-The 1st, 3rd, 5th, and 7th arguments to `multi_arg_fn` must have compatible types, but they are incompatible in this call:
-**lambda_multi_arg_mismatch.md:12:8:**
+**UNUSED VARIABLE**
+Variable `x3` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x3` to suppress this warning.
+The unused variable is declared here:
+**lambda_multi_arg_mismatch.md:5:25:5:27:**
 ```roc
-result = multi_arg_fn(
+multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8| 
+```
+                        ^^
+
+
+**UNUSED VARIABLE**
+Variable `x5` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x5` to suppress this warning.
+The unused variable is declared here:
+**lambda_multi_arg_mismatch.md:5:33:5:35:**
+```roc
+multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8| 
+```
+                                ^^
+
+
+**UNUSED VARIABLE**
+Variable `x7` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x7` to suppress this warning.
+The unused variable is declared here:
+**lambda_multi_arg_mismatch.md:5:41:5:43:**
+```roc
+multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8| 
+```
+                                        ^^
+
+
+**TYPE MISMATCH**
+The first and third arguments to `multi_arg_fn` must have compatible types, but they are incompatible in this call:
+**lambda_multi_arg_mismatch.md:11:5:**
+```roc
     42,        # x1: U64 (type 'a')
     "hello",   # x2: Str (type 'b') - correct
     "world",   # x3: Str (should be 'a' = U64) - MISMATCH  
-    1.5,       # x4: F64 (type 'c') - correct
-    3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH
-    [1, 2],    # x6: List I64 (type 'd') - correct
-    True,      # x7: Bool (should be 'a' = U64) - MISMATCH
-    "done",    # x8: Str (type 'e') - correct
-)
 ```
-    ^^             ^^^^^^             ^^^^                  ^^^^
+    ^^
+    ^^^^^^^
 
-The 1st argument is of type:
-    _Num(_size)_
-
-But the 3rd argument is of type:
+The first argument is of type:
     _Str_
 
-But the 5th argument is of type:
-    _Frac(_prec)_
-
-But the 7th argument is of type:
-    _Bool_
+But the third argument is of type:
+    _Num(_size)_
 
 `multi_arg_fn` needs these arguments to have compatible types.
 
@@ -69,8 +96,8 @@ LowerIdent(10:1-10:7),OpAssign(10:8-10:9),LowerIdent(10:10-10:22),NoSpaceOpenRou
 Int(11:5-11:7),Comma(11:7-11:8),
 StringStart(12:5-12:6),StringPart(12:6-12:11),StringEnd(12:11-12:12),Comma(12:12-12:13),
 StringStart(13:5-13:6),StringPart(13:6-13:11),StringEnd(13:11-13:12),Comma(13:12-13:13),
-Frac(14:5-14:8),Comma(14:8-14:9),
-Frac(15:5-15:9),Comma(15:9-15:10),
+Float(14:5-14:8),Comma(14:8-14:9),
+Float(15:5-15:9),Comma(15:9-15:10),
 OpenSquare(16:5-16:6),Int(16:6-16:7),Comma(16:7-16:8),Int(16:9-16:10),CloseSquare(16:10-16:11),Comma(16:11-16:12),
 UpperIdent(17:5-17:9),Comma(17:9-17:10),
 StringStart(18:5-18:6),StringPart(18:6-18:10),StringEnd(18:10-18:11),Comma(18:11-18:12),
@@ -127,11 +154,10 @@ CloseRound(19:1-19:2),EndOfFile(19:2-19:2),
 					(e-string-part @13.6-13.11 (raw "world")))
 				(e-frac @14.5-14.8 (raw "1.5"))
 				(e-frac @15.5-15.9 (raw "3.14"))
-				(e-apply @16.5-16.11
-					(e-ident @16.5-16.6 (raw "["))
+				(e-list @16.5-16.11
 					(e-int @16.6-16.7 (raw "1"))
 					(e-int @16.9-16.10 (raw "2")))
-				(e-ident @17.5-17.9 (raw "True"))
+				(e-tag @17.5-17.9 (raw "True"))
 				(e-string @18.5-18.11
 					(e-string-part @18.6-18.10 (raw "done")))))))
 ~~~
@@ -141,20 +167,20 @@ module []
 
 # Function with 8 arguments where several types must match (a appears in positions 1, 3, 5, 7)
 multi_arg_fn : a, b, a, c, a, d, a, e -> (a, b, c, d, e)
-multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8| 
-    (x1, x2, x4, x6, x8)
+multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|
+	(x1, x2, x4, x6, x8)
 
 # Call with mismatched types - args 1, 3, 5, and 7 should all be the same type 'a'
 # but we're passing U64, Str, F64, Bool which are all different
 result = multi_arg_fn(
-    42,        # x1: U64 (type 'a')
-    "hello",   # x2: Str (type 'b') - correct
-    "world",   # x3: Str (should be 'a' = U64) - MISMATCH  
-    1.5,       # x4: F64 (type 'c') - correct
-    3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH
-    [1, 2],    # x6: List I64 (type 'd') - correct
-    True,      # x7: Bool (should be 'a' = U64) - MISMATCH
-    "done",    # x8: Str (type 'e') - correct
+	42, # x1: U64 (type 'a')
+	"hello", # x2: Str (type 'b') - correct
+	"world", # x3: Str (should be 'a' = U64) - MISMATCH  
+	1.5, # x4: F64 (type 'c') - correct
+	3.14, # x5: F64 (should be 'a' = U64) - MISMATCH
+	[1, 2], # x6: List I64 (type 'd') - correct
+	True, # x7: Bool (should be 'a' = U64) - MISMATCH
+	"done", # x8: Str (type 'e') - correct
 )
 ~~~
 # CANONICALIZE
@@ -211,23 +237,24 @@ result = multi_arg_fn(
 				(e-literal @12.6-12.11 (string "hello")))
 			(e-string @13.5-13.12
 				(e-literal @13.6-13.11 (string "world")))
-			(e-frac @14.5-14.8 (value "1.5"))
-			(e-frac @15.5-15.9 (value "3.14"))
+			(e-dec-small @14.5-14.8 (numerator "15") (denominator-power-of-ten "1") (value "1.5"))
+			(e-dec-small @15.5-15.9 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
 			(e-list @16.5-16.11
 				(elems
 					(e-int @16.6-16.7 (value "1"))
 					(e-int @16.9-16.10 (value "2"))))
-			(e-tag @17.5-17.9 (name "True"))
+			(e-nominal @17.5-17.9 (nominal "Bool")
+				(e-tag @17.5-17.9 (name "True")))
 			(e-string @18.5-18.11
-				(e-literal @18.6-18.10 (string "done")))))
+				(e-literal @18.6-18.10 (string "done"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @5.1-5.13 (type "a, b, a, c, a, d, a, e -> (a, b, c, d, e)"))
-		(patt @10.1-10.7 (type "Error")))
+		(patt @10.1-10.7 (type "_f")))
 	(expressions
 		(expr @5.16-6.25 (type "a, b, a, c, a, d, a, e -> (a, b, c, d, e)"))
-		(expr @10.10-19.2 (type "Error"))))
+		(expr @10.10-19.2 (type "_f"))))
 ~~~

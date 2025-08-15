@@ -875,7 +875,7 @@ This expression is used in an unexpected way:
 	)crash ke"Unr!" #)
 ```
 
-It is of type:
+The type annotation says it should have the type:
     __arg -> _ret_
 
 But you are trying to use it as:
