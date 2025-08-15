@@ -19,18 +19,18 @@ type=expr
 TYPE MISMATCH - test_instantiated_return_crash.md:6:20:6:36
 # PROBLEMS
 **TYPE MISMATCH**
-This expression is used in an unexpected way:
-**test_instantiated_return_crash.md:6:20:6:36:**
+The first argument to this function is not what I expect:
+**test_instantiated_return_crash.md:6:26:6:35:**
 ```roc
     needs_string = |f| f(["hello"])
 ```
-                   ^^^^^^^^^^^^^^^^
+                         ^^^^^^^^^
 
-It is of type:
-    _List(Str) -> _ret -> _ret2_
+This argument is of type:
+    _List(Str)_
 
-But you are trying to use it as:
-    _Str -> Str -> Str_
+But the function needs the first argumument to be:
+    _Str_
 
 # TOKENS
 ~~~zig
@@ -130,5 +130,5 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-9.2 (type "_b"))
+(expr @1.1-9.2 (type "Error"))
 ~~~

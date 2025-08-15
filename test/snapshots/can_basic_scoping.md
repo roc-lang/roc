@@ -123,32 +123,29 @@ outerFunc = |_| {
 		(e-int @5.5-5.7 (value "10")))
 	(d-let
 		(p-assign @8.1-8.10 (ident "outerFunc"))
-		(e-closure @8.13-16.2
-			(captures
-				(capture @5.1-5.2 (ident "y")))
-			(e-lambda @8.13-16.2
-				(args
-					(p-underscore @8.14-8.15))
-				(e-block @8.17-16.2
-					(s-let @9.5-9.11
-						(p-assign @9.5-9.6 (ident "x"))
-						(e-int @9.9-9.11 (value "20")))
-					(s-let @10.5-14.6
-						(p-assign @10.5-10.16 (ident "innerResult"))
-						(e-block @10.19-14.6
-							(s-let @12.9-12.18
-								(p-assign @12.9-12.10 (ident "z"))
-								(e-binop @12.13-12.18 (op "add")
-									(e-lookup-local @12.13-12.14
-										(p-assign @9.5-9.6 (ident "x")))
-									(e-lookup-local @12.17-12.18
-										(p-assign @5.1-5.2 (ident "y")))))
-							(e-binop @13.9-13.14 (op "add")
-								(e-lookup-local @13.9-13.10
-									(p-assign @12.9-12.10 (ident "z")))
-								(e-int @13.13-13.14 (value "1")))))
-					(e-lookup-local @15.5-15.16
-						(p-assign @10.5-10.16 (ident "innerResult"))))))))
+		(e-lambda @8.13-16.2
+			(args
+				(p-underscore @8.14-8.15))
+			(e-block @8.17-16.2
+				(s-let @9.5-9.11
+					(p-assign @9.5-9.6 (ident "x"))
+					(e-int @9.9-9.11 (value "20")))
+				(s-let @10.5-14.6
+					(p-assign @10.5-10.16 (ident "innerResult"))
+					(e-block @10.19-14.6
+						(s-let @12.9-12.18
+							(p-assign @12.9-12.10 (ident "z"))
+							(e-binop @12.13-12.18 (op "add")
+								(e-lookup-local @12.13-12.14
+									(p-assign @9.5-9.6 (ident "x")))
+								(e-lookup-local @12.17-12.18
+									(p-assign @5.1-5.2 (ident "y")))))
+						(e-binop @13.9-13.14 (op "add")
+							(e-lookup-local @13.9-13.10
+								(p-assign @12.9-12.10 (ident "z")))
+							(e-int @13.13-13.14 (value "1")))))
+				(e-lookup-local @15.5-15.16
+					(p-assign @10.5-10.16 (ident "innerResult")))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -94,34 +94,6 @@ The unused variable is declared here:
     ^^^^^
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_alias_decl.md:30:14:30:17:**
-```roc
-    userId = 123
-```
-             ^^^
-
-It is of type:
-    _Num(_size2)_
-
-But you are trying to use it as:
-    _UserId_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_alias_decl.md:33:14:33:40:**
-```roc
-    person = { name: "Alice", age: 30 }
-```
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-It is of type:
-    _{ name: Str, age: Num(_size2) }_
-
-But you are trying to use it as:
-    _Person_
-
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
@@ -396,7 +368,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @27.1-27.6 (type "_arg -> Error")))
+		(patt @27.1-27.6 (type "_arg -> UserId")))
 	(type_decls
 		(alias @4.1-4.13 (type "UserId")
 			(ty-header @4.1-4.7 (name "UserId")))
@@ -423,5 +395,5 @@ main! = |_| {
 				(ty-args
 					(ty-var @22.11-22.15 (name "item"))))))
 	(expressions
-		(expr @27.9-39.2 (type "_arg -> Error"))))
+		(expr @27.9-39.2 (type "_arg -> UserId"))))
 ~~~

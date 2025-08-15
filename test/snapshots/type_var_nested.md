@@ -352,14 +352,14 @@ main = |_| "done"
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.11 (type "Result(ok, err), a -> b -> Result(ok, err)"))
+		(patt @5.1-5.11 (type "Result(a, err), a -> b -> Result(ok, err)"))
 		(patt @14.1-14.9 (type "a -> a"))
 		(patt @18.1-18.10 (type "a, b -> { first: a, second: b }"))
 		(patt @22.1-22.12 (type "List(_a) -> U64"))
 		(patt @26.1-26.15 (type "a -> Result(Error, err)"))
 		(patt @28.1-28.5 (type "_arg -> Str")))
 	(expressions
-		(expr @5.14-10.2 (type "Result(ok, err), a -> b -> Result(ok, err)"))
+		(expr @5.14-10.2 (type "Result(a, err), a -> b -> Result(ok, err)"))
 		(expr @14.12-14.17 (type "a -> a"))
 		(expr @18.13-18.43 (type "a, b -> { first: a, second: b }"))
 		(expr @22.15-22.24 (type "List(_a) -> U64"))

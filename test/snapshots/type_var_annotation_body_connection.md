@@ -21,9 +21,9 @@ TYPE MISMATCH - type_var_annotation_body_connection.md:6:13:6:14
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**type_var_annotation_body_connection.md:6:13:6:14:**
+**type_var_annotation_body_connection.md:5:13:5:14:**
 ```roc
-    thing = x  # refers to the value from the function parameter
+    thing : a  # refers to the type var introduced in function type annotation
 ```
             ^
 

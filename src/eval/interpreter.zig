@@ -1981,9 +1981,7 @@ pub const Interpreter = struct {
         self.traceInfo("handleLambdaReturn: actual_size={}, ptr_null={}", .{ actual_return_size, return_value.ptr == null });
 
         // Debug: Check if we're copying a closure and what sizes we're dealing with
-        if (actual_return_layout.tag == .closure) {
-
-        }
+        if (actual_return_layout.tag == .closure) {}
 
         // Get the pre-allocated return slot
         const return_slot_ptr = self.stack_memory.start + frame.return_slot_offset;

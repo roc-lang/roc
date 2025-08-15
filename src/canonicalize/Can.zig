@@ -4,7 +4,6 @@
 //! constructs into a simplified, normalized form suitable for type inference.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const testing = std.testing;
 const base = @import("base");
 const parse = @import("parse");
@@ -81,9 +80,6 @@ used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 module_envs: ?*const std.StringHashMap(*ModuleEnv),
 /// Map from module name string to Import.Idx for tracking unique imports
 import_indices: std.StringHashMapUnmanaged(Import.Idx),
-/// Map from identifier to pending type annotation in current block
-/// Stores the full annotation index so we can properly apply it to declarations
-pending_block_annotations: std.AutoHashMapUnmanaged(Ident.Idx, Annotation.Idx),
 /// Scratch type variables
 scratch_vars: base.Scratch(TypeVar),
 /// Scratch ident
@@ -190,7 +186,6 @@ pub fn deinit(
     self.scratch_record_fields.deinit(gpa);
     self.scratch_seen_record_fields.deinit(gpa);
     self.import_indices.deinit(gpa);
-    self.pending_block_annotations.deinit(gpa);
     self.scratch_tags.deinit(gpa);
     self.scratch_free_vars.deinit(gpa);
 }
@@ -209,7 +204,6 @@ pub fn init(env: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHash
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .module_envs = module_envs,
         .import_indices = std.StringHashMapUnmanaged(Import.Idx){},
-        .pending_block_annotations = std.AutoHashMapUnmanaged(Ident.Idx, Annotation.Idx){},
         .scratch_vars = try base.Scratch(TypeVar).init(gpa),
         .scratch_idents = try base.Scratch(Ident.Idx).init(gpa),
         .scratch_type_var_validation = try base.Scratch(Ident.Idx).init(gpa),
@@ -1899,11 +1893,8 @@ pub fn canonicalizeExpr(
                 }
 
                 // Not a module-qualified lookup, or qualifier not found, proceed with normal lookup
-                switch (self.scopeLookupWithDepth(.ident, ident)) {
-                    .found => |result| {
-                        const pattern_idx = result.pattern_idx;
-                        const scope_depth = result.scope_depth;
-
+                switch (self.scopeLookup(.ident, ident)) {
+                    .found => |pattern_idx| {
                         // Mark this pattern as used for unused variable checking
                         try self.used_patterns.put(self.env.gpa, pattern_idx, {});
 
@@ -1916,10 +1907,7 @@ pub fn canonicalizeExpr(
                         } }, ModuleEnv.varFrom(pattern_idx), region);
 
                         const free_vars_start = self.scratch_free_vars.top();
-                        // Only add to free_vars if it's not from the top-level scope (scope_depth > 0)
-                        if (scope_depth > 0) {
-                            try self.scratch_free_vars.append(self.env.gpa, pattern_idx);
-                        }
+                        try self.scratch_free_vars.append(self.env.gpa, pattern_idx);
                         const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
                         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
                     },
@@ -3005,9 +2993,6 @@ pub fn canonicalizeExpr(
             // Blocks don't introduce function boundaries, but may contain var statements
             try self.scopeEnter(self.env.gpa, false); // false = not a function boundary
             defer self.scopeExit(self.env.gpa) catch {};
-
-            // Clear pending block annotations when exiting this block
-            defer self.pending_block_annotations.clearRetainingCapacity();
 
             // Keep track of the start position for statements
             const stmt_start = self.env.store.scratch_statements.top();
@@ -5691,29 +5676,14 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
                 }
             }
 
-            // Check if this declaration has a pending annotation
-            const decl_pattern = self.parse_ir.store.getPattern(d.pattern);
-            var pending_annotation: ?Annotation.Idx = null;
-
-            if (decl_pattern == .ident) {
-                if (self.parse_ir.tokens.resolveIdentifier(decl_pattern.ident.ident_tok)) |ident_idx| {
-                    if (self.pending_block_annotations.get(ident_idx)) |anno_idx| {
-                        // Found a pending annotation for this identifier
-                        pending_annotation = anno_idx;
-                        _ = self.pending_block_annotations.remove(ident_idx);
-                    }
-                }
-            }
-
-            // Canonicalize pattern and expression first
+            // Regular declaration - canonicalize as usual
             const pattern_idx = try self.canonicalizePattern(d.pattern) orelse return null;
             const can_expr = try self.canonicalizeExpr(d.body) orelse return null;
 
-            // Create a declaration statement with the annotation if present
+            // Create a declaration statement
             const var_stmt = Statement{ .s_decl = .{
                 .pattern = pattern_idx,
                 .expr = can_expr.idx,
-                .annotation = pending_annotation,
             } };
             const region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getStatement(stmt_idx).decl.region);
             const var_stmt_idx = try self.env.addStatementAndTypeVar(var_stmt, Content{ .flex_var = null }, region);
@@ -5907,33 +5877,7 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
                 break :blk try self.env.store.whereClauseSpanFrom(where_start);
             } else null;
 
-            // Create an Annotation from the type annotation for later use
-            // This will be applied when we find a matching declaration
-            const type_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar);
-            const annotation_idx = try self.createAnnotationFromTypeAnno(type_anno_idx, type_var, region) orelse {
-                // If we couldn't create an annotation, still create the statement
-                const type_anno_stmt = Statement{
-                    .s_type_anno = .{
-                        .name = name_ident,
-                        .anno = type_anno_idx,
-                        .where = where_clauses,
-                    },
-                };
-                const type_anno_stmt_idx = try self.env.addStatementAndTypeVar(type_anno_stmt, Content{ .flex_var = null }, region);
-                try self.env.store.addScratchStatement(type_anno_stmt_idx);
-
-                // Return unit expression
-                const empty_span = Expr.Span{ .span = DataSpan{ .start = 0, .len = 0 } };
-                const unit_expr = try self.env.addExprAndTypeVar(Expr{ .e_tuple = .{
-                    .elems = empty_span,
-                } }, Content{ .flex_var = null }, region);
-                return CanonicalizedExpr{ .idx = unit_expr, .free_vars = null };
-            };
-
-            // Store this annotation as pending for the identifier
-            try self.pending_block_annotations.put(self.env.gpa, name_ident, annotation_idx);
-
-            // Create a type annotation statement (still needed for tracking)
+            // Create a type annotation statement
             const type_anno_stmt = Statement{
                 .s_type_anno = .{
                     .name = name_ident,
@@ -6060,40 +6004,6 @@ pub fn scopeLookup(
         return Scope.LookupResult{ .found = pattern };
     }
     return Scope.LookupResult{ .not_found = {} };
-}
-
-const ScopeDepthResult = struct {
-    pattern_idx: Pattern.Idx,
-    scope_depth: usize,
-};
-
-const ScopeDepthLookupResult = union(enum) {
-    found: ScopeDepthResult,
-    not_found: void,
-};
-
-pub fn scopeLookupWithDepth(
-    self: *Self,
-    comptime item_kind: Scope.ItemKind,
-    name: base.Ident.Idx,
-) ScopeDepthLookupResult {
-    var scope_idx = self.scopes.items.len;
-    while (scope_idx > 0) {
-        scope_idx -= 1;
-        const scope = &self.scopes.items[scope_idx];
-        const map = scope.itemsConst(item_kind);
-
-        var iter = map.iterator();
-        while (iter.next()) |entry| {
-            if (name.idx == entry.key_ptr.idx) {
-                return ScopeDepthLookupResult{ .found = ScopeDepthResult{
-                    .pattern_idx = entry.value_ptr.*,
-                    .scope_depth = scope_idx,
-                } };
-            }
-        }
-    }
-    return ScopeDepthLookupResult{ .not_found = {} };
 }
 
 /// Lookup a type variable in the scope hierarchy
