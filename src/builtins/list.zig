@@ -602,7 +602,7 @@ pub fn pushInPlace(
 /// the *caller* is responsible for incrementing their refcounts, as this function does not know
 /// where their refcounts are stored in memory, and therefore cannot increment them.
 ///
-/// (Supporting this would require passing a function pointer, which LLVM does not optimize well.)
+/// (Refcounting elements would require passing a function pointer, which LLVM does not optimize well.)
 pub fn shallowClone(
     old_list: RocList,
     desired_capacity: usize,
@@ -632,7 +632,7 @@ pub fn shallowClone(
     // It's fine if the original list was empty and this one will be nonempty;
     // we just make the allocation, set its length to 0, and return it.
     if (old_list.bytes) |source_bytes| {
-        // We know the new list has a valid pointer becasue otherwise roc_alloc would have crashed.
+        // We know the new list has a valid pointer because otherwise roc_alloc would have crashed.
         var dest_bytes = new_list.bytes orelse unreachable;
 
         const copy_size = len * elem_size;
