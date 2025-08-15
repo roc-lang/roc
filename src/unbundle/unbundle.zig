@@ -1,7 +1,7 @@
 //! Unbundle compressed tar archives using Zig's standard library
 //!
 //! This module provides unbundling functionality that works on all platforms
-//! including WebAssembly, by using Zig's std.compress.zstandard instead of
+//! including WebAssembly, by using Zig's std.compress.zstd instead of
 //! the C zstd library.
 
 const builtin = @import("builtin");
@@ -32,6 +32,10 @@ pub const UnbundleError = error{
     FileTooLarge,
     InvalidPath,
     NoDataExtracted,
+    ChecksumFailure,
+    DictionaryIdFlagUnsupported,
+    MalformedBlock,
+    MalformedFrame,
 } || std.mem.Allocator.Error;
 
 /// Context for error reporting during unbundle operations
@@ -54,13 +58,7 @@ pub const PathValidationReason = union(enum) {
     component_ends_with_period,
 };
 
-/// Error type for path validation failures
-pub const PathValidationError = struct {
-    path: []const u8,
-    reason: PathValidationReason,
-};
-
-/// Writer interface for extracting files during unbundle
+/// Virtual table for extract operations
 pub const ExtractWriter = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
@@ -71,9 +69,18 @@ pub const ExtractWriter = struct {
         makeDir: *const fn (ptr: *anyopaque, path: []const u8) MakeDirError!void,
     };
 
-    pub const CreateFileError = error{ FileCreateFailed, InvalidPath, OutOfMemory };
-    pub const FinishFileError = error{FileWriteFailed};
-    pub const MakeDirError = error{ DirectoryCreateFailed, InvalidPath, OutOfMemory };
+    pub const CreateFileError = error{
+        FileCreateFailed,
+        OutOfMemory,
+    };
+
+    pub const FinishFileError = error{
+        // No specific errors for finish
+        };
+
+    pub const MakeDirError = error{
+        DirectoryCreateFailed,
+    };
 
     pub fn createFile(self: ExtractWriter, path: []const u8) CreateFileError!std.io.AnyWriter {
         return self.vtable.createFile(self.ptr, path);
@@ -88,12 +95,26 @@ pub const ExtractWriter = struct {
     }
 };
 
-/// Directory-based extract writer
+/// Directory-based extract writer for filesystem extraction
 pub const DirExtractWriter = struct {
     dir: std.fs.Dir,
+    allocator: std.mem.Allocator,
+    open_files: std.ArrayList(std.fs.File),
 
-    pub fn init(dir: std.fs.Dir) DirExtractWriter {
-        return .{ .dir = dir };
+    pub fn init(dir: std.fs.Dir, allocator: std.mem.Allocator) DirExtractWriter {
+        return .{
+            .dir = dir,
+            .allocator = allocator,
+            .open_files = std.ArrayList(std.fs.File).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *DirExtractWriter) void {
+        // Close any remaining open files
+        for (self.open_files.items) |*file| {
+            file.close();
+        }
+        self.open_files.deinit();
     }
 
     pub fn extractWriter(self: *DirExtractWriter) ExtractWriter {
@@ -118,15 +139,31 @@ pub const DirExtractWriter = struct {
         }
 
         const file = self.dir.createFile(path, .{}) catch return error.FileCreateFailed;
-        return file.writer().any();
+        self.open_files.append(file) catch {
+            file.close();
+            return error.OutOfMemory;
+        };
+
+        // Return a custom AnyWriter that references the file directly
+        return .{
+            .context = @ptrCast(&self.open_files.items[self.open_files.items.len - 1]),
+            .writeFn = fileWrite,
+        };
     }
 
-    fn finishFile(_: *anyopaque, writer: std.io.AnyWriter) ExtractWriter.FinishFileError!void {
-        // For file writers, we need to close the file
-        // In Zig 0.14, we need to properly cast the context
-        const file_writer = writer.context;
-        const file = @as(*std.fs.File, @ptrCast(@alignCast(@constCast(file_writer))));
-        file.close();
+    fn fileWrite(context: *const anyopaque, bytes: []const u8) anyerror!usize {
+        const file: *std.fs.File = @ptrCast(@alignCast(@constCast(context)));
+        return file.write(bytes);
+    }
+
+    fn finishFile(ptr: *anyopaque, _: std.io.AnyWriter) ExtractWriter.FinishFileError!void {
+        const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
+        // Close and remove the last file
+        if (self.open_files.items.len > 0) {
+            const last_idx = self.open_files.items.len - 1;
+            self.open_files.items[last_idx].close();
+            _ = self.open_files.orderedRemove(last_idx);
+        }
     }
 
     fn makeDir(ptr: *anyopaque, path: []const u8) ExtractWriter.MakeDirError!void {
@@ -137,16 +174,16 @@ pub const DirExtractWriter = struct {
 
 /// Buffer-based extract writer for in-memory extraction
 pub const BufferExtractWriter = struct {
-    allocator: *std.mem.Allocator,
+    allocator: std.mem.Allocator,
     files: std.StringHashMap(std.ArrayList(u8)),
     directories: std.ArrayList([]u8),
     current_file: ?*std.ArrayList(u8) = null,
 
-    pub fn init(allocator: *std.mem.Allocator) BufferExtractWriter {
+    pub fn init(allocator: std.mem.Allocator) BufferExtractWriter {
         return .{
             .allocator = allocator,
-            .files = std.StringHashMap(std.ArrayList(u8)).init(allocator.*),
-            .directories = std.ArrayList([]u8).init(allocator.*),
+            .files = std.StringHashMap(std.ArrayList(u8)).init(allocator),
+            .directories = std.ArrayList([]u8).init(allocator),
         };
     }
 
@@ -188,11 +225,21 @@ pub const BufferExtractWriter = struct {
             self.allocator.free(key);
             result.value_ptr.clearRetainingCapacity();
         } else {
-            result.value_ptr.* = std.ArrayList(u8).init(self.allocator.*);
+            result.value_ptr.* = std.ArrayList(u8).init(self.allocator);
         }
 
         self.current_file = result.value_ptr;
-        return result.value_ptr.writer().any();
+        // Create a proper AnyWriter that directly references the ArrayList
+        return .{
+            .context = @ptrCast(result.value_ptr),
+            .writeFn = arrayListWrite,
+        };
+    }
+
+    fn arrayListWrite(context: *const anyopaque, bytes: []const u8) anyerror!usize {
+        const list: *std.ArrayList(u8) = @ptrCast(@alignCast(@constCast(context)));
+        try list.appendSlice(bytes);
+        return bytes.len;
     }
 
     fn finishFile(ptr: *anyopaque, _: std.io.AnyWriter) ExtractWriter.FinishFileError!void {
@@ -202,28 +249,33 @@ pub const BufferExtractWriter = struct {
 
     fn makeDir(ptr: *anyopaque, path: []const u8) ExtractWriter.MakeDirError!void {
         const self: *BufferExtractWriter = @ptrCast(@alignCast(ptr));
-        const dir_path = self.allocator.dupe(u8, path) catch return error.OutOfMemory;
-        self.directories.append(dir_path) catch {
-            self.allocator.free(dir_path);
-            return error.OutOfMemory;
+        const dir_copy = self.allocator.dupe(u8, path) catch return error.DirectoryCreateFailed;
+        self.directories.append(dir_copy) catch {
+            self.allocator.free(dir_copy);
+            return error.DirectoryCreateFailed;
         };
     }
 };
 
-/// Validate a base58-encoded hash string and return the decoded hash.
-/// Returns null if the hash is invalid.
-pub fn validateBase58Hash(base58_hash: []const u8) !?[32]u8 {
-    if (base58_hash.len > base58.base58_hash_bytes) {
-        return null;
-    }
+/// Result of path validation when an error is found
+pub const PathValidationError = struct {
+    path: []const u8,
+    reason: PathValidationReason,
+};
 
-    var hash: [32]u8 = undefined;
-    base58.decode(base58_hash, &hash) catch return null;
-    return hash;
-}
+// Windows reserved device names (case-insensitive)
+const WINDOWS_RESERVED_NAMES = [_][]const u8{
+    "CON",  "PRN",  "AUX",  "NUL",
+    "COM1", "COM2", "COM3", "COM4",
+    "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3",
+    "LPT4", "LPT5", "LPT6", "LPT7",
+    "LPT8", "LPT9",
+};
 
-/// Check if a path has any unbundling errors (security and compatibility issues)
+/// Check if a path has security or compatibility issues for unbundling
 pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
+    // Check for empty path
     if (path.len == 0) {
         return PathValidationError{
             .path = path,
@@ -231,34 +283,137 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
         };
     }
 
-    // Check for absolute paths
-    if (path[0] == '/' or (builtin.target.os.tag == .windows and path.len >= 2 and path[1] == ':')) {
+    // Check for path too long (255 is a common limit)
+    if (path.len > 255) {
+        return PathValidationError{
+            .path = path,
+            .reason = .path_too_long,
+        };
+    }
+
+    // Check for absolute path
+    if (path[0] == '/' or path[0] == '\\') {
         return PathValidationError{
             .path = path,
             .reason = .absolute_path,
         };
     }
 
-    // Check for path traversal attempts
-    if (std.mem.indexOf(u8, path, "..") != null) {
+    // Check for Windows absolute path (C:, D:, etc.)
+    if (path.len >= 2 and path[1] == ':') {
         return PathValidationError{
             .path = path,
-            .reason = .path_traversal,
+            .reason = .absolute_path,
         };
     }
 
-    // Check for current directory references
-    if (std.mem.eql(u8, path, ".") or std.mem.indexOf(u8, path, "./") != null or std.mem.indexOf(u8, path, "/.") != null) {
-        return PathValidationError{
-            .path = path,
-            .reason = .current_directory_reference,
-        };
+    // Check for reserved characters and validate components
+    var iter = std.mem.tokenizeScalar(u8, path, '/');
+    while (iter.next()) |component| {
+        // Check for path traversal (..)
+        if (std.mem.eql(u8, component, "..")) {
+            return PathValidationError{
+                .path = path,
+                .reason = .path_traversal,
+            };
+        }
+
+        // Check for current directory reference (.)
+        if (std.mem.eql(u8, component, ".")) {
+            return PathValidationError{
+                .path = path,
+                .reason = .current_directory_reference,
+            };
+        }
+
+        // Check for Windows reserved names
+        const upper_component = std.ascii.allocUpperString(std.heap.page_allocator, component) catch component;
+        defer if (upper_component.ptr != component.ptr) std.heap.page_allocator.free(upper_component);
+
+        // Check base name (without extension) for reserved names
+        const base_name = if (std.mem.indexOfScalar(u8, upper_component, '.')) |dot_pos|
+            upper_component[0..dot_pos]
+        else
+            upper_component;
+
+        for (WINDOWS_RESERVED_NAMES) |reserved| {
+            if (std.mem.eql(u8, base_name, reserved)) {
+                return PathValidationError{
+                    .path = path,
+                    .reason = .windows_reserved_name,
+                };
+            }
+        }
+
+        // Check for components ending with space or period
+        if (component.len > 0) {
+            if (component[component.len - 1] == ' ') {
+                return PathValidationError{
+                    .path = path,
+                    .reason = .component_ends_with_space,
+                };
+            }
+            if (component[component.len - 1] == '.') {
+                return PathValidationError{
+                    .path = path,
+                    .reason = .component_ends_with_period,
+                };
+            }
+        }
+    }
+
+    // Check for Windows reserved characters in the entire path
+    for (path) |char| {
+        switch (char) {
+            0 => return PathValidationError{
+                .path = path,
+                .reason = .{ .windows_reserved_char = char },
+            },
+            '<', '>', ':', '"', '|', '?', '*' => return PathValidationError{
+                .path = path,
+                .reason = .{ .windows_reserved_char = char },
+            },
+            '\\' => {
+                // Backslash is only allowed on Windows as a path separator
+                if (builtin.os.tag != .windows) {
+                    return PathValidationError{
+                        .path = path,
+                        .reason = .contained_backslash_on_unix,
+                    };
+                }
+            },
+            else => {},
+        }
     }
 
     return null;
 }
 
-/// Unbundle files from a compressed tar archive stream.
+/// Generic hashing reader that works with any reader type
+fn HashingReader(comptime ReaderType: type) type {
+    return struct {
+        child_reader: ReaderType,
+        hasher: *std.crypto.hash.Blake3,
+
+        const Self = @This();
+        pub const Error = ReaderType.Error;
+        pub const Reader = std.io.Reader(*Self, Error, read);
+
+        pub fn read(self: *Self, buffer: []u8) Error!usize {
+            const n = try self.child_reader.read(buffer);
+            if (n > 0) {
+                self.hasher.update(buffer[0..n]);
+            }
+            return n;
+        }
+
+        pub fn reader(self: *Self) Reader {
+            return .{ .context = self };
+        }
+    };
+}
+
+/// Unbundle a compressed tar archive, streaming from input_reader to extract_writer.
 ///
 /// This is the core streaming unbundle logic that can be used by both file-based
 /// unbundling and network-based downloading.
@@ -271,27 +426,12 @@ pub fn unbundleStream(
 ) UnbundleError!void {
     // Create a hashing reader to verify the hash while reading
     var hasher = std.crypto.hash.Blake3.init(.{});
-    const HashingReader = struct {
-        child_reader: @TypeOf(input_reader),
-        hasher: *std.crypto.hash.Blake3,
 
-        pub const Error = @TypeOf(input_reader).Error;
-        pub const Reader = std.io.Reader(@This(), Error, read);
+    // We need to create the specific type for this reader
+    const ReaderType = @TypeOf(input_reader);
+    const HashingReaderType = HashingReader(ReaderType);
 
-        pub fn read(self: @This(), buffer: []u8) Error!usize {
-            const n = try self.child_reader.read(buffer);
-            if (n > 0) {
-                self.hasher.update(buffer[0..n]);
-            }
-            return n;
-        }
-
-        pub fn reader(self: @This()) Reader {
-            return .{ .context = self };
-        }
-    };
-
-    var hashing_reader = HashingReader{
+    var hashing_reader = HashingReaderType{
         .child_reader = input_reader,
         .hasher = &hasher,
     };
@@ -303,14 +443,25 @@ pub fn unbundleStream(
     });
     const decompressed_reader = zstd_stream.reader();
 
-    // Create tar reader
-    var tar_iterator = std.tar.iterator(decompressed_reader, .{});
+    // Create tar reader with buffers for file and link names
+    var file_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    var link_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    var tar_iterator = std.tar.iterator(decompressed_reader, .{
+        .file_name_buffer = &file_name_buffer,
+        .link_name_buffer = &link_name_buffer,
+    });
 
     var data_extracted = false;
 
     // Process all tar entries
-    while (try tar_iterator.next()) |entry| {
-        const file_path = entry.path;
+    while (true) {
+        const maybe_entry = tar_iterator.next() catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return error.InvalidTarHeader,
+        };
+
+        const entry = maybe_entry orelse break;
+        const file_path = entry.name;
 
         // Validate path for security
         if (pathHasUnbundleErr(file_path)) |validation_error| {
@@ -323,45 +474,110 @@ pub fn unbundleStream(
 
         switch (entry.kind) {
             .directory => {
+                // Create directory
                 try extract_writer.makeDir(file_path);
                 data_extracted = true;
             },
             .file => {
+                // Create file and stream content
                 const file_writer = try extract_writer.createFile(file_path);
                 defer extract_writer.finishFile(file_writer) catch {};
 
-                // Stream the file content
-                const file_size = std.math.cast(usize, entry.size) orelse return error.FileTooLarge;
-                var bytes_remaining = file_size;
+                // Stream file content in chunks
                 var buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
-
+                var bytes_remaining = entry.size;
                 while (bytes_remaining > 0) {
                     const to_read = @min(buffer.len, bytes_remaining);
                     const bytes_read = try entry.reader().readAll(buffer[0..to_read]);
                     if (bytes_read == 0) return error.UnexpectedEndOfStream;
-                    try file_writer.writeAll(buffer[0..bytes_read]);
+                    file_writer.writeAll(buffer[0..bytes_read]) catch return error.FileWriteFailed;
                     bytes_remaining -= bytes_read;
                 }
 
                 data_extracted = true;
             },
-            else => {
-                // Skip other entry types (symlinks, etc.)
-                try entry.skip();
+            .sym_link => {
+                // Validate symlink target for security
+                const link_target = entry.link_name;
+
+                // Check if it's a relative path (no leading /)
+                if (link_target.len > 0 and link_target[0] == '/') {
+                    if (error_context) |ctx| {
+                        ctx.path = file_path;
+                        ctx.reason = .absolute_path;
+                    }
+                    return error.InvalidPath;
+                }
+
+                // Check for path traversal components (.. or .)
+                var iter = std.mem.tokenizeScalar(u8, link_target, '/');
+                while (iter.next()) |component| {
+                    if (std.mem.eql(u8, component, "..")) {
+                        if (error_context) |ctx| {
+                            ctx.path = file_path;
+                            ctx.reason = .path_traversal;
+                        }
+                        return error.InvalidPath;
+                    }
+                    if (std.mem.eql(u8, component, ".")) {
+                        if (error_context) |ctx| {
+                            ctx.path = file_path;
+                            ctx.reason = .current_directory_reference;
+                        }
+                        return error.InvalidPath;
+                    }
+                }
+
+                // Symlink is safe (relative, no .. or . components)
+                // For DirExtractWriter, create the symlink
+                // For BufferExtractWriter, we'll just skip it
+                // TODO: Add symlink support to ExtractWriter interface
+
+                // For now, consume the bytes even though we don't use them
+                var buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
+                var bytes_remaining = entry.size;
+                while (bytes_remaining > 0) {
+                    const to_read = @min(buffer.len, bytes_remaining);
+                    const bytes_read = try entry.reader().readAll(buffer[0..to_read]);
+                    bytes_remaining -= bytes_read;
+                }
+
+                data_extracted = true;
             },
         }
     }
 
-    if (!data_extracted) {
-        return error.NoDataExtracted;
-    }
-
-    // Verify the hash
+    // Verify hash
     var actual_hash: [32]u8 = undefined;
     hasher.final(&actual_hash);
+
     if (!std.mem.eql(u8, &actual_hash, expected_hash)) {
         return error.HashMismatch;
     }
+
+    // Ensure we extracted something
+    if (!data_extracted) {
+        return error.NoDataExtracted;
+    }
+}
+
+/// Validate a base58-encoded hash string and decode it.
+///
+/// Returns the decoded hash if valid, or null if invalid.
+pub fn validateBase58Hash(base58_str: []const u8) !?[32]u8 {
+    // A 32-byte hash encoded in base58 should be at least 43 characters
+    // (all zeros would be 32 '1' characters, any non-zero value needs more)
+    // Maximum is 44 characters for a full 256-bit value
+    if (base58_str.len < 32 or base58_str.len > 44) {
+        return null;
+    }
+
+    var hash: [32]u8 = undefined;
+    base58.decode(base58_str, &hash) catch {
+        return null;
+    };
+
+    return hash;
 }
 
 /// Unbundle files from a compressed tar archive to a directory.
@@ -369,6 +585,7 @@ pub fn unbundleStream(
 /// The filename parameter should be the base58-encoded blake3 hash + .tar.zst extension.
 /// If an InvalidPath error is returned, error_context will contain details about the invalid path.
 pub fn unbundle(
+    allocator: std.mem.Allocator,
     input_reader: anytype,
     extract_dir: std.fs.Dir,
     filename: []const u8,
@@ -383,6 +600,7 @@ pub fn unbundle(
         return error.InvalidFilename;
     };
 
-    var dir_writer = DirExtractWriter.init(extract_dir);
+    var dir_writer = DirExtractWriter.init(extract_dir, allocator);
+    defer dir_writer.deinit();
     return unbundleStream(input_reader, dir_writer.extractWriter(), &expected_hash, error_context);
 }

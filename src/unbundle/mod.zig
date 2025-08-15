@@ -32,3 +32,8 @@ pub const BufferExtractWriter = unbundle.BufferExtractWriter;
 // Re-export download functionality
 pub const downloadAndExtract = download.downloadAndExtract;
 pub const downloadAndExtractToBuffer = download.downloadAndExtractToBuffer;
+
+// Include tests
+test {
+    _ = @import("test_unbundle.zig");
+}
