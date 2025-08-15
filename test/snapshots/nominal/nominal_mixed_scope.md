@@ -220,10 +220,10 @@ processColor = |color| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.13 (type "Error -> LocalStatus")))
+		(patt @6.1-6.13 (type "Error -> Error")))
 	(type_decls
-		(nominal @3.1-3.35 (type "LocalStatus")
+		(nominal @3.1-3.35 (type "Error")
 			(ty-header @3.1-3.12 (name "LocalStatus"))))
 	(expressions
-		(expr @6.16-16.2 (type "Error -> LocalStatus"))))
+		(expr @6.16-16.2 (type "Error -> Error"))))
 ~~~

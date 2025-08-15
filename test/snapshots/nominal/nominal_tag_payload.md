@@ -150,7 +150,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.6 (type "a -> Maybe(a)"))
+		(patt @6.1-6.6 (type "a -> Error"))
 		(patt @9.1-9.6 (type "Maybe(a)"))
 		(patt @11.1-11.6 (type "a -> Maybe(a)"))
 		(patt @13.1-13.6 (type "Maybe(a)")))
@@ -160,7 +160,7 @@ NO CHANGE
 				(ty-args
 					(ty-var @3.7-3.8 (name "a"))))))
 	(expressions
-		(expr @6.9-6.26 (type "a -> Maybe(a)"))
+		(expr @6.9-6.26 (type "a -> Error"))
 		(expr @9.9-9.19 (type "Maybe(a)"))
 		(expr @11.9-11.26 (type "a -> Maybe(a)"))
 		(expr @13.9-13.19 (type "Maybe(a)"))))
