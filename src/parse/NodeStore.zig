@@ -4,6 +4,7 @@
 //! the AST.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const collections = @import("collections");
 
@@ -119,25 +120,27 @@ pub fn emptyScratch(store: *NodeStore) void {
 
 /// Prints debug information about all nodes and scratch buffers in the store.
 pub fn debug(store: *NodeStore) void {
-    std.debug.print("\n==> IR.NodeStore DEBUG <==\n", .{});
-    std.debug.print("Nodes:\n", .{});
-    var nodes_iter = store.nodes.iterIndices();
-    while (nodes_iter.next()) |idx| {
-        std.debug.print("{d}: {any}\n", .{ @intFromEnum(idx), store.nodes.get(idx) });
+    if (comptime builtin.target.os.tag != .freestanding) {
+        std.debug.print("\n==> IR.NodeStore DEBUG <==\n", .{});
+        std.debug.print("Nodes:\n", .{});
+        var nodes_iter = store.nodes.iterIndices();
+        while (nodes_iter.next()) |idx| {
+            std.debug.print("{d}: {any}\n", .{ @intFromEnum(idx), store.nodes.get(idx) });
+        }
+        std.debug.print("Extra Data: {any}\n", .{store.extra_data.items});
+        std.debug.print("Scratch statements: {any}\n", .{store.scratch_statements.items});
+        std.debug.print("Scratch tokens: {any}\n", .{store.scratch_tokens.items});
+        std.debug.print("Scratch exprs: {any}\n", .{store.scratch_exprs.items});
+        std.debug.print("Scratch patterns: {any}\n", .{store.scratch_patterns.items});
+        std.debug.print("Scratch record fields: {any}\n", .{store.scratch_record_fields.items});
+        std.debug.print("Scratch pattern record fields: {any}\n", .{store.scratch_pattern_record_fields.items});
+        std.debug.print("Scratch match branches: {any}\n", .{store.scratch_match_branches.items});
+        std.debug.print("Scratch type annos: {any}\n", .{store.scratch_type_annos.items});
+        std.debug.print("Scratch anno record fields: {any}\n", .{store.scratch_anno_record_fields.items});
+        std.debug.print("Scratch exposes items: {any}\n", .{store.scratch_exposed_items.items});
+        std.debug.print("Scratch where clauses: {any}\n", .{store.scratch_where_clauses.items});
+        std.debug.print("==> IR.NodeStore DEBUG <==\n\n", .{});
     }
-    std.debug.print("Extra Data: {any}\n", .{store.extra_data.items});
-    std.debug.print("Scratch statements: {any}\n", .{store.scratch_statements.items});
-    std.debug.print("Scratch tokens: {any}\n", .{store.scratch_tokens.items});
-    std.debug.print("Scratch exprs: {any}\n", .{store.scratch_exprs.items});
-    std.debug.print("Scratch patterns: {any}\n", .{store.scratch_patterns.items});
-    std.debug.print("Scratch record fields: {any}\n", .{store.scratch_record_fields.items});
-    std.debug.print("Scratch pattern record fields: {any}\n", .{store.scratch_pattern_record_fields.items});
-    std.debug.print("Scratch match branches: {any}\n", .{store.scratch_match_branches.items});
-    std.debug.print("Scratch type annos: {any}\n", .{store.scratch_type_annos.items});
-    std.debug.print("Scratch anno record fields: {any}\n", .{store.scratch_anno_record_fields.items});
-    std.debug.print("Scratch exposes items: {any}\n", .{store.scratch_exposed_items.items});
-    std.debug.print("Scratch where clauses: {any}\n", .{store.scratch_where_clauses.items});
-    std.debug.print("==> IR.NodeStore DEBUG <==\n\n", .{});
 }
 
 // ------------------------------------------------------------------------

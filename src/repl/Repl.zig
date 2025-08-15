@@ -6,18 +6,14 @@ const compile = @import("compile");
 const parse = @import("parse");
 const types = @import("types");
 const can = @import("can");
-const eval = @import("eval");
 const check = @import("check");
 const builtins = @import("builtins");
 const layout_mod = @import("layout");
+const eval_mod = @import("eval");
 
-const TestEnv = @import("repl_test_env.zig").TestEnv;
-
-const AST = parse.AST;
 const Can = can.Can;
 const Check = check.Check;
-const Stack = eval.Stack;
-const LayoutStore = layout_mod.Store;
+const AST = parse.AST;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const RocDec = builtins.dec.RocDec;
@@ -26,64 +22,157 @@ const types_store = types.store;
 const writers = types.writers;
 const target = base.target;
 
+/// REPL state that tracks past definitions and evaluates expressions
 const Repl = @This();
 
-/// Type of definition stored in the REPL history
-const DefKind = union(enum) {
-    /// An assignment with an identifier
-    assignment: []const u8,
-    /// An import statement
-    import,
-};
-
-/// Represents a past definition in the REPL session
-const PastDef = struct {
-    /// The source code of the definition
-    source: []const u8,
-    /// The kind of definition
-    kind: DefKind,
-
-    pub fn deinit(self: *PastDef, allocator: Allocator) void {
-        allocator.free(self.source);
-        switch (self.kind) {
-            .assignment => |ident| allocator.free(ident),
-            .import => {},
-        }
-    }
-};
-
 allocator: Allocator,
-/// All past definitions in order (allows redefinition/shadowing)
-past_defs: std.ArrayList(PastDef),
+/// Map from variable name to source string for definitions
+definitions: std.StringHashMap([]const u8),
 /// Stack for evaluation
-eval_stack: Stack,
+eval_stack: eval_mod.Stack,
 /// Operations for the Roc runtime
 roc_ops: *RocOps,
 /// Optional trace writer for debugging evaluation
 trace_writer: ?std.io.AnyWriter,
+/// ModuleEnv from last successful evaluation (for snapshot generation)
+last_module_env: ?*ModuleEnv,
+/// Debug flag to store rendered HTML for snapshot generation
+debug_store_snapshots: bool,
+/// Storage for rendered CAN HTML at each step (only when debug_store_snapshots is true)
+debug_can_html: std.ArrayList([]const u8),
+/// Storage for rendered TYPES HTML at each step (only when debug_store_snapshots is true)
+debug_types_html: std.ArrayList([]const u8),
 
 pub fn init(allocator: Allocator, roc_ops: *RocOps) !Repl {
-    const eval_stack = try Stack.initCapacity(allocator, 8192);
+    const eval_stack = try eval_mod.Stack.initCapacity(allocator, 8192);
 
     return Repl{
         .allocator = allocator,
-        .past_defs = std.ArrayList(PastDef).init(allocator),
+        .definitions = std.StringHashMap([]const u8).init(allocator),
         .eval_stack = eval_stack,
         .roc_ops = roc_ops,
         .trace_writer = null,
+        .last_module_env = null,
+        .debug_store_snapshots = false,
+        .debug_can_html = std.ArrayList([]const u8).init(allocator),
+        .debug_types_html = std.ArrayList([]const u8).init(allocator),
     };
 }
 
-/// Set a trace writer for debugging REPL evaluation
+/// Set the trace writer for the REPL.
 pub fn setTraceWriter(self: *Repl, trace_writer: std.io.AnyWriter) void {
     self.trace_writer = trace_writer;
 }
 
-pub fn deinit(self: *Repl) void {
-    for (self.past_defs.items) |*def| {
-        def.deinit(self.allocator);
+/// Enable debug mode to store snapshot HTML for each REPL step
+pub fn enableDebugSnapshots(self: *Repl) void {
+    self.debug_store_snapshots = true;
+}
+
+/// Get pointer to last ModuleEnv for snapshot generation
+pub fn getLastModuleEnv(self: *Repl) ?*ModuleEnv {
+    return self.last_module_env;
+}
+
+/// Get debug CAN HTML for all steps (only available when debug_store_snapshots is enabled)
+pub fn getDebugCanHtml(self: *Repl) []const []const u8 {
+    return self.debug_can_html.items;
+}
+
+/// Get debug TYPES HTML for all steps (only available when debug_store_snapshots is enabled)
+pub fn getDebugTypesHtml(self: *Repl) []const []const u8 {
+    return self.debug_types_html.items;
+}
+
+/// Allocate a new ModuleEnv and save it
+fn allocateModuleEnv(self: *Repl, source: []const u8) !*ModuleEnv {
+    // Clean up previous ModuleEnv if it exists
+    if (self.last_module_env) |old_env| {
+        old_env.deinit();
+        self.allocator.destroy(old_env);
     }
-    self.past_defs.deinit();
+
+    // Allocate new ModuleEnv on heap
+    const new_env = try self.allocator.create(ModuleEnv);
+    new_env.* = try ModuleEnv.init(self.allocator, source);
+    self.last_module_env = new_env;
+    return new_env;
+}
+
+/// Generate and store CAN and TYPES HTML for debugging
+fn generateAndStoreDebugHtml(self: *Repl, module_env: *ModuleEnv, expr_idx: can.CIR.Expr.Idx) !void {
+    const SExprTree = @import("base").SExprTree;
+
+    // Generate CAN HTML
+    {
+        var tree = SExprTree.init(self.allocator);
+        defer tree.deinit();
+        try module_env.pushToSExprTree(expr_idx, &tree);
+
+        var can_buffer = std.ArrayList(u8).init(self.allocator);
+        defer can_buffer.deinit();
+        try tree.toStringPretty(can_buffer.writer().any());
+
+        const can_html = try self.allocator.dupe(u8, can_buffer.items);
+        try self.debug_can_html.append(can_html);
+    }
+
+    // Generate TYPES HTML
+    {
+        var tree = SExprTree.init(self.allocator);
+        defer tree.deinit();
+        try module_env.pushTypesToSExprTree(expr_idx, &tree);
+
+        var types_buffer = std.ArrayList(u8).init(self.allocator);
+        defer types_buffer.deinit();
+        try tree.toStringPretty(types_buffer.writer().any());
+
+        const types_html = try self.allocator.dupe(u8, types_buffer.items);
+        try self.debug_types_html.append(types_html);
+    }
+}
+
+/// Add or replace a definition in the REPL context
+pub fn addOrReplaceDefinition(self: *Repl, source: []const u8, var_name: []const u8) !void {
+    // Check if we're replacing an existing definition
+    if (self.definitions.fetchRemove(var_name)) |kv| {
+        // Free both the old key and value
+        self.allocator.free(kv.key);
+        self.allocator.free(kv.value);
+    }
+
+    // Duplicate both key and value since they're borrowed from input
+    const owned_key = try self.allocator.dupe(u8, var_name);
+    const owned_source = try self.allocator.dupe(u8, source);
+    try self.definitions.put(owned_key, owned_source);
+}
+
+pub fn deinit(self: *Repl) void {
+    // Clean up definition strings and keys
+    var iterator = self.definitions.iterator();
+    while (iterator.next()) |kv| {
+        self.allocator.free(kv.key_ptr.*); // Free the variable name
+        self.allocator.free(kv.value_ptr.*); // Free the source string
+    }
+    self.definitions.deinit();
+
+    // Clean up debug HTML storage
+    for (self.debug_can_html.items) |html| {
+        self.allocator.free(html);
+    }
+    self.debug_can_html.deinit();
+
+    for (self.debug_types_html.items) |html| {
+        self.allocator.free(html);
+    }
+    self.debug_types_html.deinit();
+
+    // Clean up last ModuleEnv if it exists
+    if (self.last_module_env) |module_env| {
+        module_env.deinit();
+        self.allocator.destroy(module_env);
+    }
+
     self.eval_stack.deinit();
 }
 
@@ -127,40 +216,15 @@ fn processInput(self: *Repl, input: []const u8) ![]const u8 {
 
     switch (parse_result) {
         .assignment => |info| {
-            defer self.allocator.free(info.ident);
+            // Add or replace definition (duplicates the strings for ownership)
+            try self.addOrReplaceDefinition(info.source, info.var_name);
 
-            // Add to past definitions (allows redefinition)
-            try self.past_defs.append(.{
-                .source = try self.allocator.dupe(u8, input),
-                .kind = .{ .assignment = try self.allocator.dupe(u8, info.ident) },
-            });
-
-            // For assignments, evaluate the RHS directly
-            // Extract the RHS from the assignment
-            if (std.mem.indexOf(u8, input, "=")) |eq_pos| {
-                const rhs = std.mem.trim(u8, input[eq_pos + 1 ..], " \t\n");
-
-                // If the RHS is a simple literal, evaluate it directly
-                if (std.fmt.parseInt(i64, rhs, 10)) |num| {
-                    return try std.fmt.allocPrint(self.allocator, "{d}", .{num});
-                } else |_| {}
-
-                // Otherwise, evaluate with context
-                const full_source = try self.buildFullSource(rhs);
-                defer self.allocator.free(full_source);
-                return try self.evaluateSource(full_source);
-            }
-
-            return try self.allocator.dupe(u8, "");
+            // Return descriptive output for assignments
+            return try std.fmt.allocPrint(self.allocator, "assigned `{s}`", .{info.var_name});
         },
         .import => {
-            // Add import to past definitions
-            try self.past_defs.append(.{
-                .source = try self.allocator.dupe(u8, input),
-                .kind = .import,
-            });
-
-            return try self.allocator.dupe(u8, "");
+            // Imports are not supported in this implementation
+            return try self.allocator.dupe(u8, "Imports not yet supported");
         },
         .expression => {
             // Evaluate expression with all past definitions
@@ -181,11 +245,14 @@ fn processInput(self: *Repl, input: []const u8) ![]const u8 {
 }
 
 const ParseResult = union(enum) {
-    assignment: struct { ident: []const u8 }, // This ident must be allocator.dupe'd
+    assignment: struct {
+        source: []const u8, // Borrowed from input
+        var_name: []const u8, // Borrowed from input
+    },
     import,
     expression,
     type_decl,
-    parse_error: []const u8, // This must be allocator.dupe'd
+    parse_error: []const u8, // Must be allocator.dupe'd
 };
 
 /// Try to parse input as a statement
@@ -206,12 +273,16 @@ fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
                 .decl => |decl| {
                     const pattern = ast.store.getPattern(decl.pattern);
                     if (pattern == .ident) {
+                        // Extract the identifier name from the pattern
                         const ident_tok = pattern.ident.ident_tok;
-                        const token_region = ast.tokens.resolve(@intCast(ident_tok));
-                        const ident = ast.env.source[token_region.start.offset..token_region.end.offset];
-                        // Make a copy of the identifier since ast will be freed
-                        const ident_copy = try self.allocator.dupe(u8, ident);
-                        return ParseResult{ .assignment = .{ .ident = ident_copy } };
+                        const token_region = ast.tokens.resolve(ident_tok);
+                        const ident_name = module_env.common.source[token_region.start.offset..token_region.end.offset];
+
+                        // Return borrowed strings (no duplication needed)
+                        return ParseResult{ .assignment = .{
+                            .source = input,
+                            .var_name = ident_name,
+                        } };
                     }
                     return ParseResult.expression;
                 },
@@ -220,7 +291,9 @@ fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
                 else => return ParseResult.expression,
             }
         }
-    } else |_| {}
+    } else |_| {
+        // Statement parse failed, continue to try expression parsing
+    }
 
     // Try expression parsing
     if (parse.parseExpr(&module_env.common, self.allocator)) |ast_const| {
@@ -229,78 +302,90 @@ fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
         if (ast.root_node_idx != 0) {
             return ParseResult.expression;
         }
-    } else |_| {}
+    } else |_| {
+        // Expression parse failed too
+    }
 
     return ParseResult{ .parse_error = try self.allocator.dupe(u8, "Failed to parse input") };
 }
 
-/// Build full source including all past definitions
-fn buildFullSource(self: *Repl, current_expr: []const u8) ![]const u8 {
+/// Build full source including all definitions wrapped in block syntax
+pub fn buildFullSource(self: *Repl, current_expr: []const u8) ![]const u8 {
+    // If no definitions exist, just return the expression as-is
+    if (self.definitions.count() == 0) {
+        return try self.allocator.dupe(u8, current_expr);
+    }
+
     var buffer = std.ArrayList(u8).init(self.allocator);
     defer buffer.deinit();
 
-    // Add all past definitions in order (later ones shadow earlier ones)
-    for (self.past_defs.items) |def| {
-        try buffer.appendSlice(def.source);
+    // Start block
+    try buffer.appendSlice("{\n");
+
+    // Add all definitions in order
+    var iterator = self.definitions.iterator();
+    while (iterator.next()) |kv| {
+        try buffer.appendSlice("    ");
+        try buffer.appendSlice(kv.value_ptr.*);
         try buffer.append('\n');
     }
 
     // Add current expression
+    try buffer.appendSlice("    ");
     try buffer.appendSlice(current_expr);
+    try buffer.append('\n');
+
+    // End block
+    try buffer.append('}');
 
     return try buffer.toOwnedSlice();
 }
 
 /// Evaluate source code
 fn evaluateSource(self: *Repl, source: []const u8) ![]const u8 {
-    return try self.evaluatePureExpression(source);
+    const module_env = try self.allocateModuleEnv(source);
+    return try self.evaluatePureExpression(module_env);
 }
 
-/// Evaluate a pure expression
-fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
-    // If we have past definitions and the expression might reference them,
-    // we need context-aware evaluation (not yet implemented)
-    if (self.past_defs.items.len > 0) {
-        // Check if it's a simple literal that doesn't need context
-        if (std.fmt.parseInt(i64, std.mem.trim(u8, expr_source, " \t\n"), 10)) |num| {
-            return try std.fmt.allocPrint(self.allocator, "{d}", .{num});
-        } else |_| {}
+/// Evaluate a program (which may contain definitions)
+fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
 
-        // Context-aware evaluation not yet implemented
-        return try std.fmt.allocPrint(self.allocator, "<needs context>", .{});
-    }
+    // Determine if we have definitions (which means we built a block expression)
+    const has_definitions = self.definitions.count() > 0;
 
-    // Create module environment for the expression
-    var module_env = try ModuleEnv.init(self.allocator, expr_source);
-    defer module_env.deinit();
-
-    // Parse as expression
-    var parse_ast = parse.parseExpr(&module_env.common, self.allocator) catch |err| {
-        return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
-    };
+    // Parse appropriately based on whether we have definitions
+    var parse_ast = if (has_definitions)
+        // Has definitions - we built a block expression, parse as expression
+        parse.parseExpr(&module_env.common, self.allocator) catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
+        }
+    else
+        // No definitions - simple expression, parse as expression
+        parse.parseExpr(&module_env.common, self.allocator) catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
+        };
     defer parse_ast.deinit(self.allocator);
 
     // Empty scratch space
     parse_ast.store.emptyScratch();
 
     // Create CIR
-    const cir = &module_env; // CIR is now just ModuleEnv
+    const cir = module_env; // CIR is now just ModuleEnv
     try cir.initCIRFields(self.allocator, "repl");
 
-    // Create czer
-    //
+    // Create canonicalizer
     var czer = Can.init(cir, &parse_ast, null) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
     };
     defer czer.deinit();
 
-    // Canonicalize the expression
-    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = czer.canonicalizeExpr(expr_idx) catch |err| {
-        return try std.fmt.allocPrint(self.allocator, "Canonicalize expr error: {}", .{err});
-    } orelse {
-        return try self.allocator.dupe(u8, "Failed to canonicalize expression");
+    // Since we're always parsing as expressions now, handle them the same way
+    const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+
+    const canonical_expr = try czer.canonicalizeExpr(expr_idx) orelse {
+        return try self.allocator.dupe(u8, "Canonicalize expr error: expression returned null");
     };
+    const final_expr_idx = canonical_expr.get_idx();
 
     // Type check
     var checker = Check.init(self.allocator, &module_env.types, cir, &.{}, &cir.store.regions) catch |err| {
@@ -308,12 +393,13 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
     };
     defer checker.deinit();
 
-    _ = checker.checkExpr(canonical_expr_idx.get_idx()) catch |err| {
-        return try std.fmt.allocPrint(self.allocator, "Type check error: {}", .{err});
+    // Check the expression (no need to check defs since we're parsing as expressions)
+    _ = checker.checkExpr(final_expr_idx) catch |err| {
+        return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
     };
 
     // Create layout cache
-    var layout_cache = LayoutStore.init(&module_env, &module_env.types) catch |err| {
+    var layout_cache = layout_mod.Store.init(module_env, &module_env.types) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Layout cache error: {}", .{err});
     };
     defer layout_cache.deinit();
@@ -322,7 +408,7 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
     self.eval_stack.used = 0;
 
     // Create interpreter
-    var interpreter = eval.Interpreter.init(self.allocator, cir, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
+    var interpreter = eval_mod.Interpreter.init(self.allocator, cir, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
     };
     defer interpreter.deinit(self.roc_ops);
@@ -332,7 +418,7 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
         interpreter.startTrace(trace_writer);
     }
 
-    const result = interpreter.eval(canonical_expr_idx.get_idx(), self.roc_ops) catch |err| {
+    const result = interpreter.eval(final_expr_idx, self.roc_ops) catch |err| {
         if (self.trace_writer) |_| {
             interpreter.endTrace();
         }
@@ -341,6 +427,11 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
 
     if (self.trace_writer) |_| {
         interpreter.endTrace();
+    }
+
+    // Generate debug HTML if enabled
+    if (self.debug_store_snapshots) {
+        try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
     }
 
     // Format the result immediately while memory is still valid
@@ -360,11 +451,11 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
                 switch (precision) {
                     .f32 => {
                         const float_ptr: *f32 = @ptrCast(@alignCast(result.ptr.?));
-                        return try std.fmt.allocPrint(self.allocator, "{}", .{float_ptr.*});
+                        return try std.fmt.allocPrint(self.allocator, "{d}", .{float_ptr.*});
                     },
                     .f64 => {
                         const float_ptr: *f64 = @ptrCast(@alignCast(result.ptr.?));
-                        return try std.fmt.allocPrint(self.allocator, "{}", .{float_ptr.*});
+                        return try std.fmt.allocPrint(self.allocator, "{d}", .{float_ptr.*});
                     },
                     .dec => {
                         const dec_ptr: *RocDec = @ptrCast(@alignCast(result.ptr.?));
@@ -372,7 +463,7 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
                         const raw_value = dec_ptr.num;
                         const scale_factor = std.math.pow(f64, 10, RocDec.decimal_places);
                         const decimal_value = @as(f64, @floatFromInt(raw_value)) / scale_factor;
-                        return try std.fmt.allocPrint(self.allocator, "{}", .{decimal_value});
+                        return try std.fmt.allocPrint(self.allocator, "{d}", .{decimal_value});
                     },
                 }
             },
@@ -395,234 +486,4 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
     }
 
     return try std.fmt.allocPrint(self.allocator, "<{s}>", .{@tagName(result.layout.tag)});
-}
-
-// Tests
-const testing = std.testing;
-
-test "Repl - initialization and cleanup" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
-    defer repl.deinit();
-
-    try testing.expect(repl.past_defs.items.len == 0);
-}
-
-test "Repl - special commands" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
-    defer repl.deinit();
-
-    const help_result = try repl.step(":help");
-    defer std.testing.allocator.free(help_result);
-    try testing.expect(std.mem.indexOf(u8, help_result, "Enter an expression") != null);
-
-    const exit_result = try repl.step(":exit");
-    defer std.testing.allocator.free(exit_result);
-    try testing.expectEqualStrings("Goodbye!", exit_result);
-
-    const empty_result = try repl.step("");
-    defer std.testing.allocator.free(empty_result);
-    try testing.expectEqualStrings("", empty_result);
-}
-
-test "Repl - simple expressions" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
-    defer repl.deinit();
-
-    const result = try repl.step("42");
-    defer std.testing.allocator.free(result);
-    try testing.expectEqualStrings("42", result);
-}
-
-test "Repl - string expressions" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
-    defer repl.deinit();
-
-    const result = try repl.step("\"Hello, World!\"");
-    defer std.testing.allocator.free(result);
-    try testing.expectEqualStrings("\"Hello, World!\"", result);
-}
-
-test "Repl - redefinition with evaluation" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
-    defer repl.deinit();
-
-    // First definition of x
-    const result1 = try repl.step("x = 5");
-    defer std.testing.allocator.free(result1);
-    try testing.expectEqualStrings("5", result1);
-
-    // Define y in terms of x (returns <needs context> as context-aware evaluation is not yet implemented)
-    const result2 = try repl.step("y = x + 1");
-    defer std.testing.allocator.free(result2);
-    try testing.expectEqualStrings("<needs context>", result2);
-
-    // Redefine x
-    const result3 = try repl.step("x = 6");
-    defer std.testing.allocator.free(result3);
-    try testing.expectEqualStrings("6", result3);
-
-    // Evaluate x (returns <needs context> as context-aware evaluation is not yet implemented)
-    const result4 = try repl.step("x");
-    defer std.testing.allocator.free(result4);
-    try testing.expectEqualStrings("<needs context>", result4);
-
-    // Evaluate y (returns <needs context> as context-aware evaluation is not yet implemented)
-    const result5 = try repl.step("y");
-    defer std.testing.allocator.free(result5);
-    try testing.expectEqualStrings("<needs context>", result5);
-}
-
-test "Repl - build full source with redefinitions" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
-    defer repl.deinit();
-
-    // Add definitions manually to test source building
-    try repl.past_defs.append(.{
-        .source = try std.testing.allocator.dupe(u8, "x = 5"),
-        .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "x") },
-    });
-
-    try repl.past_defs.append(.{
-        .source = try std.testing.allocator.dupe(u8, "y = x + 1"),
-        .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "y") },
-    });
-
-    try repl.past_defs.append(.{
-        .source = try std.testing.allocator.dupe(u8, "x = 6"),
-        .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "x") },
-    });
-
-    // Build full source for evaluating y
-    const full_source = try repl.buildFullSource("y");
-    defer std.testing.allocator.free(full_source);
-
-    const expected =
-        \\x = 5
-        \\y = x + 1
-        \\x = 6
-        \\y
-    ;
-    try testing.expectEqualStrings(expected, full_source);
-}
-
-test "Repl - past def ordering" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
-    defer repl.deinit();
-
-    // Manually add definitions to test ordering
-    try repl.past_defs.append(.{
-        .source = try std.testing.allocator.dupe(u8, "x = 1"),
-        .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "x") },
-    });
-
-    try repl.past_defs.append(.{
-        .source = try std.testing.allocator.dupe(u8, "x = 2"),
-        .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "x") },
-    });
-
-    try repl.past_defs.append(.{
-        .source = try std.testing.allocator.dupe(u8, "x = 3"),
-        .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "x") },
-    });
-
-    // Verify all definitions are kept in order
-    try testing.expect(repl.past_defs.items.len == 3);
-    try testing.expectEqualStrings("x = 1", repl.past_defs.items[0].source);
-    try testing.expectEqualStrings("x = 2", repl.past_defs.items[1].source);
-    try testing.expectEqualStrings("x = 3", repl.past_defs.items[2].source);
-
-    // Build source shows all definitions
-    const full_source = try repl.buildFullSource("x");
-    defer std.testing.allocator.free(full_source);
-
-    const expected =
-        \\x = 1
-        \\x = 2
-        \\x = 3
-        \\x
-    ;
-    try testing.expectEqualStrings(expected, full_source);
-}
-
-test "Repl - minimal interpreter integration" {
-    const gpa = std.testing.allocator;
-
-    var test_env = TestEnv.init(gpa);
-    defer test_env.deinit();
-
-    // Step 1: Create module environment
-    const source = "42";
-    var module_env = try ModuleEnv.init(gpa, source);
-    defer module_env.deinit();
-
-    // Step 2: Parse as expression
-    var parse_ast = try parse.parseExpr(&module_env.common, module_env.gpa);
-    defer parse_ast.deinit(gpa);
-
-    // Empty scratch space (required before canonicalization)
-    parse_ast.store.emptyScratch();
-
-    // Step 3: Create CIR
-    const cir = &module_env; // CIR is now just ModuleEnv
-    try cir.initCIRFields(gpa, "test");
-
-    // Step 4: Canonicalize
-    var czer = try Can.init(cir, &parse_ast, null);
-    defer czer.deinit();
-
-    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx) orelse {
-        return error.CanonicalizeError;
-    };
-
-    // Step 5: Type check
-    var checker = try Check.init(gpa, &module_env.types, cir, &.{}, &cir.store.regions);
-    defer checker.deinit();
-
-    _ = try checker.checkExpr(canonical_expr_idx.get_idx());
-
-    // Step 6: Create evaluation stack
-    var eval_stack = try Stack.initCapacity(gpa, 1024);
-    defer eval_stack.deinit();
-
-    // Step 7: Create layout cache
-    var layout_cache = try LayoutStore.init(&module_env, &module_env.types);
-    defer layout_cache.deinit();
-
-    // Step 8: Create interpreter
-    var interpreter = try eval.Interpreter.init(gpa, cir, &eval_stack, &layout_cache, &module_env.types);
-    defer interpreter.deinit(test_env.get_ops());
-
-    // Step 9: Evaluate
-    const result = try interpreter.eval(canonical_expr_idx.get_idx(), test_env.get_ops());
-
-    // Step 10: Verify result
-    try testing.expect(result.layout.tag == .scalar);
-    try testing.expect(result.layout.data.scalar.tag == .int);
-
-    // Read the value back
-    const value = result.asI128();
-
-    try testing.expectEqual(@as(i128, 42), value);
 }

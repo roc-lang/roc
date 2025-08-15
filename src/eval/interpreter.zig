@@ -28,6 +28,7 @@
 //! 5. **Clean up / copy**: After the function is evaluated, we need to copy the result and clean up the stack.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const types = @import("types");
 const can = @import("can");
@@ -83,6 +84,7 @@ pub const EvalError = error{
     BugUnboxedFlexVar,
     DivisionByZero,
     InvalidStackState,
+    NullStackPointer,
     NoCapturesProvided,
     CaptureBindingFailed,
     CaptureNotFound,
@@ -135,6 +137,8 @@ const WorkKind = enum {
     w_eval_record_fields,
     w_eval_tuple_elements,
     w_let_bind,
+    w_recursive_bind_init,
+    w_recursive_bind_update,
     w_block_cleanup,
     w_dot_access,
     w_crash,
@@ -481,6 +485,16 @@ pub const Interpreter = struct {
 
                     try self.bindPattern(pattern_idx, value, roc_ops); // Value stays on stack for the block's lifetime
                 },
+                .w_recursive_bind_init => {
+                    const pattern_idx: CIR.Pattern.Idx = work.extra.decl_pattern_idx;
+                    const closure_expr_idx = work.expr_idx;
+                    try self.initRecursiveBinding(pattern_idx, closure_expr_idx);
+                },
+                .w_recursive_bind_update => {
+                    const pattern_idx: CIR.Pattern.Idx = work.extra.decl_pattern_idx;
+                    const value = try self.peekStackValue(1); // Don't pop!
+                    try self.updateRecursiveBinding(pattern_idx, value, roc_ops);
+                },
                 .w_block_cleanup => {
                     const bindings_to_keep = work.extra.bindings_stack_len;
                     const values_to_keep: u32 = @intFromEnum(work.expr_idx);
@@ -672,8 +686,18 @@ pub const Interpreter = struct {
                 if (expr_layout.tag == .scalar and expr_layout.data.scalar.tag == .int) {
                     result_value.setInt(int_lit.value.toI128());
                     self.traceInfo("Pushed integer literal {d}", .{int_lit.value.toI128()});
+                } else if (expr_layout.tag == .scalar and expr_layout.data.scalar.tag == .frac and expr_layout.data.scalar.data.frac == .dec) {
+                    // Integer literal with decimal layout - convert to RocDec
+                    const int_val = int_lit.value.toI128();
+                    const dec_value = RocDec{ .num = int_val * RocDec.one_point_zero_i128 };
+
+                    const result_ptr = @as(*RocDec, @ptrCast(@alignCast(result_value.ptr.?)));
+                    result_ptr.* = dec_value;
+                    result_value.is_initialized = true;
+
+                    self.traceInfo("Pushed integer literal {d} as decimal", .{int_val});
                 } else {
-                    self.traceError("Integer literal: expected integer layout, got {}", .{expr_layout.tag});
+                    self.traceError("Integer literal: expected integer or decimal layout, got {}", .{expr_layout.tag});
                     return error.TypeMismatch;
                 }
             },
@@ -859,43 +883,42 @@ pub const Interpreter = struct {
                     else => |e| return e,
                 };
 
-                // Debug assertions to catch regressions
-                if (std.debug.runtime_safety) {
-                    // Verify we have a nominal type
+                if (DEBUG_ENABLED) {
                     const resolved = self.layout_cache.types_store.resolveVar(nominal_var);
                     switch (resolved.desc.content) {
                         .structure => |flat_type| switch (flat_type) {
                             .nominal_type => {
-                                // Good - we have a nominal type
                                 const nominal_ident = self.env.getIdent(flat_type.nominal_type.ident.ident_idx);
                                 if (std.mem.eql(u8, nominal_ident, "Bool")) {
-                                    // For Bool nominal types, verify we get boolean layout
+                                    // For Bool nominal types should have a boolean layout
                                     const nominal_layout = self.layout_cache.getLayout(nominal_layout_idx);
                                     if (!(nominal_layout.tag == .scalar and nominal_layout.data.scalar.tag == .bool)) {
-                                        std.debug.panic("REGRESSION: Bool nominal type should have boolean layout, got: {}\n", .{nominal_layout.tag});
+                                        self.traceError("REGRESSION: Bool nominal type should have boolean layout", .{});
+                                        std.debug.assert(false);
                                     }
                                 }
                             },
                             else => {
-                                std.debug.panic("REGRESSION: e_nominal should have nominal_type, got: {}\n", .{flat_type});
+                                self.traceError("REGRESSION: e_nominal should have nominal_type", .{});
+                                std.debug.assert(false);
                             },
                         },
                         else => {
-                            std.debug.panic("REGRESSION: e_nominal should have structure content, got: {}\n", .{resolved.desc.content});
+                            self.traceError("REGRESSION: e_nominal should have structure content", .{});
+                            std.debug.assert(false);
                         },
                     }
-                }
 
-                // Trace nominal type evaluation
-                const resolved = self.layout_cache.types_store.resolveVar(nominal_var);
-                const nominal_ident = switch (resolved.desc.content) {
-                    .structure => |flat_type| switch (flat_type) {
-                        .nominal_type => |nt| self.env.getIdent(nt.ident.ident_idx),
+                    // Trace nominal type evaluation
+                    const nominal_ident = switch (resolved.desc.content) {
+                        .structure => |flat_type| switch (flat_type) {
+                            .nominal_type => |nt| self.env.getIdent(nt.ident.ident_idx),
+                            else => "unknown",
+                        },
                         else => "unknown",
-                    },
-                    else => "unknown",
-                };
-                self.traceInfo("e_nominal: type={s}, layout_idx={}", .{ nominal_ident, nominal_layout_idx });
+                    };
+                    self.traceInfo("e_nominal: type={s}, layout_idx={}", .{ nominal_ident, nominal_layout_idx });
+                }
 
                 // Evaluate backing expression but preserve nominal layout context
                 try self.work_stack.append(.{
@@ -1040,18 +1063,45 @@ pub const Interpreter = struct {
                     const stmt = self.env.store.getStatement(stmt_idx);
                     switch (stmt) {
                         .s_decl => |decl| {
-                            // Schedule binding after expression is evaluated.
-                            self.schedule_work(WorkItem{
-                                .kind = .w_let_bind,
-                                .expr_idx = expr_idx, // e_block's index for tracing
-                                .extra = .{ .decl_pattern_idx = decl.pattern },
-                            });
-                            // Schedule evaluation of the expression.
-                            self.schedule_work(WorkItem{
-                                .kind = .w_eval_expr_structural,
-                                .expr_idx = decl.expr,
-                                .extra = .{ .nothing = {} },
-                            });
+                            // Check if this is a recursive closure
+                            if (self.isRecursiveClosure(decl.expr, decl.pattern)) {
+                                // For recursive closures, we need special handling:
+                                // 1. Initialize with placeholder
+                                // 2. Evaluate expression (can now find the capture)
+                                // 3. Update the binding with the actual closure
+
+                                self.schedule_work(WorkItem{
+                                    .kind = .w_recursive_bind_update,
+                                    .expr_idx = expr_idx, // e_block's index for tracing
+                                    .extra = .{ .decl_pattern_idx = decl.pattern },
+                                });
+
+                                self.schedule_work(WorkItem{
+                                    .kind = .w_eval_expr_structural,
+                                    .expr_idx = decl.expr,
+                                    .extra = .{ .nothing = {} },
+                                });
+
+                                self.schedule_work(WorkItem{
+                                    .kind = .w_recursive_bind_init,
+                                    .expr_idx = decl.expr, // Pass the closure expr for layout info
+                                    .extra = .{ .decl_pattern_idx = decl.pattern },
+                                });
+                            } else {
+                                // Regular (non-recursive) declaration
+                                // Schedule binding after expression is evaluated.
+                                self.schedule_work(WorkItem{
+                                    .kind = .w_let_bind,
+                                    .expr_idx = expr_idx, // e_block's index for tracing
+                                    .extra = .{ .decl_pattern_idx = decl.pattern },
+                                });
+                                // Schedule evaluation of the expression.
+                                self.schedule_work(WorkItem{
+                                    .kind = .w_eval_expr_structural,
+                                    .expr_idx = decl.expr,
+                                    .extra = .{ .nothing = {} },
+                                });
+                            }
                         },
                         .s_crash => |crash| {
                             // Schedule crash to be executed
@@ -1277,68 +1327,206 @@ pub const Interpreter = struct {
 
         // Perform the operation and write to our result_value
         switch (kind) {
-            // Arithmetic operations - require integer operands
+            // Arithmetic operations - support both integer and fractional operands
             .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem => {
-                if (lhs_scalar.tag != .int or rhs_scalar.tag != .int) {
-                    self.traceError("arithmetic operations require integer operands", .{});
+                // Check if both operands are integers
+                if (lhs_scalar.tag == .int and rhs_scalar.tag == .int) {
+                    const lhs_val = lhs.asI128();
+                    const rhs_val = rhs.asI128();
+
+                    const result_layout = lhs.layout;
+                    var result_value = try self.pushStackValue(result_layout);
+
+                    const result_val: i128 = result_val: switch (kind) {
+                        .w_binop_add => {
+                            self.traceInfo("Integer addition: {} + {} = {}", .{ lhs_val, rhs_val, lhs_val + rhs_val });
+                            break :result_val lhs_val + rhs_val;
+                        },
+                        .w_binop_sub => break :result_val lhs_val - rhs_val,
+                        .w_binop_mul => break :result_val lhs_val * rhs_val,
+                        .w_binop_div => {
+                            if (rhs_val == 0) return error.DivisionByZero;
+                            break :result_val @divTrunc(lhs_val, rhs_val);
+                        },
+                        .w_binop_div_trunc => {
+                            if (rhs_val == 0) return error.DivisionByZero;
+                            break :result_val @divTrunc(lhs_val, rhs_val);
+                        },
+                        .w_binop_rem => {
+                            if (rhs_val == 0) return error.DivisionByZero;
+                            break :result_val @rem(lhs_val, rhs_val);
+                        },
+                        else => unreachable,
+                    };
+
+                    result_value.setInt(result_val);
+                }
+                // Check if both operands are decimals (frac with .dec precision)
+                else if (lhs_scalar.tag == .frac and rhs_scalar.tag == .frac) {
+                    // For now, only support .dec precision decimals
+                    const lhs_frac = lhs_scalar.data.frac;
+                    const rhs_frac = rhs_scalar.data.frac;
+
+                    if (lhs_frac == .dec and rhs_frac == .dec) {
+                        // Get RocDec values from memory
+                        const lhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(lhs.ptr.?)));
+                        const rhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(rhs.ptr.?)));
+                        const lhs_dec = lhs_ptr.*;
+                        const rhs_dec = rhs_ptr.*;
+
+                        const result_layout = lhs.layout;
+                        var result_value = try self.pushStackValue(result_layout);
+
+                        const result_dec: RocDec = switch (kind) {
+                            .w_binop_add => result_dec: {
+                                self.traceInfo("Decimal addition: {} + {} = {}", .{ lhs_dec.num, rhs_dec.num, lhs_dec.num + rhs_dec.num });
+                                break :result_dec RocDec{ .num = lhs_dec.num + rhs_dec.num };
+                            },
+                            .w_binop_sub => RocDec{ .num = lhs_dec.num - rhs_dec.num },
+                            .w_binop_mul => result_dec: {
+                                // For multiplication, we need to adjust for the decimal places
+                                // Both numbers are already scaled by 10^18, so multiplying gives us 10^36
+                                // We need to divide by 10^18 to get back to 10^18 scale
+                                const product = lhs_dec.num * rhs_dec.num;
+                                break :result_dec RocDec{ .num = @divTrunc(product, RocDec.one_point_zero_i128) };
+                            },
+                            .w_binop_div => result_dec: {
+                                if (rhs_dec.num == 0) return error.DivisionByZero;
+                                // For division, we need to scale the numerator by 10^18 first
+                                const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
+                                break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
+                            },
+                            .w_binop_div_trunc => result_dec: {
+                                if (rhs_dec.num == 0) return error.DivisionByZero;
+                                const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
+                                break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
+                            },
+                            .w_binop_rem => result_dec: {
+                                if (rhs_dec.num == 0) return error.DivisionByZero;
+                                break :result_dec RocDec{ .num = @rem(lhs_dec.num, rhs_dec.num) };
+                            },
+                            else => unreachable,
+                        };
+
+                        // Store the result in memory
+                        const result_ptr = @as(*RocDec, @ptrCast(@alignCast(result_value.ptr.?)));
+                        result_ptr.* = result_dec;
+                        result_value.is_initialized = true;
+                    } else {
+                        self.traceError("arithmetic operations on fractional types only support Dec precision", .{});
+                        return error.TypeMismatch;
+                    }
+                }
+                // Handle mixed integer and decimal operations
+                else if ((lhs_scalar.tag == .int and rhs_scalar.tag == .frac and rhs_scalar.data.frac == .dec) or
+                    (lhs_scalar.tag == .frac and lhs_scalar.data.frac == .dec and rhs_scalar.tag == .int))
+                {
+
+                    // Convert integer operand to decimal and perform decimal arithmetic
+                    const lhs_dec: RocDec = if (lhs_scalar.tag == .int)
+                        RocDec{ .num = lhs.asI128() * RocDec.one_point_zero_i128 }
+                    else
+                        @as(*const RocDec, @ptrCast(@alignCast(lhs.ptr.?))).*;
+
+                    const rhs_dec: RocDec = if (rhs_scalar.tag == .int)
+                        RocDec{ .num = rhs.asI128() * RocDec.one_point_zero_i128 }
+                    else
+                        @as(*const RocDec, @ptrCast(@alignCast(rhs.ptr.?))).*;
+
+                    // Result is always decimal
+                    const result_layout = if (lhs_scalar.tag == .frac) lhs.layout else rhs.layout;
+                    var result_value = try self.pushStackValue(result_layout);
+
+                    const result_dec: RocDec = switch (kind) {
+                        .w_binop_add => RocDec{ .num = lhs_dec.num + rhs_dec.num },
+                        .w_binop_sub => RocDec{ .num = lhs_dec.num - rhs_dec.num },
+                        .w_binop_mul => result_dec: {
+                            const product = lhs_dec.num * rhs_dec.num;
+                            break :result_dec RocDec{ .num = @divTrunc(product, RocDec.one_point_zero_i128) };
+                        },
+                        .w_binop_div => result_dec: {
+                            if (rhs_dec.num == 0) return error.DivisionByZero;
+                            const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
+                            break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
+                        },
+                        .w_binop_div_trunc => result_dec: {
+                            if (rhs_dec.num == 0) return error.DivisionByZero;
+                            const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
+                            break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
+                        },
+                        .w_binop_rem => result_dec: {
+                            if (rhs_dec.num == 0) return error.DivisionByZero;
+                            break :result_dec RocDec{ .num = @rem(lhs_dec.num, rhs_dec.num) };
+                        },
+                        else => unreachable,
+                    };
+
+                    // Store the result in memory
+                    const result_ptr = @as(*RocDec, @ptrCast(@alignCast(result_value.ptr.?)));
+                    result_ptr.* = result_dec;
+                    result_value.is_initialized = true;
+                } else {
+                    self.traceError("arithmetic operations require operands of the same type (both integers or both decimals)", .{});
                     return error.TypeMismatch;
                 }
-
-                const lhs_val = lhs.asI128();
-                const rhs_val = rhs.asI128();
-
-                const result_layout = lhs.layout;
-                var result_value = try self.pushStackValue(result_layout);
-
-                const result_val: i128 = result_val: switch (kind) {
-                    .w_binop_add => {
-                        self.traceInfo("Addition operation: {} + {} = {}", .{ lhs_val, rhs_val, lhs_val + rhs_val });
-                        break :result_val lhs_val + rhs_val;
-                    },
-                    .w_binop_sub => break :result_val lhs_val - rhs_val,
-                    .w_binop_mul => break :result_val lhs_val * rhs_val,
-                    .w_binop_div => {
-                        if (rhs_val == 0) return error.DivisionByZero;
-                        break :result_val @divTrunc(lhs_val, rhs_val);
-                    },
-                    .w_binop_div_trunc => {
-                        if (rhs_val == 0) return error.DivisionByZero;
-                        break :result_val @divTrunc(lhs_val, rhs_val);
-                    },
-                    .w_binop_rem => {
-                        if (rhs_val == 0) return error.DivisionByZero;
-                        break :result_val @rem(lhs_val, rhs_val);
-                    },
-                    else => unreachable,
-                };
-
-                result_value.setInt(result_val);
             },
 
-            // Comparison operations - require integer operands
+            // Comparison operations - support both integer and decimal operands
             .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le => {
-                if (lhs_scalar.tag != .int or rhs_scalar.tag != .int) {
-                    self.traceError("comparison operations require integer operands", .{});
+                // Check if both operands are integers
+                if (lhs_scalar.tag == .int and rhs_scalar.tag == .int) {
+                    const lhs_val = lhs.asI128();
+                    const rhs_val = rhs.asI128();
+
+                    const result_layout = Layout.boolType();
+                    var result_value = try self.pushStackValue(result_layout);
+
+                    const bool_result: u8 = switch (kind) {
+                        .w_binop_eq => if (lhs_val == rhs_val) 1 else 0,
+                        .w_binop_ne => if (lhs_val != rhs_val) 1 else 0,
+                        .w_binop_gt => if (lhs_val > rhs_val) 1 else 0,
+                        .w_binop_lt => if (lhs_val < rhs_val) 1 else 0,
+                        .w_binop_ge => if (lhs_val >= rhs_val) 1 else 0,
+                        .w_binop_le => if (lhs_val <= rhs_val) 1 else 0,
+                        else => unreachable,
+                    };
+
+                    result_value.setBool(bool_result);
+                }
+                // Check if both operands are decimals
+                else if (lhs_scalar.tag == .frac and rhs_scalar.tag == .frac) {
+                    const lhs_frac = lhs_scalar.data.frac;
+                    const rhs_frac = rhs_scalar.data.frac;
+
+                    if (lhs_frac == .dec and rhs_frac == .dec) {
+                        const lhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(lhs.ptr.?)));
+                        const rhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(rhs.ptr.?)));
+                        const lhs_dec = lhs_ptr.*;
+                        const rhs_dec = rhs_ptr.*;
+
+                        const result_layout = Layout.boolType();
+                        var result_value = try self.pushStackValue(result_layout);
+
+                        const bool_result: u8 = switch (kind) {
+                            .w_binop_eq => if (lhs_dec.num == rhs_dec.num) 1 else 0,
+                            .w_binop_ne => if (lhs_dec.num != rhs_dec.num) 1 else 0,
+                            .w_binop_gt => if (lhs_dec.num > rhs_dec.num) 1 else 0,
+                            .w_binop_lt => if (lhs_dec.num < rhs_dec.num) 1 else 0,
+                            .w_binop_ge => if (lhs_dec.num >= rhs_dec.num) 1 else 0,
+                            .w_binop_le => if (lhs_dec.num <= rhs_dec.num) 1 else 0,
+                            else => unreachable,
+                        };
+
+                        result_value.setBool(bool_result);
+                        self.traceInfo("Decimal comparison: {} {s} {} = {}", .{ lhs_dec.num, @tagName(kind), rhs_dec.num, bool_result });
+                    } else {
+                        self.traceError("comparison operations on fractional types only support Dec precision", .{});
+                        return error.TypeMismatch;
+                    }
+                } else {
+                    self.traceError("comparison operations require operands of the same type (both integers or both decimals)", .{});
                     return error.TypeMismatch;
                 }
-
-                const lhs_val = lhs.asI128();
-                const rhs_val = rhs.asI128();
-
-                const result_layout = Layout.boolType();
-                var result_value = try self.pushStackValue(result_layout);
-
-                const bool_result: u8 = switch (kind) {
-                    .w_binop_eq => if (lhs_val == rhs_val) 1 else 0,
-                    .w_binop_ne => if (lhs_val != rhs_val) 1 else 0,
-                    .w_binop_gt => if (lhs_val > rhs_val) 1 else 0,
-                    .w_binop_lt => if (lhs_val < rhs_val) 1 else 0,
-                    .w_binop_ge => if (lhs_val >= rhs_val) 1 else 0,
-                    .w_binop_le => if (lhs_val <= rhs_val) 1 else 0,
-                    else => unreachable,
-                };
-
-                result_value.setBool(bool_result);
             },
 
             // Logical operations - require boolean operands
@@ -2285,6 +2473,18 @@ pub const Interpreter = struct {
                 return error.UnsupportedWorkItem;
             },
 
+            // Recursive bindings
+            .w_recursive_bind_init => {
+                const pattern_idx: CIR.Pattern.Idx = work.extra.decl_pattern_idx;
+                const closure_expr_idx = work.expr_idx;
+                try self.initRecursiveBinding(pattern_idx, closure_expr_idx);
+            },
+            .w_recursive_bind_update => {
+                const pattern_idx: CIR.Pattern.Idx = work.extra.decl_pattern_idx;
+                const value = try self.peekStackValue(1); // Don't pop!
+                try self.updateRecursiveBinding(pattern_idx, value, roc_ops);
+            },
+
             // Field access
             .w_dot_access => try self.handleDotAccess(work.extra.dot_access_field_name),
 
@@ -2797,6 +2997,147 @@ pub const Interpreter = struct {
         }
     }
 
+    /// Check if an expression is a closure that captures the given pattern (self-referential)
+    fn isRecursiveClosure(self: *Interpreter, expr_idx: CIR.Expr.Idx, pattern_idx: CIR.Pattern.Idx) bool {
+        const expr = self.env.store.getExpr(expr_idx);
+        switch (expr) {
+            .e_closure => |closure_expr| {
+                // Get the pattern's variable name
+                const pattern_name = self.getPatternVariableName(pattern_idx) orelse return false;
+
+                // Check if this closure captures the same variable
+                const captures = self.env.store.sliceCaptures(closure_expr.captures);
+                for (captures) |capture_idx| {
+                    const capture = self.env.store.getCapture(capture_idx);
+                    const capture_name = self.env.getIdentText(capture.name);
+                    if (std.mem.eql(u8, capture_name, pattern_name)) {
+                        self.traceInfo("Detected recursive closure: '{s}' captures itself", .{pattern_name});
+                        return true;
+                    }
+                }
+            },
+            else => {},
+        }
+        return false;
+    }
+
+    /// Initialize a placeholder binding for a recursive closure
+    fn initRecursiveBinding(self: *Interpreter, pattern_idx: CIR.Pattern.Idx, _: CIR.Expr.Idx) EvalError!void {
+        const pattern_name = self.getPatternVariableName(pattern_idx) orelse return error.LayoutError;
+        self.traceInfo("Initializing recursive binding placeholder for '{s}'", .{pattern_name});
+
+        // Create a simple placeholder binding that doesn't involve allocating memory
+        // We'll use a null value with the pattern_idx to mark it as a recursive placeholder
+        const binding = Binding{
+            .pattern_idx = pattern_idx,
+            .value = StackValue{
+                .layout = Layout.boolType(), // Use a minimal safe layout
+                .ptr = null,
+                .is_initialized = false,
+            },
+        };
+
+        try self.bindings_stack.append(binding);
+        self.traceInfo("Created placeholder binding for recursive function '{s}' (null placeholder)", .{pattern_name});
+    }
+
+    /// Update a recursive binding with the actual closure value
+    fn updateRecursiveBinding(self: *Interpreter, pattern_idx: CIR.Pattern.Idx, actual_value: StackValue, roc_ops: *RocOps) EvalError!void {
+        const pattern_name = self.getPatternVariableName(pattern_idx) orelse return error.LayoutError;
+        self.traceInfo("Updating recursive binding for '{s}' with actual closure", .{pattern_name});
+
+        // Find the placeholder binding and update it
+        var found = false;
+        for (self.bindings_stack.items) |*binding| {
+            if (binding.pattern_idx == pattern_idx) {
+                // Clean up the old placeholder value
+                binding.cleanup(roc_ops);
+
+                // Update with the actual value
+                binding.value = actual_value.cloneForBinding();
+                found = true;
+                self.traceInfo("Successfully updated recursive binding for '{s}'", .{pattern_name});
+                break;
+            }
+        }
+
+        if (!found) {
+            self.traceError("Could not find placeholder binding for recursive function '{s}'", .{pattern_name});
+            return error.CaptureBindingFailed;
+        }
+    }
+
+    /// Try to copy capture from current bindings stack (including placeholder bindings)
+    fn copyFromCurrentBinding(
+        self: *Interpreter,
+        captures_ptr: [*]u8,
+        capture: CIR.Expr.Capture,
+        captures_record_layout: Layout,
+    ) EvalError!bool {
+        const capture_name_text = self.env.getIdentText(capture.name);
+
+        // Search through ALL current bindings (including recently created placeholders)
+        for (self.bindings_stack.items) |binding| {
+            const binding_name = self.getPatternVariableName(binding.pattern_idx);
+            if (binding_name != null and std.mem.eql(u8, binding_name.?, capture_name_text)) {
+                // Found the binding, check if it's a placeholder or real value
+                if (binding.value.ptr != null and binding.value.is_initialized) {
+                    try self.copyCapture(captures_ptr, capture_name_text, binding.value.ptr.?, binding.value.layout, captures_record_layout);
+                    self.traceInfo("Copied capture '{s}' from current binding", .{capture_name_text});
+                    return true;
+                } else {
+                    // This is a placeholder binding for a recursive function
+                    // We need to create a forward reference that will be resolved later
+                    try self.createSelfReferenceCapture(captures_ptr, capture, captures_record_layout);
+                    self.traceInfo("Created forward reference for recursive capture '{s}'", .{capture_name_text});
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// Create a self-reference capture placeholder for recursive closures
+    fn createSelfReferenceCapture(
+        self: *Interpreter,
+        captures_ptr: [*]u8,
+        capture: CIR.Expr.Capture,
+        captures_record_layout: Layout,
+    ) EvalError!void {
+        const capture_name_text = self.env.getIdentText(capture.name);
+
+        // For recursive functions, we create a placeholder that will be updated
+        // when the recursive binding is completed
+
+        if (captures_record_layout.tag == .record) {
+            const record_data = self.layout_cache.getRecordData(captures_record_layout.data.record.idx);
+            const sorted_fields = self.layout_cache.record_fields.sliceRange(record_data.getFields());
+
+            // Find the field for this capture
+            for (0..sorted_fields.len) |field_idx| {
+                const field_info = sorted_fields.get(field_idx);
+                const field_name = self.env.getIdent(field_info.name);
+                if (std.mem.eql(u8, field_name, capture_name_text)) {
+                    const field_layout = self.layout_cache.getLayout(field_info.layout);
+                    const field_offset = self.layout_cache.getRecordFieldOffset(captures_record_layout.data.record.idx, @intCast(field_idx));
+                    const field_ptr = captures_ptr + field_offset;
+
+                    // Create a placeholder - for closure types, we'll zero-initialize
+                    // This will be patched when updateRecursiveBinding is called
+                    const field_size = self.layout_cache.layoutSize(field_layout);
+                    @memset(field_ptr[0..field_size], 0);
+
+                    self.traceInfo("Created self-reference placeholder for field '{s}' at offset {}", .{ capture_name_text, field_offset });
+                    return;
+                }
+            }
+        }
+
+        self.traceError("Could not create self-reference placeholder for capture '{s}'", .{capture_name_text});
+        return error.LayoutError;
+    }
+
     /// Copies captured values into closure memory
     fn copyCapturesToClosure(
         self: *Interpreter,
@@ -2830,9 +3171,20 @@ pub const Interpreter = struct {
                 // Get the variable name from the binding's pattern
                 const binding_name = self.getPatternVariableName(binding.pattern_idx);
                 if (binding_name != null and std.mem.eql(u8, binding_name.?, capture_name_text)) {
-                    try self.copyCapture(captures_ptr, capture_name_text, binding.value.ptr.?, binding.value.layout, captures_record_layout);
-                    copied = true;
-                    break;
+                    // Check if this is a real binding or a placeholder
+                    if (binding.value.ptr != null and binding.value.is_initialized) {
+                        try self.copyCapture(captures_ptr, capture_name_text, binding.value.ptr.?, binding.value.layout, captures_record_layout);
+                        copied = true;
+                        self.traceInfo("Copied capture '{s}' from initialized binding", .{capture_name_text});
+                        break;
+                    } else {
+                        // This is a placeholder binding for a recursive function
+                        // Create a forward reference that will be resolved later
+                        try self.createSelfReferenceCapture(captures_ptr, capture, captures_record_layout);
+                        copied = true;
+                        self.traceInfo("Created forward reference for recursive capture '{s}' (placeholder found)", .{capture_name_text});
+                        break;
+                    }
                 }
             }
 
@@ -2842,8 +3194,15 @@ pub const Interpreter = struct {
             }
 
             if (!copied) {
-                self.traceError("Could not find capture '{s}' in bindings or outer closures", .{capture_name_text});
-                return error.CaptureNotFound;
+                // For recursive closures, the capture might refer to the closure being created
+                // In this case, we'll look for it in the current bindings stack, including
+                // recently created placeholder bindings
+                copied = try self.copyFromCurrentBinding(captures_ptr, capture, captures_record_layout);
+
+                if (!copied) {
+                    self.traceError("Could not find capture '{s}' in bindings, outer closures, or current context", .{capture_name_text});
+                    return error.CaptureNotFound;
+                }
             }
         }
     }
@@ -2984,7 +3343,7 @@ pub const Interpreter = struct {
                 return error.EvaluationFailed;
             };
 
-            result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
+            try result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
         }
     }
 
@@ -3108,7 +3467,7 @@ pub const Interpreter = struct {
         const result_value = try self.callClosureWithStackArgs(expr_idx, arg_count, ops);
 
         // Copy the result
-        result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
+        try result_value.copyToPtr(self.layout_cache, ret_ptr, ops);
     }
 
     /// This function handles the incremental construction of tuples by processing one element at a time using a work queue to avoid recursion.

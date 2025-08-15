@@ -1,6 +1,7 @@
 //! Configuration for formatting warning and error reports
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 /// Color preference for reporting output
@@ -72,7 +73,14 @@ pub const ReportingConfig = struct {
         };
 
         // Check if output is TTY
-        config.is_tty = std.io.getStdOut().isTty();
+        config.is_tty = isTty: {
+            if (comptime builtin.target.os.tag == .freestanding and builtin.target.abi == .wasm32) {
+                // can't use stdio in WASM
+                break :isTty false;
+            } else {
+                break :isTty std.io.getStdOut().isTty();
+            }
+        };
 
         // Check NO_COLOR environment variable
         const no_color = std.process.getEnvVarOwned(allocator, "NO_COLOR") catch null;

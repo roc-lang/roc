@@ -13,30 +13,10 @@ type=repl
 # OUTPUT
 42
 ---
-3.14e0
+3.14
 ---
-1.5e0
+1.5
 ---
 255
 # PROBLEMS
 NIL
-# CANONICALIZE
-~~~clojure
-(e-int @1.2-1.7 (value "42"))
----
-(e-frac-f64 @1.2-1.9 (value "3.14"))
----
-(e-frac-dec @1.2-1.8 (value "1.5"))
----
-(e-int @1.2-1.7 (value "255"))
-~~~
-# TYPES
-~~~clojure
-(expr @1.2-1.7 (type "I32"))
----
-(expr @1.2-1.9 (type "F64"))
----
-(expr @1.2-1.8 (type "Dec"))
----
-(expr @1.2-1.7 (type "U8"))
-~~~
