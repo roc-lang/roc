@@ -873,7 +873,7 @@ pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type:
                                 std.debug.assert(resolved_expected_func.desc.content.structure == .fn_effectful);
                                 const expected_func = resolved_expected_func.desc.content.structure.fn_effectful;
 
-                                does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region) or does_fx;
+                                does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region, func_expr_idx) or does_fx;
 
                                 return does_fx;
                             }
@@ -887,7 +887,7 @@ pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type:
                                 std.debug.assert(resolved_expected_func.desc.content.structure == .fn_pure);
                                 const expected_func = resolved_expected_func.desc.content.structure.fn_pure;
 
-                                does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, func_expr_region) or does_fx;
+                                does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, func_expr_region, func_expr_idx) or does_fx;
                                 return does_fx;
                             }
                         },
@@ -901,7 +901,7 @@ pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type:
                                 std.debug.assert(resolved_expected_func.desc.content.structure == .fn_unbound);
                                 const expected_func = resolved_expected_func.desc.content.structure.fn_unbound;
 
-                                does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region) or does_fx;
+                                does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region, func_expr_idx) or does_fx;
                                 return does_fx;
                             }
                         },
@@ -1290,21 +1290,81 @@ fn unifyFunctionCall(
     call_args: []const CIR.Expr.Idx, // var for the fn args
     expected_func: types_mod.Func, // the expected type of the fn (must be instantiated)
     region: Region,
+    func_expr_idx: CIR.Expr.Idx, // the function expression for name extraction
 ) std.mem.Allocator.Error!bool {
+    // Extract function name if possible
+    const func_name: ?Ident.Idx = blk: {
+        const func_expr = self.cir.store.getExpr(func_expr_idx);
+        switch (func_expr) {
+            .e_lookup_local => |lookup| {
+                // Get the pattern that defines this identifier
+                const pattern = self.cir.store.getPattern(lookup.pattern_idx);
+                switch (pattern) {
+                    .assign => |assign| break :blk assign.ident,
+                    else => break :blk null,
+                }
+            },
+            else => break :blk null,
+        }
+    };
+
     // Check arguments with expected types using bidirectional type checking
     const expected_args = self.types.sliceVars(expected_func.args);
 
     // Only unify arguments if counts match - otherwise let the normal
     // unification process handle the arity mismatch error
     if (expected_args.len == call_args.len) {
-        // Apply constraint propagation for numeric literals before regular unification
-        for (expected_args, call_args) |expected_arg, arg_expr_idx| {
-            const arg_expr = self.cir.store.getExpr(arg_expr_idx);
+        // For function signatures with bound type variables, unify arguments with each other first
+        // This ensures proper error placement for cases like mk_pair("1", 2) where a, a -> Pair(a)
 
-            // Apply constraint propagation for numeric literals
-            if (arg_expr == .e_int) {
-                const literal_var = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
-                _ = try self.unify(literal_var, expected_arg);
+        // Find arguments that share the same type variable
+        for (expected_args, 0..) |expected_arg_1, i| {
+            const expected_resolved_1 = self.types.resolveVar(expected_arg_1);
+
+            // Only check type variables, skip concrete types
+            if (expected_resolved_1.desc.content != .flex_var and expected_resolved_1.desc.content != .rigid_var) {
+                continue;
+            }
+
+            // Look for other arguments with the same type variable
+            for (expected_args[i + 1 ..], i + 1..) |expected_arg_2, j| {
+                if (expected_arg_1 == expected_arg_2) {
+                    // These two arguments are bound by the same type variable - unify them first
+                    const arg_1 = @as(Var, @enumFromInt(@intFromEnum(call_args[i])));
+                    const arg_2 = @as(Var, @enumFromInt(@intFromEnum(call_args[j])));
+
+                    const unify_result = try self.unify(arg_1, arg_2);
+
+                    if (unify_result.isProblem()) {
+                        // Use the new error detail for bound type variable incompatibility
+                        self.setProblemTypeMismatchDetail(unify_result.problem, .{
+                            .incompatible_fn_args_bound_var = .{
+                                .fn_name = func_name,
+                                .first_arg_var = arg_1,
+                                .second_arg_var = arg_2,
+                                .first_arg_index = @intCast(i),
+                                .second_arg_index = @intCast(j),
+                                .num_args = @intCast(call_args.len),
+                            },
+                        });
+                        return false; // Early return on error
+                    }
+                }
+            }
+        }
+
+        // Apply constraint propagation for numeric literals with concrete types
+        for (expected_args, call_args) |expected_arg, arg_expr_idx| {
+            const expected_resolved = self.types.resolveVar(expected_arg);
+
+            // Only apply constraint propagation for concrete types, not type variables
+            if (expected_resolved.desc.content != .flex_var and expected_resolved.desc.content != .rigid_var) {
+                const arg_expr = self.cir.store.getExpr(arg_expr_idx);
+
+                if (arg_expr == .e_int) {
+                    const literal_var = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
+                    _ = try self.unify(literal_var, expected_arg);
+                }
             }
         }
 
@@ -1357,8 +1417,8 @@ fn unifyFunctionCall(
 /// **Why this ordering matters:**
 /// ```
 /// Pair(a) := [Pair(a, a)]
-/// mkPairInvalid : a, b -> Pair(a)
-/// mkPairInvalid = |x, y| Pair.Pair(x, y)
+/// mk_pair_invalid : a, b -> Pair(a)
+/// mk_pair_invalid = |x, y| Pair.Pair(x, y)
 ///
 /// // Step 1: Constrain parameters from annotation first
 /// x := a[rigid], y := b[rigid]

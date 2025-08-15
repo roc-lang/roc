@@ -6,6 +6,7 @@ pub const DocumentElement = @import("document.zig").DocumentElement;
 pub const Annotation = @import("document.zig").Annotation;
 pub const SourceCodeDisplayRegion = @import("document.zig").SourceCodeDisplayRegion;
 pub const UnderlineRegion = @import("document.zig").UnderlineRegion;
+pub const SourceRegion = @import("document.zig").SourceRegion;
 pub const ColorPalette = @import("style.zig").ColorPalette;
 pub const ColorUtils = @import("style.zig").ColorUtils;
 pub const ColorPreference = @import("config.zig").ColorPreference;

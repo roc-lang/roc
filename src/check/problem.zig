@@ -20,6 +20,7 @@ const Report = reporting.Report;
 const Document = reporting.Document;
 const UnderlineRegion = reporting.UnderlineRegion;
 const SourceCodeDisplayRegion = reporting.SourceCodeDisplayRegion;
+const SourceRegion = reporting.SourceRegion;
 
 const TypesStore = types_mod.Store;
 const Ident = base.Ident;
@@ -96,6 +97,7 @@ pub const TypeMismatchDetail = union(enum) {
     invalid_nominal_tag,
     cross_module_import: CrossModuleImport,
     incompatible_fn_call_arg: IncompatibleFnCallArg,
+    incompatible_fn_args_bound_var: IncompatibleFnArgsBoundVar,
 };
 
 /// Problem data for when list elements have incompatible types
@@ -117,6 +119,16 @@ pub const IncompatibleFnCallArg = struct {
     arg_var: Var,
     incompatible_arg_index: u32, // 0-based index of the incompatible arg
     num_args: u32, // Total number of fn args
+};
+
+/// Problem data when function arguments have incompatible types but are bound by the same type variable
+pub const IncompatibleFnArgsBoundVar = struct {
+    fn_name: ?Ident.Idx,
+    first_arg_var: Var,
+    second_arg_var: Var,
+    first_arg_index: u32, // 0-based index of the first arg
+    second_arg_index: u32, // 0-based index of the second arg
+    num_args: u32, // number of args to the function call
 };
 
 /// Problem data for when if branches have incompatible types
@@ -261,6 +273,9 @@ pub const ReportBuilder = struct {
                         },
                         .incompatible_fn_call_arg => |data| {
                             return self.buildIncompatibleFnCallArg(&snapshot_writer, mismatch.types, data);
+                        },
+                        .incompatible_fn_args_bound_var => |data| {
+                            return self.buildIncompatibleFnArgsBoundVar(&snapshot_writer, mismatch.types, data);
                         },
                     }
                 } else {
@@ -1211,6 +1226,126 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(expected_type, .type_variable);
+
+        return report;
+    }
+
+    fn buildIncompatibleFnArgsBoundVar(
+        self: *Self,
+        snapshot_writer: *snapshot.SnapshotWriter,
+        types: TypePair,
+        data: IncompatibleFnArgsBoundVar,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+
+        self.buf.clearRetainingCapacity();
+        try appendOrdinal(&self.buf, data.first_arg_index + 1);
+        const first_arg_index = try report.addOwnedString(self.buf.items);
+
+        self.buf.clearRetainingCapacity();
+        try appendOrdinal(&self.buf, data.second_arg_index + 1);
+        const second_arg_index = try report.addOwnedString(self.buf.items);
+
+        self.buf.clearRetainingCapacity();
+        try snapshot_writer.write(types.actual_snapshot);
+        const first_type = try report.addOwnedString(self.buf.items);
+
+        self.buf.clearRetainingCapacity();
+        try snapshot_writer.write(types.expected_snapshot);
+        const second_type = try report.addOwnedString(self.buf.items);
+
+        try report.document.addText("The ");
+        try report.document.addText(first_arg_index);
+        try report.document.addText(" and ");
+        try report.document.addText(second_arg_index);
+        try report.document.addText(" arguments to ");
+        if (data.fn_name) |fn_name_ident| {
+            try report.document.addText("`");
+            try report.document.addText(self.can_ir.getIdent(fn_name_ident));
+            try report.document.addText("`");
+        } else {
+            try report.document.addText("this function");
+        }
+        try report.document.addText(" must have compatible types, but they are incompatible in this call:");
+        try report.document.addLineBreak();
+
+        // Highlight both arguments in a single code block with underlines
+        const first_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.first_arg_var)));
+        const first_region_info = self.module_env.calcRegionInfo(first_region.*);
+
+        const second_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.second_arg_var)));
+        const second_region_info = self.module_env.calcRegionInfo(second_region.*);
+
+        // Determine the overall display region (should include both arguments)
+        const start_line = @min(first_region_info.start_line_idx, second_region_info.start_line_idx);
+        const end_line = @max(first_region_info.end_line_idx, second_region_info.end_line_idx);
+        const start_col = if (start_line == first_region_info.start_line_idx) first_region_info.start_col_idx else 0;
+        const end_col = if (end_line == second_region_info.end_line_idx) second_region_info.end_col_idx else 0;
+
+        // Get the line text that covers both arguments
+        const line_text = base.RegionInfo.getLineText(self.source, self.module_env.getLineStarts(), start_line, end_line);
+
+        const display_region = SourceCodeDisplayRegion{
+            .line_text = self.gpa.dupe(u8, line_text) catch return report,
+            .start_line = start_line + 1, // Convert to 1-based
+            .start_column = start_col + 1,
+            .end_line = end_line + 1,
+            .end_column = end_col + 1,
+            .region_annotation = .error_highlight,
+            .filename = self.filename,
+        };
+
+        // Create underline regions for both arguments (convert to 1-based coordinates)
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = first_region_info.start_line_idx + 1,
+                .start_column = first_region_info.start_col_idx + 1,
+                .end_line = first_region_info.end_line_idx + 1,
+                .end_column = first_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+            .{
+                .start_line = second_region_info.start_line_idx + 1,
+                .start_column = second_region_info.start_col_idx + 1,
+                .end_line = second_region_info.end_line_idx + 1,
+                .end_column = second_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        // Show both arguments with underlines in one code block
+        try report.document.addSourceCodeWithUnderlines(
+            display_region,
+            &underline_regions,
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("The ");
+        try report.document.addText(first_arg_index);
+        try report.document.addReflowingText(" argument is of type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(first_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("But the ");
+        try report.document.addText(second_arg_index);
+        try report.document.addReflowingText(" argument is of type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(second_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        if (data.fn_name) |fn_name_ident| {
+            self.buf.clearRetainingCapacity();
+            const fn_name = try report.addOwnedString(self.can_ir.getIdent(fn_name_ident));
+            try report.document.addAnnotated(fn_name, .inline_code);
+        } else {
+            try report.document.addReflowingText("this function");
+        }
+        try report.document.addReflowingText(" requires these arguments to have compatible types because they are bound by the same type variable.");
 
         return report;
     }
