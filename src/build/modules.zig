@@ -30,6 +30,7 @@ pub const ModuleType = enum {
     ipc,
     repl,
     fmt,
+    watch,
 
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
@@ -51,6 +52,7 @@ pub const ModuleType = enum {
             .ipc => &.{},
             .repl => &.{ .base, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval },
             .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy },
+            .watch => &.{},
         };
     }
 };
@@ -74,6 +76,7 @@ pub const RocModules = struct {
     ipc: *Module,
     repl: *Module,
     fmt: *Module,
+    watch: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options) RocModules {
         const self = RocModules{
@@ -100,6 +103,7 @@ pub const RocModules = struct {
             .ipc = b.addModule("ipc", .{ .root_source_file = b.path("src/ipc/mod.zig") }),
             .repl = b.addModule("repl", .{ .root_source_file = b.path("src/repl/mod.zig") }),
             .fmt = b.addModule("fmt", .{ .root_source_file = b.path("src/fmt/mod.zig") }),
+            .watch = b.addModule("watch", .{ .root_source_file = b.path("src/watch/watch.zig") }),
         };
 
         // Setup module dependencies using our generic helper
@@ -127,6 +131,7 @@ pub const RocModules = struct {
             .ipc,
             .repl,
             .fmt,
+            .watch,
         };
 
         // Setup dependencies for each module
@@ -159,6 +164,7 @@ pub const RocModules = struct {
         step.root_module.addImport("ipc", self.ipc);
         step.root_module.addImport("repl", self.repl);
         step.root_module.addImport("fmt", self.fmt);
+        step.root_module.addImport("watch", self.watch);
     }
 
     pub fn addAllToTest(self: RocModules, step: *Step.Compile) void {
@@ -185,6 +191,7 @@ pub const RocModules = struct {
             .ipc => self.ipc,
             .repl => self.repl,
             .fmt => self.fmt,
+            .watch => self.watch,
         };
     }
 
@@ -197,7 +204,7 @@ pub const RocModules = struct {
         }
     }
 
-    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode) [15]ModuleTest {
+    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode) [16]ModuleTest {
         const test_configs = [_]ModuleType{
             .collections,
             .base,
@@ -214,6 +221,7 @@ pub const RocModules = struct {
             .ipc,
             .repl,
             .fmt,
+            .watch,
         };
 
         var tests: [test_configs.len]ModuleTest = undefined;
