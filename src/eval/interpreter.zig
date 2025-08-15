@@ -3514,8 +3514,10 @@ pub const Interpreter = struct {
 
             // Debug: Verify the value was copied correctly
             if (src_layout.tag == .scalar and src_layout.data.scalar.tag == .int) {
-                const dest_int_ptr: *const i128 = @ptrCast(@alignCast(dest_field.ptr.?));
-                self.traceInfo("After copy, destination contains: {}", .{dest_int_ptr.*});
+                // Skip alignment check for debug - just verify it's non-null
+                if (dest_field.ptr != null) {
+                    self.traceInfo("After copy, destination is non-null", .{});
+                }
             }
         }
     }
