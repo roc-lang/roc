@@ -39,9 +39,7 @@ const TestContext = struct {
     }
 };
 
-// ===== MODULE HEADER TESTS =====
 // Modules can only import other modules, not packages
-
 test "file encounter callback - module imports (non-package-qualified)" {
     const allocator = testing.allocator;
     var test_context = TestContext.init(allocator);
@@ -83,9 +81,7 @@ test "file encounter callback - module imports (non-package-qualified)" {
     try testing.expectEqualStrings("Bar", test_context.encountered_files.items[1]);
 }
 
-// ===== PACKAGE HEADER TESTS =====
 // Packages can import modules AND declare package dependencies
-
 test "file encounter callback - package with dependencies and imports" {
     const allocator = testing.allocator;
     var test_context = TestContext.init(allocator);
@@ -130,9 +126,7 @@ test "file encounter callback - package with dependencies and imports" {
     try testing.expectEqualStrings("Helper", test_context.encountered_files.items[3]);
 }
 
-// ===== APP HEADER TESTS =====
-// Apps can import modules AND declare package dependencies
-
+// app modules can import modules AND declare package dependencies
 test "file encounter callback - app with dependencies and imports" {
     const allocator = testing.allocator;
     var test_context = TestContext.init(allocator);
@@ -177,24 +171,7 @@ test "file encounter callback - app with dependencies and imports" {
     try testing.expectEqualStrings("Config", test_context.encountered_files.items[3]);
 }
 
-// ===== PLATFORM HEADER TESTS =====
-// Platforms can import modules AND declare package dependencies
-
-test "file encounter callback - platform header dependencies" {
-    // Platform headers have complex syntax requirements that make them difficult
-    // to test in isolation. The functionality is implemented and tested indirectly
-    // through the package header tests which share the same code path.
-    // A full platform header requires:
-    // - requires clause with type signatures
-    // - exposes/imports/provides clauses
-    // - proper type definitions
-    // This makes the test more about platform parsing than file encounter callbacks.
-    return error.SkipZigTest;
-}
-
-// ===== PACKAGE-QUALIFIED IMPORTS TESTS =====
 // Verify that package-qualified imports are NOT reported for any module type
-
 test "file encounter callback - package-qualified imports not reported (module)" {
     const allocator = testing.allocator;
     var test_context = TestContext.init(allocator);
@@ -407,8 +384,6 @@ test "file encounter callback - memory leak check" {
         const file2 = try allocator.dupe(u8, "test2.roc");
         try test_context.encountered_files.append(file2);
     }
-
-    // If there's a memory leak, the test allocator will catch it
 }
 
 test "file encounter callback - hosted header (no packages)" {
