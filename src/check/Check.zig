@@ -1406,8 +1406,6 @@ fn checkLambdaWithAnno(
     }
 
     // STEP 2: Check the lambda body with expected return type
-    // This is the key improvement - we pass the expected return type down
-    // so that numeric literals and nested expressions get properly constrained
     const is_effectful = if (expected_return_type) |expected_ret|
         try self.checkExprWithExpected(lambda.body, expected_ret)
     else
