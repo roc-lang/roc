@@ -2473,10 +2473,16 @@ pub const Interpreter = struct {
                 return error.UnsupportedWorkItem;
             },
 
-            // Recursive bindings - not yet implemented
-            .w_recursive_bind_init, .w_recursive_bind_update => {
-                std.log.warn("Recursive binding work item {s} not yet implemented", .{@tagName(work.kind)});
-                return error.UnsupportedWorkItem;
+            // Recursive bindings
+            .w_recursive_bind_init => {
+                const pattern_idx: CIR.Pattern.Idx = work.extra.decl_pattern_idx;
+                const closure_expr_idx = work.expr_idx;
+                try self.initRecursiveBinding(pattern_idx, closure_expr_idx);
+            },
+            .w_recursive_bind_update => {
+                const pattern_idx: CIR.Pattern.Idx = work.extra.decl_pattern_idx;
+                const value = try self.peekStackValue(1); // Don't pop!
+                try self.updateRecursiveBinding(pattern_idx, value, roc_ops);
             },
 
             // Field access
