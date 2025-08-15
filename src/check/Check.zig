@@ -1386,12 +1386,28 @@ fn checkLambdaWithAnno(
         }
     }
 
-    // STEP 2: NOW check the body (with constrained parameters)
+    // STEP 2: Check the body - but first set up return type constraints if needed
+    const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
+
+    // For better constraint propagation, especially for numeric literals in lambda bodies,
+    // we want to establish the return type constraint before checking the body.
+    // However, to avoid breaking error reporting in other cases, we only do this
+    // when the expected return type is a concrete type (not a type variable)
+    var early_unify = false;
+    if (mb_expected_func) |func| {
+        const ret_resolved = self.types.resolveVar(func.ret);
+        if (ret_resolved.desc.content == .structure) {
+            // The return type is concrete, unify early for better constraint propagation
+            _ = try self.unify(return_var, func.ret);
+            early_unify = true;
+        }
+    }
+
+    // STEP 3: Check the body
     const is_effectful = try self.checkExpr(lambda.body);
 
-    // STEP 3: Build the function type
+    // STEP 4: Build the function type
     const fn_var = ModuleEnv.varFrom(expr_idx);
-    const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
 
     if (is_effectful) {
         _ = try self.types.setVarContent(fn_var, try self.types.mkFuncEffectful(arg_vars, return_var));
@@ -1399,12 +1415,14 @@ fn checkLambdaWithAnno(
         _ = try self.types.setVarContent(fn_var, try self.types.mkFuncUnbound(arg_vars, return_var));
     }
 
-    // STEP 4: Validate the function body against the annotation return type
+    // STEP 5: Validate the function body against the annotation return type (if not done already)
     if (mb_expected_func) |func| {
-        _ = try self.unify(return_var, func.ret);
+        if (!early_unify) {
+            _ = try self.unify(return_var, func.ret);
+        }
     }
 
-    // STEP 5: Validate then entire function against the annotation
+    // STEP 6: Validate the entire function against the annotation
     if (mb_expected_var) |expected_var| {
         _ = try self.unify(fn_var, expected_var);
     }

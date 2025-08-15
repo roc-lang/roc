@@ -7,35 +7,53 @@ type=file
 ~~~roc
 app [main] { pf: platform "platform/main.roc" }
 
+helper : I64 -> I64
+helper = |n| n * 2
+
 main : I64, I64 -> I64
-main = |_, _| (|n| n * 2)
+main = |_, _| helper 5
 ~~~
 # EXPECTED
-NIL
+PARSE ERROR - lambda_ret_constraint_bug.md:7:22:7:23
+TYPE MISMATCH - lambda_ret_constraint_bug.md:6:8:6:23
 # PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**lambda_ret_constraint_bug.md:7:22:7:23:**
+```roc
+main = |_, _| helper 5
+```
+                     ^
+
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**lambda_ret_constraint_bug.md:3:20:3:23:**
+**lambda_ret_constraint_bug.md:6:8:6:23:**
 ```roc
 main : I64, I64 -> I64
 ```
-                   ^^^
+       ^^^^^^^^^^^^^^^
 
 It is of type:
-    _I64_
+    _I64, I64 -> I64_
 
 But you are trying to use it as:
-    _Num(_size) -> Num(_size2)_
+    _I64, I64 -> I64 -> I64_
 
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),LowerIdent(1:14-1:16),OpColon(1:16-1:17),KwPlatform(1:18-1:26),StringStart(1:27-1:28),StringPart(1:28-1:45),StringEnd(1:45-1:46),CloseCurly(1:47-1:48),
-LowerIdent(3:1-3:5),OpColon(3:6-3:7),UpperIdent(3:8-3:11),Comma(3:11-3:12),UpperIdent(3:13-3:16),OpArrow(3:17-3:19),UpperIdent(3:20-3:23),
-LowerIdent(4:1-4:5),OpAssign(4:6-4:7),OpBar(4:8-4:9),Underscore(4:9-4:10),Comma(4:10-4:11),Underscore(4:12-4:13),OpBar(4:13-4:14),OpenRound(4:15-4:16),OpBar(4:16-4:17),LowerIdent(4:17-4:18),OpBar(4:18-4:19),LowerIdent(4:20-4:21),OpStar(4:22-4:23),Int(4:24-4:25),CloseRound(4:25-4:26),EndOfFile(4:26-4:26),
+LowerIdent(3:1-3:7),OpColon(3:8-3:9),UpperIdent(3:10-3:13),OpArrow(3:14-3:16),UpperIdent(3:17-3:20),
+LowerIdent(4:1-4:7),OpAssign(4:8-4:9),OpBar(4:10-4:11),LowerIdent(4:11-4:12),OpBar(4:12-4:13),LowerIdent(4:14-4:15),OpStar(4:16-4:17),Int(4:18-4:19),
+LowerIdent(6:1-6:5),OpColon(6:6-6:7),UpperIdent(6:8-6:11),Comma(6:11-6:12),UpperIdent(6:13-6:16),OpArrow(6:17-6:19),UpperIdent(6:20-6:23),
+LowerIdent(7:1-7:5),OpAssign(7:6-7:7),OpBar(7:8-7:9),Underscore(7:9-7:10),Comma(7:10-7:11),Underscore(7:12-7:13),OpBar(7:13-7:14),LowerIdent(7:15-7:21),Int(7:22-7:23),EndOfFile(7:23-7:23),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-4.26
+(file @1.1-7.23
 	(app @1.1-1.48
 		(provides @1.5-1.11
 			(exposed-lower-ident @1.6-1.10
@@ -48,57 +66,85 @@ LowerIdent(4:1-4:5),OpAssign(4:6-4:7),OpBar(4:8-4:9),Underscore(4:9-4:10),Comma(
 				(e-string @1.27-1.46
 					(e-string-part @1.28-1.45 (raw "platform/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.23 (name "main")
-			(ty-fn @3.8-3.23
-				(ty @3.8-3.11 (name "I64"))
-				(ty @3.13-3.16 (name "I64"))
-				(ty @3.20-3.23 (name "I64"))))
-		(s-decl @4.1-4.26
-			(p-ident @4.1-4.5 (raw "main"))
-			(e-lambda @4.8-4.26
+		(s-type-anno @3.1-3.20 (name "helper")
+			(ty-fn @3.10-3.20
+				(ty @3.10-3.13 (name "I64"))
+				(ty @3.17-3.20 (name "I64"))))
+		(s-decl @4.1-4.19
+			(p-ident @4.1-4.7 (raw "helper"))
+			(e-lambda @4.10-4.19
+				(args
+					(p-ident @4.11-4.12 (raw "n")))
+				(e-binop @4.14-4.19 (op "*")
+					(e-ident @4.14-4.15 (raw "n"))
+					(e-int @4.18-4.19 (raw "2")))))
+		(s-type-anno @6.1-6.23 (name "main")
+			(ty-fn @6.8-6.23
+				(ty @6.8-6.11 (name "I64"))
+				(ty @6.13-6.16 (name "I64"))
+				(ty @6.20-6.23 (name "I64"))))
+		(s-decl @7.1-7.21
+			(p-ident @7.1-7.5 (raw "main"))
+			(e-lambda @7.8-7.21
 				(args
 					(p-underscore)
 					(p-underscore))
-				(e-tuple @4.15-4.26
-					(e-lambda @4.16-4.25
-						(args
-							(p-ident @4.17-4.18 (raw "n")))
-						(e-binop @4.20-4.25 (op "*")
-							(e-ident @4.20-4.21 (raw "n"))
-							(e-int @4.24-4.25 (raw "2")))))))))
+				(e-ident @7.15-7.21 (raw "helper"))))
+		(s-malformed @7.22-7.23 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app [main] { pf: platform "platform/main.roc" }
+
+helper : I64 -> I64
+helper = |n| n * 2
+
+main : I64, I64 -> I64
+main = |_, _| helper
+
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.5 (ident "main"))
-		(e-lambda @4.8-4.26
+		(p-assign @4.1-4.7 (ident "helper"))
+		(e-lambda @4.10-4.19
 			(args
-				(p-underscore @4.9-4.10)
-				(p-underscore @4.12-4.13))
-			(e-lambda @4.16-4.25
-				(args
-					(p-assign @4.17-4.18 (ident "n")))
-				(e-binop @4.20-4.25 (op "mul")
-					(e-lookup-local @4.20-4.21
-						(p-assign @4.17-4.18 (ident "n")))
-					(e-int @4.24-4.25 (value "2")))))
-		(annotation @4.1-4.5
+				(p-assign @4.11-4.12 (ident "n")))
+			(e-binop @4.14-4.19 (op "mul")
+				(e-lookup-local @4.14-4.15
+					(p-assign @4.11-4.12 (ident "n")))
+				(e-int @4.18-4.19 (value "2"))))
+		(annotation @4.1-4.7
 			(declared-type
-				(ty-fn @3.8-3.23 (effectful false)
-					(ty @3.8-3.11 (name "I64"))
-					(ty @3.13-3.16 (name "I64"))
-					(ty @3.20-3.23 (name "I64")))))))
+				(ty-fn @3.10-3.20 (effectful false)
+					(ty @3.10-3.13 (name "I64"))
+					(ty @3.17-3.20 (name "I64"))))))
+	(d-let
+		(p-assign @7.1-7.5 (ident "main"))
+		(e-closure @7.8-7.21
+			(captures
+				(capture @4.1-4.7 (ident "helper")))
+			(e-lambda @7.8-7.21
+				(args
+					(p-underscore @7.9-7.10)
+					(p-underscore @7.12-7.13))
+				(e-lookup-local @7.15-7.21
+					(p-assign @4.1-4.7 (ident "helper")))))
+		(annotation @7.1-7.5
+			(declared-type
+				(ty-fn @6.8-6.23 (effectful false)
+					(ty @6.8-6.11 (name "I64"))
+					(ty @6.13-6.16 (name "I64"))
+					(ty @6.20-6.23 (name "I64")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.5 (type "Error, Error -> Error")))
+		(patt @4.1-4.7 (type "I64 -> I64"))
+		(patt @7.1-7.5 (type "Error")))
 	(expressions
-		(expr @4.8-4.26 (type "Error, Error -> Error"))))
+		(expr @4.10-4.19 (type "I64 -> I64"))
+		(expr @7.8-7.21 (type "Error"))))
 ~~~

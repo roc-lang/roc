@@ -80,7 +80,6 @@ is_named_color = |str|{
 # EXPECTED
 UNUSED VARIABLE - Color.md:30:5:30:25
 UNDEFINED VARIABLE - Color.md:68:14:68:27
-INVALID NOMINAL TAG - Color.md:23:5:23:33
 TYPE MISMATCH - Color.md:26:7:26:46
 # PROBLEMS
 **UNUSED VARIABLE**
@@ -105,24 +104,6 @@ Is there an `import` or `exposing` missing up-top?
 ```
              ^^^^^^^^^^^^^
 
-
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
-**Color.md:23:5:23:33:**
-```roc
-    Color.RGBA(r, g, b, rounded)
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The tag is:
-    _RGBA(U8, U8, U8, Num(_size))_
-
-But it should be one of:
-    _[Hex(Str), Named(Str), RGB(U8, U8, U8), RGBA(U8, U8, U8, Dec)]_
-
-**Hint:** The nominal type has a tag with the same name, but different args:
-
-    _RGBA(U8, U8, U8, Dec)_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -198,8 +179,7 @@ UpperIdent(65:9-65:12),NoSpaceOpenRound(65:12-65:13),UpperIdent(65:13-65:25),NoS
 LowerIdent(67:1-67:15),OpAssign(67:16-67:17),OpBar(67:18-67:19),LowerIdent(67:19-67:22),OpBar(67:22-67:23),OpenCurly(67:23-67:24),
 LowerIdent(68:5-68:11),OpAssign(68:12-68:13),UpperIdent(68:14-68:17),NoSpaceDotLowerIdent(68:17-68:27),NoSpaceOpenRound(68:27-68:28),OpenSquare(68:28-68:29),StringStart(68:29-68:30),StringPart(68:30-68:39),StringEnd(68:39-68:40),Comma(68:40-68:41),StringStart(68:42-68:43),StringPart(68:43-68:55),StringEnd(68:55-68:56),Comma(68:56-68:57),StringStart(68:58-68:59),StringPart(68:59-68:63),StringEnd(68:63-68:64),CloseSquare(68:64-68:65),CloseRound(68:65-68:66),
 LowerIdent(70:5-70:11),NoSpaceDotLowerIdent(70:11-70:20),NoSpaceOpenRound(70:20-70:21),LowerIdent(70:21-70:24),CloseRound(70:24-70:25),
-CloseCurly(71:1-71:2),
-EndOfFile(72:1-72:1),
+CloseCurly(71:1-71:2),EndOfFile(71:2-71:2),
 ~~~
 # PARSE
 ~~~clojure
@@ -647,7 +627,6 @@ is_named_color = |str| {
 
 	colors.contains(str)
 }
-
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -1110,7 +1089,7 @@ is_named_color = |str| {
 		(patt @21.1-21.5 (type "U8, U8, U8, U8 -> Error"))
 		(patt @27.1-27.4 (type "Error"))
 		(patt @49.1-49.7 (type "Error -> Str"))
-		(patt @61.1-61.6 (type "Str -> Result(Error, [UnknownColor(Str)])"))
+		(patt @61.1-61.6 (type "Str -> Error"))
 		(patt @67.1-67.15 (type "_arg -> _ret")))
 	(type_decls
 		(nominal @10.1-15.2 (type "Error")
@@ -1120,6 +1099,6 @@ is_named_color = |str| {
 		(expr @21.8-24.2 (type "U8, U8, U8, U8 -> Error"))
 		(expr @27.7-46.2 (type "Error"))
 		(expr @49.10-54.2 (type "Error -> Str"))
-		(expr @61.9-65.50 (type "Str -> Result(Error, [UnknownColor(Str)])"))
+		(expr @61.9-65.50 (type "Str -> Error"))
 		(expr @67.18-71.2 (type "_arg -> _ret"))))
 ~~~
