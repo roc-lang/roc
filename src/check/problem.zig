@@ -96,6 +96,7 @@ pub const TypeMismatchDetail = union(enum) {
     invalid_nominal_tag,
     cross_module_import: CrossModuleImport,
     incompatible_fn_call_arg: IncompatibleFnCallArg,
+    annotation_mismatch: AnnotationMismatch,
 };
 
 /// Problem data for when list elements have incompatible types
@@ -117,6 +118,11 @@ pub const IncompatibleFnCallArg = struct {
     arg_var: Var,
     incompatible_arg_index: u32, // 0-based index of the incompatible arg
     num_args: u32, // Total number of fn args
+};
+
+/// Problem data for when an expression doesn't match its type annotation
+pub const AnnotationMismatch = struct {
+    // This can be expanded later if we need more context
 };
 
 /// Problem data for when if branches have incompatible types
@@ -261,6 +267,9 @@ pub const ReportBuilder = struct {
                         },
                         .incompatible_fn_call_arg => |data| {
                             return self.buildIncompatibleFnCallArg(&snapshot_writer, mismatch.types, data);
+                        },
+                        .annotation_mismatch => |data| {
+                            return self.buildAnnotationMismatchReport(&snapshot_writer, mismatch.types, data);
                         },
                     }
                 } else {
@@ -1211,6 +1220,55 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(expected_type, .type_variable);
+
+        return report;
+    }
+
+    /// Build a report for annotation mismatch with improved messaging
+    fn buildAnnotationMismatchReport(
+        self: *Self,
+        snapshot_writer: *snapshot.SnapshotWriter,
+        types: TypePair,
+        _: AnnotationMismatch,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+
+        self.buf.clearRetainingCapacity();
+        try snapshot_writer.write(types.actual_snapshot);
+        const owned_actual = try report.addOwnedString(self.buf.items[0..]);
+
+        self.buf.clearRetainingCapacity();
+        try snapshot_writer.write(types.expected_snapshot);
+        const owned_expected = try report.addOwnedString(self.buf.items[0..]);
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("This expression is used in an unexpected way:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("It is of type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_actual, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("But the type annotation says it should have the type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_expected, .type_variable);
 
         return report;
     }

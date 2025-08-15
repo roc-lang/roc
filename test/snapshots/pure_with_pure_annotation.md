@@ -18,22 +18,9 @@ double = |x| add(x, x)
 main! = add(1, 2)
 ~~~
 # EXPECTED
-TYPE MISMATCH - pure_with_pure_annotation.md:11:13:11:14
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-The first argument to this function is not what I expect:
-**pure_with_pure_annotation.md:11:13:11:14:**
-```roc
-main! = add(1, 2)
-```
-            ^
-
-This argument is of type:
-    _Num(_size)_
-
-But the function needs the first argumument to be:
-    _I32_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),
@@ -159,9 +146,9 @@ NO CHANGE
 	(defs
 		(patt @5.1-5.4 (type "I32, I32 -> I32"))
 		(patt @9.1-9.7 (type "I32 -> I32"))
-		(patt @11.1-11.6 (type "Error")))
+		(patt @11.1-11.6 (type "I32")))
 	(expressions
 		(expr @5.7-5.30 (type "I32, I32 -> I32"))
 		(expr @9.10-9.23 (type "I32 -> I32"))
-		(expr @11.9-11.18 (type "Error"))))
+		(expr @11.9-11.18 (type "I32"))))
 ~~~

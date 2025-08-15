@@ -929,7 +929,7 @@ main! : List(String) -> Result({}, _)
 It is of type:
     _List(Error) -> Result({  }, _d)_
 
-But you are trying to use it as:
+But the type annotation says it should have the type:
     _List(Error) -> [Stdoline!(Str)]_others_
 
 # TOKENS

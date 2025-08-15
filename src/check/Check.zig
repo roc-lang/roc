@@ -406,7 +406,8 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
             _ = try self.checkExpr(def.expr);
 
             // Unify the expression with its annotation
-            _ = try self.unify(expr_var, anno_var);
+            const result = try self.unify(expr_var, anno_var);
+            self.setDetailIfTypeMismatch(result, .{ .annotation_mismatch = .{} });
         }
     } else {
         // Check the expr
@@ -840,12 +841,8 @@ pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type:
             const func_expr_idx = all_exprs[0];
             does_fx = try self.checkExpr(func_expr_idx) or does_fx; // func_expr could be effectful, e.g. `(mk_fn!())(arg)`
 
-            // Then, check all the arguments
+            // Arguments will be checked during unifyFunctionCall when we know their expected types
             const call_args = all_exprs[1..];
-            for (call_args) |arg_expr_idx| {
-                // Each arg could also be effectful, e.g. `fn(mk_arg!(), mk_arg!())`
-                does_fx = try self.checkExpr(arg_expr_idx) or does_fx;
-            }
 
             // Don't try to unify with the function if the function is a runtime error.
             const func_expr = self.cir.store.getExpr(func_expr_idx);
@@ -873,7 +870,7 @@ pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type:
                                 std.debug.assert(resolved_expected_func.desc.content.structure == .fn_effectful);
                                 const expected_func = resolved_expected_func.desc.content.structure.fn_effectful;
 
-                                try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region);
+                                does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region) or does_fx;
 
                                 return does_fx;
                             }
@@ -887,7 +884,7 @@ pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type:
                                 std.debug.assert(resolved_expected_func.desc.content.structure == .fn_pure);
                                 const expected_func = resolved_expected_func.desc.content.structure.fn_pure;
 
-                                try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, func_expr_region);
+                                does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, func_expr_region) or does_fx;
                                 return does_fx;
                             }
                         },
@@ -901,7 +898,7 @@ pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type:
                                 std.debug.assert(resolved_expected_func.desc.content.structure == .fn_unbound);
                                 const expected_func = resolved_expected_func.desc.content.structure.fn_unbound;
 
-                                try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region);
+                                does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region) or does_fx;
                                 return does_fx;
                             }
                         },
@@ -1290,16 +1287,22 @@ fn unifyFunctionCall(
     call_args: []const CIR.Expr.Idx, // var for the fn args
     expected_func: types_mod.Func, // the expected type of the fn (must be instantiated)
     region: Region,
-) std.mem.Allocator.Error!void {
-    // Unify instantiated argument types with actual arguments
+) std.mem.Allocator.Error!bool {
+    // Check arguments with expected types using bidirectional type checking
     const expected_args = self.types.sliceVars(expected_func.args);
-    const actual_arg_vars: []Var = @constCast(@ptrCast(@alignCast(call_args)));
+    var does_fx = false;
 
     // Only unify arguments if counts match - otherwise let the normal
     // unification process handle the arity mismatch error
-    if (expected_args.len == actual_arg_vars.len) {
+    if (expected_args.len == call_args.len) {
         var arg_index: u32 = 0;
-        for (expected_args, actual_arg_vars) |expected_arg, actual_arg| {
+        for (expected_args, call_args) |expected_arg, arg_expr_idx| {
+            // Check the argument with the expected type for constraint propagation
+            does_fx = try self.checkExprWithExpected(arg_expr_idx, expected_arg) or does_fx;
+            
+            // Get the argument variable after checking
+            const actual_arg = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
+            
             // Instantiate polymorphic arguments before unification
             var arg_to_unify = actual_arg;
             if (self.types.needsInstantiation(actual_arg)) {
@@ -1312,7 +1315,7 @@ fn unifyFunctionCall(
                     .fn_name = null, // Get function name for better error message
                     .arg_var = actual_arg,
                     .incompatible_arg_index = arg_index,
-                    .num_args = @intCast(actual_arg_vars.len),
+                    .num_args = @intCast(call_args.len),
                 },
             });
             arg_index += 1;
@@ -1320,12 +1323,20 @@ fn unifyFunctionCall(
         // The call's type is the instantiated return type
         _ = try self.unify(call_var, expected_func.ret);
     } else {
+        // Arity mismatch - still need to check arguments but without expected types
+        for (call_args) |arg_expr_idx| {
+            does_fx = try self.checkExpr(arg_expr_idx) or does_fx;
+        }
+        
         // Fall back to normal unification to get proper error message
         // Use the original func_var to avoid issues with instantiated variables in error reporting
+        const actual_arg_vars: []Var = @constCast(@ptrCast(@alignCast(call_args)));
         const func_content = try self.types.mkFuncUnbound(actual_arg_vars, call_var);
         const expected_func_var = try self.freshFromContent(func_content, region);
         _ = try self.unify(call_func_var, expected_func_var);
     }
+    
+    return does_fx;
 }
 
 /// Performs bidirectional type checking for lambda expressions with optional type annotations.
@@ -1391,7 +1402,8 @@ fn checkLambdaWithAnno(
 
                     // Unify against the annotation
                     const pattern_var = ModuleEnv.varFrom(pattern_idx);
-                    _ = try self.unify(pattern_var, expected_arg);
+                    const result = try self.unify(pattern_var, expected_arg);
+                    self.setDetailIfTypeMismatch(result, .{ .annotation_mismatch = .{} });
                 }
             }
         }
@@ -1415,12 +1427,14 @@ fn checkLambdaWithAnno(
 
     // STEP 4: Validate the function body against the annotation return type
     if (mb_expected_func) |func| {
-        _ = try self.unify(return_var, func.ret);
+        const result = try self.unify(return_var, func.ret);
+        self.setDetailIfTypeMismatch(result, .{ .annotation_mismatch = .{} });
     }
 
     // STEP 5: Validate the entire function against the annotation
     if (mb_expected_var) |expected_var| {
-        _ = try self.unify(fn_var, expected_var);
+        const result = try self.unify(fn_var, expected_var);
+        self.setDetailIfTypeMismatch(result, .{ .annotation_mismatch = .{} });
     }
 
     return is_effectful;

@@ -285,11 +285,11 @@ addThreeTwice = |n| applyTwice(|x| x + 3, n)
 	(defs
 		(patt @5.1-5.10 (type "Error -> Error -> Error"))
 		(patt @9.1-9.11 (type "Error -> Error"))
-		(patt @13.1-13.11 (type "_arg -> _ret, _arg2 -> _ret2"))
+		(patt @13.1-13.11 (type "_arg -> ret, _arg2 -> ret2"))
 		(patt @17.1-17.14 (type "Error -> Error")))
 	(expressions
 		(expr @5.13-5.26 (type "Error -> Error -> Error"))
 		(expr @9.14-9.26 (type "Error -> Error"))
-		(expr @13.14-13.28 (type "_arg -> _ret, _arg2 -> _ret2"))
+		(expr @13.14-13.28 (type "_arg -> ret, _arg2 -> ret2"))
 		(expr @17.17-17.45 (type "Error -> Error"))))
 ~~~

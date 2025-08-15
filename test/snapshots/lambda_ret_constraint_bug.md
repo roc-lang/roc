@@ -14,22 +14,9 @@ main : I64, I64 -> I64
 main = |_, _| helper(5)
 ~~~
 # EXPECTED
-TYPE MISMATCH - lambda_ret_constraint_bug.md:7:22:7:23
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-The first argument to this function is not what I expect:
-**lambda_ret_constraint_bug.md:7:22:7:23:**
-```roc
-main = |_, _| helper(5)
-```
-                     ^
-
-This argument is of type:
-    _Num(_size)_
-
-But the function needs the first argumument to be:
-    _I64_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),LowerIdent(1:14-1:16),OpColon(1:16-1:17),KwPlatform(1:18-1:26),StringStart(1:27-1:28),StringPart(1:28-1:45),StringEnd(1:45-1:46),CloseCurly(1:47-1:48),
@@ -125,9 +112,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.7 (type "Error -> Error"))
-		(patt @7.1-7.5 (type "Error, Error -> Error")))
+		(patt @4.1-4.7 (type "I64 -> I64"))
+		(patt @7.1-7.5 (type "I64, I64 -> I64")))
 	(expressions
-		(expr @4.10-4.19 (type "Error -> Error"))
-		(expr @7.8-7.24 (type "Error, Error -> Error"))))
+		(expr @4.10-4.19 (type "I64 -> I64"))
+		(expr @7.8-7.24 (type "I64, I64 -> I64"))))
 ~~~

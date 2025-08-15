@@ -35,24 +35,24 @@ mkPairInferred = |x, y| Pair.Pair(x, y)
 failWithImplicit = mkPairInferred("str", 2)
 ~~~
 # EXPECTED
-TYPE MISMATCH - annotations.md:18:33:18:34
+TYPE MISMATCH - annotations.md:18:21:18:35
 INVALID NOMINAL TAG - annotations.md:21:22:21:41
 INVALID NOMINAL TAG - annotations.md:24:24:24:39
-TYPE MISMATCH - annotations.md:28:42:28:43
+TYPE MISMATCH - annotations.md:28:20:28:44
 # PROBLEMS
 **TYPE MISMATCH**
-The second argument to this function is not what I expect:
-**annotations.md:18:33:18:34:**
+This expression is used in an unexpected way:
+**annotations.md:18:21:18:35:**
 ```roc
 failPairDiffTypes = mkPair("1", 2)
 ```
-                                ^
+                    ^^^^^^^^^^^^^^
 
-This argument is of type:
-    _Num(_size)_
-
-But the function needs the second argumument to be:
+It is of type:
     _Str_
+
+But you are trying to use it as:
+    _Num(_size)_
 
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
@@ -83,18 +83,18 @@ But it should be:
     _Pair(a, a)_
 
 **TYPE MISMATCH**
-The second argument to this function is not what I expect:
-**annotations.md:28:42:28:43:**
+This expression is used in an unexpected way:
+**annotations.md:28:20:28:44:**
 ```roc
 failWithImplicit = mkPairInferred("str", 2)
 ```
-                                         ^
+                   ^^^^^^^^^^^^^^^^^^^^^^^^
 
-This argument is of type:
-    _Num(_size)_
-
-But the function needs the second argumument to be:
+It is of type:
     _Str_
+
+But you are trying to use it as:
+    _Num(_size)_
 
 # TOKENS
 ~~~zig
