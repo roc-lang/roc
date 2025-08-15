@@ -26,7 +26,7 @@ string_function = |x| x + 42
 ```
                       ^
 
-The type annotation says it should have the type:
+It is of type:
     _Str_
 
 But you are trying to use it as:

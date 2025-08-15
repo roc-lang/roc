@@ -23,7 +23,7 @@ main! = |_| mapList([1,2,3,4,5])
 ```
             ^^^^^^^
 
-The type annotation says it should have the type:
+It is of type:
     _List(Num(_size)) -> _ret_
 
 But you are trying to use it as:

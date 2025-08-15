@@ -26,7 +26,7 @@ main = swap(1, 2)
 ```
        ^^^^
 
-The type annotation says it should have the type:
+It is of type:
     _Num(_size), Num(_size2) -> _ret_
 
 But you are trying to use it as:

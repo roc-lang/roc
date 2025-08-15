@@ -56,7 +56,7 @@ This expression is used in an unexpected way:
 ```
          ^^^^^^^^
 
-The type annotation says it should have the type:
+It is of type:
     _Num(_size), Num(_size2), Num(_size3) -> Num(_size4), Num(_size5) -> Num(_size6) -> _ret_
 
 But you are trying to use it as:

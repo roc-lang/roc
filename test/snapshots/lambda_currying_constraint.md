@@ -86,7 +86,7 @@ makeAdder = |x| |y| x + y
 ```
                     ^
 
-The type annotation says it should have the type:
+It is of type:
     _a_
 
 But you are trying to use it as:

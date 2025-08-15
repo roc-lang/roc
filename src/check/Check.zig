@@ -155,6 +155,23 @@ pub fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result
     );
 }
 
+pub fn unifyWithAnnotation(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    return try unifier.unifyWithContext(
+        self.cir,
+        self.types,
+        &self.problems,
+        &self.snapshots,
+        &self.unify_scratch,
+        &self.occurs_scratch,
+        a,
+        b,
+        true, // from_annotation = true
+    );
+}
+
 // instantiate //
 
 const InstantiateRegionBehavior = union(enum) {
@@ -406,7 +423,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
             _ = try self.checkExpr(def.expr);
 
             // Unify the expression with its annotation
-            _ = try self.unify(expr_var, anno_var);
+            _ = try self.unifyWithAnnotation(expr_var, anno_var);
         }
     } else {
         // Check the expr
@@ -1469,7 +1486,7 @@ fn checkLambdaWithAnno(
 
                     // Unify against the annotation
                     const pattern_var = ModuleEnv.varFrom(pattern_idx);
-                    _ = try self.unify(pattern_var, expected_arg);
+                    _ = try self.unifyWithAnnotation(pattern_var, expected_arg);
                 }
             }
         }
@@ -1493,12 +1510,12 @@ fn checkLambdaWithAnno(
 
     // STEP 4: Validate the function body against the annotation return type
     if (mb_expected_func) |func| {
-        _ = try self.unify(return_var, func.ret);
+        _ = try self.unifyWithAnnotation(return_var, func.ret);
     }
 
     // STEP 5: Validate the entire function against the annotation
     if (mb_expected_var) |expected_var| {
-        _ = try self.unify(fn_var, expected_var);
+        _ = try self.unifyWithAnnotation(fn_var, expected_var);
     }
 
     return is_effectful;

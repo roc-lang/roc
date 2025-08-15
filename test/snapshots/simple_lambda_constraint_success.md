@@ -26,7 +26,7 @@ addTwoF64 = |x| x + 2.0
 ```
                 ^
 
-The type annotation says it should have the type:
+It is of type:
     _F64_
 
 But you are trying to use it as:

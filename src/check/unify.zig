@@ -114,13 +114,8 @@ pub const Result = union(enum) {
     }
 };
 
-/// Unify two type variables
-///
-/// This function
-/// * Resolves type variables & compresses paths
-/// * Compares variable contents for equality
-/// * Merges unified variables so 1 is "root" and the other is "redirect"
-pub fn unify(
+/// Unify two type variables with context about whether this is from an annotation
+pub fn unifyWithContext(
     module_env: *ModuleEnv,
     types: *types_mod.Store,
     problems: *problem_mod.Store,
@@ -129,6 +124,7 @@ pub fn unify(
     occurs_scratch: *occurs.Scratch,
     a: Var,
     b: Var,
+    from_annotation: bool,
 ) std.mem.Allocator.Error!Result {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -153,6 +149,7 @@ pub fn unify(
                             .expected_snapshot = expected_snapshot,
                             .actual_var = b,
                             .actual_snapshot = actual_snapshot,
+                            .from_annotation = from_annotation,
                         },
                         .detail = null,
                     } };
@@ -285,6 +282,36 @@ pub fn unify(
     };
 
     return .ok;
+}
+
+/// Unify two type variables
+///
+/// This function
+/// * Resolves type variables & compresses paths
+/// * Compares variable contents for equality
+/// * Merges unified variables so 1 is "root" and the other is "redirect"
+pub fn unify(
+    module_env: *ModuleEnv,
+    types: *types_mod.Store,
+    problems: *problem_mod.Store,
+    snapshots: *snapshot_mod.Store,
+    unify_scratch: *Scratch,
+    occurs_scratch: *occurs.Scratch,
+    a: Var,
+    b: Var,
+) std.mem.Allocator.Error!Result {
+    // Default to not from annotation for backward compatibility
+    return unifyWithContext(
+        module_env,
+        types,
+        problems,
+        snapshots,
+        unify_scratch,
+        occurs_scratch,
+        a,
+        b,
+        false, // from_annotation = false by default
+    );
 }
 
 /// A temporary unification context used to unify two type variables within a `Store`.

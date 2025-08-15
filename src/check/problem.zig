@@ -84,6 +84,8 @@ pub const TypePair = struct {
     expected_snapshot: SnapshotContentIdx,
     actual_var: Var,
     actual_snapshot: SnapshotContentIdx,
+    /// True if the expected type comes from a type annotation
+    from_annotation: bool = false,
 };
 
 /// More specific details about a particular type mismatch.
@@ -335,7 +337,11 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
 
-        try report.document.addText("The type annotation says it should have the type:");
+        if (types.from_annotation) {
+            try report.document.addText("The type annotation says it should have the type:");
+        } else {
+            try report.document.addText("It is of type:");
+        }
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_actual, .type_variable);

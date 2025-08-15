@@ -912,7 +912,7 @@ This expression is used in an unexpected way:
 	)
 ```
 
-The type annotation says it should have the type:
+It is of type:
     __arg -> _ret_
 
 But you are trying to use it as:
