@@ -2473,6 +2473,12 @@ pub const Interpreter = struct {
                 return error.UnsupportedWorkItem;
             },
 
+            // Recursive bindings - not yet implemented
+            .w_recursive_bind_init, .w_recursive_bind_update => {
+                std.log.warn("Recursive binding work item {s} not yet implemented", .{@tagName(work.kind)});
+                return error.UnsupportedWorkItem;
+            },
+
             // Field access
             .w_dot_access => try self.handleDotAccess(work.extra.dot_access_field_name),
 
