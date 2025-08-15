@@ -1345,7 +1345,7 @@ pub const ReportBuilder = struct {
         } else {
             try report.document.addReflowingText("this function");
         }
-        try report.document.addReflowingText(" requires these arguments to have compatible types because they are bound by the same type variable.");
+        try report.document.addReflowingText(" needs these arguments to have compatible types.");
 
         return report;
     }

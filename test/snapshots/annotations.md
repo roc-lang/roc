@@ -54,7 +54,7 @@ The first argument is of type:
 But the second argument is of type:
     _Str_
 
-`mk_pair` requires these arguments to have compatible types because they are bound by the same type variable.
+`mk_pair` needs these arguments to have compatible types.
 
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
@@ -98,7 +98,7 @@ The first argument is of type:
 But the second argument is of type:
     _Str_
 
-`mk_pair_inferred` requires these arguments to have compatible types because they are bound by the same type variable.
+`mk_pair_inferred` needs these arguments to have compatible types.
 
 # TOKENS
 ~~~zig
