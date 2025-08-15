@@ -448,7 +448,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     defer interpreter.deinit(test_env_instance.get_ops());
 
     if (should_trace == .trace) {
-        // interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
     const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());

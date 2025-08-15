@@ -50,7 +50,7 @@ pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_tr
     test_env_instance.setInterpreter(&interpreter);
 
     if (should_trace == .trace) {
-        // interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
     const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
@@ -87,7 +87,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     test_env_instance.setInterpreter(&interpreter);
 
     if (should_trace == .trace) {
-        // interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
     const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
@@ -124,7 +124,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     defer interpreter.deinit(roc_ops_ptr);
 
     if (should_trace == .trace) {
-        // interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
     const result = interpreter.eval(resources.expr_idx, roc_ops_ptr) catch |err| {
@@ -176,7 +176,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     test_env_instance.setInterpreter(&interpreter);
 
     if (should_trace == .trace) {
-        // interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
     const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
@@ -241,7 +241,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     test_env_instance.setInterpreter(&interpreter);
 
     if (should_trace == .trace) {
-        // interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
     const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
@@ -296,7 +296,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     test_env_instance.setInterpreter(&interpreter);
 
     if (should_trace == .trace) {
-        // interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace(std.io.getStdErr().writer().any());
     }
 
     const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
