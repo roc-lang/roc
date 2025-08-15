@@ -116,16 +116,13 @@ NO CHANGE
 					(ty @5.21-5.24 (name "Str"))))))
 	(d-let
 		(p-assign @8.1-8.6 (ident "main!"))
-		(e-closure @8.9-8.25
-			(captures
-				(capture @6.1-6.8 (ident "getUser")))
-			(e-lambda @8.9-8.25
-				(args
-					(p-underscore @8.10-8.11))
-				(e-call @8.13-8.25
-					(e-lookup-local @8.13-8.20
-						(p-assign @6.1-6.8 (ident "getUser")))
-					(e-int @8.21-8.24 (value "100"))))))
+		(e-lambda @8.9-8.25
+			(args
+				(p-underscore @8.10-8.11))
+			(e-call @8.13-8.25
+				(e-lookup-local @8.13-8.20
+					(p-assign @6.1-6.8 (ident "getUser")))
+				(e-int @8.21-8.24 (value "100")))))
 	(s-alias-decl @3.1-3.13
 		(ty-header @3.1-3.7 (name "UserId"))
 		(ty @3.10-3.13 (name "U64"))))

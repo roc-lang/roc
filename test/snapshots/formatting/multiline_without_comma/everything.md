@@ -687,10 +687,9 @@ h = |x, y| {
 		(p-assign @60.1-60.2 (ident "h"))
 		(e-closure @60.5-110.2
 			(captures
-				(capture @60.1-60.2 (ident "h"))
 				(capture @89.5-89.6 (ident "a"))
-				(capture @99.5-99.6 (ident "a"))
 				(capture @94.4-94.5 (ident "a"))
+				(capture @99.5-99.6 (ident "a"))
 				(capture @105.5-105.6 (ident "a")))
 			(e-lambda @60.5-110.2
 				(args

@@ -245,45 +245,40 @@ main! = |_| {
 					(ty @12.17-12.20 (name "U64"))))))
 	(d-let
 		(p-assign @15.1-15.6 (ident "main!"))
-		(e-closure @15.9-27.2
-			(captures
-				(capture @9.1-9.8 (ident "combine"))
-				(capture @13.1-13.7 (ident "addOne"))
-				(capture @5.1-5.9 (ident "identity")))
-			(e-lambda @15.9-27.2
-				(args
-					(p-underscore @15.10-15.11))
-				(e-block @15.13-27.2
-					(s-let @17.5-17.23
-						(p-assign @17.5-17.8 (ident "num"))
-						(e-call @17.11-17.23
-							(e-lookup-local @17.11-17.19
-								(p-assign @5.1-5.9 (ident "identity")))
-							(e-int @17.20-17.22 (value "42"))))
-					(s-let @18.5-18.29
-						(p-assign @18.5-18.9 (ident "text"))
-						(e-call @18.12-18.29
-							(e-lookup-local @18.12-18.20
-								(p-assign @5.1-5.9 (ident "identity")))
-							(e-string @18.21-18.28
-								(e-literal @18.22-18.27 (string "hello")))))
-					(s-let @21.5-21.30
-						(p-assign @21.5-21.9 (ident "pair"))
-						(e-call @21.12-21.30
-							(e-lookup-local @21.12-21.19
-								(p-assign @9.1-9.8 (ident "combine")))
-							(e-lookup-local @21.20-21.23
-								(p-assign @17.5-17.8 (ident "num")))
-							(e-lookup-local @21.25-21.29
-								(p-assign @18.5-18.9 (ident "text")))))
-					(s-let @24.5-24.23
-						(p-assign @24.5-24.11 (ident "result"))
-						(e-call @24.14-24.23
-							(e-lookup-local @24.14-24.20
-								(p-assign @13.1-13.7 (ident "addOne")))
-							(e-int @24.21-24.22 (value "5"))))
-					(e-lookup-local @26.5-26.11
-						(p-assign @24.5-24.11 (ident "result"))))))))
+		(e-lambda @15.9-27.2
+			(args
+				(p-underscore @15.10-15.11))
+			(e-block @15.13-27.2
+				(s-let @17.5-17.23
+					(p-assign @17.5-17.8 (ident "num"))
+					(e-call @17.11-17.23
+						(e-lookup-local @17.11-17.19
+							(p-assign @5.1-5.9 (ident "identity")))
+						(e-int @17.20-17.22 (value "42"))))
+				(s-let @18.5-18.29
+					(p-assign @18.5-18.9 (ident "text"))
+					(e-call @18.12-18.29
+						(e-lookup-local @18.12-18.20
+							(p-assign @5.1-5.9 (ident "identity")))
+						(e-string @18.21-18.28
+							(e-literal @18.22-18.27 (string "hello")))))
+				(s-let @21.5-21.30
+					(p-assign @21.5-21.9 (ident "pair"))
+					(e-call @21.12-21.30
+						(e-lookup-local @21.12-21.19
+							(p-assign @9.1-9.8 (ident "combine")))
+						(e-lookup-local @21.20-21.23
+							(p-assign @17.5-17.8 (ident "num")))
+						(e-lookup-local @21.25-21.29
+							(p-assign @18.5-18.9 (ident "text")))))
+				(s-let @24.5-24.23
+					(p-assign @24.5-24.11 (ident "result"))
+					(e-call @24.14-24.23
+						(e-lookup-local @24.14-24.20
+							(p-assign @13.1-13.7 (ident "addOne")))
+						(e-int @24.21-24.22 (value "5"))))
+				(e-lookup-local @26.5-26.11
+					(p-assign @24.5-24.11 (ident "result")))))))
 ~~~
 # TYPES
 ~~~clojure

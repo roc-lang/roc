@@ -229,19 +229,15 @@ main = |_| {
 			(e-dec-small @24.24-24.27 (numerator "25") (denominator-power-of-ten "1") (value "2.5"))))
 	(d-let
 		(p-assign @26.1-26.5 (ident "main"))
-		(e-closure @26.8-29.2
-			(captures
-				(capture @12.1-12.8 (ident "int_add"))
-				(capture @13.1-13.13 (ident "int_multiply")))
-			(e-lambda @26.8-29.2
-				(args
-					(p-underscore @26.9-26.10))
-				(e-block @26.12-29.2
-					(e-binop @28.5-28.27 (op "add")
-						(e-lookup-local @28.5-28.12
-							(p-assign @12.1-12.8 (ident "int_add")))
-						(e-lookup-local @28.15-28.27
-							(p-assign @13.1-13.13 (ident "int_multiply")))))))))
+		(e-lambda @26.8-29.2
+			(args
+				(p-underscore @26.9-26.10))
+			(e-block @26.12-29.2
+				(e-binop @28.5-28.27 (op "add")
+					(e-lookup-local @28.5-28.12
+						(p-assign @12.1-12.8 (ident "int_add")))
+					(e-lookup-local @28.15-28.27
+						(p-assign @13.1-13.13 (ident "int_multiply"))))))))
 ~~~
 # TYPES
 ~~~clojure

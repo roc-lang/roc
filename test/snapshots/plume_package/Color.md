@@ -880,7 +880,6 @@ is_named_color = |str| {
 				(capture @50.18-50.19 (ident "g"))
 				(capture @52.17-52.22 (ident "inner"))
 				(capture @50.21-50.22 (ident "b"))
-				(capture @49.1-49.7 (ident "to_str"))
 				(capture @51.19-51.20 (ident "g"))
 				(capture @50.15-50.16 (ident "r"))
 				(capture @51.16-51.17 (ident "r"))

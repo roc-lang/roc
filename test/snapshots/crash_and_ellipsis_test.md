@@ -252,34 +252,29 @@ main! = |_| {
 					(ty @14.26-14.29 (name "U64"))))))
 	(d-let
 		(p-assign @19.1-19.6 (ident "main!"))
-		(e-closure @19.9-24.2
-			(captures
-				(capture @9.1-9.10 (ident "testCrash"))
-				(capture @15.1-15.16 (ident "testCrashSimple"))
-				(capture @5.1-5.13 (ident "testEllipsis")))
-			(e-lambda @19.9-24.2
-				(args
-					(p-underscore @19.10-19.11))
-				(e-block @19.13-24.2
-					(s-let @20.5-20.31
-						(p-assign @20.5-20.12 (ident "result1"))
-						(e-call @20.15-20.31
-							(e-lookup-local @20.15-20.27
-								(p-assign @5.1-5.13 (ident "testEllipsis")))
-							(e-int @20.28-20.30 (value "42"))))
-					(s-let @21.5-21.28
-						(p-assign @21.5-21.12 (ident "result2"))
-						(e-call @21.15-21.28
-							(e-lookup-local @21.15-21.24
-								(p-assign @9.1-9.10 (ident "testCrash")))
-							(e-int @21.25-21.27 (value "42"))))
-					(s-let @22.5-22.34
-						(p-assign @22.5-22.12 (ident "result3"))
-						(e-call @22.15-22.34
-							(e-lookup-local @22.15-22.30
-								(p-assign @15.1-15.16 (ident "testCrashSimple")))
-							(e-int @22.31-22.33 (value "42"))))
-					(e-empty_list @23.5-23.7))))))
+		(e-lambda @19.9-24.2
+			(args
+				(p-underscore @19.10-19.11))
+			(e-block @19.13-24.2
+				(s-let @20.5-20.31
+					(p-assign @20.5-20.12 (ident "result1"))
+					(e-call @20.15-20.31
+						(e-lookup-local @20.15-20.27
+							(p-assign @5.1-5.13 (ident "testEllipsis")))
+						(e-int @20.28-20.30 (value "42"))))
+				(s-let @21.5-21.28
+					(p-assign @21.5-21.12 (ident "result2"))
+					(e-call @21.15-21.28
+						(e-lookup-local @21.15-21.24
+							(p-assign @9.1-9.10 (ident "testCrash")))
+						(e-int @21.25-21.27 (value "42"))))
+				(s-let @22.5-22.34
+					(p-assign @22.5-22.12 (ident "result3"))
+					(e-call @22.15-22.34
+						(e-lookup-local @22.15-22.30
+							(p-assign @15.1-15.16 (ident "testCrashSimple")))
+						(e-int @22.31-22.33 (value "42"))))
+				(e-empty_list @23.5-23.7)))))
 ~~~
 # TYPES
 ~~~clojure

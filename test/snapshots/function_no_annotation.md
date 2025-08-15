@@ -124,22 +124,18 @@ NO CHANGE
 					(p-assign @9.18-9.19 (ident "n"))))))
 	(d-let
 		(p-assign @12.1-12.9 (ident "process!"))
-		(e-closure @12.12-12.45
-			(captures
-				(capture @9.1-9.14 (ident "print_number!"))
-				(capture @6.1-6.9 (ident "multiply")))
-			(e-lambda @12.12-12.45
-				(args
-					(p-assign @12.13-12.14 (ident "x")))
-				(e-call @12.16-12.45
-					(e-lookup-local @12.16-12.29
-						(p-assign @9.1-9.14 (ident "print_number!")))
-					(e-call @12.30-12.44
-						(e-lookup-local @12.30-12.38
-							(p-assign @6.1-6.9 (ident "multiply")))
-						(e-lookup-local @12.39-12.40
-							(p-assign @12.13-12.14 (ident "x")))
-						(e-int @12.42-12.43 (value "2")))))))
+		(e-lambda @12.12-12.45
+			(args
+				(p-assign @12.13-12.14 (ident "x")))
+			(e-call @12.16-12.45
+				(e-lookup-local @12.16-12.29
+					(p-assign @9.1-9.14 (ident "print_number!")))
+				(e-call @12.30-12.44
+					(e-lookup-local @12.30-12.38
+						(p-assign @6.1-6.9 (ident "multiply")))
+					(e-lookup-local @12.39-12.40
+						(p-assign @12.13-12.14 (ident "x")))
+					(e-int @12.42-12.43 (value "2"))))))
 	(d-let
 		(p-assign @14.1-14.6 (ident "main!"))
 		(e-call @14.9-14.21
