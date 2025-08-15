@@ -165,63 +165,12 @@ pub fn freshVarFromContent(self: *Self, content: types_mod.Content) std.mem.Allo
     });
 }
 
-/// Update a variable's rank to the current rank if it's at top_level.
-/// This is needed because variables are created at top_level during canonicalization,
-/// but should get the rank of the scope where they're first used.
-fn updateVarRankIfNeeded(self: *Self, var_: Var) void {
-    const resolved = self.types.resolveVar(var_);
-    if (resolved.desc.rank == types_mod.Rank.top_level) {
-        // Update to current rank
-        self.types.setDescRank(resolved.desc_idx, self.current_rank);
-
-        // Recursively update nested types
-        self.updateContentRank(resolved.desc.content) catch {};
-    }
-}
-
-/// Recursively update ranks of nested type variables
-fn updateContentRank(self: *Self, content: types_mod.Content) std.mem.Allocator.Error!void {
-    switch (content) {
-        .structure => |flat_type| {
-            try self.updateFlatTypeRank(flat_type);
-        },
-        else => {},
-    }
-}
-
-/// Update ranks in flat type structures
-fn updateFlatTypeRank(self: *Self, flat_type: types_mod.FlatType) std.mem.Allocator.Error!void {
-    switch (flat_type) {
-        .fn_pure, .fn_effectful, .fn_unbound => |func| {
-            const args = self.types.sliceVars(func.args);
-            for (args) |arg_var| {
-                self.updateVarRankIfNeeded(arg_var);
-            }
-            self.updateVarRankIfNeeded(func.ret);
-        },
-        else => {},
-    }
-}
-
 /// Generalize a type variable by converting unbound type variables at the current rank to rank 0.
 /// This is the key operation for let-polymorphism - it makes a type polymorphic.
 pub fn generalize(self: *Self, var_: Var) std.mem.Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
 
-    // if (builtin.mode == .Debug) {
-    //     std.debug.print("  Generalizing var {} with rank {} (current_rank={})\n", .{
-    //         @intFromEnum(var_),
-    //         resolved.desc.rank,
-    //         self.current_rank,
-    //     });
-    // }
-
     try self.generalizeContent(resolved.desc_idx, resolved.desc.content);
-
-    // if (builtin.mode == .Debug) {
-    //     const after = self.types.resolveVar(var_);
-    //     std.debug.print("  After generalization: rank={}\n", .{after.desc.rank});
-    // }
 }
 
 /// Generalize the content of a type, recursively generalizing nested types.
@@ -229,19 +178,10 @@ fn generalizeContent(self: *Self, desc_idx: types_mod.DescStoreIdx, content: typ
     switch (content) {
         .flex_var => {
             // Check if this flex_var should be generalized
-            // We generalize variables with rank >= current rank
+            // We generalize variables that were created at the current rank
+            // (i.e., in the let-binding we just checked)
             const desc = self.types.getDesc(desc_idx);
-            const rank_value = switch (desc.rank) {
-                .generalized => 0,
-                .top_level => 1,
-                else => |n| @intFromEnum(n),
-            };
-            const current_rank_value = switch (self.current_rank) {
-                .generalized => 0,
-                .top_level => 1,
-                else => |n| @intFromEnum(n),
-            };
-            if (rank_value >= current_rank_value) {
+            if (desc.rank == self.current_rank) {
                 // Convert to generalized rank
                 self.types.setDescRank(desc_idx, types_mod.Rank.generalized);
             }
@@ -855,6 +795,13 @@ pub fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // Update the pattern's type variable rank if needed
+    const pattern_var = ModuleEnv.varFrom(pattern_idx);
+    const resolved = self.types.resolveVar(pattern_var);
+    if (resolved.desc.rank == types_mod.Rank.top_level) {
+        self.types.setDescRank(resolved.desc_idx, self.current_rank);
+    }
+
     const pattern = self.cir.store.getPattern(pattern_idx);
     const pattern_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx));
     switch (pattern) {
@@ -925,6 +872,15 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // CRITICAL: Update the expression's type variable rank if needed
+    // Variables from canonicalization start at top_level rank.
+    // When we first check them, they should get the current rank.
+    const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+    const resolved = self.types.resolveVar(expr_var);
+    if (resolved.desc.rank == types_mod.Rank.top_level) {
+        self.types.setDescRank(resolved.desc_idx, self.current_rank);
+    }
+
     const expr = self.cir.store.getExpr(expr_idx);
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
     var does_fx = false; // Does this expression potentially perform any side effects?
@@ -970,8 +926,6 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             }
         },
         .e_lookup_external => |e| {
-            const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-
             const module_idx = @intFromEnum(e.module_idx);
             if (module_idx < self.other_modules.len) {
                 const other_module_cir = self.other_modules[module_idx];
@@ -1184,7 +1138,6 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             // 3. For each field, unify the field type var with the field value type var
             // 4. Unification propagates concrete types through the type system
 
-            const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
             const record_var_resolved = self.types.resolveVar(expr_var);
             const record_var_content = record_var_resolved.desc.content;
 
@@ -1262,54 +1215,50 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             does_fx = try self.checkUnaryNotExpr(expr_idx, expr_region, unary);
         },
         .e_block => |block| {
-            // Enter a new scope when processing a block with declarations
-            // This increases the rank for let-polymorphism
-            const has_declarations = blk: {
-                const statements = self.cir.store.sliceStatements(block.stmts);
-                for (statements) |stmt_idx| {
-                    const stmt = self.cir.store.getStatement(stmt_idx);
-                    if (stmt == .s_decl) break :blk true;
-                }
-                break :blk false;
-            };
+            // PROPER LET-POLYMORPHISM IMPLEMENTATION
+            //
+            // For blocks with let-bindings, we need to:
+            // 1. Enter a new scope (increase rank)
+            // 2. Check the bindings - new type variables get the higher rank
+            // 3. Exit the scope (decrease rank)
+            // 4. Generalize variables created in the bindings (those at the higher rank)
+            // 5. Check the body where generalized variables can be instantiated polymorphically
 
-            if (has_declarations) {
-                self.enterScope();
-            }
-
-            // Check all statements in the block
             const statements = self.cir.store.sliceStatements(block.stmts);
+
+            // Check all statements in order
             for (statements) |stmt_idx| {
                 const stmt = self.cir.store.getStatement(stmt_idx);
                 switch (stmt) {
                     .s_decl => |decl_stmt| {
-                        // Check pattern and expression, then unify
+                        // Debug: Check if pattern already has an annotation type
+                        const pattern_var_check: Var = @enumFromInt(@intFromEnum(decl_stmt.pattern));
+                        const resolved_check = self.types.resolveVar(pattern_var_check);
+                        const has_annotation = resolved_check.desc.content != .flex_var;
+
+                        // ENTER SCOPE for this specific binding
+                        self.enterScope();
+
+                        // Check pattern
                         try self.checkPattern(decl_stmt.pattern);
 
-                        // Update the expression variable's rank if needed before checking
-                        const expr_var: Var = @enumFromInt(@intFromEnum(decl_stmt.expr));
-                        self.updateVarRankIfNeeded(expr_var);
-
-                        // if (builtin.mode == .Debug) {
-                        //     std.debug.print("  Checking let-binding expr {} at rank {}\n", .{
-                        //         @intFromEnum(decl_stmt.expr),
-                        //         self.current_rank,
-                        //     });
-                        // }
-
+                        // Check the expression - new variables created here get the higher rank
                         does_fx = try self.checkExpr(decl_stmt.expr) or does_fx;
-
-                        // if (builtin.mode == .Debug) {
-                        //     std.debug.print("  After checking expr, rank is {}\n", .{self.current_rank});
-                        // }
 
                         // Unify the pattern with the expression
                         const pattern_var: Var = @enumFromInt(@intFromEnum(decl_stmt.pattern));
-                        _ = try self.unify(pattern_var, expr_var);
+                        const decl_expr_var: Var = @enumFromInt(@intFromEnum(decl_stmt.expr));
+                        _ = try self.unify(pattern_var, decl_expr_var);
 
-                        // Generalize the pattern variable after unification
-                        // We need to be at the correct rank for generalization
-                        try self.generalize(pattern_var);
+                        // EXIT SCOPE
+                        self.exitScope();
+
+                        // GENERALIZE the binding - this makes it polymorphic
+                        // The pattern variable now has the type of the expression
+                        // But only if it doesn't have an annotation (annotations are already generalized)
+                        if (!has_annotation) {
+                            try self.generalize(pattern_var);
+                        }
                     },
                     .s_reassign => |reassign| {
                         does_fx = try self.checkExpr(reassign.expr) or does_fx;
@@ -1323,19 +1272,14 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                 }
             }
 
-            // Check the final expression
+            // Check the final expression - can use polymorphic bindings
             does_fx = try self.checkExpr(block.final_expr) or does_fx;
 
-            // Link the root expr with the final expr
+            // Link the block's type with the final expression's type
             _ = try self.unify(
                 @enumFromInt(@intFromEnum(expr_idx)),
                 @enumFromInt(@intFromEnum(block.final_expr)),
             );
-
-            // Exit the scope if we entered one
-            if (has_declarations) {
-                self.exitScope();
-            }
         },
         .e_closure => |closure| {
             // The type of a closure is the type of the lambda it wraps.
