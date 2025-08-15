@@ -4,11 +4,12 @@
 //! Seamless slice optimization reduces memory overhead for substring operations.
 const std = @import("std");
 
-const UpdateMode = @import("utils.zig").UpdateMode;
-const TestEnv = @import("utils.zig").TestEnv;
+const utils = @import("utils.zig");
+const UpdateMode = utils.UpdateMode;
+const TestEnv = utils.TestEnv;
 const RocOps = @import("host_abi.zig").RocOps;
 const RocStr = @import("str.zig").RocStr;
-const increfDataPtrC = @import("utils.zig").increfDataPtrC;
+const increfDataPtrC = utils.increfDataPtrC;
 
 const Opaque = ?[*]u8;
 const EqFn = *const fn (Opaque, Opaque) callconv(.C) bool;
@@ -189,7 +190,7 @@ pub const RocList = extern struct {
         }
 
         // We use the raw capacity to ensure we always decrement the refcount of seamless slices.
-        @import("utils.zig").decref(
+        utils.decref(
             self.getAllocationDataPtr(),
             self.capacity_or_alloc_ptr,
             alignment,
@@ -203,7 +204,7 @@ pub const RocList = extern struct {
     }
 
     pub fn isUnique(self: RocList) bool {
-        return @import("utils.zig").rcUnique(@bitCast(self.refcount()));
+        return utils.rcUnique(@bitCast(self.refcount()));
     }
 
     fn refcount(self: RocList) usize {
@@ -259,7 +260,7 @@ pub const RocList = extern struct {
     }
 
     pub fn list_allocate(
-        alignment: u32,
+        elem_alignment: u32,
         length: usize,
         element_width: usize,
         elements_refcounted: bool,
@@ -269,12 +270,12 @@ pub const RocList = extern struct {
             return empty();
         }
 
-        const capacity = @import("utils.zig").calculateCapacity(0, length, element_width);
+        const capacity = utils.calculateCapacity(0, length, element_width);
         const data_bytes = capacity * element_width;
         return RocList{
-            .bytes = @import("utils.zig").allocateWithRefcount(
+            .bytes = utils.allocateWithRefcount(
                 data_bytes,
-                alignment,
+                elem_alignment,
                 elements_refcounted,
                 roc_ops,
             ),
@@ -296,7 +297,7 @@ pub const RocList = extern struct {
 
         const data_bytes = length * element_width;
         return RocList{
-            .bytes = @import("utils.zig").allocateWithRefcount(
+            .bytes = utils.allocateWithRefcount(
                 data_bytes,
                 alignment,
                 elements_refcounted,
@@ -322,8 +323,8 @@ pub const RocList = extern struct {
                 if (capacity >= new_length) {
                     return RocList{ .bytes = self.bytes, .length = new_length, .capacity_or_alloc_ptr = capacity };
                 } else {
-                    const new_capacity = @import("utils.zig").calculateCapacity(capacity, new_length, element_width);
-                    const new_source = @import("utils.zig").unsafeReallocate(source_ptr, alignment, capacity, new_capacity, element_width, elements_refcounted);
+                    const new_capacity = utils.calculateCapacity(capacity, new_length, element_width);
+                    const new_source = utils.unsafeReallocate(source_ptr, alignment, capacity, new_capacity, element_width, elements_refcounted);
                     return RocList{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = new_capacity };
                 }
             }
@@ -363,7 +364,7 @@ pub const RocList = extern struct {
         }
 
         // Calls utils.decref directly to avoid decrementing the refcount of elements.
-        @import("utils.zig").decref(self.getAllocationDataPtr(), self.capacity_or_alloc_ptr, alignment, elements_refcounted, roc_ops);
+        utils.decref(self.getAllocationDataPtr(), self.capacity_or_alloc_ptr, alignment, elements_refcounted, roc_ops);
 
         return result;
     }
@@ -533,9 +534,22 @@ fn listAppend(
     return listAppendUnsafe(with_capacity, element, element_width, copy);
 }
 
-/// Directly mutate the given list to push an element onto the end.
+/// Directly mutate the given list to push an element onto the end, and then return it.
 /// If there isn't enough capacity, uses roc_realloc to get more.
-pub fn push_in_place(
+///
+/// NOTE: This does *not* increment any refcounts! The caller should increment
+/// the refcount of the element being appended before calling this function.
+///
+/// To implement `List.append` using this, you need to:
+/// - Check if this list's refcount is 1, and if so, call pushInPlace on it and return that list.
+///   - (If you know statically that the list's refcount will be 1, you don't need to check it at runtime.)
+/// - If the refcount is not 1, then:
+///   - Create a new list with a fresh refcount (ideally using 1.5x the necessary capacity, so future appends are cheaper)
+///   - Copy all the existing elements over using shallowClone()
+///     - Then increment all the existing elements' refcounts, if they are refcounted.
+///     - The reason we don't have an `append` function in this file is that refcounting other types is out of scope.
+///       (Refcounting other types would require passing in function pointers, which LLVM doesn't optimize well.)
+pub fn pushInPlace(
     list: RocList,
     alignment: u32,
     element_size: usize,
@@ -577,47 +591,55 @@ pub fn push_in_place(
     }
 }
 
-pub fn append(
-    list: RocList,
-    alignment: u32,
-    element_size: usize,
-    element: *anyopaque,
+/// Make a new list of nonzero-sized elements, with the given *POSITIVE* capacity, by
+/// shallowly copying an existing list's elements. (That is, doing a memcpy of the heap bytes this list points to.)
+/// The new list has a default refcount, and the same length as the existing list.
+/// This function assumes you always want a heap allocation to be performed, so passing 0 capacity to
+/// this function is illegal behavior and will panic in debug builds. If you don't want a heap allocation
+/// performed, then don't call this function! Same with passing an element with either a size or alignment of 0.
+///
+/// NOTE: This does *not* increment any refcounts! If the existing list's elements are refcounted,
+/// the *caller* is responsible for incrementing their refcounts, as this function does not know
+/// where their refcounts are stored in memory, and therefore cannot increment them.
+///
+/// (Supporting this would require passing a function pointer, which LLVM does not optimize well.)
+pub fn shallowClone(
+    old_list: RocList,
+    desired_capacity: usize,
+    elem_size: usize,
+    elem_alignment: u32,
+    elements_refcounted: bool,
     roc_ops: *RocOps,
 ) callconv(.C) RocList {
-    const old_length = list.len();
+    std.debug.assert(desired_capacity > 0);
+    std.debug.assert(elem_size > 0);
+    std.debug.assert(elem_alignment > 0);
 
-    if (list.refcount() == 1) {
-        return push_in_place(list, alignment, element_size, element, roc_ops);
-    } else {
-        // No overflow check needed: allocator will fail at isize::MAX before usize overflow
-        const new_length = old_length + 1;
-
-        // Let list_allocate determine the best capacity
-        const new_list = RocList.list_allocate(
-            alignment,
-            new_length, // Pass desired length, not capacity
-            element_size,
-            false,
+    const len = old_list.len();
+    const capacity = utils.calculateCapacity(0, desired_capacity, elem_size);
+    const new_list = RocList{
+        .bytes = utils.allocateWithRefcount(
+            capacity * elem_size,
+            elem_alignment,
+            elements_refcounted,
             roc_ops,
-        );
+        ),
+        .length = len,
+        .capacity_or_alloc_ptr = capacity,
+    };
 
-        if (list.bytes) |source_bytes| {
-            if (new_list.bytes) |dest_bytes| {
-                const copy_size = old_length * element_size;
-                @memcpy(dest_bytes[0..copy_size], source_bytes[0..copy_size]);
+    // Only copy bytes over if the original list was nonempty.
+    // It's fine if the original list was empty and this one will be nonempty;
+    // we just make the allocation, set its length to 0, and return it.
+    if (old_list.bytes) |source_bytes| {
+        // We know the new list has a valid pointer becasue otherwise roc_alloc would have crashed.
+        var dest_bytes = new_list.bytes orelse unreachable;
 
-                const target = dest_bytes + old_length * element_size;
-                @memcpy(target[0..element_size], @as([*]const u8, @ptrCast(element))[0..element_size]);
-            }
-        } else if (new_list.bytes) |dest_bytes| {
-            const target = dest_bytes + old_length * element_size;
-            @memcpy(target[0..element_size], @as([*]const u8, @ptrCast(element))[0..element_size]);
-        }
-
-        var result = new_list;
-        result.length = new_length;
-        return result;
+        const copy_size = len * elem_size;
+        @memcpy(dest_bytes[0..copy_size], source_bytes[0..copy_size]);
     }
+
+    return new_list;
 }
 
 /// Add element to beginning of list, shifting existing elements.
@@ -1268,7 +1290,7 @@ test "listConcat: non-unique with unique overlapping" {
     const bytes: [*]u8 = @as([*]u8, @ptrCast(nonUnique.bytes));
     const ptr_width = @sizeOf(usize);
     const refcount_ptr = @as([*]isize, @ptrCast(@as([*]align(ptr_width) u8, @alignCast(bytes)) - ptr_width));
-    @import("utils.zig").increfRcPtrC(&refcount_ptr[0], 1);
+    utils.increfRcPtrC(&refcount_ptr[0], 1);
     // NOTE: nonUnique will be consumed by listConcat, so no defer decref needed
 
     const unique = RocList.fromSlice(u8, ([_]u8{ 2, 3, 4 })[0..], false, test_env.getOps());
@@ -1450,7 +1472,7 @@ test "listReserve functionality" {
     const data = [_]u8{ 1, 2, 3 };
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
-    const reserved_list = listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
+    const reserved_list = listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
     defer reserved_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
 
     // Should have at least the requested capacity
@@ -1503,14 +1525,14 @@ test "listReleaseExcessCapacity functionality" {
     const list_with_data = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Reserve excess capacity for it
-    const list_with_excess = listReserve(list_with_data, @alignOf(u8), 100, @sizeOf(u8), false, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
+    const list_with_excess = listReserve(list_with_data, @alignOf(u8), 100, @sizeOf(u8), false, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
 
     // Verify it has excess capacity
     try std.testing.expect(list_with_excess.getCapacity() >= 100);
     try std.testing.expectEqual(@as(usize, 3), list_with_excess.len());
 
     // Release the excess capacity
-    const released_list = listReleaseExcessCapacity(list_with_excess, @alignOf(u8), @sizeOf(u8), false, rcNone, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
+    const released_list = listReleaseExcessCapacity(list_with_excess, @alignOf(u8), @sizeOf(u8), false, rcNone, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
     defer released_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
 
     // The released list should have capacity close to its length and preserve the data
@@ -1584,7 +1606,7 @@ test "listSwap basic functionality" {
         }
     }.copy;
 
-    const swapped_list = listSwap(list, @alignOf(u16), @sizeOf(u16), 1, 3, false, rcNone, rcNone, @import("utils.zig").UpdateMode.Immutable, copy_fn, test_env.getOps());
+    const swapped_list = listSwap(list, @alignOf(u16), @sizeOf(u16), 1, 3, false, rcNone, rcNone, utils.UpdateMode.Immutable, copy_fn, test_env.getOps());
     defer swapped_list.decref(@alignOf(u16), @sizeOf(u16), false, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), swapped_list.len());
@@ -2587,7 +2609,7 @@ test "listAllocationPtr basic functionality" {
 }
 
 test "listAllocationPtr empty list" {
-    var test_env = @import("utils.zig").TestEnv.init(std.testing.allocator);
+    var test_env = utils.TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
     const empty_list = RocList.empty();
@@ -2730,7 +2752,7 @@ test "integration: replace then swap operations" {
 
     // Now we should have [10, 99, 30, 40]
     // Swap elements at indices 0 and 2 (10 <-> 30)
-    list = listSwap(list, @alignOf(u32), @sizeOf(u32), 0, 2, false, rcNone, rcNone, @import("utils.zig").UpdateMode.Immutable, copy_fn, test_env.getOps());
+    list = listSwap(list, @alignOf(u32), @sizeOf(u32), 0, 2, false, rcNone, rcNone, utils.UpdateMode.Immutable, copy_fn, test_env.getOps());
 
     defer list.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
 
@@ -2827,7 +2849,7 @@ test "memory management: capacity boundary conditions" {
     try std.testing.expectEqual(@as(usize, 0), list.len());
 
     // Use listReserve to ensure we have exactly the capacity we want
-    list = listReserve(list, @alignOf(u32), exact_capacity, @sizeOf(u32), false, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
+    list = listReserve(list, @alignOf(u32), exact_capacity, @sizeOf(u32), false, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
     defer list.decref(@alignOf(u32), @sizeOf(u32), false, rcNone, test_env.getOps());
 
     // Verify capacity management functions work correctly
@@ -2847,13 +2869,13 @@ test "memory management: release excess capacity edge cases" {
     const small_list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Reserve much more capacity than needed
-    const oversized_list = listReserve(small_list, @alignOf(u8), 1000, @sizeOf(u8), false, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
+    const oversized_list = listReserve(small_list, @alignOf(u8), 1000, @sizeOf(u8), false, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 1), oversized_list.len());
     try std.testing.expect(oversized_list.getCapacity() >= 1000);
 
     // Release excess capacity
-    const trimmed_list = listReleaseExcessCapacity(oversized_list, @alignOf(u8), @sizeOf(u8), false, rcNone, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
+    const trimmed_list = listReleaseExcessCapacity(oversized_list, @alignOf(u8), @sizeOf(u8), false, rcNone, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
     defer trimmed_list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
 
     // Should maintain content but reduce capacity
@@ -2969,7 +2991,7 @@ test "boundary conditions: swap with identical indices" {
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Swap element with itself (index 2 with index 2)
-    const swapped = listSwap(list, @alignOf(u8), @sizeOf(u8), 2, 2, false, rcNone, rcNone, @import("utils.zig").UpdateMode.Immutable, copy_fn, test_env.getOps());
+    const swapped = listSwap(list, @alignOf(u8), @sizeOf(u8), 2, 2, false, rcNone, rcNone, utils.UpdateMode.Immutable, copy_fn, test_env.getOps());
     defer swapped.decref(@alignOf(u8), @sizeOf(u8), false, rcNone, test_env.getOps());
 
     // Should be unchanged
@@ -2992,13 +3014,13 @@ test "memory management: multiple reserve operations" {
     var list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Reserve capacity multiple times, each time increasing
-    list = listReserve(list, @alignOf(u8), 10, @sizeOf(u8), false, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
+    list = listReserve(list, @alignOf(u8), 10, @sizeOf(u8), false, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
     try std.testing.expect(list.getCapacity() >= 12); // 2 existing + 10 spare
 
-    list = listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
+    list = listReserve(list, @alignOf(u8), 20, @sizeOf(u8), false, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
     try std.testing.expect(list.getCapacity() >= 22); // 2 existing + 20 spare
 
-    list = listReserve(list, @alignOf(u8), 5, @sizeOf(u8), false, rcNone, @import("utils.zig").UpdateMode.Immutable, test_env.getOps());
+    list = listReserve(list, @alignOf(u8), 5, @sizeOf(u8), false, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
     // Should not decrease capacity, so still >= 22
     try std.testing.expect(list.getCapacity() >= 22);
 
@@ -3022,7 +3044,7 @@ test "push: basic functionality with empty list" {
 
     // Push first element
     const element1: u8 = 42;
-    list = push_in_place(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&element1)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&element1)), test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 1), list.len());
     try std.testing.expect(list.getCapacity() >= 1);
@@ -3044,7 +3066,7 @@ test "push: multiple elements with reallocation" {
     // Push multiple elements to trigger reallocation
     const values = [_]u8{ 10, 20, 30, 40, 50 };
     for (values) |value| {
-        list = push_in_place(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&value)), test_env.getOps());
+        list = pushInPlace(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&value)), test_env.getOps());
     }
 
     try std.testing.expectEqual(@as(usize, 5), list.len());
@@ -3074,10 +3096,10 @@ test "push: with pre-existing capacity" {
 
     // Push elements without triggering reallocation
     const value1: u32 = 100;
-    list = push_in_place(list, @alignOf(u32), @sizeOf(u32), @ptrCast(@constCast(&value1)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(u32), @sizeOf(u32), @ptrCast(@constCast(&value1)), test_env.getOps());
 
     const value2: u32 = 200;
-    list = push_in_place(list, @alignOf(u32), @sizeOf(u32), @ptrCast(@constCast(&value2)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(u32), @sizeOf(u32), @ptrCast(@constCast(&value2)), test_env.getOps());
 
     // Capacity should remain the same
     try std.testing.expectEqual(initial_capacity, list.getCapacity());
@@ -3101,10 +3123,10 @@ test "push: different sized elements" {
     var list = RocList.empty();
 
     const value1: u64 = 0xDEADBEEF;
-    list = push_in_place(list, @alignOf(u64), @sizeOf(u64), @ptrCast(@constCast(&value1)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(u64), @sizeOf(u64), @ptrCast(@constCast(&value1)), test_env.getOps());
 
     const value2: u64 = 0xCAFEBABE;
-    list = push_in_place(list, @alignOf(u64), @sizeOf(u64), @ptrCast(@constCast(&value2)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(u64), @sizeOf(u64), @ptrCast(@constCast(&value2)), test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 2), list.len());
 
@@ -3127,7 +3149,7 @@ test "push: stress test with many elements" {
     const count: u16 = 100;
     var i: u16 = 0;
     while (i < count) : (i += 1) {
-        list = push_in_place(list, @alignOf(u16), @sizeOf(u16), @ptrCast(@constCast(&i)), test_env.getOps());
+        list = pushInPlace(list, @alignOf(u16), @sizeOf(u16), @ptrCast(@constCast(&i)), test_env.getOps());
     }
 
     try std.testing.expectEqual(@as(usize, count), list.len());
@@ -3154,7 +3176,7 @@ test "append: with unique list (refcount 1)" {
 
     // Add one element to make it unique
     const value1: u8 = 10;
-    list = push_in_place(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&value1)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&value1)), test_env.getOps());
 
     // Verify it's unique
     try std.testing.expectEqual(@as(usize, 1), list.refcount());
@@ -3181,9 +3203,9 @@ test "append: with shared list (refcount > 1)" {
     // Create a list with some elements
     var list = RocList.empty();
     const value1: u8 = 100;
-    list = push_in_place(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&value1)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&value1)), test_env.getOps());
     const value2: u8 = 200;
-    list = push_in_place(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&value2)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&value2)), test_env.getOps());
 
     // Increment refcount to simulate sharing
     list.incref(1, false);
@@ -3240,10 +3262,10 @@ test "push: large element types" {
     var list = RocList.empty();
 
     const elem1 = LargeElement{ .a = 1, .b = 2, .c = 3, .d = 4 };
-    list = push_in_place(list, @alignOf(LargeElement), @sizeOf(LargeElement), @ptrCast(@constCast(&elem1)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(LargeElement), @sizeOf(LargeElement), @ptrCast(@constCast(&elem1)), test_env.getOps());
 
     const elem2 = LargeElement{ .a = 5, .b = 6, .c = 7, .d = 8 };
-    list = push_in_place(list, @alignOf(LargeElement), @sizeOf(LargeElement), @ptrCast(@constCast(&elem2)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(LargeElement), @sizeOf(LargeElement), @ptrCast(@constCast(&elem2)), test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 2), list.len());
 
@@ -3271,18 +3293,18 @@ test "push: with exact capacity boundary" {
 
     // Fill exactly to capacity
     const val1: u16 = 111;
-    list = push_in_place(list, @alignOf(u16), @sizeOf(u16), @ptrCast(@constCast(&val1)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(u16), @sizeOf(u16), @ptrCast(@constCast(&val1)), test_env.getOps());
     const val2: u16 = 222;
-    list = push_in_place(list, @alignOf(u16), @sizeOf(u16), @ptrCast(@constCast(&val2)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(u16), @sizeOf(u16), @ptrCast(@constCast(&val2)), test_env.getOps());
     const val3: u16 = 333;
-    list = push_in_place(list, @alignOf(u16), @sizeOf(u16), @ptrCast(@constCast(&val3)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(u16), @sizeOf(u16), @ptrCast(@constCast(&val3)), test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 3), list.len());
     try std.testing.expectEqual(initial_capacity, list.getCapacity());
 
     // Next push should trigger reallocation
     const val4: u16 = 444;
-    list = push_in_place(list, @alignOf(u16), @sizeOf(u16), @ptrCast(@constCast(&val4)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(u16), @sizeOf(u16), @ptrCast(@constCast(&val4)), test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), list.len());
     try std.testing.expect(list.getCapacity() > initial_capacity);
@@ -3307,7 +3329,7 @@ test "push: single byte elements" {
     // Push ASCII characters
     const chars = "Hello";
     for (chars) |ch| {
-        list = push_in_place(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&ch)), test_env.getOps());
+        list = pushInPlace(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&ch)), test_env.getOps());
     }
 
     try std.testing.expectEqual(@as(usize, 5), list.len());
@@ -3332,7 +3354,7 @@ test "append: refcount transitions" {
     // Start with unique list
     var list = RocList.empty();
     const val1: u8 = 10;
-    list = push_in_place(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&val1)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&val1)), test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 1), list.refcount());
 
@@ -3371,7 +3393,7 @@ test "append: capacity growth strategy" {
     var list = RocList.empty();
     const values = [_]u32{ 100, 200, 300 };
     for (values) |val| {
-        list = push_in_place(list, @alignOf(u32), @sizeOf(u32), @ptrCast(@constCast(&val)), test_env.getOps());
+        list = pushInPlace(list, @alignOf(u32), @sizeOf(u32), @ptrCast(@constCast(&val)), test_env.getOps());
     }
 
     // Make it shared
@@ -3403,7 +3425,7 @@ test "append: mixed with push operations" {
 
     // Start with push
     const val1: u8 = 1;
-    list = push_in_place(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&val1)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&val1)), test_env.getOps());
 
     // Append while unique
     const val2: u8 = 2;
@@ -3411,7 +3433,7 @@ test "append: mixed with push operations" {
 
     // More pushes
     const val3: u8 = 3;
-    list = push_in_place(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&val3)), test_env.getOps());
+    list = pushInPlace(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&val3)), test_env.getOps());
 
     // Make shared
     list.incref(1, false);
@@ -3443,7 +3465,7 @@ test "push and append: large scale alternating operations" {
     var i: u16 = 0;
     while (i < 50) : (i += 1) {
         if (i % 2 == 0) {
-            list = push_in_place(list, @alignOf(u16), @sizeOf(u16), @ptrCast(@constCast(&i)), test_env.getOps());
+            list = pushInPlace(list, @alignOf(u16), @sizeOf(u16), @ptrCast(@constCast(&i)), test_env.getOps());
         } else {
             list = append(list, @alignOf(u16), @sizeOf(u16), @ptrCast(@constCast(&i)), test_env.getOps());
         }
@@ -3470,7 +3492,7 @@ test "append: stress test with cloning" {
     // Build up original list
     var i: u8 = 0;
     while (i < 20) : (i += 1) {
-        original = push_in_place(original, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&i)), test_env.getOps());
+        original = pushInPlace(original, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&i)), test_env.getOps());
     }
 
     // Make it shared
