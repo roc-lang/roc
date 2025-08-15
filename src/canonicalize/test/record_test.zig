@@ -219,7 +219,7 @@ test "record_unbound with multiple fields" {
 test "record with extension variable" {
     const gpa = std.testing.allocator;
 
-    var env = try ModuleEnv.init(gpa, "");
+    var env = try ModuleEnv.init(gpa, "", null, null);
     defer env.deinit();
 
     try env.initCIRFields(gpa, "test");

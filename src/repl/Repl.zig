@@ -94,7 +94,7 @@ fn allocateModuleEnv(self: *Repl, source: []const u8) !*ModuleEnv {
 
     // Allocate new ModuleEnv on heap
     const new_env = try self.allocator.create(ModuleEnv);
-    new_env.* = try ModuleEnv.init(self.allocator, source);
+    new_env.* = try ModuleEnv.init(self.allocator, source, null, null);
     self.last_module_env = new_env;
     return new_env;
 }

@@ -22,7 +22,7 @@ const ScopeTestContext = struct {
     fn init(gpa: std.mem.Allocator) !ScopeTestContext {
         // heap allocate ModuleEnv for testing
         const module_env = try gpa.create(ModuleEnv);
-        module_env.* = try ModuleEnv.init(gpa, "");
+        module_env.* = try ModuleEnv.init(gpa, "", null, null);
         try module_env.initCIRFields(gpa, "test");
 
         return ScopeTestContext{

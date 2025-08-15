@@ -25,7 +25,7 @@ test "cross-module type checking - monomorphic function" {
     const allocator = testing.allocator;
 
     // Create module A that exports a simple function
-    var module_a_env = try ModuleEnv.init(allocator, "");
+    var module_a_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_a_env.deinit();
 
     try module_a_env.initCIRFields(allocator, "ModuleA");
@@ -51,7 +51,7 @@ test "cross-module type checking - monomorphic function" {
     try modules.append(module_a_cir);
 
     // Create module B that imports and uses the function from module A
-    var module_b_env = try ModuleEnv.init(allocator, "");
+    var module_b_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_b_env.deinit();
 
     try module_b_env.initCIRFields(allocator, "ModuleB");
@@ -108,7 +108,7 @@ test "cross-module type checking - polymorphic function" {
     const allocator = testing.allocator;
 
     // Create module A that exports a polymorphic identity function
-    var module_a_env = try ModuleEnv.init(allocator, "");
+    var module_a_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_a_env.deinit();
 
     try module_a_env.initCIRFields(allocator, "ModuleA");
@@ -128,7 +128,7 @@ test "cross-module type checking - polymorphic function" {
     try modules.append(module_a_cir);
 
     // Create module B that imports and uses the polymorphic function
-    var module_b_env = try ModuleEnv.init(allocator, "");
+    var module_b_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_b_env.deinit();
 
     try module_b_env.initCIRFields(allocator, "ModuleB");
@@ -178,7 +178,7 @@ test "cross-module type checking - record type" {
     const allocator = testing.allocator;
 
     // Create module A that exports a record type
-    var module_a_env = try ModuleEnv.init(allocator, "");
+    var module_a_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_a_env.deinit();
 
     try module_a_env.initCIRFields(allocator, "ModuleA");
@@ -221,7 +221,7 @@ test "cross-module type checking - record type" {
     try modules.append(module_a_cir);
 
     // Create module B that imports and uses the record from module A
-    var module_b_env = try ModuleEnv.init(allocator, "");
+    var module_b_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_b_env.deinit();
 
     try module_b_env.initCIRFields(allocator, "ModuleB");
@@ -279,7 +279,7 @@ test "cross-module type checking - type mismatch error" {
     const allocator = testing.allocator;
 
     // Create module A that exports an I32
-    var module_a_env = try ModuleEnv.init(allocator, "");
+    var module_a_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_a_env.deinit();
 
     try module_a_env.initCIRFields(allocator, "ModuleA");
@@ -294,7 +294,7 @@ test "cross-module type checking - type mismatch error" {
     } }, i32_content, base.Region.zero());
 
     // Create module B that imports the I32 but tries to use it as a String
-    var module_b_env = try ModuleEnv.init(allocator, "");
+    var module_b_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_b_env.deinit();
 
     try module_b_env.initCIRFields(allocator, "ModuleB");
@@ -346,7 +346,7 @@ test "cross-module type checking - polymorphic instantiation" {
     const allocator = testing.allocator;
 
     // Create module A that exports a polymorphic list function
-    var module_a_env = try ModuleEnv.init(allocator, "");
+    var module_a_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_a_env.deinit();
 
     try module_a_env.initCIRFields(allocator, "ModuleA");
@@ -377,7 +377,7 @@ test "cross-module type checking - polymorphic instantiation" {
     } }, func_content, base.Region.zero());
 
     // Create module B that imports and uses the function with a specific type
-    var module_b_env = try ModuleEnv.init(allocator, "");
+    var module_b_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_b_env.deinit();
 
     try module_b_env.initCIRFields(allocator, "ModuleB");
@@ -442,7 +442,7 @@ test "cross-module type checking - preserves module A types" {
     const allocator = testing.allocator;
 
     // Create module A
-    var module_a_env = try ModuleEnv.init(allocator, "");
+    var module_a_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_a_env.deinit();
 
     try module_a_env.initCIRFields(allocator, "ModuleA");
@@ -461,7 +461,7 @@ test "cross-module type checking - preserves module A types" {
     try testing.expect(original_content == .flex_var);
 
     // Create module B
-    var module_b_env = try ModuleEnv.init(allocator, "");
+    var module_b_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_b_env.deinit();
 
     try module_b_env.initCIRFields(allocator, "ModuleB");
@@ -521,7 +521,7 @@ test "cross-module type checking - three module chain monomorphic" {
     const allocator = testing.allocator;
 
     // Module A exports a simple function: add : I32, I32 -> I32
-    var module_a_env = try ModuleEnv.init(allocator, "");
+    var module_a_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_a_env.deinit();
 
     try module_a_env.initCIRFields(allocator, "ModuleA");
@@ -539,7 +539,7 @@ test "cross-module type checking - three module chain monomorphic" {
     } }, func_content, base.Region.zero());
 
     // Module B imports from A and re-exports it
-    var module_b_env = try ModuleEnv.init(allocator, "");
+    var module_b_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_b_env.deinit();
 
     try module_b_env.initCIRFields(allocator, "ModuleB");
@@ -557,7 +557,7 @@ test "cross-module type checking - three module chain monomorphic" {
     }, Content{ .flex_var = null }, base.Region.zero());
 
     // Module C imports from B
-    var module_c_env = try ModuleEnv.init(allocator, "");
+    var module_c_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_c_env.deinit();
 
     try module_c_env.initCIRFields(allocator, "ModuleC");
@@ -624,7 +624,7 @@ test "cross-module type checking - three module chain polymorphic" {
     const allocator = testing.allocator;
 
     // Module A exports a polymorphic function: identity : a -> a
-    var module_a_env = try ModuleEnv.init(allocator, "");
+    var module_a_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_a_env.deinit();
 
     try module_a_env.initCIRFields(allocator, "ModuleA");
@@ -637,7 +637,7 @@ test "cross-module type checking - three module chain polymorphic" {
     } }, func_content, base.Region.zero());
 
     // Module B imports from A and re-exports it
-    var module_b_env = try ModuleEnv.init(allocator, "");
+    var module_b_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_b_env.deinit();
 
     try module_b_env.initCIRFields(allocator, "ModuleB");
@@ -654,7 +654,7 @@ test "cross-module type checking - three module chain polymorphic" {
     }, Content{ .flex_var = null }, base.Region.zero());
 
     // Module C imports from B
-    var module_c_env = try ModuleEnv.init(allocator, "");
+    var module_c_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_c_env.deinit();
 
     try module_c_env.initCIRFields(allocator, "ModuleC");
@@ -714,7 +714,7 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     const allocator = testing.allocator;
 
     // Module A exports: map : (a -> b), List a -> List b
-    var module_a_env = try ModuleEnv.init(allocator, "");
+    var module_a_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_a_env.deinit();
 
     try module_a_env.initCIRFields(allocator, "ModuleA");
@@ -745,7 +745,7 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     } }, map_func_content, base.Region.zero());
 
     // Module B imports map and partially applies it with I32
-    var module_b_env = try ModuleEnv.init(allocator, "");
+    var module_b_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_b_env.deinit();
 
     try module_b_env.initCIRFields(allocator, "ModuleB");
@@ -783,7 +783,7 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     } }, map_i32_content, base.Region.zero());
 
     // Module C imports the partially specialized version from B
-    var module_c_env = try ModuleEnv.init(allocator, "");
+    var module_c_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_c_env.deinit();
 
     try module_c_env.initCIRFields(allocator, "ModuleC");
@@ -880,7 +880,7 @@ test "cross-module type checking - record type chain" {
     const allocator = testing.allocator;
 
     // Module A exports a record type: { x: I32, y: Str }
-    var module_a_env = try ModuleEnv.init(allocator, "");
+    var module_a_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_a_env.deinit();
 
     try module_a_env.initCIRFields(allocator, "ModuleA");
@@ -912,7 +912,7 @@ test "cross-module type checking - record type chain" {
     } }, record_content, base.Region.zero());
 
     // Module B imports and re-exports the record
-    var module_b_env = try ModuleEnv.init(allocator, "");
+    var module_b_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_b_env.deinit();
 
     try module_b_env.initCIRFields(allocator, "ModuleB");
@@ -929,7 +929,7 @@ test "cross-module type checking - record type chain" {
     }, Content{ .flex_var = null }, base.Region.zero());
 
     // Module C imports from B
-    var module_c_env = try ModuleEnv.init(allocator, "");
+    var module_c_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_c_env.deinit();
 
     try module_c_env.initCIRFields(allocator, "ModuleC");
@@ -997,7 +997,7 @@ test "cross-module type checking - polymorphic record chain" {
     const allocator = testing.allocator;
 
     // Module A exports a polymorphic record: { value: a, next: List a }
-    var module_a_env = try ModuleEnv.init(allocator, "");
+    var module_a_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_a_env.deinit();
 
     try module_a_env.initCIRFields(allocator, "ModuleA");
@@ -1028,7 +1028,7 @@ test "cross-module type checking - polymorphic record chain" {
     } }, record_content, base.Region.zero());
 
     // Module B imports and partially specializes to Str
-    var module_b_env = try ModuleEnv.init(allocator, "");
+    var module_b_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_b_env.deinit();
 
     try module_b_env.initCIRFields(allocator, "ModuleB");
@@ -1071,7 +1071,7 @@ test "cross-module type checking - polymorphic record chain" {
     } }, str_record_content, base.Region.zero());
 
     // Module C imports the specialized version from B
-    var module_c_env = try ModuleEnv.init(allocator, "");
+    var module_c_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_c_env.deinit();
 
     try module_c_env.initCIRFields(allocator, "ModuleC");
@@ -1143,7 +1143,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     const allocator = testing.allocator;
 
     // Module A exports: compose : (b -> c), (a -> b) -> (a -> c)
-    var module_a_env = try ModuleEnv.init(allocator, "");
+    var module_a_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_a_env.deinit();
 
     try module_a_env.initCIRFields(allocator, "ModuleA");
@@ -1173,7 +1173,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     } }, compose_content, base.Region.zero());
 
     // Module B imports compose and partially applies with b = Str
-    var module_b_env = try ModuleEnv.init(allocator, "");
+    var module_b_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_b_env.deinit();
 
     try module_b_env.initCIRFields(allocator, "ModuleB");
@@ -1218,7 +1218,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     } }, compose_str_content, base.Region.zero());
 
     // Module C imports the partially specialized version and further specializes c = I32
-    var module_c_env = try ModuleEnv.init(allocator, "");
+    var module_c_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_c_env.deinit();
 
     try module_c_env.initCIRFields(allocator, "ModuleC");
@@ -1359,7 +1359,7 @@ test "cross-module type checking - type mismatch with proper error message" {
     const allocator = testing.allocator;
 
     // Module A: Exports a string value
-    var module_a_env = try ModuleEnv.init(allocator, "");
+    var module_a_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_a_env.deinit();
 
     try module_a_env.initCIRFields(allocator, "ModuleA");
@@ -1371,7 +1371,7 @@ test "cross-module type checking - type mismatch with proper error message" {
     } }, .{ .structure = .str }, base.Region.zero());
 
     // Module B: Tries to use the string as a number
-    var module_b_env = try ModuleEnv.init(allocator, "");
+    var module_b_env = try ModuleEnv.init(allocator, "", null, null);
     defer module_b_env.deinit();
 
     try module_b_env.initCIRFields(allocator, "ModuleB");
