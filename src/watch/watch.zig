@@ -1,10 +1,15 @@
+//! File system watcher for monitoring .roc file changes across platforms.
+//! Provides efficient, cross-platform file watching with recursive directory support.
+
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Event triggered when a watched file changes
 pub const WatchEvent = struct {
     path: []const u8,
 };
 
+/// Callback function type for handling file change events
 pub const WatchCallback = *const fn (event: WatchEvent) void;
 
 /// High-performance filesystem watcher for .roc files
