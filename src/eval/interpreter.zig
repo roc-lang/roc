@@ -326,7 +326,6 @@ pub const Interpreter = struct {
         var reversed = std.mem.reverseIterator(self.bindings_stack.items);
         while (reversed.next()) |binding| {
             if (binding.pattern_idx == pattern_idx) {
-                self.traceInfo("Found binding for pattern_idx={}", .{@intFromEnum(pattern_idx)});
                 return binding.value;
             }
         }
@@ -1983,17 +1982,7 @@ pub const Interpreter = struct {
 
         // Debug: Check if we're copying a closure and what sizes we're dealing with
         if (actual_return_layout.tag == .closure) {
-            // Since we fixed pushStackValue, the return slot should now be the right size
-            const slot_size = if (actual_return_layout.tag == .closure) blk: {
-                const closure_header_size = @sizeOf(Closure);
-                const captures_layout = self.layout_cache.getLayout(actual_return_layout.data.closure.captures_layout_idx);
-                const captures_size = self.layout_cache.layoutSize(captures_layout);
-                const captures_alignment = captures_layout.alignment(target_usize);
-                const aligned_captures_offset = std.mem.alignForward(u32, closure_header_size, @intCast(captures_alignment.toByteUnits()));
-                break :blk aligned_captures_offset + captures_size;
-            } else self.layout_cache.layoutSize(actual_return_layout);
 
-            self.traceInfo("CLOSURE DEBUG: slot_size={}, actual_size={}", .{ slot_size, actual_return_size });
         }
 
         // Get the pre-allocated return slot
@@ -2267,10 +2256,10 @@ pub const Interpreter = struct {
 
     /// Print trace information (data/state)
     pub fn traceInfo(self: *const Interpreter, comptime fmt: []const u8, args: anytype) void {
-        if (self.trace_writer) |writer| {
-            self.printTraceIndent();
-            writer.print("  " ++ fmt ++ "\n", args) catch {};
-        }
+        _ = self;
+        _ = fmt;
+        _ = args;
+        // Tracing disabled to clean up test output
     }
 
     /// Print trace warning

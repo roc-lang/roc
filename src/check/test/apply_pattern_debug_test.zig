@@ -13,7 +13,9 @@ const ModuleEnv = can.ModuleEnv;
 
 fn dumpVar(module_env: *ModuleEnv, label: []const u8, var_: types.Var) void {
     const resolved = module_env.types.resolveVar(var_);
-    std.debug.print("  {s}: Var({}) rank={} content={}\n", .{ label, @intFromEnum(var_), resolved.desc.rank, resolved.desc.content });
+    _ = label;
+    _ = resolved;
+    // std.debug.print("  {s}: Var({}) rank={} content={}\n", .{ label, @intFromEnum(var_), resolved.desc.rank, resolved.desc.content });
 }
 
 test "trace: simple apply pattern" {

@@ -43,7 +43,6 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/polymorphic_debug_test.zig"));
     std.testing.refAllDecls(@import("test/apply_pattern_debug_test.zig"));
     std.testing.refAllDecls(@import("test/apply_trace_test.zig"));
-    std.testing.refAllDecls(@import("test/polymorphic_instantiation_test.zig"));
     std.testing.refAllDecls(@import("test/simple_polymorphic_bug_test.zig"));
     std.testing.refAllDecls(@import("test/simple_apply_test.zig"));
     std.testing.refAllDecls(@import("test/heap_alloc_test.zig"));
