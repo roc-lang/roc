@@ -383,8 +383,8 @@ test "lambdas with unary minus" {
 }
 
 test "lambdas closures" {
+    // Curried functions still have interpreter issues with TypeMismatch
     return error.SkipZigTest;
-    // Not implemented yet -- the closure return type is still flex var
     // try runExpectInt("(|a| |b| a * b)(5)(10)", 50, .no_trace);
     // try runExpectInt("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
     // try runExpectInt("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
@@ -411,13 +411,13 @@ test "lambdas with capture" {
 }
 
 test "lambdas nested closures" {
+    // Nested closures still have interpreter issues with TypeMismatch
     return error.SkipZigTest;
-    // Not implemented yet -- the closure return type is still flex var
     // try runExpectInt(
     //     \\(((|a| {
-    //     \\    a_loc = a * 2;
+    //     \\    a_loc = a * 2
     //     \\    |b| {
-    //     \\        b_loc = a_loc + b;
+    //     \\        b_loc = a_loc + b
     //     \\        |c| b_loc + c
     //     \\    }
     //     \\})(100))(20))(3)
@@ -551,6 +551,69 @@ test "string refcount - basic literal" {
     try runExpectStr("\"Hello, World!\"", "Hello, World!", .no_trace);
 }
 
+test "polymorphic identity function" {
+    // Test the identity function with different types
+    const code =
+        \\{
+        \\    identity = |val| val
+        \\    num = identity(5)
+        \\    str = identity("Hello")
+        \\    if (num > 0) str else ""
+        \\}
+    ;
+    try runExpectStr(code, "Hello", .no_trace);
+}
+
+test "direct polymorphic function usage" {
+    // Test that polymorphic functions work correctly when used directly
+    // This is valid in rank-1 Hindley-Milner type systems
+    const code =
+        \\{
+        \\    id = |x| x
+        \\
+        \\    # Direct calls to identity with different types
+        \\    num1 = id(10)
+        \\    str1 = id("Test")
+        \\    num2 = id(20)
+        \\
+        \\    # Verify all values are correct
+        \\    if (num1 == 10)
+        \\        if (num2 == 20)
+        \\            str1
+        \\        else
+        \\            "Failed2"
+        \\    else
+        \\        "Failed1"
+        \\}
+    ;
+    try runExpectStr(code, "Test", .no_trace);
+}
+
+test "multiple polymorphic instantiations" {
+    // Test that let-bound polymorphic values can be instantiated multiple times
+    // This tests valid rank-1 polymorphism patterns
+    const code =
+        \\{
+        \\    id = |x| x
+        \\
+        \\    # Test polymorphic identity with different types
+        \\    num1 = id(42)
+        \\    str1 = id("Hello")
+        \\    num2 = id(100)
+        \\
+        \\    # Verify all results
+        \\    if (num1 == 42)
+        \\        if (num2 == 100)
+        \\            str1
+        \\        else
+        \\            "Failed2"
+        \\    else
+        \\        "Failed1"
+        \\}
+    ;
+    try runExpectStr(code, "Hello", .no_trace);
+}
+
 test "string refcount - large string literal" {
     // Test large string that requires heap allocation and reference counting
     // This string is longer than SMALL_STR_MAX_LENGTH to trigger heap allocation
@@ -630,16 +693,12 @@ test "string refcount - record with empty string" {
 }
 
 test "string refcount - simple integer closure" {
-    return error.SkipZigTest;
-    // Not implemented yet -- the closure return type is still flex var
     // Test basic closure with integer first to see if the issue is closure-specific
-    // try runExpectInt("(|x| x)(42)", 42, .no_trace);
+    try runExpectInt("(|x| x)(42)", 42, .no_trace);
 }
 
 test "string refcount - simple string closure" {
-    return error.SkipZigTest;
-    // Not implemented yet -- the closure return type is still flex var
-    // try runExpectStr("(|s| s)(\"Test\")", "Test", .trace);
+    try runExpectStr("(|s| s)(\"Test\")", "Test", .no_trace);
 }
 
 test "ModuleEnv serialization and interpreter evaluation" {

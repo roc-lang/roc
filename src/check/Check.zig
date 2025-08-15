@@ -727,6 +727,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             // The lookup expression should have the same type as the pattern it refers to
             const lookup_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
             const pattern_var = @as(Var, @enumFromInt(@intFromEnum(local.pattern_idx)));
+
             _ = try self.unify(lookup_var, pattern_var);
         },
         .e_lookup_external => |e| {
@@ -1288,7 +1289,13 @@ fn unifyFunctionCall(
     if (expected_args.len == actual_arg_vars.len) {
         var arg_index: u32 = 0;
         for (expected_args, actual_arg_vars) |expected_arg, actual_arg| {
-            const arg_result = try self.unify(expected_arg, actual_arg);
+            // Instantiate polymorphic arguments before unification
+            var arg_to_unify = actual_arg;
+            if (self.types.needsInstantiation(actual_arg)) {
+                arg_to_unify = try self.instantiateVarAnon(actual_arg, .{ .explicit = region });
+            }
+
+            const arg_result = try self.unify(expected_arg, arg_to_unify);
             self.setDetailIfTypeMismatch(arg_result, .{
                 .incompatible_fn_call_arg = .{
                     .fn_name = null, // Get function name for better error message

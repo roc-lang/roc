@@ -14,6 +14,7 @@ const Ident = base.Ident;
 const target = base.target;
 const LayoutError = layout_store_.LayoutError;
 const Store = layout_store_.Store;
+const TypeScope = types.TypeScope;
 
 test "addTypeVar - str" {
     const testing = std.testing;
@@ -28,13 +29,15 @@ test "addTypeVar - str" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a str type variable
     const str_var = try type_store.freshFromContent(.{ .structure = .str });
 
     // Convert to layout
-    const str_layout_idx = try layout_store.addTypeVar(str_var);
+    const str_layout_idx = try layout_store.addTypeVar(str_var, &type_scope);
 
     // Verify the layout
     const str_layout = layout_store.getLayout(str_layout_idx);
@@ -55,6 +58,8 @@ test "addTypeVar - bool" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a bool layout directly (since we don't have bool types in the type system yet)
@@ -81,6 +86,8 @@ test "addTypeVar - list of strings" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a str type variable
@@ -90,7 +97,7 @@ test "addTypeVar - list of strings" {
     const list_str_var = try type_store.freshFromContent(.{ .structure = .{ .list = str_var } });
 
     // Convert to layout
-    const list_layout_idx = try layout_store.addTypeVar(list_str_var);
+    const list_layout_idx = try layout_store.addTypeVar(list_str_var, &type_scope);
 
     // Verify the layout - List(Str) should be a list with str sentinel
     const list_layout = layout_store.getLayout(list_layout_idx);
@@ -113,6 +120,8 @@ test "addTypeVar - list of box of strings" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a str type variable
@@ -125,7 +134,7 @@ test "addTypeVar - list of box of strings" {
     const list_box_str_var = try type_store.freshFromContent(.{ .structure = .{ .list = box_str_var } });
 
     // Convert to layout
-    const list_layout_idx = try layout_store.addTypeVar(list_box_str_var);
+    const list_layout_idx = try layout_store.addTypeVar(list_box_str_var, &type_scope);
 
     // Verify the layout - List(Box(Str)) should use index since Box(Str) is not a scalar
     const list_layout = layout_store.getLayout(list_layout_idx);
@@ -152,6 +161,8 @@ test "addTypeVar - box of flex_var compiles to box of opaque_ptr" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a flex_var type variable
@@ -161,7 +172,7 @@ test "addTypeVar - box of flex_var compiles to box of opaque_ptr" {
     const box_flex_var = try type_store.freshFromContent(.{ .structure = .{ .box = flex_var } });
 
     // Convert to layout
-    const box_layout_idx = try layout_store.addTypeVar(box_flex_var);
+    const box_layout_idx = try layout_store.addTypeVar(box_flex_var, &type_scope);
 
     // Verify the box layout
     const box_layout = layout_store.getLayout(box_layout_idx);
@@ -184,13 +195,15 @@ test "addTypeVar - num u32" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a u32 type variable
     const u32_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
 
     // Convert to layout
-    const u32_layout_idx = try layout_store.addTypeVar(u32_var);
+    const u32_layout_idx = try layout_store.addTypeVar(u32_var, &type_scope);
 
     // Verify the layout
     const u32_layout = layout_store.getLayout(u32_layout_idx);
@@ -211,13 +224,15 @@ test "addTypeVar - num f64" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a f64 type variable
     const f64_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } });
 
     // Convert to layout
-    const f64_layout_idx = try layout_store.addTypeVar(f64_var);
+    const f64_layout_idx = try layout_store.addTypeVar(f64_var, &type_scope);
 
     // Verify the layout
     const f64_layout = layout_store.getLayout(f64_layout_idx);
@@ -238,6 +253,8 @@ test "addTypeVar - list of num i128" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create an i128 type variable
@@ -248,7 +265,7 @@ test "addTypeVar - list of num i128" {
 
     // Convert to layout
     // Convert to layout
-    const list_layout_idx = try layout_store.addTypeVar(list_i128_var);
+    const list_layout_idx = try layout_store.addTypeVar(list_i128_var, &type_scope);
 
     // Verify the layout - List(I128) should be a list with i128 sentinel
     const list_layout = layout_store.getLayout(list_layout_idx);
@@ -271,13 +288,15 @@ test "addTypeVar - num dec" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a dec type variable
     const dec_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } });
 
     // Convert to layout
-    const dec_layout_idx = try layout_store.addTypeVar(dec_var);
+    const dec_layout_idx = try layout_store.addTypeVar(dec_var, &type_scope);
 
     // Verify the layout
     const num_dec_layout = layout_store.getLayout(dec_layout_idx);
@@ -298,6 +317,8 @@ test "addTypeVar - flex num var defaults to i128" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a flex number type variable (Num(a))
@@ -309,7 +330,7 @@ test "addTypeVar - flex num var defaults to i128" {
     const flex_num_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_var, .requirements = requirements } } } });
 
     // Convert to layout - should default to i128
-    const layout_idx = try layout_store.addTypeVar(flex_num_var);
+    const layout_idx = try layout_store.addTypeVar(flex_num_var, &type_scope);
 
     // Verify the layout
     const num_layout = layout_store.getLayout(layout_idx);
@@ -330,6 +351,8 @@ test "addTypeVar - flex int var defaults to i128" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a flex int type variable (Int(a))
@@ -341,7 +364,7 @@ test "addTypeVar - flex int var defaults to i128" {
     const flex_int_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .int_poly = .{ .var_ = int_var, .requirements = int_requirements } } } });
 
     // Convert to layout - should default to i128
-    const layout_idx = try layout_store.addTypeVar(flex_int_var);
+    const layout_idx = try layout_store.addTypeVar(flex_int_var, &type_scope);
 
     // Verify the layout
     const int_i64_layout = layout_store.getLayout(layout_idx);
@@ -362,6 +385,8 @@ test "addTypeVar - flex frac var defaults to dec" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a flex frac type variable (Frac(a))
@@ -373,7 +398,7 @@ test "addTypeVar - flex frac var defaults to dec" {
     const flex_frac_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac_poly = .{ .var_ = frac_var, .requirements = frac_requirements } } } });
 
     // Convert to layout - should default to dec
-    const layout_idx = try layout_store.addTypeVar(flex_frac_var);
+    const layout_idx = try layout_store.addTypeVar(flex_frac_var, &type_scope);
 
     // Verify the layout
     const frac_f64_layout = layout_store.getLayout(layout_idx);
@@ -394,6 +419,8 @@ test "addTypeVar - list of flex num var defaults to list of i128" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a flex num type variable (Num(a))
@@ -409,7 +436,7 @@ test "addTypeVar - list of flex num var defaults to list of i128" {
     const list_flex_num_var = try type_store.freshFromContent(.{ .structure = .{ .list = poly_int_var } });
 
     // Convert to layout - should default to list of i128
-    const list_layout_idx = try layout_store.addTypeVar(list_flex_num_var);
+    const list_layout_idx = try layout_store.addTypeVar(list_flex_num_var, &type_scope);
 
     // Verify the layout - List(FlexVar) should be a list with i128 sentinel (default for Num)
     const list_layout = layout_store.getLayout(list_layout_idx);
@@ -432,6 +459,8 @@ test "addTypeVar - box of flex frac var defaults to box of dec" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a flex frac type variable (Frac(a))
@@ -447,7 +476,7 @@ test "addTypeVar - box of flex frac var defaults to box of dec" {
     const box_flex_frac_var = try type_store.freshFromContent(.{ .structure = .{ .box = poly_frac_var } });
 
     // Convert to layout - should default to box of dec
-    const box_layout_idx = try layout_store.addTypeVar(box_flex_frac_var);
+    const box_layout_idx = try layout_store.addTypeVar(box_flex_frac_var, &type_scope);
 
     // Verify the layout - Box(FlexFrac) should be a box with dec sentinel (default for Frac)
     const box_layout = layout_store.getLayout(box_layout_idx);
@@ -468,6 +497,8 @@ test "addTypeVar - box of rigid_var compiles to box of opaque_ptr" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create an ident for the rigid var
@@ -480,7 +511,7 @@ test "addTypeVar - box of rigid_var compiles to box of opaque_ptr" {
     const box_rigid_var = try type_store.freshFromContent(.{ .structure = .{ .box = rigid_var } });
 
     // Convert to layout
-    const box_layout_idx = try layout_store.addTypeVar(box_rigid_var);
+    const box_layout_idx = try layout_store.addTypeVar(box_rigid_var, &type_scope);
 
     // Verify the box layout
     const box_layout = layout_store.getLayout(box_layout_idx);
@@ -503,6 +534,8 @@ test "addTypeVar - box of empty record compiles to box_of_zst" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create an empty record type variable
@@ -512,7 +545,7 @@ test "addTypeVar - box of empty record compiles to box_of_zst" {
     const box_empty_record_var = try type_store.freshFromContent(.{ .structure = .{ .box = empty_record_var } });
 
     // Convert to layout
-    const box_layout_idx = try layout_store.addTypeVar(box_empty_record_var);
+    const box_layout_idx = try layout_store.addTypeVar(box_empty_record_var, &type_scope);
 
     // Verify the layout is box_of_zst
     const box_layout = layout_store.getLayout(box_layout_idx);
@@ -532,6 +565,8 @@ test "addTypeVar - list of empty tag union compiles to list_of_zst" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create an empty tag union type variable
@@ -541,7 +576,7 @@ test "addTypeVar - list of empty tag union compiles to list_of_zst" {
     const list_empty_tag_union_var = try type_store.freshFromContent(.{ .structure = .{ .list = empty_tag_union_var } });
 
     // Convert to layout
-    const list_layout_idx = try layout_store.addTypeVar(list_empty_tag_union_var);
+    const list_layout_idx = try layout_store.addTypeVar(list_empty_tag_union_var, &type_scope);
 
     // Verify the layout is list_of_zst
     const list_layout = layout_store.getLayout(list_layout_idx);
@@ -561,6 +596,8 @@ test "alignment - record alignment is max of field alignments" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create field identifiers
@@ -585,7 +622,7 @@ test "alignment - record alignment is max of field alignments" {
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
 
     // Convert to layout
-    const record_layout_idx = try layout_store.addTypeVar(record_var);
+    const record_layout_idx = try layout_store.addTypeVar(record_var, &type_scope);
     const record_layout = layout_store.getLayout(record_layout_idx);
 
     // Test alignment calculation
@@ -607,7 +644,7 @@ test "alignment - record alignment is max of field alignments" {
     const ext2 = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_var2 = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields2, .ext = ext2 } } });
 
-    const record_layout_idx2 = try layout_store.addTypeVar(record_var2);
+    const record_layout_idx2 = try layout_store.addTypeVar(record_var2, &type_scope);
     const record_layout2 = layout_store.getLayout(record_layout_idx2);
 
     for (target.TargetUsize.all()) |target_usize| {
@@ -629,6 +666,8 @@ test "alignment - deeply nested record alignment (non-recursive)" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create field identifiers
@@ -669,7 +708,7 @@ test "alignment - deeply nested record alignment (non-recursive)" {
     const outermost_record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outermost_fields, .ext = outermost_ext } } });
 
     // Convert to layout
-    const outermost_layout_idx = try layout_store.addTypeVar(outermost_record_var);
+    const outermost_layout_idx = try layout_store.addTypeVar(outermost_record_var, &type_scope);
     const outermost_layout = layout_store.getLayout(outermost_layout_idx);
 
     // Test alignment calculation
@@ -693,13 +732,15 @@ test "addTypeVar - bare empty record returns error" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create an empty record type variable
     const empty_record_var = try type_store.freshFromContent(.{ .structure = .empty_record });
 
     // Try to convert to layout - should fail
-    const result = layout_store.addTypeVar(empty_record_var);
+    const result = layout_store.addTypeVar(empty_record_var, &type_scope);
     try testing.expectError(LayoutError.ZeroSizedType, result);
 }
 
@@ -716,13 +757,15 @@ test "addTypeVar - bare empty tag union returns error" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create an empty tag union type variable
     const empty_tag_union_var = try type_store.freshFromContent(.{ .structure = .empty_tag_union });
 
     // Try to convert to layout - should fail
-    const result = layout_store.addTypeVar(empty_tag_union_var);
+    const result = layout_store.addTypeVar(empty_tag_union_var, &type_scope);
     try testing.expectError(LayoutError.ZeroSizedType, result);
 }
 
@@ -739,6 +782,8 @@ test "addTypeVar - simple record" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create field types
@@ -760,7 +805,7 @@ test "addTypeVar - simple record" {
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = empty_ext } } });
 
     // Convert to layout
-    const record_layout_idx = try layout_store.addTypeVar(record_var);
+    const record_layout_idx = try layout_store.addTypeVar(record_var, &type_scope);
 
     // Verify the layout
     const record_layout = layout_store.getLayout(record_layout_idx);
@@ -802,6 +847,8 @@ test "record size calculation" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Test record with multiple fields requiring padding
@@ -826,7 +873,7 @@ test "record size calculation" {
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
 
     // Convert to layout
-    const record_layout_idx = try layout_store.addTypeVar(record_var);
+    const record_layout_idx = try layout_store.addTypeVar(record_var, &type_scope);
     const record_layout = layout_store.getLayout(record_layout_idx);
 
     try testing.expect(record_layout.tag == .record);
@@ -856,6 +903,8 @@ test "addTypeVar - nested record" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create inner record type { x: i32, y: i32 }
@@ -884,7 +933,7 @@ test "addTypeVar - nested record" {
     const player_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = player_fields, .ext = empty_ext } } });
 
     // Convert to layout
-    const player_layout_idx = try layout_store.addTypeVar(player_var);
+    const player_layout_idx = try layout_store.addTypeVar(player_var, &type_scope);
 
     // Verify the outer layout
     const player_layout = layout_store.getLayout(player_layout_idx);
@@ -944,6 +993,8 @@ test "addTypeVar - list of records" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create record type { id: u64, active: bool }
@@ -965,7 +1016,7 @@ test "addTypeVar - list of records" {
     const list_record_var = try type_store.freshFromContent(.{ .structure = .{ .list = record_var } });
 
     // Convert to layout
-    const list_layout_idx = try layout_store.addTypeVar(list_record_var);
+    const list_layout_idx = try layout_store.addTypeVar(list_record_var, &type_scope);
 
     // Verify the list layout
     const list_layout = layout_store.getLayout(list_layout_idx);
@@ -1009,6 +1060,8 @@ test "addTypeVar - record with extension" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create extension record { y: i32, z: u16 }
@@ -1036,7 +1089,7 @@ test "addTypeVar - record with extension" {
     const main_record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = main_fields, .ext = ext_record_var } } });
 
     // Convert to layout
-    const record_layout_idx = try layout_store.addTypeVar(main_record_var);
+    const record_layout_idx = try layout_store.addTypeVar(main_record_var, &type_scope);
 
     // Verify the layout
     const record_layout = layout_store.getLayout(record_layout_idx);
@@ -1086,6 +1139,8 @@ test "addTypeVar - record extension with str type fails" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a record with str as extension (invalid)
@@ -1102,7 +1157,7 @@ test "addTypeVar - record extension with str type fails" {
     const str_ext = try type_store.freshFromContent(.{ .structure = .str });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = str_ext } } });
 
-    const result = layout_store.addTypeVar(record_var);
+    const result = layout_store.addTypeVar(record_var, &type_scope);
     try testing.expectError(LayoutError.InvalidRecordExtension, result);
 }
 
@@ -1117,6 +1172,8 @@ test "addTypeVar - record extension with num type fails" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a record with number as extension (invalid)
@@ -1133,7 +1190,7 @@ test "addTypeVar - record extension with num type fails" {
     const num_ext = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = num_ext } } });
 
-    const result = layout_store.addTypeVar(record_var);
+    const result = layout_store.addTypeVar(record_var, &type_scope);
     try testing.expectError(LayoutError.InvalidRecordExtension, result);
 }
 
@@ -1148,6 +1205,8 @@ test "addTypeVar - deeply nested containers with zero-sized inner type" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create List(Box(List(Box(empty_record))))
@@ -1157,7 +1216,7 @@ test "addTypeVar - deeply nested containers with zero-sized inner type" {
     const outer_box = try type_store.freshFromContent(.{ .structure = .{ .box = inner_list } });
     const outer_list_var = try type_store.freshFromContent(.{ .structure = .{ .list = outer_box } });
 
-    const result = try layout_store.addTypeVar(outer_list_var);
+    const result = try layout_store.addTypeVar(outer_list_var, &type_scope);
     const result_layout = layout_store.getLayout(result);
 
     // Should resolve to List(Box(List(Box(empty_record))))
@@ -1188,6 +1247,8 @@ test "addTypeVar - record with single zero-sized field in container" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create List({ only_field: {} })
@@ -1205,7 +1266,7 @@ test "addTypeVar - record with single zero-sized field in container" {
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
     const list_var = try type_store.freshFromContent(.{ .structure = .{ .list = record_var } });
 
-    const result = try layout_store.addTypeVar(list_var);
+    const result = try layout_store.addTypeVar(list_var, &type_scope);
     const result_layout = layout_store.getLayout(result);
 
     // List of empty record should be list_of_zst
@@ -1223,6 +1284,8 @@ test "addTypeVar - record field ordering stability" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create multiple records with same fields but different order
@@ -1265,9 +1328,9 @@ test "addTypeVar - record field ordering stability" {
     const fields3_slice = try type_store.record_fields.appendSlice(gpa, fields3.items);
     const record3_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields3_slice, .ext = empty_ext } } });
 
-    const result1 = try layout_store.addTypeVar(record1_var);
-    const result2 = try layout_store.addTypeVar(record2_var);
-    const result3 = try layout_store.addTypeVar(record3_var);
+    const result1 = try layout_store.addTypeVar(record1_var, &type_scope);
+    const result2 = try layout_store.addTypeVar(record2_var, &type_scope);
+    const result3 = try layout_store.addTypeVar(record3_var, &type_scope);
 
     const layout1 = layout_store.getLayout(result1);
     const layout2 = layout_store.getLayout(result2);
@@ -1328,22 +1391,24 @@ test "addTypeVar - empty record in different contexts" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Test 1: Bare empty record
     const empty_record = try type_store.freshFromContent(.{ .structure = .empty_record });
-    const result1 = layout_store.addTypeVar(empty_record);
+    const result1 = layout_store.addTypeVar(empty_record, &type_scope);
     try testing.expectError(LayoutError.ZeroSizedType, result1);
 
     // Test 2: Box of empty record
     const box_empty = try type_store.freshFromContent(.{ .structure = .{ .box = empty_record } });
-    const result2 = try layout_store.addTypeVar(box_empty);
+    const result2 = try layout_store.addTypeVar(box_empty, &type_scope);
     const result2_layout = layout_store.getLayout(result2);
     try testing.expect(result2_layout.tag == .box_of_zst);
 
     // Test 3: List of empty record
     const list_empty = try type_store.freshFromContent(.{ .structure = .{ .list = empty_record } });
-    const result3 = try layout_store.addTypeVar(list_empty);
+    const result3 = try layout_store.addTypeVar(list_empty, &type_scope);
     const result3_layout = layout_store.getLayout(result3);
     try testing.expect(result3_layout.tag == .list_of_zst);
 
@@ -1359,7 +1424,7 @@ test "addTypeVar - empty record in different contexts" {
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_with_empty = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
-    const result4 = layout_store.addTypeVar(record_with_empty);
+    const result4 = layout_store.addTypeVar(record_with_empty, &type_scope);
     try testing.expectError(LayoutError.ZeroSizedType, result4);
 }
 
@@ -1374,6 +1439,8 @@ test "addTypeVar - record alignment edge cases" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create record with fields of all different alignments
@@ -1401,7 +1468,7 @@ test "addTypeVar - record alignment edge cases" {
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
-    const result = try layout_store.addTypeVar(record_var);
+    const result = try layout_store.addTypeVar(record_var, &type_scope);
     const result_layout = layout_store.getLayout(result);
     switch (result_layout.tag) {
         .record => {
@@ -1436,6 +1503,8 @@ test "addTypeVar - record with duplicate field in extension (matching types)" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create types
@@ -1461,7 +1530,7 @@ test "addTypeVar - record with duplicate field in extension (matching types)" {
     const main_record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = main_fields, .ext = ext_record_var } } });
 
     // Convert to layout - should succeed since types match
-    const record_layout_idx = try layout_store.addTypeVar(main_record_var);
+    const record_layout_idx = try layout_store.addTypeVar(main_record_var, &type_scope);
 
     // Verify the layout
     const record_layout = layout_store.getLayout(record_layout_idx);
@@ -1510,6 +1579,8 @@ test "addTypeVar - record with duplicate field in extension (mismatched types)" 
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create types
@@ -1534,7 +1605,7 @@ test "addTypeVar - record with duplicate field in extension (mismatched types)" 
 
     // Convert to layout - currently succeeds with both fields present
     // TODO: Type checking should catch duplicate fields with mismatched types before layout generation
-    const record_layout_idx = try layout_store.addTypeVar(main_record_var);
+    const record_layout_idx = try layout_store.addTypeVar(main_record_var, &type_scope);
 
     // Verify the layout
     const record_layout = layout_store.getLayout(record_layout_idx);
@@ -1577,6 +1648,8 @@ test "addTypeVar - record with invalid extension type" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a str type to use as invalid extension
@@ -1591,7 +1664,7 @@ test "addTypeVar - record with invalid extension type" {
     const main_record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = main_fields, .ext = str_var } } });
 
     // Convert to layout - should fail due to invalid extension
-    const result = layout_store.addTypeVar(main_record_var);
+    const result = layout_store.addTypeVar(main_record_var, &type_scope);
     try testing.expectError(LayoutError.InvalidRecordExtension, result);
 }
 
@@ -1608,6 +1681,8 @@ test "addTypeVar - record with chained extensions" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create types
@@ -1645,7 +1720,7 @@ test "addTypeVar - record with chained extensions" {
     const outer_record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_fields, .ext = middle_record_var } } });
 
     // Convert to layout
-    const record_layout_idx = try layout_store.addTypeVar(outer_record_var);
+    const record_layout_idx = try layout_store.addTypeVar(outer_record_var, &type_scope);
 
     // Verify the layout
     const record_layout = layout_store.getLayout(record_layout_idx);
@@ -1702,6 +1777,8 @@ test "addTypeVar - record with zero-sized fields dropped" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create types
@@ -1724,7 +1801,7 @@ test "addTypeVar - record with zero-sized fields dropped" {
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
 
     // Convert to layout
-    const record_layout_idx = try layout_store.addTypeVar(record_var);
+    const record_layout_idx = try layout_store.addTypeVar(record_var, &type_scope);
 
     // Verify the layout
     const record_layout = layout_store.getLayout(record_layout_idx);
@@ -1767,6 +1844,8 @@ test "addTypeVar - record with all zero-sized fields becomes empty" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create types
@@ -1786,7 +1865,7 @@ test "addTypeVar - record with all zero-sized fields becomes empty" {
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
 
     // Convert to layout - should fail because all fields are zero-sized
-    const result = layout_store.addTypeVar(record_var);
+    const result = layout_store.addTypeVar(record_var, &type_scope);
     try testing.expectError(LayoutError.ZeroSizedType, result);
 }
 
@@ -1803,6 +1882,8 @@ test "addTypeVar - box of record with all zero-sized fields" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create types
@@ -1824,7 +1905,7 @@ test "addTypeVar - box of record with all zero-sized fields" {
     const box_record_var = try type_store.freshFromContent(.{ .structure = .{ .box = record_var } });
 
     // Convert to layout - should become box_of_zst
-    const box_layout_idx = try layout_store.addTypeVar(box_record_var);
+    const box_layout_idx = try layout_store.addTypeVar(box_record_var, &type_scope);
 
     // Verify the layout is box_of_zst
     const box_layout = layout_store.getLayout(box_layout_idx);
@@ -1849,6 +1930,8 @@ test "addTypeVar - comprehensive nested record combinations" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create field names we'll reuse
@@ -1968,7 +2051,7 @@ test "addTypeVar - comprehensive nested record combinations" {
             const outer_record_var = try test_type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_fields_slice, .ext = empty_ext } } });
 
             // Convert to layout
-            const result = test_layout_store.addTypeVar(outer_record_var) catch |err| {
+            const result = test_layout_store.addTypeVar(outer_record_var, &type_scope) catch |err| {
                 if (err == LayoutError.ZeroSizedType) {
                     // This is expected if all fields were zero-sized
                     try testing.expect(expected_non_zero_fields == 0);
@@ -2031,6 +2114,8 @@ test "addTypeVar - nested record with inner record having all zero-sized fields"
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create inner record with only zero-sized fields
@@ -2060,7 +2145,7 @@ test "addTypeVar - nested record with inner record having all zero-sized fields"
     const outer_record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_fields, .ext = empty_ext } } });
 
     // Convert to layout
-    const record_layout_idx = try layout_store.addTypeVar(outer_record_var);
+    const record_layout_idx = try layout_store.addTypeVar(outer_record_var, &type_scope);
 
     // Verify the layout
     const record_layout = layout_store.getLayout(record_layout_idx);
@@ -2081,6 +2166,8 @@ test "addTypeVar - list of record with all zero-sized fields" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create empty record type
@@ -2099,7 +2186,7 @@ test "addTypeVar - list of record with all zero-sized fields" {
     const list_var = try type_store.freshFromContent(.{ .structure = .{ .list = record_var } });
 
     // Convert to layout - should be list_of_zst
-    const list_layout_idx = try layout_store.addTypeVar(list_var);
+    const list_layout_idx = try layout_store.addTypeVar(list_var, &type_scope);
     const list_layout = layout_store.getLayout(list_layout_idx);
 
     try testing.expect(list_layout.tag == .list_of_zst);
@@ -2118,6 +2205,8 @@ test "alignment - record with log2 alignment representation" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Test 1: Record with U8 field (alignment 1, log2 = 0)
@@ -2130,7 +2219,7 @@ test "alignment - record with log2 alignment representation" {
         const ext = try type_store.freshFromContent(.{ .structure = .empty_record });
         const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
 
-        const record_layout_idx = try layout_store.addTypeVar(record_var);
+        const record_layout_idx = try layout_store.addTypeVar(record_var, &type_scope);
         const record_layout = layout_store.getLayout(record_layout_idx);
 
         // The record was optimized to record
@@ -2153,7 +2242,7 @@ test "alignment - record with log2 alignment representation" {
         const ext = try type_store.freshFromContent(.{ .structure = .empty_record });
         const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
 
-        const record_layout_idx = try layout_store.addTypeVar(record_var);
+        const record_layout_idx = try layout_store.addTypeVar(record_var, &type_scope);
         const record_layout = layout_store.getLayout(record_layout_idx);
 
         // The record was optimized to record
@@ -2176,7 +2265,7 @@ test "alignment - record with log2 alignment representation" {
         const ext = try type_store.freshFromContent(.{ .structure = .empty_record });
         const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
 
-        const record_layout_idx = try layout_store.addTypeVar(record_var);
+        const record_layout_idx = try layout_store.addTypeVar(record_var, &type_scope);
         const record_layout = layout_store.getLayout(record_layout_idx);
 
         // The record was optimized to record
@@ -2202,7 +2291,7 @@ test "alignment - record with log2 alignment representation" {
         const ext = try type_store.freshFromContent(.{ .structure = .empty_record });
         const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
 
-        const record_layout_idx = try layout_store.addTypeVar(record_var);
+        const record_layout_idx = try layout_store.addTypeVar(record_var, &type_scope);
         const record_layout = layout_store.getLayout(record_layout_idx);
 
         try testing.expect(record_layout.tag == .record);
@@ -2229,6 +2318,8 @@ test "record fields sorted by alignment then name" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create types with different alignments
@@ -2255,7 +2346,7 @@ test "record fields sorted by alignment then name" {
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
 
     // Convert to layout
-    const record_layout_idx = try layout_store.addTypeVar(record_var);
+    const record_layout_idx = try layout_store.addTypeVar(record_var, &type_scope);
     const record_layout = layout_store.getLayout(record_layout_idx);
 
     try testing.expect(record_layout.tag == .record);
@@ -2309,6 +2400,8 @@ test "record fields with same alignment sorted by name" {
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create types with same alignment
@@ -2333,7 +2426,7 @@ test "record fields with same alignment sorted by name" {
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
 
     // Convert to layout
-    const record_layout_idx = try layout_store.addTypeVar(record_var);
+    const record_layout_idx = try layout_store.addTypeVar(record_var, &type_scope);
     const record_layout = layout_store.getLayout(record_layout_idx);
 
     try testing.expect(record_layout.tag == .record);
@@ -2378,6 +2471,8 @@ test "addTypeVar - maximum nesting depth" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create deeply nested record structure
@@ -2401,7 +2496,7 @@ test "addTypeVar - maximum nesting depth" {
     }
 
     // This should still work - we don't want arbitrary limits on nesting
-    const result = try layout_store.addTypeVar(current_var);
+    const result = try layout_store.addTypeVar(current_var, &type_scope);
     const result_layout = layout_store.getLayout(result);
     try testing.expect(result_layout.tag == .record);
 }
@@ -2417,6 +2512,8 @@ test "addTypeVar - record with maximum fields" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create record with many fields
@@ -2449,7 +2546,7 @@ test "addTypeVar - record with maximum fields" {
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
     // Should handle large number of fields
-    const result = try layout_store.addTypeVar(record_var);
+    const result = try layout_store.addTypeVar(record_var, &type_scope);
     const result_layout = layout_store.getLayout(result);
 
     switch (result_layout.tag) {
@@ -2472,6 +2569,8 @@ test "addTypeVar - record field alignments differ between targets" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create fields with different alignments on 32-bit vs 64-bit
@@ -2496,7 +2595,7 @@ test "addTypeVar - record field alignments differ between targets" {
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
-    const result = try layout_store.addTypeVar(record_var);
+    const result = try layout_store.addTypeVar(record_var, &type_scope);
     const result_layout = layout_store.getLayout(result);
 
     switch (result_layout.tag) {
@@ -2564,6 +2663,8 @@ test "addTypeVar - record field sorting follows alignment then name order" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create fields with different alignments to test sorting
@@ -2593,7 +2694,7 @@ test "addTypeVar - record field sorting follows alignment then name order" {
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
-    const result = try layout_store.addTypeVar(record_var);
+    const result = try layout_store.addTypeVar(record_var, &type_scope);
     const result_layout = layout_store.getLayout(result);
 
     switch (result_layout.tag) {
@@ -2650,6 +2751,8 @@ test "addTypeVar - pointer types have target-dependent alignment" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create types that contain pointers
@@ -2658,9 +2761,9 @@ test "addTypeVar - pointer types have target-dependent alignment" {
     const list_var = try type_store.freshFromContent(.{ .structure = .{ .list = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } }) } });
 
     // Convert to layouts
-    const str_idx = try layout_store.addTypeVar(str_var);
-    const box_idx = try layout_store.addTypeVar(box_var);
-    const list_idx = try layout_store.addTypeVar(list_var);
+    const str_idx = try layout_store.addTypeVar(str_var, &type_scope);
+    const box_idx = try layout_store.addTypeVar(box_var, &type_scope);
+    const list_idx = try layout_store.addTypeVar(list_var, &type_scope);
 
     const str_layout = layout_store.getLayout(str_idx);
     const box_layout = layout_store.getLayout(box_idx);
@@ -2692,6 +2795,8 @@ test "addTypeVar - record with very long field names" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create record with very long field names
@@ -2718,7 +2823,7 @@ test "addTypeVar - record with very long field names" {
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
     // Should handle long field names
-    const result = try layout_store.addTypeVar(record_var);
+    const result = try layout_store.addTypeVar(record_var, &type_scope);
     const result_layout = layout_store.getLayout(result);
     try testing.expect(result_layout.tag == .record);
 }
@@ -2734,6 +2839,8 @@ test "addTypeVar - alternating zero-sized and non-zero-sized fields" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create record with alternating zero and non-zero sized fields
@@ -2767,7 +2874,7 @@ test "addTypeVar - alternating zero-sized and non-zero-sized fields" {
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
-    const result = try layout_store.addTypeVar(record_var);
+    const result = try layout_store.addTypeVar(record_var, &type_scope);
     const result_layout = layout_store.getLayout(result);
 
     switch (result_layout.tag) {
@@ -2791,6 +2898,8 @@ test "addTypeVar - record field type changes through alias" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create an alias that points to a concrete type
@@ -2811,7 +2920,7 @@ test "addTypeVar - record field type changes through alias" {
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
-    const result = try layout_store.addTypeVar(record_var);
+    const result = try layout_store.addTypeVar(record_var, &type_scope);
     const result_layout = layout_store.getLayout(result);
 
     switch (result_layout.tag) {
@@ -2841,6 +2950,8 @@ test "addTypeVar - mixed container types" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create complex nested structure: List(Box(Record { a: Str, b: List(U64) }))
@@ -2876,7 +2987,7 @@ test "addTypeVar - mixed container types" {
     const outer_list_var = try type_store.freshFromContent(.{ .structure = .{ .list = box_var } });
 
     // Should handle complex nesting
-    const result = try layout_store.addTypeVar(outer_list_var);
+    const result = try layout_store.addTypeVar(outer_list_var, &type_scope);
     const result_layout = layout_store.getLayout(result);
 
     // Verify it's a list
@@ -2924,6 +3035,8 @@ test "addTypeVar - record size calculation with padding" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create record that requires padding: { a: U8, b: U64, c: U16 }
@@ -2954,7 +3067,7 @@ test "addTypeVar - record size calculation with padding" {
     const empty_ext = try type_store.freshFromContent(.{ .structure = .empty_record });
     const record_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
-    const result = try layout_store.addTypeVar(record_var);
+    const result = try layout_store.addTypeVar(record_var, &type_scope);
     const result_layout = layout_store.getLayout(result);
 
     switch (result_layout.tag) {
@@ -2997,6 +3110,8 @@ test "addTypeVar - all scalar types use scalar optimization" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Test Box(I32) - should use box with i32 sentinel
@@ -3004,7 +3119,7 @@ test "addTypeVar - all scalar types use scalar optimization" {
         const i32_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
         const box_i32_var = try type_store.freshFromContent(.{ .structure = .{ .box = i32_var } });
 
-        const result = try layout_store.addTypeVar(box_i32_var);
+        const result = try layout_store.addTypeVar(box_i32_var, &type_scope);
         const result_layout = layout_store.getLayout(result);
 
         try testing.expect(result_layout.tag == .box);
@@ -3016,7 +3131,7 @@ test "addTypeVar - all scalar types use scalar optimization" {
         const f64_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } });
         const box_f64_var = try type_store.freshFromContent(.{ .structure = .{ .box = f64_var } });
 
-        const result = try layout_store.addTypeVar(box_f64_var);
+        const result = try layout_store.addTypeVar(box_f64_var, &type_scope);
         const result_layout = layout_store.getLayout(result);
 
         try testing.expect(result_layout.tag == .box);
@@ -3044,7 +3159,7 @@ test "addTypeVar - all scalar types use scalar optimization" {
         const str_var = try type_store.freshFromContent(.{ .structure = .str });
         const box_str_var = try type_store.freshFromContent(.{ .structure = .{ .box = str_var } });
 
-        const result = try layout_store.addTypeVar(box_str_var);
+        const result = try layout_store.addTypeVar(box_str_var, &type_scope);
         const result_layout = layout_store.getLayout(result);
 
         try testing.expect(result_layout.tag == .box);
@@ -3063,6 +3178,8 @@ test "addTypeVar - list of scalar types uses scalar optimization" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Test List(U8) - should use list with u8 sentinel
@@ -3070,7 +3187,7 @@ test "addTypeVar - list of scalar types uses scalar optimization" {
         const u8_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
         const list_u8_var = try type_store.freshFromContent(.{ .structure = .{ .list = u8_var } });
 
-        const result = try layout_store.addTypeVar(list_u8_var);
+        const result = try layout_store.addTypeVar(list_u8_var, &type_scope);
         const result_layout = layout_store.getLayout(result);
 
         try testing.expect(result_layout.tag == .list);
@@ -3082,7 +3199,7 @@ test "addTypeVar - list of scalar types uses scalar optimization" {
         const f32_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } });
         const list_f32_var = try type_store.freshFromContent(.{ .structure = .{ .list = f32_var } });
 
-        const result = try layout_store.addTypeVar(list_f32_var);
+        const result = try layout_store.addTypeVar(list_f32_var, &type_scope);
         const result_layout = layout_store.getLayout(result);
 
         try testing.expect(result_layout.tag == .list);
@@ -3110,7 +3227,7 @@ test "addTypeVar - list of scalar types uses scalar optimization" {
         const str_var = try type_store.freshFromContent(.{ .structure = .str });
         const list_str_var = try type_store.freshFromContent(.{ .structure = .{ .list = str_var } });
 
-        const result = try layout_store.addTypeVar(list_str_var);
+        const result = try layout_store.addTypeVar(list_str_var, &type_scope);
         const result_layout = layout_store.getLayout(result);
 
         try testing.expect(result_layout.tag == .list);
@@ -3129,6 +3246,8 @@ test "addTypeVar - box and list of non-scalar types use indexed approach" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a record type (non-scalar)
@@ -3144,7 +3263,7 @@ test "addTypeVar - box and list of non-scalar types use indexed approach" {
     {
         const box_record_var = try type_store.freshFromContent(.{ .structure = .{ .box = record_var } });
 
-        const result = try layout_store.addTypeVar(box_record_var);
+        const result = try layout_store.addTypeVar(box_record_var, &type_scope);
         const result_layout = layout_store.getLayout(result);
 
         try testing.expect(result_layout.tag == .box);
@@ -3158,7 +3277,7 @@ test "addTypeVar - box and list of non-scalar types use indexed approach" {
     {
         const list_record_var = try type_store.freshFromContent(.{ .structure = .{ .list = record_var } });
 
-        const result = try layout_store.addTypeVar(list_record_var);
+        const result = try layout_store.addTypeVar(list_record_var, &type_scope);
         const result_layout = layout_store.getLayout(result);
 
         try testing.expect(result_layout.tag == .list);
@@ -3174,7 +3293,7 @@ test "addTypeVar - box and list of non-scalar types use indexed approach" {
         const list_i32_var = try type_store.freshFromContent(.{ .structure = .{ .list = i32_var } });
         const box_list_var = try type_store.freshFromContent(.{ .structure = .{ .box = list_i32_var } });
 
-        const result = try layout_store.addTypeVar(box_list_var);
+        const result = try layout_store.addTypeVar(box_list_var, &type_scope);
         const result_layout = layout_store.getLayout(result);
 
         try testing.expect(result_layout.tag == .box);
@@ -3196,6 +3315,8 @@ test "addTypeVar - host opaque types use scalar optimization" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a flex var (becomes host opaque when boxed)
@@ -3205,7 +3326,7 @@ test "addTypeVar - host opaque types use scalar optimization" {
     {
         const box_flex_var = try type_store.freshFromContent(.{ .structure = .{ .box = flex_var } });
 
-        const result = try layout_store.addTypeVar(box_flex_var);
+        const result = try layout_store.addTypeVar(box_flex_var, &type_scope);
         const result_layout = layout_store.getLayout(result);
 
         try testing.expect(result_layout.tag == .box);
@@ -3216,7 +3337,7 @@ test "addTypeVar - host opaque types use scalar optimization" {
     {
         const list_flex_var = try type_store.freshFromContent(.{ .structure = .{ .list = flex_var } });
 
-        const result = try layout_store.addTypeVar(list_flex_var);
+        const result = try layout_store.addTypeVar(list_flex_var, &type_scope);
         const result_layout = layout_store.getLayout(result);
 
         try testing.expect(result_layout.tag == .list);
@@ -3235,6 +3356,8 @@ test "addTypeVar - mixed scalar optimization in nested structures" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create List(Box(I64)) - List should use index, Box should use scalar
@@ -3242,7 +3365,7 @@ test "addTypeVar - mixed scalar optimization in nested structures" {
     const box_i64_var = try type_store.freshFromContent(.{ .structure = .{ .box = i64_var } });
     const list_box_var = try type_store.freshFromContent(.{ .structure = .{ .list = box_i64_var } });
 
-    const result = try layout_store.addTypeVar(list_box_var);
+    const result = try layout_store.addTypeVar(list_box_var, &type_scope);
     const result_layout = layout_store.getLayout(result);
 
     // Outer list should use index approach since Box(I64) is not a scalar
@@ -3265,6 +3388,8 @@ test "addTypeVar - all integer precisions use scalar optimization" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     const int_precisions = [_]types.Num.Int.Precision{ .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 };
@@ -3274,7 +3399,7 @@ test "addTypeVar - all integer precisions use scalar optimization" {
         const int_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = precision } } } });
         const box_int_var = try type_store.freshFromContent(.{ .structure = .{ .box = int_var } });
 
-        const box_result = try layout_store.addTypeVar(box_int_var);
+        const box_result = try layout_store.addTypeVar(box_int_var, &type_scope);
         const box_layout = layout_store.getLayout(box_result);
 
         try testing.expect(box_layout.tag == .box);
@@ -3296,7 +3421,7 @@ test "addTypeVar - all integer precisions use scalar optimization" {
         // Test List(IntType)
         const list_int_var = try type_store.freshFromContent(.{ .structure = .{ .list = int_var } });
 
-        const list_result = try layout_store.addTypeVar(list_int_var);
+        const list_result = try layout_store.addTypeVar(list_int_var, &type_scope);
         const list_layout = layout_store.getLayout(list_result);
 
         try testing.expect(list_layout.tag == .list);
@@ -3315,6 +3440,8 @@ test "addTypeVar - all boolean precisions use scalar optimization" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Test Box(Bool)
@@ -3361,6 +3488,8 @@ test "addTypeVar - all frac precisions use scalar optimization" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     const frac_precisions = [_]types.Num.Frac.Precision{ .f32, .f64, .dec };
@@ -3370,7 +3499,7 @@ test "addTypeVar - all frac precisions use scalar optimization" {
         const frac_var = try type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = precision } } } });
         const box_frac_var = try type_store.freshFromContent(.{ .structure = .{ .box = frac_var } });
 
-        const box_result = try layout_store.addTypeVar(box_frac_var);
+        const box_result = try layout_store.addTypeVar(box_frac_var, &type_scope);
         const box_layout = layout_store.getLayout(box_result);
 
         try testing.expect(box_layout.tag == .box);
@@ -3385,7 +3514,7 @@ test "addTypeVar - all frac precisions use scalar optimization" {
         // Test List(FracType)
         const list_frac_var = try type_store.freshFromContent(.{ .structure = .{ .list = frac_var } });
 
-        const list_result = try layout_store.addTypeVar(list_frac_var);
+        const list_result = try layout_store.addTypeVar(list_frac_var, &type_scope);
         const list_layout = layout_store.getLayout(list_result);
 
         try testing.expect(list_layout.tag == .list);
@@ -3405,6 +3534,8 @@ test "layouts_by_var uses ArrayListMap with pre-allocation" {
 
     // Create layout store with types store
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create some type variables
@@ -3413,9 +3544,9 @@ test "layouts_by_var uses ArrayListMap with pre-allocation" {
     const list_var = try type_store.freshFromContent(.{ .structure = .{ .list = num_var } });
 
     // Convert to layouts
-    _ = try layout_store.addTypeVar(str_var);
-    _ = try layout_store.addTypeVar(num_var);
-    _ = try layout_store.addTypeVar(list_var);
+    _ = try layout_store.addTypeVar(str_var, &type_scope);
+    _ = try layout_store.addTypeVar(num_var, &type_scope);
+    _ = try layout_store.addTypeVar(list_var, &type_scope);
 
     // Verify variables were created
     try testing.expect(str_var != num_var);
@@ -3529,6 +3660,8 @@ test "putRecord and getRecordFieldOffsetByName" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
+    var type_scope = TypeScope.init(gpa);
+    defer type_scope.deinit();
     defer layout_store.deinit();
 
     // Create a record with out-of-order fields

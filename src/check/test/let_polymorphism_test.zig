@@ -10,7 +10,10 @@ const can = @import("can");
 const Check = @import("../Check.zig");
 
 const TypesStore = types.Store;
+const Can = can.Can;
+const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
+const CanonicalizedExpr = can.Can.CanonicalizedExpr;
 const testing = std.testing;
 const test_allocator = testing.allocator;
 const Instantiate = types.instantiate.Instantiate;
@@ -484,4 +487,299 @@ test "let-polymorphism preserves sharing within single instantiation" {
         .{ .ident = "a", .var_ = int_var },
     });
     try testing.expect(inst != inst2);
+}
+
+/// Helper to parse, canonicalize, and type check source code
+fn typeCheckSource(allocator: std.mem.Allocator, source: []const u8) !struct {
+    module_env: *ModuleEnv,
+    parse_ast: *parse.AST,
+    czer: *Can,
+    checker: *Check,
+    has_type_errors: bool,
+    canon_expr_idx: Can.CanonicalizedExpr,
+} {
+    // Set up module environment
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, source);
+
+    // Parse
+    const parse_ast = try allocator.create(parse.AST);
+    parse_ast.* = try parse.parseExpr(&module_env.common, module_env.gpa);
+
+    // Empty scratch space
+    parse_ast.store.emptyScratch();
+
+    // Initialize CIR fields
+    try module_env.initCIRFields(allocator, "test");
+
+    // Canonicalize
+    const czer = try allocator.create(Can);
+    czer.* = try Can.init(module_env, parse_ast, null);
+
+    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+    const canon_result = try czer.canonicalizeExpr(expr_idx);
+    const canon_expr = canon_result orelse return error.CanonicalizeError;
+
+    // Type check
+    const checker = try allocator.create(Check);
+    const empty_modules: []const *ModuleEnv = &.{};
+    checker.* = try Check.init(allocator, &module_env.types, module_env, empty_modules, &module_env.store.regions);
+
+    _ = try checker.checkExpr(canon_expr.get_idx());
+
+    const has_type_errors = checker.problems.problems.items.len > 0;
+
+    return .{
+        .module_env = module_env,
+        .parse_ast = parse_ast,
+        .czer = czer,
+        .checker = checker,
+        .has_type_errors = has_type_errors,
+        .canon_expr_idx = canon_expr,
+    };
+}
+
+fn cleanupTypeCheckSource(result: anytype, allocator: std.mem.Allocator) void {
+    result.checker.deinit();
+    allocator.destroy(result.checker);
+    result.czer.deinit();
+    allocator.destroy(result.czer);
+    result.parse_ast.deinit(allocator);
+    allocator.destroy(result.parse_ast);
+    result.module_env.deinit();
+    allocator.destroy(result.module_env);
+}
+
+test "identity function should have polymorphic parameter type" {
+    const source = "|x| x";
+
+    const result = try typeCheckSource(test_allocator, source);
+    defer cleanupTypeCheckSource(result, test_allocator);
+
+    // The canonicalized expression is already computed in typeCheckSource
+    const expr_idx = result.canon_expr_idx.get_idx();
+    const cir_expr = result.module_env.store.getExpr(expr_idx);
+
+    // Verify it's a lambda
+    try testing.expect(cir_expr == .e_lambda);
+
+    // Get the lambda's type
+    const lambda_var = ModuleEnv.varFrom(expr_idx);
+    const lambda_resolved = result.module_env.types.resolveVar(lambda_var);
+
+    // The lambda should have a function type
+    try testing.expect(lambda_resolved.desc.content == .structure);
+
+    const structure = lambda_resolved.desc.content.structure;
+    const func = switch (structure) {
+        .fn_pure => |f| f,
+        .fn_effectful => |f| f,
+        .fn_unbound => |f| f,
+        else => return error.NotAFunction,
+    };
+
+    // Get the parameter type
+    const param_types = result.module_env.types.sliceVars(func.args);
+    try testing.expect(param_types.len == 1);
+
+    const param_var = param_types[0];
+    const param_resolved = result.module_env.types.resolveVar(param_var);
+
+    // The parameter should be a polymorphic variable (flex_var or rigid_var)
+    // NOT an error type!
+    const is_polymorphic = param_resolved.desc.content == .flex_var or
+        param_resolved.desc.content == .rigid_var;
+
+    try testing.expect(is_polymorphic);
+}
+
+test "nested identity in apply function should have polymorphic types" {
+    const source =
+        \\{
+        \\    id = |x| x
+        \\    app = |f, val| f(val)
+        \\    app(id, 10)
+        \\}
+    ;
+
+    const result = try typeCheckSource(test_allocator, source);
+    defer cleanupTypeCheckSource(result, test_allocator);
+
+    // Find the id function in the canonicalized output
+    // This is more complex, but we want to check that when id is used
+    // inside app, it still has polymorphic types
+
+    // Should type check without errors
+    try testing.expect(!result.has_type_errors);
+}
+
+test "apply function with identity should resolve types correctly" {
+    const source =
+        \\{
+        \\    id = |x| x
+        \\    app = |f, val| f(val)
+        \\    num = app(id, 42)
+        \\    str = app(id, "hello")
+        \\    { num, str }
+        \\}
+    ;
+
+    const result = try typeCheckSource(test_allocator, source);
+    defer cleanupTypeCheckSource(result, test_allocator);
+
+    // This test should now pass with our let-polymorphism implementation
+    // The id function is properly generalized and can be used polymorphically
+
+    // Should type check without errors
+    try testing.expect(!result.has_type_errors);
+}
+
+test "deeply nested polymorphic functions" {
+    const source =
+        \\{
+        \\    id = |x| x
+        \\    app = |f, val| f(val)
+        \\    twice = |f, val| f(f(val))
+        \\    
+        \\    result1 = twice(id, 42)
+        \\    result2 = app(|x| app(id, x), 100)
+        \\    
+        \\    { result1, result2 }
+        \\}
+    ;
+
+    const result = try typeCheckSource(test_allocator, source);
+    defer cleanupTypeCheckSource(result, test_allocator);
+
+    // Should type check without errors
+    try testing.expect(!result.has_type_errors);
+}
+
+/// Helper to run parsing, canonicalization, and type checking on an expression
+fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
+    module_env: *ModuleEnv,
+    parse_ast: *parse.AST,
+    cir: *ModuleEnv,
+    can: *Can,
+    checker: *Check,
+    has_type_errors: bool,
+} {
+    // Set up module environment
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, source);
+
+    // Parse
+    const parse_ast = try allocator.create(parse.AST);
+    parse_ast.* = try parse.parseExpr(&module_env.common, module_env.gpa);
+
+    // Check for parse errors
+    if (parse_ast.hasErrors()) {
+        return .{
+            .module_env = module_env,
+            .parse_ast = parse_ast,
+            .cir = undefined,
+            .can = undefined,
+            .checker = undefined,
+            .has_type_errors = true,
+        };
+    }
+
+    // Canonicalize - CIR is an alias for ModuleEnv, so we use the same module_env
+    const cir = module_env;
+
+    const czer = try allocator.create(Can);
+    czer.* = try Can.init(cir, parse_ast, null);
+
+    // Run canonicalization - for expressions
+    var canon_expr_idx: ?CanonicalizedExpr = null;
+    if (parse_ast.root_node_idx != 0) {
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+        canon_expr_idx = try czer.canonicalizeExpr(expr_idx);
+    }
+
+    // Type check - continue even if there are parse errors
+    const checker = try allocator.create(Check);
+    const empty_modules: []const *ModuleEnv = &.{};
+
+    checker.* = try Check.init(allocator, &module_env.types, cir, empty_modules, &cir.store.regions);
+
+    // For expressions, check the expression directly
+    if (canon_expr_idx) |expr_idx| {
+        _ = try checker.checkExpr(expr_idx.get_idx());
+    }
+
+    // Check if there are any type errors
+    const has_type_errors = checker.problems.problems.items.len > 0;
+
+    return .{
+        .module_env = module_env,
+        .parse_ast = parse_ast,
+        .cir = cir,
+        .can = czer,
+        .checker = checker,
+        .has_type_errors = has_type_errors,
+    };
+}
+
+fn cleanupExpr(result: anytype, allocator: std.mem.Allocator) void {
+    result.checker.deinit();
+    allocator.destroy(result.checker);
+    result.can.deinit();
+    allocator.destroy(result.can);
+    result.parse_ast.deinit(allocator);
+    allocator.destroy(result.parse_ast);
+    result.module_env.deinit();
+    allocator.destroy(result.module_env);
+}
+
+test "let-polymorphism with function composition" {
+    const source =
+        \\{
+        \\    compose = |f, g| |x| f(g(x))
+        \\    double = |x| x * 2
+        \\    add_one = |x| x + 1
+        \\    num_compose = compose(double, add_one)
+        \\    result1 = num_compose(5)
+        \\    { result1 }
+        \\}
+    ;
+
+    const result = try typeCheckExpr(test_allocator, source);
+    defer cleanupExpr(result, test_allocator);
+
+    // Verify no type errors - polymorphic function composition should type check
+    try testing.expect(!result.has_type_errors);
+}
+
+test "direct polymorphic identity usage - integration test" {
+    const source =
+        \\{
+        \\    id = |x| x
+        \\    a = id(1)
+        \\    b = id("x")
+        \\    { a, b }
+        \\}
+    ;
+
+    const result = try typeCheckExpr(test_allocator, source);
+    defer cleanupExpr(result, test_allocator);
+
+    try testing.expect(!result.has_type_errors);
+}
+
+test "higher-order function with polymorphic identity - integration test" {
+    const source =
+        \\{
+        \\    id = |x| x
+        \\    f = |g, v| g(v)
+        \\    a = f(id, 1)
+        \\    b = f(id, "x")
+        \\    { a, b }
+        \\}
+    ;
+
+    const result = try typeCheckExpr(test_allocator, source);
+    defer cleanupExpr(result, test_allocator);
+
+    try testing.expect(!result.has_type_errors);
 }

@@ -365,15 +365,11 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // on syntax errors to catch issues like semicolons that shouldn't be in Roc code.
     if (parse_ast.tokenize_diagnostics.items.len > 0) {
         // Found tokenization errors in test code
-        const first_diagnostic = parse_ast.tokenize_diagnostics.items[0];
-        std.debug.print("Test failed due to tokenization error: {}\n", .{first_diagnostic});
         return error.TokenizeError;
     }
 
     if (parse_ast.parse_diagnostics.items.len > 0) {
         // Found parse errors in test code
-        const first_diagnostic = parse_ast.parse_diagnostics.items[0];
-        std.debug.print("Test failed due to parse error: {} at token {}-{}\n", .{ first_diagnostic.tag, first_diagnostic.region.start, first_diagnostic.region.end });
         return error.SyntaxError;
     }
 

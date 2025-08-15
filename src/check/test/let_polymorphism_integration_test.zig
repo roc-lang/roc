@@ -573,3 +573,36 @@ test "let-polymorphism with complex nested structures" {
     // Verify no type errors - complex nested polymorphic structures should type check
     try testing.expect(!result.has_type_errors);
 }
+
+test "direct polymorphic identity usage" {
+    const source =
+        \\{
+        \\    id = |x| x
+        \\    a = id(1)
+        \\    b = id("x")
+        \\    { a, b }
+        \\}
+    ;
+
+    const result = try typeCheckExpr(test_allocator, source);
+    defer cleanup(result, test_allocator);
+
+    try testing.expect(!result.has_type_errors);
+}
+
+test "higher-order function with polymorphic identity" {
+    const source =
+        \\{
+        \\    id = |x| x
+        \\    f = |g, v| g(v)
+        \\    a = f(id, 1)
+        \\    b = f(id, "x")
+        \\    { a, b }
+        \\}
+    ;
+
+    const result = try typeCheckExpr(test_allocator, source);
+    defer cleanup(result, test_allocator);
+
+    try testing.expect(!result.has_type_errors);
+}

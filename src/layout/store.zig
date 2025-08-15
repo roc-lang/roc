@@ -17,6 +17,7 @@ const target = base.target;
 const Ident = base.Ident;
 const Region = base.Region;
 const Var = types.Var;
+const TypeScope = types.TypeScope;
 const Layout = layout_mod.Layout;
 const Idx = layout_mod.Idx;
 const RecordField = layout_mod.RecordField;
@@ -388,11 +389,11 @@ pub const Store = struct {
                 .int => layout.data.scalar.data.int.size(),
                 .frac => layout.data.scalar.data.frac.size(),
                 .bool => 1, // bool is 1 byte
-                .str => @sizeOf(builtins.str.RocStr), // RocStr is a 24-byte struct
+                .str => 3 * target_usize.size(), // ptr, byte length, capacity
                 .opaque_ptr => target_usize.size(), // opaque_ptr is pointer-sized
             },
             .box, .box_of_zst => target_usize.size(), // a Box is just a pointer to refcounted memory
-            .list => @sizeOf(builtins.list.RocList), // RocList is a 24-byte struct
+            .list => 3 * target_usize.size(), // ptr, length, capacity
             .list_of_zst => target_usize.size(), // Zero-sized lists might be different
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
@@ -719,6 +720,7 @@ pub const Store = struct {
     pub fn addTypeVar(
         self: *Self,
         unresolved_var: Var,
+        type_scope: *const TypeScope,
     ) (LayoutError || std.mem.Allocator.Error)!Idx {
         var current = self.types_store.resolveVar(unresolved_var);
 
@@ -1070,6 +1072,13 @@ pub const Store = struct {
                     },
                 },
                 .flex_var => |_| blk: {
+                    // First, check if this flex var is mapped in the TypeScope
+                    if (type_scope.lookup(current.var_)) |mapped_var| {
+                        // Found a mapping, resolve the mapped variable and continue
+                        current = self.types_store.resolveVar(mapped_var);
+                        continue :outer;
+                    }
+
                     // Flex vars can only be sent to the host if boxed.
                     if (self.work.pending_containers.len > 0) {
                         const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
@@ -1085,6 +1094,13 @@ pub const Store = struct {
                 },
                 .rigid_var => |ident| blk: {
                     _ = ident;
+                    // First, check if this rigid var is mapped in the TypeScope
+                    if (type_scope.lookup(current.var_)) |mapped_var| {
+                        // Found a mapping, resolve the mapped variable and continue
+                        current = self.types_store.resolveVar(mapped_var);
+                        continue :outer;
+                    }
+
                     // Rigid vars can only be sent to the host if boxed.
                     if (self.work.pending_containers.len > 0) {
                         const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
