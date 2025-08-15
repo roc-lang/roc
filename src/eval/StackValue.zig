@@ -5,6 +5,7 @@
 //! It provides methods for working with the value safely using the layout.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const types = @import("types");
 const can = @import("can");
@@ -37,11 +38,10 @@ ptr: ?*anyopaque,
 is_initialized: bool = false,
 
 /// Copy this stack value to a destination pointer with bounds checking
-pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, ops: *RocOps) void {
+pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, ops: *RocOps) !void {
     std.debug.assert(self.is_initialized); // Source must be initialized before copying
     if (self.ptr == null) {
-        std.log.err("Stack result pointer is null, cannot copy result", .{});
-        return;
+        return error.NullStackPointer;
     }
 
     // For closures, use getTotalSize to include capture data; for others use layoutSize
@@ -304,7 +304,7 @@ pub const TupleAccessor = struct {
     /// Set an element by copying from a source StackValue
     pub fn setElement(self: TupleAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
         const dest_element = try self.getElement(index);
-        source.copyToPtr(self.layout_cache, dest_element.ptr.?, ops);
+        try source.copyToPtr(self.layout_cache, dest_element.ptr.?, ops);
     }
 
     /// Get the number of elements in this tuple
@@ -409,7 +409,7 @@ pub const RecordAccessor = struct {
     /// Set a field by copying from a source StackValue
     pub fn setFieldByIndex(self: RecordAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
         const dest_field = try self.getFieldByIndex(index);
-        source.copyToPtr(self.layout_cache, dest_field.ptr.?, ops);
+        try source.copyToPtr(self.layout_cache, dest_field.ptr.?, ops);
     }
 
     /// Get the number of fields in this record
@@ -527,7 +527,9 @@ pub fn incref(self: StackValue) void {
         return;
     }
     // TODO: Add support for other refcounted types (lists, boxes) when implemented
-    std.debug.panic("called incref on a non-refcounted value: {}", .{self.layout.tag});
+    // Called incref on a non-refcounted value
+    std.debug.assert(false);
+    unreachable;
 }
 
 /// Decrement reference count for refcounted types
@@ -538,7 +540,9 @@ pub fn decref(self: StackValue, ops: *RocOps) void {
         return;
     }
     // TODO: Add support for other refcounted types (lists, boxes) when implemented
-    std.debug.panic("called decref on a non-refcounted value: {}", .{self.layout.tag});
+    // Called decref on a non-refcounted value
+    std.debug.assert(false);
+    unreachable;
 }
 
 /// Calculate total memory footprint for a value.
