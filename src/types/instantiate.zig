@@ -106,14 +106,6 @@ pub const Instantiate = struct {
                     // Remember this substitution for recursive references
                     try self.seen_vars_subs.put(resolved_var, fresh_var);
 
-                    // if (@import("builtin").mode == .Debug) {
-                    //     std.debug.print("    Created fresh var {} for rigid var {} ({s})\n", .{
-                    //         @intFromEnum(fresh_var),
-                    //         @intFromEnum(resolved_var),
-                    //         ident_bytes,
-                    //     });
-                    // }
-
                     return fresh_var;
                 }
             },
