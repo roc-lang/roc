@@ -115,7 +115,7 @@ pub const RocModules = struct {
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
         };
 
-        // Link zstd to bundle module if available (for compression)
+        // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
         if (zstd) |z| {
             self.bundle.linkLibrary(z.artifact("zstd"));
         }
