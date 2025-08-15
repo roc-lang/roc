@@ -16,36 +16,21 @@ addTwoF64 : F64 -> F64
 addTwoF64 = |x| x + 2.0
 ~~~
 # EXPECTED
-TYPE MISMATCH - simple_lambda_constraint_success.md:5:18:5:19
-TYPE MISMATCH - simple_lambda_constraint_success.md:9:21:9:24
+TYPE MISMATCH - simple_lambda_constraint_success.md:9:17:9:18
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**simple_lambda_constraint_success.md:5:18:5:19:**
-```roc
-addTwo = |x| x + 2
-```
-                 ^
-
-It is of type:
-    _Num(_size)_
-
-But you are trying to use it as:
-    _I64_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**simple_lambda_constraint_success.md:9:21:9:24:**
+**simple_lambda_constraint_success.md:9:17:9:18:**
 ```roc
 addTwoF64 = |x| x + 2.0
 ```
-                    ^^^
+                ^
 
 It is of type:
-    _Frac(_size)_
+    _F64_
 
 But you are trying to use it as:
-    _F64_
+    _Num(_size)_
 
 # TOKENS
 ~~~zig
@@ -130,9 +115,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.7 (type "Error -> Error"))
+		(patt @5.1-5.7 (type "I64 -> I64"))
 		(patt @9.1-9.10 (type "Error -> Error")))
 	(expressions
-		(expr @5.10-5.19 (type "Error -> Error"))
+		(expr @5.10-5.19 (type "I64 -> I64"))
 		(expr @9.13-9.24 (type "Error -> Error"))))
 ~~~

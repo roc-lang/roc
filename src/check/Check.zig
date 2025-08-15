@@ -1070,7 +1070,7 @@ pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type:
             _ = try self.unify(closure_var, lambda_var);
         },
         .e_lambda => |lambda| {
-            does_fx = try self.checkLambdaWithAnno(expr_idx, expr_region, lambda, expected_type);
+            does_fx = try self.checkLambdaWithAnno(expr_idx, expr_region, lambda, null);
         },
         .e_tuple => |tuple| {
             // Check tuple elements
@@ -1367,9 +1367,8 @@ fn checkLambdaWithAnno(
 
     var mb_expected_var: ?Var = null;
     var mb_expected_func: ?types_mod.Func = null;
-    var expected_return_type: ?Var = null;
 
-    // STEP 1: Extract expected function type and argument/return types
+    // STEP 1: Apply annotation constraints to parameters FIRST
     if (anno_type) |anno_var| {
         mb_expected_var = anno_var;
 
@@ -1384,8 +1383,6 @@ fn checkLambdaWithAnno(
 
         if (mb_expected_func) |func| {
             const expected_args = self.types.sliceVars(func.args);
-            expected_return_type = func.ret;
-
             if (expected_args.len == arg_patterns.len) {
                 // Constrain parameters with annotation types
                 for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
@@ -1398,17 +1395,12 @@ fn checkLambdaWithAnno(
                 }
             }
         }
-    } else {
-        // No annotation - just check patterns normally
-        for (arg_patterns) |pattern_idx| {
-            try self.checkPattern(pattern_idx);
-        }
     }
 
-    // STEP 2: Check the lambda body with expected return type
-    const is_effectful = if (expected_return_type) |expected_ret|
-        try self.checkExprWithExpected(lambda.body, expected_ret)
-    else
+    // STEP 2: Check the body with return type constraint propagation for literals
+    const is_effectful = if (mb_expected_func) |func| 
+        try self.checkExprWithExpected(lambda.body, func.ret)
+    else 
         try self.checkExpr(lambda.body);
 
     // STEP 3: Build the function type
@@ -1422,8 +1414,8 @@ fn checkLambdaWithAnno(
     }
 
     // STEP 4: Validate the function body against the annotation return type
-    if (expected_return_type) |expected_ret| {
-        _ = try self.unify(return_var, expected_ret);
+    if (mb_expected_func) |func| {
+        _ = try self.unify(return_var, func.ret);
     }
 
     // STEP 5: Validate the entire function against the annotation
@@ -1443,21 +1435,27 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
 
     switch (binop.op) {
         .add, .sub, .mul, .div, .rem, .pow, .div_trunc => {
-            // For arithmetic operations, check operands normally first, then unify
+            // Check operands first
             var does_fx = try self.checkExpr(binop.lhs);
             does_fx = try self.checkExpr(binop.rhs) or does_fx;
-
-            // Get operand variables
+            
+            // For now, we'll constrain both operands to be numbers
+            // In the future, this will use static dispatch based on the lhs type
             const lhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.lhs)));
             const rhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.rhs)));
             const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
 
-            // Unify operands - they must be the same type
-            _ = try self.unify(lhs_var, rhs_var);
+            // Create a fresh number variable for the operation
+            const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
+            const num_var_lhs = try self.freshFromContent(num_content, expr_region);
+            const num_var_rhs = try self.freshFromContent(num_content, expr_region);
+            const num_var_result = try self.freshFromContent(num_content, expr_region);
 
-            // Result should have the same type as the operands
-            _ = try self.unify(result_var, lhs_var);
-
+            // Unify lhs, rhs, and result with the number type
+            _ = try self.unify(num_var_lhs, lhs_var);
+            _ = try self.unify(num_var_rhs, rhs_var);
+            _ = try self.unify(result_var, num_var_result);
+            
             return does_fx;
         },
         .lt, .gt, .le, .ge, .eq, .ne => {
