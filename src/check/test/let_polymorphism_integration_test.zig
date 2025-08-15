@@ -92,7 +92,9 @@ test "polymorphic empty list" {
 }
 
 test "polymorphic cons function" {
-    // Skip: spread operator syntax may not be implemented
+    // This test is skipped because these features are missing:
+    //   - Spread operator `..` in list literals [fails at parse stage - syntax not recognized]
+    // TODO: Enable when spread operator is implemented in the parser
     if (true) return error.SkipZigTest;
 
     const source =
@@ -107,7 +109,14 @@ test "polymorphic cons function" {
 }
 
 test "polymorphic map function" {
-    // Skip: recursive functions and list indexing may not be fully implemented
+    // This test is skipped because these features are missing:
+    //   - If-then-else expressions [fails at parse stage - syntax not recognized]
+    //   - Recursive function calls [would fail at canonicalize stage - self-references not resolved]
+    //   - List slicing `xs[1..]` [fails at parse stage - range syntax not recognized]
+    //   - Spread operator `[x, ..xs]` [fails at parse stage - syntax not recognized]
+    //   - List equality comparison `xs == []` [may fail at type-check stage]
+    // Note: List indexing `xs[0]` does parse and canonicalize but may have type issues
+    // TODO: Enable when conditional expressions, recursion, and list operations are implemented
     if (true) return error.SkipZigTest;
 
     const source =
@@ -180,7 +189,14 @@ test "polymorphic function in let binding" {
 }
 
 test "polymorphic swap function" {
-    // Skip: record field access may not be fully implemented
+    // This test is skipped because these features are missing:
+    //   - Type inference for field access on polymorphic record parameters
+    //     [parses and canonicalizes successfully, fails at type-check stage]
+    // The syntax `pair.field` works for concrete types but fails when `pair` is
+    // a polymorphic parameter with fields that have different types across usages.
+    // The type checker cannot properly infer that `swap` should be polymorphic
+    // over records with `first` and `second` fields of arbitrary types.
+    // TODO: Enable when polymorphic record field access type inference is improved
     if (true) return error.SkipZigTest;
 
     const source =
@@ -197,7 +213,15 @@ test "polymorphic swap function" {
 }
 
 test "polymorphic fold function" {
-    // Skip: recursive functions and list operations may not be fully implemented
+    // This test is skipped because these features are missing:
+    //   - If-then-else expressions [fails at parse stage - syntax not recognized]
+    //   - Recursive function calls [would fail at canonicalize stage - self-references not resolved]
+    //   - List equality comparison `xs == []` [may fail at type-check stage]
+    //   - String concatenation operator `++` [fails at parse or canonicalize stage]
+    //   - List slicing `xs[1..]` [fails at parse stage - range syntax not recognized]
+    // Even if parsing succeeded, the canonicalizer doesn't support recursive
+    // let-bindings, and the type checker doesn't handle recursive polymorphic functions.
+    // TODO: Enable when conditional expressions, recursion, and list/string operations are implemented
     if (true) return error.SkipZigTest;
 
     const source =
@@ -244,7 +268,15 @@ test "polymorphic const function" {
 }
 
 test "shadowing of polymorphic values" {
-    // Skip: nested scopes with shadowing may not be fully implemented
+    // This test is skipped because these features are missing:
+    //   - Type checking for nested block expressions that return values
+    //     [parses and canonicalizes successfully, fails at type-check stage]
+    // The inner block `{ id = ...; b = ...; b }` should return `b` as its value.
+    // The type checker fails to properly handle the combination of:
+    //   1. A nested block that shadows a polymorphic identifier
+    //   2. The block returning a value (the final `b` expression)
+    //   3. Continuing to use the original polymorphic `id` after the block
+    // TODO: Enable when nested block expressions with value returns are fully supported
     if (true) return error.SkipZigTest;
 
     const source =
