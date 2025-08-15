@@ -18,7 +18,7 @@ test "record literal uses record_unbound" {
     {
         const source = "{ x: 42, y: \"hello\" }";
 
-        var env = try ModuleEnv.init(gpa, source);
+        var env = try ModuleEnv.init(gpa, source, null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -55,7 +55,7 @@ test "record literal uses record_unbound" {
     {
         const source2 = "{}";
 
-        var env = try ModuleEnv.init(gpa, source2);
+        var env = try ModuleEnv.init(gpa, source2, null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -92,7 +92,7 @@ test "record literal uses record_unbound" {
     {
         const source3 = "{ value: 123 }";
 
-        var env = try ModuleEnv.init(gpa, source3);
+        var env = try ModuleEnv.init(gpa, source3, null, null);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -136,7 +136,7 @@ test "record_unbound basic functionality" {
     const source = "{ x: 42, y: 99 }";
 
     // Test that record literals create record_unbound types
-    var env = try ModuleEnv.init(gpa, source);
+    var env = try ModuleEnv.init(gpa, source, null, null);
     defer env.deinit();
 
     try env.initCIRFields(gpa, "test");
@@ -178,7 +178,7 @@ test "record_unbound with multiple fields" {
     const gpa = std.testing.allocator;
     const source = "{ a: 123, b: 456, c: 789 }";
 
-    var env = try ModuleEnv.init(gpa, source);
+    var env = try ModuleEnv.init(gpa, source, null, null);
     defer env.deinit();
 
     try env.initCIRFields(gpa, "test");

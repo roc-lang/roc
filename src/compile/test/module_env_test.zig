@@ -160,7 +160,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //     // Module env takes ownership of Common env -- no need to deinit here
 
 //     // Create ModuleEnv with some types
-//     var original = try ModuleEnv.init(gpa, &common_env);
+//     var original = try ModuleEnv.init(gpa, &common_env, null, null);
 //     defer original.deinit();
 
 //     // Initialize CIR fields
@@ -256,7 +256,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //     // Module env takes ownership of Common env -- no need to deinit here
 
 //     // Create empty ModuleEnv
-//     var original = try ModuleEnv.init(gpa, &common_env);
+//     var original = try ModuleEnv.init(gpa, &common_env, null, null);
 //     defer original.deinit();
 
 //     // Don't initialize CIR fields to keep it truly empty
@@ -325,7 +325,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //     try common_env.calcLineStarts(gpa);
 
 //     // Create ModuleEnv with source
-//     var original = try ModuleEnv.init(gpa, &common_env);
+//     var original = try ModuleEnv.init(gpa, &common_env, null, null);
 //     defer original.deinit();
 
 //     // Initialize CIR fields

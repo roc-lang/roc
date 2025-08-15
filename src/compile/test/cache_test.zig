@@ -322,7 +322,7 @@
 //     ;
 
 //     // Parse the source
-//     var module_env = try ModuleEnv.init(gpa, source);
+//     var module_env = try ModuleEnv.init(gpa, source, null, null);
 //     defer module_env.deinit();
 
 //     try module_env.initCIRFields(gpa, "TestModule");
@@ -398,7 +398,7 @@
 // //     ;
 
 // //     // Parse the source
-// //     var module_env = try ModuleEnv.init(gpa, source);
+// //     var module_env = try ModuleEnv.init(gpa, source, null, null);
 // //     defer module_env.deinit();
 
 // //     try module_env.initCIRFields(gpa, "TestModule");

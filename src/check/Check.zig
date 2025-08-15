@@ -1916,7 +1916,7 @@ fn setProblemTypeMismatchDetail(self: *Self, problem_idx: problem.Problem.Idx, m
 
 //     const gpa = std.testing.allocator;
 
-//     var module_env = try ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+//     var module_env = try ModuleEnv.init(gpa, try gpa.dupe(u8, "", null, null));
 //     try module_env.initModuleEnvFields(gpa, "Test");
 //     defer module_env.deinit();
 
@@ -2067,7 +2067,7 @@ fn setProblemTypeMismatchDetail(self: *Self, problem_idx: problem.Problem.Idx, m
 //     const gpa = std.testing.allocator;
 
 //     // Create a minimal environment for testing
-//     var module_env = try ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+//     var module_env = try ModuleEnv.init(gpa, try gpa.dupe(u8, "", null, null));
 //     defer module_env.deinit();
 
 //     try module_env.initModuleEnvFields(gpa, "Test");
@@ -2172,7 +2172,7 @@ fn setProblemTypeMismatchDetail(self: *Self, problem_idx: problem.Problem.Idx, m
 //     const gpa = std.testing.allocator;
 
 //     // Create a minimal environment for testing
-//     var module_env = try ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+//     var module_env = try ModuleEnv.init(gpa, try gpa.dupe(u8, "", null, null));
 //     defer module_env.deinit();
 
 //     try module_env.initModuleEnvFields(gpa, "Test");
@@ -2283,7 +2283,7 @@ fn setProblemTypeMismatchDetail(self: *Self, problem_idx: problem.Problem.Idx, m
 //     // Module env takes ownership of Common env -- no need to deinit here
 
 //     // Create a minimal environment for testing
-//     var module_env = try ModuleEnv.init(gpa, &common_env);
+//     var module_env = try ModuleEnv.init(gpa, &common_env, null, null);
 //     defer module_env.deinit();
 
 //     try module_env.initModuleEnvFields(gpa, "Test");

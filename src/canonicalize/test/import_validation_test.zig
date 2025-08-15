@@ -23,7 +23,7 @@
 //     can: *Can,
 // } {
 //     const parse_env = try allocator.create(ModuleEnv);
-//     parse_env.* = try ModuleEnv.init(allocator, source);
+//     parse_env.* = try ModuleEnv.init(allocator, source, null, null);
 
 //     const ast = try allocator.create(parse.AST);
 //     ast.* = try parse.parse(parse_env);
@@ -52,7 +52,7 @@
 
 //     // Create module environment for "Json" module
 //     const json_env = try allocator.create(ModuleEnv);
-//     json_env.* = try ModuleEnv.init(allocator, "");
+//     json_env.* = try ModuleEnv.init(allocator, "", null, null);
 //     defer {
 //         json_env.deinit();
 //         allocator.destroy(json_env);
@@ -73,7 +73,7 @@
 
 //     // Create module environment for "Utils" module
 //     const utils_env = try allocator.create(ModuleEnv);
-//     utils_env.* = try ModuleEnv.init(allocator, "");
+//     utils_env.* = try ModuleEnv.init(allocator, "", null, null);
 //     defer {
 //         utils_env.deinit();
 //         allocator.destroy(utils_env);
@@ -110,7 +110,7 @@
 
 //     // Parse the source
 //     const parse_env = try allocator.create(ModuleEnv);
-//     parse_env.* = try ModuleEnv.init(allocator, source);
+//     parse_env.* = try ModuleEnv.init(allocator, source, null, null);
 //     defer {
 //         parse_env.deinit();
 //         allocator.destroy(parse_env);
@@ -195,7 +195,7 @@
 
 //     // Let's do it manually instead of using the helper to isolate the issue
 //     const parse_env = try allocator.create(ModuleEnv);
-//     parse_env.* = try ModuleEnv.init(allocator, source);
+//     parse_env.* = try ModuleEnv.init(allocator, source, null, null);
 //     defer {
 //         parse_env.deinit();
 //         allocator.destroy(parse_env);
@@ -525,7 +525,7 @@
 
 //     // Create a "MathUtils" module with some exposed definitions
 //     const math_env = try allocator.create(ModuleEnv);
-//     math_env.* = try ModuleEnv.init(allocator, "");
+//     math_env.* = try ModuleEnv.init(allocator, "", null, null);
 //     defer {
 //         math_env.deinit();
 //         allocator.destroy(math_env);
@@ -605,7 +605,7 @@
 
 //     // Test case where node index is not populated (should get 0)
 //     const empty_env = try allocator.create(ModuleEnv);
-//     empty_env.* = try ModuleEnv.init(allocator, "");
+//     empty_env.* = try ModuleEnv.init(allocator, "", null, null);
 //     defer {
 //         empty_env.deinit();
 //         allocator.destroy(empty_env);
@@ -670,7 +670,7 @@
 //     try expectEqual(@as(u32, 65535), std.math.maxInt(u16));
 
 //     // Test the diagnostic for exactly maxInt(u16) exports
-//     var env1 = try ModuleEnv.init(allocator, "");
+//     var env1 = try ModuleEnv.init(allocator, "", null, null);
 //     defer env1.deinit();
 //     try env1.initCIRFields(allocator, "Test");
 
@@ -692,7 +692,7 @@
 //     }
 
 //     // Test the diagnostic for exceeding the limit
-//     var env2 = try ModuleEnv.init(allocator, "");
+//     var env2 = try ModuleEnv.init(allocator, "", null, null);
 //     defer env2.deinit();
 //     try env2.initCIRFields(allocator, "Test");
 
