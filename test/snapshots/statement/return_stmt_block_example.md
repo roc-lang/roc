@@ -162,7 +162,7 @@ foo = |num| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "U64 -> Error")))
+		(patt @4.1-4.4 (type "U64 -> Result(Error, [TooBig])")))
 	(expressions
-		(expr @4.7-11.2 (type "U64 -> Error"))))
+		(expr @4.7-11.2 (type "U64 -> Result(Error, [TooBig])"))))
 ~~~

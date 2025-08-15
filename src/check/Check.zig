@@ -1392,14 +1392,25 @@ fn checkLambdaWithAnno(
     // For better constraint propagation, especially for numeric literals in lambda bodies,
     // we want to establish the return type constraint before checking the body.
     // However, to avoid breaking error reporting in other cases, we only do this
-    // when the expected return type is a concrete type (not a type variable)
+    // when the expected return type is a concrete base type (not a type variable, nominal type, etc.)
     var early_unify = false;
     if (mb_expected_func) |func| {
         const ret_resolved = self.types.resolveVar(func.ret);
         if (ret_resolved.desc.content == .structure) {
-            // The return type is concrete, unify early for better constraint propagation
-            _ = try self.unify(return_var, func.ret);
-            early_unify = true;
+            // Only do early unification for concrete base types (num, str, etc.)
+            // Skip nominal types, tag unions, and other complex types
+            const should_early_unify = switch (ret_resolved.desc.content.structure) {
+                .num, .str => true,
+                .nominal_type, .tag_union, .fn_pure, .fn_effectful, .fn_unbound => false,
+                .list, .box, .tuple, .record, .record_unbound, .record_poly => false,
+                .empty_record, .empty_tag_union, .list_unbound => false,
+            };
+
+            if (should_early_unify) {
+                // The return type is a concrete base type, unify early for better constraint propagation
+                _ = try self.unify(return_var, func.ret);
+                early_unify = true;
+            }
         }
     }
 

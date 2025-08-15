@@ -105,6 +105,24 @@ Is there an `import` or `exposing` missing up-top?
              ^^^^^^^^^^^^^
 
 
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**Color.md:23:5:23:33:**
+```roc
+    Color.RGBA(r, g, b, rounded)
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The tag is:
+    _RGBA(U8, U8, U8, Num(_size))_
+
+But it should be one of:
+    _[Hex(Str), Named(Str), RGB(U8, U8, U8), RGBA(U8, U8, U8, Dec)]_
+
+**Hint:** The nominal type has a tag with the same name, but different args:
+
+    _RGBA(U8, U8, U8, Dec)_
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **Color.md:26:7:26:46:**
@@ -1091,7 +1109,7 @@ is_named_color = |str| {
 		(patt @21.1-21.5 (type "U8, U8, U8, U8 -> Error"))
 		(patt @27.1-27.4 (type "Error"))
 		(patt @49.1-49.7 (type "Error -> Str"))
-		(patt @61.1-61.6 (type "Str -> Error"))
+		(patt @61.1-61.6 (type "Str -> Result(Error, [UnknownColor(Str)])"))
 		(patt @67.1-67.15 (type "_arg -> _ret")))
 	(type_decls
 		(nominal @10.1-15.2 (type "Error")
@@ -1101,6 +1119,6 @@ is_named_color = |str| {
 		(expr @21.8-24.2 (type "U8, U8, U8, U8 -> Error"))
 		(expr @27.7-46.2 (type "Error"))
 		(expr @49.10-54.2 (type "Error -> Str"))
-		(expr @61.9-65.50 (type "Str -> Error"))
+		(expr @61.9-65.50 (type "Str -> Result(Error, [UnknownColor(Str)])"))
 		(expr @67.18-71.2 (type "_arg -> _ret"))))
 ~~~
