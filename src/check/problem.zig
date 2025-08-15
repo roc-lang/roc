@@ -1207,7 +1207,7 @@ pub const ReportBuilder = struct {
         }
         try report.document.addReflowingText(" needs the ");
         try report.document.addReflowingText(arg_index);
-        try report.document.addReflowingText(" argumument to be:");
+        try report.document.addReflowingText(" argument to be:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(expected_type, .type_variable);

@@ -51,7 +51,7 @@ failPairDiffTypes = mkPair("1", 2)
 This argument is of type:
     _Str_
 
-But the function needs the first argumument to be:
+But the function needs the first argument to be:
     _Num(_size)_
 
 **INVALID NOMINAL TAG**
@@ -93,7 +93,7 @@ failWithImplicit = mkPairInferred("str", 2)
 This argument is of type:
     _Str_
 
-But the function needs the first argumument to be:
+But the function needs the first argument to be:
     _Num(_size)_
 
 # TOKENS
