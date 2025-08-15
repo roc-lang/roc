@@ -3503,8 +3503,51 @@ pub const Interpreter = struct {
 
             // Debug: Check what value is actually at the source address
             if (src_layout.tag == .scalar and src_layout.data.scalar.tag == .int) {
-                const src_int_ptr: *const i128 = @ptrCast(@alignCast(src_ptr));
-                self.traceInfo("Copying capture '{s}' ({} bytes) to field index {} [SOURCE VALUE: {}]", .{ capture_name, binding_size, field_index, src_int_ptr.* });
+                const precision = src_layout.data.scalar.data.int;
+                const value_str = switch (precision) {
+                    .u8 => blk: {
+                        const ptr: *const u8 = @ptrCast(@alignCast(src_ptr));
+                        break :blk std.fmt.allocPrint(self.allocator, "{}", .{ptr.*}) catch "?";
+                    },
+                    .i8 => blk: {
+                        const ptr: *const i8 = @ptrCast(@alignCast(src_ptr));
+                        break :blk std.fmt.allocPrint(self.allocator, "{}", .{ptr.*}) catch "?";
+                    },
+                    .u16 => blk: {
+                        const ptr: *const u16 = @ptrCast(@alignCast(src_ptr));
+                        break :blk std.fmt.allocPrint(self.allocator, "{}", .{ptr.*}) catch "?";
+                    },
+                    .i16 => blk: {
+                        const ptr: *const i16 = @ptrCast(@alignCast(src_ptr));
+                        break :blk std.fmt.allocPrint(self.allocator, "{}", .{ptr.*}) catch "?";
+                    },
+                    .u32 => blk: {
+                        const ptr: *const u32 = @ptrCast(@alignCast(src_ptr));
+                        break :blk std.fmt.allocPrint(self.allocator, "{}", .{ptr.*}) catch "?";
+                    },
+                    .i32 => blk: {
+                        const ptr: *const i32 = @ptrCast(@alignCast(src_ptr));
+                        break :blk std.fmt.allocPrint(self.allocator, "{}", .{ptr.*}) catch "?";
+                    },
+                    .u64 => blk: {
+                        const ptr: *const u64 = @ptrCast(@alignCast(src_ptr));
+                        break :blk std.fmt.allocPrint(self.allocator, "{}", .{ptr.*}) catch "?";
+                    },
+                    .i64 => blk: {
+                        const ptr: *const i64 = @ptrCast(@alignCast(src_ptr));
+                        break :blk std.fmt.allocPrint(self.allocator, "{}", .{ptr.*}) catch "?";
+                    },
+                    .u128 => blk: {
+                        const ptr: *const u128 = @ptrCast(@alignCast(src_ptr));
+                        break :blk std.fmt.allocPrint(self.allocator, "{}", .{ptr.*}) catch "?";
+                    },
+                    .i128 => blk: {
+                        const ptr: *const i128 = @ptrCast(@alignCast(src_ptr));
+                        break :blk std.fmt.allocPrint(self.allocator, "{}", .{ptr.*}) catch "?";
+                    },
+                };
+                defer if (!std.mem.eql(u8, value_str, "?")) self.allocator.free(value_str);
+                self.traceInfo("Copying capture '{s}' ({} bytes) to field index {} [SOURCE VALUE: {s}]", .{ capture_name, binding_size, field_index, value_str });
             } else {
                 self.traceInfo("Copying capture '{s}' ({} bytes) to field index {}", .{ capture_name, binding_size, field_index });
             }
@@ -3513,12 +3556,7 @@ pub const Interpreter = struct {
             src_value.copyWithoutRefcount(dest_field, self.layout_cache);
 
             // Debug: Verify the value was copied correctly
-            if (src_layout.tag == .scalar and src_layout.data.scalar.tag == .int) {
-                // Skip alignment check for debug - just verify it's non-null
-                if (dest_field.ptr != null) {
-                    self.traceInfo("After copy, destination is non-null", .{});
-                }
-            }
+            self.traceInfo("Copy completed successfully", .{});
         }
     }
 
