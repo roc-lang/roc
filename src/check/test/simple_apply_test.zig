@@ -119,10 +119,5 @@ test "apply used twice - the problem case" {
         _ = try checker.checkExpr(expr.get_idx());
     }
 
-    // This test represents the core let-polymorphism issue where the same polymorphic function
-    // is used with different types through higher-order function application.
-    // Currently this functionality is not fully implemented, so we skip this test.
-    if (checker.problems.problems.items.len > 0) {
-        return; // Known limitation - let-polymorphism through higher-order functions
-    }
+    try testing.expect(checker.problems.problems.items.len == 0);
 }
