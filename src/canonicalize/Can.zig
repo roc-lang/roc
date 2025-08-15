@@ -1899,8 +1899,11 @@ pub fn canonicalizeExpr(
                 }
 
                 // Not a module-qualified lookup, or qualifier not found, proceed with normal lookup
-                switch (self.scopeLookup(.ident, ident)) {
-                    .found => |pattern_idx| {
+                switch (self.scopeLookupWithDepth(.ident, ident)) {
+                    .found => |result| {
+                        const pattern_idx = result.pattern_idx;
+                        const scope_depth = result.scope_depth;
+
                         // Mark this pattern as used for unused variable checking
                         try self.used_patterns.put(self.env.gpa, pattern_idx, {});
 
@@ -1913,7 +1916,10 @@ pub fn canonicalizeExpr(
                         } }, ModuleEnv.varFrom(pattern_idx), region);
 
                         const free_vars_start = self.scratch_free_vars.top();
-                        try self.scratch_free_vars.append(self.env.gpa, pattern_idx);
+                        // Only add to free_vars if it's not from the top-level scope (scope_depth > 0)
+                        if (scope_depth > 0) {
+                            try self.scratch_free_vars.append(self.env.gpa, pattern_idx);
+                        }
                         const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
                         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
                     },
@@ -6054,6 +6060,40 @@ pub fn scopeLookup(
         return Scope.LookupResult{ .found = pattern };
     }
     return Scope.LookupResult{ .not_found = {} };
+}
+
+const ScopeDepthResult = struct {
+    pattern_idx: Pattern.Idx,
+    scope_depth: usize,
+};
+
+const ScopeDepthLookupResult = union(enum) {
+    found: ScopeDepthResult,
+    not_found: void,
+};
+
+pub fn scopeLookupWithDepth(
+    self: *Self,
+    comptime item_kind: Scope.ItemKind,
+    name: base.Ident.Idx,
+) ScopeDepthLookupResult {
+    var scope_idx = self.scopes.items.len;
+    while (scope_idx > 0) {
+        scope_idx -= 1;
+        const scope = &self.scopes.items[scope_idx];
+        const map = scope.itemsConst(item_kind);
+
+        var iter = map.iterator();
+        while (iter.next()) |entry| {
+            if (name.idx == entry.key_ptr.idx) {
+                return ScopeDepthLookupResult{ .found = ScopeDepthResult{
+                    .pattern_idx = entry.value_ptr.*,
+                    .scope_depth = scope_idx,
+                } };
+            }
+        }
+    }
+    return ScopeDepthLookupResult{ .not_found = {} };
 }
 
 /// Lookup a type variable in the scope hierarchy

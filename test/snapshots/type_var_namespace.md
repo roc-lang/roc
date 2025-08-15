@@ -26,6 +26,7 @@ main! = |_| {}
 UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:31:11:33
 UNDEFINED VARIABLE - type_var_namespace.md:11:14:11:24
 UNDEFINED VARIABLE - type_var_namespace.md:11:34:11:52
+TYPE MISMATCH - type_var_namespace.md:4:25:4:29
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **|>** is not expected in an expression.
@@ -60,6 +61,20 @@ Is there an `import` or `exposing` missing up-top?
 ```
                                  ^^^^^^^^^^^^^^^^^^
 
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_var_namespace.md:4:25:4:29:**
+```roc
+process : List(elem) -> elem
+```
+                        ^^^^
+
+It is of type:
+    _elem_
+
+But you are trying to use it as:
+    _elem_
 
 # TOKENS
 ~~~zig
@@ -188,9 +203,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.8 (type "List(elem) -> elem"))
+		(patt @5.1-5.8 (type "List(elem) -> Error"))
 		(patt @16.1-16.6 (type "_arg -> {}")))
 	(expressions
-		(expr @5.11-14.2 (type "List(elem) -> elem"))
+		(expr @5.11-14.2 (type "List(elem) -> Error"))
 		(expr @16.9-16.15 (type "_arg -> {}"))))
 ~~~

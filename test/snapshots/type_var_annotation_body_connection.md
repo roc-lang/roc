@@ -17,9 +17,22 @@ identity = |x| {
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - type_var_annotation_body_connection.md:6:13:6:14
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_var_annotation_body_connection.md:6:13:6:14:**
+```roc
+    thing = x  # refers to the value from the function parameter
+```
+            ^
+
+It is of type:
+    _a_
+
+But you are trying to use it as:
+    _a_
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
@@ -116,9 +129,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.9 (type "a -> a"))
+		(patt @4.1-4.9 (type "Error -> Error"))
 		(patt @10.1-10.6 (type "_arg -> {}")))
 	(expressions
-		(expr @4.12-8.2 (type "a -> a"))
+		(expr @4.12-8.2 (type "Error -> Error"))
 		(expr @10.9-10.15 (type "_arg -> {}"))))
 ~~~

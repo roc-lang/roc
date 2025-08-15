@@ -13,9 +13,22 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:14:5:21
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+The second argument to this function is not what I expect:
+**test_instantiated_arg_mismatch.md:5:14:5:21:**
+```roc
+    pair(42, "hello")
+```
+             ^^^^^^^
+
+This argument is of type:
+    _Str_
+
+But the function needs the second argumument to be:
+    _Num(_size)_
+
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),
@@ -90,5 +103,5 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "(Num(_size), Str)"))
+(expr @1.1-6.2 (type "(Error, Error)"))
 ~~~

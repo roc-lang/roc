@@ -1255,44 +1255,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         }
 
                         // Check the expression - new variables created here get the higher rank
-                        // If we have an annotation and the expression is a lambda, use special handling
-                        if (decl_stmt.annotation != null) {
-                            const decl_expr = self.cir.store.getExpr(decl_stmt.expr);
-                            if (decl_expr == .e_lambda) {
-                                const annotation = self.cir.store.getAnnotation(decl_stmt.annotation.?);
-                                const anno_var = ModuleEnv.varFrom(annotation.type_anno);
-                                const decl_expr_region = self.cir.store.getExprRegion(decl_stmt.expr);
-                                does_fx = try self.checkLambdaWithAnno(
-                                    decl_stmt.expr,
-                                    decl_expr_region,
-                                    decl_expr.e_lambda,
-                                    anno_var,
-                                ) or does_fx;
-                            } else if (decl_expr == .e_closure) {
-                                // Closures wrap lambdas, so get the lambda and handle it with annotation
-                                const lambda_expr = self.cir.store.getExpr(decl_expr.e_closure.lambda_idx);
-                                if (lambda_expr == .e_lambda) {
-                                    const annotation = self.cir.store.getAnnotation(decl_stmt.annotation.?);
-                                    const anno_var = ModuleEnv.varFrom(annotation.type_anno);
-                                    const lambda_region = self.cir.store.getExprRegion(decl_expr.e_closure.lambda_idx);
-                                    // First check the closure to set up captures
-                                    does_fx = try self.checkExpr(decl_stmt.expr) or does_fx;
-                                    // Then handle the lambda with annotation
-                                    does_fx = try self.checkLambdaWithAnno(
-                                        decl_expr.e_closure.lambda_idx,
-                                        lambda_region,
-                                        lambda_expr.e_lambda,
-                                        anno_var,
-                                    ) or does_fx;
-                                } else {
-                                    does_fx = try self.checkExpr(decl_stmt.expr) or does_fx;
-                                }
-                            } else {
-                                does_fx = try self.checkExpr(decl_stmt.expr) or does_fx;
-                            }
-                        } else {
-                            does_fx = try self.checkExpr(decl_stmt.expr) or does_fx;
-                        }
+                        does_fx = try self.checkExpr(decl_stmt.expr) or does_fx;
 
                         // Unify the pattern with the expression
                         const pattern_var: Var = @enumFromInt(@intFromEnum(decl_stmt.pattern));

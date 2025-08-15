@@ -49,6 +49,8 @@ main! = |_| {
 TYPE REDECLARED - type_alias_decl.md:7:1:7:37
 UNUSED VARIABLE - type_alias_decl.md:33:5:33:11
 UNUSED VARIABLE - type_alias_decl.md:36:5:36:10
+TYPE MISMATCH - type_alias_decl.md:30:14:30:17
+TYPE MISMATCH - type_alias_decl.md:33:14:33:40
 # PROBLEMS
 **TYPE REDECLARED**
 The type _Result_ is being redeclared.
@@ -91,6 +93,34 @@ The unused variable is declared here:
 ```
     ^^^^^
 
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_alias_decl.md:30:14:30:17:**
+```roc
+    userId = 123
+```
+             ^^^
+
+It is of type:
+    _Num(_size2)_
+
+But you are trying to use it as:
+    _UserId_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_alias_decl.md:33:14:33:40:**
+```roc
+    person = { name: "Alice", age: 30 }
+```
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It is of type:
+    _{ name: Str, age: Num(_size2) }_
+
+But you are trying to use it as:
+    _Person_
 
 # TOKENS
 ~~~zig
@@ -366,7 +396,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @27.1-27.6 (type "_arg -> Num(_size2)")))
+		(patt @27.1-27.6 (type "_arg -> Error")))
 	(type_decls
 		(alias @4.1-4.13 (type "UserId")
 			(ty-header @4.1-4.7 (name "UserId")))
@@ -393,5 +423,5 @@ main! = |_| {
 				(ty-args
 					(ty-var @22.11-22.15 (name "item"))))))
 	(expressions
-		(expr @27.9-39.2 (type "_arg -> Num(_size2)"))))
+		(expr @27.9-39.2 (type "_arg -> Error"))))
 ~~~
