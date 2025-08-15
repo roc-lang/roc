@@ -179,8 +179,8 @@ test "DirExtractWriter - basic functionality" {
     try writer.extractWriter().makeDir("test_dir");
 
     // Verify directory was created
-    const dir_stat = try tmp.dir.statFile("test_dir");
-    try testing.expect(dir_stat.kind == .directory);
+    var test_dir = try tmp.dir.openDir("test_dir", .{});
+    test_dir.close();
 
     // Create a file
     const file_writer = try writer.extractWriter().createFile("test.txt");

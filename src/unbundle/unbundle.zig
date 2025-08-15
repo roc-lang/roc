@@ -469,7 +469,7 @@ pub fn unbundleStream(
                 var bytes_remaining = entry.size;
                 while (bytes_remaining > 0) {
                     const to_read = @min(buffer.len, bytes_remaining);
-                    const bytes_read = try entry.reader().readAll(buffer[0..to_read]);
+                    const bytes_read = entry.reader().readAll(buffer[0..to_read]) catch return error.UnexpectedEndOfStream;
                     if (bytes_read == 0) return error.UnexpectedEndOfStream;
                     file_writer.writeAll(buffer[0..bytes_read]) catch return error.FileWriteFailed;
                     bytes_remaining -= bytes_read;
@@ -511,7 +511,7 @@ pub fn unbundleStream(
                 var bytes_remaining = entry.size;
                 while (bytes_remaining > 0) {
                     const to_read = @min(buffer.len, bytes_remaining);
-                    const bytes_read = try entry.reader().readAll(buffer[0..to_read]);
+                    const bytes_read = entry.reader().readAll(buffer[0..to_read]) catch return error.UnexpectedEndOfStream;
                     bytes_remaining -= bytes_read;
                 }
 

@@ -1261,12 +1261,11 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     try stdout.print("Time: {} ms\n", .{elapsed_ms});
 }
 
-fn rocUnbundle(_: Allocator, args: cli_args.UnbundleArgs) !void {
+fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
     const cwd = std.fs.cwd();
 
-    // Use arena allocator for all unbundle operations
     var had_errors = false;
 
     for (args.paths) |archive_path| {
@@ -1313,6 +1312,7 @@ fn rocUnbundle(_: Allocator, args: cli_args.UnbundleArgs) !void {
         // Unbundle the archive
         var error_ctx: unbundle.ErrorContext = undefined;
         unbundle.unbundleFiles(
+            allocator,
             archive_file.reader(),
             output_dir,
             basename,
