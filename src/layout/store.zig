@@ -388,17 +388,11 @@ pub const Store = struct {
                 .int => layout.data.scalar.data.int.size(),
                 .frac => layout.data.scalar.data.frac.size(),
                 .bool => 1, // bool is 1 byte
-                .str => switch (target_usize) {
-                    .u32 => 12, // 3 * 4 bytes (pointer + 2 usize fields)
-                    .u64 => 24, // 3 * 8 bytes (pointer + 2 usize fields)
-                },
+                .str => 3 * target_usize.size(), // ptr, byte length, capacity
                 .opaque_ptr => target_usize.size(), // opaque_ptr is pointer-sized
             },
             .box, .box_of_zst => target_usize.size(), // a Box is just a pointer to refcounted memory
-            .list => switch (target_usize) {
-                .u32 => 12, // 3 * 4 bytes (pointer + length + capacity)
-                .u64 => 24, // 3 * 8 bytes (pointer + length + capacity)
-            },
+            .list => 3 * target_usize.size(), // ptr, length, capacity
             .list_of_zst => target_usize.size(), // Zero-sized lists might be different
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,

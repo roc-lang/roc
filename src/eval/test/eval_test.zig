@@ -693,14 +693,12 @@ test "string refcount - record with empty string" {
 }
 
 test "string refcount - simple integer closure" {
-    // Testing if closure return types are now working
     // Test basic closure with integer first to see if the issue is closure-specific
     try runExpectInt("(|x| x)(42)", 42, .no_trace);
 }
 
 test "string refcount - simple string closure" {
-    // Testing if closure return types are now working
-    try runExpectStr("(|s| s)(\"Test\")", "Test", .trace);
+    try runExpectStr("(|s| s)(\"Test\")", "Test", .no_trace);
 }
 
 test "ModuleEnv serialization and interpreter evaluation" {
