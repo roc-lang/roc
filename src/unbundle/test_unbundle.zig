@@ -143,7 +143,7 @@ test "BufferExtractWriter - basic functionality" {
     // Create a file
     const file_writer = try writer.extractWriter().createFile("test.txt");
     try file_writer.writeAll("Hello, World!");
-    try writer.extractWriter().finishFile(file_writer);
+    writer.extractWriter().finishFile(file_writer);
 
     // Create a directory (should be no-op for buffer writer)
     try writer.extractWriter().makeDir("test_dir");
@@ -151,7 +151,7 @@ test "BufferExtractWriter - basic functionality" {
     // Create another file in a subdirectory
     const file_writer2 = try writer.extractWriter().createFile("subdir/test2.txt");
     try file_writer2.writeAll("Second file");
-    try writer.extractWriter().finishFile(file_writer2);
+    writer.extractWriter().finishFile(file_writer2);
 
     // Verify files were stored
     try testing.expectEqual(@as(usize, 2), writer.files.count());
@@ -185,7 +185,7 @@ test "DirExtractWriter - basic functionality" {
     // Create a file
     const file_writer = try writer.extractWriter().createFile("test.txt");
     try file_writer.writeAll("Test content");
-    try writer.extractWriter().finishFile(file_writer);
+    writer.extractWriter().finishFile(file_writer);
 
     // Verify file was created
     const content = try tmp.dir.readFileAlloc(testing.allocator, "test.txt", 1024);
@@ -195,7 +195,7 @@ test "DirExtractWriter - basic functionality" {
     // Create a file in a subdirectory (should create parent dirs)
     const file_writer2 = try writer.extractWriter().createFile("deep/nested/file.txt");
     try file_writer2.writeAll("Nested content");
-    try writer.extractWriter().finishFile(file_writer2);
+    writer.extractWriter().finishFile(file_writer2);
 
     // Verify nested file was created
     const nested_content = try tmp.dir.readFileAlloc(testing.allocator, "deep/nested/file.txt", 1024);
@@ -226,6 +226,130 @@ test "unbundle filename validation" {
     try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, stream.reader(), tmp.dir, ".tar.zst", null));
 }
 
-// Note: We can't easily test empty archive detection and hash mismatch
-// without a real zstd compressor in Zig's std library.
-// These cases are tested in integration tests instead.
+test "pathHasUnbundleErr - long paths" {
+    var long_path: [300]u8 = undefined;
+    @memset(&long_path, 'a');
+
+    const err = unbundle.pathHasUnbundleErr(&long_path);
+    try testing.expect(err != null);
+    try testing.expect(err.?.reason == .path_too_long);
+}
+
+test "pathHasUnbundleErr - empty path" {
+    const err = unbundle.pathHasUnbundleErr("");
+    try testing.expect(err != null);
+    try testing.expect(err.?.reason == .empty_path);
+}
+
+test "pathHasUnbundleErr - mixed valid and invalid components" {
+    // Path with valid components but one .. in the middle
+    const err1 = unbundle.pathHasUnbundleErr("valid/path/../file.txt");
+    try testing.expect(err1 != null);
+    try testing.expect(err1.?.reason == .path_traversal);
+
+    // Path with valid components but one . in the middle
+    const err2 = unbundle.pathHasUnbundleErr("valid/./path/file.txt");
+    try testing.expect(err2 != null);
+    try testing.expect(err2.?.reason == .current_directory_reference);
+}
+
+test "pathHasUnbundleErr - Windows drive letters" {
+    const paths = [_][]const u8{
+        "C:/file.txt",
+        "D:\\file.txt",
+        "Z:file.txt",
+    };
+
+    for (paths) |path| {
+        const err = unbundle.pathHasUnbundleErr(path);
+        try testing.expect(err != null);
+        try testing.expect(err.?.reason == .absolute_path);
+    }
+}
+
+test "pathHasUnbundleErr - special characters in filenames" {
+    // Test null byte
+    const err1 = unbundle.pathHasUnbundleErr("file\x00name.txt");
+    try testing.expect(err1 != null);
+    try testing.expect(err1.?.reason == .windows_reserved_char);
+    try testing.expectEqual(@as(u8, 0), err1.?.reason.windows_reserved_char);
+
+    // Test various control characters are allowed (except null)
+    try testing.expect(unbundle.pathHasUnbundleErr("file\x01name.txt") == null);
+    try testing.expect(unbundle.pathHasUnbundleErr("file\x1fname.txt") == null);
+}
+
+test "validateBase58Hash - edge cases" {
+    // Exactly 32 characters (minimum valid)
+    const short_valid = "11111111111111111111111111111111";
+    const result1 = try unbundle.validateBase58Hash(short_valid);
+    try testing.expect(result1 != null);
+
+    // 31 characters (too short)
+    const too_short = "1111111111111111111111111111111";
+    const result2 = try unbundle.validateBase58Hash(too_short);
+    try testing.expect(result2 == null);
+
+    // 45 characters (too long)
+    const too_long = "111111111111111111111111111111111111111111111";
+    const result3 = try unbundle.validateBase58Hash(too_long);
+    try testing.expect(result3 == null);
+}
+
+test "BufferExtractWriter - overwrite existing file" {
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var writer = unbundle.BufferExtractWriter.init(alloc);
+    defer writer.deinit();
+
+    // Create a file with initial content
+    const file_writer1 = try writer.extractWriter().createFile("test.txt");
+    try file_writer1.writeAll("Initial content");
+    writer.extractWriter().finishFile(file_writer1);
+
+    // Overwrite the same file
+    const file_writer2 = try writer.extractWriter().createFile("test.txt");
+    try file_writer2.writeAll("New content");
+    writer.extractWriter().finishFile(file_writer2);
+
+    // Verify it was overwritten
+    const file = writer.files.get("test.txt");
+    try testing.expect(file != null);
+    try testing.expectEqualStrings("New content", file.?.items);
+}
+
+test "DirExtractWriter - nested directory creation" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var writer = unbundle.DirExtractWriter.init(tmp.dir, testing.allocator);
+    defer writer.deinit();
+
+    // Create a file in a deeply nested path
+    const file_writer = try writer.extractWriter().createFile("a/b/c/d/e/file.txt");
+    try file_writer.writeAll("Nested content");
+    writer.extractWriter().finishFile(file_writer);
+
+    // Verify the file was created
+    const content = try tmp.dir.readFileAlloc(testing.allocator, "a/b/c/d/e/file.txt", 1024);
+    defer testing.allocator.free(content);
+    try testing.expectEqualStrings("Nested content", content);
+}
+
+test "ErrorContext population" {
+    var error_context: unbundle.ErrorContext = undefined;
+
+    // Test that error context is populated correctly
+    if (unbundle.pathHasUnbundleErr("../etc/passwd")) |validation_error| {
+        error_context.path = validation_error.path;
+        error_context.reason = validation_error.reason;
+
+        try testing.expectEqualStrings("../etc/passwd", error_context.path);
+        try testing.expect(error_context.reason == .path_traversal);
+    } else {
+        try testing.expect(false); // Should have failed
+    }
+}

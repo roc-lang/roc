@@ -65,7 +65,7 @@ pub const ExtractWriter = struct {
 
     pub const VTable = struct {
         createFile: *const fn (ptr: *anyopaque, path: []const u8) CreateFileError!std.io.AnyWriter,
-        finishFile: *const fn (ptr: *anyopaque, writer: std.io.AnyWriter) FinishFileError!void,
+        finishFile: *const fn (ptr: *anyopaque, writer: std.io.AnyWriter) void,
         makeDir: *const fn (ptr: *anyopaque, path: []const u8) MakeDirError!void,
     };
 
@@ -73,10 +73,6 @@ pub const ExtractWriter = struct {
         FileCreateFailed,
         OutOfMemory,
     };
-
-    pub const FinishFileError = error{
-        // No specific errors for finish
-        };
 
     pub const MakeDirError = error{
         DirectoryCreateFailed,
@@ -86,7 +82,7 @@ pub const ExtractWriter = struct {
         return self.vtable.createFile(self.ptr, path);
     }
 
-    pub fn finishFile(self: ExtractWriter, writer: std.io.AnyWriter) FinishFileError!void {
+    pub fn finishFile(self: ExtractWriter, writer: std.io.AnyWriter) void {
         return self.vtable.finishFile(self.ptr, writer);
     }
 
@@ -144,7 +140,6 @@ pub const DirExtractWriter = struct {
             return error.OutOfMemory;
         };
 
-        // Return a custom AnyWriter that references the file directly
         return .{
             .context = @ptrCast(&self.open_files.items[self.open_files.items.len - 1]),
             .writeFn = fileWrite,
@@ -156,7 +151,7 @@ pub const DirExtractWriter = struct {
         return file.write(bytes);
     }
 
-    fn finishFile(ptr: *anyopaque, _: std.io.AnyWriter) ExtractWriter.FinishFileError!void {
+    fn finishFile(ptr: *anyopaque, _: std.io.AnyWriter) void {
         const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
         // Close and remove the last file
         if (self.open_files.items.len > 0) {
@@ -229,7 +224,6 @@ pub const BufferExtractWriter = struct {
         }
 
         self.current_file = result.value_ptr;
-        // Create a proper AnyWriter that directly references the ArrayList
         return .{
             .context = @ptrCast(result.value_ptr),
             .writeFn = arrayListWrite,
@@ -242,7 +236,7 @@ pub const BufferExtractWriter = struct {
         return bytes.len;
     }
 
-    fn finishFile(ptr: *anyopaque, _: std.io.AnyWriter) ExtractWriter.FinishFileError!void {
+    fn finishFile(ptr: *anyopaque, _: std.io.AnyWriter) void {
         const self: *BufferExtractWriter = @ptrCast(@alignCast(ptr));
         self.current_file = null;
     }
@@ -263,7 +257,6 @@ pub const PathValidationError = struct {
     reason: PathValidationReason,
 };
 
-// Windows reserved device names (case-insensitive)
 const WINDOWS_RESERVED_NAMES = [_][]const u8{
     "CON",  "PRN",  "AUX",  "NUL",
     "COM1", "COM2", "COM3", "COM4",
@@ -275,7 +268,6 @@ const WINDOWS_RESERVED_NAMES = [_][]const u8{
 
 /// Check if a path has security or compatibility issues for unbundling
 pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
-    // Check for empty path
     if (path.len == 0) {
         return PathValidationError{
             .path = path,
@@ -283,7 +275,6 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
         };
     }
 
-    // Check for path too long (255 is a common limit)
     if (path.len > 255) {
         return PathValidationError{
             .path = path,
@@ -291,7 +282,6 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
         };
     }
 
-    // Check for absolute path
     if (path[0] == '/' or path[0] == '\\') {
         return PathValidationError{
             .path = path,
@@ -299,7 +289,6 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
         };
     }
 
-    // Check for Windows absolute path (C:, D:, etc.)
     if (path.len >= 2 and path[1] == ':') {
         return PathValidationError{
             .path = path,
@@ -307,10 +296,8 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
         };
     }
 
-    // Check for reserved characters and validate components
     var iter = std.mem.tokenizeScalar(u8, path, '/');
     while (iter.next()) |component| {
-        // Check for path traversal (..)
         if (std.mem.eql(u8, component, "..")) {
             return PathValidationError{
                 .path = path,
@@ -318,7 +305,6 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
             };
         }
 
-        // Check for current directory reference (.)
         if (std.mem.eql(u8, component, ".")) {
             return PathValidationError{
                 .path = path,
@@ -326,11 +312,19 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
             };
         }
 
-        // Check for Windows reserved names
-        const upper_component = std.ascii.allocUpperString(std.heap.page_allocator, component) catch component;
-        defer if (upper_component.ptr != component.ptr) std.heap.page_allocator.free(upper_component);
+        // Use stack buffer for small components to avoid allocation
+        var upper_buf: [256]u8 = undefined;
+        const upper_component = if (component.len <= upper_buf.len) blk: {
+            for (component, 0..) |c, i| {
+                upper_buf[i] = std.ascii.toUpper(c);
+            }
+            break :blk upper_buf[0..component.len];
+        } else blk: {
+            break :blk std.ascii.allocUpperString(std.heap.page_allocator, component) catch component;
+        };
+        defer if (component.len > upper_buf.len and upper_component.ptr != component.ptr)
+            std.heap.page_allocator.free(upper_component);
 
-        // Check base name (without extension) for reserved names
         const base_name = if (std.mem.indexOfScalar(u8, upper_component, '.')) |dot_pos|
             upper_component[0..dot_pos]
         else
@@ -345,7 +339,6 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
             }
         }
 
-        // Check for components ending with space or period
         if (component.len > 0) {
             if (component[component.len - 1] == ' ') {
                 return PathValidationError{
@@ -362,7 +355,6 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
         }
     }
 
-    // Check for Windows reserved characters in the entire path
     for (path) |char| {
         switch (char) {
             0 => return PathValidationError{
@@ -374,7 +366,6 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
                 .reason = .{ .windows_reserved_char = char },
             },
             '\\' => {
-                // Backslash is only allowed on Windows as a path separator
                 if (builtin.os.tag != .windows) {
                     return PathValidationError{
                         .path = path,
@@ -424,10 +415,7 @@ pub fn unbundleStream(
     expected_hash: *const [32]u8,
     error_context: ?*ErrorContext,
 ) UnbundleError!void {
-    // Create a hashing reader to verify the hash while reading
     var hasher = std.crypto.hash.Blake3.init(.{});
-
-    // We need to create the specific type for this reader
     const ReaderType = @TypeOf(input_reader);
     const HashingReaderType = HashingReader(ReaderType);
 
@@ -436,14 +424,12 @@ pub fn unbundleStream(
         .hasher = &hasher,
     };
 
-    // Create zstandard decompressor
     var window_buffer: [ZSTD_WINDOW_BUFFER_SIZE]u8 = undefined;
     var zstd_stream = std.compress.zstd.decompressor(hashing_reader.reader(), .{
         .window_buffer = &window_buffer,
     });
     const decompressed_reader = zstd_stream.reader();
 
-    // Create tar reader with buffers for file and link names
     var file_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
     var link_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
     var tar_iterator = std.tar.iterator(decompressed_reader, .{
@@ -453,7 +439,6 @@ pub fn unbundleStream(
 
     var data_extracted = false;
 
-    // Process all tar entries
     while (true) {
         const maybe_entry = tar_iterator.next() catch |err| switch (err) {
             error.EndOfStream => break,
@@ -463,7 +448,6 @@ pub fn unbundleStream(
         const entry = maybe_entry orelse break;
         const file_path = entry.name;
 
-        // Validate path for security
         if (pathHasUnbundleErr(file_path)) |validation_error| {
             if (error_context) |ctx| {
                 ctx.path = validation_error.path;
@@ -474,16 +458,13 @@ pub fn unbundleStream(
 
         switch (entry.kind) {
             .directory => {
-                // Create directory
                 try extract_writer.makeDir(file_path);
                 data_extracted = true;
             },
             .file => {
-                // Create file and stream content
                 const file_writer = try extract_writer.createFile(file_path);
-                defer extract_writer.finishFile(file_writer) catch {};
+                defer extract_writer.finishFile(file_writer);
 
-                // Stream file content in chunks
                 var buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
                 var bytes_remaining = entry.size;
                 while (bytes_remaining > 0) {
@@ -497,10 +478,8 @@ pub fn unbundleStream(
                 data_extracted = true;
             },
             .sym_link => {
-                // Validate symlink target for security
                 const link_target = entry.link_name;
 
-                // Check if it's a relative path (no leading /)
                 if (link_target.len > 0 and link_target[0] == '/') {
                     if (error_context) |ctx| {
                         ctx.path = file_path;
@@ -509,7 +488,6 @@ pub fn unbundleStream(
                     return error.InvalidPath;
                 }
 
-                // Check for path traversal components (.. or .)
                 var iter = std.mem.tokenizeScalar(u8, link_target, '/');
                 while (iter.next()) |component| {
                     if (std.mem.eql(u8, component, "..")) {
@@ -528,12 +506,7 @@ pub fn unbundleStream(
                     }
                 }
 
-                // Symlink is safe (relative, no .. or . components)
-                // For DirExtractWriter, create the symlink
-                // For BufferExtractWriter, we'll just skip it
                 // TODO: Add symlink support to ExtractWriter interface
-
-                // For now, consume the bytes even though we don't use them
                 var buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
                 var bytes_remaining = entry.size;
                 while (bytes_remaining > 0) {
@@ -547,7 +520,6 @@ pub fn unbundleStream(
         }
     }
 
-    // Verify hash
     var actual_hash: [32]u8 = undefined;
     hasher.final(&actual_hash);
 
@@ -555,7 +527,6 @@ pub fn unbundleStream(
         return error.HashMismatch;
     }
 
-    // Ensure we extracted something
     if (!data_extracted) {
         return error.NoDataExtracted;
     }
@@ -565,9 +536,7 @@ pub fn unbundleStream(
 ///
 /// Returns the decoded hash if valid, or null if invalid.
 pub fn validateBase58Hash(base58_str: []const u8) !?[32]u8 {
-    // A 32-byte hash encoded in base58 should be at least 43 characters
-    // (all zeros would be 32 '1' characters, any non-zero value needs more)
-    // Maximum is 44 characters for a full 256-bit value
+    // Valid base58 hash should be 32-44 characters
     if (base58_str.len < 32 or base58_str.len > 44) {
         return null;
     }
@@ -591,11 +560,10 @@ pub fn unbundle(
     filename: []const u8,
     error_context: ?*ErrorContext,
 ) UnbundleError!void {
-    // Extract expected hash from filename
     if (!std.mem.endsWith(u8, filename, TAR_EXTENSION)) {
         return error.InvalidFilename;
     }
-    const base58_hash = filename[0 .. filename.len - TAR_EXTENSION.len]; // Remove .tar.zst
+    const base58_hash = filename[0 .. filename.len - TAR_EXTENSION.len];
     const expected_hash = (try validateBase58Hash(base58_hash)) orelse {
         return error.InvalidFilename;
     };
