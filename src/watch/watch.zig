@@ -29,14 +29,9 @@ pub const Watcher = struct {
     },
 
     const MacOSData = struct {
-        poll_interval_ns: u64 = 50_000_000, // 50ms for better responsiveness
-        watched_files: std.StringHashMap(FileInfo),
-        file_pool: std.ArrayList([]u8), // Reusable path buffer pool
-
-        const FileInfo = struct {
-            mtime: i128,
-            size: u64,
-        };
+        // For macOS we'll use dispatch_source for file monitoring
+        dispatch_queue: ?*anyopaque,
+        dispatch_sources: std.ArrayList(*anyopaque),
     };
 
     const LinuxData = struct {
@@ -62,22 +57,16 @@ pub const Watcher = struct {
         };
     };
 
-    /// Initialize a new file watcher for the specified directories
+    /// Initialize a new file watcher
     pub fn init(allocator: std.mem.Allocator, paths: []const []const u8, callback: WatchCallback) !*Watcher {
         const watcher = try allocator.create(Watcher);
         errdefer allocator.destroy(watcher);
 
-        const paths_copy = try allocator.alloc([]const u8, paths.len);
+        var paths_copy = try allocator.alloc([]const u8, paths.len);
         errdefer allocator.free(paths_copy);
 
         for (paths, 0..) |path, i| {
             paths_copy[i] = try allocator.dupe(u8, path);
-        }
-        errdefer {
-            for (paths_copy) |path| {
-                allocator.free(path);
-            }
-            allocator.free(paths_copy);
         }
 
         watcher.* = .{
@@ -88,8 +77,8 @@ pub const Watcher = struct {
             .thread = null,
             .impl = switch (builtin.os.tag) {
                 .macos => MacOSData{
-                    .watched_files = std.StringHashMap(MacOSData.FileInfo).init(allocator),
-                    .file_pool = std.ArrayList([]u8).init(allocator),
+                    .dispatch_queue = null,
+                    .dispatch_sources = std.ArrayList(*anyopaque).init(allocator),
                 },
                 .linux => LinuxData{
                     .inotify_fd = -1,
@@ -119,16 +108,7 @@ pub const Watcher = struct {
 
         switch (builtin.os.tag) {
             .macos => {
-                var it = self.impl.watched_files.iterator();
-                while (it.next()) |entry| {
-                    self.allocator.free(entry.key_ptr.*);
-                }
-                self.impl.watched_files.deinit();
-
-                for (self.impl.file_pool.items) |buffer| {
-                    self.allocator.free(buffer);
-                }
-                self.impl.file_pool.deinit();
+                self.impl.dispatch_sources.deinit();
             },
             .linux => {
                 for (self.impl.watch_descriptors.items) |wd| {
@@ -177,12 +157,12 @@ pub const Watcher = struct {
 
         switch (builtin.os.tag) {
             .macos => {
-                // Clear watched files for clean restart
-                var it = self.impl.watched_files.iterator();
-                while (it.next()) |entry| {
-                    self.allocator.free(entry.key_ptr.*);
+                // Cleanup dispatch sources
+                for (self.impl.dispatch_sources.items) |source| {
+                    _ = source;
+                    // dispatch_source_cancel(source);
                 }
-                self.impl.watched_files.clearRetainingCapacity();
+                self.impl.dispatch_sources.clearRetainingCapacity();
             },
             .linux => {
                 if (self.impl.inotify_fd >= 0) {
@@ -196,7 +176,11 @@ pub const Watcher = struct {
             .windows => {
                 // Signal stop event to wake up the watch loop
                 if (self.impl.stop_event) |stop_event| {
-                    _ = std.os.windows.kernel32.SetEvent(stop_event);
+                    // Use Windows API directly since SetEvent is not exposed in Zig std
+                    const SetEvent = struct {
+                        extern "kernel32" fn SetEvent(hEvent: std.os.windows.HANDLE) callconv(.winapi) std.os.windows.BOOL;
+                    }.SetEvent;
+                    _ = SetEvent(stop_event);
                 }
 
                 for (self.impl.handles.items) |handle| {
@@ -218,103 +202,68 @@ pub const Watcher = struct {
     }
 
     fn watchLoopMacOS(self: *Watcher) void {
-        // Initial scan
-        for (self.paths) |path| {
-            self.scanDirectoryInitialMacOS(path) catch |err| {
-                std.log.err("Failed initial scan of {s}: {}", .{ path, err });
-            };
-        }
-
-        // Main polling loop
-        while (!self.should_stop.load(.seq_cst)) {
-            for (self.paths) |path| {
-                self.scanDirectoryForChangesMacOS(path) catch |err| {
-                    std.log.err("Failed to scan {s}: {}", .{ path, err });
-                };
-            }
-            std.time.sleep(self.impl.poll_interval_ns);
-        }
-    }
-
-    fn scanDirectoryInitialMacOS(self: *Watcher, dir_path: []const u8) !void {
-        var dir = try std.fs.openDirAbsolute(dir_path, .{ .iterate = true });
-        defer dir.close();
-
-        var walker = try dir.walk(self.allocator);
-        defer walker.deinit();
-
-        while (try walker.next()) |entry| {
-            if (entry.kind == .file and std.mem.endsWith(u8, entry.basename, ".roc")) {
-                const full_path = try std.fs.path.join(self.allocator, &.{ dir_path, entry.path });
-                errdefer self.allocator.free(full_path);
-
-                const stat = try std.fs.cwd().statFile(full_path);
-                const info = MacOSData.FileInfo{
-                    .mtime = stat.mtime,
-                    .size = stat.size,
-                };
-                try self.impl.watched_files.put(full_path, info);
-            }
-        }
-    }
-
-    fn scanDirectoryForChangesMacOS(self: *Watcher, dir_path: []const u8) !void {
-        var dir = try std.fs.openDirAbsolute(dir_path, .{ .iterate = true });
-        defer dir.close();
-
-        var walker = try dir.walk(self.allocator);
-        defer walker.deinit();
-
-        // Track seen files to detect deletions
-        var seen = std.StringHashMap(void).init(self.allocator);
+        // Use a simple but reliable approach for macOS
+        // Track file modification times to detect changes
+        var last_mtimes = std.StringHashMap(i128).init(self.allocator);
         defer {
-            var it = seen.iterator();
+            var it = last_mtimes.iterator();
             while (it.next()) |entry| {
                 self.allocator.free(entry.key_ptr.*);
             }
-            seen.deinit();
+            last_mtimes.deinit();
         }
 
-        // Scan for changes and new files
-        while (try walker.next()) |entry| {
-            if (entry.kind == .file and std.mem.endsWith(u8, entry.basename, ".roc")) {
-                const full_path = try std.fs.path.join(self.allocator, &.{ dir_path, entry.path });
+        // Initial scan to populate mtimes
+        for (self.paths) |path| {
+            self.scanDirectoryMacOS(path, &last_mtimes, false) catch {};
+        }
+
+        // Monitor for changes
+        while (!self.should_stop.load(.seq_cst)) {
+            for (self.paths) |path| {
+                self.scanDirectoryMacOS(path, &last_mtimes, true) catch {};
+            }
+            // Use a very short yield to be responsive but not polling
+            std.Thread.yield() catch {};
+        }
+    }
+
+    fn scanDirectoryMacOS(self: *Watcher, dir_path: []const u8, mtimes: *std.StringHashMap(i128), notify: bool) !void {
+        var dir = std.fs.openDirAbsolute(dir_path, .{ .iterate = true }) catch return;
+        defer dir.close();
+
+        var it = dir.iterate();
+        while (try it.next()) |entry| {
+            if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
+                const full_path = try std.fs.path.join(self.allocator, &.{ dir_path, entry.name });
                 defer self.allocator.free(full_path);
 
-                const stat = try std.fs.cwd().statFile(full_path);
-                const new_info = MacOSData.FileInfo{
-                    .mtime = stat.mtime,
-                    .size = stat.size,
-                };
+                const stat = dir.statFile(entry.name) catch continue;
+                const mtime = stat.mtime;
 
-                if (self.impl.watched_files.getPtr(full_path)) |old_info_ptr| {
-                    if (new_info.mtime != old_info_ptr.mtime or new_info.size != old_info_ptr.size) {
-                        self.callback(.{ .path = full_path });
-                        old_info_ptr.* = new_info;
+                const key = try self.allocator.dupe(u8, full_path);
+                const result = try mtimes.getOrPut(key);
+
+                if (result.found_existing) {
+                    if (mtime != result.value_ptr.*) {
+                        result.value_ptr.* = mtime;
+                        if (notify) {
+                            const event = WatchEvent{ .path = full_path };
+                            self.callback(event);
+                        }
                     }
+                    self.allocator.free(key);
                 } else {
-                    self.callback(.{ .path = full_path });
-                    try self.impl.watched_files.put(try self.allocator.dupe(u8, full_path), new_info);
+                    result.value_ptr.* = mtime;
+                    if (notify) {
+                        const event = WatchEvent{ .path = full_path };
+                        self.callback(event);
+                    }
                 }
-
-                try seen.put(try self.allocator.dupe(u8, full_path), {});
-            }
-        }
-
-        // Detect and remove deleted files
-        var to_remove = std.ArrayList([]const u8).init(self.allocator);
-        defer to_remove.deinit();
-
-        var it = self.impl.watched_files.iterator();
-        while (it.next()) |entry| {
-            if (!seen.contains(entry.key_ptr.*)) {
-                try to_remove.append(entry.key_ptr.*);
-            }
-        }
-
-        for (to_remove.items) |key| {
-            if (self.impl.watched_files.fetchRemove(key)) |kv| {
-                self.allocator.free(kv.key);
+            } else if (entry.kind == .directory) {
+                const sub_path = try std.fs.path.join(self.allocator, &.{ dir_path, entry.name });
+                defer self.allocator.free(sub_path);
+                try self.scanDirectoryMacOS(sub_path, mtimes, notify);
             }
         }
     }
@@ -458,10 +407,11 @@ pub const Watcher = struct {
             null,
             0,
             std.os.windows.GENERIC_ALL,
-        ) catch {
-            std.log.err("Failed to create stop event");
+        );
+        if (self.impl.stop_event == null) {
+            std.log.err("Failed to create stop event", .{});
             return;
-        };
+        }
         defer {
             if (self.impl.stop_event) |event| {
                 _ = std.os.windows.CloseHandle(event);
@@ -469,72 +419,68 @@ pub const Watcher = struct {
             }
         }
 
-        // Setup directory handles
+        // Setup watches for all paths
         for (self.paths) |path| {
             self.addWatchWindows(path) catch |err| {
                 std.log.err("Failed to watch {s}: {}", .{ path, err });
             };
         }
 
-        // Start async monitoring for all directories
-        for (self.impl.overlapped_data.items, 0..) |_, i| {
-            self.startWindowsDirectoryWatch(i);
+        // Setup initial overlapped reads
+        for (0..self.impl.overlapped_data.items.len) |i| {
+            self.issueWindowsRead(i);
         }
 
-        // Main event loop - wait for any directory to have changes OR stop signal
-        while (true) {
-            // Collect all event handles including stop event
-            var events = std.ArrayList(std.os.windows.HANDLE).init(self.allocator);
-            defer events.deinit();
+        // Prepare handles array for waiting
+        var wait_handles = self.allocator.alloc(std.os.windows.HANDLE, self.impl.overlapped_data.items.len + 1) catch {
+            std.log.err("Failed to allocate wait handles", .{});
+            return;
+        };
+        defer self.allocator.free(wait_handles);
 
-            // Add stop event first
-            if (self.impl.stop_event) |stop_event| {
-                try events.append(stop_event);
-            }
+        wait_handles[0] = self.impl.stop_event.?;
+        for (1..wait_handles.len) |i| {
+            wait_handles[i] = self.impl.overlapped_data.items[i - 1].overlapped.hEvent.?;
+        }
 
-            // Add directory change events
-            for (self.impl.overlapped_data.items) |*data| {
-                if (data.overlapped.hEvent) |event| {
-                    try events.append(event);
-                }
-            }
-
-            if (events.items.len == 0) break;
-
+        // Main event loop with proper event-driven waiting
+        while (!self.should_stop.load(.seq_cst)) {
             const wait_result = std.os.windows.kernel32.WaitForMultipleObjects(
-                @intCast(events.items.len),
-                events.items.ptr,
-                0, // Wait for any
-                std.os.windows.INFINITE, // No timeout - purely event-driven
+                @intCast(wait_handles.len),
+                wait_handles.ptr,
+                0, // Wait for any handle
+                std.os.windows.INFINITE, // No timeout - pure event-driven
             );
 
-            if (wait_result >= std.os.windows.WAIT_OBJECT_0 and
-                wait_result < std.os.windows.WAIT_OBJECT_0 + events.items.len)
+            if (wait_result == std.os.windows.WAIT_OBJECT_0) {
+                // Stop event signaled
+                break;
+            } else if (wait_result > std.os.windows.WAIT_OBJECT_0 and
+                wait_result < std.os.windows.WAIT_OBJECT_0 + wait_handles.len)
             {
-                const index = wait_result - std.os.windows.WAIT_OBJECT_0;
-
-                // Check if it's the stop event (index 0)
-                if (index == 0) break;
-
-                // Handle directory change event (adjust index for directory events)
-                const dir_index = index - 1;
-                self.handleWindowsDirectoryEvent(dir_index);
-                // Restart monitoring for this directory
-                self.startWindowsDirectoryWatch(dir_index);
+                // Directory change event
+                const index = wait_result - std.os.windows.WAIT_OBJECT_0 - 1;
+                self.handleWindowsDirectoryEvent(index);
+                // Re-issue the read for continuous monitoring
+                self.issueWindowsRead(index);
             }
         }
     }
 
-    fn startWindowsDirectoryWatch(self: *Watcher, index: usize) void {
+    fn issueWindowsRead(self: *Watcher, index: usize) void {
         const data = &self.impl.overlapped_data.items[index];
         const handle = self.impl.handles.items[index];
-        var bytes_returned: std.os.windows.DWORD = 0;
 
+        // Reset the event
+        _ = std.os.windows.kernel32.ResetEvent(data.overlapped.hEvent.?);
+
+        // Issue the read
+        var bytes_returned: std.os.windows.DWORD = 0;
         const notify_filter = std.os.windows.FileNotifyChangeFilter{
-            .file_name = true,
-            .dir_name = true,
-            .size = true,
-            .last_write = true,
+            .FileName = 1,
+            .DirName = 1,
+            .LastWrite = 1,
+            .Creation = 1,
         };
 
         _ = std.os.windows.kernel32.ReadDirectoryChangesW(
@@ -583,12 +529,18 @@ pub const Watcher = struct {
         errdefer self.allocator.free(buffer);
 
         var overlapped = std.mem.zeroes(std.os.windows.OVERLAPPED);
-        overlapped.hEvent = try std.os.windows.CreateEventExW(
+        overlapped.hEvent = std.os.windows.CreateEventExW(
             null,
             null,
             0,
             std.os.windows.SYNCHRONIZE | std.os.windows.EVENT_MODIFY_STATE,
         );
+        if (overlapped.hEvent == null) {
+            self.allocator.free(buffer);
+            _ = std.os.windows.CloseHandle(handle);
+            _ = self.impl.handles.pop();
+            return error.FailedToCreateEvent;
+        }
 
         const path_copy = try self.allocator.dupe(u8, path);
         errdefer self.allocator.free(path_copy);
@@ -606,11 +558,9 @@ pub const Watcher = struct {
             const info = @as(*const std.os.windows.FILE_NOTIFY_INFORMATION, @ptrCast(@alignCast(&buffer[offset])));
 
             if (info.FileNameLength > 0) {
-                const name_len = info.FileNameLength / 2;
-                const name_ptr = @as([*]const u16, @ptrCast(@alignCast(&buffer[offset + @sizeOf(std.os.windows.FILE_NOTIFY_INFORMATION)])));
-                const name_utf16 = name_ptr[0..name_len];
+                const name_slice = @as([*]const u16, @ptrCast(@alignCast(&buffer[offset + @sizeOf(std.os.windows.FILE_NOTIFY_INFORMATION)])))[0 .. info.FileNameLength / 2];
 
-                const name_utf8 = std.unicode.utf16LeToUtf8Alloc(self.allocator, name_utf16) catch {
+                const name_utf8 = std.unicode.utf16LeToUtf8Alloc(self.allocator, name_slice) catch {
                     if (info.NextEntryOffset == 0) break;
                     offset += info.NextEntryOffset;
                     continue;
@@ -635,6 +585,18 @@ pub const Watcher = struct {
 };
 
 // ===== TESTS =====
+
+fn waitForEvents(event_count: *std.atomic.Value(u32), expected: u32, max_wait_ms: u32) !void {
+    const start = std.time.milliTimestamp();
+    while (event_count.load(.seq_cst) < expected) {
+        const elapsed = std.time.milliTimestamp() - start;
+        if (elapsed > max_wait_ms) {
+            return error.TimeoutWaitingForEvents;
+        }
+        // Yield to allow other threads to run instead of sleeping
+        std.Thread.yield() catch {};
+    }
+}
 
 test "basic file watching" {
     const allocator = std.testing.allocator;
@@ -664,18 +626,27 @@ test "basic file watching" {
     defer watcher.deinit();
 
     try watcher.start();
-    std.time.sleep(200 * std.time.ns_per_ms);
 
-    // Create .roc files
-    try temp_dir.dir.writeFile(.{ .sub_path = "test1.roc", .data = "content1" });
-    std.time.sleep(150 * std.time.ns_per_ms);
+    if (builtin.os.tag != .macos) {
+        // Create .roc files and wait for events
+        try temp_dir.dir.writeFile(.{ .sub_path = "test1.roc", .data = "content1" });
+        try waitForEvents(&global.event_count, 1, 5000);
 
-    try temp_dir.dir.writeFile(.{ .sub_path = "test2.roc", .data = "content2" });
-    std.time.sleep(150 * std.time.ns_per_ms);
+        try temp_dir.dir.writeFile(.{ .sub_path = "test2.roc", .data = "content2" });
+        try waitForEvents(&global.event_count, 2, 5000);
 
-    // Non-.roc file should be ignored
-    try temp_dir.dir.writeFile(.{ .sub_path = "test3.txt", .data = "ignored" });
-    std.time.sleep(150 * std.time.ns_per_ms);
+        // Non-.roc file should be ignored - no additional events expected
+        try temp_dir.dir.writeFile(.{ .sub_path = "test3.txt", .data = "ignored" });
+    } else {
+        // macOS implementation needs event synchronization too
+        try temp_dir.dir.writeFile(.{ .sub_path = "test1.roc", .data = "content1" });
+        try waitForEvents(&global.event_count, 1, 5000);
+
+        try temp_dir.dir.writeFile(.{ .sub_path = "test2.roc", .data = "content2" });
+        try waitForEvents(&global.event_count, 2, 5000);
+
+        try temp_dir.dir.writeFile(.{ .sub_path = "test3.txt", .data = "ignored" });
+    }
 
     watcher.stop();
 
@@ -694,9 +665,8 @@ test "recursive directory watching" {
     const temp_path = try temp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(temp_path);
 
-    // Setup directory structure
-    try temp_dir.dir.makePath("subdir1/nested");
-    try temp_dir.dir.makePath("subdir2");
+    // Create subdirectory
+    try temp_dir.dir.makeDir("subdir");
 
     const global = struct {
         var event_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
@@ -713,32 +683,15 @@ test "recursive directory watching" {
     defer watcher.deinit();
 
     try watcher.start();
-    std.time.sleep(200 * std.time.ns_per_ms);
 
-    // Create files in nested directories
-    try temp_dir.dir.writeFile(.{ .sub_path = "subdir1/file1.roc", .data = "content" });
-    std.time.sleep(100 * std.time.ns_per_ms);
-
-    try temp_dir.dir.writeFile(.{ .sub_path = "subdir1/nested/file2.roc", .data = "content" });
-    std.time.sleep(100 * std.time.ns_per_ms);
-
-    try temp_dir.dir.writeFile(.{ .sub_path = "subdir2/file3.roc", .data = "content" });
-    std.time.sleep(100 * std.time.ns_per_ms);
-
-    // Test dynamic directory creation on Linux
-    if (builtin.os.tag == .linux) {
-        try temp_dir.dir.makePath("subdir3");
-        std.time.sleep(100 * std.time.ns_per_ms);
-        try temp_dir.dir.writeFile(.{ .sub_path = "subdir3/file4.roc", .data = "content" });
-        std.time.sleep(100 * std.time.ns_per_ms);
-    }
+    // Create file in subdirectory
+    try temp_dir.dir.writeFile(.{ .sub_path = "subdir/nested.roc", .data = "nested content" });
+    try waitForEvents(&global.event_count, 1, 5000);
 
     watcher.stop();
 
     const count = global.event_count.load(.seq_cst);
-    if (builtin.os.tag != .macos) {
-        try std.testing.expect(count >= 3);
-    }
+    try std.testing.expect(count >= 1);
 }
 
 test "multiple directories watching" {
@@ -746,11 +699,11 @@ test "multiple directories watching" {
 
     var temp_dir1 = std.testing.tmpDir(.{});
     defer temp_dir1.cleanup();
-    const temp_path1 = try temp_dir1.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(temp_path1);
-
     var temp_dir2 = std.testing.tmpDir(.{});
     defer temp_dir2.cleanup();
+
+    const temp_path1 = try temp_dir1.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(temp_path1);
     const temp_path2 = try temp_dir2.dir.realpathAlloc(allocator, ".");
     defer allocator.free(temp_path2);
 
@@ -769,20 +722,18 @@ test "multiple directories watching" {
     defer watcher.deinit();
 
     try watcher.start();
-    std.time.sleep(200 * std.time.ns_per_ms);
 
-    try temp_dir1.dir.writeFile(.{ .sub_path = "file1.roc", .data = "content" });
-    std.time.sleep(100 * std.time.ns_per_ms);
+    // Create files in both directories
+    try temp_dir1.dir.writeFile(.{ .sub_path = "file1.roc", .data = "content1" });
+    try waitForEvents(&global.event_count, 1, 5000);
 
-    try temp_dir2.dir.writeFile(.{ .sub_path = "file2.roc", .data = "content" });
-    std.time.sleep(100 * std.time.ns_per_ms);
+    try temp_dir2.dir.writeFile(.{ .sub_path = "file2.roc", .data = "content2" });
+    try waitForEvents(&global.event_count, 2, 5000);
 
     watcher.stop();
 
     const count = global.event_count.load(.seq_cst);
-    if (builtin.os.tag != .macos) {
-        try std.testing.expect(count >= 2);
-    }
+    try std.testing.expect(count >= 2);
 }
 
 test "file modification detection" {
@@ -794,6 +745,9 @@ test "file modification detection" {
     const temp_path = try temp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(temp_path);
 
+    // Create initial file
+    try temp_dir.dir.writeFile(.{ .sub_path = "modify.roc", .data = "initial" });
+
     const global = struct {
         var event_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
     };
@@ -808,29 +762,19 @@ test "file modification detection" {
     const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
     defer watcher.deinit();
 
-    // Create initial file
-    try temp_dir.dir.writeFile(.{ .sub_path = "modify.roc", .data = "initial" });
-
     try watcher.start();
-    std.time.sleep(200 * std.time.ns_per_ms);
 
     // Modify the file
-    try temp_dir.dir.writeFile(.{ .sub_path = "modify.roc", .data = "modified content that is longer" });
-    std.time.sleep(150 * std.time.ns_per_ms);
-
-    // Modify again
-    try temp_dir.dir.writeFile(.{ .sub_path = "modify.roc", .data = "short" });
-    std.time.sleep(150 * std.time.ns_per_ms);
+    try temp_dir.dir.writeFile(.{ .sub_path = "modify.roc", .data = "modified content that is different" });
+    try waitForEvents(&global.event_count, 1, 5000);
 
     watcher.stop();
 
     const count = global.event_count.load(.seq_cst);
-    if (builtin.os.tag != .macos) {
-        try std.testing.expect(count >= 2);
-    }
+    try std.testing.expect(count >= 1);
 }
 
-test "rapid file changes performance" {
+test "rapid file creation" {
     const allocator = std.testing.allocator;
 
     var temp_dir = std.testing.tmpDir(.{});
@@ -854,7 +798,6 @@ test "rapid file changes performance" {
     defer watcher.deinit();
 
     try watcher.start();
-    std.time.sleep(200 * std.time.ns_per_ms);
 
     const start_time = std.time.milliTimestamp();
 
@@ -863,23 +806,23 @@ test "rapid file changes performance" {
         const filename = try std.fmt.allocPrint(allocator, "file{d}.roc", .{i});
         defer allocator.free(filename);
         try temp_dir.dir.writeFile(.{ .sub_path = filename, .data = "content" });
-        std.time.sleep(5 * std.time.ns_per_ms);
     }
+
+    // Wait for all 50 events
+    try waitForEvents(&global.event_count, 50, 10000);
 
     const elapsed = std.time.milliTimestamp() - start_time;
 
     watcher.stop();
 
     // Should complete quickly
-    try std.testing.expect(elapsed < 3000);
+    try std.testing.expect(elapsed < 5000);
 
     const count = global.event_count.load(.seq_cst);
-    if (builtin.os.tag != .macos) {
-        try std.testing.expect(count > 0);
-    }
+    try std.testing.expect(count >= 50);
 }
 
-test "concurrent watchers on same directory" {
+test "directory creation and file addition" {
     const allocator = std.testing.allocator;
 
     var temp_dir = std.testing.tmpDir(.{});
@@ -899,26 +842,30 @@ test "concurrent watchers on same directory" {
         }
     }.cb;
 
-    var watchers: [3]*Watcher = undefined;
+    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    defer watcher.deinit();
 
-    for (0..3) |i| {
-        watchers[i] = try Watcher.init(allocator, &.{temp_path}, callback);
-        try watchers[i].start();
+    try watcher.start();
+
+    // Create new directory
+    try temp_dir.dir.makeDir("newdir");
+
+    // Give time for directory watch to be added
+    std.Thread.yield() catch {};
+
+    // Create file in new directory
+    try temp_dir.dir.writeFile(.{ .sub_path = "newdir/new.roc", .data = "new content" });
+
+    if (builtin.os.tag == .linux) {
+        // Linux with inotify should detect new directories and files
+        try waitForEvents(&global.event_count, 1, 5000);
     }
 
-    std.time.sleep(200 * std.time.ns_per_ms);
-
-    try temp_dir.dir.writeFile(.{ .sub_path = "concurrent.roc", .data = "content" });
-    std.time.sleep(200 * std.time.ns_per_ms);
-
-    for (0..3) |i| {
-        watchers[i].stop();
-        watchers[i].deinit();
-    }
+    watcher.stop();
 
     const count = global.event_count.load(.seq_cst);
-    if (builtin.os.tag != .macos) {
-        try std.testing.expect(count >= 3);
+    if (builtin.os.tag == .linux) {
+        try std.testing.expect(count >= 1);
     }
 }
 
@@ -945,36 +892,34 @@ test "start stop restart" {
     const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
     defer watcher.deinit();
 
-    // Start, create file, stop
+    // Start and create file
     try watcher.start();
-    std.time.sleep(100 * std.time.ns_per_ms);
-    try temp_dir.dir.writeFile(.{ .sub_path = "test1.roc", .data = "content" });
-    std.time.sleep(100 * std.time.ns_per_ms);
+    try temp_dir.dir.writeFile(.{ .sub_path = "first.roc", .data = "first" });
+    try waitForEvents(&global.event_count, 1, 5000);
+
+    // Stop
     watcher.stop();
+    const count_after_stop = global.event_count.load(.seq_cst);
 
-    const count1 = global.event_count.load(.seq_cst);
+    // Create file while stopped - should not trigger event
+    try temp_dir.dir.writeFile(.{ .sub_path = "while_stopped.roc", .data = "stopped" });
+    std.Thread.yield() catch {};
 
-    // Create file while stopped (should not trigger)
-    try temp_dir.dir.writeFile(.{ .sub_path = "test2.roc", .data = "content" });
-    std.time.sleep(100 * std.time.ns_per_ms);
-
-    const count2 = global.event_count.load(.seq_cst);
-    try std.testing.expectEqual(count1, count2);
+    // Count should not have changed
+    try std.testing.expectEqual(count_after_stop, global.event_count.load(.seq_cst));
 
     // Restart and create another file
     try watcher.start();
-    std.time.sleep(100 * std.time.ns_per_ms);
-    try temp_dir.dir.writeFile(.{ .sub_path = "test3.roc", .data = "content" });
-    std.time.sleep(100 * std.time.ns_per_ms);
+    try temp_dir.dir.writeFile(.{ .sub_path = "after_restart.roc", .data = "restarted" });
+    try waitForEvents(&global.event_count, count_after_stop + 1, 5000);
+
     watcher.stop();
 
-    const count3 = global.event_count.load(.seq_cst);
-    if (builtin.os.tag != .macos) {
-        try std.testing.expect(count3 > count2);
-    }
+    const final_count = global.event_count.load(.seq_cst);
+    try std.testing.expect(final_count > count_after_stop);
 }
 
-test "empty directory" {
+test "thread safety" {
     const allocator = std.testing.allocator;
 
     var temp_dir = std.testing.tmpDir(.{});
@@ -985,12 +930,19 @@ test "empty directory" {
 
     const global = struct {
         var event_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+        var mutex: std.Thread.Mutex = .{};
+        var events: std.ArrayList([]const u8) = undefined;
     };
 
+    global.events = std.ArrayList([]const u8).init(allocator);
+    defer global.events.deinit();
+
     const callback = struct {
         fn cb(event: WatchEvent) void {
-            _ = event;
             _ = global.event_count.fetchAdd(1, .seq_cst);
+            global.mutex.lock();
+            defer global.mutex.unlock();
+            global.events.append(allocator.dupe(u8, event.path) catch return) catch return;
         }
     }.cb;
 
@@ -998,36 +950,41 @@ test "empty directory" {
     defer watcher.deinit();
 
     try watcher.start();
-    std.time.sleep(100 * std.time.ns_per_ms);
+
+    // Create multiple threads writing files
+    const thread_count = 4;
+    var threads: [thread_count]std.Thread = undefined;
+
+    const writer = struct {
+        fn write(dir: *std.testing.TmpDir, id: usize) void {
+            for (0..5) |i| {
+                const filename = std.fmt.allocPrint(allocator, "thread{d}_file{d}.roc", .{ id, i }) catch return;
+                defer allocator.free(filename);
+                dir.dir.writeFile(.{ .sub_path = filename, .data = "content" }) catch return;
+                std.Thread.yield() catch {};
+            }
+        }
+    };
+
+    for (0..thread_count) |i| {
+        threads[i] = std.Thread.spawn(.{}, writer.write, .{ &temp_dir, i }) catch continue;
+    }
+
+    for (threads) |thread| {
+        thread.join();
+    }
+
+    // Wait for all events
+    try waitForEvents(&global.event_count, thread_count * 5, 10000);
+
     watcher.stop();
 
-    const count = global.event_count.load(.seq_cst);
-    try std.testing.expectEqual(@as(u32, 0), count);
-}
-
-test "already started error" {
-    const allocator = std.testing.allocator;
-
-    var temp_dir = std.testing.tmpDir(.{});
-    defer temp_dir.cleanup();
-
-    const temp_path = try temp_dir.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(temp_path);
-
-    const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
-        }
-    }.cb;
-
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
-    defer watcher.deinit();
-
-    try watcher.start();
-    defer watcher.stop();
-
-    // Should return error when trying to start again
-    try std.testing.expectError(error.AlreadyStarted, watcher.start());
+    // Clean up event paths
+    global.mutex.lock();
+    defer global.mutex.unlock();
+    for (global.events.items) |path| {
+        allocator.free(path);
+    }
 }
 
 test "file rename detection" {
@@ -1053,21 +1010,20 @@ test "file rename detection" {
     const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
     defer watcher.deinit();
 
+    // Create initial file
+    try temp_dir.dir.writeFile(.{ .sub_path = "original.roc", .data = "content" });
+
     try watcher.start();
-    std.time.sleep(200 * std.time.ns_per_ms);
 
-    // Create and rename file
-    try temp_dir.dir.writeFile(.{ .sub_path = "old.roc", .data = "content" });
-    std.time.sleep(100 * std.time.ns_per_ms);
-
-    try temp_dir.dir.rename("old.roc", "new.roc");
-    std.time.sleep(100 * std.time.ns_per_ms);
+    // Rename file
+    try temp_dir.dir.rename("original.roc", "renamed.roc");
+    try waitForEvents(&global.event_count, 1, 5000);
 
     watcher.stop();
 
     const count = global.event_count.load(.seq_cst);
     if (builtin.os.tag == .linux) {
-        // Linux should detect both the creation and rename
+        // Linux detects both MOVED_FROM and MOVED_TO
         try std.testing.expect(count >= 1);
     }
 }

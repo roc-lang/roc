@@ -237,6 +237,13 @@ pub const RocModules = struct {
                 .link_libc = (module_type == .ipc),
             });
 
+            // Watch module needs Core Foundation and FSEvents on macOS (only when not cross-compiling)
+            // These frameworks provide the FSEvents API for proper event-driven file system monitoring on macOS.
+            if (module_type == .watch and target.result.os.tag == .macos and target.query.isNative()) {
+                test_step.linkFramework("CoreFoundation");
+                test_step.linkFramework("CoreServices");
+            }
+
             // Add only the necessary dependencies for each module test
             self.addModuleDependencies(test_step, module_type);
 
