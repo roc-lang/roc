@@ -406,8 +406,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
             _ = try self.checkExpr(def.expr);
 
             // Unify the expression with its annotation
-            const result = try self.unify(expr_var, anno_var);
-            self.setDetailIfTypeMismatch(result, .{ .annotation_mismatch = .{} });
+            _ = try self.unify(expr_var, anno_var);
         }
     } else {
         // Check the expr
@@ -841,8 +840,12 @@ pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type:
             const func_expr_idx = all_exprs[0];
             does_fx = try self.checkExpr(func_expr_idx) or does_fx; // func_expr could be effectful, e.g. `(mk_fn!())(arg)`
 
-            // Arguments will be checked during unifyFunctionCall when we know their expected types
+            // Then, check all the arguments
             const call_args = all_exprs[1..];
+            for (call_args) |arg_expr_idx| {
+                // Each arg could also be effectful, e.g. `fn(mk_arg!(), mk_arg!())`
+                does_fx = try self.checkExpr(arg_expr_idx) or does_fx;
+            }
 
             // Don't try to unify with the function if the function is a runtime error.
             const func_expr = self.cir.store.getExpr(func_expr_idx);
@@ -1290,19 +1293,26 @@ fn unifyFunctionCall(
 ) std.mem.Allocator.Error!bool {
     // Check arguments with expected types using bidirectional type checking
     const expected_args = self.types.sliceVars(expected_func.args);
-    var does_fx = false;
 
     // Only unify arguments if counts match - otherwise let the normal
     // unification process handle the arity mismatch error
     if (expected_args.len == call_args.len) {
+        // Apply constraint propagation for numeric literals before regular unification
+        for (expected_args, call_args) |expected_arg, arg_expr_idx| {
+            const arg_expr = self.cir.store.getExpr(arg_expr_idx);
+
+            // Apply constraint propagation for numeric literals
+            if (arg_expr == .e_int) {
+                const literal_var = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
+                _ = try self.unify(literal_var, expected_arg);
+            }
+        }
+
+        // Regular unification using the argument vars
         var arg_index: u32 = 0;
         for (expected_args, call_args) |expected_arg, arg_expr_idx| {
-            // Check the argument with the expected type for constraint propagation
-            does_fx = try self.checkExprWithExpected(arg_expr_idx, expected_arg) or does_fx;
-            
-            // Get the argument variable after checking
             const actual_arg = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
-            
+
             // Instantiate polymorphic arguments before unification
             var arg_to_unify = actual_arg;
             if (self.types.needsInstantiation(actual_arg)) {
@@ -1323,11 +1333,8 @@ fn unifyFunctionCall(
         // The call's type is the instantiated return type
         _ = try self.unify(call_var, expected_func.ret);
     } else {
-        // Arity mismatch - still need to check arguments but without expected types
-        for (call_args) |arg_expr_idx| {
-            does_fx = try self.checkExpr(arg_expr_idx) or does_fx;
-        }
-        
+        // Arity mismatch - arguments already checked
+
         // Fall back to normal unification to get proper error message
         // Use the original func_var to avoid issues with instantiated variables in error reporting
         const actual_arg_vars: []Var = @constCast(@ptrCast(@alignCast(call_args)));
@@ -1335,8 +1342,8 @@ fn unifyFunctionCall(
         const expected_func_var = try self.freshFromContent(func_content, region);
         _ = try self.unify(call_func_var, expected_func_var);
     }
-    
-    return does_fx;
+
+    return false;
 }
 
 /// Performs bidirectional type checking for lambda expressions with optional type annotations.
@@ -1402,17 +1409,16 @@ fn checkLambdaWithAnno(
 
                     // Unify against the annotation
                     const pattern_var = ModuleEnv.varFrom(pattern_idx);
-                    const result = try self.unify(pattern_var, expected_arg);
-                    self.setDetailIfTypeMismatch(result, .{ .annotation_mismatch = .{} });
+                    _ = try self.unify(pattern_var, expected_arg);
                 }
             }
         }
     }
 
     // STEP 2: Check the body with return type constraint propagation for literals
-    const is_effectful = if (mb_expected_func) |func| 
+    const is_effectful = if (mb_expected_func) |func|
         try self.checkExprWithExpected(lambda.body, func.ret)
-    else 
+    else
         try self.checkExpr(lambda.body);
 
     // STEP 3: Build the function type
@@ -1427,14 +1433,12 @@ fn checkLambdaWithAnno(
 
     // STEP 4: Validate the function body against the annotation return type
     if (mb_expected_func) |func| {
-        const result = try self.unify(return_var, func.ret);
-        self.setDetailIfTypeMismatch(result, .{ .annotation_mismatch = .{} });
+        _ = try self.unify(return_var, func.ret);
     }
 
     // STEP 5: Validate the entire function against the annotation
     if (mb_expected_var) |expected_var| {
-        const result = try self.unify(fn_var, expected_var);
-        self.setDetailIfTypeMismatch(result, .{ .annotation_mismatch = .{} });
+        _ = try self.unify(fn_var, expected_var);
     }
 
     return is_effectful;
@@ -1452,7 +1456,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
             // Check operands first
             var does_fx = try self.checkExpr(binop.lhs);
             does_fx = try self.checkExpr(binop.rhs) or does_fx;
-            
+
             // For now, we'll constrain both operands to be numbers
             // In the future, this will use static dispatch based on the lhs type
             const lhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.lhs)));
@@ -1469,7 +1473,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
             _ = try self.unify(num_var_lhs, lhs_var);
             _ = try self.unify(num_var_rhs, rhs_var);
             _ = try self.unify(result_var, num_var_result);
-            
+
             return does_fx;
         },
         .lt, .gt, .le, .ge, .eq, .ne => {

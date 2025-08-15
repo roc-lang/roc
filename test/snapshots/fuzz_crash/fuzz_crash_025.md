@@ -162,7 +162,7 @@ e : U128
 It is of type:
     _U128_
 
-But the type annotation says it should have the type:
+But you are trying to use it as:
     _Frac(_size)_
 
 # TOKENS

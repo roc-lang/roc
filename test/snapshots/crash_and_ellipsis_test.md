@@ -83,7 +83,7 @@ testCrash : U64 -> U64
 It is of type:
     _U64_
 
-But the type annotation says it should have the type:
+But you are trying to use it as:
     _{}_
 
 # TOKENS

@@ -107,7 +107,7 @@ ending_underscore : List(elem_) -> elem_
 It is of type:
     _elem__
 
-But the type annotation says it should have the type:
+But you are trying to use it as:
     _Str_
 
 # TOKENS

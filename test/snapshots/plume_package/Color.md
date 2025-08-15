@@ -135,7 +135,7 @@ hex : Str -> Result(Color, [InvalidHex(Str)])
 It is of type:
     _Str -> Result(Error, [InvalidHex(Str)])_
 
-But the type annotation says it should have the type:
+But you are trying to use it as:
     _{ to_utf8: List(Num(_size)) } -> Result(Error, [InvalidHex(Str)]_others)_
 
 # TOKENS
