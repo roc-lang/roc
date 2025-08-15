@@ -43,5 +43,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.13 (type "Num(_size), Num(_size2) -> Num(_size3)"))
+(expr @1.1-1.13 (type "_arg, _arg2 -> Num(_size)"))
 ~~~

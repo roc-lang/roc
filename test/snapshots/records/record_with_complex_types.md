@@ -234,5 +234,5 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-15.2 (type "{ name: Str, scores: List(Num(_size)), status: [Active({ since: Str })]_others, preferences: { theme: [Dark]_others2, notifications: [Email(Str)]_others3 }, metadata: Result({ tags: List(Str), permissions: List([Read]_others4) }, err), callback: Num(_size2) -> Num(_size3), nested: { items: List([Some(Str)][None]_others5), result: [Success({ data: List(Num(_size4)), timestamp: Str })]_others6 } }"))
+(expr @1.1-15.2 (type "{ name: Str, scores: List(Num(_size)), status: [Active({ since: Str })]_others, preferences: { theme: [Dark]_others2, notifications: [Email(Str)]_others3 }, metadata: Result({ tags: List(Str), permissions: List([Read]_others4) }, err), callback: _arg -> Num(_size2), nested: { items: List([Some(Str)][None]_others5), result: [Success({ data: List(Num(_size3)), timestamp: Str })]_others6 } }"))
 ~~~

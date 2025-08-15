@@ -692,6 +692,11 @@ pub fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator
 
 /// Check the types for an exprexpression. Returns whether evaluating the expr might perform side effects.
 pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
+    return self.checkExprWithExpected(expr_idx, null);
+}
+
+/// Check expression with an optional expected type for bidirectional type checking
+pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type: ?Var) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -705,6 +710,12 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             // constraints will be checked when unified with expected types.
             // The type variable for this expression was already created with the
             // appropriate num_unbound or int_unbound content during canonicalization.
+
+            // If we have an expected type, unify immediately to constrain the literal
+            if (expected_type) |expected| {
+                const literal_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+                _ = try self.unify(literal_var, expected);
+            }
         },
         .e_frac_f32 => |_| {
             // Fractional literals have their type constraints (fits_in_f32, fits_in_dec)
@@ -1059,7 +1070,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             _ = try self.unify(closure_var, lambda_var);
         },
         .e_lambda => |lambda| {
-            does_fx = try self.checkLambdaWithAnno(expr_idx, expr_region, lambda, null);
+            does_fx = try self.checkLambdaWithAnno(expr_idx, expr_region, lambda, expected_type);
         },
         .e_tuple => |tuple| {
             // Check tuple elements
@@ -1356,8 +1367,9 @@ fn checkLambdaWithAnno(
 
     var mb_expected_var: ?Var = null;
     var mb_expected_func: ?types_mod.Func = null;
+    var expected_return_type: ?Var = null;
 
-    // STEP 1: Apply annotation constraints to parameters FIRST
+    // STEP 1: Extract expected function type and argument/return types
     if (anno_type) |anno_var| {
         mb_expected_var = anno_var;
 
@@ -1372,6 +1384,8 @@ fn checkLambdaWithAnno(
 
         if (mb_expected_func) |func| {
             const expected_args = self.types.sliceVars(func.args);
+            expected_return_type = func.ret;
+
             if (expected_args.len == arg_patterns.len) {
                 // Constrain parameters with annotation types
                 for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
@@ -1384,41 +1398,24 @@ fn checkLambdaWithAnno(
                 }
             }
         }
-    }
-
-    // STEP 2: Check the body - but first set up return type constraints if needed
-    const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
-
-    // For better constraint propagation, especially for numeric literals in lambda bodies,
-    // we want to establish the return type constraint before checking the body.
-    // However, to avoid breaking error reporting in other cases, we only do this
-    // when the expected return type is a concrete base type (not a type variable, nominal type, etc.)
-    var early_unify = false;
-    if (mb_expected_func) |func| {
-        const ret_resolved = self.types.resolveVar(func.ret);
-        if (ret_resolved.desc.content == .structure) {
-            // Only do early unification for concrete base types (num, str, etc.)
-            // Skip nominal types, tag unions, and other complex types
-            const should_early_unify = switch (ret_resolved.desc.content.structure) {
-                .num, .str => true,
-                .nominal_type, .tag_union, .fn_pure, .fn_effectful, .fn_unbound => false,
-                .list, .box, .tuple, .record, .record_unbound, .record_poly => false,
-                .empty_record, .empty_tag_union, .list_unbound => false,
-            };
-
-            if (should_early_unify) {
-                // The return type is a concrete base type, unify early for better constraint propagation
-                _ = try self.unify(return_var, func.ret);
-                early_unify = true;
-            }
+    } else {
+        // No annotation - just check patterns normally
+        for (arg_patterns) |pattern_idx| {
+            try self.checkPattern(pattern_idx);
         }
     }
 
-    // STEP 3: Check the body
-    const is_effectful = try self.checkExpr(lambda.body);
+    // STEP 2: Check the lambda body with expected return type
+    // This is the key improvement - we pass the expected return type down
+    // so that numeric literals and nested expressions get properly constrained
+    const is_effectful = if (expected_return_type) |expected_ret|
+        try self.checkExprWithExpected(lambda.body, expected_ret)
+    else
+        try self.checkExpr(lambda.body);
 
-    // STEP 4: Build the function type
+    // STEP 3: Build the function type
     const fn_var = ModuleEnv.varFrom(expr_idx);
+    const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
 
     if (is_effectful) {
         _ = try self.types.setVarContent(fn_var, try self.types.mkFuncEffectful(arg_vars, return_var));
@@ -1426,14 +1423,12 @@ fn checkLambdaWithAnno(
         _ = try self.types.setVarContent(fn_var, try self.types.mkFuncUnbound(arg_vars, return_var));
     }
 
-    // STEP 5: Validate the function body against the annotation return type (if not done already)
-    if (mb_expected_func) |func| {
-        if (!early_unify) {
-            _ = try self.unify(return_var, func.ret);
-        }
+    // STEP 4: Validate the function body against the annotation return type
+    if (expected_return_type) |expected_ret| {
+        _ = try self.unify(return_var, expected_ret);
     }
 
-    // STEP 6: Validate the entire function against the annotation
+    // STEP 5: Validate the entire function against the annotation
     if (mb_expected_var) |expected_var| {
         _ = try self.unify(fn_var, expected_var);
     }
@@ -1448,35 +1443,40 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var does_fx = try self.checkExpr(binop.lhs);
-    does_fx = try self.checkExpr(binop.rhs) or does_fx;
-
     switch (binop.op) {
         .add, .sub, .mul, .div, .rem, .pow, .div_trunc => {
-            // For now, we'll constrain both operands to be numbers
-            // In the future, this will use static dispatch based on the lhs type
-            const lhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.lhs)));
-            const rhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.rhs)));
+            // For arithmetic operations, create a shared number type for operands and result
             const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
 
-            // Create a fresh number variable for the operation
+            // Create a fresh number variable that all operands should match
             const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
-            const num_var_lhs = try self.freshFromContent(num_content, expr_region);
-            const num_var_rhs = try self.freshFromContent(num_content, expr_region);
-            const num_var_result = try self.freshFromContent(num_content, expr_region);
+            const shared_num_var = try self.freshFromContent(num_content, expr_region);
 
-            // Unify lhs, rhs, and result with the number type
-            _ = try self.unify(num_var_lhs, lhs_var);
-            _ = try self.unify(num_var_rhs, rhs_var);
-            _ = try self.unify(result_var, num_var_result);
+            // Check operands with the shared numeric type as expected
+            var does_fx = try self.checkExprWithExpected(binop.lhs, shared_num_var);
+            does_fx = try self.checkExprWithExpected(binop.rhs, shared_num_var) or does_fx;
+
+            // Result should also be of the same numeric type
+            _ = try self.unify(result_var, shared_num_var);
+
+            return does_fx;
         },
         .lt, .gt, .le, .ge, .eq, .ne => {
+            // Check operands first
+            var does_fx = try self.checkExpr(binop.lhs);
+            does_fx = try self.checkExpr(binop.rhs) or does_fx;
+
             // Comparison operators always return Bool
             const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
             const fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             _ = try self.unify(expr_var, fresh_bool);
+
+            return does_fx;
         },
         .@"and" => {
+            var does_fx = try self.checkExpr(binop.lhs);
+            does_fx = try self.checkExpr(binop.rhs) or does_fx;
+
             const lhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
@@ -1494,8 +1494,13 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
                     .binop = .@"and",
                 } });
             }
+
+            return does_fx;
         },
         .@"or" => {
+            var does_fx = try self.checkExpr(binop.lhs);
+            does_fx = try self.checkExpr(binop.rhs) or does_fx;
+
             const lhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
@@ -1513,12 +1518,20 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
                     .binop = .@"or",
                 } });
             }
-        },
-        .pipe_forward => {},
-        .null_coalesce => {},
-    }
 
-    return does_fx;
+            return does_fx;
+        },
+        .pipe_forward => {
+            var does_fx = try self.checkExpr(binop.lhs);
+            does_fx = try self.checkExpr(binop.rhs) or does_fx;
+            return does_fx;
+        },
+        .null_coalesce => {
+            var does_fx = try self.checkExpr(binop.lhs);
+            does_fx = try self.checkExpr(binop.rhs) or does_fx;
+            return does_fx;
+        },
+    }
 }
 
 fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, unary: CIR.Expr.UnaryMinus) Allocator.Error!bool {

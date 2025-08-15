@@ -166,5 +166,5 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-10.2 (type "{ someTag: [Some(Num(_size))]_others, noneTag: [None]_others2, okTag: Result(Str, err), errTag: Result(ok, Str), addOne: Num(_size2) -> Num(_size3), result: _field, nested: [Some(Error)]_others3, tagList: List([Some(Num(_size4))][None]_others4) }"))
+(expr @1.1-10.2 (type "{ someTag: [Some(Num(_size))]_others, noneTag: [None]_others2, okTag: Result(Str, err), errTag: Result(ok, Str), addOne: _arg -> Num(_size2), result: _field, nested: [Some(Error)]_others3, tagList: List([Some(Num(_size3))][None]_others4) }"))
 ~~~

@@ -256,12 +256,12 @@ main! = |_| {
 		(patt @4.1-4.15 (type "_arg -> Num(_size)"))
 		(patt @7.1-7.16 (type "_arg -> _ret"))
 		(patt @10.1-10.18 (type "_arg -> Num(_size)"))
-		(patt @13.1-13.13 (type "Num(_size) -> Num(_size2)"))
+		(patt @13.1-13.13 (type "_arg -> Num(_size)"))
 		(patt @15.1-15.6 (type "_arg -> Num(_size)")))
 	(expressions
 		(expr @4.18-4.24 (type "_arg -> Num(_size)"))
 		(expr @7.19-7.34 (type "_arg -> _ret"))
 		(expr @10.21-10.35 (type "_arg -> Num(_size)"))
-		(expr @13.16-13.35 (type "Num(_size) -> Num(_size2)"))
+		(expr @13.16-13.35 (type "_arg -> Num(_size)"))
 		(expr @15.9-21.2 (type "_arg -> Num(_size)"))))
 ~~~
