@@ -94,6 +94,97 @@ test "nested polymorphic instantiation with type mismatch should fail" {
     try testing.expect(checker.problems.problems.items.len > 0);
 }
 
+test "simplified nested instantiation bug" {
+    // Tests that block-level type annotations are properly connected to declarations
+    const source =
+        \\{
+        \\    f : a -> a
+        \\    f = |x| x
+        \\    
+        \\    g : List(b) -> Str  
+        \\    g = |x| f(x)  # This should fail! f(List(b)) returns List(b), not Str
+        \\    
+        \\    g([1, 2, 3])
+        \\}
+    ;
+
+    var module_env = try ModuleEnv.init(test_allocator, source);
+    defer module_env.deinit();
+
+    var parse_ast = try parse.parseExpr(&module_env.common, test_allocator);
+    defer parse_ast.deinit(test_allocator);
+
+    parse_ast.store.emptyScratch();
+    try module_env.initCIRFields(test_allocator, "test");
+
+    var czer = try can.Can.init(&module_env, &parse_ast, null);
+    defer czer.deinit();
+
+    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+    const canon_expr = try czer.canonicalizeExpr(expr_idx);
+
+    var checker = try Check.init(test_allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions);
+    defer checker.deinit();
+
+    if (canon_expr) |expr| {
+        _ = try checker.checkExpr(expr.get_idx());
+    }
+
+    // This MUST fail - g returns List(b) but is annotated as returning Str
+    try testing.expect(checker.problems.problems.items.len > 0);
+}
+
+test "correct nested polymorphic instantiation should pass" {
+    // This version should work correctly
+    const source =
+        \\{
+        \\    make_record : a -> { value: a, tag: Str }
+        \\    make_record = |x| { value: x, tag: "data" }
+        \\    
+        \\    get_value : { value: a, tag: Str } -> a
+        \\    get_value = |r| r.value
+        \\    
+        \\    composed : List(a) -> List(a)  # Correct return type!
+        \\    composed = |n| get_value(make_record(n))
+        \\    
+        \\    composed([42])
+        \\}
+    ;
+
+    var module_env = try ModuleEnv.init(test_allocator, source);
+    defer module_env.deinit();
+
+    var parse_ast = try parse.parseExpr(&module_env.common, test_allocator);
+    defer parse_ast.deinit(test_allocator);
+
+    parse_ast.store.emptyScratch();
+    try module_env.initCIRFields(test_allocator, "test");
+
+    var czer = try can.Can.init(&module_env, &parse_ast, null);
+    defer czer.deinit();
+
+    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+    const canon_expr = try czer.canonicalizeExpr(expr_idx);
+
+    var checker = try Check.init(test_allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions);
+    defer checker.deinit();
+
+    if (canon_expr) |expr| {
+        _ = try checker.checkExpr(expr.get_idx());
+    }
+
+    // This should pass - the types are correct
+    if (checker.problems.problems.items.len > 0) {
+        std.debug.print("\nCorrect test: {} errors detected (should be 0)\n", .{checker.problems.problems.items.len});
+        for (checker.problems.problems.items) |problem| {
+            std.debug.print("  Problem: {}\n", .{problem});
+        }
+    } else {
+        std.debug.print("\nCorrect test: No errors (good!)\n", .{});
+    }
+    try testing.expect(checker.problems.problems.items.len == 0);
+}
+
 test "polymorphic value passed to function and used twice" {
     // This should also work in standard Hindley-Milner
     const source =

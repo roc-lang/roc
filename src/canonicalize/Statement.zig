@@ -37,6 +37,7 @@ pub const Statement = union(enum) {
     s_decl: struct {
         pattern: Pattern.Idx,
         expr: Expr.Idx,
+        annotation: ?CIR.Annotation.Idx,
     },
     /// A rebindable declaration using the "var" keyword.
     ///

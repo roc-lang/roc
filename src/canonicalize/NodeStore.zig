@@ -190,6 +190,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         .statement_decl => return CIR.Statement{ .s_decl = .{
             .pattern = @enumFromInt(node.data_1),
             .expr = @enumFromInt(node.data_2),
+            .annotation = if (node.data_3 == 0) null else @enumFromInt(node.data_3),
         } },
         .statement_var => return CIR.Statement{ .s_var = .{
             .pattern_idx = @enumFromInt(node.data_1),
@@ -1073,6 +1074,7 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Re
             node.tag = .statement_decl;
             node.data_1 = @intFromEnum(s.pattern);
             node.data_2 = @intFromEnum(s.expr);
+            node.data_3 = if (s.annotation) |a| @intFromEnum(a) else 0;
         },
         .s_var => |s| {
             node.tag = .statement_var;
