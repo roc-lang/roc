@@ -36,7 +36,7 @@ LowerIdent(3:1-3:16),LowerIdent(3:17-3:21),EndOfFile(3:21-3:21),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-1.24 (ext-var 79) (id 80)
+(e-record @1.1-1.24 (id 79)
 	(fields
 		(field (name "launchTheNukes!")
 			(e-runtime-error (tag "ident_not_in_scope")))
@@ -45,5 +45,5 @@ LowerIdent(3:1-3:16),LowerIdent(3:17-3:21),EndOfFile(3:21-3:21),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 80) (type "{ launchTheNukes!: Error, code: Error }"))
+(expr (id 79) (type "{ launchTheNukes!: Error, code: Error }"))
 ~~~
