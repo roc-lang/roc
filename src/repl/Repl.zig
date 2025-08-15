@@ -59,6 +59,7 @@ pub fn init(allocator: Allocator, roc_ops: *RocOps) !Repl {
     };
 }
 
+/// Set the trace writer for the REPL.
 pub fn setTraceWriter(self: *Repl, trace_writer: std.io.AnyWriter) void {
     self.trace_writer = trace_writer;
 }

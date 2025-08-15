@@ -12,7 +12,7 @@ type=repl
 # OUTPUT
 42
 ---
-3.14e0
+3.14
 ---
 3
 # PROBLEMS

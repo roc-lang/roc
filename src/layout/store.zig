@@ -790,10 +790,10 @@ pub const Store = struct {
                         .int_precision => |precision| Layout.int(precision),
                         .frac_precision => |precision| Layout.frac(precision),
                         // For polymorphic types, use default precision
-                        .num_unbound => Layout.frac(types.Num.Frac.Precision.default),
+                        .num_unbound => Layout.int(types.Num.Int.Precision.default),
                         .int_unbound => Layout.int(types.Num.Int.Precision.default),
                         .frac_unbound => Layout.frac(types.Num.Frac.Precision.default),
-                        .num_poly => Layout.frac(types.Num.Frac.Precision.default),
+                        .num_poly => Layout.int(types.Num.Int.Precision.default),
                         .int_poly => Layout.int(types.Num.Int.Precision.default),
                         .frac_poly => Layout.frac(types.Num.Frac.Precision.default),
                     },

@@ -13,7 +13,7 @@ type=repl
 # OUTPUT
 2
 ---
-3e-1
+0.3
 ---
 "Hello, World!"
 ---

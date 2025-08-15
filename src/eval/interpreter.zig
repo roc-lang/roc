@@ -1069,19 +1069,19 @@ pub const Interpreter = struct {
                                 // 1. Initialize with placeholder
                                 // 2. Evaluate expression (can now find the capture)
                                 // 3. Update the binding with the actual closure
-                                
+
                                 self.schedule_work(WorkItem{
                                     .kind = .w_recursive_bind_update,
                                     .expr_idx = expr_idx, // e_block's index for tracing
                                     .extra = .{ .decl_pattern_idx = decl.pattern },
                                 });
-                                
+
                                 self.schedule_work(WorkItem{
                                     .kind = .w_eval_expr_structural,
                                     .expr_idx = decl.expr,
                                     .extra = .{ .nothing = {} },
                                 });
-                                
+
                                 self.schedule_work(WorkItem{
                                     .kind = .w_recursive_bind_init,
                                     .expr_idx = decl.expr, // Pass the closure expr for layout info
@@ -1416,6 +1416,55 @@ pub const Interpreter = struct {
                         self.traceError("arithmetic operations on fractional types only support Dec precision", .{});
                         return error.TypeMismatch;
                     }
+                }
+                // Handle mixed integer and decimal operations
+                else if ((lhs_scalar.tag == .int and rhs_scalar.tag == .frac and rhs_scalar.data.frac == .dec) or
+                    (lhs_scalar.tag == .frac and lhs_scalar.data.frac == .dec and rhs_scalar.tag == .int))
+                {
+
+                    // Convert integer operand to decimal and perform decimal arithmetic
+                    const lhs_dec: RocDec = if (lhs_scalar.tag == .int)
+                        RocDec{ .num = lhs.asI128() * RocDec.one_point_zero_i128 }
+                    else
+                        @as(*const RocDec, @ptrCast(@alignCast(lhs.ptr.?))).*;
+
+                    const rhs_dec: RocDec = if (rhs_scalar.tag == .int)
+                        RocDec{ .num = rhs.asI128() * RocDec.one_point_zero_i128 }
+                    else
+                        @as(*const RocDec, @ptrCast(@alignCast(rhs.ptr.?))).*;
+
+                    // Result is always decimal
+                    const result_layout = if (lhs_scalar.tag == .frac) lhs.layout else rhs.layout;
+                    var result_value = try self.pushStackValue(result_layout);
+
+                    const result_dec: RocDec = switch (kind) {
+                        .w_binop_add => RocDec{ .num = lhs_dec.num + rhs_dec.num },
+                        .w_binop_sub => RocDec{ .num = lhs_dec.num - rhs_dec.num },
+                        .w_binop_mul => result_dec: {
+                            const product = lhs_dec.num * rhs_dec.num;
+                            break :result_dec RocDec{ .num = @divTrunc(product, RocDec.one_point_zero_i128) };
+                        },
+                        .w_binop_div => result_dec: {
+                            if (rhs_dec.num == 0) return error.DivisionByZero;
+                            const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
+                            break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
+                        },
+                        .w_binop_div_trunc => result_dec: {
+                            if (rhs_dec.num == 0) return error.DivisionByZero;
+                            const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
+                            break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
+                        },
+                        .w_binop_rem => result_dec: {
+                            if (rhs_dec.num == 0) return error.DivisionByZero;
+                            break :result_dec RocDec{ .num = @rem(lhs_dec.num, rhs_dec.num) };
+                        },
+                        else => unreachable,
+                    };
+
+                    // Store the result in memory
+                    const result_ptr = @as(*RocDec, @ptrCast(@alignCast(result_value.ptr.?)));
+                    result_ptr.* = result_dec;
+                    result_value.is_initialized = true;
                 } else {
                     self.traceError("arithmetic operations require operands of the same type (both integers or both decimals)", .{});
                     return error.TypeMismatch;
@@ -2943,7 +2992,7 @@ pub const Interpreter = struct {
             .e_closure => |closure_expr| {
                 // Get the pattern's variable name
                 const pattern_name = self.getPatternVariableName(pattern_idx) orelse return false;
-                
+
                 // Check if this closure captures the same variable
                 const captures = self.env.store.sliceCaptures(closure_expr.captures);
                 for (captures) |capture_idx| {
@@ -2964,7 +3013,7 @@ pub const Interpreter = struct {
     fn initRecursiveBinding(self: *Interpreter, pattern_idx: CIR.Pattern.Idx, _: CIR.Expr.Idx) EvalError!void {
         const pattern_name = self.getPatternVariableName(pattern_idx) orelse return error.LayoutError;
         self.traceInfo("Initializing recursive binding placeholder for '{s}'", .{pattern_name});
-        
+
         // Create a simple placeholder binding that doesn't involve allocating memory
         // We'll use a null value with the pattern_idx to mark it as a recursive placeholder
         const binding = Binding{
@@ -2975,7 +3024,7 @@ pub const Interpreter = struct {
                 .is_initialized = false,
             },
         };
-        
+
         try self.bindings_stack.append(binding);
         self.traceInfo("Created placeholder binding for recursive function '{s}' (null placeholder)", .{pattern_name});
     }
@@ -2984,14 +3033,14 @@ pub const Interpreter = struct {
     fn updateRecursiveBinding(self: *Interpreter, pattern_idx: CIR.Pattern.Idx, actual_value: StackValue, roc_ops: *RocOps) EvalError!void {
         const pattern_name = self.getPatternVariableName(pattern_idx) orelse return error.LayoutError;
         self.traceInfo("Updating recursive binding for '{s}' with actual closure", .{pattern_name});
-        
+
         // Find the placeholder binding and update it
         var found = false;
         for (self.bindings_stack.items) |*binding| {
             if (binding.pattern_idx == pattern_idx) {
                 // Clean up the old placeholder value
                 binding.cleanup(roc_ops);
-                
+
                 // Update with the actual value
                 binding.value = actual_value.cloneForBinding();
                 found = true;
@@ -2999,7 +3048,7 @@ pub const Interpreter = struct {
                 break;
             }
         }
-        
+
         if (!found) {
             self.traceError("Could not find placeholder binding for recursive function '{s}'", .{pattern_name});
             return error.CaptureBindingFailed;
@@ -3014,7 +3063,7 @@ pub const Interpreter = struct {
         captures_record_layout: Layout,
     ) EvalError!bool {
         const capture_name_text = self.env.getIdentText(capture.name);
-        
+
         // Search through ALL current bindings (including recently created placeholders)
         for (self.bindings_stack.items) |binding| {
             const binding_name = self.getPatternVariableName(binding.pattern_idx);
@@ -3033,7 +3082,7 @@ pub const Interpreter = struct {
                 }
             }
         }
-        
+
         return false;
     }
 
@@ -3045,14 +3094,14 @@ pub const Interpreter = struct {
         captures_record_layout: Layout,
     ) EvalError!void {
         const capture_name_text = self.env.getIdentText(capture.name);
-        
+
         // For recursive functions, we create a placeholder that will be updated
         // when the recursive binding is completed
-        
+
         if (captures_record_layout.tag == .record) {
             const record_data = self.layout_cache.getRecordData(captures_record_layout.data.record.idx);
             const sorted_fields = self.layout_cache.record_fields.sliceRange(record_data.getFields());
-            
+
             // Find the field for this capture
             for (0..sorted_fields.len) |field_idx| {
                 const field_info = sorted_fields.get(field_idx);
@@ -3061,18 +3110,18 @@ pub const Interpreter = struct {
                     const field_layout = self.layout_cache.getLayout(field_info.layout);
                     const field_offset = self.layout_cache.getRecordFieldOffset(captures_record_layout.data.record.idx, @intCast(field_idx));
                     const field_ptr = captures_ptr + field_offset;
-                    
+
                     // Create a placeholder - for closure types, we'll zero-initialize
                     // This will be patched when updateRecursiveBinding is called
                     const field_size = self.layout_cache.layoutSize(field_layout);
                     @memset(field_ptr[0..field_size], 0);
-                    
+
                     self.traceInfo("Created self-reference placeholder for field '{s}' at offset {}", .{ capture_name_text, field_offset });
                     return;
                 }
             }
         }
-        
+
         self.traceError("Could not create self-reference placeholder for capture '{s}'", .{capture_name_text});
         return error.LayoutError;
     }
@@ -3137,7 +3186,7 @@ pub const Interpreter = struct {
                 // In this case, we'll look for it in the current bindings stack, including
                 // recently created placeholder bindings
                 copied = try self.copyFromCurrentBinding(captures_ptr, capture, captures_record_layout);
-                
+
                 if (!copied) {
                     self.traceError("Could not find capture '{s}' in bindings, outer closures, or current context", .{capture_name_text});
                     return error.CaptureNotFound;

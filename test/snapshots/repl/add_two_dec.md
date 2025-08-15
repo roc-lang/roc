@@ -14,7 +14,7 @@ assigned `x`
 ---
 assigned `y`
 ---
-3e-1
+0.3
 # PROBLEMS
 NIL
 # CANONICALIZE
