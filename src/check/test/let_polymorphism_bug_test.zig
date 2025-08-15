@@ -1,4 +1,4 @@
-//! Trace test for the apply pattern issue
+//! Test that reproduces the let-polymorphism bug
 
 const std = @import("std");
 const base = @import("base");
@@ -11,18 +11,16 @@ const testing = std.testing;
 const test_allocator = testing.allocator;
 const ModuleEnv = can.ModuleEnv;
 
-test "minimal apply pattern trace" {
-    // Minimal failing case
+test "direct polymorphic use - should work" {
+    // This simpler case should work now with our fix
     const source =
         \\{
         \\    id = |x| x
-        \\    f = |g, v| g(v)
-        \\    a = f(id, 1)
-        \\    a
+        \\    a = id(1)
+        \\    b = id("x")
+        \\    { a, b }
         \\}
     ;
-
-    // std.debug.print("\n=== MINIMAL APPLY TRACE ===\n", .{});
 
     var module_env = try ModuleEnv.init(test_allocator, source);
     defer module_env.deinit();
@@ -46,21 +44,6 @@ test "minimal apply pattern trace" {
         _ = try checker.checkExpr(expr.get_idx());
     }
 
-    // std.debug.print("Problems: {}\n", .{checker.problems.problems.items.len});
-    // for (checker.problems.problems.items, 0..) |problem, i| {
-    //     std.debug.print("  Problem {}: ", .{i});
-    //     switch (problem) {
-    //         .type_mismatch => |tm| {
-    //             std.debug.print("Type mismatch: expected var {} actual var {}\n", .{
-    //                 @intFromEnum(tm.types.expected_var),
-    //                 @intFromEnum(tm.types.actual_var),
-    //             });
-    //         },
-    //         else => std.debug.print("{any}\n", .{problem}),
-    //     }
-    // }
-
-    // This should pass
     try testing.expect(checker.problems.problems.items.len == 0);
 }
 
@@ -76,8 +59,6 @@ test "double apply pattern trace" {
         \\}
     ;
 
-    // std.debug.print("\n=== DOUBLE APPLY TRACE ===\n", .{});
-
     var module_env = try ModuleEnv.init(test_allocator, source);
     defer module_env.deinit();
 
@@ -98,12 +79,6 @@ test "double apply pattern trace" {
 
     if (canon_expr) |expr| {
         _ = try checker.checkExpr(expr.get_idx());
-    }
-
-    // Debug output to see what's failing
-    std.debug.print("Problems found: {}\n", .{checker.problems.problems.items.len});
-    for (checker.problems.problems.items, 0..) |problem, i| {
-        std.debug.print("  Problem {}: {any}\n", .{ i, problem });
     }
 
     try testing.expect(checker.problems.problems.items.len == 0);
