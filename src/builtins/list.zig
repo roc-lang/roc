@@ -556,7 +556,8 @@ pub fn push_in_place(
 
         return output;
     } else {
-        const new_length = old_length +| 1;
+        // No overflow check needed: allocator will fail at isize::MAX before usize overflow
+        const new_length = old_length + 1;
 
         const resized_list = list.reallocate(
             alignment,
@@ -588,7 +589,8 @@ pub fn append(
     if (list.refcount() == 1) {
         return push_in_place(list, alignment, element_size, element, roc_ops);
     } else {
-        const new_length = old_length +| 1;
+        // No overflow check needed: allocator will fail at isize::MAX before usize overflow
+        const new_length = old_length + 1;
 
         // Let list_allocate determine the best capacity
         const new_list = RocList.list_allocate(
