@@ -13,35 +13,9 @@ runEffect! = |fn!, x| fn!(x)
 main! = |_| {}
 ~~~
 # EXPECTED
-PARSE ERROR - type_function_effectful.md:3:25:3:27
-PARSE ERROR - type_function_effectful.md:3:28:3:30
 PARSE ERROR - type_function_effectful.md:3:31:3:33
 PARSE ERROR - type_function_effectful.md:3:34:3:36
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_function_effectful.md:3:25:3:27:**
-```roc
-runEffect! : (_a => _b) -> _a => _b
-```
-                        ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_function_effectful.md:3:28:3:30:**
-```roc
-runEffect! : (_a => _b) -> _a => _b
-```
-                           ^^
-
-
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
@@ -88,12 +62,12 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.24 (name "runEffect!")
-			(ty-fn @3.15-3.23
-				(underscore-ty-var @3.15-3.17 (raw "_a"))
-				(underscore-ty-var @3.21-3.23 (raw "_b"))))
-		(s-malformed @3.25-3.27 (tag "statement_unexpected_token"))
-		(s-malformed @3.28-3.30 (tag "statement_unexpected_token"))
+		(s-type-anno @3.1-3.30 (name "runEffect!")
+			(ty-fn @3.14-3.30
+				(ty-fn @3.15-3.23
+					(underscore-ty-var @3.15-3.17 (raw "_a"))
+					(underscore-ty-var @3.21-3.23 (raw "_b")))
+				(underscore-ty-var @3.28-3.30 (raw "_a"))))
 		(s-malformed @3.31-3.33 (tag "statement_unexpected_token"))
 		(s-malformed @3.34-3.36 (tag "statement_unexpected_token"))
 		(s-decl @4.1-4.29
@@ -116,7 +90,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-runEffect! : (_a => _b)
+runEffect! : (_a => _b) -> _a
 
 runEffect! = |fn!, x| fn!(x)
 
