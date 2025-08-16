@@ -81,7 +81,6 @@ is_named_color = |str|{
 UNUSED VARIABLE - Color.md:30:5:30:25
 UNDEFINED VARIABLE - Color.md:68:14:68:27
 INVALID NOMINAL TAG - Color.md:23:5:23:33
-TYPE MISMATCH - Color.md:29:13:29:26
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `is_char_in_hex_range` is not used anywhere in your code.
@@ -123,20 +122,6 @@ But it should be one of:
 **Hint:** The nominal type has a tag with the same name, but different args:
 
     _RGBA(U8, U8, U8, Dec)_
-
-**TYPE MISMATCH**
-The first argument being passed to this function has the wrong type:
-**Color.md:29:13:29:26:**
-```roc
-    bytes = str.to_utf8()
-```
-            ^^^^^^^^^^^^^
-
-This argument has the type:
-    _Str_
-
-But the function needs the first argument to be:
-    _{ to_utf8: List(Num(_size2)) }_
 
 # TOKENS
 ~~~zig
@@ -1108,7 +1093,7 @@ is_named_color = |str| {
 	(defs
 		(patt @18.1-18.4 (type "U8, U8, U8 -> Error"))
 		(patt @21.1-21.5 (type "U8, U8, U8, U8 -> Error"))
-		(patt @27.1-27.4 (type "Error"))
+		(patt @27.1-27.4 (type "Str -> Result(Error, [InvalidHex(Str)])"))
 		(patt @49.1-49.7 (type "Error -> Str"))
 		(patt @61.1-61.6 (type "Str -> Result(Error, [UnknownColor(Str)])"))
 		(patt @67.1-67.15 (type "_arg -> _ret")))
@@ -1118,7 +1103,7 @@ is_named_color = |str| {
 	(expressions
 		(expr @18.7-18.35 (type "U8, U8, U8 -> Error"))
 		(expr @21.8-24.2 (type "U8, U8, U8, U8 -> Error"))
-		(expr @27.7-46.2 (type "Error"))
+		(expr @27.7-46.2 (type "Str -> Result(Error, [InvalidHex(Str)])"))
 		(expr @49.10-54.2 (type "Error -> Str"))
 		(expr @61.9-65.50 (type "Str -> Result(Error, [UnknownColor(Str)])"))
 		(expr @67.18-71.2 (type "_arg -> _ret"))))
