@@ -148,8 +148,6 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
     if (diagnostic.region.start.offset < diagnostic.region.end.offset and
         diagnostic.region.end.offset <= self.env.source.len)
     {
-
-        // Calculate line starts if not already done
         var env = self.env.*;
         if (env.line_starts.items.items.len == 0) {
             try env.calcLineStarts(allocator);
