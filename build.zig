@@ -64,6 +64,7 @@ pub fn build(b: *std.Build) void {
     }
     build_options.addOption(bool, "enable_tracy_allocation", flag_tracy_allocation);
     build_options.addOption(u32, "tracy_callstack_depth", flag_tracy_callstack_depth);
+    build_options.addOption(bool, "target_is_native", target.query.isNative());
 
     const roc_modules = modules.RocModules.create(b, build_options);
 
