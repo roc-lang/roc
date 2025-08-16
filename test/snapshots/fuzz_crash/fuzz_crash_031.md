@@ -16,7 +16,7 @@ PARSE ERROR - fuzz_crash_031.md:1:6:1:7
 PARSE ERROR - fuzz_crash_031.md:1:7:1:8
 PARSE ERROR - fuzz_crash_031.md:4:1:4:6
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_031.md:4:10:4:11
-UNKNOWN OPERATOR - fuzz_crash_031.md:4:10:4:11
+UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -77,8 +77,8 @@ vavar t= '
          ^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
 **fuzz_crash_031.md:4:10:4:11:**
 ```roc
@@ -86,7 +86,7 @@ vavar t= '
 ```
          ^
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig

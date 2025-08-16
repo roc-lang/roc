@@ -42,9 +42,9 @@ UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:13:26:13:27
 PARSE ERROR - let_polymorphism_lists.md:13:28:13:41
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:14:30:14:31
 PARSE ERROR - let_polymorphism_lists.md:14:32:14:45
-UNKNOWN OPERATOR - let_polymorphism_lists.md:12:16:12:27
-UNKNOWN OPERATOR - let_polymorphism_lists.md:13:16:13:27
-UNKNOWN OPERATOR - let_polymorphism_lists.md:14:18:14:31
+UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:12:16:12:27
+UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:13:16:13:27
+UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 UNDEFINED VARIABLE - let_polymorphism_lists.md:25:12:25:20
 UNDEFINED VARIABLE - let_polymorphism_lists.md:26:12:26:20
 UNDEFINED VARIABLE - let_polymorphism_lists.md:27:12:27:20
@@ -115,8 +115,8 @@ all_float_list = float_list ++ my_empty_list
                                ^^^^^^^^^^^^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
 **let_polymorphism_lists.md:12:16:12:27:**
 ```roc
@@ -124,10 +124,10 @@ all_int_list = int_list ++ my_empty_list
 ```
                ^^^^^^^^^^^
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+This might be a syntax error, an unsupported language feature, or a typo.
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
 **let_polymorphism_lists.md:13:16:13:27:**
 ```roc
@@ -135,10 +135,10 @@ all_str_list = str_list ++ my_empty_list
 ```
                ^^^^^^^^^^^
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+This might be a syntax error, an unsupported language feature, or a typo.
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
 **let_polymorphism_lists.md:14:18:14:31:**
 ```roc
@@ -146,7 +146,7 @@ all_float_list = float_list ++ my_empty_list
 ```
                  ^^^^^^^^^^^^^
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+This might be a syntax error, an unsupported language feature, or a typo.
 
 **UNDEFINED VARIABLE**
 Nothing is named `len` in this scope.

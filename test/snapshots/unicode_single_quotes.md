@@ -54,7 +54,7 @@ INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
-UNKNOWN OPERATOR - unicode_single_quotes.md:20:5:20:7
+UNRECOGNIZED SYNTAX - unicode_single_quotes.md:20:5:20:7
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.```roc
@@ -232,8 +232,8 @@ This tuple element is malformed or contains invalid syntax.
 **INVALID TUPLE ELEMENT**
 This tuple element is malformed or contains invalid syntax.
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
 **unicode_single_quotes.md:20:5:20:7:**
 ```roc
@@ -241,7 +241,7 @@ y = 'u
 ```
     ^^
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig

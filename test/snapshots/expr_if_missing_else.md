@@ -11,7 +11,7 @@ foo = if tru 0
 ~~~
 # EXPECTED
 IF WITHOUT ELSE - expr_if_missing_else.md:3:7:3:9
-UNKNOWN OPERATOR - expr_if_missing_else.md:3:7:3:15
+UNRECOGNIZED SYNTAX - expr_if_missing_else.md:3:7:3:15
 # PROBLEMS
 **IF WITHOUT ELSE**
 This `if` is being used as an expression, but it doesn't have an `else`.
@@ -25,8 +25,8 @@ foo = if tru 0
       ^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
 **expr_if_missing_else.md:3:7:3:15:**
 ```roc
@@ -34,7 +34,7 @@ foo = if tru 0
 ```
       ^^^^^^^^
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig

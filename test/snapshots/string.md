@@ -33,7 +33,7 @@ UNCLOSED STRING - :0:0:0:0
 PARSE ERROR - string.md:12:1:12:2
 PARSE ERROR - string.md:15:1:15:2
 PARSE ERROR - string.md:15:2:15:3
-UNKNOWN OPERATOR - string.md:12:1:12:2
+UNRECOGNIZED SYNTAX - string.md:12:1:12:2
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.```roc
@@ -124,8 +124,8 @@ This is an unexpected parsing error. Please check your syntax.
  ^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
 **string.md:12:1:12:2:**
 ```roc
@@ -133,7 +133,7 @@ This looks like an operator, but it's not one I recognize!
 ```
 ^
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig

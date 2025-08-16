@@ -37,7 +37,7 @@ UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:44:3:44
 PARSE ERROR - guards_1.md:3:44:3:44
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:44:3:45
 UNDEFINED VARIABLE - guards_1.md:1:7:1:12
-UNKNOWN OPERATOR - guards_1.md:2:7:2:20
+UNRECOGNIZED SYNTAX - guards_1.md:2:7:2:20
 UNUSED VARIABLE - guards_1.md:2:5:2:6
 # PROBLEMS
 **PARSE ERROR**
@@ -317,8 +317,8 @@ match value {
       ^^^^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
 **guards_1.md:2:7:2:20:**
 ```roc
@@ -326,7 +326,7 @@ This looks like an operator, but it's not one I recognize!
 ```
       ^^^^^^^^^^^^^
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+This might be a syntax error, an unsupported language feature, or a typo.
 
 **UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.

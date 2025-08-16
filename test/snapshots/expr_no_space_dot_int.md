@@ -11,7 +11,7 @@ foo = asd.0
 ~~~
 # EXPECTED
 PARSE ERROR - expr_no_space_dot_int.md:3:10:3:12
-UNKNOWN OPERATOR - expr_no_space_dot_int.md:3:10:3:12
+UNRECOGNIZED SYNTAX - expr_no_space_dot_int.md:3:10:3:12
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expr_no_space_dot_int`
@@ -24,8 +24,8 @@ foo = asd.0
          ^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
 **expr_no_space_dot_int.md:3:10:3:12:**
 ```roc
@@ -33,7 +33,7 @@ foo = asd.0
 ```
          ^^
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
