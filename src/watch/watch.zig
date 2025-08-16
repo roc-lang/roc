@@ -440,6 +440,16 @@ pub const Watcher = struct {
                     _ = std.os.windows.CloseHandle(handle);
                 }
                 self.impl.handles.clearRetainingCapacity();
+
+                // Clean up overlapped data to keep arrays in sync
+                for (self.impl.overlapped_data.items) |*data| {
+                    if (data.overlapped.hEvent) |event| {
+                        _ = std.os.windows.CloseHandle(event);
+                    }
+                    self.allocator.free(data.buffer);
+                    self.allocator.free(data.path);
+                }
+                self.impl.overlapped_data.clearRetainingCapacity();
             },
             else => {},
         }
@@ -811,10 +821,10 @@ pub const Watcher = struct {
 
         var bytes_returned: std.os.windows.DWORD = 0;
         const notify_filter = std.os.windows.FileNotifyChangeFilter{
-            .FileName = 1,
-            .DirName = 1,
-            .LastWrite = 1,
-            .Creation = 1,
+            .file_name = true,
+            .dir_name = true,
+            .last_write = true,
+            .creation = true,
         };
 
         _ = std.os.windows.kernel32.ReadDirectoryChangesW(
@@ -857,8 +867,6 @@ pub const Watcher = struct {
             return error.FailedToOpenDirectory;
         }
 
-        try self.impl.handles.append(handle);
-
         const buffer = try self.allocator.alignedAlloc(u8, @alignOf(std.os.windows.FILE_NOTIFY_INFORMATION), 64 * 1024);
         errdefer self.allocator.free(buffer);
 
@@ -873,12 +881,15 @@ pub const Watcher = struct {
             std.log.err("Failed to create overlapped event", .{});
             self.allocator.free(buffer);
             _ = std.os.windows.CloseHandle(handle);
-            _ = self.impl.handles.pop();
-            return;
+            return error.FailedToCreateEvent;
         }
 
         const path_copy = try self.allocator.dupe(u8, path);
         errdefer self.allocator.free(path_copy);
+
+        // Only append to arrays after all allocations succeed to keep them in sync
+        try self.impl.handles.append(handle);
+        errdefer _ = self.impl.handles.pop();
 
         try self.impl.overlapped_data.append(.{
             .overlapped = overlapped,
