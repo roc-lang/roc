@@ -126,7 +126,6 @@ pub const IncompatibleFnCallArg = struct {
     num_args: u32, // Total number of fn args
 };
 
-
 /// Problem data when function arguments have incompatible types but are bound by the same type variable
 pub const IncompatibleFnArgsBoundVar = struct {
     fn_name: ?Ident.Idx,
@@ -1275,7 +1274,6 @@ pub const ReportBuilder = struct {
 
         return report;
     }
-
 
     fn buildIncompatibleFnArgsBoundVar(
         self: *Self,

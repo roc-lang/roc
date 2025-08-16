@@ -140,6 +140,7 @@ pub fn unifyWithContext(
     );
 }
 
+/// Unify two types, tracking the origin of the constraint for better error reporting
 pub fn unifyWithConstraintOrigin(
     module_env: *ModuleEnv,
     types: *types_mod.Store,
