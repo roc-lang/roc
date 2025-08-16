@@ -16,18 +16,18 @@ wrong_type_function : I64 -> I64
 wrong_type_function = |x| x * 3.14
 ~~~
 # EXPECTED
-TYPE MISMATCH - lambda_annotation_mismatch_error.md:4:26:4:29
-TYPE MISMATCH - lambda_annotation_mismatch_error.md:8:30:8:33
+TYPE MISMATCH - lambda_annotation_mismatch_error.md:5:27:5:29
+TYPE MISMATCH - lambda_annotation_mismatch_error.md:9:31:9:35
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**lambda_annotation_mismatch_error.md:4:26:4:29:**
+**lambda_annotation_mismatch_error.md:5:27:5:29:**
 ```roc
-string_function : Str -> Str
+string_function = |x| x + 42
 ```
-                         ^^^
+                          ^^
 
-It is of type:
+The type annotation says it should have the type:
     _Str_
 
 But here it's being used as:
@@ -35,13 +35,13 @@ But here it's being used as:
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**lambda_annotation_mismatch_error.md:8:30:8:33:**
+**lambda_annotation_mismatch_error.md:9:31:9:35:**
 ```roc
-wrong_type_function : I64 -> I64
+wrong_type_function = |x| x * 3.14
 ```
-                             ^^^
+                              ^^^^
 
-It is of type:
+The type annotation says it should have the type:
     _I64_
 
 But here it's being used as:

@@ -34,7 +34,7 @@ UNUSED VARIABLE - type_var_underscore_conventions.md:9:22:9:26
 UNUSED VARIABLE - type_var_underscore_conventions.md:13:17:13:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
-TYPE MISMATCH - type_var_underscore_conventions.md:9:28:9:37
+TYPE MISMATCH - type_var_underscore_conventions.md:8:36:8:41
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.
@@ -98,13 +98,13 @@ main = |x| "done"
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**type_var_underscore_conventions.md:9:28:9:37:**
+**type_var_underscore_conventions.md:8:36:8:41:**
 ```roc
-ending_underscore = |list| "default"
+ending_underscore : List(elem_) -> elem_
 ```
-                           ^^^^^^^^^
+                                   ^^^^^
 
-The type annotation says it should have the type:
+It is of type:
     _elem__
 
 But here it's being used as:

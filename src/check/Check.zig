@@ -155,6 +155,8 @@ pub fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result
     );
 }
 
+/// Unify two variables where the second represents an annotation type.
+/// This sets from_annotation=true to ensure proper error region highlighting.
 pub fn unifyWithAnnotation(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -714,6 +716,10 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
 /// Check expression with an optional expected type for bidirectional type checking
 pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type: ?Var) std.mem.Allocator.Error!bool {
+    return self.checkExprWithExpectedAndAnnotation(expr_idx, expected_type, false);
+}
+
+fn checkExprWithExpectedAndAnnotation(self: *Self, expr_idx: CIR.Expr.Idx, expected_type: ?Var, from_annotation: bool) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -731,7 +737,11 @@ pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type:
             // If we have an expected type, unify immediately to constrain the literal
             if (expected_type) |expected| {
                 const literal_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-                _ = try self.unify(literal_var, expected);
+                if (from_annotation) {
+                    _ = try self.unifyWithAnnotation(literal_var, expected);
+                } else {
+                    _ = try self.unify(literal_var, expected);
+                }
             }
         },
         .e_frac_f32 => |_| {
@@ -1032,7 +1042,7 @@ pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type:
         },
         .e_zero_argument_tag => |_| {},
         .e_binop => |binop| {
-            does_fx = try self.checkBinopExpr(expr_idx, expr_region, binop, expected_type);
+            does_fx = try self.checkBinopExpr(expr_idx, expr_region, binop, expected_type, from_annotation);
         },
         .e_unary_minus => |unary| {
             does_fx = try self.checkUnaryMinusExpr(expr_idx, expr_region, unary);
@@ -1486,7 +1496,7 @@ fn checkLambdaWithAnno(
 
                     // Unify against the annotation
                     const pattern_var = ModuleEnv.varFrom(pattern_idx);
-                    _ = try self.unifyWithAnnotation(pattern_var, expected_arg);
+                    _ = try self.unify(pattern_var, expected_arg);
                 }
             }
         }
@@ -1494,13 +1504,18 @@ fn checkLambdaWithAnno(
 
     // STEP 2: Check the body with return type constraint propagation for literals
     const is_effectful = if (mb_expected_func) |func|
-        try self.checkExprWithExpected(lambda.body, func.ret)
+        try self.checkExprWithExpectedAndAnnotation(lambda.body, func.ret, true)
     else
         try self.checkExpr(lambda.body);
 
     // STEP 3: Build the function type
     const fn_var = ModuleEnv.varFrom(expr_idx);
     const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
+
+    // Ensure the return variable has the correct region for error reporting
+    const body_region = self.cir.store.getExprRegion(lambda.body);
+    try self.fillInRegionsThrough(return_var);
+    self.setRegionAt(return_var, body_region);
 
     if (is_effectful) {
         _ = try self.types.setVarContent(fn_var, try self.types.mkFuncEffectful(arg_vars, return_var));
@@ -1510,12 +1525,12 @@ fn checkLambdaWithAnno(
 
     // STEP 4: Validate the function body against the annotation return type
     if (mb_expected_func) |func| {
-        _ = try self.unifyWithAnnotation(return_var, func.ret);
+        _ = try self.unify(return_var, func.ret);
     }
 
     // STEP 5: Validate the entire function against the annotation
     if (mb_expected_var) |expected_var| {
-        _ = try self.unifyWithAnnotation(fn_var, expected_var);
+        _ = try self.unify(fn_var, expected_var);
     }
 
     return is_effectful;
@@ -1524,7 +1539,7 @@ fn checkLambdaWithAnno(
 // binop //
 
 /// Check the types for a binary operation expression
-fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, binop: CIR.Expr.Binop, expected_type: ?Var) Allocator.Error!bool {
+fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, binop: CIR.Expr.Binop, expected_type: ?Var, from_annotation: bool) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1546,9 +1561,15 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
             // when the lambda has a type annotation like `I64 -> I64`.
             if (expected_type) |expected| {
                 // All three must be the same type for arithmetic operations
-                _ = try self.unify(lhs_var, expected);
-                _ = try self.unify(rhs_var, expected);
-                _ = try self.unify(result_var, expected);
+                if (from_annotation) {
+                    _ = try self.unifyWithAnnotation(lhs_var, expected);
+                    _ = try self.unifyWithAnnotation(rhs_var, expected);
+                    _ = try self.unifyWithAnnotation(result_var, expected);
+                } else {
+                    _ = try self.unify(lhs_var, expected);
+                    _ = try self.unify(rhs_var, expected);
+                    _ = try self.unify(result_var, expected);
+                }
             } else {
                 // No expected type - use fresh number variables to maintain polymorphism
                 const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };

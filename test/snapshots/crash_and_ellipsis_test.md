@@ -34,7 +34,7 @@ main! = |_| {
 UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
-TYPE MISMATCH - crash_and_ellipsis_test.md:9:17:11:2
+TYPE MISMATCH - crash_and_ellipsis_test.md:8:20:8:23
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `result1` is not used anywhere in your code.
@@ -74,14 +74,13 @@ The unused variable is declared here:
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**crash_and_ellipsis_test.md:9:17:11:2:**
+**crash_and_ellipsis_test.md:8:20:8:23:**
 ```roc
-testCrash = |_| {
-	crash "This is a crash message"
-}
+testCrash : U64 -> U64
 ```
+                   ^^^
 
-The type annotation says it should have the type:
+It is of type:
     _U64_
 
 But here it's being used as:

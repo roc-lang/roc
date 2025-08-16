@@ -33,7 +33,7 @@ UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
 UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
-TYPE MISMATCH - type_app_complex_nested.md:13:18:15:2
+TYPE MISMATCH - type_app_complex_nested.md:12:55:12:56
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Maybe_ is not declared in this scope.
@@ -104,14 +104,13 @@ deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**type_app_complex_nested.md:13:18:15:2:**
+**type_app_complex_nested.md:12:55:12:56:**
 ```roc
-deepNested = |_| {
-	crash "not implemented"
-}
+deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
 ```
+                                                      ^
 
-The type annotation says it should have the type:
+It is of type:
     _a_
 
 But here it's being used as:
