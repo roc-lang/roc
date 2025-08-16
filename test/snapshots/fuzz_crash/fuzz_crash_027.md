@@ -915,7 +915,7 @@ This expression is used in an unexpected way:
 It is of type:
     __arg -> _ret_
 
-But you are trying to use it as:
+But here it's being used as:
     _[Red, Blue]_others, _arg2 -> Error_
 
 **TYPE MISMATCH**
@@ -976,7 +976,7 @@ e[, # afarg
 The type annotation says it should have the type:
     _List(Error) -> Result({  }, _d)_
 
-But you are trying to use it as:
+But here it's being used as:
     _List(Error) -> [Stdoline!(Str)]_others_
 
 # TOKENS

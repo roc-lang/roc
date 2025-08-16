@@ -89,7 +89,7 @@ makeAdder = |x| |y| x + y
 It is of type:
     _a_
 
-But you are trying to use it as:
+But here it's being used as:
     _Num(_size)_
 
 # TOKENS

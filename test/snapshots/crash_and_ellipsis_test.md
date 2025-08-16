@@ -84,7 +84,7 @@ testCrash = |_| {
 The type annotation says it should have the type:
     _U64_
 
-But you are trying to use it as:
+But here it's being used as:
     _{}_
 
 # TOKENS

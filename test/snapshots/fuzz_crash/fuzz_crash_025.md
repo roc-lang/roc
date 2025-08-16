@@ -162,7 +162,7 @@ e = 3402823669209384634633746074317682114553.14: I8
 The type annotation says it should have the type:
     _U128_
 
-But you are trying to use it as:
+But here it's being used as:
     _Frac(_size)_
 
 # TOKENS

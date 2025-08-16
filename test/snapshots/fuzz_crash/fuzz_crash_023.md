@@ -964,7 +964,7 @@ This expression is used in an unexpected way:
 It is of type:
     __arg -> _ret_
 
-But you are trying to use it as:
+But here it's being used as:
     _[Red][Blue, Green]_others, _arg2 -> Error_
 
 # TOKENS

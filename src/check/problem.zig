@@ -352,7 +352,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try report.document.addText("But you are trying to use it as:");
+        try report.document.addText("But here it's being used as:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_expected, .type_variable);

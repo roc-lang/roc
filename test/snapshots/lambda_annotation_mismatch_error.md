@@ -30,7 +30,7 @@ string_function : Str -> Str
 It is of type:
     _Str_
 
-But you are trying to use it as:
+But here it's being used as:
     _Num(_size)_
 
 **TYPE MISMATCH**
@@ -44,7 +44,7 @@ wrong_type_function : I64 -> I64
 It is of type:
     _I64_
 
-But you are trying to use it as:
+But here it's being used as:
     _Frac(_size)_
 
 # TOKENS

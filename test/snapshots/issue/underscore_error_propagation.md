@@ -47,7 +47,7 @@ goodValue = "test"
 The type annotation says it should have the type:
     _GoodDerived_
 
-But you are trying to use it as:
+But here it's being used as:
     _Str_
 
 # TOKENS

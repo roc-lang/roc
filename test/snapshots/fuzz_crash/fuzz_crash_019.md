@@ -878,7 +878,7 @@ This expression is used in an unexpected way:
 It is of type:
     __arg -> _ret_
 
-But you are trying to use it as:
+But here it's being used as:
     _[Blue]_others, [Tb]_others2 -> Error_
 
 # TOKENS

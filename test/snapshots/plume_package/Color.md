@@ -153,7 +153,7 @@ hex = |str| {
 The type annotation says it should have the type:
     _Str -> Result(Error, [InvalidHex(Str)])_
 
-But you are trying to use it as:
+But here it's being used as:
     _{ to_utf8: List(Num(_size)) } -> Result(Error, [InvalidHex(Str)]_others)_
 
 # TOKENS
