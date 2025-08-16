@@ -81,7 +81,7 @@ is_named_color = |str|{
 UNUSED VARIABLE - Color.md:30:5:30:25
 UNDEFINED VARIABLE - Color.md:68:14:68:27
 INVALID NOMINAL TAG - Color.md:23:5:23:33
-TYPE MISMATCH - Color.md:27:7:46:2
+TYPE MISMATCH - Color.md:29:13:29:26
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `is_char_in_hex_range` is not used anywhere in your code.
@@ -126,29 +126,11 @@ But it should be one of:
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**Color.md:27:7:46:2:**
+**Color.md:29:13:29:26:**
 ```roc
-hex = |str| {
-
     bytes = str.to_utf8()
-    is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
-
-    match bytes {
-        ['#', a, b, c, d, e, f] => {
-            is_valid =
-                a.is_char_in_hex_range()
-                and b.is_char_in_hex_range()
-                and c.is_char_in_hex_range()
-                and d.is_char_in_hex_range()
-                and e.is_char_in_hex_range()
-                and f.is_char_in_hex_range()
-
-            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
-        }
-        _ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
-    }
-}
 ```
+            ^^^^^^^^^^^^^
 
 The type annotation says it should have the type:
     _Str -> Result(Error, [InvalidHex(Str)])_

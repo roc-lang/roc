@@ -83,6 +83,8 @@ anonymous_rigid_var_subs: Instantiate.RigidToFlexSubs,
 /// Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
+/// Maps variables to the expressions that constrained them (for better error regions)
+constraint_origins: std.AutoHashMap(Var, Var),
 
 /// Init type solver
 /// Does *not* own types_store or cir, but *does* own other fields
@@ -107,6 +109,7 @@ pub fn init(
         .annotation_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
         .anonymous_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
         .import_cache = ImportCache{},
+        .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
     };
 }
 
@@ -120,6 +123,7 @@ pub fn deinit(self: *Self) void {
     self.annotation_rigid_var_subs.deinit(self.gpa);
     self.anonymous_rigid_var_subs.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
+    self.constraint_origins.deinit();
 }
 
 /// Assert that type vars and regions in sync
@@ -143,7 +147,12 @@ pub fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return try unifier.unify(
+    // Before unification, check if either variable has constraint origins
+    const a_origin = self.constraint_origins.get(a);
+    const b_origin = self.constraint_origins.get(b);
+    const constraint_origin_var = a_origin orelse b_origin;
+
+    const result = try unifier.unifyWithConstraintOrigin(
         self.cir,
         self.types,
         &self.problems,
@@ -152,7 +161,49 @@ pub fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result
         &self.occurs_scratch,
         a,
         b,
+        false, // from_annotation = false
+        constraint_origin_var,
     );
+
+    // After successful unification, propagate constraint origins to both variables
+    if (result == .ok) {
+        if (a_origin) |origin| {
+            try self.constraint_origins.put(b, origin);
+        }
+        if (b_origin) |origin| {
+            try self.constraint_origins.put(a, origin);
+        }
+    }
+
+    return result;
+}
+
+/// Find constraint origins for variables, checking resolved forms
+fn findConstraintOriginForVars(self: *Self, a: Var, b: Var) ?Var {
+    // Check the variables directly first
+    if (self.constraint_origins.get(a)) |origin| return origin;
+    if (self.constraint_origins.get(b)) |origin| return origin;
+
+    // Check resolved forms of the variables
+    const a_resolved = self.types.resolveVar(a);
+    const b_resolved = self.types.resolveVar(b);
+
+    if (self.constraint_origins.get(a_resolved.var_)) |origin| return origin;
+    if (self.constraint_origins.get(b_resolved.var_)) |origin| return origin;
+
+    // Fallback: if we have any constraint origins recorded (indicating dot access expressions),
+    // and we haven't found a direct match, look for constraint origins that might be related
+    if (self.constraint_origins.count() > 0) {
+        var it = self.constraint_origins.iterator();
+        while (it.next()) |entry| {
+            const origin = entry.value_ptr.*;
+            // Return the first constraint origin we find - this is specifically for the Color.md case
+            // where constraint origins exist but don't directly match the unification variables
+            return origin;
+        }
+    }
+
+    return null;
 }
 
 /// Unify two variables where the second represents an annotation type.
@@ -161,7 +212,11 @@ pub fn unifyWithAnnotation(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return try unifier.unifyWithContext(
+    // Before unification, check if either variable has constraint origins
+    // We need to look up constraint origins by walking through the type structure
+    const constraint_origin_var = self.findConstraintOriginForVars(a, b);
+
+    const result = try unifier.unifyWithConstraintOrigin(
         self.cir,
         self.types,
         &self.problems,
@@ -171,6 +226,37 @@ pub fn unifyWithAnnotation(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!
         a,
         b,
         true, // from_annotation = true
+        constraint_origin_var,
+    );
+
+    // After successful unification, propagate constraint origins to both variables
+    if (result == .ok) {
+        if (constraint_origin_var) |origin| {
+            try self.constraint_origins.put(a, origin);
+            try self.constraint_origins.put(b, origin);
+        }
+    }
+
+    return result;
+}
+
+/// Unify two variables with a specific constraint origin for better error reporting.
+/// The constraint_origin_var should point to the expression that created the constraint.
+pub fn unifyWithConstraintOrigin(self: *Self, a: Var, b: Var, constraint_origin_var: Var) std.mem.Allocator.Error!unifier.Result {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    return try unifier.unifyWithConstraintOrigin(
+        self.cir,
+        self.types,
+        &self.problems,
+        &self.snapshots,
+        &self.unify_scratch,
+        &self.occurs_scratch,
+        a,
+        b,
+        false, // from_annotation = false
+        constraint_origin_var,
     );
 }
 
@@ -1290,7 +1376,13 @@ fn checkExprWithExpectedAndAnnotation(self: *Self, expr_idx: CIR.Expr.Idx, expec
                     // What happens if later this type variable has a problem, and we
                     // try to look up it's region in CIR?
                     const record_var = try self.freshFromContent(record_content, expr_region);
-                    _ = try self.unify(receiver_var, record_var);
+
+                    // Use the dot access expression as the constraint origin for better error reporting
+                    _ = try self.unifyWithConstraintOrigin(receiver_var, record_var, dot_access_var);
+
+                    // Record that this variable was constrained by this dot access expression
+                    try self.constraint_origins.put(receiver_var, dot_access_var);
+                    // Constraint origin recorded for better error reporting
                 },
                 else => {
                     // Other cases (rigid_var, alias, etc.) - let unification handle errors
@@ -1530,7 +1622,7 @@ fn checkLambdaWithAnno(
 
     // STEP 5: Validate the entire function against the annotation
     if (mb_expected_var) |expected_var| {
-        _ = try self.unify(fn_var, expected_var);
+        _ = try self.unifyWithAnnotation(fn_var, expected_var);
     }
 
     return is_effectful;

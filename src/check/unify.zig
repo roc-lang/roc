@@ -126,6 +126,32 @@ pub fn unifyWithContext(
     b: Var,
     from_annotation: bool,
 ) std.mem.Allocator.Error!Result {
+    return unifyWithConstraintOrigin(
+        module_env,
+        types,
+        problems,
+        snapshots,
+        unify_scratch,
+        occurs_scratch,
+        a,
+        b,
+        from_annotation,
+        null,
+    );
+}
+
+pub fn unifyWithConstraintOrigin(
+    module_env: *ModuleEnv,
+    types: *types_mod.Store,
+    problems: *problem_mod.Store,
+    snapshots: *snapshot_mod.Store,
+    unify_scratch: *Scratch,
+    occurs_scratch: *occurs.Scratch,
+    a: Var,
+    b: Var,
+    from_annotation: bool,
+    constraint_origin_var: ?Var,
+) std.mem.Allocator.Error!Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -143,6 +169,7 @@ pub fn unifyWithContext(
                 error.TypeMismatch => {
                     const expected_snapshot = try snapshots.deepCopyVar(types, a);
                     const actual_snapshot = try snapshots.deepCopyVar(types, b);
+
                     break :blk .{ .type_mismatch = .{
                         .types = .{
                             .expected_var = a,
@@ -150,6 +177,7 @@ pub fn unifyWithContext(
                             .actual_var = b,
                             .actual_snapshot = actual_snapshot,
                             .from_annotation = from_annotation,
+                            .constraint_origin_var = constraint_origin_var,
                         },
                         .detail = null,
                     } };

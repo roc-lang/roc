@@ -86,6 +86,9 @@ pub const TypePair = struct {
     actual_snapshot: SnapshotContentIdx,
     /// True if the expected type comes from a type annotation
     from_annotation: bool = false,
+    /// The specific region where this constraint originated from (e.g., dot access expression)
+    /// If present, this region should be highlighted instead of the variable's region
+    constraint_origin_var: ?Var = null,
 };
 
 /// More specific details about a particular type mismatch.
@@ -323,7 +326,14 @@ pub const ReportBuilder = struct {
         // For annotation mismatches, we want to highlight the expression that doesn't match,
         // not the annotation itself. When from_annotation is true and we're showing
         // "The type annotation says...", the expression is in expected_var.
-        const region_var = if (types.from_annotation) types.expected_var else types.actual_var;
+        // If we have a constraint origin (e.g., from dot access), use that for more precise highlighting.
+
+        const region_var = if (types.constraint_origin_var) |origin_var|
+            origin_var
+        else if (types.from_annotation)
+            types.expected_var // Use expected_var to highlight the expression causing the mismatch
+        else
+            types.actual_var;
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(region_var)));
 
         // Add source region highlighting
