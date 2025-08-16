@@ -24,6 +24,7 @@ const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const Pattern = ModuleEnv.Pattern;
 const Expr = ModuleEnv.Expr;
+const Annotation = ModuleEnv.Annotation;
 
 /// A single statement - either at the top-level or within a block expression.
 pub const Statement = union(enum) {
@@ -35,6 +36,7 @@ pub const Statement = union(enum) {
     s_decl: struct {
         pattern: Pattern.Idx,
         expr: Expr.Idx,
+        anno: ?Annotation.Idx,
     },
     /// A rebindable declaration using the "var" keyword.
     ///

@@ -1338,6 +1338,16 @@ pub fn addStatementAndTypeVar(self: *Self, expr: Statement, content: types_mod.C
 
 /// Add a new expression and type variable.
 /// This function asserts that the types array and the nodes are in sync.
+pub fn addStatementAndTypeVarRedirect(self: *Self, expr: Statement, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!Statement.Idx {
+    const expr_idx = try self.store.addStatement(expr, region);
+    const expr_var = try self.types.freshRedirect(redirect_to);
+    debugAssertIdxsEql("addStatementAndTypeVarRedirect", expr_idx, expr_var);
+    self.debugAssertArraysInSync();
+    return expr_idx;
+}
+
+/// Add a new expression and type variable.
+/// This function asserts that the types array and the nodes are in sync.
 pub fn addPatternAndTypeVar(self: *Self, expr: Pattern, content: types_mod.Content, region: Region) std.mem.Allocator.Error!Pattern.Idx {
     const expr_idx = try self.store.addPattern(expr, region);
     const expr_var = try self.types.freshFromContent(content);

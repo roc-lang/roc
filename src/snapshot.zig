@@ -1088,7 +1088,8 @@ fn processSnapshotContent(
             // Manually track scratch statements because we aren't using the file entrypoint
             const stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
             const scratch_statements_start = can_ir.store.scratch_statements.top();
-            _ = try can.canonicalizeStatement(stmt_idx);
+            var last_anno: ?Can.StmtTypeAnno = null;
+            _ = try can.canonicalizeStatement(stmt_idx, &last_anno);
             can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
         },
         .package => try can.canonicalizeFile(),

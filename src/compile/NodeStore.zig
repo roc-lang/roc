@@ -185,10 +185,22 @@ pub fn getStatement(store: *const NodeStore, statement: ModuleEnv.Statement.Idx)
     const node = store.nodes.get(node_idx);
 
     switch (node.tag) {
-        .statement_decl => return ModuleEnv.Statement{ .s_decl = .{
-            .pattern = @enumFromInt(node.data_1),
-            .expr = @enumFromInt(node.data_2),
-        } },
+        .statement_decl => {
+            return ModuleEnv.Statement{ .s_decl = .{
+                .pattern = @enumFromInt(node.data_1),
+                .expr = @enumFromInt(node.data_2),
+                .anno = blk: {
+                    const extra_start = node.data_3;
+                    const extra_data = store.extra_data.items.items[extra_start..];
+                    const has_anno = extra_data[0] != 0;
+                    if (has_anno) {
+                        break :blk @as(ModuleEnv.Annotation.Idx, @enumFromInt(extra_data[1]));
+                    } else {
+                        break :blk null;
+                    }
+                },
+            } };
+        },
         .statement_var => return ModuleEnv.Statement{ .s_var = .{
             .pattern_idx = @enumFromInt(node.data_1),
             .expr = @enumFromInt(node.data_2),
@@ -1068,9 +1080,18 @@ pub fn addStatement(store: *NodeStore, statement: ModuleEnv.Statement, region: b
 
     switch (statement) {
         .s_decl => |s| {
+            var has_anno = false;
+            if (s.anno) |anno| {
+                has_anno = true;
+                _ = try store.extra_data.append(store.gpa, true);
+                _ = try store.extra_data.append(store.gpa, @int);
+                
+            }
+
             node.tag = .statement_decl;
             node.data_1 = @intFromEnum(s.pattern);
             node.data_2 = @intFromEnum(s.expr);
+            node.data_3 = @intFromBool();
         },
         .s_var => |s| {
             node.tag = .statement_var;
