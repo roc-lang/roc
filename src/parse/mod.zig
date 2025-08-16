@@ -21,11 +21,20 @@ pub const Parser = @import("Parser.zig");
 /// **AST.Node**
 pub const Node = @import("Node.zig");
 
+/// **AST2.Node**
+pub const Node2 = @import("Node2.zig");
+
 /// **AST.NodeStore**
 pub const NodeStore = @import("NodeStore.zig");
 
+/// **AST2.NodeStore**
+pub const NodeStore2 = @import("NodeStore2.zig");
+
 /// Represents the intermediate representation or Abstract Syntax Tree (AST) of a parsed Roc file.
 pub const AST = @import("AST.zig");
+
+/// New version of the AST module for development.
+pub const AST2 = @import("AST2.zig");
 
 fn runParse(env: *CommonEnv, gpa: std.mem.Allocator, parserCall: *const fn (*Parser) Parser.Error!u32) Parser.Error!AST {
     const trace = tracy.trace(@src());
@@ -113,9 +122,12 @@ pub fn parseStatement(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST 
 
 test "parser tests" {
     std.testing.refAllDecls(@import("AST.zig"));
+    std.testing.refAllDecls(@import("AST2.zig"));
     std.testing.refAllDecls(@import("HTML.zig"));
     std.testing.refAllDecls(@import("Node.zig"));
+    std.testing.refAllDecls(@import("Node2.zig"));
     std.testing.refAllDecls(@import("NodeStore.zig"));
+    std.testing.refAllDecls(@import("NodeStore2.zig"));
     std.testing.refAllDecls(@import("Parser.zig"));
     std.testing.refAllDecls(@import("tokenize.zig"));
     std.testing.refAllDecls(@import("test/ast_node_store_test.zig"));
