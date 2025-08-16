@@ -24,7 +24,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	bool
 ```
- ^^^^
+	^^^^
 
 
 # TOKENS

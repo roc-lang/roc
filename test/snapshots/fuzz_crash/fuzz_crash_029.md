@@ -62,7 +62,7 @@ Here is the problematic code:
 ```roc
 			{ # d
 ```
-   ^
+			^
 
 
 **PARSE ERROR**
@@ -74,7 +74,7 @@ Here is the problematic code:
 ```roc
 			n! : List(Str) => {}, # ure
 ```
-             ^^^
+			          ^^^
 
 
 **PARSE ERROR**
@@ -98,7 +98,7 @@ Here is the problematic code:
 ```roc
 			n! : List(Str) => {}, # ure
 ```
-        ^^^^
+			     ^^^^
 
 
 **PARSE ERROR**
@@ -110,7 +110,7 @@ Here is the problematic code:
 ```roc
 			n! : List(Str) => {}, # ure
 ```
-                     ^
+			                  ^
 
 
 **PARSE ERROR**
@@ -122,7 +122,7 @@ Here is the problematic code:
 ```roc
 			n! : List(Str) => {}, # ure
 ```
-                      ^
+			                   ^
 
 
 **PARSE ERROR**
@@ -134,7 +134,7 @@ Here is the problematic code:
 ```roc
 			n! : List(Str) => {}, # ure
 ```
-                       ^
+			                    ^
 
 
 **PARSE ERROR**
@@ -146,7 +146,7 @@ Here is the problematic code:
 ```roc
 			} #Ce
 ```
-   ^
+			^
 
 
 **PARSE ERROR**
@@ -158,7 +158,7 @@ Here is the problematic code:
 ```roc
 	exposes #rd
 ```
- ^^^^^^^
+	^^^^^^^
 
 
 **PARSE ERROR**
@@ -170,7 +170,7 @@ Here is the problematic code:
 ```roc
 		[ #
 ```
-  ^
+		^
 
 
 **PARSE ERROR**
@@ -182,7 +182,7 @@ Here is the problematic code:
 ```roc
 		] # Cse
 ```
-  ^
+		^
 
 
 **PARSE ERROR**
@@ -194,7 +194,7 @@ Here is the problematic code:
 ```roc
 	packages # Cd
 ```
- ^^^^^^^^
+	^^^^^^^^
 
 
 **PARSE ERROR**
@@ -206,7 +206,7 @@ Here is the problematic code:
 ```roc
 		vides # Cd
 ```
-  ^^^^^
+		^^^^^
 
 
 **PARSE ERROR**
@@ -218,7 +218,7 @@ Here is the problematic code:
 ```roc
 		{ # pen
 ```
-  ^
+		^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -290,7 +290,7 @@ Here is the problematic code:
 ```roc
 pkg: "..l", mmen		} # Cose
 ```
-                  ^
+                		^
 
 
 **PARSE ERROR**
@@ -302,7 +302,7 @@ Here is the problematic code:
 ```roc
 	provides # Cd
 ```
- ^^^^^^^^
+	^^^^^^^^
 
 
 **PARSE ERROR**
@@ -314,7 +314,7 @@ Here is the problematic code:
 ```roc
 		[ Ok(world), (n # pen
 ```
-  ^
+		^
 
 
 **PARSE ERROR**
@@ -338,7 +338,7 @@ Here is the problematic code:
 ```roc
 		[ Ok(world), (n # pen
 ```
-    ^^
+		  ^^
 
 
 **PARSE ERROR**
@@ -350,7 +350,7 @@ Here is the problematic code:
 ```roc
 		[ Ok(world), (n # pen
 ```
-               ^
+		             ^
 
 
 **PARSE ERROR**
@@ -362,7 +362,7 @@ Here is the problematic code:
 ```roc
 		[ Ok(world), (n # pen
 ```
-                ^
+		              ^
 
 
 **PARSE ERROR**
@@ -398,7 +398,7 @@ Here is the problematic code:
 ```roc
 		]
 ```
-  ^
+		^
 
 
 **MALFORMED TYPE**

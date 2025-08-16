@@ -197,7 +197,7 @@ Here is the problematic code:
 ```roc
 	match a {lue  {
 ```
-               
+	              
 
 
 **PARSE ERROR**
@@ -209,7 +209,7 @@ Here is the problematic code:
 ```roc
 			1	"for" => 20[1, ] # t
 ```
-   
+			
 
 
 **PARSE ERROR**
@@ -221,7 +221,7 @@ Here is the problematic code:
 ```roc
 		ment
 ```
-  
+		
 
 
 **PARSE ERROR**
@@ -233,7 +233,7 @@ Here is the problematic code:
 ```roc
 		[1, 2, 3,est]123
 ```
-               
+		             
 
 
 **PARSE ERROR**
@@ -245,7 +245,7 @@ Here is the problematic code:
 ```roc
 		] 23
 ```
-    
+		  
 
 
 **PARSE ERROR**
@@ -257,7 +257,7 @@ Here is the problematic code:
 ```roc
 		3.1 314
 ```
-      
+		    
 
 
 **PARSE ERROR**
@@ -269,7 +269,7 @@ Here is the problematic code:
 ```roc
 		(1, 2, 3)123
 ```
-           
+		         
 
 
 **UNDECLARED TYPE**
@@ -306,7 +306,7 @@ This type variable is referenced here:
 ```roc
 		(ab) -> # row
 ```
-   ^^
+		 ^^
 
 
 **UNDECLARED TYPE VARIABLE**
@@ -319,7 +319,7 @@ This type variable is referenced here:
 ```roc
 			List(			b	) #z)
 ```
-           ^
+			     			^
 
 
 **UNDECLARED TYPE**
@@ -410,7 +410,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 			s exp0
 ```
-   ^
+			^
 
 
 **UNDEFINED VARIABLE**
@@ -421,7 +421,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 			s exp0
 ```
-     ^^^^
+			  ^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -432,7 +432,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 		r
 ```
-  ^
+		^
 
 
 **UNDEFINED VARIABLE**
@@ -443,7 +443,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	x
 ```
- ^
+	^
 
 
 **UNUSED VARIABLE**
@@ -455,7 +455,7 @@ The unused variable is declared here:
 ```roc
 	match a {lue  {
 ```
-          ^^^
+	         ^^^
 
 
 **UNDEFINED VARIABLE**
@@ -466,7 +466,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 		Blue=> {x
 ```
-          ^
+		        ^
 
 
 **UNUSED VARIABLE**
@@ -478,7 +478,7 @@ The unused variable is declared here:
 ```roc
 	er #ent
 ```
- ^^
+	^^
 
 
 **UNDEFINED VARIABLE**
@@ -489,7 +489,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 		ment
 ```
-  ^^^^
+		^^^^
 
 
 **UNUSED VARIABLE**
@@ -501,7 +501,7 @@ The unused variable is declared here:
 ```roc
 		[1, 2, 3,est]123
 ```
-           ^^^
+		         ^^^
 
 
 **UNDEFINED VARIABLE**
@@ -512,7 +512,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	nt
 ```
- ^^
+	^^
 
 
 **UNDECLARED TYPE**
@@ -545,7 +545,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	expect blaue
 ```
-        ^^^^^
+	       ^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -556,7 +556,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 		tag
 ```
-  ^^^
+		^^^
 
 
 **CRASH EXPECTS STRING**
@@ -566,7 +566,7 @@ For example: `crash "Something went wrong"`
 ```roc
 	)crash ke"Unr!" #)
 ```
-  ^^^^^^^^
+	 ^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -577,7 +577,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	i= "H, ${d}"
 ```
-          ^
+	         ^
 
 
 **UNDEFINED VARIABLE**
@@ -588,7 +588,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 		one(er, 		),	456, # two
 ```
-  ^^^
+		^^^
 
 
 **NOT IMPLEMENTED**
@@ -604,7 +604,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 ```
-                                 ^^^
+	                                ^^^
 
 
 **UNDEFINED VARIABLE**
@@ -615,7 +615,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 ```
-                                              ^^^^^
+	                                             ^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -626,7 +626,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 ```
-                                                     ^^^
+	                                                    ^^^
 
 
 **DUPLICATE DEFINITION**
@@ -637,7 +637,7 @@ The redeclaration is here:
 ```roc
 	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
 ```
- ^
+	^
 
 But `t` was already defined here:
 **fuzz_crash_019.md:88:1:88:2:**
@@ -655,7 +655,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
 ```
-                    ^^^
+	                   ^^^
 
 
 **UNDEFINED VARIABLE**
@@ -666,7 +666,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
 ```
-                             ^^
+	                            ^^
 
 
 **UNDEFINED VARIABLE**
@@ -677,7 +677,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	m (
 ```
- ^
+	^
 
 
 **UNDEFINED VARIABLE**
@@ -688,7 +688,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 		"World",ag1,
 ```
-          ^^^
+		        ^^^
 
 
 **UNDEFINED VARIABLE**
@@ -699,7 +699,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 		(ne, tuple),
 ```
-   ^^
+		 ^^
 
 
 **UNDEFINED VARIABLE**
@@ -710,7 +710,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 		(ne, tuple),
 ```
-       ^^^^^
+		     ^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -721,7 +721,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
 ```
- ^
+	^
 
 
 **NOT IMPLEMENTED**
@@ -737,7 +737,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 			r(nu) # xpr
 ```
-   ^
+			^
 
 
 **UNDEFINED VARIABLE**
@@ -748,7 +748,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 			r(nu) # xpr
 ```
-     ^^
+			  ^^
 
 
 **UNUSED VARIABLE**
@@ -760,7 +760,7 @@ The unused variable is declared here:
 ```roc
 	w = "d"
 ```
- ^
+	^
 
 
 **UNUSED VARIABLE**
@@ -772,7 +772,7 @@ The unused variable is declared here:
 ```roc
 	i= "H, ${d}"
 ```
- ^
+	^
 
 
 **UNUSED VARIABLE**
@@ -784,7 +784,7 @@ The unused variable is declared here:
 ```roc
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 ```
- ^^
+	^^
 
 
 **UNDECLARED TYPE**
@@ -806,7 +806,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	foo == 1
 ```
- ^^^
+	^^^
 
 
 **UNDEFINED VARIABLE**

@@ -45,7 +45,7 @@ Here is the problematic code:
 ```roc
 		[ .
 ```
-    ^
+		  ^
 
 
 **PARSE ERROR**
@@ -129,7 +129,7 @@ Here is the problematic code:
 ```roc
 	provides # Cd
 ```
- ^^^^^^^^
+	^^^^^^^^
 
 
 **PARSE ERROR**
@@ -141,7 +141,7 @@ Here is the problematic code:
 ```roc
 		[ # pen
 ```
-  ^
+		^
 
 
 **PARSE ERROR**
@@ -177,7 +177,7 @@ Here is the problematic code:
 ```roc
 		]
 ```
-  ^
+		^
 
 
 # TOKENS

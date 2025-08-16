@@ -67,7 +67,7 @@ Here is the problematic code:
 ```roc
 	"\u",
 ```
-    
+	   
 
 
 **UNEXPECTED TOKEN IN STRING**
@@ -79,7 +79,7 @@ Here is the problematic code:
 ```roc
 	"\u)",
 ```
-     
+	    
 
 
 **UNEXPECTED TOKEN IN STRING**
@@ -91,7 +91,7 @@ Here is the problematic code:
 ```roc
 	"\u(",
 ```
-     
+	    
 
 
 **UNEXPECTED TOKEN IN STRING**
@@ -103,7 +103,7 @@ Here is the problematic code:
 ```roc
 	"\u()",
 ```
-      
+	     
 
 
 **UNEXPECTED TOKEN IN STRING**
@@ -115,7 +115,7 @@ Here is the problematic code:
 ```roc
 	"\u(K)",
 ```
-       
+	      
 
 
 **PARSE ERROR**

@@ -24,7 +24,7 @@ The module header says that `a!` is exposed, but it is not defined anywhere in t
 ```roc
 	a!,
 ```
- ^^
+	^^
 You can fix this by either defining `a!` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
@@ -34,7 +34,7 @@ The module header says that `b!` is exposed, but it is not defined anywhere in t
 ```roc
 	b!
 ```
- ^^
+	^^
 You can fix this by either defining `b!` in this module, or by removing it from the list of exposed values.
 
 # TOKENS

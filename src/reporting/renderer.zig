@@ -562,15 +562,25 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
 
             // Add underline for single-line regions in markdown
             if (region.start_line == region.end_line) {
-                // Print spaces up to the start column
-                var i: u32 = 0;
-                while (i < region.start_column - 1) : (i += 1) {
-                    try writer.writeAll(" ");
+                // Recreate the exact whitespace from the source line up to the start column
+                const chars_before_target = region.start_column - 1;
+                if (chars_before_target > 0 and lines.len >= chars_before_target) {
+                    // Extract and print the exact whitespace characters (including tabs) from the source
+                    for (lines[0..chars_before_target]) |char| {
+                        if (char == '\t') {
+                            try writer.writeAll("\t");
+                        } else if (char == ' ') {
+                            try writer.writeAll(" ");
+                        } else {
+                            // For non-whitespace characters, use a space to maintain positioning
+                            try writer.writeAll(" ");
+                        }
+                    }
                 }
 
                 // Print the underline
                 const underline_len = source_region.calculateUnderlineLength(region.start_column, region.end_column);
-                i = 0;
+                var i: u32 = 0;
                 while (i < underline_len) : (i += 1) {
                     try writer.writeAll("^");
                 }
