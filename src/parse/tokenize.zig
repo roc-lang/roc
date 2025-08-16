@@ -1576,7 +1576,7 @@ pub const Tokenizer = struct {
 
                 const escape = c == '\\';
                 if (escape) {
-                    self.cursor.chompEscapeSequence() catch {
+                    self.cursor.chompEscapeSequenceWithQuote('"') catch {
                         string_part_tag = .MalformedStringPart;
                     };
                 }
