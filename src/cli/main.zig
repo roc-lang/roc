@@ -14,6 +14,8 @@ const fs_mod = @import("fs");
 const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
+const bundle = @import("bundle");
+const unbundle = @import("unbundle");
 const ipc = @import("ipc");
 const fmt = @import("fmt");
 
@@ -33,6 +35,10 @@ const CacheConfig = compile.CacheConfig;
 const tokenize = parse.tokenize;
 
 const roc_shim_lib = if (builtin.is_test) &[_]u8{} else if (builtin.target.os.tag == .windows) @embedFile("roc_shim.lib") else @embedFile("libroc_shim.a");
+
+test {
+    _ = @import("test_bundle_logic.zig");
+}
 
 // Workaround for Zig standard library compilation issue on macOS ARM64.
 //
@@ -367,6 +373,8 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
         .run => |run_args| rocRun(gpa, run_args),
         .check => |check_args| rocCheck(gpa, check_args),
         .build => |build_args| rocBuild(gpa, build_args),
+        .bundle => |bundle_args| rocBundle(gpa, bundle_args),
+        .unbundle => |unbundle_args| rocUnbundle(gpa, unbundle_args),
         .format => |format_args| rocFormat(gpa, arena, format_args),
         .test_cmd => |test_args| rocTest(gpa, test_args),
         .repl => rocRepl(gpa),
@@ -1043,6 +1051,309 @@ pub fn extractReadRocFilePathShimLibrary(gpa: Allocator, output_path: []const u8
     defer shim_file.close();
 
     try shim_file.writeAll(roc_shim_lib);
+}
+
+/// Format a bundle path validation reason into a user-friendly error message
+fn formatBundlePathValidationReason(reason: bundle.PathValidationReason) []const u8 {
+    return switch (reason) {
+        .empty_path => "Path cannot be empty",
+        .path_too_long => "Path exceeds maximum length of 255 characters",
+        .windows_reserved_char => |char| switch (char) {
+            0 => "Path contains NUL byte (\\0)",
+            ':' => "Path contains colon (:) which is reserved on Windows",
+            '*' => "Path contains asterisk (*) which is a wildcard on Windows",
+            '?' => "Path contains question mark (?) which is a wildcard on Windows",
+            '"' => "Path contains quote (\") which is reserved on Windows",
+            '<' => "Path contains less-than (<) which is reserved on Windows",
+            '>' => "Path contains greater-than (>) which is reserved on Windows",
+            '|' => "Path contains pipe (|) which is reserved on Windows",
+            '\\' => "Path contains backslash (\\). Use forward slashes (/) for all paths",
+            else => "Path contains reserved character",
+        },
+        .absolute_path => "Absolute paths are not allowed",
+        .path_traversal => "Path traversal (..) is not allowed",
+        .current_directory_reference => "Current directory reference (.) is not allowed",
+        .contained_backslash_on_unix => "Path contains a backslash, which is a directory separator on Windows.",
+        .windows_reserved_name => "Path contains Windows reserved device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)",
+        .component_ends_with_space => "Path components cannot end with space",
+        .component_ends_with_period => "Path components cannot end with period",
+    };
+}
+
+/// Format an unbundle path validation reason into a user-friendly error message
+fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []const u8 {
+    return switch (reason) {
+        .empty_path => "Path cannot be empty",
+        .path_too_long => "Path exceeds maximum length of 255 characters",
+        .windows_reserved_char => |char| switch (char) {
+            0 => "Path contains NUL byte (\\0)",
+            ':' => "Path contains colon (:) which is reserved on Windows",
+            '*' => "Path contains asterisk (*) which is a wildcard on Windows",
+            '?' => "Path contains question mark (?) which is a wildcard on Windows",
+            '"' => "Path contains quote (\") which is reserved on Windows",
+            '<' => "Path contains less-than (<) which is reserved on Windows",
+            '>' => "Path contains greater-than (>) which is reserved on Windows",
+            '|' => "Path contains pipe (|) which is reserved on Windows",
+            '\\' => "Path contains backslash (\\). Use forward slashes (/) for all paths",
+            else => "Path contains reserved character",
+        },
+        .absolute_path => "Absolute paths are not allowed",
+        .path_traversal => "Path traversal (..) is not allowed",
+        .current_directory_reference => "Current directory reference (.) is not allowed",
+        .contained_backslash_on_unix => "Path contains a backslash, which is a directory separator on Windows.",
+        .windows_reserved_name => "Path contains Windows reserved device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)",
+        .component_ends_with_space => "Path components cannot end with space",
+        .component_ends_with_period => "Path components cannot end with period",
+    };
+}
+
+/// Bundles a roc package and its dependencies into a compressed tar archive
+pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
+    const stdout = std.io.getStdOut().writer();
+    const stderr = std.io.getStdErr().writer();
+
+    // Use arena allocator for all bundle operations
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    // Start timing
+    const start_time = std.time.nanoTimestamp();
+
+    // Get current working directory
+    const cwd = std.fs.cwd();
+
+    // Determine output directory
+    var output_dir = if (args.output_dir) |dir|
+        try cwd.openDir(dir, .{})
+    else
+        cwd;
+    defer if (args.output_dir != null) output_dir.close();
+
+    // Create a temporary directory for the output file
+    var tmp_dir = try std.fs.cwd().makeOpenPath(".roc_bundle_tmp", .{});
+    defer {
+        tmp_dir.close();
+        std.fs.cwd().deleteTree(".roc_bundle_tmp") catch {};
+    }
+
+    // Collect all files to bundle
+    var file_paths = std.ArrayList([]const u8).init(arena_allocator);
+    defer file_paths.deinit();
+
+    var uncompressed_size: u64 = 0;
+
+    // If no paths provided, default to "main.roc"
+    const paths_to_use = if (args.paths.len == 0) &[_][]const u8{"main.roc"} else args.paths;
+
+    // Remember the first path from CLI args (before sorting)
+    const first_cli_path = paths_to_use[0];
+
+    // Check that all files exist and collect their sizes
+    for (paths_to_use) |path| {
+        const file = cwd.openFile(path, .{}) catch |err| {
+            try stderr.print("Error: Could not open file '{s}': {}\n", .{ path, err });
+            return err;
+        };
+        defer file.close();
+
+        const stat = try file.stat();
+        uncompressed_size += stat.size;
+
+        try file_paths.append(path);
+    }
+
+    // Sort and deduplicate paths
+    std.mem.sort([]const u8, file_paths.items, {}, struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lessThan);
+
+    // Remove duplicates by keeping only unique consecutive elements
+    var unique_count: usize = 0;
+    for (file_paths.items, 0..) |path, i| {
+        if (i == 0 or !std.mem.eql(u8, path, file_paths.items[i - 1])) {
+            file_paths.items[unique_count] = path;
+            unique_count += 1;
+        }
+    }
+    file_paths.items.len = unique_count;
+
+    // If we have more than one file, ensure the first CLI arg stays first
+    if (file_paths.items.len > 1) {
+        // Find the first CLI path in the sorted array
+        var found_index: ?usize = null;
+        for (file_paths.items, 0..) |path, i| {
+            if (std.mem.eql(u8, path, first_cli_path)) {
+                found_index = i;
+                break;
+            }
+        }
+
+        // Swap the found item with the first position if needed
+        if (found_index) |idx| {
+            if (idx != 0) {
+                const temp = file_paths.items[0];
+                file_paths.items[0] = file_paths.items[idx];
+                file_paths.items[idx] = temp;
+            }
+        }
+    }
+
+    // Create temporary output file
+    const temp_filename = "temp_bundle.tar.zst";
+    const temp_file = try tmp_dir.createFile(temp_filename, .{});
+    defer temp_file.close();
+
+    // Create file path iterator
+    const FilePathIterator = struct {
+        paths: []const []const u8,
+        index: usize = 0,
+
+        pub fn next(self: *@This()) !?[]const u8 {
+            if (self.index >= self.paths.len) return null;
+            const path = self.paths[self.index];
+            self.index += 1;
+            return path;
+        }
+    };
+
+    var iter = FilePathIterator{ .paths = file_paths.items };
+
+    // Bundle the files
+    var allocator_copy = arena_allocator;
+    var error_ctx: bundle.ErrorContext = undefined;
+    const final_filename = bundle.bundleFiles(
+        &iter,
+        @intCast(args.compression_level),
+        &allocator_copy,
+        temp_file.writer(),
+        cwd,
+        null, // path_prefix parameter - null means no stripping
+        &error_ctx,
+    ) catch |err| {
+        if (err == error.InvalidPath) {
+            try stderr.print("Error: Invalid file path - {s}\n", .{formatBundlePathValidationReason(error_ctx.reason)});
+            try stderr.print("Path: {s}\n", .{error_ctx.path});
+        }
+        return err;
+    };
+    // No need to free when using arena allocator
+
+    // Get the compressed file size
+    const compressed_stat = try temp_file.stat();
+    const compressed_size = compressed_stat.size;
+
+    // Move the temp file to the final location
+    try std.fs.rename(tmp_dir, temp_filename, output_dir, final_filename);
+
+    // Calculate elapsed time
+    const end_time = std.time.nanoTimestamp();
+    const elapsed_ns = @as(u64, @intCast(end_time - start_time));
+    const elapsed_ms = elapsed_ns / 1_000_000;
+
+    // Calculate relative path for display
+    const display_path = if (args.output_dir == null)
+        final_filename
+    else
+        try std.fs.path.join(arena_allocator, &.{ args.output_dir.?, final_filename });
+    // No need to free when using arena allocator
+
+    // Print results
+    try stdout.print("Created: {s}\n", .{display_path});
+    try stdout.print("Compressed size: {} bytes\n", .{compressed_size});
+    try stdout.print("Uncompressed size: {} bytes\n", .{uncompressed_size});
+    try stdout.print("Compression ratio: {d:.2}:1\n", .{@as(f64, @floatFromInt(uncompressed_size)) / @as(f64, @floatFromInt(compressed_size))});
+    try stdout.print("Time: {} ms\n", .{elapsed_ms});
+}
+
+fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
+    const stdout = std.io.getStdOut().writer();
+    const stderr = std.io.getStdErr().writer();
+    const cwd = std.fs.cwd();
+
+    var had_errors = false;
+
+    for (args.paths) |archive_path| {
+        // Extract directory name from archive filename
+        const basename = std.fs.path.basename(archive_path);
+        var dir_name: []const u8 = undefined;
+
+        if (std.mem.endsWith(u8, basename, ".tar.zst")) {
+            dir_name = basename[0 .. basename.len - 8];
+        } else {
+            try stderr.print("Error: {s} is not a .tar.zst file\n", .{archive_path});
+            had_errors = true;
+            continue;
+        }
+
+        // Check if directory already exists
+        cwd.access(dir_name, .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                // Good, directory doesn't exist
+            },
+            else => return err,
+        };
+
+        if (cwd.openDir(dir_name, .{})) |_| {
+            try stderr.print("Error: Directory {s} already exists\n", .{dir_name});
+            had_errors = true;
+            continue;
+        } else |_| {
+            // Directory doesn't exist, proceed
+        }
+
+        // Create the output directory
+        var output_dir = try cwd.makeOpenPath(dir_name, .{});
+        defer output_dir.close();
+
+        // Open the archive file
+        const archive_file = cwd.openFile(archive_path, .{}) catch |err| {
+            try stderr.print("Error opening {s}: {s}\n", .{ archive_path, @errorName(err) });
+            had_errors = true;
+            continue;
+        };
+        defer archive_file.close();
+
+        // Unbundle the archive
+        var error_ctx: unbundle.ErrorContext = undefined;
+        unbundle.unbundleFiles(
+            allocator,
+            archive_file.reader(),
+            output_dir,
+            basename,
+            &error_ctx,
+        ) catch |err| {
+            switch (err) {
+                error.HashMismatch => {
+                    try stderr.print("Error: Hash mismatch for {s} - file may be corrupted\n", .{archive_path});
+                    had_errors = true;
+                },
+                error.InvalidFilename => {
+                    try stderr.print("Error: Invalid filename format for {s}\n", .{archive_path});
+                    had_errors = true;
+                },
+                error.InvalidPath => {
+                    try stderr.print("Error: Invalid path in archive - {s}\n", .{formatUnbundlePathValidationReason(error_ctx.reason)});
+                    try stderr.print("Path: {s}\n", .{error_ctx.path});
+                    try stderr.print("Archive: {s}\n", .{archive_path});
+                    had_errors = true;
+                },
+                else => {
+                    try stderr.print("Error unbundling {s}: {s}\n", .{ archive_path, @errorName(err) });
+                    had_errors = true;
+                },
+            }
+            continue; // Skip success message on error
+        };
+
+        try stdout.print("Extracted: {s}\n", .{dir_name});
+    }
+
+    if (had_errors) {
+        std.process.exit(1);
+    }
 }
 
 fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {

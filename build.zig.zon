@@ -52,6 +52,10 @@
             .url = "git+https://github.com/lukewilliamboswell/bytebox.git#694b53b748dba8078751a8836f1b3cead792dcca",
             .hash = "bytebox-0.0.1-SXc2sSfbDgCLYYKaTGdlU4Dl3ncfvesPax1bkLHAlCg6",
         },
+        .zstd = .{
+            .url = "git+https://github.com/allyourcodebase/zstd.git#1.5.7",
+            .hash = "1220b9feb4652a62df95843e78a5db008401599366989b52d7cab421bf6263fa73d0",
+        },
     },
     .fingerprint = 0x9eea22a6c3bd0034,
     .paths = .{

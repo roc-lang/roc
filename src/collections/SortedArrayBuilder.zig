@@ -372,6 +372,8 @@ test "SortedArrayBuilder detectDuplicates sorts if unsorted" {
 
     // Verify we found the expected duplicates
     try testing.expectEqual(@as(usize, 2), duplicates.len);
+    try testing.expectEqual(@as(u32, 100), duplicates[0]);
+    try testing.expectEqual(@as(u32, 200), duplicates[1]);
 
     // After detection, normal operations work as expected
     builder.ensureSorted(allocator);
