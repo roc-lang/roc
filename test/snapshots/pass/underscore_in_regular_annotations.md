@@ -38,177 +38,10 @@ transform : _a -> _b -> _b
 transform = |_, b| b
 ~~~
 # EXPECTED
-PARSE ERROR - underscore_in_regular_annotations.md:26:15:26:16
-PARSE ERROR - underscore_in_regular_annotations.md:26:25:26:27
-PARSE ERROR - underscore_in_regular_annotations.md:27:1:27:4
-PARSE ERROR - underscore_in_regular_annotations.md:27:5:27:6
-PARSE ERROR - underscore_in_regular_annotations.md:27:7:27:8
-PARSE ERROR - underscore_in_regular_annotations.md:27:8:27:9
-PARSE ERROR - underscore_in_regular_annotations.md:27:9:27:10
-PARSE ERROR - underscore_in_regular_annotations.md:27:11:27:12
-PARSE ERROR - underscore_in_regular_annotations.md:27:12:27:13
-PARSE ERROR - underscore_in_regular_annotations.md:27:14:27:15
-PARSE ERROR - underscore_in_regular_annotations.md:27:15:27:16
 PARSE ERROR - underscore_in_regular_annotations.md:30:22:30:24
 PARSE ERROR - underscore_in_regular_annotations.md:30:25:30:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:11:12:11:16
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:26:15:26:16:**
-```roc
-map : (a -> b), List(a) -> List(b)
-```
-              ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:26:25:26:27:**
-```roc
-map : (a -> b), List(a) -> List(b)
-```
-                        ^^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:27:1:27:4:**
-```roc
-map = |_, _| []
-```
-^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:27:5:27:6:**
-```roc
-map = |_, _| []
-```
-    ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:27:7:27:8:**
-```roc
-map = |_, _| []
-```
-      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:27:8:27:9:**
-```roc
-map = |_, _| []
-```
-       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:27:9:27:10:**
-```roc
-map = |_, _| []
-```
-        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:27:11:27:12:**
-```roc
-map = |_, _| []
-```
-          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:27:12:27:13:**
-```roc
-map = |_, _| []
-```
-           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:27:14:27:15:**
-```roc
-map = |_, _| []
-```
-             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:27:15:27:16:**
-```roc
-map = |_, _| []
-```
-              ^
-
-
 **PARSE ERROR**
 Function types with multiple arrows need parentheses.
 
@@ -349,21 +182,24 @@ LowerIdent(31:1-31:10),OpAssign(31:11-31:12),OpBar(31:13-31:14),Underscore(31:14
 							(p-tag @22.9-22.17 (raw "Err")
 								(p-ident @22.13-22.16 (raw "msg")))
 							(e-ident @22.21-22.24 (raw "msg")))))))
-		(s-type-anno @26.1-26.15 (name "map")
-			(ty-fn @26.8-26.14
-				(ty-var @26.8-26.9 (raw "a"))
-				(ty-var @26.13-26.14 (raw "b"))))
-		(s-malformed @26.15-26.16 (tag "statement_unexpected_token"))
-		(s-malformed @26.25-26.27 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @27.1-27.4 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @27.5-27.6 (tag "statement_unexpected_token"))
-		(s-malformed @27.7-27.8 (tag "statement_unexpected_token"))
-		(s-malformed @27.8-27.9 (tag "statement_unexpected_token"))
-		(s-malformed @27.9-27.10 (tag "statement_unexpected_token"))
-		(s-malformed @27.11-27.12 (tag "statement_unexpected_token"))
-		(s-malformed @27.12-27.13 (tag "statement_unexpected_token"))
-		(s-malformed @27.14-27.15 (tag "statement_unexpected_token"))
-		(s-malformed @27.15-27.16 (tag "statement_unexpected_token"))
+		(s-type-anno @26.1-26.35 (name "map")
+			(ty-fn @26.7-26.35
+				(ty-fn @26.8-26.14
+					(ty-var @26.8-26.9 (raw "a"))
+					(ty-var @26.13-26.14 (raw "b")))
+				(ty-apply @26.17-26.24
+					(ty @26.17-26.21 (name "List"))
+					(ty-var @26.22-26.23 (raw "a")))
+				(ty-apply @26.28-26.35
+					(ty @26.28-26.32 (name "List"))
+					(ty-var @26.33-26.34 (raw "b")))))
+		(s-decl @27.1-27.16
+			(p-ident @27.1-27.4 (raw "map"))
+			(e-lambda @27.7-27.16
+				(args
+					(p-underscore)
+					(p-underscore))
+				(e-list @27.14-27.16)))
 		(s-type-anno @30.1-30.21 (name "transform")
 			(ty-fn @30.13-30.21
 				(underscore-ty-var @30.13-30.15 (raw "_a"))
@@ -405,9 +241,8 @@ handle_result = |result|
 	}
 
 # Underscore in function arguments
-map : (a -> b)
-
-
+map : (a -> b), List(a) -> List(b)
+map = |_, _| []
 
 # Named underscore type variables
 transform : _a -> _b
@@ -510,6 +345,24 @@ transform = |_, b| b
 						(ty @18.27-18.30 (name "Str")))
 					(ty @18.35-18.38 (name "Str"))))))
 	(d-let
+		(p-assign @27.1-27.4 (ident "map"))
+		(e-lambda @27.7-27.16
+			(args
+				(p-underscore @27.8-27.9)
+				(p-underscore @27.11-27.12))
+			(e-empty_list @27.14-27.16))
+		(annotation @27.1-27.4
+			(declared-type
+				(ty-fn @26.7-26.35 (effectful false)
+					(ty-parens @26.7-26.15
+						(ty-fn @26.8-26.14 (effectful false)
+							(ty-var @26.8-26.9 (name "a"))
+							(ty-var @26.13-26.14 (name "b"))))
+					(ty-apply @26.17-26.24 (symbol "List")
+						(ty-var @26.22-26.23 (name "a")))
+					(ty-apply @26.28-26.35 (symbol "List")
+						(ty-var @26.33-26.34 (name "b")))))))
+	(d-let
 		(p-assign @31.1-31.10 (ident "transform"))
 		(e-lambda @31.13-31.21
 			(args
@@ -527,6 +380,7 @@ transform = |_, b| b
 		(patt @11.1-11.8 (type "List(_c) -> Str"))
 		(patt @15.1-15.9 (type "{ field: _field2, other: U32 } -> U32"))
 		(patt @19.1-19.14 (type "Result(ok, Str) -> Str"))
+		(patt @27.1-27.4 (type "a -> b, List(a) -> List(b)"))
 		(patt @31.1-31.10 (type "_arg, _arg2 -> _ret")))
 	(expressions
 		(expr @4.8-4.13 (type "_arg -> _ret"))
@@ -534,5 +388,6 @@ transform = |_, b| b
 		(expr @11.11-11.29 (type "List(_c) -> Str"))
 		(expr @15.12-15.33 (type "{ field: _field2, other: U32 } -> U32"))
 		(expr @19.17-23.6 (type "Result(ok, Str) -> Str"))
+		(expr @27.7-27.16 (type "a -> b, List(a) -> List(b)"))
 		(expr @31.13-31.21 (type "_arg, _arg2 -> _ret"))))
 ~~~

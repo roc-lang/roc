@@ -24,63 +24,8 @@ addThreeTwice : I64 -> I64
 addThreeTwice = |n| applyTwice(|x| x + 3, n)
 ~~~
 # EXPECTED
-PARSE ERROR - lambda_currying_constraint.md:12:22:12:23
-PARSE ERROR - lambda_currying_constraint.md:12:24:12:25
-PARSE ERROR - lambda_currying_constraint.md:12:26:12:28
-PARSE ERROR - lambda_currying_constraint.md:12:29:12:30
 TYPE MISMATCH - lambda_currying_constraint.md:5:21:5:22
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**lambda_currying_constraint.md:12:22:12:23:**
-```roc
-applyTwice : (a -> a), a -> a
-```
-                     ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**lambda_currying_constraint.md:12:24:12:25:**
-```roc
-applyTwice : (a -> a), a -> a
-```
-                       ^
-
-
-**PARSE ERROR**
-Function types with multiple arrows need parentheses.
-
-Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
-        a -> (b -> c) for a **curried** function (a function that **returns** another function)
-        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
-
-Here is the problematic code:
-**lambda_currying_constraint.md:12:26:12:28:**
-```roc
-applyTwice : (a -> a), a -> a
-```
-                         ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**lambda_currying_constraint.md:12:29:12:30:**
-```roc
-applyTwice : (a -> a), a -> a
-```
-                            ^
-
-
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **lambda_currying_constraint.md:5:21:5:22:**
@@ -145,14 +90,13 @@ LowerIdent(17:1-17:14),OpAssign(17:15-17:16),OpBar(17:17-17:18),LowerIdent(17:18
 			(e-apply @9.14-9.26
 				(e-ident @9.14-9.23 (raw "makeAdder"))
 				(e-int @9.24-9.25 (raw "5"))))
-		(s-type-anno @12.1-12.22 (name "applyTwice")
-			(ty-fn @12.15-12.21
-				(ty-var @12.15-12.16 (raw "a"))
-				(ty-var @12.20-12.21 (raw "a"))))
-		(s-malformed @12.22-12.23 (tag "statement_unexpected_token"))
-		(s-malformed @12.24-12.25 (tag "statement_unexpected_token"))
-		(s-malformed @12.26-12.28 (tag "multi_arrow_needs_parens"))
-		(s-malformed @12.29-12.30 (tag "statement_unexpected_token"))
+		(s-type-anno @12.1-12.30 (name "applyTwice")
+			(ty-fn @12.14-12.30
+				(ty-fn @12.15-12.21
+					(ty-var @12.15-12.16 (raw "a"))
+					(ty-var @12.20-12.21 (raw "a")))
+				(ty-var @12.24-12.25 (raw "a"))
+				(ty-var @12.29-12.30 (raw "a"))))
 		(s-decl @13.1-13.28
 			(p-ident @13.1-13.11 (raw "applyTwice"))
 			(e-lambda @13.14-13.28
@@ -185,24 +129,7 @@ LowerIdent(17:1-17:14),OpAssign(17:15-17:16),OpBar(17:17-17:18),LowerIdent(17:18
 ~~~
 # FORMATTED
 ~~~roc
-module [makeAdder, curriedAdd, applyTwice]
-
-# Function that returns a function with polymorphic type
-makeAdder : a -> (a -> a)
-makeAdder = |x| |y| x + y
-
-# Should constrain the literal 5 to I64
-curriedAdd : I64 -> I64
-curriedAdd = makeAdder(5)
-
-# Higher-order function that applies a function twice
-applyTwice : (a -> a)
-
-applyTwice = |f, x| f(f(x))
-
-# Should constrain the literal 3 to I64
-addThreeTwice : I64 -> I64
-addThreeTwice = |n| applyTwice(|x| x + 3, n)
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -255,7 +182,16 @@ addThreeTwice = |n| applyTwice(|x| x + 3, n)
 					(e-lookup-local @13.23-13.24
 						(p-assign @13.15-13.16 (ident "f")))
 					(e-lookup-local @13.25-13.26
-						(p-assign @13.18-13.19 (ident "x")))))))
+						(p-assign @13.18-13.19 (ident "x"))))))
+		(annotation @13.1-13.11
+			(declared-type
+				(ty-fn @12.14-12.30 (effectful false)
+					(ty-parens @12.14-12.22
+						(ty-fn @12.15-12.21 (effectful false)
+							(ty-var @12.15-12.16 (name "a"))
+							(ty-var @12.20-12.21 (name "a"))))
+					(ty-var @12.24-12.25 (name "a"))
+					(ty-var @12.29-12.30 (name "a"))))))
 	(d-let
 		(p-assign @17.1-17.14 (ident "addThreeTwice"))
 		(e-closure @17.17-17.45
@@ -288,11 +224,11 @@ addThreeTwice = |n| applyTwice(|x| x + 3, n)
 	(defs
 		(patt @5.1-5.10 (type "Error -> Error -> Error"))
 		(patt @9.1-9.11 (type "Error -> Error"))
-		(patt @13.1-13.11 (type "_arg -> _ret, _arg2 -> _ret2"))
+		(patt @13.1-13.11 (type "a -> a, a -> a"))
 		(patt @17.1-17.14 (type "Error -> Error")))
 	(expressions
 		(expr @5.13-5.26 (type "Error -> Error -> Error"))
 		(expr @9.14-9.26 (type "Error -> Error"))
-		(expr @13.14-13.28 (type "_arg -> _ret, _arg2 -> _ret2"))
+		(expr @13.14-13.28 (type "a -> a, a -> a"))
 		(expr @17.17-17.45 (type "Error -> Error"))))
 ~~~
