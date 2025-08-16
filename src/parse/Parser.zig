@@ -2624,7 +2624,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             const effectful = self.peek() == .OpFatArrow;
             self.advance(); // Advance past arrow
             // TODO: Handle thin vs fat arrow
-            const ret = try self.parseTypeAnno(.looking_for_args);
+            const ret = try self.parseTypeAnno(.not_looking_for_args);
             return try self.store.addTypeAnno(.{ .@"fn" = .{
                 .region = .{ .start = start, .end = self.pos },
                 .args = args,

@@ -42,30 +42,6 @@ PARSE ERROR - underscore_in_regular_annotations.md:30:22:30:24
 PARSE ERROR - underscore_in_regular_annotations.md:30:25:30:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:11:12:11:16
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:30:22:30:24:**
-```roc
-transform : _a -> _b -> _b
-```
-                     ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**underscore_in_regular_annotations.md:30:25:30:27:**
-```roc
-transform : _a -> _b -> _b
-```
-                        ^^
-
-
 **UNUSED VARIABLE**
 Variable `list` is not used anywhere in your code.
 
@@ -77,6 +53,20 @@ process = |list| "processed"
 ```
            ^^^^
 
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**underscore_in_regular_annotations.md:31:13:31:21:**
+```roc
+transform = |_, b| b
+```
+            ^^^^^^^^
+
+The type annotation says it should have the type:
+    __a -> _b -> _b_
+
+But here it's being used as:
+    __arg, _b -> _b -> _b -> _b_
 
 # TOKENS
 ~~~zig
@@ -197,12 +187,12 @@ LowerIdent(31:1-31:10),OpAssign(31:11-31:12),OpBar(31:13-31:14),Underscore(31:14
 					(p-underscore)
 					(p-underscore))
 				(e-list @27.14-27.16)))
-		(s-type-anno @30.1-30.21 (name "transform")
-			(ty-fn @30.13-30.21
+		(s-type-anno @30.1-30.27 (name "transform")
+			(ty-fn @30.13-30.27
 				(underscore-ty-var @30.13-30.15 (raw "_a"))
-				(underscore-ty-var @30.19-30.21 (raw "_b"))))
-		(s-malformed @30.22-30.24 (tag "statement_unexpected_token"))
-		(s-malformed @30.25-30.27 (tag "statement_unexpected_token"))
+				(ty-fn @30.19-30.27
+					(underscore-ty-var @30.19-30.21 (raw "_b"))
+					(underscore-ty-var @30.25-30.27 (raw "_b")))))
 		(s-decl @31.1-31.21
 			(p-ident @31.1-31.10 (raw "transform"))
 			(e-lambda @31.13-31.21
@@ -242,8 +232,7 @@ map : (a -> b), List(a) -> List(b)
 map = |_, _| []
 
 # Named underscore type variables
-transform : _a -> _b
-
+transform : _a -> (_b -> _b)
 transform = |_, b| b
 ~~~
 # CANONICALIZE
@@ -366,7 +355,14 @@ transform = |_, b| b
 				(p-underscore @31.14-31.15)
 				(p-assign @31.17-31.18 (ident "b")))
 			(e-lookup-local @31.20-31.21
-				(p-assign @31.17-31.18 (ident "b"))))))
+				(p-assign @31.17-31.18 (ident "b"))))
+		(annotation @31.1-31.10
+			(declared-type
+				(ty-fn @30.13-30.27 (effectful false)
+					(ty-var @30.13-30.15 (name "_a"))
+					(ty-fn @30.19-30.27 (effectful false)
+						(ty-var @30.19-30.21 (name "_b"))
+						(ty-var @30.25-30.27 (name "_b"))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -378,7 +374,7 @@ transform = |_, b| b
 		(patt @15.1-15.9 (type "{ field: _field2, other: U32 } -> U32"))
 		(patt @19.1-19.14 (type "Result(ok, Str) -> Str"))
 		(patt @27.1-27.4 (type "a -> b, List(a) -> List(b)"))
-		(patt @31.1-31.10 (type "_arg, _arg2 -> _ret")))
+		(patt @31.1-31.10 (type "Error")))
 	(expressions
 		(expr @4.8-4.13 (type "_arg -> _ret"))
 		(expr @7.12-7.17 (type "a -> a"))
@@ -386,5 +382,5 @@ transform = |_, b| b
 		(expr @15.12-15.33 (type "{ field: _field2, other: U32 } -> U32"))
 		(expr @19.17-23.6 (type "Result(ok, Str) -> Str"))
 		(expr @27.7-27.16 (type "a -> b, List(a) -> List(b)"))
-		(expr @31.13-31.21 (type "_arg, _arg2 -> _ret"))))
+		(expr @31.13-31.21 (type "Error"))))
 ~~~

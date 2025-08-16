@@ -13,7 +13,124 @@ process = |_, _| ...
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN TYPE ANNOTATION**
+The token **module** is not expected in a type annotation.
+Type annotations should contain types like _Str_, _Num a_, or _List U64_.
+
+Here is the problematic code:
+**where_clauses_multi_type_vars.md:3:55:3:61:**
+```roc
+process : a, b -> c where module(a).convert : a -> c, module(b).transform : b -> c
+```
+                                                      ^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `expected_arrow`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**where_clauses_multi_type_vars.md:3:52:3:53:**
+```roc
+process : a, b -> c where module(a).convert : a -> c, module(b).transform : b -> c
+```
+                                                   ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**where_clauses_multi_type_vars.md:3:62:3:63:**
+```roc
+process : a, b -> c where module(a).convert : a -> c, module(b).transform : b -> c
+```
+                                                             ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**where_clauses_multi_type_vars.md:3:63:3:64:**
+```roc
+process : a, b -> c where module(a).convert : a -> c, module(b).transform : b -> c
+```
+                                                              ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**where_clauses_multi_type_vars.md:3:64:3:74:**
+```roc
+process : a, b -> c where module(a).convert : a -> c, module(b).transform : b -> c
+```
+                                                               ^^^^^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**where_clauses_multi_type_vars.md:3:75:3:76:**
+```roc
+process : a, b -> c where module(a).convert : a -> c, module(b).transform : b -> c
+```
+                                                                          ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**where_clauses_multi_type_vars.md:3:77:3:78:**
+```roc
+process : a, b -> c where module(a).convert : a -> c, module(b).transform : b -> c
+```
+                                                                            ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**where_clauses_multi_type_vars.md:3:79:3:81:**
+```roc
+process : a, b -> c where module(a).convert : a -> c, module(b).transform : b -> c
+```
+                                                                              ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**where_clauses_multi_type_vars.md:3:82:3:83:**
+```roc
+process : a, b -> c where module(a).convert : a -> c, module(b).transform : b -> c
+```
+                                                                                 ^
+
+
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
+
+**where_clauses_multi_type_vars.md:3:52:3:62:**
+```roc
+process : a, b -> c where module(a).convert : a -> c, module(b).transform : b -> c
+```
+                                                   ^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:16),CloseSquare(1:16-1:17),
@@ -28,20 +145,23 @@ LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),Underscore(4:12-4:13),Co
 			(exposed-lower-ident @1.9-1.16
 				(text "process"))))
 	(statements
-		(s-type-anno @3.1-3.83 (name "process")
+		(s-type-anno @3.1-3.62 (name "process")
 			(ty-fn @3.11-3.20
 				(ty-var @3.11-3.12 (raw "a"))
 				(ty-var @3.14-3.15 (raw "b"))
 				(ty-var @3.19-3.20 (raw "c")))
 			(where
-				(method @3.27-3.53 (module-of "a") (name "convert")
+				(method @3.27-3.62 (module-of "a") (name "convert")
 					(args
 						(ty-var @3.47-3.48 (raw "a")))
-					(ty-var @3.52-3.53 (raw "c")))
-				(method @3.55-3.83 (module-of "b") (name "transform")
-					(args
-						(ty-var @3.77-3.78 (raw "b")))
-					(ty-var @3.82-3.83 (raw "c")))))
+					(ty-malformed @3.52-3.62 (tag "expected_arrow")))))
+		(s-malformed @3.62-3.63 (tag "statement_unexpected_token"))
+		(s-malformed @3.63-3.64 (tag "statement_unexpected_token"))
+		(s-malformed @3.64-3.74 (tag "statement_unexpected_token"))
+		(s-malformed @3.75-3.76 (tag "statement_unexpected_token"))
+		(s-malformed @3.77-3.78 (tag "statement_unexpected_token"))
+		(s-malformed @3.79-3.81 (tag "statement_unexpected_token"))
+		(s-malformed @3.82-3.83 (tag "statement_unexpected_token"))
 		(s-decl @4.1-4.21
 			(p-ident @4.1-4.8 (raw "process"))
 			(e-lambda @4.11-4.21
@@ -52,7 +172,11 @@ LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),Underscore(4:12-4:13),Co
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [process]
+
+process : a, b -> c where module(a).convert : a -> 
+
+process = |_, _| ...
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -63,35 +187,24 @@ NO CHANGE
 			(args
 				(p-underscore @4.12-4.13)
 				(p-underscore @4.15-4.16))
-			(e-not-implemented @1.1-1.1))
-		(annotation @4.1-4.8
-			(declared-type
-				(ty-fn @3.11-3.20 (effectful false)
-					(ty-var @3.11-3.12 (name "a"))
-					(ty-var @3.14-3.15 (name "b"))
-					(ty-var @3.19-3.20 (name "c"))))))
-	(s-type-anno @3.1-3.83 (name "process")
+			(e-not-implemented @1.1-1.1)))
+	(s-type-anno @3.1-3.62 (name "process")
 		(ty-fn @3.11-3.20 (effectful false)
 			(ty-var @3.11-3.12 (name "a"))
 			(ty-var @3.14-3.15 (name "b"))
 			(ty-var @3.19-3.20 (name "c")))
 		(where
-			(method @3.27-3.53 (module-of "a") (ident "convert")
+			(method @3.27-3.62 (module-of "a") (ident "convert")
 				(args
 					(ty-var @3.47-3.48 (name "a")))
-				(ty-var @3.52-3.53 (name "c")))
-			(method @3.55-3.83 (module-of "b") (ident "transform")
-				(args
-					(ty-var @3.77-3.78 (name "b")))
-				(ty-var @3.82-3.83 (name "c")))))
-	(ext-decl @3.27-3.53 (ident "module(a).convert") (kind "value"))
-	(ext-decl @3.55-3.83 (ident "module(b).transform") (kind "value")))
+				(ty-malformed @3.52-3.62))))
+	(ext-decl @3.27-3.62 (ident "module(a).convert") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "a, b -> c")))
+		(patt @4.1-4.8 (type "_arg, _arg2 -> _ret")))
 	(expressions
-		(expr @4.11-4.21 (type "a, b -> c"))))
+		(expr @4.11-4.21 (type "_arg, _arg2 -> _ret"))))
 ~~~

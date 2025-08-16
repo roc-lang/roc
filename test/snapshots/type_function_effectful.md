@@ -16,29 +16,19 @@ main! = |_| {}
 PARSE ERROR - type_function_effectful.md:3:31:3:33
 PARSE ERROR - type_function_effectful.md:3:34:3:36
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_function_effectful.md:3:31:3:33:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_function_effectful.md:4:14:4:29:**
 ```roc
-runEffect! : (_a => _b) -> _a => _b
+runEffect! = |fn!, x| fn!(x)
 ```
-                              ^^
+             ^^^^^^^^^^^^^^^
 
+The type annotation says it should have the type:
+    __a => _b -> _a => _b_
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_function_effectful.md:3:34:3:36:**
-```roc
-runEffect! : (_a => _b) -> _a => _b
-```
-                                 ^^
-
+But here it's being used as:
+    __arg -> _a => _b, _arg2 -> _a => _b_
 
 # TOKENS
 ~~~zig
@@ -62,14 +52,14 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.30 (name "runEffect!")
-			(ty-fn @3.14-3.30
+		(s-type-anno @3.1-3.36 (name "runEffect!")
+			(ty-fn @3.14-3.36
 				(ty-fn @3.15-3.23
 					(underscore-ty-var @3.15-3.17 (raw "_a"))
 					(underscore-ty-var @3.21-3.23 (raw "_b")))
-				(underscore-ty-var @3.28-3.30 (raw "_a"))))
-		(s-malformed @3.31-3.33 (tag "statement_unexpected_token"))
-		(s-malformed @3.34-3.36 (tag "statement_unexpected_token"))
+				(ty-fn @3.28-3.36
+					(underscore-ty-var @3.28-3.30 (raw "_a"))
+					(underscore-ty-var @3.34-3.36 (raw "_b")))))
 		(s-decl @4.1-4.29
 			(p-ident @4.1-4.11 (raw "runEffect!"))
 			(e-lambda @4.14-4.29
@@ -90,8 +80,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-runEffect! : (_a => _b) -> _a
-
+runEffect! : (_a => _b) -> (_a => _b)
 runEffect! = |fn!, x| fn!(x)
 
 main! = |_| {}
@@ -109,7 +98,17 @@ main! = |_| {}
 				(e-lookup-local @4.23-4.26
 					(p-assign @4.15-4.18 (ident "fn!")))
 				(e-lookup-local @4.27-4.28
-					(p-assign @4.20-4.21 (ident "x"))))))
+					(p-assign @4.20-4.21 (ident "x")))))
+		(annotation @4.1-4.11
+			(declared-type
+				(ty-fn @3.14-3.36 (effectful false)
+					(ty-parens @3.14-3.24
+						(ty-fn @3.15-3.23 (effectful true)
+							(ty-var @3.15-3.17 (name "_a"))
+							(ty-var @3.21-3.23 (name "_b"))))
+					(ty-fn @3.28-3.36 (effectful true)
+						(ty-var @3.28-3.30 (name "_a"))
+						(ty-var @3.34-3.36 (name "_b")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
@@ -121,9 +120,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.11 (type "_arg -> ret, _arg2 -> ret2"))
+		(patt @4.1-4.11 (type "Error"))
 		(patt @6.1-6.6 (type "_arg -> {}")))
 	(expressions
-		(expr @4.14-4.29 (type "_arg -> ret, _arg2 -> ret2"))
+		(expr @4.14-4.29 (type "Error"))
 		(expr @6.9-6.15 (type "_arg -> {}"))))
 ~~~

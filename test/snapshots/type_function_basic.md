@@ -16,29 +16,19 @@ main! = |_| {}
 PARSE ERROR - type_function_basic.md:3:26:3:28
 PARSE ERROR - type_function_basic.md:3:29:3:31
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_function_basic.md:3:26:3:28:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_function_basic.md:4:9:4:22:**
 ```roc
-apply : (_a -> _b) -> _a -> _b
+apply = |fn, x| fn(x)
 ```
-                         ^^
+        ^^^^^^^^^^^^^
 
+The type annotation says it should have the type:
+    __a -> _b -> _a -> _b_
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_function_basic.md:3:29:3:31:**
-```roc
-apply : (_a -> _b) -> _a -> _b
-```
-                            ^^
-
+But here it's being used as:
+    __arg -> _a -> _b, _arg2 -> _a -> _b_
 
 # TOKENS
 ~~~zig
@@ -62,14 +52,14 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.25 (name "apply")
-			(ty-fn @3.9-3.25
+		(s-type-anno @3.1-3.31 (name "apply")
+			(ty-fn @3.9-3.31
 				(ty-fn @3.10-3.18
 					(underscore-ty-var @3.10-3.12 (raw "_a"))
 					(underscore-ty-var @3.16-3.18 (raw "_b")))
-				(underscore-ty-var @3.23-3.25 (raw "_a"))))
-		(s-malformed @3.26-3.28 (tag "statement_unexpected_token"))
-		(s-malformed @3.29-3.31 (tag "statement_unexpected_token"))
+				(ty-fn @3.23-3.31
+					(underscore-ty-var @3.23-3.25 (raw "_a"))
+					(underscore-ty-var @3.29-3.31 (raw "_b")))))
 		(s-decl @4.1-4.22
 			(p-ident @4.1-4.6 (raw "apply"))
 			(e-lambda @4.9-4.22
@@ -90,8 +80,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-apply : (_a -> _b) -> _a
-
+apply : (_a -> _b) -> (_a -> _b)
 apply = |fn, x| fn(x)
 
 main! = |_| {}
@@ -109,7 +98,17 @@ main! = |_| {}
 				(e-lookup-local @4.17-4.19
 					(p-assign @4.10-4.12 (ident "fn")))
 				(e-lookup-local @4.20-4.21
-					(p-assign @4.14-4.15 (ident "x"))))))
+					(p-assign @4.14-4.15 (ident "x")))))
+		(annotation @4.1-4.6
+			(declared-type
+				(ty-fn @3.9-3.31 (effectful false)
+					(ty-parens @3.9-3.19
+						(ty-fn @3.10-3.18 (effectful false)
+							(ty-var @3.10-3.12 (name "_a"))
+							(ty-var @3.16-3.18 (name "_b"))))
+					(ty-fn @3.23-3.31 (effectful false)
+						(ty-var @3.23-3.25 (name "_a"))
+						(ty-var @3.29-3.31 (name "_b")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
@@ -121,9 +120,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.6 (type "_arg -> ret, _arg2 -> ret2"))
+		(patt @4.1-4.6 (type "Error"))
 		(patt @6.1-6.6 (type "_arg -> {}")))
 	(expressions
-		(expr @4.9-4.22 (type "_arg -> ret, _arg2 -> ret2"))
+		(expr @4.9-4.22 (type "Error"))
 		(expr @6.9-6.15 (type "_arg -> {}"))))
 ~~~
