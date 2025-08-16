@@ -562,7 +562,8 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
 
             // Add underline for single-line regions in markdown
             if (region.start_line == region.end_line) {
-                // Recreate the exact whitespace from the source line up to the start column
+                // Recreate the exact whitespace from the source line up to the start column.
+                // This is critical so that leading tabs end up being in exactly the same place(s).
                 const chars_before_target = region.start_column - 1;
                 if (chars_before_target > 0 and lines.len >= chars_before_target) {
                     // Extract and print the exact whitespace characters (including tabs) from the source
