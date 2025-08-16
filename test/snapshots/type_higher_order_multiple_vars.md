@@ -13,6 +13,12 @@ compose = |f, g| |x| f(g(x))
 main! = |_| {}
 ~~~
 # EXPECTED
+PARSE ERROR - type_higher_order_multiple_vars.md:3:22:3:24
+PARSE ERROR - type_higher_order_multiple_vars.md:3:25:3:26
+PARSE ERROR - type_higher_order_multiple_vars.md:3:26:3:28
+PARSE ERROR - type_higher_order_multiple_vars.md:3:29:3:31
+PARSE ERROR - type_higher_order_multiple_vars.md:3:32:3:34
+PARSE ERROR - type_higher_order_multiple_vars.md:3:34:3:35
 PARSE ERROR - type_higher_order_multiple_vars.md:3:36:3:38
 PARSE ERROR - type_higher_order_multiple_vars.md:3:39:3:40
 PARSE ERROR - type_higher_order_multiple_vars.md:3:40:3:42
@@ -20,19 +26,161 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:43:3:45
 PARSE ERROR - type_higher_order_multiple_vars.md:3:46:3:48
 PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_higher_order_multiple_vars.md:4:11:4:29:**
+**PARSE ERROR**
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:22:3:24:**
 ```roc
-compose = |f, g| |x| f(g(x))
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
 ```
-          ^^^^^^^^^^^^^^^^^^
+                     ^^
 
-The type annotation says it should have the type:
-    __b -> _c -> _a -> _b -> _a -> _c_
 
-But here it's being used as:
-    __arg -> _a -> _c, _a -> _b -> _ret -> _a -> _b -> _a -> _c_
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:25:3:26:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                        ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:26:3:28:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                         ^^
+
+
+**PARSE ERROR**
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:29:3:31:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                            ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:32:3:34:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                               ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:34:3:35:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                                 ^
+
+
+**PARSE ERROR**
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:36:3:38:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                                   ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:39:3:40:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                                      ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:40:3:42:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                                       ^^
+
+
+**PARSE ERROR**
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:43:3:45:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                                          ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:46:3:48:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                                             ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:48:3:49:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+                                               ^
+
 
 # TOKENS
 ~~~zig
@@ -56,18 +204,22 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.49 (name "compose")
-			(ty-fn @3.11-3.49
-				(ty-fn @3.12-3.20
-					(underscore-ty-var @3.12-3.14 (raw "_b"))
-					(underscore-ty-var @3.18-3.20 (raw "_c")))
-				(ty-fn @3.25-3.49
-					(ty-fn @3.26-3.34
-						(underscore-ty-var @3.26-3.28 (raw "_a"))
-						(underscore-ty-var @3.32-3.34 (raw "_b")))
-					(ty-fn @3.40-3.48
-						(underscore-ty-var @3.40-3.42 (raw "_a"))
-						(underscore-ty-var @3.46-3.48 (raw "_c"))))))
+		(s-type-anno @3.1-3.21 (name "compose")
+			(ty-fn @3.12-3.20
+				(underscore-ty-var @3.12-3.14 (raw "_b"))
+				(underscore-ty-var @3.18-3.20 (raw "_c"))))
+		(s-malformed @3.22-3.24 (tag "multi_arrow_needs_parens"))
+		(s-malformed @3.25-3.26 (tag "statement_unexpected_token"))
+		(s-malformed @3.26-3.28 (tag "statement_unexpected_token"))
+		(s-malformed @3.29-3.31 (tag "multi_arrow_needs_parens"))
+		(s-malformed @3.32-3.34 (tag "statement_unexpected_token"))
+		(s-malformed @3.34-3.35 (tag "statement_unexpected_token"))
+		(s-malformed @3.36-3.38 (tag "multi_arrow_needs_parens"))
+		(s-malformed @3.39-3.40 (tag "statement_unexpected_token"))
+		(s-malformed @3.40-3.42 (tag "statement_unexpected_token"))
+		(s-malformed @3.43-3.45 (tag "multi_arrow_needs_parens"))
+		(s-malformed @3.46-3.48 (tag "statement_unexpected_token"))
+		(s-malformed @3.48-3.49 (tag "statement_unexpected_token"))
 		(s-decl @4.1-4.29
 			(p-ident @4.1-4.8 (raw "compose"))
 			(e-lambda @4.11-4.29
@@ -93,7 +245,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-compose : (_b -> _c) -> ((_a -> _b) -> (_a -> _c))
+compose : (_b -> _c)
+
 compose = |f, g| |x| f(g(x))
 
 main! = |_| {}
@@ -121,23 +274,7 @@ main! = |_| {}
 							(e-lookup-local @4.24-4.25
 								(p-assign @4.15-4.16 (ident "g")))
 							(e-lookup-local @4.26-4.27
-								(p-assign @4.19-4.20 (ident "x"))))))))
-		(annotation @4.1-4.8
-			(declared-type
-				(ty-fn @3.11-3.49 (effectful false)
-					(ty-parens @3.11-3.21
-						(ty-fn @3.12-3.20 (effectful false)
-							(ty-var @3.12-3.14 (name "_b"))
-							(ty-var @3.18-3.20 (name "_c"))))
-					(ty-fn @3.25-3.49 (effectful false)
-						(ty-parens @3.25-3.35
-							(ty-fn @3.26-3.34 (effectful false)
-								(ty-var @3.26-3.28 (name "_a"))
-								(ty-var @3.32-3.34 (name "_b"))))
-						(ty-parens @3.39-3.49
-							(ty-fn @3.40-3.48 (effectful false)
-								(ty-var @3.40-3.42 (name "_a"))
-								(ty-var @3.46-3.48 (name "_c")))))))))
+								(p-assign @4.19-4.20 (ident "x")))))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
@@ -149,9 +286,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "Error"))
+		(patt @4.1-4.8 (type "arg -> ret, _arg2 -> ret2 -> _arg3 -> ret3"))
 		(patt @6.1-6.6 (type "_arg -> {}")))
 	(expressions
-		(expr @4.11-4.29 (type "Error"))
+		(expr @4.11-4.29 (type "arg -> ret, _arg2 -> ret2 -> _arg3 -> ret3"))
 		(expr @6.9-6.15 (type "_arg -> {}"))))
 ~~~

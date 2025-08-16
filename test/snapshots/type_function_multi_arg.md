@@ -13,13 +13,32 @@ curry = |fn| |x| |y| fn(x, y)
 main! = |_| {}
 ~~~
 # EXPECTED
+PARSE ERROR - type_function_multi_arg.md:3:24:3:26
 PARSE ERROR - type_function_multi_arg.md:3:27:3:28
+PARSE ERROR - type_function_multi_arg.md:3:28:3:30
+PARSE ERROR - type_function_multi_arg.md:3:31:3:33
+PARSE ERROR - type_function_multi_arg.md:3:34:3:36
+PARSE ERROR - type_function_multi_arg.md:3:37:3:39
 PARSE ERROR - type_function_multi_arg.md:3:40:3:42
 PARSE ERROR - type_function_multi_arg.md:3:42:3:43
-MALFORMED TYPE - type_function_multi_arg.md:3:27:3:39
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: `expected_ty_anno_close_round`
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+
+Here is the problematic code:
+**type_function_multi_arg.md:3:24:3:26:**
+```roc
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+```
+                       ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
@@ -28,6 +47,60 @@ Here is the problematic code:
 curry : (_a, _b -> _c) -> (_a -> _b -> _c)
 ```
                           ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_function_multi_arg.md:3:28:3:30:**
+```roc
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+```
+                           ^^
+
+
+**PARSE ERROR**
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+
+Here is the problematic code:
+**type_function_multi_arg.md:3:31:3:33:**
+```roc
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+```
+                              ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_function_multi_arg.md:3:34:3:36:**
+```roc
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+```
+                                 ^^
+
+
+**PARSE ERROR**
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+
+Here is the problematic code:
+**type_function_multi_arg.md:3:37:3:39:**
+```roc
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+```
+                                    ^^
 
 
 **PARSE ERROR**
@@ -54,16 +127,6 @@ curry : (_a, _b -> _c) -> (_a -> _b -> _c)
                                          ^
 
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**type_function_multi_arg.md:3:27:3:39:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                          ^^^^^^^^^^^^
-
-
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
@@ -86,13 +149,17 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.39 (name "curry")
-			(ty-fn @3.9-3.39
-				(ty-fn @3.10-3.22
-					(underscore-ty-var @3.10-3.12 (raw "_a"))
-					(underscore-ty-var @3.14-3.16 (raw "_b"))
-					(underscore-ty-var @3.20-3.22 (raw "_c")))
-				(ty-malformed @3.27-3.39 (tag "expected_ty_anno_close_round"))))
+		(s-type-anno @3.1-3.23 (name "curry")
+			(ty-fn @3.10-3.22
+				(underscore-ty-var @3.10-3.12 (raw "_a"))
+				(underscore-ty-var @3.14-3.16 (raw "_b"))
+				(underscore-ty-var @3.20-3.22 (raw "_c"))))
+		(s-malformed @3.24-3.26 (tag "multi_arrow_needs_parens"))
+		(s-malformed @3.27-3.28 (tag "statement_unexpected_token"))
+		(s-malformed @3.28-3.30 (tag "statement_unexpected_token"))
+		(s-malformed @3.31-3.33 (tag "multi_arrow_needs_parens"))
+		(s-malformed @3.34-3.36 (tag "statement_unexpected_token"))
+		(s-malformed @3.37-3.39 (tag "multi_arrow_needs_parens"))
 		(s-malformed @3.40-3.42 (tag "statement_unexpected_token"))
 		(s-malformed @3.42-3.43 (tag "statement_unexpected_token"))
 		(s-decl @4.1-4.30
@@ -121,7 +188,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-curry : (_a, _b -> _c) -> 
+curry : (_a, _b -> _c)
 
 curry = |fn| |x| |y| fn(x, y)
 
@@ -143,8 +210,8 @@ main! = |_| {}
 						(p-assign @4.15-4.16 (ident "x")))
 					(e-closure @4.18-4.30
 						(captures
-							(capture @4.10-4.12 (ident "fn"))
-							(capture @4.15-4.16 (ident "x")))
+							(capture @4.15-4.16 (ident "x"))
+							(capture @4.10-4.12 (ident "fn")))
 						(e-lambda @4.18-4.30
 							(args
 								(p-assign @4.19-4.20 (ident "y")))
