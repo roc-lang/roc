@@ -1833,7 +1833,21 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
+                
+                // Add parentheses around the return type if it's a function type
+                // This makes right-associativity explicit
+                const ret_anno = fmt.ast.store.getTypeAnno(f.ret);
+                const needs_parens = switch (ret_anno) {
+                    .@"fn" => true,
+                    else => false,
+                };
+                if (needs_parens) {
+                    try fmt.push('(');
+                }
                 _ = try fmt.formatTypeAnno(f.ret);
+                if (needs_parens) {
+                    try fmt.push(')');
+                }
             },
             .parens => |p| {
                 region = p.region;
