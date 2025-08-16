@@ -887,6 +887,14 @@ pub const Cursor = struct {
                         {
                             self.pos += 1;
                         } else {
+                            // Invalid hex character - advance to the closing paren if possible
+                            // to include the full escape sequence in the error region
+                            while (self.pos < self.buf.len and self.peek() != ')' and self.peek() != '\n') {
+                                self.pos += 1;
+                            }
+                            if (self.pos < self.buf.len and self.peek() == ')') {
+                                self.pos += 1;
+                            }
                             self.pushMessage(.InvalidUnicodeEscapeSequence, escape_start, self.pos);
                             return error.InvalidUnicodeEscapeSequence;
                         }

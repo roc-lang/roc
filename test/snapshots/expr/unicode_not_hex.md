@@ -14,7 +14,7 @@ INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
 This Unicode escape sequence is not valid.```roc
 "abc\u(zzzz)def"
 ```
-    ^^^
+    ^^^^^^^^
 
 
 # TOKENS
