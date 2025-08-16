@@ -416,6 +416,11 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addIndent(1);
             try report.document.addAnnotated("Maybe(List(U64))", .dimmed);
         },
+        .expected_equals_after_pattern => {
+            try report.document.addReflowingText("I expected an ");
+            try report.document.addKeyword("=");
+            try report.document.addText(" after this pattern to complete the destructuring assignment.");
+        },
         .where_expected_mod_open => {
             try report.document.addReflowingText("Expected an opening parenthesis after ");
             try report.document.addKeyword("module");
@@ -639,6 +644,7 @@ pub const Diagnostic = struct {
         exposed_item_unexpected_token,
         expected_upper_name_after_import_as,
         expected_colon_after_type_annotation,
+        expected_equals_after_pattern,
         expected_lower_ident_pat_field_name,
         expected_colon_after_pat_field_name,
         expected_expr_bar,

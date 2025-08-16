@@ -1204,7 +1204,19 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!?AST.State
                 
                 // If it's OpAssign, this is a pattern assignment, not a type declaration
                 if (next_tok == .OpAssign) {
-                    // Fall through to parse as a pattern assignment
+                    // Parse as a pattern assignment (destructuring)
+                    const patt = try self.parsePattern(.alternatives_forbidden);
+                    if (self.peek() != .OpAssign) {
+                        return try self.pushMalformed(AST.Statement.Idx, .expected_equals_after_pattern, self.pos);
+                    }
+                    self.advance(); // Advance past OpAssign
+                    const expr = try self.parseExpr();
+                    const statement_idx = try self.store.addStatement(.{ .decl = .{
+                        .pattern = patt,
+                        .body = expr,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    return statement_idx;
                 } else {
                     // Parse as a type declaration
                     const header = try self.parseTypeHeader();
