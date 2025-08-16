@@ -40,7 +40,6 @@ PARSE ERROR - fuzz_crash_030.md:16:3:16:4
 A parsing error occurred: `exposed_item_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_030.md:8:5:8:6:**
 ```roc
 		[ .
@@ -52,7 +51,6 @@ Here is the problematic code:
 A parsing error occurred: `expected_packages_close_curly`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_030.md:12:8:12:9:**
 ```roc
 pkg: 77"..c", mm} #
@@ -64,7 +62,6 @@ pkg: 77"..c", mm} #
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_030.md:12:9:12:12:**
 ```roc
 pkg: 77"..c", mm} #
@@ -76,7 +73,6 @@ pkg: 77"..c", mm} #
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_030.md:12:12:12:13:**
 ```roc
 pkg: 77"..c", mm} #
@@ -88,7 +84,6 @@ pkg: 77"..c", mm} #
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_030.md:12:13:12:14:**
 ```roc
 pkg: 77"..c", mm} #
@@ -100,7 +95,6 @@ pkg: 77"..c", mm} #
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_030.md:12:15:12:17:**
 ```roc
 pkg: 77"..c", mm} #
@@ -112,7 +106,6 @@ pkg: 77"..c", mm} #
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_030.md:12:17:12:18:**
 ```roc
 pkg: 77"..c", mm} #
@@ -124,7 +117,6 @@ pkg: 77"..c", mm} #
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_030.md:13:2:13:10:**
 ```roc
 	provides # Cd
@@ -136,7 +128,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_030.md:14:3:14:4:**
 ```roc
 		[ # pen
@@ -148,7 +139,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_030.md:15:1:15:3:**
 ```roc
 ar,
@@ -160,7 +150,6 @@ ar,
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_030.md:15:3:15:4:**
 ```roc
 ar,
@@ -172,7 +161,6 @@ ar,
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_030.md:16:3:16:4:**
 ```roc
 		]

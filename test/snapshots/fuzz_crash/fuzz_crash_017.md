@@ -25,7 +25,6 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
-Here is the problematic code:
 **fuzz_crash_017.md:1:1:1:3:**
 ```roc
 me = "luc"
@@ -37,7 +36,6 @@ me = "luc"
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_017.md:1:4:1:5:**
 ```roc
 me = "luc"
@@ -49,7 +47,6 @@ me = "luc"
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_017.md:1:6:1:7:**
 ```roc
 me = "luc"
@@ -61,7 +58,6 @@ me = "luc"
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_017.md:1:7:1:10:**
 ```roc
 me = "luc"
@@ -73,7 +69,6 @@ me = "luc"
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_017.md:1:10:1:11:**
 ```roc
 me = "luc"
@@ -85,7 +80,6 @@ me = "luc"
 A parsing error occurred: `string_expected_close_interpolation`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_017.md:2:7:2:8:**
 ```roc
 foo = "hello ${namF

@@ -49,7 +49,6 @@ Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
         a -> (b -> c) for a **curried** function (a function that **returns** another function)
         (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
 
-Here is the problematic code:
 **underscore_in_regular_annotations.md:30:22:30:24:**
 ```roc
 transform : _a -> _b -> _b
@@ -61,7 +60,6 @@ transform : _a -> _b -> _b
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_in_regular_annotations.md:30:25:30:27:**
 ```roc
 transform : _a -> _b -> _b

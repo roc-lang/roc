@@ -59,7 +59,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **fuzz_crash_025.md:11:1:11:2:**
 ```roc
 d = 18446744073709551615
@@ -71,7 +70,6 @@ d = 18446744073709551615
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_025.md:11:3:11:4:**
 ```roc
 d = 18446744073709551615
@@ -83,7 +81,6 @@ d = 18446744073709551615
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_025.md:11:5:11:25:**
 ```roc
 d = 18446744073709551615
@@ -95,7 +92,6 @@ d = 18446744073709551615
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_025.md:14:48:14:49:**
 ```roc
 e = 3402823669209384634633746074317682114553.14: I8
@@ -119,7 +115,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **fuzz_crash_025.md:15:1:15:2:**
 ```roc
 f =8
@@ -131,7 +126,6 @@ f =8
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_025.md:15:3:15:4:**
 ```roc
 f =8
@@ -143,7 +137,6 @@ f =8
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_025.md:15:4:15:5:**
 ```roc
 f =8

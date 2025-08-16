@@ -39,7 +39,6 @@ module [module ] { pf: platform ".-/main._]where # A
 A parsing error occurred: `exposed_item_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_024.md:1:9:1:15:**
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
@@ -51,7 +50,6 @@ module [module ] { pf: platform ".-/main._]where # A
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_024.md:1:18:1:19:**
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
@@ -63,7 +61,6 @@ module [module ] { pf: platform ".-/main._]where # A
 The token **platform** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-Here is the problematic code:
 **fuzz_crash_024.md:1:24:1:32:**
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
@@ -75,7 +72,6 @@ module [module ] { pf: platform ".-/main._]where # A
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_024.md:1:33:1:34:**
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
@@ -87,7 +83,6 @@ module [module ] { pf: platform ".-/main._]where # A
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_024.md:1:34:1:53:**
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
@@ -99,7 +94,6 @@ module [module ] { pf: platform ".-/main._]where # A
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_024.md:1:53:1:53:**
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
@@ -111,7 +105,6 @@ module [module ] { pf: platform ".-/main._]where # A
 A parsing error occurred: `var_only_allowed_in_a_body`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_024.md:4:1:4:4:**
 ```roc
 var t= ]
@@ -123,7 +116,6 @@ var t= ]
 The token **]** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **fuzz_crash_024.md:4:8:4:9:**
 ```roc
 var t= ]
@@ -135,7 +127,6 @@ var t= ]
 A parsing error occurred: `var_only_allowed_in_a_body`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_024.md:7:1:7:4:**
 ```roc
 var t= 0

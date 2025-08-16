@@ -54,7 +54,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **underscore_type_decl.md:5:13:5:14:**
 ```roc
 Pair1(x, _) = Pair(0, 1)
@@ -66,7 +65,6 @@ Pair1(x, _) = Pair(0, 1)
 A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:5:20:5:21:**
 ```roc
 Pair1(x, _) = Pair(0, 1)
@@ -78,7 +76,6 @@ Pair1(x, _) = Pair(0, 1)
 A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:5:23:5:24:**
 ```roc
 Pair1(x, _) = Pair(0, 1)
@@ -102,7 +99,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **underscore_type_decl.md:6:1:6:6:**
 ```roc
 Pair2(_, y) = Pair(0, 1)
@@ -114,7 +110,6 @@ Pair2(_, y) = Pair(0, 1)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:6:6:6:7:**
 ```roc
 Pair2(_, y) = Pair(0, 1)
@@ -126,7 +121,6 @@ Pair2(_, y) = Pair(0, 1)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:6:7:6:8:**
 ```roc
 Pair2(_, y) = Pair(0, 1)
@@ -138,7 +132,6 @@ Pair2(_, y) = Pair(0, 1)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:6:8:6:9:**
 ```roc
 Pair2(_, y) = Pair(0, 1)
@@ -150,7 +143,6 @@ Pair2(_, y) = Pair(0, 1)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:6:10:6:11:**
 ```roc
 Pair2(_, y) = Pair(0, 1)
@@ -162,7 +154,6 @@ Pair2(_, y) = Pair(0, 1)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:6:11:6:12:**
 ```roc
 Pair2(_, y) = Pair(0, 1)
@@ -174,7 +165,6 @@ Pair2(_, y) = Pair(0, 1)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:6:13:6:14:**
 ```roc
 Pair2(_, y) = Pair(0, 1)
@@ -186,7 +176,6 @@ Pair2(_, y) = Pair(0, 1)
 A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:6:20:6:21:**
 ```roc
 Pair2(_, y) = Pair(0, 1)
@@ -198,7 +187,6 @@ Pair2(_, y) = Pair(0, 1)
 A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:6:23:6:24:**
 ```roc
 Pair2(_, y) = Pair(0, 1)
@@ -222,7 +210,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **underscore_type_decl.md:7:1:7:6:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
@@ -234,7 +221,6 @@ Pair3(_, _) = Pair(0, 1)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:7:6:7:7:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
@@ -246,7 +232,6 @@ Pair3(_, _) = Pair(0, 1)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:7:7:7:8:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
@@ -258,7 +243,6 @@ Pair3(_, _) = Pair(0, 1)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:7:8:7:9:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
@@ -270,7 +254,6 @@ Pair3(_, _) = Pair(0, 1)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:7:10:7:11:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
@@ -282,7 +265,6 @@ Pair3(_, _) = Pair(0, 1)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:7:11:7:12:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
@@ -294,7 +276,6 @@ Pair3(_, _) = Pair(0, 1)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:7:13:7:14:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
@@ -306,7 +287,6 @@ Pair3(_, _) = Pair(0, 1)
 A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:7:20:7:21:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
@@ -318,7 +298,6 @@ Pair3(_, _) = Pair(0, 1)
 A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **underscore_type_decl.md:7:23:7:24:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
@@ -342,7 +321,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **underscore_type_decl.md:7:25:7:25:**
 ```roc
 Pair3(_, _) = Pair(0, 1)

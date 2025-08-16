@@ -37,7 +37,6 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
-Here is the problematic code:
 **fuzz_crash_021.md:1:1:1:4:**
 ```roc
 Fli/main.roc" }
@@ -49,7 +48,6 @@ Fli/main.roc" }
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_021.md:1:4:1:5:**
 ```roc
 Fli/main.roc" }
@@ -61,7 +59,6 @@ Fli/main.roc" }
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_021.md:1:5:1:9:**
 ```roc
 Fli/main.roc" }
@@ -73,7 +70,6 @@ Fli/main.roc" }
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_021.md:1:9:1:13:**
 ```roc
 Fli/main.roc" }
@@ -85,7 +81,6 @@ Fli/main.roc" }
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_021.md:1:13:1:14:**
 ```roc
 Fli/main.roc" }
@@ -97,7 +92,6 @@ Fli/main.roc" }
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_021.md:1:14:1:16:**
 ```roc
 Fli/main.roc" }
@@ -109,7 +103,6 @@ Fli/main.roc" }
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_021.md:1:16:1:16:**
 ```roc
 Fli/main.roc" }
@@ -121,7 +114,6 @@ Fli/main.roc" }
 A parsing error occurred: `expected_ty_anno_close_round_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_021.md:3:1:3:5:**
 ```roc
 Pair(a, b+ : (
@@ -133,7 +125,6 @@ Pair(a, b+ : (
 A parsing error occurred: `expected_ty_anno_close_round`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_021.md:3:15:3:15:**
 ```roc
 Pair(a, b+ : (

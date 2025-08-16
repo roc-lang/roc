@@ -95,7 +95,6 @@ This string is missing a closing quote.```roc
 A parsing error occurred: `expected_expr_close_round_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **string.md:12:1:12:2:**
 ```roc
 )
@@ -107,7 +106,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **string.md:15:1:15:2:**
 ```roc
 "\
@@ -119,7 +117,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **string.md:15:2:15:3:**
 ```roc
 "\

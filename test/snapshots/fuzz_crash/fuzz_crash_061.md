@@ -25,7 +25,6 @@ platform"
 The token **0** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-Here is the problematic code:
 **fuzz_crash_061.md:2:14:2:15:**
 ```roc
 requires{}{n:0[import S	exposing[
@@ -37,7 +36,6 @@ requires{}{n:0[import S	exposing[
 A parsing error occurred: `expected_requires_signatures_close_curly`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_061.md:2:11:2:12:**
 ```roc
 requires{}{n:0[import S	exposing[
@@ -49,7 +47,6 @@ requires{}{n:0[import S	exposing[
 A parsing error occurred: `import_exposing_no_close`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_061.md:2:16:2:22:**
 ```roc
 requires{}{n:0[import S	exposing[

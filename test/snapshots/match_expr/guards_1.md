@@ -44,7 +44,6 @@ UNUSED VARIABLE - guards_1.md:2:5:2:6
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **guards_1.md:2:7:2:7:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
@@ -56,7 +55,6 @@ Here is the problematic code:
 The token **=>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **guards_1.md:2:16:2:18:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
@@ -69,7 +67,6 @@ This `if` is being used as an expression, but it doesn't have an `else`.
 
 When `if` is used as an expression (to evaluate to a value), it must have an `else` branch to specify what value to use when the condition is `False`.
 
-Here is the problematic code:
 **guards_1.md:2:7:2:9:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
@@ -81,7 +78,6 @@ Here is the problematic code:
 The token **positive: ** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
-Here is the problematic code:
 **guards_1.md:2:20:2:30:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
@@ -93,7 +89,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **guards_1.md:2:30:2:30:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
@@ -105,7 +100,6 @@ Here is the problematic code:
 The token **${** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **guards_1.md:2:30:2:32:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
@@ -117,7 +111,6 @@ Here is the problematic code:
 The token **Num** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
-Here is the problematic code:
 **guards_1.md:2:32:2:35:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
@@ -129,7 +122,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **guards_1.md:2:43:2:43:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
@@ -141,7 +133,6 @@ Here is the problematic code:
 The token **}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **guards_1.md:2:43:2:44:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
@@ -153,7 +144,6 @@ Here is the problematic code:
 The token  is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
-Here is the problematic code:
 **guards_1.md:2:44:2:44:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
@@ -165,7 +155,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **guards_1.md:2:44:2:44:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
@@ -177,7 +166,6 @@ Here is the problematic code:
 The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **guards_1.md:2:44:2:45:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
@@ -189,7 +177,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **guards_1.md:3:7:3:7:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
@@ -201,7 +188,6 @@ Here is the problematic code:
 The token **=>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **guards_1.md:3:16:3:18:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
@@ -214,7 +200,6 @@ This `if` is being used as an expression, but it doesn't have an `else`.
 
 When `if` is used as an expression (to evaluate to a value), it must have an `else` branch to specify what value to use when the condition is `False`.
 
-Here is the problematic code:
 **guards_1.md:3:7:3:9:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
@@ -226,7 +211,6 @@ Here is the problematic code:
 The token **negative: ** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
-Here is the problematic code:
 **guards_1.md:3:20:3:30:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
@@ -238,7 +222,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **guards_1.md:3:30:3:30:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
@@ -250,7 +233,6 @@ Here is the problematic code:
 The token **${** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **guards_1.md:3:30:3:32:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
@@ -262,7 +244,6 @@ Here is the problematic code:
 The token **Num** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
-Here is the problematic code:
 **guards_1.md:3:32:3:35:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
@@ -274,7 +255,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **guards_1.md:3:43:3:43:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
@@ -286,7 +266,6 @@ Here is the problematic code:
 The token **}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **guards_1.md:3:43:3:44:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
@@ -298,7 +277,6 @@ Here is the problematic code:
 The token  is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
-Here is the problematic code:
 **guards_1.md:3:44:3:44:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
@@ -310,7 +288,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **guards_1.md:3:44:3:44:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
@@ -322,7 +299,6 @@ Here is the problematic code:
 The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **guards_1.md:3:44:3:45:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"

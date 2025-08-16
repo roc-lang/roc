@@ -18,7 +18,6 @@ MALFORMED TYPE - fuzz_crash_040.md:2:3:2:4
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_040.md:1:20:1:21:**
 ```roc
 app[]{f:platform""}{
@@ -30,7 +29,6 @@ app[]{f:platform""}{
 The token **0** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-Here is the problematic code:
 **fuzz_crash_040.md:2:3:2:4:**
 ```roc
 o:0)
@@ -42,7 +40,6 @@ o:0)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_040.md:2:4:2:5:**
 ```roc
 o:0)

@@ -26,7 +26,6 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
-Here is the problematic code:
 **fuzz_crash_031.md:1:1:1:5:**
 ```roc
 mule []
@@ -38,7 +37,6 @@ mule []
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_031.md:1:6:1:7:**
 ```roc
 mule []
@@ -50,7 +48,6 @@ mule []
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_031.md:1:7:1:8:**
 ```roc
 mule []
@@ -62,7 +59,6 @@ mule []
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_031.md:4:1:4:6:**
 ```roc
 vavar t= '
@@ -74,7 +70,6 @@ vavar t= '
 The token **'** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **fuzz_crash_031.md:4:10:4:11:**
 ```roc
 vavar t= '

@@ -45,7 +45,6 @@ UNDEFINED VARIABLE - multi_qualified_import.md:14:8:14:12
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **multi_qualified_import.md:3:17:3:22:**
 ```roc
 import json.Core.Utf8 exposing [Encoder]
@@ -57,7 +56,6 @@ import json.Core.Utf8 exposing [Encoder]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **multi_qualified_import.md:3:23:3:31:**
 ```roc
 import json.Core.Utf8 exposing [Encoder]
@@ -69,7 +67,6 @@ import json.Core.Utf8 exposing [Encoder]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **multi_qualified_import.md:3:32:3:33:**
 ```roc
 import json.Core.Utf8 exposing [Encoder]
@@ -93,7 +90,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **multi_qualified_import.md:3:40:3:41:**
 ```roc
 import json.Core.Utf8 exposing [Encoder]
@@ -105,7 +101,6 @@ import json.Core.Utf8 exposing [Encoder]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **multi_qualified_import.md:14:12:14:17:**
 ```roc
 data = json.Core.Utf8.encode("hello")
@@ -117,7 +112,6 @@ data = json.Core.Utf8.encode("hello")
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **multi_qualified_import.md:14:17:14:22:**
 ```roc
 data = json.Core.Utf8.encode("hello")
@@ -129,7 +123,6 @@ data = json.Core.Utf8.encode("hello")
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **multi_qualified_import.md:14:22:14:29:**
 ```roc
 data = json.Core.Utf8.encode("hello")
@@ -141,7 +134,6 @@ data = json.Core.Utf8.encode("hello")
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **multi_qualified_import.md:14:29:14:30:**
 ```roc
 data = json.Core.Utf8.encode("hello")
@@ -153,7 +145,6 @@ data = json.Core.Utf8.encode("hello")
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **multi_qualified_import.md:14:30:14:31:**
 ```roc
 data = json.Core.Utf8.encode("hello")
@@ -165,7 +156,6 @@ data = json.Core.Utf8.encode("hello")
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **multi_qualified_import.md:14:31:14:36:**
 ```roc
 data = json.Core.Utf8.encode("hello")
@@ -177,7 +167,6 @@ data = json.Core.Utf8.encode("hello")
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **multi_qualified_import.md:14:36:14:37:**
 ```roc
 data = json.Core.Utf8.encode("hello")
@@ -189,7 +178,6 @@ data = json.Core.Utf8.encode("hello")
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **multi_qualified_import.md:14:37:14:38:**
 ```roc
 data = json.Core.Utf8.encode("hello")

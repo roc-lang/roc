@@ -20,7 +20,6 @@ MODULE NOT FOUND - stmt_import.md:3:1:3:17
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **stmt_import.md:3:18:3:19:**
 ```roc
 import json.Json [foo, BAR]
@@ -32,7 +31,6 @@ import json.Json [foo, BAR]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **stmt_import.md:3:19:3:22:**
 ```roc
 import json.Json [foo, BAR]
@@ -44,7 +42,6 @@ import json.Json [foo, BAR]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **stmt_import.md:3:22:3:23:**
 ```roc
 import json.Json [foo, BAR]
@@ -68,7 +65,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **stmt_import.md:3:27:3:28:**
 ```roc
 import json.Json [foo, BAR]

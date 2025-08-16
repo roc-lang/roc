@@ -53,7 +53,6 @@ UNDEFINED VARIABLE - let_polymorphism_lists.md:27:12:27:20
 The token **+** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **let_polymorphism_lists.md:12:26:12:27:**
 ```roc
 all_int_list = int_list ++ my_empty_list
@@ -65,7 +64,6 @@ all_int_list = int_list ++ my_empty_list
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **let_polymorphism_lists.md:12:28:12:41:**
 ```roc
 all_int_list = int_list ++ my_empty_list
@@ -77,7 +75,6 @@ all_int_list = int_list ++ my_empty_list
 The token **+** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **let_polymorphism_lists.md:13:26:13:27:**
 ```roc
 all_str_list = str_list ++ my_empty_list
@@ -89,7 +86,6 @@ all_str_list = str_list ++ my_empty_list
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **let_polymorphism_lists.md:13:28:13:41:**
 ```roc
 all_str_list = str_list ++ my_empty_list
@@ -101,7 +97,6 @@ all_str_list = str_list ++ my_empty_list
 The token **+** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **let_polymorphism_lists.md:14:30:14:31:**
 ```roc
 all_float_list = float_list ++ my_empty_list
@@ -113,7 +108,6 @@ all_float_list = float_list ++ my_empty_list
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **let_polymorphism_lists.md:14:32:14:45:**
 ```roc
 all_float_list = float_list ++ my_empty_list

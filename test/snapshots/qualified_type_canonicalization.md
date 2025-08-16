@@ -76,7 +76,6 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:43:20:43:23
 A parsing error occurred: `import_exposing_no_close`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **qualified_type_canonicalization.md:8:1:8:7:**
 ```roc
 import Basics.Result
@@ -100,7 +99,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **qualified_type_canonicalization.md:8:14:8:21:**
 ```roc
 import Basics.Result
@@ -112,7 +110,6 @@ import Basics.Result
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **qualified_type_canonicalization.md:10:15:10:23:**
 ```roc
 import ModuleA.ModuleB exposing [TypeC]
@@ -124,7 +121,6 @@ import ModuleA.ModuleB exposing [TypeC]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **qualified_type_canonicalization.md:10:24:10:32:**
 ```roc
 import ModuleA.ModuleB exposing [TypeC]
@@ -136,7 +132,6 @@ import ModuleA.ModuleB exposing [TypeC]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **qualified_type_canonicalization.md:10:33:10:34:**
 ```roc
 import ModuleA.ModuleB exposing [TypeC]
@@ -160,7 +155,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **qualified_type_canonicalization.md:10:39:10:40:**
 ```roc
 import ModuleA.ModuleB exposing [TypeC]

@@ -851,9 +851,13 @@ pub const Cursor = struct {
     }
 
     pub fn chompEscapeSequence(self: *Cursor) !void {
+        return self.chompEscapeSequenceWithQuote(null);
+    }
+
+    pub fn chompEscapeSequenceWithQuote(self: *Cursor, quote_char: ?u8) !void {
         // Store the start position of the escape sequence (before the backslash)
         const escape_start = if (self.pos > 0) self.pos - 1 else self.pos;
-        
+
         switch (self.peek() orelse 0) {
             '\\', '"', '\'', 'n', 'r', 't', '$' => {
                 self.pos += 1;
@@ -888,8 +892,18 @@ pub const Cursor = struct {
                             self.pos += 1;
                         } else {
                             // Invalid hex character - advance to the closing paren if possible
-                            // to include the full escape sequence in the error region
-                            while (self.pos < self.buf.len and self.peek() != ')' and self.peek() != '\n') {
+                            // to include the full escape sequence in the error region, but stop
+                            // if we encounter the closing quote or newline
+                            while (self.pos < self.buf.len) {
+                                const next_char = self.peek() orelse 0;
+                                if (next_char == ')' or next_char == '\n') {
+                                    break;
+                                }
+                                if (quote_char) |qc| {
+                                    if (next_char == qc) {
+                                        break;
+                                    }
+                                }
                                 self.pos += 1;
                             }
                             if (self.pos < self.buf.len and self.peek() == ')') {
@@ -942,7 +956,7 @@ pub const Cursor = struct {
                     },
                     '\\' => {
                         state = .Enough;
-                        self.chompEscapeSequence() catch {
+                        self.chompEscapeSequenceWithQuote('\'') catch {
                             state = .Invalid;
                         };
                     },

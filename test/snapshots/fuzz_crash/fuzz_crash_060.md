@@ -36,7 +36,6 @@ This string is missing a closing quote.```roc
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_060.md:1:12:1:13:**
 ```roc
 module[]C:k||match 0{0|#
@@ -48,7 +47,6 @@ module[]C:k||match 0{0|#
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_060.md:1:13:1:14:**
 ```roc
 module[]C:k||match 0{0|#
@@ -60,7 +58,6 @@ module[]C:k||match 0{0|#
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_060.md:1:14:1:19:**
 ```roc
 module[]C:k||match 0{0|#
@@ -72,7 +69,6 @@ module[]C:k||match 0{0|#
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_060.md:1:20:1:21:**
 ```roc
 module[]C:k||match 0{0|#
@@ -84,7 +80,6 @@ module[]C:k||match 0{0|#
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_060.md:1:21:1:22:**
 ```roc
 module[]C:k||match 0{0|#
@@ -96,7 +91,6 @@ module[]C:k||match 0{0|#
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_060.md:1:22:1:23:**
 ```roc
 module[]C:k||match 0{0|#
@@ -108,7 +102,6 @@ module[]C:k||match 0{0|#
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_060.md:1:23:1:24:**
 ```roc
 module[]C:k||match 0{0|#
@@ -120,7 +113,6 @@ module[]C:k||match 0{0|#
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_060.md:2:1:2:2:**
 ```roc
 0"
@@ -132,7 +124,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_060.md:2:2:2:3:**
 ```roc
 0"
@@ -144,7 +135,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_060.md:2:3:2:3:**
 ```roc
 0"
@@ -156,7 +146,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_060.md:2:3:2:3:**
 ```roc
 0"
@@ -168,7 +157,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_060.md:3:1:3:2:**
 ```roc
 }

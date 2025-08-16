@@ -41,7 +41,6 @@ EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:9:1:12
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_032.md:3:24:3:25:**
 ```roc
 LocalStatus :lue => Loc= [Pending, Complete]
@@ -53,7 +52,6 @@ LocalStatus :lue => Loc= [Pending, Complete]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_032.md:3:26:3:27:**
 ```roc
 LocalStatus :lue => Loc= [Pending, Complete]
@@ -77,7 +75,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **fuzz_crash_032.md:3:34:3:35:**
 ```roc
 LocalStatus :lue => Loc= [Pending, Complete]
@@ -101,7 +98,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **fuzz_crash_032.md:3:44:3:45:**
 ```roc
 LocalStatus :lue => Loc= [Pending, Complete]
@@ -113,7 +109,6 @@ LocalStatus :lue => Loc= [Pending, Complete]
 Import statements must appear at the top level of a module.
 Move this import to the top of the file, after the module header but before any definitions.
 
-Here is the problematic code:
 **fuzz_crash_032.md:6:18:6:24:**
 ```roc
 olor = |color| { import Color.RGB
@@ -125,7 +120,6 @@ olor = |color| { import Color.RGB
 The token **-** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
-Here is the problematic code:
 **fuzz_crash_032.md:9:21:9:22:**
 ```roc
 Green => LocalStatus-Complete
@@ -137,7 +131,6 @@ Green => LocalStatus-Complete
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_032.md:9:22:9:22:**
 ```roc
 Green => LocalStatus-Complete

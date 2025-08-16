@@ -255,7 +255,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **fuzz_crash_027.md:40:5:40:6:**
 ```roc
 Maya) : [ #
@@ -267,7 +266,6 @@ Maya) : [ #
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_027.md:40:7:40:8:**
 ```roc
 Maya) : [ #
@@ -279,7 +277,6 @@ Maya) : [ #
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_027.md:40:9:40:10:**
 ```roc
 Maya) : [ #
@@ -291,7 +288,6 @@ Maya) : [ #
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_027.md:41:1:41:2:**
 ```roc
 ] #se
@@ -303,7 +299,6 @@ Here is the problematic code:
 A parsing error occurred: `expected_expr_apply_close_round`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_027.md:122:3:122:10:**
 ```roc
 		add_one(
@@ -315,7 +310,6 @@ Here is the problematic code:
 The token **)** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **fuzz_crash_027.md:125:3:125:4:**
 ```roc
 		),	456, # ee

@@ -29,7 +29,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **type_annotation_missing_parens.md:3:15:3:15:**
 ```roc
 nums : List U8

@@ -567,8 +567,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
 
         try report.document.addLineBreak();
         try report.document.addLineBreak();
-        try report.document.addText("Here is the problematic code:");
-        try report.document.addLineBreak();
 
         // Use the proper addSourceContext method with owned filename
         const owned_filename = try report.addOwnedString(filename);
