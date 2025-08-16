@@ -756,8 +756,7 @@ pub const Watcher = struct {
             std.os.windows.GENERIC_ALL,
         );
         if (self.impl.stop_event == null) {
-            std.log.err("Failed to create stop event", .{});
-            return;
+            std.debug.panic("Failed to create Windows stop event", .{});
         }
         defer {
             if (self.impl.stop_event) |event| {
@@ -777,8 +776,7 @@ pub const Watcher = struct {
         }
 
         var wait_handles = self.allocator.alloc(std.os.windows.HANDLE, self.impl.overlapped_data.items.len + 1) catch {
-            std.log.err("Failed to allocate wait handles", .{});
-            return;
+            std.debug.panic("Failed to allocate wait handles for {} items", .{self.impl.overlapped_data.items.len});
         };
         defer self.allocator.free(wait_handles);
 
@@ -806,6 +804,10 @@ pub const Watcher = struct {
                 const index = wait_result - std.os.windows.WAIT_OBJECT_0 - 1;
                 self.handleWindowsDirectoryEvent(index);
                 self.issueWindowsRead(index);
+            } else if (wait_result == std.os.windows.WAIT_FAILED) {
+                std.debug.panic("WaitForMultipleObjects failed with error", .{});
+            } else {
+                std.debug.panic("Unexpected wait result: {}", .{wait_result});
             }
         }
     }
@@ -827,7 +829,7 @@ pub const Watcher = struct {
             .creation = true,
         };
 
-        _ = std.os.windows.kernel32.ReadDirectoryChangesW(
+        const result = std.os.windows.kernel32.ReadDirectoryChangesW(
             handle,
             data.buffer.ptr,
             @intCast(data.buffer.len),
@@ -837,6 +839,10 @@ pub const Watcher = struct {
             &data.overlapped,
             null,
         );
+
+        if (result == 0) {
+            std.debug.panic("ReadDirectoryChangesW failed for index {}", .{index});
+        }
     }
 
     fn handleWindowsDirectoryEvent(self: *Watcher, index: usize) void {
