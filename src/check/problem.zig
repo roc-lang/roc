@@ -344,33 +344,13 @@ pub const ReportBuilder = struct {
             const actual_content = self.snapshots.getContent(types.actual_snapshot);
 
             if (self.areBothFunctionSnapshots(expected_content, actual_content)) {
-                // Both are functions - determine if it's an argument or return type mismatch
-                // Extract argument and return types
-                const expected_arg = self.extractFirstArgTypeFromFunctionSnapshot(types.expected_snapshot);
-                const actual_arg = self.extractFirstArgTypeFromFunctionSnapshot(types.actual_snapshot);
-
-                // Check if arguments match by comparing their string representations
-                var args_match = false;
-                if (expected_arg != null and actual_arg != null) {
-                    self.buf.clearRetainingCapacity();
-                    snapshot_writer.write(expected_arg.?) catch {};
-                    const expected_arg_str = self.gpa.dupe(u8, self.buf.items) catch "";
-
-                    self.buf.clearRetainingCapacity();
-                    snapshot_writer.write(actual_arg.?) catch {};
-                    const actual_arg_str = self.buf.items;
-
-                    args_match = std.mem.eql(u8, expected_arg_str, actual_arg_str);
-                    self.gpa.free(expected_arg_str);
-                }
-
-                // Only use specialized function error messages when we have constraint_origin_var
-                // which indicates this is actually about a function call argument mismatch
-                if (types.constraint_origin_var != null and !args_match) {
-                    // Argument type mismatch (e.g., str.to_utf8())
+                // When we have constraint_origin_var, it indicates this error originated from
+                // a specific constraint like a dot access (e.g., str.to_utf8()).
+                // In this case, show a specialized argument type mismatch error.
+                if (types.constraint_origin_var) |origin_var| {
                     return self.buildIncompatibleFnCallArg(snapshot_writer, types, .{
                         .fn_name = null,
-                        .arg_var = types.constraint_origin_var.?,
+                        .arg_var = origin_var,
                         .incompatible_arg_index = 0, // First argument
                         .num_args = 1, // Single argument lambda
                     });
@@ -1707,20 +1687,6 @@ pub const ReportBuilder = struct {
         };
     }
 
-    /// Check if two function snapshots have unifiable return types (simplified check)
-    fn functionSnapshotsHaveUnifiableReturnTypes(self: *Self, expected_content: snapshot.SnapshotContent, actual_content: snapshot.SnapshotContent) bool {
-        _ = self;
-        _ = expected_content;
-        _ = actual_content;
-        // For now, we'll assume that if both are function types and have reached this point,
-        // their return types are likely compatible (the user's insight was that
-        // Result(Error, [InvalidHex(Str)]) and Result(Error, [InvalidHex(Str)]_others) unify)
-        // A more sophisticated implementation would extract the return types and compare them
-
-        // Simple heuristic: if we get here, the return types probably unify
-        return true;
-    }
-
     /// Extract the first argument type from a function snapshot (if available)
     fn extractFirstArgTypeFromFunctionSnapshot(self: *Self, func_snapshot: SnapshotContentIdx) ?SnapshotContentIdx {
         const content = self.snapshots.getContent(func_snapshot);
@@ -1739,7 +1705,6 @@ pub const ReportBuilder = struct {
             else => null,
         };
     }
-
 };
 
 // store //

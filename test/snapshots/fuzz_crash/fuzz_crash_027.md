@@ -919,18 +919,18 @@ But here it's being used as:
     _[Red, Blue]_others, _arg2 -> Error_
 
 **TYPE MISMATCH**
-This expression is used in an unexpected way:
+The first argument being passed to this function has the wrong type:
 **fuzz_crash_027.md:142:10:142:41:**
 ```roc
 	stale = some_fn(arg1)?.statod()?.ned()?.recd?
 ```
 	        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The type annotation says it should have the type:
-    _List(Error) -> Result({  }, _d)_
+This argument is of type:
+    _List(Error)_
 
-But here it's being used as:
-    _List(Error) -> [Stdoline!(Str)]_others_
+But the function needs the first argument to be:
+    _List(Error)_
 
 # TOKENS
 ~~~zig

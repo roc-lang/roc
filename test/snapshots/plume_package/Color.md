@@ -136,7 +136,7 @@ This argument is of type:
     _Str_
 
 But the function needs the first argument to be:
-    _{ to_utf8: List(Num(_size3)) }_
+    _{ to_utf8: List(Num(_size2)) }_
 
 # TOKENS
 ~~~zig
