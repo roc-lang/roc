@@ -2249,6 +2249,10 @@ pub fn canonicalizeExpr(
             const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
         },
+        .multiline_string => |_| {
+            // TODO implement multiline_string CAN
+            return null;
+        },
         .list => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 

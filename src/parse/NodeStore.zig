@@ -556,6 +556,13 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.lhs = e.parts.span.start;
             node.data.rhs = e.parts.span.len;
         },
+        .multiline_string => |e| {
+            node.tag = .multiline_string;
+            node.region = e.region;
+            node.main_token = e.token;
+            node.data.lhs = e.parts.span.start;
+            node.data.rhs = e.parts.span.len;
+        },
         .list => |l| {
             node.tag = .list;
             node.region = l.region;
@@ -1371,6 +1378,16 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         },
         .string => {
             return .{ .string = .{
+                .token = node.main_token,
+                .parts = .{ .span = base.DataSpan{
+                    .start = node.data.lhs,
+                    .len = node.data.rhs,
+                } },
+                .region = node.region,
+            } };
+        },
+        .multiline_string => {
+            return .{ .multiline_string = .{
                 .token = node.main_token,
                 .parts = .{ .span = base.DataSpan{
                     .start = node.data.lhs,
