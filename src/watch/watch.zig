@@ -749,7 +749,10 @@ pub const Watcher = struct {
     }
 
     fn watchLoopWindows(self: *Watcher) void {
-        std.debug.print("Windows watch loop starting...\n", .{});
+        // Ensure is_ready is always set, even if we crash
+        defer if (!self.is_ready.load(.seq_cst)) {
+            self.is_ready.store(true, .seq_cst);
+        };
         self.impl.stop_event = std.os.windows.kernel32.CreateEventExW(
             null,
             null,
@@ -757,7 +760,9 @@ pub const Watcher = struct {
             std.os.windows.GENERIC_ALL,
         );
         if (self.impl.stop_event == null) {
-            std.debug.panic("Failed to create Windows stop event", .{});
+            // Set is_ready even on failure to prevent hang
+            self.is_ready.store(true, .seq_cst);
+            return;
         }
         defer {
             if (self.impl.stop_event) |event| {
@@ -766,21 +771,20 @@ pub const Watcher = struct {
             }
         }
 
-        std.debug.print("Adding {} paths to watch\n", .{self.paths.len});
         for (self.paths) |path| {
-            std.debug.print("Adding watch for path: {s}\n", .{path});
             self.addWatchWindows(path) catch |err| {
                 std.log.err("Failed to watch {s}: {}", .{ path, err });
             };
         }
-        std.debug.print("Added {} watches\n", .{self.impl.overlapped_data.items.len});
 
         for (0..self.impl.overlapped_data.items.len) |i| {
             self.issueWindowsRead(i);
         }
 
         var wait_handles = self.allocator.alloc(std.os.windows.HANDLE, self.impl.overlapped_data.items.len + 1) catch {
-            std.debug.panic("Failed to allocate wait handles for {} items", .{self.impl.overlapped_data.items.len});
+            // Set is_ready even on failure to prevent hang
+            self.is_ready.store(true, .seq_cst);
+            return;
         };
         defer self.allocator.free(wait_handles);
 
