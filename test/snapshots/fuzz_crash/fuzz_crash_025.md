@@ -208,7 +208,7 @@ LowerIdent(27:1-27:2),OpAssign(27:3-27:4),Int(27:5-27:29),EndOfFile(27:29-27:29)
 		(s-decl @10.1-10.14
 			(p-ident @10.1-10.2 (raw "c"))
 			(e-int @10.5-10.14 (raw "429496729")))
-		(s-malformed @10.15-11.2 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @11.1-11.2 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @11.3-11.4 (tag "statement_unexpected_token"))
 		(s-malformed @11.5-11.25 (tag "statement_unexpected_token"))
 		(s-type-anno @13.1-13.9 (name "e")
@@ -217,7 +217,7 @@ LowerIdent(27:1-27:2),OpAssign(27:3-27:4),Int(27:5-27:29),EndOfFile(27:29-27:29)
 			(p-ident @14.1-14.2 (raw "e"))
 			(e-frac @14.5-14.48 (raw "3402823669209384634633746074317682114553.14")))
 		(s-malformed @14.48-14.49 (tag "statement_unexpected_token"))
-		(s-malformed @14.50-15.2 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @15.1-15.2 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @15.3-15.4 (tag "statement_unexpected_token"))
 		(s-malformed @15.4-15.5 (tag "statement_unexpected_token"))
 		(s-type-anno @17.1-17.8 (name "g")
@@ -257,6 +257,7 @@ c = 429496729
 
 e : U128
 e = 3402823669209384634633746074317682114553.14
+
 
 
 g : I16

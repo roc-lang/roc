@@ -14,7 +14,7 @@ match value {
 # EXPECTED
 PARSE ERROR - guards_1.md:2:7:2:7
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:2:16:2:18
-PARSE ERROR - guards_1.md:2:19:2:20
+PARSE ERROR - guards_1.md:2:7:2:9
 UNEXPECTED TOKEN IN PATTERN - guards_1.md:2:20:2:30
 PARSE ERROR - guards_1.md:2:30:2:30
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:2:30:2:32
@@ -26,7 +26,7 @@ PARSE ERROR - guards_1.md:2:44:2:44
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:2:44:2:45
 PARSE ERROR - guards_1.md:3:7:3:7
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:16:3:18
-PARSE ERROR - guards_1.md:3:19:3:20
+PARSE ERROR - guards_1.md:3:7:3:9
 UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:20:3:30
 PARSE ERROR - guards_1.md:3:30:3:30
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:30:3:32
@@ -37,7 +37,7 @@ UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:44:3:44
 PARSE ERROR - guards_1.md:3:44:3:44
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:44:3:45
 UNDEFINED VARIABLE - guards_1.md:1:7:1:12
-UNKNOWN OPERATOR - guards_1.md:2:19:2:20
+UNKNOWN OPERATOR - guards_1.md:2:7:2:20
 UNUSED VARIABLE - guards_1.md:2:5:2:6
 # PROBLEMS
 **PARSE ERROR**
@@ -69,11 +69,11 @@ A parsing error occurred: `no_else`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**guards_1.md:2:19:2:20:**
+**guards_1.md:2:7:2:9:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
 ```
-                  ^
+      ^^
 
 
 **UNEXPECTED TOKEN IN PATTERN**
@@ -213,11 +213,11 @@ A parsing error occurred: `no_else`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**guards_1.md:3:19:3:20:**
+**guards_1.md:3:7:3:9:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
 ```
-                  ^
+      ^^
 
 
 **UNEXPECTED TOKEN IN PATTERN**
@@ -342,11 +342,11 @@ match value {
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 
-**guards_1.md:2:19:2:20:**
+**guards_1.md:2:7:2:20:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
 ```
-                  ^
+      ^^^^^^^^^^^^^
 
 Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
@@ -377,7 +377,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 	(branches
 		(branch @2.5-2.20
 			(p-ident @2.5-2.6 (raw "x"))
-			(e-malformed @2.19-2.20 (reason "no_else")))
+			(e-malformed @2.7-2.20 (reason "no_else")))
 		(branch @2.20-2.32
 			(p-malformed @2.20-2.30 (tag "pattern_unexpected_token"))
 			(e-malformed @2.30-2.32 (reason "expr_unexpected_token")))
@@ -389,7 +389,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 			(e-malformed @2.44-2.45 (reason "expr_unexpected_token")))
 		(branch @3.5-3.20
 			(p-ident @3.5-3.6 (raw "x"))
-			(e-malformed @3.19-3.20 (reason "no_else")))
+			(e-malformed @3.7-3.20 (reason "no_else")))
 		(branch @3.20-3.32
 			(p-malformed @3.20-3.30 (tag "pattern_unexpected_token"))
 			(e-malformed @3.30-3.32 (reason "expr_unexpected_token")))
@@ -424,5 +424,5 @@ match value {
 ~~~
 # TYPES
 ~~~clojure
-(expr @2.19-2.20 (type "Error"))
+(expr @2.7-2.20 (type "Error"))
 ~~~

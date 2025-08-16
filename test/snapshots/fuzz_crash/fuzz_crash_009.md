@@ -22,7 +22,11 @@ PARSE ERROR - fuzz_crash_009.md:2:6:2:7
 PARSE ERROR - fuzz_crash_009.md:6:12:6:12
 # PROBLEMS
 **UNCLOSED STRING**
-This string is missing a closing quote.
+This string is missing a closing quote.```roc
+    "onmo %
+```
+     ^^^^^^
+
 
 **MISSING HEADER**
 Roc files must start with a module header.

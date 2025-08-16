@@ -14,7 +14,7 @@ match value {
 # EXPECTED
 PARSE ERROR - guards_2.md:2:25:2:25
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:47:2:49
-PARSE ERROR - guards_2.md:2:50:2:51
+PARSE ERROR - guards_2.md:2:25:2:27
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:51:2:75
 PARSE ERROR - guards_2.md:2:75:2:75
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:75:2:77
@@ -26,7 +26,7 @@ PARSE ERROR - guards_2.md:2:93:2:93
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:93:2:94
 PARSE ERROR - guards_2.md:3:12:3:12
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:22:3:24
-PARSE ERROR - guards_2.md:3:25:3:26
+PARSE ERROR - guards_2.md:3:12:3:14
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:26:3:48
 PARSE ERROR - guards_2.md:3:48:3:48
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:48:3:50
@@ -37,7 +37,7 @@ UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:62:3:62
 PARSE ERROR - guards_2.md:3:62:3:62
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:62:3:63
 UNDEFINED VARIABLE - guards_2.md:1:7:1:12
-UNKNOWN OPERATOR - guards_2.md:2:50:2:51
+UNKNOWN OPERATOR - guards_2.md:2:25:2:51
 UNUSED VARIABLE - guards_2.md:2:6:2:11
 UNUSED VARIABLE - guards_2.md:1:1:1:1
 # PROBLEMS
@@ -70,11 +70,11 @@ A parsing error occurred: `no_else`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**guards_2.md:2:50:2:51:**
+**guards_2.md:2:25:2:27:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
 ```
-                                                 ^
+                        ^^
 
 
 **UNEXPECTED TOKEN IN PATTERN**
@@ -214,11 +214,11 @@ A parsing error occurred: `no_else`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**guards_2.md:3:25:3:26:**
+**guards_2.md:3:12:3:14:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
 ```
-                        ^
+           ^^
 
 
 **UNEXPECTED TOKEN IN PATTERN**
@@ -343,11 +343,11 @@ match value {
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 
-**guards_2.md:2:50:2:51:**
+**guards_2.md:2:25:2:51:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
 ```
-                                                 ^
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 
@@ -392,7 +392,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 			(p-list @2.5-2.24
 				(p-ident @2.6-2.11 (raw "first"))
 				(p-list-rest @2.13-2.23 (name "rest")))
-			(e-malformed @2.50-2.51 (reason "no_else")))
+			(e-malformed @2.25-2.51 (reason "no_else")))
 		(branch @2.51-2.77
 			(p-malformed @2.51-2.75 (tag "pattern_unexpected_token"))
 			(e-malformed @2.75-2.77 (reason "expr_unexpected_token")))
@@ -406,7 +406,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 			(p-list @3.5-3.11
 				(p-ident @3.6-3.7 (raw "x"))
 				(p-ident @3.9-3.10 (raw "y")))
-			(e-malformed @3.25-3.26 (reason "no_else")))
+			(e-malformed @3.12-3.26 (reason "no_else")))
 		(branch @3.26-3.50
 			(p-malformed @3.26-3.48 (tag "pattern_unexpected_token"))
 			(e-malformed @3.48-3.50 (reason "expr_unexpected_token")))
@@ -441,5 +441,5 @@ match value {
 ~~~
 # TYPES
 ~~~clojure
-(expr @2.50-2.51 (type "Error"))
+(expr @2.25-2.51 (type "Error"))
 ~~~

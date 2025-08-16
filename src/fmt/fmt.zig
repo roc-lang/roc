@@ -1833,7 +1833,6 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-
                 _ = try fmt.formatTypeAnno(f.ret);
             },
             .parens => |p| {

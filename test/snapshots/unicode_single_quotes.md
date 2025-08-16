@@ -57,22 +57,46 @@ INVALID TUPLE ELEMENT - :0:0:0:0
 UNKNOWN OPERATOR - unicode_single_quotes.md:20:5:20:7
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+This Unicode escape sequence is not valid.```roc
+    '\u',
+```
+     ^^
+
 
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+This Unicode escape sequence is not valid.```roc
+    '\u)',
+```
+     ^^
+
 
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+This Unicode escape sequence is not valid.```roc
+    '\u(',
+```
+     ^^^
+
 
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+This Unicode escape sequence is not valid.```roc
+    '\u()',
+```
+     ^^^^
+
 
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+This Unicode escape sequence is not valid.```roc
+    '\u(K)',
+```
+     ^^^
+
 
 **INVALID ESCAPE SEQUENCE**
-This escape sequence is not recognized.
+This escape sequence is not recognized.```roc
+'\
+```
+ ^
+
 
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **'\u'** is not expected in an expression.

@@ -29,7 +29,11 @@ UNKNOWN OPERATOR - fuzz_crash_024.md:4:8:4:9
 DUPLICATE DEFINITION - fuzz_crash_024.md:7:5:7:6
 # PROBLEMS
 **UNCLOSED STRING**
-This string is missing a closing quote.
+This string is missing a closing quote.```roc
+module [module ] { pf: platform ".-/main._]where # A
+```
+                                 ^^^^^^^^^^^^^^^^^^^
+
 
 **PARSE ERROR**
 A parsing error occurred: `exposed_item_unexpected_token`

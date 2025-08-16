@@ -23,7 +23,11 @@ PARSE ERROR - fuzz_crash_021.md:3:15:3:15
 MALFORMED TYPE - fuzz_crash_021.md:3:14:3:15
 # PROBLEMS
 **UNCLOSED STRING**
-This string is missing a closing quote.
+This string is missing a closing quote.```roc
+Fli/main.roc" }
+```
+             ^^
+
 
 **MISSING HEADER**
 Roc files must start with a module header.

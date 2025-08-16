@@ -420,13 +420,13 @@ CloseCurly(44:5-44:6),EndOfFile(44:6-44:6),
 (file @1.1-44.6
 	(malformed-header @8.1-8.7 (tag "import_exposing_no_close"))
 	(statements
-		(s-malformed @8.8-8.21 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @8.14-8.21 (tag "expected_colon_after_type_annotation"))
 		(s-import @9.1-9.13 (raw "Color"))
 		(s-import @10.1-10.15 (raw "ModuleA"))
 		(s-malformed @10.15-10.23 (tag "statement_unexpected_token"))
 		(s-malformed @10.24-10.32 (tag "statement_unexpected_token"))
 		(s-malformed @10.33-10.34 (tag "statement_unexpected_token"))
-		(s-malformed @10.34-10.40 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @10.39-10.40 (tag "expected_colon_after_type_annotation"))
 		(s-import @11.1-11.32 (raw "ExternalModule") (alias "ExtMod"))
 		(s-type-anno @14.1-14.28 (name "simpleQualified")
 			(ty @14.19-14.28 (name "Color.RGB")))

@@ -275,8 +275,8 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 				(ty @3.21-3.24 (name "Loc"))))
 		(s-malformed @3.24-3.25 (tag "statement_unexpected_token"))
 		(s-malformed @3.26-3.27 (tag "statement_unexpected_token"))
-		(s-malformed @3.27-3.35 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @3.36-3.45 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @3.34-3.35 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @3.44-3.45 (tag "expected_colon_after_type_annotation"))
 		(s-type-anno @5.1-5.16 (name "olor")
 			(ty-fn @5.8-5.16
 				(_)

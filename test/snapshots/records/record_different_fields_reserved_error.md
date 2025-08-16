@@ -16,7 +16,7 @@ type=expr
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:2:7:2:8
-PARSE ERROR - record_different_fields_reserved_error.md:2:22:2:23
+PARSE ERROR - record_different_fields_reserved_error.md:2:5:2:7
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_reserved_error.md:3:11:3:12
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:12:3:25
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:25:3:26
@@ -54,11 +54,11 @@ A parsing error occurred: `no_else`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**record_different_fields_reserved_error.md:2:22:2:23:**
+**record_different_fields_reserved_error.md:2:5:2:7:**
 ```roc
     if: "conditional",
 ```
-                     ^
+    ^^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -293,7 +293,7 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~clojure
 (e-block @1.1-8.2
 	(statements
-		(e-malformed @2.22-2.23 (reason "no_else"))
+		(e-malformed @2.5-2.23 (reason "no_else"))
 		(s-type-anno @3.5-3.12 (name "when")
 			(ty-malformed @3.11-3.12 (tag "ty_anno_unexpected_token")))
 		(e-malformed @3.12-3.25 (reason "expr_unexpected_token"))

@@ -14,10 +14,18 @@ PARSE ERROR - fuzz_crash_037.md:1:9:1:10
 PARSE ERROR - fuzz_crash_037.md:1:10:1:11
 # PROBLEMS
 **INVALID ESCAPE SEQUENCE**
-This escape sequence is not recognized.
+This escape sequence is not recognized.```roc
+module[]"\
+```
+         ^
+
 
 **UNCLOSED STRING**
-This string is missing a closing quote.
+This string is missing a closing quote.```roc
+module[]"\
+```
+         ^
+
 
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`

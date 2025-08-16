@@ -428,7 +428,7 @@ LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17
 		(s-import @4.1-4.19 (raw "http.Client"))
 		(s-malformed @4.19-4.24 (tag "statement_unexpected_token"))
 		(s-malformed @4.25-4.27 (tag "statement_unexpected_token"))
-		(s-malformed @4.28-5.7 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @5.1-5.7 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @5.8-5.13 (tag "statement_unexpected_token"))
 		(s-malformed @5.13-5.20 (tag "statement_unexpected_token"))
 		(s-malformed @5.20-5.27 (tag "statement_unexpected_token"))
@@ -517,6 +517,7 @@ module []
 import json.Parser
 
 import http.Client
+
 
 
 # Test multi-level type qualification

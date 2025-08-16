@@ -14,10 +14,10 @@ Pair2(_, y) = Pair(0, 1)
 Pair3(_, _) = Pair(0, 1)
 ~~~
 # EXPECTED
-PARSE ERROR - underscore_type_decl.md:5:1:5:6
+PARSE ERROR - underscore_type_decl.md:5:13:5:14
 PARSE ERROR - underscore_type_decl.md:5:20:5:21
 PARSE ERROR - underscore_type_decl.md:5:23:5:24
-PARSE ERROR - underscore_type_decl.md:5:15:5:19
+PARSE ERROR - underscore_type_decl.md:6:1:6:6
 PARSE ERROR - underscore_type_decl.md:6:6:6:7
 PARSE ERROR - underscore_type_decl.md:6:7:6:8
 PARSE ERROR - underscore_type_decl.md:6:8:6:9
@@ -26,7 +26,7 @@ PARSE ERROR - underscore_type_decl.md:6:11:6:12
 PARSE ERROR - underscore_type_decl.md:6:13:6:14
 PARSE ERROR - underscore_type_decl.md:6:20:6:21
 PARSE ERROR - underscore_type_decl.md:6:23:6:24
-PARSE ERROR - underscore_type_decl.md:6:15:6:19
+PARSE ERROR - underscore_type_decl.md:7:1:7:6
 PARSE ERROR - underscore_type_decl.md:7:6:7:7
 PARSE ERROR - underscore_type_decl.md:7:7:7:8
 PARSE ERROR - underscore_type_decl.md:7:8:7:9
@@ -35,7 +35,7 @@ PARSE ERROR - underscore_type_decl.md:7:11:7:12
 PARSE ERROR - underscore_type_decl.md:7:13:7:14
 PARSE ERROR - underscore_type_decl.md:7:20:7:21
 PARSE ERROR - underscore_type_decl.md:7:23:7:24
-PARSE ERROR - underscore_type_decl.md:7:15:7:19
+PARSE ERROR - underscore_type_decl.md:7:25:7:25
 MODULE NOT FOUND - underscore_type_decl.md:3:1:3:30
 # PROBLEMS
 **PARSE ERROR**
@@ -55,11 +55,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**underscore_type_decl.md:5:1:5:6:**
+**underscore_type_decl.md:5:13:5:14:**
 ```roc
 Pair1(x, _) = Pair(0, 1)
 ```
-^^^^^
+            ^
 
 
 **PARSE ERROR**
@@ -103,11 +103,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**underscore_type_decl.md:5:15:5:19:**
+**underscore_type_decl.md:6:1:6:6:**
 ```roc
-Pair1(x, _) = Pair(0, 1)
+Pair2(_, y) = Pair(0, 1)
 ```
-              ^^^^
+^^^^^
 
 
 **PARSE ERROR**
@@ -223,11 +223,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**underscore_type_decl.md:6:15:6:19:**
+**underscore_type_decl.md:7:1:7:6:**
 ```roc
-Pair2(_, y) = Pair(0, 1)
+Pair3(_, _) = Pair(0, 1)
 ```
-              ^^^^
+^^^^^
 
 
 **PARSE ERROR**
@@ -343,11 +343,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**underscore_type_decl.md:7:15:7:19:**
+**underscore_type_decl.md:7:25:7:25:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
 ```
-              ^^^^
+                        ^
 
 
 **MODULE NOT FOUND**
@@ -378,28 +378,29 @@ UpperIdent(7:1-7:6),NoSpaceOpenRound(7:6-7:7),Underscore(7:7-7:8),Comma(7:8-7:9)
 		(s-import @3.1-3.30 (raw "Module")
 			(exposing
 				(exposed-upper-ident @3.25-3.29 (text "Pair"))))
-		(s-malformed @5.1-5.14 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @5.15-6.6 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @5.13-5.14 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @6.1-6.6 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @6.6-6.7 (tag "statement_unexpected_token"))
 		(s-malformed @6.7-6.8 (tag "statement_unexpected_token"))
 		(s-malformed @6.8-6.9 (tag "statement_unexpected_token"))
 		(s-malformed @6.10-6.11 (tag "statement_unexpected_token"))
 		(s-malformed @6.11-6.12 (tag "statement_unexpected_token"))
 		(s-malformed @6.13-6.14 (tag "statement_unexpected_token"))
-		(s-malformed @6.15-7.6 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @7.1-7.6 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @7.6-7.7 (tag "statement_unexpected_token"))
 		(s-malformed @7.7-7.8 (tag "statement_unexpected_token"))
 		(s-malformed @7.8-7.9 (tag "statement_unexpected_token"))
 		(s-malformed @7.10-7.11 (tag "statement_unexpected_token"))
 		(s-malformed @7.11-7.12 (tag "statement_unexpected_token"))
 		(s-malformed @7.13-7.14 (tag "statement_unexpected_token"))
-		(s-malformed @7.15-7.25 (tag "expected_colon_after_type_annotation"))))
+		(s-malformed @7.25-7.25 (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc
 module []
 
 import Module exposing [Pair]
+
 
 
 ~~~

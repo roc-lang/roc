@@ -117,7 +117,6 @@ pub fn deinit(self: *AST, gpa: std.mem.Allocator) void {
 
 /// Convert a tokenize diagnostic to a Report for rendering
 pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator) !reporting.Report {
-    _ = self; // TODO: Use self for source information
     const title = switch (diagnostic.tag) {
         .MisplacedCarriageReturn => "MISPLACED CARRIAGE RETURN",
         .AsciiControl => "ASCII CONTROL CHARACTER",
@@ -144,6 +143,38 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
 
     var report = reporting.Report.init(allocator, title, .runtime_error);
     try report.document.addText(body);
+    
+    // Add the region information from the diagnostic if valid
+    if (diagnostic.region.start.offset < diagnostic.region.end.offset and 
+        diagnostic.region.end.offset <= self.env.source.len) {
+        
+        // Calculate line starts if not already done
+        var env = self.env.*;
+        if (env.line_starts.items.items.len == 0) {
+            try env.calcLineStarts(allocator);
+        }
+        
+        // Convert region to RegionInfo
+        const region_info = base.RegionInfo.position(
+            self.env.source,
+            env.line_starts.items.items,
+            diagnostic.region.start.offset,
+            diagnostic.region.end.offset,
+        ) catch {
+            // If we can't calculate region info, just return the report without source context
+            return report;
+        };
+        
+        // Add source region to the report
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            null, // No filename available for tokenize diagnostics
+            self.env.source,
+            env.line_starts.items.items,
+        );
+    }
+    
     return report;
 }
 

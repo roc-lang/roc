@@ -851,6 +851,9 @@ pub const Cursor = struct {
     }
 
     pub fn chompEscapeSequence(self: *Cursor) !void {
+        // Store the start position of the escape sequence (before the backslash)
+        const escape_start = if (self.pos > 0) self.pos - 1 else self.pos;
+        
         switch (self.peek() orelse 0) {
             '\\', '"', '\'', 'n', 'r', 't', '$' => {
                 self.pos += 1;
@@ -861,7 +864,7 @@ pub const Cursor = struct {
                 if (self.peek() == '(') {
                     self.pos += 1;
                 } else {
-                    self.pushMessageHere(.InvalidUnicodeEscapeSequence);
+                    self.pushMessage(.InvalidUnicodeEscapeSequence, escape_start, self.pos);
                     return error.InvalidUnicodeEscapeSequence;
                 }
 
@@ -870,7 +873,7 @@ pub const Cursor = struct {
                     if (self.peek() == ')') {
                         if (self.pos == hex_start) {
                             // Empty unicode escape sequence
-                            self.pushMessageHere(.InvalidUnicodeEscapeSequence);
+                            self.pushMessage(.InvalidUnicodeEscapeSequence, escape_start, self.pos + 1);
                             self.pos += 1;
                             return error.InvalidUnicodeEscapeSequence;
                         }
@@ -884,17 +887,19 @@ pub const Cursor = struct {
                         {
                             self.pos += 1;
                         } else {
-                            self.pushMessageHere(.InvalidUnicodeEscapeSequence);
+                            self.pushMessage(.InvalidUnicodeEscapeSequence, escape_start, self.pos);
                             return error.InvalidUnicodeEscapeSequence;
                         }
                     } else {
-                        self.pushMessageHere(.InvalidUnicodeEscapeSequence);
+                        self.pushMessage(.InvalidUnicodeEscapeSequence, escape_start, self.pos);
                         return error.InvalidUnicodeEscapeSequence;
                     }
                 }
             },
             else => {
-                self.pushMessageHere(.InvalidEscapeSequence);
+                // Include the character after the backslash in the error region
+                const end_pos = if (self.peek() != null) self.pos + 1 else self.pos;
+                self.pushMessage(.InvalidEscapeSequence, escape_start, end_pos);
                 return error.InvalidEscapeSequence;
             },
         }

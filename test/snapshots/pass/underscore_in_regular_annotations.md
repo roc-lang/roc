@@ -39,8 +39,8 @@ transform = |_, b| b
 ~~~
 # EXPECTED
 PARSE ERROR - underscore_in_regular_annotations.md:26:15:26:16
-PARSE ERROR - underscore_in_regular_annotations.md:26:17:26:21
-PARSE ERROR - underscore_in_regular_annotations.md:26:28:26:32
+PARSE ERROR - underscore_in_regular_annotations.md:26:25:26:27
+PARSE ERROR - underscore_in_regular_annotations.md:27:1:27:4
 PARSE ERROR - underscore_in_regular_annotations.md:27:5:27:6
 PARSE ERROR - underscore_in_regular_annotations.md:27:7:27:8
 PARSE ERROR - underscore_in_regular_annotations.md:27:8:27:9
@@ -82,11 +82,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**underscore_in_regular_annotations.md:26:17:26:21:**
+**underscore_in_regular_annotations.md:26:25:26:27:**
 ```roc
 map : (a -> b), List(a) -> List(b)
 ```
-                ^^^^
+                        ^^
 
 
 **PARSE ERROR**
@@ -106,11 +106,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**underscore_in_regular_annotations.md:26:28:26:32:**
+**underscore_in_regular_annotations.md:27:1:27:4:**
 ```roc
-map : (a -> b), List(a) -> List(b)
+map = |_, _| []
 ```
-                           ^^^^
+^^^
 
 
 **PARSE ERROR**
@@ -354,8 +354,8 @@ LowerIdent(31:1-31:10),OpAssign(31:11-31:12),OpBar(31:13-31:14),Underscore(31:14
 				(ty-var @26.8-26.9 (raw "a"))
 				(ty-var @26.13-26.14 (raw "b"))))
 		(s-malformed @26.15-26.16 (tag "statement_unexpected_token"))
-		(s-malformed @26.17-26.27 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @26.28-27.4 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @26.25-26.27 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @27.1-27.4 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @27.5-27.6 (tag "statement_unexpected_token"))
 		(s-malformed @27.7-27.8 (tag "statement_unexpected_token"))
 		(s-malformed @27.8-27.9 (tag "statement_unexpected_token"))
@@ -406,6 +406,7 @@ handle_result = |result|
 
 # Underscore in function arguments
 map : (a -> b)
+
 
 
 # Named underscore type variables

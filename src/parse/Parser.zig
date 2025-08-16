@@ -1174,7 +1174,8 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!?AST.State
             if (statementType == .top_level) {
                 const header = try self.parseTypeHeader();
                 if (self.peek() != .OpColon and self.peek() != .OpColonEqual) {
-                    return try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, start);
+                    // Point to the unexpected token (e.g., "U8" in "List U8")
+                    return try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
                 }
                 const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual) .nominal else .alias;
                 self.advance();
@@ -2033,7 +2034,8 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
             const condition = try self.parseExpr();
             const then = try self.parseExpr();
             if (self.peek() != .KwElse) {
-                return try self.pushMalformed(AST.Expr.Idx, .no_else, self.pos);
+                // Point to the if keyword for missing else error
+                return try self.pushMalformed(AST.Expr.Idx, .no_else, start);
             }
             self.advance();
             const else_idx = try self.parseExpr();
@@ -2336,11 +2338,9 @@ pub fn parseStringExpr(self: *Parser) Error!AST.Expr.Idx {
                 self.advance(); // Advance past the CloseString Interpolation
             },
             .MalformedStringPart => {
+                // Don't create a parser diagnostic - the tokenizer already created
+                // a more precise diagnostic with the exact error location
                 self.advance();
-                try self.pushDiagnostic(.string_unexpected_token, .{
-                    .start = self.pos,
-                    .end = self.pos,
-                });
             },
             else => {
                 // Something is broken in the tokenizer if we get here!

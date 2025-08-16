@@ -14,7 +14,11 @@ PARSE ERROR - fuzz_crash_003.md:1:3:1:4
 PARSE ERROR - fuzz_crash_003.md:1:4:1:6
 # PROBLEMS
 **UNCLOSED STRING**
-This string is missing a closing quote.
+This string is missing a closing quote.```roc
+= "te
+```
+   ^^
+
 
 **MISSING HEADER**
 Roc files must start with a module header.

@@ -233,7 +233,11 @@ TYPE MISMATCH - fuzz_crash_027.md:142:10:142:41
 Numbers cannot have leading zeros.
 
 **UNCLOSED STRING**
-This string is missing a closing quote.
+This string is missing a closing quote.```roc
+	crash "Unreachtement
+```
+	       ^^^^^^^^^^^^^
+
 
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.
@@ -1166,7 +1170,7 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 			(ty-record @37.12-39.2
 				(anno-record-field @38.2-38.11 (name "bar")
 					(ty @38.8-38.11 (name "Som")))))
-		(s-malformed @40.1-40.6 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @40.5-40.6 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @40.7-40.8 (tag "statement_unexpected_token"))
 		(s-malformed @40.9-40.10 (tag "statement_unexpected_token"))
 		(s-malformed @41.1-41.2 (tag "statement_unexpected_token"))

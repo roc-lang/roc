@@ -26,7 +26,7 @@ ar,
 # EXPECTED
 PARSE ERROR - fuzz_crash_029.md:4:4:4:5
 PARSE ERROR - fuzz_crash_029.md:5:14:5:17
-PARSE ERROR - fuzz_crash_029.md:5:9:5:13
+PARSE ERROR - fuzz_crash_029.md:5:19:5:21
 PARSE ERROR - fuzz_crash_029.md:5:22:5:23
 PARSE ERROR - fuzz_crash_029.md:5:23:5:24
 PARSE ERROR - fuzz_crash_029.md:5:24:5:25
@@ -45,7 +45,7 @@ PARSE ERROR - fuzz_crash_029.md:13:13:13:17
 PARSE ERROR - fuzz_crash_029.md:13:19:13:20
 PARSE ERROR - fuzz_crash_029.md:14:2:14:10
 PARSE ERROR - fuzz_crash_029.md:15:3:15:4
-PARSE ERROR - fuzz_crash_029.md:15:5:15:7
+PARSE ERROR - fuzz_crash_029.md:15:14:15:15
 PARSE ERROR - fuzz_crash_029.md:15:16:15:17
 PARSE ERROR - fuzz_crash_029.md:15:17:15:18
 PARSE ERROR - fuzz_crash_029.md:16:1:16:3
@@ -94,11 +94,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**fuzz_crash_029.md:5:9:5:13:**
+**fuzz_crash_029.md:5:19:5:21:**
 ```roc
 			n! : List(Str) => {}, # ure
 ```
-			     ^^^^
+			               ^^
 
 
 **PARSE ERROR**
@@ -334,11 +334,11 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**fuzz_crash_029.md:15:5:15:7:**
+**fuzz_crash_029.md:15:14:15:15:**
 ```roc
 		[ Ok(world), (n # pen
 ```
-		  ^^
+		           ^
 
 
 **PARSE ERROR**
@@ -436,7 +436,7 @@ CloseSquare(17:3-17:4),EndOfFile(17:4-17:4),
 (file @1.1-17.4
 	(malformed-header @4.4-5.8 (tag "expected_requires_rigids_close_curly"))
 	(statements
-		(s-malformed @5.9-5.21 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @5.19-5.21 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @5.22-5.23 (tag "statement_unexpected_token"))
 		(s-malformed @5.23-5.24 (tag "statement_unexpected_token"))
 		(s-malformed @5.24-5.25 (tag "statement_unexpected_token"))
@@ -456,7 +456,7 @@ CloseSquare(17:3-17:4),EndOfFile(17:4-17:4),
 		(s-malformed @13.19-13.20 (tag "statement_unexpected_token"))
 		(s-malformed @14.2-14.10 (tag "statement_unexpected_token"))
 		(s-malformed @15.3-15.4 (tag "statement_unexpected_token"))
-		(s-malformed @15.5-15.15 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @15.14-15.15 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @15.16-15.17 (tag "statement_unexpected_token"))
 		(s-malformed @15.17-15.18 (tag "statement_unexpected_token"))
 		(s-malformed @16.1-16.3 (tag "statement_unexpected_token"))

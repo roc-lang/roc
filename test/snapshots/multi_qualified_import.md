@@ -318,7 +318,7 @@ LowerIdent(14:1-14:5),OpAssign(14:6-14:7),LowerIdent(14:8-14:12),NoSpaceDotUpper
 		(s-malformed @3.17-3.22 (tag "statement_unexpected_token"))
 		(s-malformed @3.23-3.31 (tag "statement_unexpected_token"))
 		(s-malformed @3.32-3.33 (tag "statement_unexpected_token"))
-		(s-malformed @3.33-3.41 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @3.40-3.41 (tag "expected_colon_after_type_annotation"))
 		(s-type-anno @5.1-5.23 (name "json_encoder")
 			(ty @5.16-5.23 (name "Encoder")))
 		(s-decl @6.1-6.45
