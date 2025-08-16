@@ -236,7 +236,7 @@ Numbers cannot have leading zeros.
 This string is missing a closing quote.```roc
 	crash "Unreachtement
 ```
-	       ^^^^^^^^^^^^^
+	      ^^^^^^^^^^^^^^
 
 
 **PARSE ERROR**

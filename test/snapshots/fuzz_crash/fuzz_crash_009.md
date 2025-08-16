@@ -25,7 +25,7 @@ PARSE ERROR - fuzz_crash_009.md:6:12:6:12
 This string is missing a closing quote.```roc
     "onmo %
 ```
-     ^^^^^^
+    ^^^^^^^
 
 
 **MISSING HEADER**

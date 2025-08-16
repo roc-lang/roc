@@ -78,7 +78,7 @@ This escape sequence is not recognized.```roc
 This string is missing a closing quote.```roc
 "\
 ```
- ^
+^^
 
 
 **PARSE ERROR**

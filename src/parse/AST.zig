@@ -250,6 +250,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .where_expected_module => "WHERE CLAUSE ERROR",
         .where_expected_colon => "WHERE CLAUSE ERROR",
         .where_expected_constraints => "WHERE CLAUSE ERROR",
+        .no_else => "IF WITHOUT ELSE",
         else => "PARSE ERROR",
     };
 
@@ -529,6 +530,20 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addText(" function (a function that ");
             try report.document.addAnnotated("takes", .emphasized);
             try report.document.addText(" another function)");
+        },
+        .no_else => {
+            try report.document.addText("This ");
+            try report.document.addKeyword("if");
+            try report.document.addText(" is being used as an expression, but it doesn't have an ");
+            try report.document.addKeyword("else");
+            try report.document.addText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("When ");
+            try report.document.addKeyword("if");
+            try report.document.addReflowingText(" is used as an expression (to produce a value), it must have an ");
+            try report.document.addKeyword("else");
+            try report.document.addReflowingText(" branch to handle the case when the condition is false.");
         },
         else => {
             const tag_name = @tagName(diagnostic.tag);

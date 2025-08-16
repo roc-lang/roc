@@ -14,7 +14,7 @@ match value {
 # EXPECTED
 PARSE ERROR - guards_2.md:2:25:2:25
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:47:2:49
-PARSE ERROR - guards_2.md:2:25:2:27
+IF WITHOUT ELSE - guards_2.md:2:25:2:27
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:51:2:75
 PARSE ERROR - guards_2.md:2:75:2:75
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:75:2:77
@@ -26,7 +26,7 @@ PARSE ERROR - guards_2.md:2:93:2:93
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:93:2:94
 PARSE ERROR - guards_2.md:3:12:3:12
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:22:3:24
-PARSE ERROR - guards_2.md:3:12:3:14
+IF WITHOUT ELSE - guards_2.md:3:12:3:14
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:26:3:48
 PARSE ERROR - guards_2.md:3:48:3:48
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:48:3:50
@@ -65,9 +65,10 @@ Here is the problematic code:
                                               ^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `no_else`
-This is an unexpected parsing error. Please check your syntax.
+**IF WITHOUT ELSE**
+This `if` is being used as an expression, but it doesn't have an `else`.
+
+When `if` is used as an expression (to produce a value), it must have an `else` branch to handle the case when the condition is false.
 
 Here is the problematic code:
 **guards_2.md:2:25:2:27:**
@@ -209,9 +210,10 @@ Here is the problematic code:
                      ^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `no_else`
-This is an unexpected parsing error. Please check your syntax.
+**IF WITHOUT ELSE**
+This `if` is being used as an expression, but it doesn't have an `else`.
+
+When `if` is used as an expression (to produce a value), it must have an `else` branch to handle the case when the condition is false.
 
 Here is the problematic code:
 **guards_2.md:3:12:3:14:**

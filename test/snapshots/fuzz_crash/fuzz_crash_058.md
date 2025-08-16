@@ -12,7 +12,11 @@ app[]{f:platform"",r:"
 UNCLOSED STRING - :0:0:0:0
 # PROBLEMS
 **UNCLOSED STRING**
-This string is missing a closing quote.
+This string is missing a closing quote.```roc
+app[]{f:platform"",r:"
+```
+                     ^
+
 
 # TOKENS
 ~~~zig

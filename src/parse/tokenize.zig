@@ -1375,7 +1375,9 @@ pub const Tokenizer = struct {
                     self.cursor.pos += 1;
                     if (self.string_interpolation_stack.pop()) |last| {
                         try self.pushTokenNormalHere(gpa, .CloseStringInterpolation, start);
-                        try self.tokenizeStringLikeLiteralBody(gpa, last);
+                        // For string interpolations, we don't have the original opening quote position
+                        // so we use the current position as a fallback
+                        try self.tokenizeStringLikeLiteralBody(gpa, last, self.cursor.pos);
                     } else {
                         try self.pushTokenNormalHere(gpa, .CloseCurly, start);
                     }
@@ -1507,14 +1509,14 @@ pub const Tokenizer = struct {
         } else {
             try self.pushTokenNormalHere(gpa, .StringStart, start);
         }
-        try self.tokenizeStringLikeLiteralBody(gpa, kind);
+        try self.tokenizeStringLikeLiteralBody(gpa, kind, start);
     }
 
     // Moving curly chars to constants because some editors hate them inline.
     const open_curly = '{';
     const close_curly = '}';
 
-    pub fn tokenizeStringLikeLiteralBody(self: *Tokenizer, gpa: std.mem.Allocator, kind: StringKind) std.mem.Allocator.Error!void {
+    pub fn tokenizeStringLikeLiteralBody(self: *Tokenizer, gpa: std.mem.Allocator, kind: StringKind, opening_quote_pos: usize) std.mem.Allocator.Error!void {
         const start = self.cursor.pos;
         var string_part_tag: Token.Tag = .StringPart;
         while (self.cursor.pos < self.cursor.buf.len) {
@@ -1529,7 +1531,8 @@ pub const Tokenizer = struct {
             } else if (c == '\n') {
                 try self.pushTokenNormalHere(gpa, string_part_tag, start);
                 if (kind == .single_line) {
-                    self.cursor.pushMessage(.UnclosedString, @intCast(start), @intCast(self.cursor.pos));
+                    // Include the opening quote in the error region
+                    self.cursor.pushMessage(.UnclosedString, @intCast(opening_quote_pos), @intCast(self.cursor.pos));
                     try self.pushTokenNormalHere(gpa, .StringEnd, self.cursor.pos);
                 }
                 return;
@@ -1558,7 +1561,8 @@ pub const Tokenizer = struct {
             }
         }
         if (kind == .single_line) {
-            self.cursor.pushMessage(.UnclosedString, start, self.cursor.pos);
+            // Include the opening quote in the error region
+            self.cursor.pushMessage(.UnclosedString, @intCast(opening_quote_pos), @intCast(self.cursor.pos));
         }
         try self.pushTokenNormalHere(gpa, string_part_tag, start);
     }

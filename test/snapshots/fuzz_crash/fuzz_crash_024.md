@@ -32,7 +32,7 @@ DUPLICATE DEFINITION - fuzz_crash_024.md:7:5:7:6
 This string is missing a closing quote.```roc
 module [module ] { pf: platform ".-/main._]where # A
 ```
-                                 ^^^^^^^^^^^^^^^^^^^
+                                ^^^^^^^^^^^^^^^^^^^^
 
 
 **PARSE ERROR**

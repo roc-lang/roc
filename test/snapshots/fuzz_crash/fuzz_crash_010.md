@@ -28,7 +28,7 @@ ASCII control characters are not allowed in Roc source code.
 This string is missing a closing quote.```roc
     "on        (string 'onmo %')))
 ```
-     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **MISSING HEADER**

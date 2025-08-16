@@ -10,12 +10,13 @@ module []
 foo = if tru 0
 ~~~
 # EXPECTED
-PARSE ERROR - expr_if_missing_else.md:3:7:3:9
+IF WITHOUT ELSE - expr_if_missing_else.md:3:7:3:9
 UNKNOWN OPERATOR - expr_if_missing_else.md:3:7:3:15
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `no_else`
-This is an unexpected parsing error. Please check your syntax.
+**IF WITHOUT ELSE**
+This `if` is being used as an expression, but it doesn't have an `else`.
+
+When `if` is used as an expression (to produce a value), it must have an `else` branch to handle the case when the condition is false.
 
 Here is the problematic code:
 **expr_if_missing_else.md:3:7:3:9:**

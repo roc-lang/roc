@@ -26,7 +26,11 @@ PARSE ERROR - fuzz_crash_060.md:3:1:3:2
 UNDECLARED TYPE VARIABLE - fuzz_crash_060.md:1:11:1:12
 # PROBLEMS
 **UNCLOSED STRING**
-This string is missing a closing quote.
+This string is missing a closing quote.```roc
+0"
+```
+ ^
+
 
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`

@@ -24,7 +24,7 @@ module[]"\
 This string is missing a closing quote.```roc
 module[]"\
 ```
-         ^
+        ^^
 
 
 **PARSE ERROR**

@@ -16,7 +16,7 @@ type=expr
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:2:7:2:8
-PARSE ERROR - record_different_fields_reserved_error.md:2:5:2:7
+IF WITHOUT ELSE - record_different_fields_reserved_error.md:2:5:2:7
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_reserved_error.md:3:11:3:12
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:12:3:25
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:25:3:26
@@ -49,9 +49,10 @@ Here is the problematic code:
       ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `no_else`
-This is an unexpected parsing error. Please check your syntax.
+**IF WITHOUT ELSE**
+This `if` is being used as an expression, but it doesn't have an `else`.
+
+When `if` is used as an expression (to produce a value), it must have an `else` branch to handle the case when the condition is false.
 
 Here is the problematic code:
 **record_different_fields_reserved_error.md:2:5:2:7:**

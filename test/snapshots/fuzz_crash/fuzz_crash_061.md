@@ -15,7 +15,11 @@ PARSE ERROR - fuzz_crash_061.md:2:11:2:12
 PARSE ERROR - fuzz_crash_061.md:2:16:2:22
 # PROBLEMS
 **UNCLOSED STRING**
-This string is missing a closing quote.
+This string is missing a closing quote.```roc
+platform"
+```
+        ^
+
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **0** is not expected in a type annotation.

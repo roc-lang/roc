@@ -26,7 +26,7 @@ MALFORMED TYPE - fuzz_crash_021.md:3:14:3:15
 This string is missing a closing quote.```roc
 Fli/main.roc" }
 ```
-             ^^
+            ^^^
 
 
 **MISSING HEADER**

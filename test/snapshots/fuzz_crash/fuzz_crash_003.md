@@ -17,7 +17,7 @@ PARSE ERROR - fuzz_crash_003.md:1:4:1:6
 This string is missing a closing quote.```roc
 = "te
 ```
-   ^^
+  ^^^
 
 
 **MISSING HEADER**
