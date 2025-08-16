@@ -652,12 +652,12 @@ combineResults = |result1, result2|
 		(patt @14.1-14.10 (type "Error -> Result(Error, Error)"))
 		(patt @23.1-23.7 (type "Error"))
 		(patt @27.1-27.15 (type "Error, Str -> Result(Error, Error)"))
-		(patt @31.1-31.15 (type "Result(ok, err), Result(ok, err) -> Result((ok, ok), err)")))
+		(patt @31.1-31.15 (type "Result(a, err), Result(b, err) -> Result((a, b), err)")))
 	(expressions
 		(expr @8.18-8.44 (type "Error -> Error"))
 		(expr @11.13-11.38 (type "Str -> Error"))
 		(expr @14.13-20.2 (type "Error -> Result(Error, Error)"))
 		(expr @23.10-23.28 (type "Error"))
 		(expr @27.18-27.82 (type "Error, Str -> Result(Error, Error)"))
-		(expr @31.18-39.6 (type "Result(ok, err), Result(ok, err) -> Result((ok, ok), err)"))))
+		(expr @31.18-39.6 (type "Result(a, err), Result(b, err) -> Result((a, b), err)"))))
 ~~~

@@ -105,7 +105,7 @@ The unused variable is declared here:
 ```roc
 		Z1((a, b,)) => a
 ```
-         ^
+		       ^
 
 
 **UNUSED VARIABLE**
@@ -117,7 +117,7 @@ The unused variable is declared here:
 ```roc
 		Z2(a, b,) => a
 ```
-        ^
+		      ^
 
 
 **UNUSED VARIABLE**
@@ -129,7 +129,7 @@ The unused variable is declared here:
 ```roc
 		Z3({ a, b, }) => a
 ```
-          ^
+		        ^
 
 
 **UNUSED VARIABLE**
@@ -141,7 +141,7 @@ The unused variable is declared here:
 ```roc
 		Z4([a, b,]) => a
 ```
-         ^
+		       ^
 
 
 **UNUSED VARIABLE**
@@ -153,7 +153,7 @@ The unused variable is declared here:
 ```roc
 	h1 = { h11: x, h12: x, h13: { h131: x, h132: y, }, }
 ```
- ^^
+	^^
 
 
 **UNUSED VARIABLE**
@@ -165,7 +165,7 @@ The unused variable is declared here:
 ```roc
 	h2 = h(x, y,)
 ```
- ^^
+	^^
 
 
 **UNUSED VARIABLE**
@@ -177,7 +177,7 @@ The unused variable is declared here:
 ```roc
 	h3 = A(x, y,)
 ```
- ^^
+	^^
 
 
 **UNUSED VARIABLE**
@@ -189,7 +189,7 @@ The unused variable is declared here:
 ```roc
 	h4 = [x, y,]
 ```
- ^^
+	^^
 
 
 **UNUSED VARIABLE**
@@ -201,7 +201,7 @@ The unused variable is declared here:
 ```roc
 	h5 = (x, y,)
 ```
- ^^
+	^^
 
 
 # TOKENS

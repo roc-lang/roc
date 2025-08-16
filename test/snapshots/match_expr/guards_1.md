@@ -49,7 +49,7 @@ Here is the problematic code:
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
 ```
-      
+      ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -97,7 +97,7 @@ Here is the problematic code:
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
 ```
-                             
+                             ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -133,7 +133,7 @@ Here is the problematic code:
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
 ```
-                                          
+                                          ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -157,7 +157,7 @@ Here is the problematic code:
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
 ```
-                                           
+                                           ^
 
 
 **PARSE ERROR**
@@ -169,7 +169,7 @@ Here is the problematic code:
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
 ```
-                                           
+                                           ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -193,7 +193,7 @@ Here is the problematic code:
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
 ```
-      
+      ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -241,7 +241,7 @@ Here is the problematic code:
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
 ```
-                             
+                             ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -277,7 +277,7 @@ Here is the problematic code:
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
 ```
-                                          
+                                          ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -301,7 +301,7 @@ Here is the problematic code:
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
 ```
-                                           
+                                           ^
 
 
 **PARSE ERROR**
@@ -313,7 +313,7 @@ Here is the problematic code:
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
 ```
-                                           
+                                           ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**

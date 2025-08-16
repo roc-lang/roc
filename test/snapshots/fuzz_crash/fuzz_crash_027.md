@@ -227,7 +227,7 @@ UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
-TYPE MISMATCH - fuzz_crash_027.md:99:9:99:38
+TYPE MISMATCH - fuzz_crash_027.md:142:10:142:41
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -304,7 +304,7 @@ Here is the problematic code:
 ```roc
 		add_one(
 ```
-  ^^^^^^^
+		^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -316,7 +316,7 @@ Here is the problematic code:
 ```roc
 		),	456, # ee
 ```
-  ^
+		^
 
 
 **UNDECLARED TYPE**
@@ -373,7 +373,7 @@ This type is referenced here:
 ```roc
 	bar : Som# Afld
 ```
-       ^^^
+	      ^^^
 
 
 **UNDECLARED TYPE**
@@ -384,7 +384,7 @@ This type is referenced here:
 ```roc
 	bar : Som
 ```
-       ^^^
+	      ^^^
 
 
 **UNDECLARED TYPE**
@@ -473,7 +473,7 @@ This type is referenced here:
 ```roc
 	Bar, #
 ```
- ^^^
+	^^^
 
 
 **UNDECLARED TYPE**
@@ -484,7 +484,7 @@ This type is referenced here:
 ```roc
 	Baz, #m
 ```
- ^^^
+	^^^
 
 
 **EMPTY TUPLE NOT ALLOWED**
@@ -505,7 +505,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 			x x
 ```
-   ^
+			^
 
 
 **UNDEFINED VARIABLE**
@@ -516,7 +516,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 			x x
 ```
-     ^
+			  ^
 
 
 **UNUSED VARIABLE**
@@ -528,7 +528,7 @@ The unused variable is declared here:
 ```roc
 	match a {lue | Red => {
 ```
-          ^^^
+	         ^^^
 
 
 **UNDEFINED VARIABLE**
@@ -539,7 +539,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 			=> ment
 ```
-      ^^^^
+			   ^^^^
 
 
 **UNUSED VARIABLE**
@@ -551,7 +551,7 @@ The unused variable is declared here:
 ```roc
 # Thnt!
 ```
-
+^
 
 
 **NOT IMPLEMENTED**
@@ -568,7 +568,7 @@ The unused variable is declared here:
 ```roc
 # Thnt!
 ```
-
+^
 
 
 **UNUSED VARIABLE**
@@ -602,7 +602,7 @@ The unused variable is declared here:
 ```roc
 		{ foo: 1, bar: 2, ..rest } => 12->add(34)
 ```
-                    ^^^^^^
+		                  ^^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -624,7 +624,7 @@ The unused variable is declared here:
 ```roc
 	b,
 ```
- ^
+	^
 
 
 **UNDEFINED VARIABLE**
@@ -635,7 +635,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	blah == 1 # Commnt
 ```
- ^^^^
+	^^^^
 
 
 **UNDECLARED TYPE**
@@ -657,7 +657,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	expect blah == 1
 ```
-        ^^^^
+	       ^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -668,7 +668,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	some_func(
 ```
- ^^^^^^^^^
+	^^^^^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -684,7 +684,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 ```
-                                                              ^^^^^^
+	                                                             ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -695,7 +695,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 ```
-                                         ^^^^^^
+	                                        ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -706,7 +706,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 		tag1,
 ```
-  ^^^^
+		^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -717,7 +717,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 		(nested, tuple),
 ```
-   ^^^^^^
+		 ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -728,7 +728,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ```
-             ^^^
+	            ^^^
 
 
 **NOT IMPLEMENTED**
@@ -744,7 +744,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 			Num.toStr(number) # on expr
 ```
-   ^^^^^^^^^
+			^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -756,7 +756,7 @@ The unused variable is declared here:
 ```roc
 	tag_with = Ok(number)
 ```
- ^^^^^^^^
+	^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -768,7 +768,7 @@ The unused variable is declared here:
 ```roc
 	ited = "Hello, ${world}"
 ```
- ^^^^
+	^^^^
 
 
 **UNUSED VARIABLE**
@@ -780,7 +780,7 @@ The unused variable is declared here:
 ```roc
 	list = [
 ```
- ^^^^
+	^^^^
 
 
 **UNUSED VARIABLE**
@@ -792,7 +792,7 @@ The unused variable is declared here:
 ```roc
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 ```
- ^^^^^^
+	^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -804,7 +804,7 @@ The unused variable is declared here:
 ```roc
 	m_tuple = (
 ```
- ^^^^^^^
+	^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -816,7 +816,7 @@ The unused variable is declared here:
 ```roc
 	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ```
- ^^^^^
+	^^^^^
 
 
 **UNUSED VARIABLE**
@@ -828,7 +828,7 @@ The unused variable is declared here:
 ```roc
 	stale = some_fn(arg1)?.statod()?.ned()?.recd?
 ```
- ^^^^^
+	^^^^^
 
 
 **UNDECLARED TYPE**
@@ -912,25 +912,25 @@ This expression is used in an unexpected way:
 	)
 ```
 
-It is of type:
+It has the type:
     __arg -> _ret_
 
-But you are trying to use it as:
+But here it's being used as:
     _[Red, Blue]_others, _arg2 -> Error_
 
 **TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:99:9:99:38:**
+The first argument being passed to this function has the wrong type:
+**fuzz_crash_027.md:142:10:142:41:**
 ```roc
-main! : List(String) -> Result({}, _)
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
 ```
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-It is of type:
-    _List(Error) -> Result({  }, _d)_
+This argument has the type:
+    _List(Error)_
 
-But you are trying to use it as:
-    _List(Error) -> [Stdoline!(Str)]_others_
+But the function needs the first argument to be:
+    _List(Error)_
 
 # TOKENS
 ~~~zig

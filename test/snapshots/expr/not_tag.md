@@ -18,10 +18,10 @@ This expression is used in an unexpected way:
 ```
 ^^^^^^^
 
-It is of type:
+It has the type:
     _Bool_
 
-But you are trying to use it as:
+But here it's being used as:
     _[C(Num(_size))]_others_
 
 # TOKENS

@@ -142,7 +142,7 @@ Here is the problematic code:
 ```roc
 Green => LocalStatus-Complete
 ```
-                     
+                     ^
 
 
 **UNDECLARED TYPE VARIABLE**

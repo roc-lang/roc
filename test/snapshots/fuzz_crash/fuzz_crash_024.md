@@ -100,7 +100,7 @@ Here is the problematic code:
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
 ```
-                                                    
+                                                    ^
 
 
 **PARSE ERROR**

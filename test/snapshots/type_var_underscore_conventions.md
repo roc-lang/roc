@@ -104,10 +104,10 @@ ending_underscore : List(elem_) -> elem_
 ```
                                    ^^^^^
 
-It is of type:
+It has the type:
     _elem__
 
-But you are trying to use it as:
+But here it's being used as:
     _Str_
 
 # TOKENS

@@ -25,7 +25,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	some_func(
 ```
- ^^^^^^^^^
+	^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -36,7 +36,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 		a, # This is a comment
 ```
-  ^
+		^
 
 
 **UNDEFINED VARIABLE**
@@ -47,7 +47,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 		b,
 ```
-  ^
+		^
 
 
 # TOKENS

@@ -65,7 +65,7 @@ But _Result_ was already declared here:
 ```roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 ```
-
+^
 
 
 **UNUSED VARIABLE**

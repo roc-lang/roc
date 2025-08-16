@@ -110,10 +110,10 @@ deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
 ```
                                                       ^
 
-It is of type:
+It has the type:
     _a_
 
-But you are trying to use it as:
+But here it's being used as:
     _{}_
 
 # TOKENS

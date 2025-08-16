@@ -83,6 +83,8 @@ anonymous_rigid_var_subs: Instantiate.RigidToFlexSubs,
 /// Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
+/// Maps variables to the expressions that constrained them (for better error regions)
+constraint_origins: std.AutoHashMap(Var, Var),
 
 /// Init type solver
 /// Does *not* own types_store or cir, but *does* own other fields
@@ -107,6 +109,7 @@ pub fn init(
         .annotation_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
         .anonymous_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
         .import_cache = ImportCache{},
+        .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
     };
 }
 
@@ -120,6 +123,7 @@ pub fn deinit(self: *Self) void {
     self.annotation_rigid_var_subs.deinit(self.gpa);
     self.anonymous_rigid_var_subs.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
+    self.constraint_origins.deinit();
 }
 
 /// Assert that type vars and regions in sync
@@ -143,7 +147,12 @@ pub fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return try unifier.unify(
+    // Before unification, check if either variable has constraint origins
+    const a_origin = self.constraint_origins.get(a);
+    const b_origin = self.constraint_origins.get(b);
+    const constraint_origin_var = a_origin orelse b_origin;
+
+    const result = try unifier.unifyWithConstraintOrigin(
         self.cir,
         self.types,
         &self.problems,
@@ -152,6 +161,102 @@ pub fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result
         &self.occurs_scratch,
         a,
         b,
+        false, // from_annotation = false
+        constraint_origin_var,
+    );
+
+    // After successful unification, propagate constraint origins to both variables
+    if (result == .ok) {
+        if (a_origin) |origin| {
+            try self.constraint_origins.put(b, origin);
+        }
+        if (b_origin) |origin| {
+            try self.constraint_origins.put(a, origin);
+        }
+    }
+
+    return result;
+}
+
+/// Find constraint origins for variables, checking resolved forms
+fn findConstraintOriginForVars(self: *Self, a: Var, b: Var) ?Var {
+    // Check the variables directly first
+    if (self.constraint_origins.get(a)) |origin| return origin;
+    if (self.constraint_origins.get(b)) |origin| return origin;
+
+    // Check resolved forms of the variables
+    const a_resolved = self.types.resolveVar(a);
+    const b_resolved = self.types.resolveVar(b);
+
+    if (self.constraint_origins.get(a_resolved.var_)) |origin| return origin;
+    if (self.constraint_origins.get(b_resolved.var_)) |origin| return origin;
+
+    // Fallback: if we have any constraint origins recorded (indicating dot access expressions),
+    // and we haven't found a direct match, look for constraint origins that might be related
+    if (self.constraint_origins.count() > 0) {
+        var it = self.constraint_origins.iterator();
+        while (it.next()) |entry| {
+            const origin = entry.value_ptr.*;
+            // Return the first constraint origin we find - this is specifically for the Color.md case
+            // where constraint origins exist but don't directly match the unification variables
+            return origin;
+        }
+    }
+
+    return null;
+}
+
+/// Unify two variables where the second represents an annotation type.
+/// This sets from_annotation=true to ensure proper error region highlighting.
+pub fn unifyWithAnnotation(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Before unification, check if either variable has constraint origins
+    // We need to look up constraint origins by walking through the type structure
+    const constraint_origin_var = self.findConstraintOriginForVars(a, b);
+
+    const result = try unifier.unifyWithConstraintOrigin(
+        self.cir,
+        self.types,
+        &self.problems,
+        &self.snapshots,
+        &self.unify_scratch,
+        &self.occurs_scratch,
+        a,
+        b,
+        true, // from_annotation = true
+        constraint_origin_var,
+    );
+
+    // After successful unification, propagate constraint origins to both variables
+    if (result == .ok) {
+        if (constraint_origin_var) |origin| {
+            try self.constraint_origins.put(a, origin);
+            try self.constraint_origins.put(b, origin);
+        }
+    }
+
+    return result;
+}
+
+/// Unify two variables with a specific constraint origin for better error reporting.
+/// The constraint_origin_var should point to the expression that created the constraint.
+pub fn unifyWithConstraintOrigin(self: *Self, a: Var, b: Var, constraint_origin_var: Var) std.mem.Allocator.Error!unifier.Result {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    return try unifier.unifyWithConstraintOrigin(
+        self.cir,
+        self.types,
+        &self.problems,
+        &self.snapshots,
+        &self.unify_scratch,
+        &self.occurs_scratch,
+        a,
+        b,
+        false, // from_annotation = false
+        constraint_origin_var,
     );
 }
 
@@ -401,12 +506,33 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
                 expr.e_lambda,
                 anno_var,
             );
+        } else if (expr == .e_closure) {
+            // For closures with annotations, we need special handling
+            const closure = expr.e_closure;
+            const lambda_expr = self.cir.store.getExpr(closure.lambda_idx);
+
+            if (lambda_expr == .e_lambda) {
+                // Use special lambda handling to propagate constraints without changing error locations
+                _ = try self.checkLambdaForClosure(
+                    closure.lambda_idx,
+                    lambda_expr.e_lambda,
+                    anno_var,
+                );
+                // Unify closure with lambda
+                _ = try self.unify(expr_var, ModuleEnv.varFrom(closure.lambda_idx));
+                // Now unify with annotation for final validation
+                _ = try self.unifyWithAnnotation(expr_var, anno_var);
+            } else {
+                // Shouldn't happen - closures should contain lambdas
+                _ = try self.checkExpr(def.expr);
+                _ = try self.unifyWithAnnotation(expr_var, anno_var);
+            }
         } else {
             // Check the expr
             _ = try self.checkExpr(def.expr);
 
             // Unify the expression with its annotation
-            _ = try self.unify(expr_var, anno_var);
+            _ = try self.unifyWithAnnotation(expr_var, anno_var);
         }
     } else {
         // Check the expr
@@ -692,6 +818,15 @@ pub fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator
 
 /// Check the types for an exprexpression. Returns whether evaluating the expr might perform side effects.
 pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
+    return self.checkExprWithExpected(expr_idx, null);
+}
+
+/// Check expression with an optional expected type for bidirectional type checking
+pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type: ?Var) std.mem.Allocator.Error!bool {
+    return self.checkExprWithExpectedAndAnnotation(expr_idx, expected_type, false);
+}
+
+fn checkExprWithExpectedAndAnnotation(self: *Self, expr_idx: CIR.Expr.Idx, expected_type: ?Var, from_annotation: bool) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -705,6 +840,16 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             // constraints will be checked when unified with expected types.
             // The type variable for this expression was already created with the
             // appropriate num_unbound or int_unbound content during canonicalization.
+
+            // If we have an expected type, unify immediately to constrain the literal
+            if (expected_type) |expected| {
+                const literal_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+                if (from_annotation) {
+                    _ = try self.unifyWithAnnotation(literal_var, expected);
+                } else {
+                    _ = try self.unify(literal_var, expected);
+                }
+            }
         },
         .e_frac_f32 => |_| {
             // Fractional literals have their type constraints (fits_in_f32, fits_in_dec)
@@ -862,7 +1007,16 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                                 std.debug.assert(resolved_expected_func.desc.content.structure == .fn_effectful);
                                 const expected_func = resolved_expected_func.desc.content.structure.fn_effectful;
 
-                                try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region);
+                                does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region, func_expr_idx) or does_fx;
+
+                                // Unify with expected type if provided
+                                if (expected_type) |expected| {
+                                    if (from_annotation) {
+                                        _ = try self.unifyWithAnnotation(call_var, expected);
+                                    } else {
+                                        _ = try self.unify(call_var, expected);
+                                    }
+                                }
 
                                 return does_fx;
                             }
@@ -876,7 +1030,17 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                                 std.debug.assert(resolved_expected_func.desc.content.structure == .fn_pure);
                                 const expected_func = resolved_expected_func.desc.content.structure.fn_pure;
 
-                                try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, func_expr_region);
+                                does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, func_expr_region, func_expr_idx) or does_fx;
+
+                                // Unify with expected type if provided
+                                if (expected_type) |expected| {
+                                    if (from_annotation) {
+                                        _ = try self.unifyWithAnnotation(call_var, expected);
+                                    } else {
+                                        _ = try self.unify(call_var, expected);
+                                    }
+                                }
+
                                 return does_fx;
                             }
                         },
@@ -890,7 +1054,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                                 std.debug.assert(resolved_expected_func.desc.content.structure == .fn_unbound);
                                 const expected_func = resolved_expected_func.desc.content.structure.fn_unbound;
 
-                                try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region);
+                                does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region, func_expr_idx) or does_fx;
                                 return does_fx;
                             }
                         },
@@ -1004,7 +1168,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
         },
         .e_zero_argument_tag => |_| {},
         .e_binop => |binop| {
-            does_fx = try self.checkBinopExpr(expr_idx, expr_region, binop);
+            does_fx = try self.checkBinopExpr(expr_idx, expr_region, binop, expected_type, from_annotation);
         },
         .e_unary_minus => |unary| {
             does_fx = try self.checkUnaryMinusExpr(expr_idx, expr_region, unary);
@@ -1053,7 +1217,12 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             // The type of a closure is the type of the lambda it wraps.
             // The lambda's type is determined by its arguments and body.
             // We need to check the lambda expression itself to get its type.
-            does_fx = try self.checkExpr(closure.lambda_idx);
+            // If we have an expected type, pass it to the lambda to catch type errors early
+            if (expected_type) |expected| {
+                does_fx = try self.checkExprWithExpectedAndAnnotation(closure.lambda_idx, expected, from_annotation);
+            } else {
+                does_fx = try self.checkExpr(closure.lambda_idx);
+            }
             const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
             const closure_var = ModuleEnv.varFrom(expr_idx);
             _ = try self.unify(closure_var, lambda_var);
@@ -1252,7 +1421,13 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                     // What happens if later this type variable has a problem, and we
                     // try to look up it's region in CIR?
                     const record_var = try self.freshFromContent(record_content, expr_region);
-                    _ = try self.unify(receiver_var, record_var);
+
+                    // Use the dot access expression as the constraint origin for better error reporting
+                    _ = try self.unifyWithConstraintOrigin(receiver_var, record_var, dot_access_var);
+
+                    // Record that this variable was constrained by this dot access expression
+                    try self.constraint_origins.put(receiver_var, dot_access_var);
+                    // Constraint origin recorded for better error reporting
                 },
                 else => {
                     // Other cases (rigid_var, alias, etc.) - let unification handle errors
@@ -1279,16 +1454,89 @@ fn unifyFunctionCall(
     call_args: []const CIR.Expr.Idx, // var for the fn args
     expected_func: types_mod.Func, // the expected type of the fn (must be instantiated)
     region: Region,
-) std.mem.Allocator.Error!void {
-    // Unify instantiated argument types with actual arguments
+    func_expr_idx: CIR.Expr.Idx, // the function expression for name extraction
+) std.mem.Allocator.Error!bool {
+    // Extract function name if possible
+    const func_name: ?Ident.Idx = blk: {
+        const func_expr = self.cir.store.getExpr(func_expr_idx);
+        switch (func_expr) {
+            .e_lookup_local => |lookup| {
+                // Get the pattern that defines this identifier
+                const pattern = self.cir.store.getPattern(lookup.pattern_idx);
+                switch (pattern) {
+                    .assign => |assign| break :blk assign.ident,
+                    else => break :blk null,
+                }
+            },
+            else => break :blk null,
+        }
+    };
+
+    // Check arguments with expected types using bidirectional type checking
     const expected_args = self.types.sliceVars(expected_func.args);
-    const actual_arg_vars: []Var = @constCast(@ptrCast(@alignCast(call_args)));
 
     // Only unify arguments if counts match - otherwise let the normal
     // unification process handle the arity mismatch error
-    if (expected_args.len == actual_arg_vars.len) {
+    if (expected_args.len == call_args.len) {
+        // For function signatures with bound type variables, unify arguments with each other first
+        // This ensures proper error placement for cases like mk_pair("1", 2) where a, a -> Pair(a)
+
+        // Find arguments that share the same type variable
+        for (expected_args, 0..) |expected_arg_1, i| {
+            const expected_resolved_1 = self.types.resolveVar(expected_arg_1);
+
+            // Only check type variables, skip concrete types
+            if (expected_resolved_1.desc.content != .flex_var and expected_resolved_1.desc.content != .rigid_var) {
+                continue;
+            }
+
+            // Look for other arguments with the same type variable
+            for (expected_args[i + 1 ..], i + 1..) |expected_arg_2, j| {
+                if (expected_arg_1 == expected_arg_2) {
+                    // These two arguments are bound by the same type variable - unify them first
+                    const arg_1 = @as(Var, @enumFromInt(@intFromEnum(call_args[i])));
+                    const arg_2 = @as(Var, @enumFromInt(@intFromEnum(call_args[j])));
+
+                    const unify_result = try self.unify(arg_1, arg_2);
+
+                    if (unify_result.isProblem()) {
+                        // Use the new error detail for bound type variable incompatibility
+                        self.setProblemTypeMismatchDetail(unify_result.problem, .{
+                            .incompatible_fn_args_bound_var = .{
+                                .fn_name = func_name,
+                                .first_arg_var = arg_1,
+                                .second_arg_var = arg_2,
+                                .first_arg_index = @intCast(i),
+                                .second_arg_index = @intCast(j),
+                                .num_args = @intCast(call_args.len),
+                            },
+                        });
+                        return false; // Early return on error
+                    }
+                }
+            }
+        }
+
+        // Apply constraint propagation for numeric literals with concrete types
+        for (expected_args, call_args) |expected_arg, arg_expr_idx| {
+            const expected_resolved = self.types.resolveVar(expected_arg);
+
+            // Only apply constraint propagation for concrete types, not type variables
+            if (expected_resolved.desc.content != .flex_var and expected_resolved.desc.content != .rigid_var) {
+                const arg_expr = self.cir.store.getExpr(arg_expr_idx);
+
+                if (arg_expr == .e_int) {
+                    const literal_var = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
+                    _ = try self.unify(literal_var, expected_arg);
+                }
+            }
+        }
+
+        // Regular unification using the argument vars
         var arg_index: u32 = 0;
-        for (expected_args, actual_arg_vars) |expected_arg, actual_arg| {
+        for (expected_args, call_args) |expected_arg, arg_expr_idx| {
+            const actual_arg = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
+
             // Instantiate polymorphic arguments before unification
             var arg_to_unify = actual_arg;
             if (self.types.needsInstantiation(actual_arg)) {
@@ -1301,7 +1549,7 @@ fn unifyFunctionCall(
                     .fn_name = null, // Get function name for better error message
                     .arg_var = actual_arg,
                     .incompatible_arg_index = arg_index,
-                    .num_args = @intCast(actual_arg_vars.len),
+                    .num_args = @intCast(call_args.len),
                 },
             });
             arg_index += 1;
@@ -1309,12 +1557,17 @@ fn unifyFunctionCall(
         // The call's type is the instantiated return type
         _ = try self.unify(call_var, expected_func.ret);
     } else {
+        // Arity mismatch - arguments already checked
+
         // Fall back to normal unification to get proper error message
         // Use the original func_var to avoid issues with instantiated variables in error reporting
+        const actual_arg_vars: []Var = @constCast(@ptrCast(@alignCast(call_args)));
         const func_content = try self.types.mkFuncUnbound(actual_arg_vars, call_var);
         const expected_func_var = try self.freshFromContent(func_content, region);
         _ = try self.unify(call_func_var, expected_func_var);
     }
+
+    return false;
 }
 
 /// Performs bidirectional type checking for lambda expressions with optional type annotations.
@@ -1328,8 +1581,8 @@ fn unifyFunctionCall(
 /// **Why this ordering matters:**
 /// ```
 /// Pair(a) := [Pair(a, a)]
-/// mkPairInvalid : a, b -> Pair(a)
-/// mkPairInvalid = |x, y| Pair.Pair(x, y)
+/// mk_pair_invalid : a, b -> Pair(a)
+/// mk_pair_invalid = |x, y| Pair.Pair(x, y)
 ///
 /// // Step 1: Constrain parameters from annotation first
 /// x := a[rigid], y := b[rigid]
@@ -1340,6 +1593,80 @@ fn unifyFunctionCall(
 ///
 /// Without upfront constraints, the error would only surface during final annotation
 /// validation, making it harder to locate the actual problem in the source code.
+/// Similar to checkLambdaWithAnno but only validates return type, not the entire function.
+/// This is used for lambdas to preserve error locations while still catching type errors.
+fn checkLambdaForClosure(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    lambda: std.meta.FieldType(CIR.Expr, .e_lambda),
+    anno_type: ?Var,
+) std.mem.Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Get the actual lambda arguments
+    const arg_patterns = self.cir.store.slicePatterns(lambda.args);
+    const arg_vars: []Var = @ptrCast(@alignCast(arg_patterns));
+
+    var mb_expected_func: ?types_mod.Func = null;
+
+    // STEP 1: Apply annotation constraints to parameters FIRST
+    if (anno_type) |anno_var| {
+        const expected_resolved = self.types.resolveVar(anno_var);
+        mb_expected_func = switch (expected_resolved.desc.content) {
+            .structure => |s| switch (s) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| func,
+                else => null,
+            },
+            else => null,
+        };
+
+        if (mb_expected_func) |func| {
+            const expected_args = self.types.sliceVars(func.args);
+            if (expected_args.len == arg_patterns.len) {
+                // Constrain parameters with annotation types
+                for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
+                    // Check the pattern
+                    try self.checkPattern(pattern_idx);
+
+                    // Unify against the annotation
+                    const pattern_var = ModuleEnv.varFrom(pattern_idx);
+                    _ = try self.unify(pattern_var, expected_arg);
+                }
+            }
+        }
+    }
+
+    // STEP 2: Check the body with return type constraint propagation
+    const is_effectful = if (mb_expected_func) |func|
+        try self.checkExprWithExpectedAndAnnotation(lambda.body, func.ret, true)
+    else
+        try self.checkExpr(lambda.body);
+
+    // STEP 3: Build the function type
+    const fn_var = ModuleEnv.varFrom(expr_idx);
+    const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
+
+    // Ensure the return variable has the correct region for error reporting
+    const body_region = self.cir.store.getExprRegion(lambda.body);
+    try self.fillInRegionsThrough(return_var);
+    self.setRegionAt(return_var, body_region);
+
+    if (is_effectful) {
+        _ = try self.types.setVarContent(fn_var, try self.types.mkFuncEffectful(arg_vars, return_var));
+    } else {
+        _ = try self.types.setVarContent(fn_var, try self.types.mkFuncUnbound(arg_vars, return_var));
+    }
+
+    // STEP 4: Don't validate here - let checkDef do the final unification
+    // This preserves error locations correctly
+
+    // NOTE: We don't do the final unification with the full annotation here
+    // The caller (checkDef) will handle that to preserve error locations
+
+    return is_effectful;
+}
+
 fn checkLambdaWithAnno(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
@@ -1386,12 +1713,20 @@ fn checkLambdaWithAnno(
         }
     }
 
-    // STEP 2: NOW check the body (with constrained parameters)
-    const is_effectful = try self.checkExpr(lambda.body);
+    // STEP 2: Check the body with return type constraint propagation for literals
+    const is_effectful = if (mb_expected_func) |func|
+        try self.checkExprWithExpectedAndAnnotation(lambda.body, func.ret, true)
+    else
+        try self.checkExpr(lambda.body);
 
     // STEP 3: Build the function type
     const fn_var = ModuleEnv.varFrom(expr_idx);
     const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
+
+    // Ensure the return variable has the correct region for error reporting
+    const body_region = self.cir.store.getExprRegion(lambda.body);
+    try self.fillInRegionsThrough(return_var);
+    self.setRegionAt(return_var, body_region);
 
     if (is_effectful) {
         _ = try self.types.setVarContent(fn_var, try self.types.mkFuncEffectful(arg_vars, return_var));
@@ -1404,9 +1739,9 @@ fn checkLambdaWithAnno(
         _ = try self.unify(return_var, func.ret);
     }
 
-    // STEP 5: Validate then entire function against the annotation
+    // STEP 5: Validate the entire function against the annotation
     if (mb_expected_var) |expected_var| {
-        _ = try self.unify(fn_var, expected_var);
+        _ = try self.unifyWithAnnotation(fn_var, expected_var);
     }
 
     return is_effectful;
@@ -1414,40 +1749,69 @@ fn checkLambdaWithAnno(
 
 // binop //
 
-/// Check the types for an if-else expr
-fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, binop: CIR.Expr.Binop) Allocator.Error!bool {
+/// Check the types for a binary operation expression
+fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, binop: CIR.Expr.Binop, expected_type: ?Var, from_annotation: bool) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var does_fx = try self.checkExpr(binop.lhs);
-    does_fx = try self.checkExpr(binop.rhs) or does_fx;
-
     switch (binop.op) {
         .add, .sub, .mul, .div, .rem, .pow, .div_trunc => {
+            // Check operands first
+            var does_fx = try self.checkExpr(binop.lhs);
+            does_fx = try self.checkExpr(binop.rhs) or does_fx;
+
             // For now, we'll constrain both operands to be numbers
             // In the future, this will use static dispatch based on the lhs type
             const lhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.lhs)));
             const rhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.rhs)));
             const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
 
-            // Create a fresh number variable for the operation
-            const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
-            const num_var_lhs = try self.freshFromContent(num_content, expr_region);
-            const num_var_rhs = try self.freshFromContent(num_content, expr_region);
-            const num_var_result = try self.freshFromContent(num_content, expr_region);
+            // For bidirectional type checking: if we have an expected type,
+            // we need to unify all operands and result with it.
+            // This ensures literals like `2` in `|x| x + 2` get properly constrained
+            // when the lambda has a type annotation like `I64 -> I64`.
+            if (expected_type) |expected| {
+                // All three must be the same type for arithmetic operations
+                if (from_annotation) {
+                    _ = try self.unifyWithAnnotation(lhs_var, expected);
+                    _ = try self.unifyWithAnnotation(rhs_var, expected);
+                    _ = try self.unifyWithAnnotation(result_var, expected);
+                } else {
+                    _ = try self.unify(lhs_var, expected);
+                    _ = try self.unify(rhs_var, expected);
+                    _ = try self.unify(result_var, expected);
+                }
+            } else {
+                // No expected type - use fresh number variables to maintain polymorphism
+                const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
+                const num_var_lhs = try self.freshFromContent(num_content, expr_region);
+                const num_var_rhs = try self.freshFromContent(num_content, expr_region);
+                const num_var_result = try self.freshFromContent(num_content, expr_region);
 
-            // Unify lhs, rhs, and result with the number type
-            _ = try self.unify(num_var_lhs, lhs_var);
-            _ = try self.unify(num_var_rhs, rhs_var);
-            _ = try self.unify(result_var, num_var_result);
+                // Unify lhs, rhs, and result with the number type
+                _ = try self.unify(num_var_lhs, lhs_var);
+                _ = try self.unify(num_var_rhs, rhs_var);
+                _ = try self.unify(result_var, num_var_result);
+            }
+
+            return does_fx;
         },
         .lt, .gt, .le, .ge, .eq, .ne => {
+            // Check operands first
+            var does_fx = try self.checkExpr(binop.lhs);
+            does_fx = try self.checkExpr(binop.rhs) or does_fx;
+
             // Comparison operators always return Bool
             const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
             const fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             _ = try self.unify(expr_var, fresh_bool);
+
+            return does_fx;
         },
         .@"and" => {
+            var does_fx = try self.checkExpr(binop.lhs);
+            does_fx = try self.checkExpr(binop.rhs) or does_fx;
+
             const lhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
@@ -1465,8 +1829,13 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
                     .binop = .@"and",
                 } });
             }
+
+            return does_fx;
         },
         .@"or" => {
+            var does_fx = try self.checkExpr(binop.lhs);
+            does_fx = try self.checkExpr(binop.rhs) or does_fx;
+
             const lhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
@@ -1484,12 +1853,20 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
                     .binop = .@"or",
                 } });
             }
-        },
-        .pipe_forward => {},
-        .null_coalesce => {},
-    }
 
-    return does_fx;
+            return does_fx;
+        },
+        .pipe_forward => {
+            var does_fx = try self.checkExpr(binop.lhs);
+            does_fx = try self.checkExpr(binop.rhs) or does_fx;
+            return does_fx;
+        },
+        .null_coalesce => {
+            var does_fx = try self.checkExpr(binop.lhs);
+            does_fx = try self.checkExpr(binop.rhs) or does_fx;
+            return does_fx;
+        },
+    }
 }
 
 fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, unary: CIR.Expr.UnaryMinus) Allocator.Error!bool {

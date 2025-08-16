@@ -26,7 +26,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	bool # Comment after cond
 ```
- ^^^^
+	^^^^
 
 
 # TOKENS

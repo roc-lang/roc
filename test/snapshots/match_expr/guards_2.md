@@ -50,7 +50,7 @@ Here is the problematic code:
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
 ```
-                        
+                        ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -98,7 +98,7 @@ Here is the problematic code:
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
 ```
-                                                                          
+                                                                          ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -134,7 +134,7 @@ Here is the problematic code:
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
 ```
-                                                                                           
+                                                                                           ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -158,7 +158,7 @@ Here is the problematic code:
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
 ```
-                                                                                            
+                                                                                            ^
 
 
 **PARSE ERROR**
@@ -170,7 +170,7 @@ Here is the problematic code:
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
 ```
-                                                                                            
+                                                                                            ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -194,7 +194,7 @@ Here is the problematic code:
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
 ```
-           
+           ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -242,7 +242,7 @@ Here is the problematic code:
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
 ```
-                                               
+                                               ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -278,7 +278,7 @@ Here is the problematic code:
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
 ```
-                                                            
+                                                            ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -302,7 +302,7 @@ Here is the problematic code:
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
 ```
-                                                             
+                                                             ^
 
 
 **PARSE ERROR**
@@ -314,7 +314,7 @@ Here is the problematic code:
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
 ```
-                                                             
+                                                             ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -372,7 +372,7 @@ The unused variable is declared here:
 ```roc
 match value {
 ```
-
+^
 
 
 # TOKENS

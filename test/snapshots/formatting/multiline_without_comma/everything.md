@@ -204,7 +204,7 @@ The unused variable is declared here:
 ```roc
 				b
 ```
-    ^
+				^
 
 
 **UNUSED VARIABLE**
@@ -216,7 +216,7 @@ The unused variable is declared here:
 ```roc
 			b
 ```
-   ^
+			^
 
 
 **UNUSED VARIABLE**
@@ -228,7 +228,7 @@ The unused variable is declared here:
 ```roc
 				b
 ```
-    ^
+				^
 
 
 **UNUSED VARIABLE**
@@ -240,7 +240,7 @@ The unused variable is declared here:
 ```roc
 				b
 ```
-    ^
+				^
 
 
 **UNUSED VARIABLE**
@@ -252,7 +252,7 @@ The unused variable is declared here:
 ```roc
 	h1 = {
 ```
- ^^
+	^^
 
 
 **UNUSED VARIABLE**
@@ -264,7 +264,7 @@ The unused variable is declared here:
 ```roc
 	h2 = h(
 ```
- ^^
+	^^
 
 
 **UNUSED VARIABLE**
@@ -276,7 +276,7 @@ The unused variable is declared here:
 ```roc
 	h3 = A(
 ```
- ^^
+	^^
 
 
 **UNUSED VARIABLE**
@@ -288,7 +288,7 @@ The unused variable is declared here:
 ```roc
 	h4 = [
 ```
- ^^
+	^^
 
 
 **UNUSED VARIABLE**
@@ -300,7 +300,7 @@ The unused variable is declared here:
 ```roc
 	h5 = (
 ```
- ^^
+	^^
 
 
 # TOKENS

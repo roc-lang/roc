@@ -40,7 +40,7 @@ The unused variable is declared here:
 ```roc
 match list {
 ```
-
+^
 
 
 **UNUSED VARIABLE**
@@ -52,7 +52,7 @@ The unused variable is declared here:
 ```roc
 match list {
 ```
-
+^
 
 
 **UNUSED VARIABLE**
@@ -64,7 +64,7 @@ The unused variable is declared here:
 ```roc
 match list {
 ```
-
+^
 
 
 # TOKENS

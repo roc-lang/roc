@@ -28,7 +28,7 @@ Here is the problematic code:
 ```roc
 G	if 0{}else||0
 ```
-  ^^
+ 	^^
 
 
 **PARSE ERROR**
@@ -40,7 +40,7 @@ Here is the problematic code:
 ```roc
 G	if 0{}else||0
 ```
-     ^
+ 	   ^
 
 
 **PARSE ERROR**
@@ -52,7 +52,7 @@ Here is the problematic code:
 ```roc
 G	if 0{}else||0
 ```
-      ^
+ 	    ^
 
 
 **PARSE ERROR**
@@ -64,7 +64,7 @@ Here is the problematic code:
 ```roc
 G	if 0{}else||0
 ```
-       ^
+ 	     ^
 
 
 **PARSE ERROR**
@@ -76,7 +76,7 @@ Here is the problematic code:
 ```roc
 G	if 0{}else||0
 ```
-        ^^^^
+ 	      ^^^^
 
 
 **PARSE ERROR**
@@ -88,7 +88,7 @@ Here is the problematic code:
 ```roc
 G	if 0{}else||0
 ```
-            ^
+ 	          ^
 
 
 **PARSE ERROR**
@@ -100,7 +100,7 @@ Here is the problematic code:
 ```roc
 G	if 0{}else||0
 ```
-             ^
+ 	           ^
 
 
 **PARSE ERROR**
@@ -112,7 +112,7 @@ Here is the problematic code:
 ```roc
 G	if 0{}else||0
 ```
-              ^
+ 	            ^
 
 
 **MODULE NOT FOUND**

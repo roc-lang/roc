@@ -39,7 +39,7 @@ Underscores are not allowed in type alias declarations.
 ```roc
 module []
 ```
-
+^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
@@ -50,7 +50,7 @@ Underscores are not allowed in type alias declarations.
 ```roc
 module []
 ```
-
+^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
@@ -61,7 +61,7 @@ Underscores are not allowed in type alias declarations.
 ```roc
 ComplexType := List(_)
 ```
-                    
+                    ^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
@@ -72,18 +72,7 @@ Underscores are not allowed in type alias declarations.
 ```roc
 module []
 ```
-
-
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
-
-**underscore_in_type_alias.md:1:1:1:1:**
-```roc
-module []
-```
-
+^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
@@ -94,7 +83,18 @@ Underscores are not allowed in type alias declarations.
 ```roc
 module []
 ```
+^
 
+Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+
+**UNDERSCORE IN TYPE ALIAS**
+Underscores are not allowed in type alias declarations.
+
+**underscore_in_type_alias.md:1:1:1:1:**
+```roc
+module []
+```
+^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
@@ -105,7 +105,7 @@ Underscores are not allowed in type alias declarations.
 ```roc
 TupleType := (_, U32, _)
 ```
-              
+              ^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
@@ -116,7 +116,7 @@ Underscores are not allowed in type alias declarations.
 ```roc
 module []
 ```
-
+^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
@@ -127,7 +127,7 @@ Underscores are not allowed in type alias declarations.
 ```roc
 TagType := [Some(_), None]
 ```
-                 
+                 ^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 

@@ -19,7 +19,7 @@ Here is the problematic code:
 ```roc
 module
 ```
-      
+      ^
 
 
 # TOKENS

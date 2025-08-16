@@ -475,6 +475,30 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .match_branch_wrong_arrow => {
             try report.document.addReflowingText("Match branches use `=>` instead of `->`.");
         },
+        .multi_arrow_needs_parens => {
+            try report.document.addReflowingText("Function types with multiple arrows need parentheses.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("Instead of writing ");
+            try report.document.addAnnotated("a -> b -> c", .error_highlight);
+            try report.document.addText(", use parentheses to clarify which you mean:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("a -> (b -> c)");
+            try report.document.addText(" for a ");
+            try report.document.addAnnotated("curried", .emphasized);
+            try report.document.addText(" function (a function that ");
+            try report.document.addAnnotated("returns", .emphasized);
+            try report.document.addText(" another function)");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("(a -> b) -> c");
+            try report.document.addText(" for a ");
+            try report.document.addAnnotated("higher-order", .emphasized);
+            try report.document.addText(" function (a function that ");
+            try report.document.addAnnotated("takes", .emphasized);
+            try report.document.addText(" another function)");
+        },
         else => {
             const tag_name = @tagName(diagnostic.tag);
             const owned_tag = try report.addOwnedString(tag_name);
@@ -558,6 +582,7 @@ pub const Diagnostic = struct {
         expected_type_field_name,
         expected_colon_after_type_field_name,
         expected_arrow,
+        multi_arrow_needs_parens,
         expected_ty_close_curly_or_comma,
         expected_ty_close_square_or_comma,
         expected_lower_name_after_exposed_item_as,

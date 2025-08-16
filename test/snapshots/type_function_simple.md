@@ -13,38 +13,15 @@ apply = |fn, x| fn(x)
 main! = |_| {}
 ~~~
 # EXPECTED
-PARSE ERROR - type_function_simple.md:3:20:3:22
-PARSE ERROR - type_function_simple.md:3:23:3:25
 PARSE ERROR - type_function_simple.md:3:26:3:28
 PARSE ERROR - type_function_simple.md:3:29:3:31
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Function types with multiple arrows need parentheses.
 
-Here is the problematic code:
-**type_function_simple.md:3:20:3:22:**
-```roc
-apply : (_a -> _b) -> _a -> _b
-```
-                   ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_function_simple.md:3:23:3:25:**
-```roc
-apply : (_a -> _b) -> _a -> _b
-```
-                      ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
 
 Here is the problematic code:
 **type_function_simple.md:3:26:3:28:**
@@ -88,13 +65,13 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.19 (name "apply")
-			(ty-fn @3.10-3.18
-				(underscore-ty-var @3.10-3.12 (raw "_a"))
-				(underscore-ty-var @3.16-3.18 (raw "_b"))))
-		(s-malformed @3.20-3.22 (tag "statement_unexpected_token"))
-		(s-malformed @3.23-3.25 (tag "statement_unexpected_token"))
-		(s-malformed @3.26-3.28 (tag "statement_unexpected_token"))
+		(s-type-anno @3.1-3.25 (name "apply")
+			(ty-fn @3.9-3.25
+				(ty-fn @3.10-3.18
+					(underscore-ty-var @3.10-3.12 (raw "_a"))
+					(underscore-ty-var @3.16-3.18 (raw "_b")))
+				(underscore-ty-var @3.23-3.25 (raw "_a"))))
+		(s-malformed @3.26-3.28 (tag "multi_arrow_needs_parens"))
 		(s-malformed @3.29-3.31 (tag "statement_unexpected_token"))
 		(s-decl @4.1-4.22
 			(p-ident @4.1-4.6 (raw "apply"))
@@ -116,7 +93,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-apply : (_a -> _b)
+apply : (_a -> _b) -> _a
 
 apply = |fn, x| fn(x)
 

@@ -35,24 +35,26 @@ mkPairInferred = |x, y| Pair.Pair(x, y)
 failWithImplicit = mkPairInferred("str", 2)
 ~~~
 # EXPECTED
-TYPE MISMATCH - annotations.md:18:33:18:34
+TYPE MISMATCH - annotations.md:18:28:18:28
 INVALID NOMINAL TAG - annotations.md:21:22:21:41
 INVALID NOMINAL TAG - annotations.md:24:24:24:39
-TYPE MISMATCH - annotations.md:28:42:28:43
+TYPE MISMATCH - annotations.md:28:35:28:35
 # PROBLEMS
 **TYPE MISMATCH**
-The second argument to this function is not what I expect:
-**annotations.md:18:33:18:34:**
+The first and second arguments to `mkPair` must have compatible types, but they are incompatible in this call:
+**annotations.md:18:28:**
 ```roc
 failPairDiffTypes = mkPair("1", 2)
 ```
-                                ^
+                           ^^^  ^
 
-This argument is of type:
+The first argument has the type:
+    _Str_
+
+But the second argument has the type:
     _Num(_size)_
 
-But the function needs the second argumument to be:
-    _Str_
+`mkPair` needs these arguments to have compatible types.
 
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
@@ -83,18 +85,20 @@ But it should be:
     _Pair(a, a)_
 
 **TYPE MISMATCH**
-The second argument to this function is not what I expect:
-**annotations.md:28:42:28:43:**
+The first and second arguments to `mkPairInferred` must have compatible types, but they are incompatible in this call:
+**annotations.md:28:35:**
 ```roc
 failWithImplicit = mkPairInferred("str", 2)
 ```
-                                         ^
+                                  ^^^^^  ^
 
-This argument is of type:
+The first argument has the type:
+    _Str_
+
+But the second argument has the type:
     _Num(_size)_
 
-But the function needs the second argumument to be:
-    _Str_
+`mkPairInferred` needs these arguments to have compatible types.
 
 # TOKENS
 ~~~zig
@@ -383,11 +387,11 @@ NO CHANGE
 		(patt @9.1-9.8 (type "Pair(Str)"))
 		(patt @12.1-12.7 (type "a, a -> Pair(a)"))
 		(patt @15.1-15.20 (type "Pair(U8)"))
-		(patt @18.1-18.18 (type "Pair(Error)"))
+		(patt @18.1-18.18 (type "Pair(U8)"))
 		(patt @21.1-21.19 (type "Error"))
 		(patt @24.1-24.14 (type "a, b -> Error"))
 		(patt @26.1-26.15 (type "a, a -> Pair(a)"))
-		(patt @28.1-28.17 (type "Pair(Error)")))
+		(patt @28.1-28.17 (type "_c")))
 	(type_decls
 		(nominal @3.1-3.24 (type "Pair(a)")
 			(ty-header @3.1-3.8 (name "Pair")
@@ -398,9 +402,9 @@ NO CHANGE
 		(expr @9.11-9.38 (type "Pair(Str)"))
 		(expr @12.10-12.32 (type "a, a -> Pair(a)"))
 		(expr @15.23-15.35 (type "Pair(U8)"))
-		(expr @18.21-18.35 (type "Pair(Error)"))
+		(expr @18.21-18.35 (type "Pair(U8)"))
 		(expr @21.22-21.41 (type "Error"))
 		(expr @24.17-24.39 (type "a, b -> Error"))
 		(expr @26.18-26.40 (type "a, a -> Pair(a)"))
-		(expr @28.20-28.44 (type "Pair(Error)"))))
+		(expr @28.20-28.44 (type "_c"))))
 ~~~
