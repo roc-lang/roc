@@ -506,6 +506,27 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
                 expr.e_lambda,
                 anno_var,
             );
+        } else if (expr == .e_closure) {
+            // For closures with annotations, we need special handling
+            const closure = expr.e_closure;
+            const lambda_expr = self.cir.store.getExpr(closure.lambda_idx);
+
+            if (lambda_expr == .e_lambda) {
+                // Use special lambda handling to propagate constraints without changing error locations
+                _ = try self.checkLambdaForClosure(
+                    closure.lambda_idx,
+                    lambda_expr.e_lambda,
+                    anno_var,
+                );
+                // Unify closure with lambda
+                _ = try self.unify(expr_var, ModuleEnv.varFrom(closure.lambda_idx));
+                // Now unify with annotation for final validation
+                _ = try self.unifyWithAnnotation(expr_var, anno_var);
+            } else {
+                // Shouldn't happen - closures should contain lambdas
+                _ = try self.checkExpr(def.expr);
+                _ = try self.unifyWithAnnotation(expr_var, anno_var);
+            }
         } else {
             // Check the expr
             _ = try self.checkExpr(def.expr);
@@ -988,6 +1009,15 @@ fn checkExprWithExpectedAndAnnotation(self: *Self, expr_idx: CIR.Expr.Idx, expec
 
                                 does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region, func_expr_idx) or does_fx;
 
+                                // Unify with expected type if provided
+                                if (expected_type) |expected| {
+                                    if (from_annotation) {
+                                        _ = try self.unifyWithAnnotation(call_var, expected);
+                                    } else {
+                                        _ = try self.unify(call_var, expected);
+                                    }
+                                }
+
                                 return does_fx;
                             }
                         },
@@ -1001,6 +1031,16 @@ fn checkExprWithExpectedAndAnnotation(self: *Self, expr_idx: CIR.Expr.Idx, expec
                                 const expected_func = resolved_expected_func.desc.content.structure.fn_pure;
 
                                 does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, func_expr_region, func_expr_idx) or does_fx;
+
+                                // Unify with expected type if provided
+                                if (expected_type) |expected| {
+                                    if (from_annotation) {
+                                        _ = try self.unifyWithAnnotation(call_var, expected);
+                                    } else {
+                                        _ = try self.unify(call_var, expected);
+                                    }
+                                }
+
                                 return does_fx;
                             }
                         },
@@ -1177,7 +1217,12 @@ fn checkExprWithExpectedAndAnnotation(self: *Self, expr_idx: CIR.Expr.Idx, expec
             // The type of a closure is the type of the lambda it wraps.
             // The lambda's type is determined by its arguments and body.
             // We need to check the lambda expression itself to get its type.
-            does_fx = try self.checkExpr(closure.lambda_idx);
+            // If we have an expected type, pass it to the lambda to catch type errors early
+            if (expected_type) |expected| {
+                does_fx = try self.checkExprWithExpectedAndAnnotation(closure.lambda_idx, expected, from_annotation);
+            } else {
+                does_fx = try self.checkExpr(closure.lambda_idx);
+            }
             const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
             const closure_var = ModuleEnv.varFrom(expr_idx);
             _ = try self.unify(closure_var, lambda_var);
@@ -1548,6 +1593,80 @@ fn unifyFunctionCall(
 ///
 /// Without upfront constraints, the error would only surface during final annotation
 /// validation, making it harder to locate the actual problem in the source code.
+/// Similar to checkLambdaWithAnno but only validates return type, not the entire function.
+/// This is used for lambdas to preserve error locations while still catching type errors.
+fn checkLambdaForClosure(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    lambda: std.meta.FieldType(CIR.Expr, .e_lambda),
+    anno_type: ?Var,
+) std.mem.Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Get the actual lambda arguments
+    const arg_patterns = self.cir.store.slicePatterns(lambda.args);
+    const arg_vars: []Var = @ptrCast(@alignCast(arg_patterns));
+
+    var mb_expected_func: ?types_mod.Func = null;
+
+    // STEP 1: Apply annotation constraints to parameters FIRST
+    if (anno_type) |anno_var| {
+        const expected_resolved = self.types.resolveVar(anno_var);
+        mb_expected_func = switch (expected_resolved.desc.content) {
+            .structure => |s| switch (s) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| func,
+                else => null,
+            },
+            else => null,
+        };
+
+        if (mb_expected_func) |func| {
+            const expected_args = self.types.sliceVars(func.args);
+            if (expected_args.len == arg_patterns.len) {
+                // Constrain parameters with annotation types
+                for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
+                    // Check the pattern
+                    try self.checkPattern(pattern_idx);
+
+                    // Unify against the annotation
+                    const pattern_var = ModuleEnv.varFrom(pattern_idx);
+                    _ = try self.unify(pattern_var, expected_arg);
+                }
+            }
+        }
+    }
+
+    // STEP 2: Check the body with return type constraint propagation
+    const is_effectful = if (mb_expected_func) |func|
+        try self.checkExprWithExpectedAndAnnotation(lambda.body, func.ret, true)
+    else
+        try self.checkExpr(lambda.body);
+
+    // STEP 3: Build the function type
+    const fn_var = ModuleEnv.varFrom(expr_idx);
+    const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
+
+    // Ensure the return variable has the correct region for error reporting
+    const body_region = self.cir.store.getExprRegion(lambda.body);
+    try self.fillInRegionsThrough(return_var);
+    self.setRegionAt(return_var, body_region);
+
+    if (is_effectful) {
+        _ = try self.types.setVarContent(fn_var, try self.types.mkFuncEffectful(arg_vars, return_var));
+    } else {
+        _ = try self.types.setVarContent(fn_var, try self.types.mkFuncUnbound(arg_vars, return_var));
+    }
+
+    // STEP 4: Don't validate here - let checkDef do the final unification
+    // This preserves error locations correctly
+
+    // NOTE: We don't do the final unification with the full annotation here
+    // The caller (checkDef) will handle that to preserve error locations
+
+    return is_effectful;
+}
+
 fn checkLambdaWithAnno(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
