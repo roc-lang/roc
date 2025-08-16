@@ -15,7 +15,7 @@ PARSE ERROR - fuzz_crash_017.md:1:6:1:7
 PARSE ERROR - fuzz_crash_017.md:1:7:1:10
 PARSE ERROR - fuzz_crash_017.md:1:10:1:11
 PARSE ERROR - fuzz_crash_017.md:2:7:2:8
-UNKNOWN OPERATOR - fuzz_crash_017.md:2:7:2:20
+UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -25,7 +25,6 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
-Here is the problematic code:
 **fuzz_crash_017.md:1:1:1:3:**
 ```roc
 me = "luc"
@@ -37,7 +36,6 @@ me = "luc"
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_017.md:1:4:1:5:**
 ```roc
 me = "luc"
@@ -49,7 +47,6 @@ me = "luc"
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_017.md:1:6:1:7:**
 ```roc
 me = "luc"
@@ -61,7 +58,6 @@ me = "luc"
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_017.md:1:7:1:10:**
 ```roc
 me = "luc"
@@ -73,7 +69,6 @@ me = "luc"
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_017.md:1:10:1:11:**
 ```roc
 me = "luc"
@@ -85,7 +80,6 @@ me = "luc"
 A parsing error occurred: `string_expected_close_interpolation`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_017.md:2:7:2:8:**
 ```roc
 foo = "hello ${namF
@@ -93,8 +87,8 @@ foo = "hello ${namF
       ^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
 **fuzz_crash_017.md:2:7:2:20:**
 ```roc
@@ -102,7 +96,7 @@ foo = "hello ${namF
 ```
       ^^^^^^^^^^^^^
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig

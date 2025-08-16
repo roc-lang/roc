@@ -14,7 +14,7 @@ match value {
 # EXPECTED
 PARSE ERROR - guards_2.md:2:25:2:25
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:47:2:49
-PARSE ERROR - guards_2.md:2:50:2:51
+IF WITHOUT ELSE - guards_2.md:2:25:2:27
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:51:2:75
 PARSE ERROR - guards_2.md:2:75:2:75
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:75:2:77
@@ -26,7 +26,7 @@ PARSE ERROR - guards_2.md:2:93:2:93
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:93:2:94
 PARSE ERROR - guards_2.md:3:12:3:12
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:22:3:24
-PARSE ERROR - guards_2.md:3:25:3:26
+IF WITHOUT ELSE - guards_2.md:3:12:3:14
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:26:3:48
 PARSE ERROR - guards_2.md:3:48:3:48
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:48:3:50
@@ -37,7 +37,7 @@ UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:62:3:62
 PARSE ERROR - guards_2.md:3:62:3:62
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:62:3:63
 UNDEFINED VARIABLE - guards_2.md:1:7:1:12
-UNKNOWN OPERATOR - guards_2.md:2:50:2:51
+UNRECOGNIZED SYNTAX - guards_2.md:2:25:2:51
 UNUSED VARIABLE - guards_2.md:2:6:2:11
 UNUSED VARIABLE - guards_2.md:1:1:1:1
 # PROBLEMS
@@ -45,7 +45,6 @@ UNUSED VARIABLE - guards_2.md:1:1:1:1
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **guards_2.md:2:25:2:25:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -57,7 +56,6 @@ Here is the problematic code:
 The token **=>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **guards_2.md:2:47:2:49:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -65,23 +63,22 @@ Here is the problematic code:
                                               ^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `no_else`
-This is an unexpected parsing error. Please check your syntax.
+**IF WITHOUT ELSE**
+This `if` is being used as an expression, but it doesn't have an `else`.
 
-Here is the problematic code:
-**guards_2.md:2:50:2:51:**
+When `if` is used as an expression (to evaluate to a value), it must have an `else` branch to specify what value to use when the condition is `False`.
+
+**guards_2.md:2:25:2:27:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
 ```
-                                                 ^
+                        ^^
 
 
 **UNEXPECTED TOKEN IN PATTERN**
 The token **long list starting with ** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
-Here is the problematic code:
 **guards_2.md:2:51:2:75:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -93,7 +90,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **guards_2.md:2:75:2:75:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -105,7 +101,6 @@ Here is the problematic code:
 The token **${** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **guards_2.md:2:75:2:77:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -117,7 +112,6 @@ Here is the problematic code:
 The token **Num** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
-Here is the problematic code:
 **guards_2.md:2:77:2:80:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -129,7 +123,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **guards_2.md:2:92:2:92:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -141,7 +134,6 @@ Here is the problematic code:
 The token **}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **guards_2.md:2:92:2:93:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -153,7 +145,6 @@ Here is the problematic code:
 The token  is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
-Here is the problematic code:
 **guards_2.md:2:93:2:93:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -165,7 +156,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **guards_2.md:2:93:2:93:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -177,7 +167,6 @@ Here is the problematic code:
 The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **guards_2.md:2:93:2:94:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -189,7 +178,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **guards_2.md:3:12:3:12:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -201,7 +189,6 @@ Here is the problematic code:
 The token **=>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **guards_2.md:3:22:3:24:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -209,23 +196,22 @@ Here is the problematic code:
                      ^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `no_else`
-This is an unexpected parsing error. Please check your syntax.
+**IF WITHOUT ELSE**
+This `if` is being used as an expression, but it doesn't have an `else`.
 
-Here is the problematic code:
-**guards_2.md:3:25:3:26:**
+When `if` is used as an expression (to evaluate to a value), it must have an `else` branch to specify what value to use when the condition is `False`.
+
+**guards_2.md:3:12:3:14:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
 ```
-                        ^
+           ^^
 
 
 **UNEXPECTED TOKEN IN PATTERN**
 The token **pair of equal values: ** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
-Here is the problematic code:
 **guards_2.md:3:26:3:48:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -237,7 +223,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **guards_2.md:3:48:3:48:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -249,7 +234,6 @@ Here is the problematic code:
 The token **${** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **guards_2.md:3:48:3:50:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -261,7 +245,6 @@ Here is the problematic code:
 The token **Num** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
-Here is the problematic code:
 **guards_2.md:3:50:3:53:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -273,7 +256,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **guards_2.md:3:61:3:61:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -285,7 +267,6 @@ Here is the problematic code:
 The token **}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **guards_2.md:3:61:3:62:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -297,7 +278,6 @@ Here is the problematic code:
 The token  is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 
-Here is the problematic code:
 **guards_2.md:3:62:3:62:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -309,7 +289,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **guards_2.md:3:62:3:62:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -321,7 +300,6 @@ Here is the problematic code:
 The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **guards_2.md:3:62:3:63:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
@@ -340,16 +318,16 @@ match value {
       ^^^^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
-**guards_2.md:2:50:2:51:**
+**guards_2.md:2:25:2:51:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
 ```
-                                                 ^
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+This might be a syntax error, an unsupported language feature, or a typo.
 
 **UNUSED VARIABLE**
 Variable `first` is not used anywhere in your code.
@@ -392,7 +370,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 			(p-list @2.5-2.24
 				(p-ident @2.6-2.11 (raw "first"))
 				(p-list-rest @2.13-2.23 (name "rest")))
-			(e-malformed @2.50-2.51 (reason "no_else")))
+			(e-malformed @2.25-2.51 (reason "no_else")))
 		(branch @2.51-2.77
 			(p-malformed @2.51-2.75 (tag "pattern_unexpected_token"))
 			(e-malformed @2.75-2.77 (reason "expr_unexpected_token")))
@@ -406,7 +384,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 			(p-list @3.5-3.11
 				(p-ident @3.6-3.7 (raw "x"))
 				(p-ident @3.9-3.10 (raw "y")))
-			(e-malformed @3.25-3.26 (reason "no_else")))
+			(e-malformed @3.12-3.26 (reason "no_else")))
 		(branch @3.26-3.50
 			(p-malformed @3.26-3.48 (tag "pattern_unexpected_token"))
 			(e-malformed @3.48-3.50 (reason "expr_unexpected_token")))
@@ -441,5 +419,5 @@ match value {
 ~~~
 # TYPES
 ~~~clojure
-(expr @2.50-2.51 (type "Error"))
+(expr @2.25-2.51 (type "Error"))
 ~~~

@@ -36,7 +36,6 @@ Expected a colon **:** after the method name in this where clause constraint.
 Method constraints require a colon to separate the method name from its type.
 For example:     module(a).method : a -> b
 
-Here is the problematic code:
 **where_clauses_error_cases.md:6:5:6:11:**
 ```roc
     module(a).method -> b
@@ -48,7 +47,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **where_clauses_error_cases.md:6:25:6:26:**
 ```roc
     module(a).method -> b
@@ -62,7 +60,6 @@ Where clauses must contain at least one constraint.
 For example:
         module(a).method : a -> b
 
-Here is the problematic code:
 **where_clauses_error_cases.md:10:3:10:8:**
 ```roc
   where

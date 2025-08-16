@@ -24,7 +24,6 @@ MALFORMED TYPE - record_builder.md:3:8:3:9
 The token **<-** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_builder.md:1:15:1:17:**
 ```roc
 { Foo.Bar.baz <-
@@ -36,7 +35,6 @@ Here is the problematic code:
 The token **5** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-Here is the problematic code:
 **record_builder.md:2:8:2:9:**
 ```roc
     x: 5,
@@ -48,7 +46,6 @@ Here is the problematic code:
 The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_builder.md:2:9:2:10:**
 ```roc
     x: 5,
@@ -60,7 +57,6 @@ Here is the problematic code:
 The token **0** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-Here is the problematic code:
 **record_builder.md:3:8:3:9:**
 ```roc
     y: 0,
@@ -72,7 +68,6 @@ Here is the problematic code:
 The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_builder.md:3:9:3:10:**
 ```roc
     y: 0,

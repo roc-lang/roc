@@ -24,7 +24,6 @@ PARSE ERROR - fuzz_crash_044.md:4:2:4:3
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_044.md:1:20:1:21:**
 ```roc
 app[]{f:platform""}{{0
@@ -36,7 +35,6 @@ app[]{f:platform""}{{0
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_044.md:1:21:1:22:**
 ```roc
 app[]{f:platform""}{{0
@@ -48,7 +46,6 @@ app[]{f:platform""}{{0
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_044.md:1:22:1:23:**
 ```roc
 app[]{f:platform""}{{0
@@ -60,7 +57,6 @@ app[]{f:platform""}{{0
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_044.md:2:1:2:2:**
 ```roc
 }}
@@ -72,7 +68,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_044.md:2:2:2:3:**
 ```roc
 }}
@@ -84,7 +79,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_044.md:4:1:4:2:**
 ```roc
 ""
@@ -96,7 +90,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_044.md:4:2:4:2:**
 ```roc
 ""
@@ -108,7 +101,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_044.md:4:2:4:3:**
 ```roc
 ""

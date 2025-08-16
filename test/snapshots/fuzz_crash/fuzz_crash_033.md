@@ -15,7 +15,6 @@ PARSE ERROR - fuzz_crash_033.md:1:14:1:15
 A parsing error occurred: `expected_expr_record_field_name`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_033.md:1:6:1:14:**
 ```roc
 { i, Complete]
@@ -27,7 +26,6 @@ Here is the problematic code:
 A parsing error occurred: `expected_expr_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_033.md:1:14:1:15:**
 ```roc
 { i, Complete]

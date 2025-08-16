@@ -31,7 +31,6 @@ UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
 A parsing error occurred: `expected_package_or_platform_name`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_022.md:1:1:1:4:**
 ```roc
 app [main!] { |f: platform "c" }
@@ -43,7 +42,6 @@ app [main!] { |f: platform "c" }
 The token **platform** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-Here is the problematic code:
 **fuzz_crash_022.md:1:19:1:27:**
 ```roc
 app [main!] { |f: platform "c" }
@@ -55,7 +53,6 @@ app [main!] { |f: platform "c" }
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_022.md:1:28:1:29:**
 ```roc
 app [main!] { |f: platform "c" }
@@ -67,7 +64,6 @@ app [main!] { |f: platform "c" }
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_022.md:1:29:1:30:**
 ```roc
 app [main!] { |f: platform "c" }
@@ -79,7 +75,6 @@ app [main!] { |f: platform "c" }
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_022.md:1:30:1:31:**
 ```roc
 app [main!] { |f: platform "c" }
@@ -91,7 +86,6 @@ app [main!] { |f: platform "c" }
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_022.md:1:32:1:33:**
 ```roc
 app [main!] { |f: platform "c" }
@@ -103,7 +97,6 @@ app [main!] { |f: platform "c" }
 A parsing error occurred: `expected_expr_close_round_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_022.md:6:27:6:28:**
 ```roc
 getUser = |id| if (id > 1!) "big" else "l"
@@ -115,7 +108,6 @@ getUser = |id| if (id > 1!) "big" else "l"
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_022.md:8:1:8:2:**
 ```roc
 -ain! = |_| getUser(900)

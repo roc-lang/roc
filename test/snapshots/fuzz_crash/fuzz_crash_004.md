@@ -18,7 +18,6 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
-Here is the problematic code:
 **fuzz_crash_004.md:1:1:1:2:**
 ```roc
 F

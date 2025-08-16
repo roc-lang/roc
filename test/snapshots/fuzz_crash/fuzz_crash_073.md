@@ -20,7 +20,6 @@ ASCII control characters are not allowed in Roc source code.
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_073.md:1:9:1:10:**
 ```roc
 module[]!0.t
@@ -32,7 +31,6 @@ module[]!0.t
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_073.md:1:10:1:11:**
 ```roc
 module[]!0.t
@@ -44,7 +42,6 @@ module[]!0.t
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_073.md:1:12:1:14:**
 ```roc
 module[]!0.t

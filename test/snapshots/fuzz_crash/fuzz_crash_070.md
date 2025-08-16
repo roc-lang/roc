@@ -17,7 +17,6 @@ PARSE ERROR - fuzz_crash_070.md:1:17:1:19
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_070.md:1:9:1:10:**
 ```roc
 module[]()0     .t
@@ -29,7 +28,6 @@ module[]()0     .t
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_070.md:1:10:1:11:**
 ```roc
 module[]()0     .t
@@ -41,7 +39,6 @@ module[]()0     .t
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_070.md:1:11:1:12:**
 ```roc
 module[]()0     .t
@@ -53,7 +50,6 @@ module[]()0     .t
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_070.md:1:17:1:19:**
 ```roc
 module[]()0     .t

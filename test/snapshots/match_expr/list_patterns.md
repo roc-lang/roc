@@ -21,7 +21,6 @@ UNUSED VARIABLE - list_patterns.md:3:15:3:15
 List rest patterns should use the `.. as name` syntax, not `..name`.
 For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
-Here is the problematic code:
 **list_patterns.md:3:13:3:19:**
 ```roc
     [first, ..rest] => 0 # invalid rest pattern should error

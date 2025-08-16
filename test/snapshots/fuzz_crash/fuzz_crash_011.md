@@ -16,7 +16,6 @@ PARSE ERROR - fuzz_crash_011.md:1:11:1:11
 A parsing error occurred: `header_expected_open_square`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_011.md:1:8:1:9:**
 ```roc
 module P]F
@@ -28,7 +27,6 @@ module P]F
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_011.md:1:9:1:10:**
 ```roc
 module P]F
@@ -52,7 +50,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **fuzz_crash_011.md:1:11:1:11:**
 ```roc
 module P]F
@@ -70,7 +67,7 @@ KwModule(1:1-1:7),UpperIdent(1:8-1:9),CloseSquare(1:9-1:10),UpperIdent(1:10-1:11
 	(malformed-header @1.8-1.9 (tag "header_expected_open_square"))
 	(statements
 		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
-		(s-malformed @1.10-1.11 (tag "expected_colon_after_type_annotation"))))
+		(s-malformed @1.11-1.11 (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc

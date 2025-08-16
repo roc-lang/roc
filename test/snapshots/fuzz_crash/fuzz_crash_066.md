@@ -17,7 +17,6 @@ MALFORMED TYPE - fuzz_crash_066.md:3:4:3:5
 The token **0** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-Here is the problematic code:
 **fuzz_crash_066.md:3:4:3:5:**
 ```roc
 C:[0]

@@ -22,7 +22,6 @@ MALFORMED TYPE - type_function_multi_arg.md:3:27:3:39
 A parsing error occurred: `expected_ty_anno_close_round`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **type_function_multi_arg.md:3:27:3:28:**
 ```roc
 curry : (_a, _b -> _c) -> (_a -> _b -> _c)
@@ -34,7 +33,6 @@ curry : (_a, _b -> _c) -> (_a -> _b -> _c)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **type_function_multi_arg.md:3:40:3:42:**
 ```roc
 curry : (_a, _b -> _c) -> (_a -> _b -> _c)
@@ -46,7 +44,6 @@ curry : (_a, _b -> _c) -> (_a -> _b -> _c)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **type_function_multi_arg.md:3:42:3:43:**
 ```roc
 curry : (_a, _b -> _c) -> (_a -> _b -> _c)

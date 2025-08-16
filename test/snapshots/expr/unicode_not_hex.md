@@ -9,21 +9,12 @@ type=expr
 ~~~
 # EXPECTED
 INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-UNEXPECTED TOKEN IN STRING - unicode_not_hex.md:1:16:1:16
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
-
-**UNEXPECTED TOKEN IN STRING**
-The token **<unknown>** is not expected in a string literal.
-String literals should be enclosed in double quotes.
-
-Here is the problematic code:
-**unicode_not_hex.md:1:16:1:16:**
-```roc
+This Unicode escape sequence is not valid.```roc
 "abc\u(zzzz)def"
 ```
-               ^
+    ^^^^^^^^
 
 
 # TOKENS

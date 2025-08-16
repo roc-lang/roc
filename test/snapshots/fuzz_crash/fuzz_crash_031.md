@@ -16,7 +16,7 @@ PARSE ERROR - fuzz_crash_031.md:1:6:1:7
 PARSE ERROR - fuzz_crash_031.md:1:7:1:8
 PARSE ERROR - fuzz_crash_031.md:4:1:4:6
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_031.md:4:10:4:11
-UNKNOWN OPERATOR - fuzz_crash_031.md:4:10:4:11
+UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -26,7 +26,6 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
-Here is the problematic code:
 **fuzz_crash_031.md:1:1:1:5:**
 ```roc
 mule []
@@ -38,7 +37,6 @@ mule []
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_031.md:1:6:1:7:**
 ```roc
 mule []
@@ -50,7 +48,6 @@ mule []
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_031.md:1:7:1:8:**
 ```roc
 mule []
@@ -62,7 +59,6 @@ mule []
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_031.md:4:1:4:6:**
 ```roc
 vavar t= '
@@ -74,7 +70,6 @@ vavar t= '
 The token **'** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **fuzz_crash_031.md:4:10:4:11:**
 ```roc
 vavar t= '
@@ -82,8 +77,8 @@ vavar t= '
          ^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
 **fuzz_crash_031.md:4:10:4:11:**
 ```roc
@@ -91,7 +86,7 @@ vavar t= '
 ```
          ^
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig

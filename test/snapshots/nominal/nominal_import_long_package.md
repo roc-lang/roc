@@ -25,7 +25,6 @@ UNDECLARED TYPE - nominal_import_long_package.md:5:7:5:9
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **nominal_import_long_package.md:3:21:3:27:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
@@ -37,7 +36,6 @@ import design.Styles.Color exposing [Encoder as CE]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **nominal_import_long_package.md:3:28:3:36:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
@@ -49,7 +47,6 @@ import design.Styles.Color exposing [Encoder as CE]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **nominal_import_long_package.md:3:37:3:38:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
@@ -73,7 +70,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **nominal_import_long_package.md:3:46:3:48:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
@@ -97,7 +93,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **nominal_import_long_package.md:3:51:3:52:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
@@ -146,8 +141,8 @@ LowerIdent(6:1-6:4),OpAssign(6:5-6:6),TripleDot(6:7-6:10),EndOfFile(6:28-6:28),
 		(s-malformed @3.21-3.27 (tag "statement_unexpected_token"))
 		(s-malformed @3.28-3.36 (tag "statement_unexpected_token"))
 		(s-malformed @3.37-3.38 (tag "statement_unexpected_token"))
-		(s-malformed @3.38-3.48 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @3.49-3.52 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @3.46-3.48 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @3.51-3.52 (tag "expected_colon_after_type_annotation"))
 		(s-type-anno @5.1-5.9 (name "red")
 			(ty @5.7-5.9 (name "CE")))
 		(s-decl @6.1-6.10

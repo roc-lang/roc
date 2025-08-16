@@ -17,7 +17,6 @@ MALFORMED TYPE - type_open_record.md:1:47:1:49
 The token **..** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-Here is the problematic code:
 **type_open_record.md:1:42:1:44:**
 ```roc
 process_user! : { name : Str, age : U32, .. } => Str
@@ -29,7 +28,6 @@ process_user! : { name : Str, age : U32, .. } => Str
 A parsing error occurred: `expected_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **type_open_record.md:1:37:1:40:**
 ```roc
 process_user! : { name : Str, age : U32, .. } => Str
@@ -41,7 +39,6 @@ process_user! : { name : Str, age : U32, .. } => Str
 A parsing error occurred: `expected_ty_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **type_open_record.md:1:47:1:49:**
 ```roc
 process_user! : { name : Str, age : U32, .. } => Str

@@ -117,7 +117,6 @@ pub fn deinit(self: *AST, gpa: std.mem.Allocator) void {
 
 /// Convert a tokenize diagnostic to a Report for rendering
 pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator) !reporting.Report {
-    _ = self; // TODO: Use self for source information
     const title = switch (diagnostic.tag) {
         .MisplacedCarriageReturn => "MISPLACED CARRIAGE RETURN",
         .AsciiControl => "ASCII CONTROL CHARACTER",
@@ -144,6 +143,37 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
 
     var report = reporting.Report.init(allocator, title, .runtime_error);
     try report.document.addText(body);
+
+    // Add the region information from the diagnostic if valid
+    if (diagnostic.region.start.offset < diagnostic.region.end.offset and
+        diagnostic.region.end.offset <= self.env.source.len)
+    {
+        var env = self.env.*;
+        if (env.line_starts.items.items.len == 0) {
+            try env.calcLineStarts(allocator);
+        }
+
+        // Convert region to RegionInfo
+        const region_info = base.RegionInfo.position(
+            self.env.source,
+            env.line_starts.items.items,
+            diagnostic.region.start.offset,
+            diagnostic.region.end.offset,
+        ) catch {
+            // If we can't calculate region info, just return the report without source context
+            return report;
+        };
+
+        // Add source region to the report
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            null, // No filename available for tokenize diagnostics
+            self.env.source,
+            env.line_starts.items.items,
+        );
+    }
+
     return report;
 }
 
@@ -219,6 +249,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .where_expected_module => "WHERE CLAUSE ERROR",
         .where_expected_colon => "WHERE CLAUSE ERROR",
         .where_expected_constraints => "WHERE CLAUSE ERROR",
+        .no_else => "IF WITHOUT ELSE",
         else => "PARSE ERROR",
     };
 
@@ -499,6 +530,22 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addAnnotated("takes", .emphasized);
             try report.document.addText(" another function)");
         },
+        .no_else => {
+            try report.document.addText("This ");
+            try report.document.addKeyword("if");
+            try report.document.addText(" is being used as an expression, but it doesn't have an ");
+            try report.document.addKeyword("else");
+            try report.document.addText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("When ");
+            try report.document.addKeyword("if");
+            try report.document.addReflowingText(" is used as an expression (to evaluate to a value), it must have an ");
+            try report.document.addKeyword("else");
+            try report.document.addReflowingText(" branch to specify what value to use when the condition is ");
+            try report.document.addKeyword("False");
+            try report.document.addReflowingText(".");
+        },
         else => {
             const tag_name = @tagName(diagnostic.tag);
             const owned_tag = try report.addOwnedString(tag_name);
@@ -517,8 +564,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         };
 
         try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addText("Here is the problematic code:");
         try report.document.addLineBreak();
 
         // Use the proper addSourceContext method with owned filename

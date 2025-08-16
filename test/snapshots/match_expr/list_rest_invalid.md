@@ -28,7 +28,6 @@ UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
 List rest patterns should use the `.. as name` syntax, not `..name`.
 For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
-Here is the problematic code:
 **list_rest_invalid.md:2:13:2:19:**
 ```roc
     [first, ..rest] => 0 # invalid rest pattern should error
@@ -40,7 +39,6 @@ Here is the problematic code:
 List rest patterns should use the `.. as name` syntax, not `..name`.
 For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
-Here is the problematic code:
 **list_rest_invalid.md:3:6:3:12:**
 ```roc
     [..rest, last] => 1 # invalid rest pattern should error
@@ -52,7 +50,6 @@ Here is the problematic code:
 List rest patterns should use the `.. as name` syntax, not `..name`.
 For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
-Here is the problematic code:
 **list_rest_invalid.md:4:9:4:15:**
 ```roc
     [x, ..rest, y] => 2 # invalid rest pattern should error

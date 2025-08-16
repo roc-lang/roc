@@ -54,31 +54,54 @@ INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
-UNKNOWN OPERATOR - unicode_single_quotes.md:20:5:20:7
+UNRECOGNIZED SYNTAX - unicode_single_quotes.md:20:5:20:7
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+This Unicode escape sequence is not valid.```roc
+    '\u',
+```
+     ^^
+
 
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+This Unicode escape sequence is not valid.```roc
+    '\u)',
+```
+     ^^
+
 
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+This Unicode escape sequence is not valid.```roc
+    '\u(',
+```
+     ^^^
+
 
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+This Unicode escape sequence is not valid.```roc
+    '\u()',
+```
+     ^^^^
+
 
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+This Unicode escape sequence is not valid.```roc
+    '\u(K)',
+```
+     ^^^^^
+
 
 **INVALID ESCAPE SEQUENCE**
-This escape sequence is not recognized.
+This escape sequence is not recognized.```roc
+'\
+```
+ ^
+
 
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **'\u'** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **unicode_single_quotes.md:7:5:7:9:**
 ```roc
     '\u',
@@ -90,7 +113,6 @@ Here is the problematic code:
 The token **'\u)'** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **unicode_single_quotes.md:8:5:8:10:**
 ```roc
     '\u)',
@@ -102,7 +124,6 @@ Here is the problematic code:
 The token **'\u('** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **unicode_single_quotes.md:9:5:9:10:**
 ```roc
     '\u(',
@@ -114,7 +135,6 @@ Here is the problematic code:
 The token **'\u()'** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **unicode_single_quotes.md:10:5:10:11:**
 ```roc
     '\u()',
@@ -126,7 +146,6 @@ Here is the problematic code:
 The token **'\u(K)'** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **unicode_single_quotes.md:12:5:12:12:**
 ```roc
     '\u(K)',
@@ -138,7 +157,6 @@ Here is the problematic code:
 The token **''** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **unicode_single_quotes.md:15:5:15:7:**
 ```roc
     '',
@@ -150,7 +168,6 @@ Here is the problematic code:
 The token **'long'** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **unicode_single_quotes.md:16:5:16:11:**
 ```roc
     'long',
@@ -162,7 +179,6 @@ Here is the problematic code:
 The token **'\',** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **unicode_single_quotes.md:17:5:17:9:**
 ```roc
     '\',
@@ -174,7 +190,6 @@ Here is the problematic code:
 The token **'u** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **unicode_single_quotes.md:20:5:20:7:**
 ```roc
 y = 'u
@@ -186,7 +201,6 @@ y = 'u
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **unicode_single_quotes.md:23:1:23:3:**
 ```roc
 '\
@@ -218,8 +232,8 @@ This tuple element is malformed or contains invalid syntax.
 **INVALID TUPLE ELEMENT**
 This tuple element is malformed or contains invalid syntax.
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
 **unicode_single_quotes.md:20:5:20:7:**
 ```roc
@@ -227,7 +241,7 @@ y = 'u
 ```
     ^^
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig

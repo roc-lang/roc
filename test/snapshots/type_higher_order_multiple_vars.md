@@ -27,7 +27,6 @@ Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
         a -> (b -> c) for a **curried** function (a function that **returns** another function)
         (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
 
-Here is the problematic code:
 **type_higher_order_multiple_vars.md:3:36:3:38:**
 ```roc
 compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
@@ -39,7 +38,6 @@ compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **type_higher_order_multiple_vars.md:3:39:3:40:**
 ```roc
 compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
@@ -51,7 +49,6 @@ compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **type_higher_order_multiple_vars.md:3:40:3:42:**
 ```roc
 compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
@@ -66,7 +63,6 @@ Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
         a -> (b -> c) for a **curried** function (a function that **returns** another function)
         (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
 
-Here is the problematic code:
 **type_higher_order_multiple_vars.md:3:43:3:45:**
 ```roc
 compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
@@ -78,7 +74,6 @@ compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **type_higher_order_multiple_vars.md:3:46:3:48:**
 ```roc
 compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
@@ -90,7 +85,6 @@ compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **type_higher_order_multiple_vars.md:3:48:3:49:**
 ```roc
 compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)

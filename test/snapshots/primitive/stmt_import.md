@@ -20,7 +20,6 @@ MODULE NOT FOUND - stmt_import.md:3:1:3:17
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **stmt_import.md:3:18:3:19:**
 ```roc
 import json.Json [foo, BAR]
@@ -32,7 +31,6 @@ import json.Json [foo, BAR]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **stmt_import.md:3:19:3:22:**
 ```roc
 import json.Json [foo, BAR]
@@ -44,7 +42,6 @@ import json.Json [foo, BAR]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **stmt_import.md:3:22:3:23:**
 ```roc
 import json.Json [foo, BAR]
@@ -68,7 +65,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **stmt_import.md:3:27:3:28:**
 ```roc
 import json.Json [foo, BAR]
@@ -102,7 +98,7 @@ KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),OpenSquar
 		(s-malformed @3.18-3.19 (tag "statement_unexpected_token"))
 		(s-malformed @3.19-3.22 (tag "statement_unexpected_token"))
 		(s-malformed @3.22-3.23 (tag "statement_unexpected_token"))
-		(s-malformed @3.24-3.28 (tag "expected_colon_after_type_annotation"))))
+		(s-malformed @3.27-3.28 (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc

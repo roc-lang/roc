@@ -19,7 +19,6 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
-Here is the problematic code:
 **fuzz_crash_038.md:1:1:1:2:**
 ```roc
 *import B as
@@ -31,7 +30,6 @@ Here is the problematic code:
 A parsing error occurred: `expected_upper_name_after_import_as`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_038.md:1:2:1:8:**
 ```roc
 *import B as

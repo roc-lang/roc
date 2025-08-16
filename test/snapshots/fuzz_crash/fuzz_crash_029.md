@@ -26,7 +26,7 @@ ar,
 # EXPECTED
 PARSE ERROR - fuzz_crash_029.md:4:4:4:5
 PARSE ERROR - fuzz_crash_029.md:5:14:5:17
-PARSE ERROR - fuzz_crash_029.md:5:9:5:13
+PARSE ERROR - fuzz_crash_029.md:5:19:5:21
 PARSE ERROR - fuzz_crash_029.md:5:22:5:23
 PARSE ERROR - fuzz_crash_029.md:5:23:5:24
 PARSE ERROR - fuzz_crash_029.md:5:24:5:25
@@ -45,7 +45,7 @@ PARSE ERROR - fuzz_crash_029.md:13:13:13:17
 PARSE ERROR - fuzz_crash_029.md:13:19:13:20
 PARSE ERROR - fuzz_crash_029.md:14:2:14:10
 PARSE ERROR - fuzz_crash_029.md:15:3:15:4
-PARSE ERROR - fuzz_crash_029.md:15:5:15:7
+PARSE ERROR - fuzz_crash_029.md:15:14:15:15
 PARSE ERROR - fuzz_crash_029.md:15:16:15:17
 PARSE ERROR - fuzz_crash_029.md:15:17:15:18
 PARSE ERROR - fuzz_crash_029.md:16:1:16:3
@@ -57,7 +57,6 @@ MALFORMED TYPE - fuzz_crash_029.md:13:6:13:7
 A parsing error occurred: `expected_requires_rigids_close_curly`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:4:4:4:5:**
 ```roc
 			{ # d
@@ -69,7 +68,6 @@ Here is the problematic code:
 A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:5:14:5:17:**
 ```roc
 			n! : List(Str) => {}, # ure
@@ -93,19 +91,17 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
-**fuzz_crash_029.md:5:9:5:13:**
+**fuzz_crash_029.md:5:19:5:21:**
 ```roc
 			n! : List(Str) => {}, # ure
 ```
-			     ^^^^
+			               ^^
 
 
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:5:22:5:23:**
 ```roc
 			n! : List(Str) => {}, # ure
@@ -117,7 +113,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:5:23:5:24:**
 ```roc
 			n! : List(Str) => {}, # ure
@@ -129,7 +124,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:5:24:5:25:**
 ```roc
 			n! : List(Str) => {}, # ure
@@ -141,7 +135,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:6:4:6:5:**
 ```roc
 			} #Ce
@@ -153,7 +146,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:7:2:7:9:**
 ```roc
 	exposes #rd
@@ -165,7 +157,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:8:3:8:4:**
 ```roc
 		[ #
@@ -177,7 +168,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:9:3:9:4:**
 ```roc
 		] # Cse
@@ -189,7 +179,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:10:2:10:10:**
 ```roc
 	packages # Cd
@@ -201,7 +190,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:11:3:11:8:**
 ```roc
 		vides # Cd
@@ -213,7 +201,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:12:3:12:4:**
 ```roc
 		{ # pen
@@ -225,7 +212,6 @@ Here is the problematic code:
 The token **"** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-Here is the problematic code:
 **fuzz_crash_029.md:13:6:13:7:**
 ```roc
 pkg: "..l", mmen		} # Cose
@@ -237,7 +223,6 @@ pkg: "..l", mmen		} # Cose
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:13:7:13:10:**
 ```roc
 pkg: "..l", mmen		} # Cose
@@ -249,7 +234,6 @@ pkg: "..l", mmen		} # Cose
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:13:10:13:11:**
 ```roc
 pkg: "..l", mmen		} # Cose
@@ -261,7 +245,6 @@ pkg: "..l", mmen		} # Cose
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:13:11:13:12:**
 ```roc
 pkg: "..l", mmen		} # Cose
@@ -273,7 +256,6 @@ pkg: "..l", mmen		} # Cose
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:13:13:13:17:**
 ```roc
 pkg: "..l", mmen		} # Cose
@@ -285,7 +267,6 @@ pkg: "..l", mmen		} # Cose
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:13:19:13:20:**
 ```roc
 pkg: "..l", mmen		} # Cose
@@ -297,7 +278,6 @@ pkg: "..l", mmen		} # Cose
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:14:2:14:10:**
 ```roc
 	provides # Cd
@@ -309,7 +289,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:15:3:15:4:**
 ```roc
 		[ Ok(world), (n # pen
@@ -333,19 +312,17 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
-**fuzz_crash_029.md:15:5:15:7:**
+**fuzz_crash_029.md:15:14:15:15:**
 ```roc
 		[ Ok(world), (n # pen
 ```
-		  ^^
+		           ^
 
 
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:15:16:15:17:**
 ```roc
 		[ Ok(world), (n # pen
@@ -357,7 +334,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:15:17:15:18:**
 ```roc
 		[ Ok(world), (n # pen
@@ -369,7 +345,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:16:1:16:3:**
 ```roc
 ar,
@@ -381,7 +356,6 @@ ar,
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:16:3:16:4:**
 ```roc
 ar,
@@ -393,7 +367,6 @@ ar,
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_029.md:17:3:17:4:**
 ```roc
 		]
@@ -436,7 +409,7 @@ CloseSquare(17:3-17:4),EndOfFile(17:4-17:4),
 (file @1.1-17.4
 	(malformed-header @4.4-5.8 (tag "expected_requires_rigids_close_curly"))
 	(statements
-		(s-malformed @5.9-5.21 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @5.19-5.21 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @5.22-5.23 (tag "statement_unexpected_token"))
 		(s-malformed @5.23-5.24 (tag "statement_unexpected_token"))
 		(s-malformed @5.24-5.25 (tag "statement_unexpected_token"))
@@ -456,7 +429,7 @@ CloseSquare(17:3-17:4),EndOfFile(17:4-17:4),
 		(s-malformed @13.19-13.20 (tag "statement_unexpected_token"))
 		(s-malformed @14.2-14.10 (tag "statement_unexpected_token"))
 		(s-malformed @15.3-15.4 (tag "statement_unexpected_token"))
-		(s-malformed @15.5-15.15 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @15.14-15.15 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @15.16-15.17 (tag "statement_unexpected_token"))
 		(s-malformed @15.17-15.18 (tag "statement_unexpected_token"))
 		(s-malformed @16.1-16.3 (tag "statement_unexpected_token"))

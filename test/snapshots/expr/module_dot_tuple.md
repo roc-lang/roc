@@ -14,7 +14,6 @@ PARSE ERROR - module_dot_tuple.md:1:2:1:4
 A parsing error occurred: `expr_no_space_dot_int`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **module_dot_tuple.md:1:2:1:4:**
 ```roc
 I.5

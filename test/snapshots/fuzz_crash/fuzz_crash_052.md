@@ -17,7 +17,6 @@ MODULE NOT FOUND - fuzz_crash_052.md:1:9:2:2
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_052.md:3:1:3:2:**
 ```roc
 0

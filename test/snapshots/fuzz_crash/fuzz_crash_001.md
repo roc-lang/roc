@@ -20,7 +20,6 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
-Here is the problematic code:
 **fuzz_crash_001.md:1:1:1:3:**
 ```roc
 mo|%
@@ -32,7 +31,6 @@ mo|%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_001.md:1:3:1:4:**
 ```roc
 mo|%
@@ -44,7 +42,6 @@ mo|%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_001.md:1:4:1:5:**
 ```roc
 mo|%

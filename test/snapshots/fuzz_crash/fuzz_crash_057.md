@@ -14,7 +14,6 @@ PARSE ERROR - fuzz_crash_057.md:1:39:1:42
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_057.md:1:39:1:42:**
 ```roc
 module[]s:b->c where module(a).t:c,u:o...

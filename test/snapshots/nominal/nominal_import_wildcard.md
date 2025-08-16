@@ -29,7 +29,6 @@ UNDECLARED TYPE - nominal_import_wildcard.md:11:9:11:14
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **nominal_import_wildcard.md:3:13:3:15:**
 ```roc
 import Color.*

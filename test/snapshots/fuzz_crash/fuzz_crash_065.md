@@ -15,7 +15,6 @@ PARSE ERROR - fuzz_crash_065.md:1:11:1:12
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_065.md:1:9:1:10:**
 ```roc
 module[]{R}
@@ -39,7 +38,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **fuzz_crash_065.md:1:11:1:12:**
 ```roc
 module[]{R}
@@ -58,7 +56,7 @@ KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),OpenCurly(1:9-1:10),U
 		(exposes @1.7-1.9))
 	(statements
 		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
-		(s-malformed @1.10-1.12 (tag "expected_colon_after_type_annotation"))))
+		(s-malformed @1.11-1.12 (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc

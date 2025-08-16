@@ -37,7 +37,6 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:1:1:5:**
 ```roc
 modu:;::::::::::::::le[%
@@ -49,7 +48,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:5:1:6:**
 ```roc
 modu:;::::::::::::::le[%
@@ -61,7 +59,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:6:1:7:**
 ```roc
 modu:;::::::::::::::le[%
@@ -73,7 +70,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:7:1:8:**
 ```roc
 modu:;::::::::::::::le[%
@@ -85,7 +81,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:8:1:9:**
 ```roc
 modu:;::::::::::::::le[%
@@ -97,7 +92,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:9:1:10:**
 ```roc
 modu:;::::::::::::::le[%
@@ -109,7 +103,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:10:1:11:**
 ```roc
 modu:;::::::::::::::le[%
@@ -121,7 +114,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:11:1:12:**
 ```roc
 modu:;::::::::::::::le[%
@@ -133,7 +125,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:12:1:13:**
 ```roc
 modu:;::::::::::::::le[%
@@ -145,7 +136,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:13:1:14:**
 ```roc
 modu:;::::::::::::::le[%
@@ -157,7 +147,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:14:1:15:**
 ```roc
 modu:;::::::::::::::le[%
@@ -169,7 +158,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:15:1:16:**
 ```roc
 modu:;::::::::::::::le[%
@@ -181,7 +169,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:16:1:17:**
 ```roc
 modu:;::::::::::::::le[%
@@ -193,7 +180,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:17:1:18:**
 ```roc
 modu:;::::::::::::::le[%
@@ -205,7 +191,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:18:1:19:**
 ```roc
 modu:;::::::::::::::le[%
@@ -217,7 +202,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:19:1:20:**
 ```roc
 modu:;::::::::::::::le[%
@@ -229,7 +213,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:20:1:21:**
 ```roc
 modu:;::::::::::::::le[%
@@ -241,7 +224,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:21:1:23:**
 ```roc
 modu:;::::::::::::::le[%
@@ -253,7 +235,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:23:1:24:**
 ```roc
 modu:;::::::::::::::le[%
@@ -265,7 +246,6 @@ modu:;::::::::::::::le[%
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_002.md:1:24:1:25:**
 ```roc
 modu:;::::::::::::::le[%
