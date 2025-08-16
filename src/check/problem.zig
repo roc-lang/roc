@@ -102,7 +102,6 @@ pub const TypeMismatchDetail = union(enum) {
     invalid_nominal_tag,
     cross_module_import: CrossModuleImport,
     incompatible_fn_call_arg: IncompatibleFnCallArg,
-    incompatible_fn_return_type: IncompatibleFnReturnType,
     incompatible_fn_args_bound_var: IncompatibleFnArgsBoundVar,
 };
 
@@ -127,11 +126,6 @@ pub const IncompatibleFnCallArg = struct {
     num_args: u32, // Total number of fn args
 };
 
-/// Problem data when function return type doesn't match
-pub const IncompatibleFnReturnType = struct {
-    fn_name: ?Ident.Idx,
-    return_var: Var,
-};
 
 /// Problem data when function arguments have incompatible types but are bound by the same type variable
 pub const IncompatibleFnArgsBoundVar = struct {
@@ -285,9 +279,6 @@ pub const ReportBuilder = struct {
                         },
                         .incompatible_fn_call_arg => |data| {
                             return self.buildIncompatibleFnCallArg(&snapshot_writer, mismatch.types, data);
-                        },
-                        .incompatible_fn_return_type => |data| {
-                            return self.buildIncompatibleFnReturnType(&snapshot_writer, mismatch.types, data);
                         },
                         .incompatible_fn_args_bound_var => |data| {
                             return self.buildIncompatibleFnArgsBoundVar(&snapshot_writer, mismatch.types, data);
@@ -1305,64 +1296,6 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for function return type mismatch
-    fn buildIncompatibleFnReturnType(
-        self: *Self,
-        snapshot_writer: *snapshot.SnapshotWriter,
-        types: TypePair,
-        data: IncompatibleFnReturnType,
-    ) !Report {
-        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
-
-        // Extract only the return types from the function snapshots
-        const actual_return_type = self.extractReturnTypeFromFunctionSnapshot(types.actual_snapshot) orelse types.actual_snapshot;
-        const expected_return_type = self.extractReturnTypeFromFunctionSnapshot(types.expected_snapshot) orelse types.expected_snapshot;
-
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(actual_return_type);
-        const actual_type = try report.addOwnedString(self.buf.items);
-
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(expected_return_type);
-        const expected_type = try report.addOwnedString(self.buf.items);
-
-        try report.document.addText("This function's return type is not what I expect:");
-        try report.document.addLineBreak();
-
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.return_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-
-        try report.document.addReflowingText("This returns:");
-        try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(actual_type, .type_variable);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        try report.document.addReflowingText("But ");
-        if (data.fn_name) |fn_name_ident| {
-            self.buf.clearRetainingCapacity();
-            const fn_name = try report.addOwnedString(self.can_ir.getIdent(fn_name_ident));
-            try report.document.addReflowingText("the annotation on ");
-            try report.document.addAnnotated(fn_name, .inline_code);
-            try report.document.addReflowingText(" says it should return:");
-        } else {
-            try report.document.addReflowingText("the annotation says it should return:");
-        }
-        try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(expected_type, .type_variable);
-
-        return report;
-    }
 
     fn buildIncompatibleFnArgsBoundVar(
         self: *Self,
@@ -1807,18 +1740,6 @@ pub const ReportBuilder = struct {
         };
     }
 
-    /// Extract the return type from a function snapshot
-    fn extractReturnTypeFromFunctionSnapshot(self: *Self, func_snapshot: SnapshotContentIdx) ?SnapshotContentIdx {
-        const content = self.snapshots.getContent(func_snapshot);
-
-        return switch (content) {
-            .structure => |structure| switch (structure) {
-                .fn_pure, .fn_effectful, .fn_unbound => |func| func.ret,
-                else => null,
-            },
-            else => null,
-        };
-    }
 };
 
 // store //
