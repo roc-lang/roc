@@ -1168,77 +1168,29 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!?AST.State
                 // continue to parse final expression
             }
         },
-        // Could be a Type Annotation (e.g. `Foo a : (a,a)`) or a pattern assignment (e.g. `Pair(x, y) = expr`)
+        // Type Annotation (e.g. `Foo a : (a,a)`)
         .UpperIdent => {
             const start = self.pos;
             if (statementType == .top_level) {
-                // Look ahead to determine if this is a type declaration or pattern assignment
-                // We need to check what comes after the identifier and any parentheses
-                var lookahead_pos = self.pos + 1;
-                var paren_depth: u32 = 0;
-                
-                // Skip past any parentheses to find what operator follows
-                while (lookahead_pos < self.tok_buf.tokens.len) {
-                    const tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
-                    if (tok == .OpenRound or tok == .NoSpaceOpenRound) {
-                        paren_depth += 1;
-                    } else if (tok == .CloseRound) {
-                        if (paren_depth == 0) break;
-                        paren_depth -= 1;
-                        if (paren_depth == 0) {
-                            lookahead_pos += 1;
-                            break;
-                        }
-                    } else if (paren_depth == 0) {
-                        // We're not in parentheses, so check what token we have
-                        break;
-                    }
-                    lookahead_pos += 1;
+                const header = try self.parseTypeHeader();
+                if (self.peek() != .OpColon and self.peek() != .OpColonEqual) {
+                    // Point to the unexpected token (e.g., "U8" in "List U8")
+                    return try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
                 }
-                
-                // Check what token follows the identifier (and any parentheses)
-                const next_tok = if (lookahead_pos < self.tok_buf.tokens.len) 
-                    self.tok_buf.tokens.items(.tag)[lookahead_pos] 
-                else 
-                    .EndOfFile;
-                
-                // If it's OpAssign, this is a pattern assignment, not a type declaration
-                if (next_tok == .OpAssign) {
-                    // Parse as a pattern assignment (destructuring)
-                    const patt = try self.parsePattern(.alternatives_forbidden);
-                    if (self.peek() != .OpAssign) {
-                        return try self.pushMalformed(AST.Statement.Idx, .expected_equals_after_pattern, self.pos);
-                    }
-                    self.advance(); // Advance past OpAssign
-                    const expr = try self.parseExpr();
-                    const statement_idx = try self.store.addStatement(.{ .decl = .{
-                        .pattern = patt,
-                        .body = expr,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
-                    return statement_idx;
-                } else {
-                    // Parse as a type declaration
-                    const header = try self.parseTypeHeader();
-                    if (self.peek() != .OpColon and self.peek() != .OpColonEqual) {
-                        // Point to the unexpected token (e.g., "U8" in "List U8")
-                        return try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
-                    }
-                    const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual) .nominal else .alias;
-                    self.advance();
-                    const anno = try self.parseTypeAnno(.not_looking_for_args);
-                    const where_clause = try self.parseWhereConstraint();
-                    // Use the type annotation's end position if there's no where clause,
-                    // otherwise use the current position (after parsing where clause)
-                    const statement_idx = try self.store.addStatement(.{ .type_decl = .{
-                        .header = header,
-                        .anno = anno,
-                        .where = where_clause,
-                        .kind = kind,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
-                    return statement_idx;
-                }
+                const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual) .nominal else .alias;
+                self.advance();
+                const anno = try self.parseTypeAnno(.not_looking_for_args);
+                const where_clause = try self.parseWhereConstraint();
+                // Use the type annotation's end position if there's no where clause,
+                // otherwise use the current position (after parsing where clause)
+                const statement_idx = try self.store.addStatement(.{ .type_decl = .{
+                    .header = header,
+                    .anno = anno,
+                    .where = where_clause,
+                    .kind = kind,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                return statement_idx;
             }
         },
         .OpenCurly, .OpenRound => {

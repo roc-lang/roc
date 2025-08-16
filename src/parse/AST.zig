@@ -548,11 +548,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addKeyword("False");
             try report.document.addReflowingText(".");
         },
-        .expected_equals_after_pattern => {
-            try report.document.addReflowingText("I expected an ");
-            try report.document.addKeyword("=");
-            try report.document.addText(" after this pattern to complete the destructuring assignment.");
-        },
         else => {
             const tag_name = @tagName(diagnostic.tag);
             const owned_tag = try report.addOwnedString(tag_name);
@@ -644,7 +639,6 @@ pub const Diagnostic = struct {
         exposed_item_unexpected_token,
         expected_upper_name_after_import_as,
         expected_colon_after_type_annotation,
-        expected_equals_after_pattern,
         expected_lower_ident_pat_field_name,
         expected_colon_after_pat_field_name,
         expected_expr_bar,

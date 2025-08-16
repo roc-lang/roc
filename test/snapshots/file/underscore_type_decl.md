@@ -16,6 +16,318 @@ Pair3(_, _) = Pair(0, 1)
 # EXPECTED
 MODULE NOT FOUND - underscore_type_decl.md:3:1:3:30
 # PROBLEMS
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+Here is the problematic code:
+**underscore_type_decl.md:5:13:5:14:**
+```roc
+Pair1(x, _) = Pair(0, 1)
+```
+            ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `invalid_type_arg`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:5:20:5:21:**
+```roc
+Pair1(x, _) = Pair(0, 1)
+```
+                   ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `invalid_type_arg`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:5:23:5:24:**
+```roc
+Pair1(x, _) = Pair(0, 1)
+```
+                      ^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+Here is the problematic code:
+**underscore_type_decl.md:6:1:6:6:**
+```roc
+Pair2(_, y) = Pair(0, 1)
+```
+^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:6:6:6:7:**
+```roc
+Pair2(_, y) = Pair(0, 1)
+```
+     ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:6:7:6:8:**
+```roc
+Pair2(_, y) = Pair(0, 1)
+```
+      ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:6:8:6:9:**
+```roc
+Pair2(_, y) = Pair(0, 1)
+```
+       ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:6:10:6:11:**
+```roc
+Pair2(_, y) = Pair(0, 1)
+```
+         ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:6:11:6:12:**
+```roc
+Pair2(_, y) = Pair(0, 1)
+```
+          ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:6:13:6:14:**
+```roc
+Pair2(_, y) = Pair(0, 1)
+```
+            ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `invalid_type_arg`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:6:20:6:21:**
+```roc
+Pair2(_, y) = Pair(0, 1)
+```
+                   ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `invalid_type_arg`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:6:23:6:24:**
+```roc
+Pair2(_, y) = Pair(0, 1)
+```
+                      ^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+Here is the problematic code:
+**underscore_type_decl.md:7:1:7:6:**
+```roc
+Pair3(_, _) = Pair(0, 1)
+```
+^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:7:6:7:7:**
+```roc
+Pair3(_, _) = Pair(0, 1)
+```
+     ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:7:7:7:8:**
+```roc
+Pair3(_, _) = Pair(0, 1)
+```
+      ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:7:8:7:9:**
+```roc
+Pair3(_, _) = Pair(0, 1)
+```
+       ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:7:10:7:11:**
+```roc
+Pair3(_, _) = Pair(0, 1)
+```
+         ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:7:11:7:12:**
+```roc
+Pair3(_, _) = Pair(0, 1)
+```
+          ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:7:13:7:14:**
+```roc
+Pair3(_, _) = Pair(0, 1)
+```
+            ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `invalid_type_arg`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:7:20:7:21:**
+```roc
+Pair3(_, _) = Pair(0, 1)
+```
+                   ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `invalid_type_arg`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**underscore_type_decl.md:7:23:7:24:**
+```roc
+Pair3(_, _) = Pair(0, 1)
+```
+                      ^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+Here is the problematic code:
+**underscore_type_decl.md:7:25:7:25:**
+```roc
+Pair3(_, _) = Pair(0, 1)
+```
+                        ^
+
+
 **MODULE NOT FOUND**
 The module `Module` was not found in this Roc project.
 
@@ -44,56 +356,35 @@ UpperIdent(7:1-7:6),NoSpaceOpenRound(7:6-7:7),Underscore(7:7-7:8),Comma(7:8-7:9)
 		(s-import @3.1-3.30 (raw "Module")
 			(exposing
 				(exposed-upper-ident @3.25-3.29 (text "Pair"))))
-		(s-decl @5.1-5.25
-			(p-tag @5.1-5.12 (raw "Pair1")
-				(p-ident @5.7-5.8 (raw "x"))
-				(p-underscore))
-			(e-apply @5.15-5.25
-				(e-tag @5.15-5.19 (raw "Pair"))
-				(e-int @5.20-5.21 (raw "0"))
-				(e-int @5.23-5.24 (raw "1"))))
-		(s-decl @6.1-6.25
-			(p-tag @6.1-6.12 (raw "Pair2")
-				(p-underscore)
-				(p-ident @6.10-6.11 (raw "y")))
-			(e-apply @6.15-6.25
-				(e-tag @6.15-6.19 (raw "Pair"))
-				(e-int @6.20-6.21 (raw "0"))
-				(e-int @6.23-6.24 (raw "1"))))
-		(s-decl @7.1-7.25
-			(p-tag @7.1-7.12 (raw "Pair3")
-				(p-underscore)
-				(p-underscore))
-			(e-apply @7.15-7.25
-				(e-tag @7.15-7.19 (raw "Pair"))
-				(e-int @7.20-7.21 (raw "0"))
-				(e-int @7.23-7.24 (raw "1"))))))
+		(s-malformed @5.13-5.14 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @6.1-6.6 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @6.6-6.7 (tag "statement_unexpected_token"))
+		(s-malformed @6.7-6.8 (tag "statement_unexpected_token"))
+		(s-malformed @6.8-6.9 (tag "statement_unexpected_token"))
+		(s-malformed @6.10-6.11 (tag "statement_unexpected_token"))
+		(s-malformed @6.11-6.12 (tag "statement_unexpected_token"))
+		(s-malformed @6.13-6.14 (tag "statement_unexpected_token"))
+		(s-malformed @7.1-7.6 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @7.6-7.7 (tag "statement_unexpected_token"))
+		(s-malformed @7.7-7.8 (tag "statement_unexpected_token"))
+		(s-malformed @7.8-7.9 (tag "statement_unexpected_token"))
+		(s-malformed @7.10-7.11 (tag "statement_unexpected_token"))
+		(s-malformed @7.11-7.12 (tag "statement_unexpected_token"))
+		(s-malformed @7.13-7.14 (tag "statement_unexpected_token"))
+		(s-malformed @7.25-7.25 (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+import Module exposing [Pair]
+
+
+
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-applied-tag @5.1-5.12)
-		(e-tag @5.15-5.25 (name "Pair")
-			(args
-				(e-int @5.20-5.21 (value "0"))
-				(e-int @5.23-5.24 (value "1")))))
-	(d-let
-		(p-applied-tag @6.1-6.12)
-		(e-tag @6.15-6.25 (name "Pair")
-			(args
-				(e-int @6.20-6.21 (value "0"))
-				(e-int @6.23-6.24 (value "1")))))
-	(d-let
-		(p-applied-tag @7.1-7.12)
-		(e-tag @7.15-7.25 (name "Pair")
-			(args
-				(e-int @7.20-7.21 (value "0"))
-				(e-int @7.23-7.24 (value "1")))))
 	(s-import @3.1-3.30 (module "Module")
 		(exposes
 			(exposed (name "Pair") (wildcard false)))))
@@ -102,8 +393,5 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs)
-	(expressions
-		(expr @5.15-5.25 (type "[Pair1(_a, _b), Pair(Num(_size), Num(_size2))]_others"))
-		(expr @6.15-6.25 (type "[Pair2(_a, _b), Pair(Num(_size), Num(_size2))]_others"))
-		(expr @7.15-7.25 (type "[Pair3(_a, _b), Pair(Num(_size), Num(_size2))]_others"))))
+	(expressions))
 ~~~
