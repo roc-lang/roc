@@ -17,8 +17,11 @@ PARSE ERROR - type_function_effectful.md:3:31:3:33
 PARSE ERROR - type_function_effectful.md:3:34:3:36
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
 
 Here is the problematic code:
 **type_function_effectful.md:3:31:3:33:**
@@ -68,7 +71,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 					(underscore-ty-var @3.15-3.17 (raw "_a"))
 					(underscore-ty-var @3.21-3.23 (raw "_b")))
 				(underscore-ty-var @3.28-3.30 (raw "_a"))))
-		(s-malformed @3.31-3.33 (tag "statement_unexpected_token"))
+		(s-malformed @3.31-3.33 (tag "multi_arrow_needs_parens"))
 		(s-malformed @3.34-3.36 (tag "statement_unexpected_token"))
 		(s-decl @4.1-4.29
 			(p-ident @4.1-4.11 (raw "runEffect!"))

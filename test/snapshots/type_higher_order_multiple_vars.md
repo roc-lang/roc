@@ -21,8 +21,11 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:46:3:48
 PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
 
 Here is the problematic code:
 **type_higher_order_multiple_vars.md:3:36:3:38:**
@@ -57,8 +60,11 @@ compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
 
 Here is the problematic code:
 **type_higher_order_multiple_vars.md:3:43:3:45:**
@@ -122,10 +128,10 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(ty-fn @3.26-3.34
 					(underscore-ty-var @3.26-3.28 (raw "_a"))
 					(underscore-ty-var @3.32-3.34 (raw "_b")))))
-		(s-malformed @3.36-3.38 (tag "statement_unexpected_token"))
+		(s-malformed @3.36-3.38 (tag "multi_arrow_needs_parens"))
 		(s-malformed @3.39-3.40 (tag "statement_unexpected_token"))
 		(s-malformed @3.40-3.42 (tag "statement_unexpected_token"))
-		(s-malformed @3.43-3.45 (tag "statement_unexpected_token"))
+		(s-malformed @3.43-3.45 (tag "multi_arrow_needs_parens"))
 		(s-malformed @3.46-3.48 (tag "statement_unexpected_token"))
 		(s-malformed @3.48-3.49 (tag "statement_unexpected_token"))
 		(s-decl @4.1-4.29

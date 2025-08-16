@@ -17,8 +17,11 @@ PARSE ERROR - type_function_simple.md:3:26:3:28
 PARSE ERROR - type_function_simple.md:3:29:3:31
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
 
 Here is the problematic code:
 **type_function_simple.md:3:26:3:28:**
@@ -68,7 +71,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 					(underscore-ty-var @3.10-3.12 (raw "_a"))
 					(underscore-ty-var @3.16-3.18 (raw "_b")))
 				(underscore-ty-var @3.23-3.25 (raw "_a"))))
-		(s-malformed @3.26-3.28 (tag "statement_unexpected_token"))
+		(s-malformed @3.26-3.28 (tag "multi_arrow_needs_parens"))
 		(s-malformed @3.29-3.31 (tag "statement_unexpected_token"))
 		(s-decl @4.1-4.22
 			(p-ident @4.1-4.6 (raw "apply"))

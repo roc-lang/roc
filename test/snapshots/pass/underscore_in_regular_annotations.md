@@ -43,8 +43,11 @@ PARSE ERROR - underscore_in_regular_annotations.md:30:25:30:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:11:12:11:16
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
 
 Here is the problematic code:
 **underscore_in_regular_annotations.md:30:22:30:24:**
@@ -201,7 +204,7 @@ LowerIdent(31:1-31:10),OpAssign(31:11-31:12),OpBar(31:13-31:14),Underscore(31:14
 			(ty-fn @30.13-30.21
 				(underscore-ty-var @30.13-30.15 (raw "_a"))
 				(underscore-ty-var @30.19-30.21 (raw "_b"))))
-		(s-malformed @30.22-30.24 (tag "statement_unexpected_token"))
+		(s-malformed @30.22-30.24 (tag "multi_arrow_needs_parens"))
 		(s-malformed @30.25-30.27 (tag "statement_unexpected_token"))
 		(s-decl @31.1-31.21
 			(p-ident @31.1-31.10 (raw "transform"))

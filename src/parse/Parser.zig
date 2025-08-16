@@ -1245,6 +1245,12 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!?AST.State
     }
 
     if (statementType == .top_level) {
+        // Check if this might be a multi-arrow type pattern
+        if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
+            // Look back to see if the previous statement was a type annotation
+            // If so, this is likely an attempt to write "a -> b -> c" style
+            return try self.pushMalformed(AST.Statement.Idx, .multi_arrow_needs_parens, self.pos);
+        }
         return try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
     }
 
