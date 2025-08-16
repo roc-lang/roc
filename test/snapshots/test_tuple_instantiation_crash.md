@@ -26,10 +26,10 @@ main = swap(1, 2)
 ```
        ^^^^
 
-It is of type:
+It has the type:
     _Num(_size), Num(_size2) -> _ret_
 
-But you are trying to use it as:
+But here it's being used as:
     _(a, b) -> (b, a)_
 
 # TOKENS

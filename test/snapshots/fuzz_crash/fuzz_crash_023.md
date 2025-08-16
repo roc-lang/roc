@@ -285,7 +285,7 @@ Here is the problematic code:
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
-                                    ^
+	                                   ^
 
 
 **PARSE ERROR**
@@ -297,7 +297,7 @@ Here is the problematic code:
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
-                                     ^^
+	                                    ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -309,7 +309,7 @@ Here is the problematic code:
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
-                                       ^
+	                                      ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -321,7 +321,7 @@ Here is the problematic code:
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
-                                            ^
+	                                           ^
 
 
 **PARSE ERROR**
@@ -333,7 +333,7 @@ Here is the problematic code:
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
-                                                   ^^
+	                                                  ^^
 
 
 **UNDECLARED TYPE**
@@ -366,7 +366,7 @@ This type is referenced here:
 ```roc
 	Bar, # Comment after pattern tuple item
 ```
- ^^^
+	^^^
 
 
 **UNDECLARED TYPE**
@@ -377,7 +377,7 @@ This type is referenced here:
 ```roc
 	Baz, # Another after pattern tuple item
 ```
- ^^^
+	^^^
 
 
 **UNDECLARED TYPE**
@@ -410,7 +410,7 @@ This type is referenced here:
 ```roc
 	foo : Ok(a), # After field
 ```
-       ^^
+	      ^^
 
 
 **UNDECLARED TYPE**
@@ -421,7 +421,7 @@ This type is referenced here:
 ```roc
 	bar : Something, # After last field
 ```
-       ^^^^^^^^^
+	      ^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -432,7 +432,7 @@ This type is referenced here:
 ```roc
 			Ok(a), # Comment after pattern record field
 ```
-   ^^
+			^^
 
 
 **UNDECLARED TYPE**
@@ -443,7 +443,7 @@ This type is referenced here:
 ```roc
 	bar : Something, # Another after pattern record field
 ```
-       ^^^^^^^^^
+	      ^^^^^^^^^
 
 
 **MODULE NOT FOUND**
@@ -531,7 +531,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 			some_func() # After debug expr
 ```
-   ^^^^^^^^^
+			^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -543,7 +543,7 @@ The unused variable is declared here:
 ```roc
 		lower # After pattern comment
 ```
-  ^^^^^
+		^^^^^
 
 
 **UNUSED VARIABLE**
@@ -555,7 +555,7 @@ The unused variable is declared here:
 ```roc
 # This is a module comment!
 ```
-
+^
 
 
 **NOT IMPLEMENTED**
@@ -572,7 +572,7 @@ The unused variable is declared here:
 ```roc
 # This is a module comment!
 ```
-
+^
 
 
 **NOT IMPLEMENTED**
@@ -589,7 +589,7 @@ The unused variable is declared here:
 ```roc
 # This is a module comment!
 ```
-
+^
 
 
 **NOT IMPLEMENTED**
@@ -611,7 +611,7 @@ The unused variable is declared here:
 ```roc
 		{ foo: 1, bar: 2, ..rest } => 12->add(34)
 ```
-                    ^^^^^^
+		                  ^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -645,7 +645,7 @@ The unused variable is declared here:
 ```roc
 	b,
 ```
- ^
+	^
 
 
 **UNDEFINED VARIABLE**
@@ -656,7 +656,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	blah == 1 # Comment after expect statement
 ```
- ^^^^
+	^^^^
 
 
 **UNDECLARED TYPE**
@@ -678,7 +678,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	expect blah == 1
 ```
-        ^^^^
+	       ^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -689,7 +689,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	some_func(
 ```
- ^^^^^^^^^
+	^^^^^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -704,7 +704,7 @@ This type annotation is malformed or contains invalid syntax.
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
-                                                   ^^^^^^^^^^^^^^^^^^^
+	                                                  ^^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -715,7 +715,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 ```
-                                         ^^^^^^
+	                                        ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -726,7 +726,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 		tag1,
 ```
-  ^^^^
+		^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -737,7 +737,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 		(nested, tuple),
 ```
-   ^^^^^^
+		 ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -748,7 +748,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ```
-                     ^^^
+	                    ^^^
 
 
 **NOT IMPLEMENTED**
@@ -769,7 +769,7 @@ Is there an `import` or `exposing` missing up-top?
 ```roc
 			Num.toStr(number) # Comment after string interpolation expr
 ```
-   ^^^^^^^^^
+			^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -781,7 +781,7 @@ The unused variable is declared here:
 ```roc
 	tag_with_payload = Ok(number)
 ```
- ^^^^^^^^^^^^^^^^
+	^^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -793,7 +793,7 @@ The unused variable is declared here:
 ```roc
 	interpolated = "Hello, ${world}"
 ```
- ^^^^^^^^^^^^
+	^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -805,7 +805,7 @@ The unused variable is declared here:
 ```roc
 	list = [
 ```
- ^^^^
+	^^^^
 
 
 **UNUSED VARIABLE**
@@ -817,7 +817,7 @@ The unused variable is declared here:
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
- ^^^^^^
+	^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -829,7 +829,7 @@ The unused variable is declared here:
 ```roc
 	multiline_tuple = (
 ```
- ^^^^^^^^^^^^^^^
+	^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -841,7 +841,7 @@ The unused variable is declared here:
 ```roc
 	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ```
- ^^^^^^^^^^^^^
+	^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -853,7 +853,7 @@ The unused variable is declared here:
 ```roc
 	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ```
- ^^^^^^^^^^^^^^^^^^^^^
+	^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -961,10 +961,10 @@ This expression is used in an unexpected way:
 	)
 ```
 
-It is of type:
+It has the type:
     __arg -> _ret_
 
-But you are trying to use it as:
+But here it's being used as:
     _[Red][Blue, Green]_others, _arg2 -> Error_
 
 # TOKENS

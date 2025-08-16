@@ -23,7 +23,7 @@ goodValue = "test"
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
-TYPE MISMATCH - underscore_error_propagation.md:14:13:14:24
+TYPE MISMATCH - underscore_error_propagation.md:15:13:15:19
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -32,22 +32,22 @@ Underscores are not allowed in type alias declarations.
 ```roc
 module []
 ```
-
+^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**underscore_error_propagation.md:14:13:14:24:**
+**underscore_error_propagation.md:15:13:15:19:**
 ```roc
-goodValue : GoodDerived
+goodValue = "test"
 ```
-            ^^^^^^^^^^^
+            ^^^^^^
 
-It is of type:
+The type annotation says it should have the type:
     _GoodDerived_
 
-But you are trying to use it as:
+But here it's being used as:
     _Str_
 
 # TOKENS

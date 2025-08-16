@@ -15,22 +15,9 @@ getUser = |id| if (id > 10) "big" else "small"
 main! = |_| getUser(100)
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_alias_simple.md:8:21:8:24
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-The first argument to this function is not what I expect:
-**type_alias_simple.md:8:21:8:24:**
-```roc
-main! = |_| getUser(100)
-```
-                    ^^^
-
-This argument is of type:
-    _Num(_size)_
-
-But the function needs the first argumument to be:
-    _UserId_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),

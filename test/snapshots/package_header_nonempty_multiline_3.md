@@ -20,7 +20,7 @@ The module header says that `something` is exposed, but it is not defined anywhe
 ```roc
 	[something, SomeType,]
 ```
-  ^^^^^^^^^
+	 ^^^^^^^^^
 You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
@@ -30,7 +30,7 @@ The module header says that `SomeType` is exposed, but it is not defined anywher
 ```roc
 	[something, SomeType,]
 ```
-             ^^^^^^^^
+	            ^^^^^^^^
 You can fix this by either defining `SomeType` in this module, or by removing it from the list of exposed values.
 
 # TOKENS

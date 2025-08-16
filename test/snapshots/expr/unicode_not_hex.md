@@ -23,7 +23,7 @@ Here is the problematic code:
 ```roc
 "abc\u(zzzz)def"
 ```
-               
+               ^
 
 
 # TOKENS

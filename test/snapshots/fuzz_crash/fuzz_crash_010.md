@@ -100,7 +100,7 @@ Here is the problematic code:
 ```roc
     "on        (string 'onmo %')))
 ```
-                                  
+                                  ^
 
 
 # TOKENS

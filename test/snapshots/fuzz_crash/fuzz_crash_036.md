@@ -44,7 +44,7 @@ Here is the problematic code:
 ```roc
 module[]{B
 ```
-          
+          ^
 
 
 # TOKENS

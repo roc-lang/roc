@@ -28,14 +28,14 @@ The redeclaration is here:
 ```roc
 	var x_ = 10 # Redeclare var - should warn but proceed
 ```
- ^^^^^^^^^^^
+	^^^^^^^^^^^
 
 But `x_` was already defined here:
 **can_var_scoping_var_redeclaration.md:5:2:5:12:**
 ```roc
 	var x_ = 5
 ```
- ^^^^^^^^^^
+	^^^^^^^^^^
 
 
 # TOKENS

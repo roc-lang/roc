@@ -81,7 +81,7 @@ is_named_color = |str|{
 UNUSED VARIABLE - Color.md:30:5:30:25
 UNDEFINED VARIABLE - Color.md:68:14:68:27
 INVALID NOMINAL TAG - Color.md:23:5:23:33
-TYPE MISMATCH - Color.md:26:7:26:46
+TYPE MISMATCH - Color.md:29:13:29:26
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `is_char_in_hex_range` is not used anywhere in your code.
@@ -125,18 +125,18 @@ But it should be one of:
     _RGBA(U8, U8, U8, Dec)_
 
 **TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Color.md:26:7:26:46:**
+The first argument being passed to this function has the wrong type:
+**Color.md:29:13:29:26:**
 ```roc
-hex : Str -> Result(Color, [InvalidHex(Str)])
+    bytes = str.to_utf8()
 ```
-      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            ^^^^^^^^^^^^^
 
-It is of type:
-    _Str -> Result(Error, [InvalidHex(Str)])_
+This argument has the type:
+    _Str_
 
-But you are trying to use it as:
-    _{ to_utf8: List(Num(_size)) } -> Result(Error, [InvalidHex(Str)]_others)_
+But the function needs the first argument to be:
+    _{ to_utf8: List(Num(_size2)) }_
 
 # TOKENS
 ~~~zig

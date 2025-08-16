@@ -23,10 +23,10 @@ main! = |_| mapList([1,2,3,4,5])
 ```
             ^^^^^^^
 
-It is of type:
+It has the type:
     _List(Num(_size)) -> _ret_
 
-But you are trying to use it as:
+But here it's being used as:
     _List(a), a -> b -> List(b)_
 
 # TOKENS

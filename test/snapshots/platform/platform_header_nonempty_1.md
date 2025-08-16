@@ -37,7 +37,7 @@ The module header says that `foo` is exposed, but it is not defined anywhere in 
 ```roc
 			foo, # Comment after exposed item
 ```
-   ^^^
+			^^^
 You can fix this by either defining `foo` in this module, or by removing it from the list of exposed values.
 
 # TOKENS

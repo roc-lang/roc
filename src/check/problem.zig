@@ -20,6 +20,7 @@ const Report = reporting.Report;
 const Document = reporting.Document;
 const UnderlineRegion = reporting.UnderlineRegion;
 const SourceCodeDisplayRegion = reporting.SourceCodeDisplayRegion;
+const SourceRegion = reporting.SourceRegion;
 
 const TypesStore = types_mod.Store;
 const Ident = base.Ident;
@@ -83,6 +84,11 @@ pub const TypePair = struct {
     expected_snapshot: SnapshotContentIdx,
     actual_var: Var,
     actual_snapshot: SnapshotContentIdx,
+    /// True if the expected type comes from a type annotation
+    from_annotation: bool = false,
+    /// The specific region where this constraint originated from (e.g., dot access expression)
+    /// If present, this region should be highlighted instead of the variable's region
+    constraint_origin_var: ?Var = null,
 };
 
 /// More specific details about a particular type mismatch.
@@ -96,6 +102,7 @@ pub const TypeMismatchDetail = union(enum) {
     invalid_nominal_tag,
     cross_module_import: CrossModuleImport,
     incompatible_fn_call_arg: IncompatibleFnCallArg,
+    incompatible_fn_args_bound_var: IncompatibleFnArgsBoundVar,
 };
 
 /// Problem data for when list elements have incompatible types
@@ -111,12 +118,22 @@ pub const CrossModuleImport = struct {
     module_idx: CIR.Import.Idx,
 };
 
-/// Problem data when
+/// Problem data when function argument types don't match
 pub const IncompatibleFnCallArg = struct {
     fn_name: ?Ident.Idx,
     arg_var: Var,
     incompatible_arg_index: u32, // 0-based index of the incompatible arg
     num_args: u32, // Total number of fn args
+};
+
+/// Problem data when function arguments have incompatible types but are bound by the same type variable
+pub const IncompatibleFnArgsBoundVar = struct {
+    fn_name: ?Ident.Idx,
+    first_arg_var: Var,
+    second_arg_var: Var,
+    first_arg_index: u32, // 0-based index of the first arg
+    second_arg_index: u32, // 0-based index of the second arg
+    num_args: u32, // number of args to the function call
 };
 
 /// Problem data for when if branches have incompatible types
@@ -262,6 +279,9 @@ pub const ReportBuilder = struct {
                         .incompatible_fn_call_arg => |data| {
                             return self.buildIncompatibleFnCallArg(&snapshot_writer, mismatch.types, data);
                         },
+                        .incompatible_fn_args_bound_var => |data| {
+                            return self.buildIncompatibleFnArgsBoundVar(&snapshot_writer, mismatch.types, data);
+                        },
                     }
                 } else {
                     return self.buildGenericTypeMismatchReport(&snapshot_writer, mismatch.types);
@@ -294,6 +314,7 @@ pub const ReportBuilder = struct {
         types: TypePair,
     ) !Report {
         var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
 
         self.buf.clearRetainingCapacity();
         try snapshot_writer.write(types.actual_snapshot);
@@ -303,7 +324,40 @@ pub const ReportBuilder = struct {
         try snapshot_writer.write(types.expected_snapshot);
         const owned_expected = try report.addOwnedString(self.buf.items[0..]);
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        // For annotation mismatches, we want to highlight the expression that doesn't match,
+        // not the annotation itself. When from_annotation is true and we're showing
+        // "The type annotation says...", the expression is in expected_var.
+        // If we have a constraint origin (e.g., from dot access), use that for more precise highlighting.
+
+        const region_var = if (types.constraint_origin_var) |origin_var|
+            origin_var
+        else if (types.from_annotation)
+            types.expected_var // Use expected_var to highlight the expression causing the mismatch
+        else
+            types.actual_var;
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(region_var)));
+
+        // Check if both types are functions to provide more specific error messages
+        if (types.from_annotation) {
+            // Check the snapshot content to determine if we have function types
+            const expected_content = self.snapshots.getContent(types.expected_snapshot);
+            const actual_content = self.snapshots.getContent(types.actual_snapshot);
+
+            if (self.areBothFunctionSnapshots(expected_content, actual_content)) {
+                // When we have constraint_origin_var, it indicates this error originated from
+                // a specific constraint like a dot access (e.g., str.to_utf8()).
+                // In this case, show a specialized argument type mismatch error.
+                if (types.constraint_origin_var) |origin_var| {
+                    report.deinit();
+                    return self.buildIncompatibleFnCallArg(snapshot_writer, types, .{
+                        .fn_name = null,
+                        .arg_var = origin_var,
+                        .incompatible_arg_index = 0, // First argument
+                        .num_args = 1, // Single argument lambda
+                    });
+                }
+            }
+        }
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
@@ -320,14 +374,18 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
 
-        try report.document.addText("It is of type:");
+        if (types.from_annotation) {
+            try report.document.addText("The type annotation says it should have the type:");
+        } else {
+            try report.document.addText("It has the type:");
+        }
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_actual, .type_variable);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try report.document.addText("But you are trying to use it as:");
+        try report.document.addText("But here it's being used as:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_expected, .type_variable);
@@ -366,6 +424,7 @@ pub const ReportBuilder = struct {
         data: IncompatibleListElements,
     ) !Report {
         var report = Report.init(self.gpa, "INCOMPATIBLE LIST ELEMENTS", .runtime_error);
+        errdefer report.deinit();
 
         // Create owned strings
         self.buf.clearRetainingCapacity();
@@ -500,6 +559,7 @@ pub const ReportBuilder = struct {
         types: TypePair,
     ) !Report {
         var report = Report.init(self.gpa, "INVALID IF CONDITION", .runtime_error);
+        errdefer report.deinit();
 
         // Create owned strings
         self.buf.clearRetainingCapacity();
@@ -585,6 +645,7 @@ pub const ReportBuilder = struct {
         const is_only_if_else = data.num_branches == 2;
 
         var report = Report.init(self.gpa, "INCOMPATIBLE IF BRANCHES", .runtime_error);
+        errdefer report.deinit();
 
         // Create owned strings
         self.buf.clearRetainingCapacity();
@@ -723,6 +784,7 @@ pub const ReportBuilder = struct {
         data: IncompatibleMatchPatterns,
     ) !Report {
         var report = Report.init(self.gpa, "INCOMPATIBLE MATCH PATTERNS", .runtime_error);
+        errdefer report.deinit();
 
         // Create owned strings
         self.buf.clearRetainingCapacity();
@@ -848,6 +910,7 @@ pub const ReportBuilder = struct {
         std.debug.assert(data.problem_branch_index > 0);
 
         var report = Report.init(self.gpa, "INCOMPATIBLE MATCH BRANCHES", .runtime_error);
+        errdefer report.deinit();
 
         // Create owned strings
         self.buf.clearRetainingCapacity();
@@ -970,6 +1033,7 @@ pub const ReportBuilder = struct {
         data: InvalidBoolBinop,
     ) !Report {
         var report = Report.init(self.gpa, "INVALID BOOL OPERATION", .runtime_error);
+        errdefer report.deinit();
 
         // Create owned strings
         self.buf.clearRetainingCapacity();
@@ -1060,6 +1124,7 @@ pub const ReportBuilder = struct {
         types: TypePair,
     ) !Report {
         var report = Report.init(self.gpa, "INVALID NOMINAL TAG", .runtime_error);
+        errdefer report.deinit();
 
         // Create actual tag str
         const actual_content = self.snapshots.getContent(types.actual_snapshot);
@@ -1153,7 +1218,7 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for cross-module import type mismatch
+    /// Build a report for function argument type mismatch
     fn buildIncompatibleFnCallArg(
         self: *Self,
         snapshot_writer: *snapshot.SnapshotWriter,
@@ -1161,22 +1226,27 @@ pub const ReportBuilder = struct {
         data: IncompatibleFnCallArg,
     ) !Report {
         var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
 
         self.buf.clearRetainingCapacity();
         try appendOrdinal(&self.buf, data.incompatible_arg_index + 1);
         const arg_index = try report.addOwnedString(self.buf.items);
 
+        // Extract only the argument types from the function snapshots
+        const actual_arg_type = self.extractFirstArgTypeFromFunctionSnapshot(types.actual_snapshot) orelse types.actual_snapshot;
+        const expected_arg_type = self.extractFirstArgTypeFromFunctionSnapshot(types.expected_snapshot) orelse types.expected_snapshot;
+
         self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.actual_snapshot);
+        try snapshot_writer.write(actual_arg_type);
         const actual_type = try report.addOwnedString(self.buf.items);
 
         self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.expected_snapshot);
+        try snapshot_writer.write(expected_arg_type);
         const expected_type = try report.addOwnedString(self.buf.items);
 
         try report.document.addText("The ");
         try report.document.addText(arg_index);
-        try report.document.addText(" argument to this function is not what I expect:");
+        try report.document.addText(" argument being passed to this function has the wrong type:");
         try report.document.addLineBreak();
 
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.arg_var)));
@@ -1190,7 +1260,7 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
 
-        try report.document.addReflowingText("This argument is of type:");
+        try report.document.addReflowingText("This argument has the type:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(actual_type, .type_variable);
@@ -1207,10 +1277,133 @@ pub const ReportBuilder = struct {
         }
         try report.document.addReflowingText(" needs the ");
         try report.document.addReflowingText(arg_index);
-        try report.document.addReflowingText(" argumument to be:");
+        try report.document.addReflowingText(" argument to be:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(expected_type, .type_variable);
+
+        return report;
+    }
+
+    fn buildIncompatibleFnArgsBoundVar(
+        self: *Self,
+        snapshot_writer: *snapshot.SnapshotWriter,
+        types: TypePair,
+        data: IncompatibleFnArgsBoundVar,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        self.buf.clearRetainingCapacity();
+        try appendOrdinal(&self.buf, data.first_arg_index + 1);
+        const first_arg_index = try report.addOwnedString(self.buf.items);
+
+        self.buf.clearRetainingCapacity();
+        try appendOrdinal(&self.buf, data.second_arg_index + 1);
+        const second_arg_index = try report.addOwnedString(self.buf.items);
+
+        // The types from unification already have the correct snapshots
+        // expected = first argument, actual = second argument
+        self.buf.clearRetainingCapacity();
+        try snapshot_writer.write(types.expected_snapshot);
+        const first_type = try report.addOwnedString(self.buf.items);
+
+        self.buf.clearRetainingCapacity();
+        try snapshot_writer.write(types.actual_snapshot);
+        const second_type = try report.addOwnedString(self.buf.items);
+
+        try report.document.addText("The ");
+        try report.document.addText(first_arg_index);
+        try report.document.addText(" and ");
+        try report.document.addText(second_arg_index);
+        try report.document.addText(" arguments to ");
+        if (data.fn_name) |fn_name_ident| {
+            try report.document.addText("`");
+            try report.document.addText(self.can_ir.getIdent(fn_name_ident));
+            try report.document.addText("`");
+        } else {
+            try report.document.addText("this function");
+        }
+        try report.document.addText(" must have compatible types, but they are incompatible in this call:");
+        try report.document.addLineBreak();
+
+        // Highlight both arguments in a single code block with underlines
+        const first_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.first_arg_var)));
+        const first_region_info = self.module_env.calcRegionInfo(first_region.*);
+
+        const second_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.second_arg_var)));
+        const second_region_info = self.module_env.calcRegionInfo(second_region.*);
+
+        // Determine the overall display region (should include both arguments)
+        const start_line = @min(first_region_info.start_line_idx, second_region_info.start_line_idx);
+        const end_line = @max(first_region_info.end_line_idx, second_region_info.end_line_idx);
+        const start_col = if (start_line == first_region_info.start_line_idx) first_region_info.start_col_idx else 0;
+        const end_col = if (end_line == second_region_info.end_line_idx) second_region_info.end_col_idx else 0;
+
+        // Get the line text that covers both arguments
+        const line_text = base.RegionInfo.getLineText(self.source, self.module_env.getLineStarts(), start_line, end_line);
+
+        const display_region = SourceCodeDisplayRegion{
+            .line_text = self.gpa.dupe(u8, line_text) catch return report,
+            .start_line = start_line + 1, // Convert to 1-based
+            .start_column = start_col + 1,
+            .end_line = end_line + 1,
+            .end_column = end_col + 1,
+            .region_annotation = .error_highlight,
+            .filename = self.filename,
+        };
+
+        // Create underline regions for both arguments (convert to 1-based coordinates)
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = first_region_info.start_line_idx + 1,
+                .start_column = first_region_info.start_col_idx + 1,
+                .end_line = first_region_info.end_line_idx + 1,
+                .end_column = first_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+            .{
+                .start_line = second_region_info.start_line_idx + 1,
+                .start_column = second_region_info.start_col_idx + 1,
+                .end_line = second_region_info.end_line_idx + 1,
+                .end_column = second_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        // Show both arguments with underlines in one code block
+        try report.document.addSourceCodeWithUnderlines(
+            display_region,
+            &underline_regions,
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("The ");
+        try report.document.addText(first_arg_index);
+        try report.document.addReflowingText(" argument has the type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(first_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("But the ");
+        try report.document.addText(second_arg_index);
+        try report.document.addReflowingText(" argument has the type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(second_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        if (data.fn_name) |fn_name_ident| {
+            self.buf.clearRetainingCapacity();
+            const fn_name = try report.addOwnedString(self.can_ir.getIdent(fn_name_ident));
+            try report.document.addAnnotated(fn_name, .inline_code);
+        } else {
+            try report.document.addReflowingText("this function");
+        }
+        try report.document.addReflowingText(" needs these arguments to have compatible types.");
 
         return report;
     }
@@ -1233,6 +1426,7 @@ pub const ReportBuilder = struct {
             }
         };
         var report = Report.init(self.gpa, title, .runtime_error);
+        errdefer report.deinit();
 
         const type_name = try report.addOwnedString(self.can_ir.getIdent(data.type_name));
 
@@ -1279,6 +1473,7 @@ pub const ReportBuilder = struct {
         data: NumberDoesNotFit,
     ) !Report {
         var report = Report.init(self.gpa, "NUMBER DOES NOT FIT IN TYPE", .runtime_error);
+        errdefer report.deinit();
 
         self.buf.clearRetainingCapacity();
         try snapshot_writer.write(data.expected_type);
@@ -1319,6 +1514,7 @@ pub const ReportBuilder = struct {
         data: NegativeUnsignedInt,
     ) !Report {
         var report = Report.init(self.gpa, "NEGATIVE UNSIGNED INTEGER", .runtime_error);
+        errdefer report.deinit();
 
         self.buf.clearRetainingCapacity();
         try snapshot_writer.write(data.expected_type);
@@ -1366,6 +1562,7 @@ pub const ReportBuilder = struct {
         data: CrossModuleImport,
     ) !Report {
         var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
 
         try report.document.addText("This value is being used in an unexpected way.");
         try report.document.addLineBreak();
@@ -1484,6 +1681,42 @@ pub const ReportBuilder = struct {
                 try buf.writer().print("{d}{s}", .{ n, suffix });
             },
         }
+    }
+
+    /// Check if both snapshot contents represent function types
+    fn areBothFunctionSnapshots(self: *Self, expected_content: snapshot.SnapshotContent, actual_content: snapshot.SnapshotContent) bool {
+        return self.isSnapshotFunction(expected_content) and self.isSnapshotFunction(actual_content);
+    }
+
+    /// Check if a snapshot content represents a function type
+    fn isSnapshotFunction(self: *Self, content: snapshot.SnapshotContent) bool {
+        _ = self;
+        return switch (content) {
+            .structure => |structure| switch (structure) {
+                .fn_pure, .fn_effectful, .fn_unbound => true,
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    /// Extract the first argument type from a function snapshot (if available)
+    fn extractFirstArgTypeFromFunctionSnapshot(self: *Self, func_snapshot: SnapshotContentIdx) ?SnapshotContentIdx {
+        const content = self.snapshots.getContent(func_snapshot);
+
+        return switch (content) {
+            .structure => |structure| switch (structure) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    const args = self.snapshots.sliceVars(func.args);
+                    if (args.len > 0) {
+                        return args[0];
+                    }
+                    return null;
+                },
+                else => null,
+            },
+            else => null,
+        };
     }
 };
 

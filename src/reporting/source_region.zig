@@ -18,7 +18,7 @@ pub fn formatLineNumber(writer: anytype, line_num: u32, width: u32) !void {
 /// For single-line regions, returns end_column - start_column
 /// Minimum length is 1
 pub fn calculateUnderlineLength(start_column: u32, end_column: u32) u32 {
-    if (end_column >= start_column) {
+    if (end_column > start_column) {
         return end_column - start_column;
     }
     return 1;
@@ -72,7 +72,7 @@ test "calculateUnderlineLength" {
     try testing.expectEqual(@as(u32, 5), calculateUnderlineLength(1, 6));
 
     // Single character
-    try testing.expectEqual(@as(u32, 0), calculateUnderlineLength(1, 1));
+    try testing.expectEqual(@as(u32, 1), calculateUnderlineLength(1, 1));
 
     // Edge case: end < start (should return 1)
     try testing.expectEqual(@as(u32, 1), calculateUnderlineLength(5, 3));

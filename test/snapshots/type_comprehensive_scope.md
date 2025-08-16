@@ -65,7 +65,7 @@ But _Result_ was already declared here:
 ```roc
 module [MyU64, Person, Result, Tree, Node]
 ```
-
+^
 
 
 **UNDECLARED TYPE**

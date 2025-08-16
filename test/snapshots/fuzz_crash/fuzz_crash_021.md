@@ -110,7 +110,7 @@ Here is the problematic code:
 ```roc
 Fli/main.roc" }
 ```
-               
+               ^
 
 
 **PARSE ERROR**
@@ -134,7 +134,7 @@ Here is the problematic code:
 ```roc
 Pair(a, b+ : (
 ```
-              
+              ^
 
 
 **MALFORMED TYPE**

@@ -57,7 +57,7 @@ Here is the problematic code:
 ```roc
 module P]F
 ```
-          
+          ^
 
 
 # TOKENS

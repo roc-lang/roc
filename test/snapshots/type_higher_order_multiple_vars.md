@@ -13,12 +13,6 @@ compose = |f, g| |x| f(g(x))
 main! = |_| {}
 ~~~
 # EXPECTED
-PARSE ERROR - type_higher_order_multiple_vars.md:3:22:3:24
-PARSE ERROR - type_higher_order_multiple_vars.md:3:25:3:26
-PARSE ERROR - type_higher_order_multiple_vars.md:3:26:3:28
-PARSE ERROR - type_higher_order_multiple_vars.md:3:29:3:31
-PARSE ERROR - type_higher_order_multiple_vars.md:3:32:3:34
-PARSE ERROR - type_higher_order_multiple_vars.md:3:34:3:35
 PARSE ERROR - type_higher_order_multiple_vars.md:3:36:3:38
 PARSE ERROR - type_higher_order_multiple_vars.md:3:39:3:40
 PARSE ERROR - type_higher_order_multiple_vars.md:3:40:3:42
@@ -26,78 +20,6 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:43:3:45
 PARSE ERROR - type_higher_order_multiple_vars.md:3:46:3:48
 PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_higher_order_multiple_vars.md:3:22:3:24:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-                     ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_higher_order_multiple_vars.md:3:25:3:26:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-                        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_higher_order_multiple_vars.md:3:26:3:28:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-                         ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_higher_order_multiple_vars.md:3:29:3:31:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-                            ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_higher_order_multiple_vars.md:3:32:3:34:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-                               ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_higher_order_multiple_vars.md:3:34:3:35:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-                                 ^
-
-
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
@@ -192,16 +114,14 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.21 (name "compose")
-			(ty-fn @3.12-3.20
-				(underscore-ty-var @3.12-3.14 (raw "_b"))
-				(underscore-ty-var @3.18-3.20 (raw "_c"))))
-		(s-malformed @3.22-3.24 (tag "statement_unexpected_token"))
-		(s-malformed @3.25-3.26 (tag "statement_unexpected_token"))
-		(s-malformed @3.26-3.28 (tag "statement_unexpected_token"))
-		(s-malformed @3.29-3.31 (tag "statement_unexpected_token"))
-		(s-malformed @3.32-3.34 (tag "statement_unexpected_token"))
-		(s-malformed @3.34-3.35 (tag "statement_unexpected_token"))
+		(s-type-anno @3.1-3.35 (name "compose")
+			(ty-fn @3.11-3.35
+				(ty-fn @3.12-3.20
+					(underscore-ty-var @3.12-3.14 (raw "_b"))
+					(underscore-ty-var @3.18-3.20 (raw "_c")))
+				(ty-fn @3.26-3.34
+					(underscore-ty-var @3.26-3.28 (raw "_a"))
+					(underscore-ty-var @3.32-3.34 (raw "_b")))))
 		(s-malformed @3.36-3.38 (tag "statement_unexpected_token"))
 		(s-malformed @3.39-3.40 (tag "statement_unexpected_token"))
 		(s-malformed @3.40-3.42 (tag "statement_unexpected_token"))
@@ -233,7 +153,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-compose : (_b -> _c)
+compose : (_b -> _c) -> (_a -> _b)
 
 compose = |f, g| |x| f(g(x))
 

@@ -72,7 +72,7 @@ The unused variable is declared here:
 ```roc
     [first, ..rest] => 0 # invalid rest pattern should error
 ```
-              
+              ^
 
 
 # TOKENS
