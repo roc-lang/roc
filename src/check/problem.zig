@@ -376,7 +376,7 @@ pub const ReportBuilder = struct {
         if (types.from_annotation) {
             try report.document.addText("The type annotation says it should have the type:");
         } else {
-            try report.document.addText("It is of type:");
+            try report.document.addText("It has the type:");
         }
         try report.document.addLineBreak();
         try report.document.addText("    ");
@@ -1251,7 +1251,7 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
 
-        try report.document.addReflowingText("This argument is of type:");
+        try report.document.addReflowingText("This argument has the type:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(actual_type, .type_variable);
@@ -1371,7 +1371,7 @@ pub const ReportBuilder = struct {
 
         try report.document.addReflowingText("The ");
         try report.document.addText(first_arg_index);
-        try report.document.addReflowingText(" argument is of type:");
+        try report.document.addReflowingText(" argument has the type:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(first_type, .type_variable);
@@ -1380,7 +1380,7 @@ pub const ReportBuilder = struct {
 
         try report.document.addReflowingText("But the ");
         try report.document.addText(second_arg_index);
-        try report.document.addReflowingText(" argument is of type:");
+        try report.document.addReflowingText(" argument has the type:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(second_type, .type_variable);

@@ -104,7 +104,7 @@ ending_underscore : List(elem_) -> elem_
 ```
                                    ^^^^^
 
-It is of type:
+It has the type:
     _elem__
 
 But here it's being used as:

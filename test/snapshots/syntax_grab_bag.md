@@ -897,7 +897,7 @@ This expression is used in an unexpected way:
 	)
 ```
 
-It is of type:
+It has the type:
     __arg -> _ret_
 
 But here it's being used as:

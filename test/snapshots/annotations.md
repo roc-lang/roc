@@ -48,10 +48,10 @@ fail_pair_diff_types = mk_pair("1", 2)
 ```
                                ^^^  ^
 
-The first argument is of type:
+The first argument has the type:
     _Str_
 
-But the second argument is of type:
+But the second argument has the type:
     _Num(_size)_
 
 `mk_pair` needs these arguments to have compatible types.
@@ -92,10 +92,10 @@ fail_with_implicit = mk_pair_inferred("str", 2)
 ```
                                       ^^^^^  ^
 
-The first argument is of type:
+The first argument has the type:
     _Str_
 
-But the second argument is of type:
+But the second argument has the type:
     _Num(_size)_
 
 `mk_pair_inferred` needs these arguments to have compatible types.

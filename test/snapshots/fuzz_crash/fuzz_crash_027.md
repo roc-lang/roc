@@ -912,7 +912,7 @@ This expression is used in an unexpected way:
 	)
 ```
 
-It is of type:
+It has the type:
     __arg -> _ret_
 
 But here it's being used as:
@@ -926,7 +926,7 @@ The first argument being passed to this function has the wrong type:
 ```
 	        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-This argument is of type:
+This argument has the type:
     _List(Error)_
 
 But the function needs the first argument to be:

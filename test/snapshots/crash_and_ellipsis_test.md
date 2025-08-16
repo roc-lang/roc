@@ -80,7 +80,7 @@ testCrash : U64 -> U64
 ```
                    ^^^
 
-It is of type:
+It has the type:
     _U64_
 
 But here it's being used as:
