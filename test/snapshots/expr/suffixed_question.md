@@ -15,7 +15,6 @@ UNDEFINED VARIABLE - suffixed_question.md:1:1:1:12
 The token **?** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **suffixed_question.md:1:14:1:15:**
 ```roc
 Stdout.line???

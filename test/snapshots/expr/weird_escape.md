@@ -9,21 +9,12 @@ type=expr
 ~~~
 # EXPECTED
 INVALID ESCAPE SEQUENCE - :0:0:0:0
-UNEXPECTED TOKEN IN STRING - weird_escape.md:1:10:1:10
 # PROBLEMS
 **INVALID ESCAPE SEQUENCE**
-This escape sequence is not recognized.
-
-**UNEXPECTED TOKEN IN STRING**
-The token **<unknown>** is not expected in a string literal.
-String literals should be enclosed in double quotes.
-
-Here is the problematic code:
-**weird_escape.md:1:10:1:10:**
-```roc
+This escape sequence is not recognized.```roc
 "abc\qdef"
 ```
-         ^
+    ^^
 
 
 # TOKENS

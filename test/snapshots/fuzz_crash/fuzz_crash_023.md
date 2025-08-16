@@ -280,7 +280,6 @@ TYPE MISMATCH - fuzz_crash_023.md:155:2:157:3
 A parsing error occurred: `expected_expr_record_field_name`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_023.md:178:37:178:38:**
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
@@ -292,7 +291,6 @@ Here is the problematic code:
 A parsing error occurred: `expected_expr_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_023.md:178:38:178:40:**
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
@@ -304,7 +302,6 @@ Here is the problematic code:
 The token **:** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **fuzz_crash_023.md:178:40:178:41:**
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
@@ -316,7 +313,6 @@ Here is the problematic code:
 The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **fuzz_crash_023.md:178:45:178:46:**
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
@@ -328,7 +324,6 @@ Here is the problematic code:
 A parsing error occurred: `expected_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_023.md:178:52:178:54:**
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }

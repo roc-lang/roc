@@ -17,7 +17,6 @@ UNUSED VARIABLE - error_malformed_syntax_2.md:1:12:1:16
 The token **42** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-Here is the problematic code:
 **error_malformed_syntax_2.md:1:8:1:10:**
 ```roc
 { age: 42, name = "Alice" }
@@ -29,7 +28,6 @@ Here is the problematic code:
 The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **error_malformed_syntax_2.md:1:10:1:11:**
 ```roc
 { age: 42, name = "Alice" }

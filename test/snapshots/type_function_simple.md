@@ -23,7 +23,6 @@ Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
         a -> (b -> c) for a **curried** function (a function that **returns** another function)
         (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
 
-Here is the problematic code:
 **type_function_simple.md:3:26:3:28:**
 ```roc
 apply : (_a -> _b) -> _a -> _b
@@ -35,7 +34,6 @@ apply : (_a -> _b) -> _a -> _b
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **type_function_simple.md:3:29:3:31:**
 ```roc
 apply : (_a -> _b) -> _a -> _b

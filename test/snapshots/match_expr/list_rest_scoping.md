@@ -24,7 +24,6 @@ UNUSED VARIABLE - list_rest_scoping.md:4:11:4:11
 List rest patterns should use the `.. as name` syntax, not `..name`.
 For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
-Here is the problematic code:
 **list_rest_scoping.md:2:13:2:19:**
 ```roc
     [first, ..rest] => first + 1
@@ -36,7 +35,6 @@ Here is the problematic code:
 List rest patterns should use the `.. as name` syntax, not `..name`.
 For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
-Here is the problematic code:
 **list_rest_scoping.md:3:6:3:12:**
 ```roc
     [..rest, last] => last + 2
@@ -48,7 +46,6 @@ Here is the problematic code:
 List rest patterns should use the `.. as name` syntax, not `..name`.
 For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
-Here is the problematic code:
 **list_rest_scoping.md:4:9:4:15:**
 ```roc
     [x, ..rest, y] => x + y

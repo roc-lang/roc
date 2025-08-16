@@ -14,7 +14,6 @@ UNEXPECTED TOKEN IN EXPRESSION - unknown_operator.md:1:4:1:5
 The token **+** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **unknown_operator.md:1:4:1:5:**
 ```roc
 1 ++ 2

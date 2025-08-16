@@ -192,7 +192,6 @@ TYPE MISMATCH - fuzz_crash_019.md:84:2:86:3
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_019.md:52:16:52:16:**
 ```roc
 	match a {lue  {
@@ -204,7 +203,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_019.md:58:4:58:4:**
 ```roc
 			1	"for" => 20[1, ] # t
@@ -216,7 +214,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_019.md:59:3:59:3:**
 ```roc
 		ment
@@ -228,7 +225,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_019.md:60:16:60:16:**
 ```roc
 		[1, 2, 3,est]123
@@ -240,7 +236,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_019.md:62:5:62:5:**
 ```roc
 		] 23
@@ -252,7 +247,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_019.md:63:7:63:7:**
 ```roc
 		3.1 314
@@ -264,7 +258,6 @@ Here is the problematic code:
 A parsing error occurred: `match_branch_missing_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_019.md:66:12:66:12:**
 ```roc
 		(1, 2, 3)123

@@ -47,7 +47,6 @@ UNDEFINED VARIABLE - record_different_fields_error.md:7:5:7:10
 The token **"** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-Here is the problematic code:
 **record_different_fields_error.md:2:20:2:21:**
 ```roc
     _privateField: "leading underscore",
@@ -59,7 +58,6 @@ Here is the problematic code:
 The token **leading underscore** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:2:21:2:39:**
 ```roc
     _privateField: "leading underscore",
@@ -71,7 +69,6 @@ Here is the problematic code:
 The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:2:39:2:40:**
 ```roc
     _privateField: "leading underscore",
@@ -83,7 +80,6 @@ Here is the problematic code:
 The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:2:40:2:41:**
 ```roc
     _privateField: "leading underscore",
@@ -95,7 +91,6 @@ Here is the problematic code:
 The token **"** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-Here is the problematic code:
 **record_different_fields_error.md:3:13:3:14:**
 ```roc
     field_: "trailing underscore",
@@ -107,7 +102,6 @@ Here is the problematic code:
 The token **trailing underscore** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:3:14:3:33:**
 ```roc
     field_: "trailing underscore",
@@ -119,7 +113,6 @@ Here is the problematic code:
 The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:3:33:3:34:**
 ```roc
     field_: "trailing underscore",
@@ -131,7 +124,6 @@ Here is the problematic code:
 The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:3:34:3:35:**
 ```roc
     field_: "trailing underscore",
@@ -143,7 +135,6 @@ Here is the problematic code:
 The token **:** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:4:15:4:16:**
 ```roc
     PascalCase: "pascal",
@@ -155,7 +146,6 @@ Here is the problematic code:
 The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:4:25:4:26:**
 ```roc
     PascalCase: "pascal",
@@ -167,7 +157,6 @@ Here is the problematic code:
 The token **:** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:5:15:5:16:**
 ```roc
     kebab-case: "kebab",
@@ -179,7 +168,6 @@ Here is the problematic code:
 The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:5:24:5:25:**
 ```roc
     kebab-case: "kebab",
@@ -191,7 +179,6 @@ Here is the problematic code:
 The token **$** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:6:10:6:11:**
 ```roc
     field$special: "dollar",
@@ -203,7 +190,6 @@ Here is the problematic code:
 The token **"** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-Here is the problematic code:
 **record_different_fields_error.md:6:20:6:21:**
 ```roc
     field$special: "dollar",
@@ -215,7 +201,6 @@ Here is the problematic code:
 The token **dollar** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:6:21:6:27:**
 ```roc
     field$special: "dollar",
@@ -227,7 +212,6 @@ Here is the problematic code:
 The token **"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:6:27:6:28:**
 ```roc
     field$special: "dollar",
@@ -239,7 +223,6 @@ Here is the problematic code:
 The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:6:28:6:29:**
 ```roc
     field$special: "dollar",
@@ -251,7 +234,6 @@ Here is the problematic code:
 The token **@symbol** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:7:10:7:17:**
 ```roc
     field@symbol: "at symbol",
@@ -263,7 +245,6 @@ Here is the problematic code:
 The token **:** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:7:17:7:18:**
 ```roc
     field@symbol: "at symbol",
@@ -275,7 +256,6 @@ Here is the problematic code:
 The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_different_fields_error.md:7:30:7:31:**
 ```roc
     field@symbol: "at symbol",
