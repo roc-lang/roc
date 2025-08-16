@@ -749,6 +749,7 @@ pub const Watcher = struct {
     }
 
     fn watchLoopWindows(self: *Watcher) void {
+        std.debug.print("Windows watch loop starting...\n", .{});
         self.impl.stop_event = std.os.windows.kernel32.CreateEventExW(
             null,
             null,
@@ -765,11 +766,14 @@ pub const Watcher = struct {
             }
         }
 
+        std.debug.print("Adding {} paths to watch\n", .{self.paths.len});
         for (self.paths) |path| {
+            std.debug.print("Adding watch for path: {s}\n", .{path});
             self.addWatchWindows(path) catch |err| {
                 std.log.err("Failed to watch {s}: {}", .{ path, err });
             };
         }
+        std.debug.print("Added {} watches\n", .{self.impl.overlapped_data.items.len});
 
         for (0..self.impl.overlapped_data.items.len) |i| {
             self.issueWindowsRead(i);
@@ -821,7 +825,6 @@ pub const Watcher = struct {
         }.ResetEvent;
         _ = ResetEvent(data.overlapped.hEvent.?);
 
-        var bytes_returned: std.os.windows.DWORD = 0;
         const notify_filter = std.os.windows.FileNotifyChangeFilter{
             .file_name = true,
             .dir_name = true,
@@ -835,7 +838,7 @@ pub const Watcher = struct {
             @intCast(data.buffer.len),
             1,
             notify_filter,
-            &bytes_returned,
+            null, // Must be null for overlapped I/O
             &data.overlapped,
             null,
         );
@@ -851,7 +854,12 @@ pub const Watcher = struct {
         var bytes_returned: std.os.windows.DWORD = 0;
 
         if (std.os.windows.kernel32.GetOverlappedResult(handle, &data.overlapped, &bytes_returned, 0) != 0) {
+            if (bytes_returned == 0) {
+                std.debug.panic("GetOverlappedResult succeeded but returned 0 bytes", .{});
+            }
             self.processWindowsNotifications(data.buffer[0..bytes_returned], data.path);
+        } else {
+            std.debug.panic("GetOverlappedResult failed", .{});
         }
     }
 
