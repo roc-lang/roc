@@ -38,6 +38,457 @@ root_node_idx: u32 = 0,
 tokenize_diagnostics: std.ArrayListUnmanaged(tokenize.Diagnostic),
 parse_diagnostics: std.ArrayListUnmanaged(Self.Diagnostic),
 
+// ============================================================================
+// AST DESIGN
+// ============================================================================
+// This AST uses a unified approach where types, patterns, and expressions are
+// all represented as expressions with operators. Programs consist of statements,
+// and statements contain expressions.
+//
+// Key concepts:
+// - `Foo : Bar` and `Foo = Bar` are both binary operations
+// - Statement boundaries occur at whitespace not followed by operators/delimiters
+// - Operator precedence determines expression structure
+
+/// Expression type that represents all value-level and type-level constructs uniformly
+pub const UnifiedExpr = union(enum) {
+    /// Terminal nodes - identifiers, literals, etc.
+    ident: struct {
+        token: Token.Idx,
+        region: TokenizedRegion,
+    },
+    int: struct {
+        token: Token.Idx,
+        region: TokenizedRegion,
+    },
+    frac: struct {
+        token: Token.Idx,
+        region: TokenizedRegion,
+    },
+    str: struct {
+        token: Token.Idx,
+        region: TokenizedRegion,
+    },
+
+    /// Binary operators - unified handling of =, :, +, *, etc.
+    binary_op: struct {
+        op: BinaryOp,
+        left: UnifiedExpr.Idx,
+        right: UnifiedExpr.Idx,
+        region: TokenizedRegion,
+    },
+
+    /// Function application
+    apply: struct {
+        func: UnifiedExpr.Idx,
+        args: UnifiedExpr.Span,
+        region: TokenizedRegion,
+    },
+
+    /// Block with curly braces { expr1, expr2, ... }
+    /// Could be a record literal, or just a block of expressions
+    block: struct {
+        exprs: UnifiedExpr.Span,
+        region: TokenizedRegion,
+    },
+
+    /// List literal [a, b, c]
+    list: struct {
+        items: UnifiedExpr.Span,
+        region: TokenizedRegion,
+    },
+
+    /// Parenthesized expression
+    parens: struct {
+        expr: UnifiedExpr.Idx,
+        region: TokenizedRegion,
+    },
+
+    /// Lambda \x -> body
+    lambda: struct {
+        params: UnifiedExpr.Span,
+        body: UnifiedExpr.Idx,
+        region: TokenizedRegion,
+    },
+
+    /// When expression
+    when: struct {
+        expr: UnifiedExpr.Idx,
+        branches: WhenBranch.Span,
+        region: TokenizedRegion,
+    },
+
+    /// If expression
+    @"if": struct {
+        condition: UnifiedExpr.Idx,
+        then_branch: UnifiedExpr.Idx,
+        else_branch: UnifiedExpr.Idx,
+        region: TokenizedRegion,
+    },
+
+    /// Malformed expression
+    malformed: struct {
+        reason: Diagnostic.Tag,
+        region: TokenizedRegion,
+    },
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+
+    /// Generate S-Expression representation for debugging
+    pub fn toSExpr(self: UnifiedExpr, gpa: std.mem.Allocator, ast: *const Self, tree: *SExprTree) std.mem.Allocator.Error!void {
+        _ = gpa;
+        _ = ast;
+        switch (self) {
+            .ident => |_| {
+                // TODO: Get token from store when integrated
+                try tree.pushStaticAtom("IDENT");
+            },
+            .int => |_| {
+                // TODO: Get token from store when integrated
+                try tree.pushStaticAtom("INT");
+            },
+            .frac => |_| {
+                // TODO: Get token from store when integrated
+                try tree.pushStaticAtom("FRAC");
+            },
+            .str => |_| {
+                // TODO: Get token from store when integrated
+                try tree.pushString("STR");
+            },
+            .binary_op => |op| {
+                const begin = tree.beginNode();
+
+                const op_str = switch (op.op) {
+                    .equal => "=",
+                    .colon => ":",
+                    .colon_equal => ":=",
+                    .@"and" => "&&",
+                    .@"or" => "||",
+                    .eq => "==",
+                    .neq => "!=",
+                    .lt => "<",
+                    .gt => ">",
+                    .lte => "<=",
+                    .gte => ">=",
+                    .add => "+",
+                    .sub => "-",
+                    .mul => "*",
+                    .div => "/",
+                    .mod => "%",
+                    .pipe => "|>",
+                    .compose => ">>",
+                };
+                try tree.pushStaticAtom(op_str);
+
+                // TODO: Get expressions from store when integrated
+                // try ast.store.getUnifiedExpr(op.left).toSExpr(gpa, ast, tree);
+                // try ast.store.getUnifiedExpr(op.right).toSExpr(gpa, ast, tree);
+                try tree.pushStaticAtom("LEFT");
+                try tree.pushStaticAtom("RIGHT");
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .apply => |_| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("apply");
+
+                // TODO: Get expressions from store when integrated
+                try tree.pushStaticAtom("FUNC");
+                try tree.pushStaticAtom("ARGS");
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .block => |_| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("block");
+
+                // TODO: Get expressions from store when integrated
+                try tree.pushStaticAtom("EXPRS");
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .list => |_| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("list");
+
+                // TODO: Get expressions from store when integrated
+                try tree.pushStaticAtom("ITEMS");
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .parens => |_| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("parens");
+
+                // TODO: Get expression from store when integrated
+                try tree.pushStaticAtom("EXPR");
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .lambda => |_| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("lambda");
+
+                // TODO: Get expressions from store when integrated
+                try tree.pushStaticAtom("PARAMS");
+                try tree.pushStaticAtom("BODY");
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .when => |_| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("when");
+
+                // TODO: Get expressions from store when integrated
+                try tree.pushStaticAtom("EXPR");
+                try tree.pushStaticAtom("BRANCHES");
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .@"if" => |_| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("if");
+
+                // TODO: Get expressions from store when integrated
+                try tree.pushStaticAtom("CONDITION");
+                try tree.pushStaticAtom("THEN");
+                try tree.pushStaticAtom("ELSE");
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .malformed => |_| {
+                try tree.pushStaticAtom("MALFORMED");
+            },
+        }
+    }
+};
+
+/// Binary operators with precedence
+pub const BinaryOp = enum {
+    // Assignment and type annotation operators (lowest precedence)
+    equal, // =
+    colon, // :
+    colon_equal, // :=
+
+    // Logical operators
+    @"and", // &&
+    @"or", // ||
+
+    // Comparison operators
+    eq, // ==
+    neq, // !=
+    lt, // <
+    gt, // >
+    lte, // <=
+    gte, // >=
+
+    // Arithmetic operators
+    add, // +
+    sub, // -
+    mul, // *
+    div, // /
+    mod, // %
+
+    // Other operators
+    pipe, // |>
+    compose, // >>
+
+    pub fn precedence(self: BinaryOp) u8 {
+        return switch (self) {
+            // Lowest precedence - statements
+            .equal, .colon, .colon_equal => 10,
+
+            // Pipes
+            .pipe, .compose => 20,
+
+            // Logical
+            .@"or" => 30,
+            .@"and" => 40,
+
+            // Comparison
+            .eq, .neq, .lt, .gt, .lte, .gte => 50,
+
+            // Arithmetic
+            .add, .sub => 60,
+            .mul, .div, .mod => 70,
+        };
+    }
+
+    pub fn isRightAssociative(self: BinaryOp) bool {
+        return switch (self) {
+            .equal, .colon, .colon_equal => true,
+            .pipe, .compose => true,
+            else => false,
+        };
+    }
+};
+
+/// When branch in unified expression
+pub const WhenBranch = struct {
+    pattern: UnifiedExpr.Idx, // Pattern is just an expression now
+    guard: ?UnifiedExpr.Idx,
+    body: UnifiedExpr.Idx,
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+};
+
+// ============================================================================
+// TESTS AND EXAMPLES
+// ============================================================================
+
+test "UnifiedExpr S-Expression generation" {
+    const allocator = testing.allocator;
+
+    // Test 1: Simple binary operation (foo = bar)
+    {
+        var tree = SExprTree.init(allocator);
+        defer tree.deinit();
+
+        const expr = UnifiedExpr{
+            .binary_op = .{
+                .op = .equal,
+                .left = @enumFromInt(0),
+                .right = @enumFromInt(1),
+                .region = TokenizedRegion.empty(),
+            },
+        };
+
+        // For now, we'll just test the structure without a full AST
+        try expr.toSExpr(allocator, undefined, &tree);
+
+        var buf = std.ArrayList(u8).init(allocator);
+        defer buf.deinit();
+
+        try tree.toStringPretty(buf.writer().any());
+
+        // Should produce: (= LEFT RIGHT)
+        try testing.expectEqualStrings("(= LEFT RIGHT)", buf.items);
+    }
+
+    // Test 2: Nested binary operations (foo = bar + baz)
+    {
+        var tree = SExprTree.init(allocator);
+        defer tree.deinit();
+
+        // This would represent: foo = (bar + baz)
+        const expr = UnifiedExpr{
+            .binary_op = .{
+                .op = .equal,
+                .left = @enumFromInt(0), // foo
+                .right = @enumFromInt(1), // (bar + baz)
+                .region = TokenizedRegion.empty(),
+            },
+        };
+
+        try expr.toSExpr(allocator, undefined, &tree);
+
+        var buf = std.ArrayList(u8).init(allocator);
+        defer buf.deinit();
+
+        try tree.toStringPretty(buf.writer().any());
+
+        // Should produce: (= LEFT RIGHT)
+        // In real implementation, RIGHT would be (+ bar baz)
+        try testing.expectEqualStrings("(= LEFT RIGHT)", buf.items);
+    }
+
+    // Test 3: Block with colon operator { foo : bar }
+    {
+        var tree = SExprTree.init(allocator);
+        defer tree.deinit();
+
+        const expr = UnifiedExpr{
+            .block = .{
+                .exprs = .{ .span = base.DataSpan.empty() },
+                .region = TokenizedRegion.empty(),
+            },
+        };
+
+        try expr.toSExpr(allocator, undefined, &tree);
+
+        var buf = std.ArrayList(u8).init(allocator);
+        defer buf.deinit();
+
+        try tree.toStringPretty(buf.writer().any());
+
+        // Should produce: (block EXPRS)
+        // In real implementation, EXPRS would be (: foo bar)
+        try testing.expectEqualStrings("(block EXPRS)", buf.items);
+    }
+}
+
+test "Unified AST parsing examples" {
+    // These demonstrate how different Roc constructs would parse
+
+    // Example 1: foo = bar + baz
+    // S-Expression: (= foo (+ bar baz))
+    // The + has higher precedence, so it binds tighter
+
+    // Example 2: foo : Str
+    // S-Expression: (: foo Str)
+    // Simple binary operation with the : operator
+
+    // Example 3: { foo: bar }
+    // S-Expression: (block (: foo bar))
+    // Block containing one expression
+
+    // Example 4: foo = bar + baz blah = etc
+    // S-Expressions (two statements):
+    //   (= foo (+ bar baz))
+    //   (= blah etc)
+
+    // Example 5: List(String)
+    // S-Expression: (apply List String)
+    // Function application with parentheses
+
+    // Example 6: { foo : bar, baz : qux }
+    // S-Expression: (block (: foo bar) (: baz qux))
+    // Block with two colon operations
+
+    // Example 7: if condition then a else b
+    // S-Expression: (if condition a b)
+    // Keyword special form
+
+    // Example 8: \x -> x + 1
+    // S-Expression: (lambda x (+ x 1))
+    // Lambda expression
+}
+
+// ============================================================================
+// AST DESIGN PRINCIPLES
+// ============================================================================
+//
+// Programs are sequences of statements. Statements contain expressions.
+//
+// 1. **Expressions are uniform**: Types, patterns, and values all use the same expression syntax
+//
+// 2. **Statement boundaries**: Whitespace not followed by an operator or delimiter ends a statement
+//    - `foo : List a = []` → two statements: `foo : List` and `a = []`
+//
+// 3. **Function application**: Requires parentheses except for keyword special forms
+//    - Regular application: `List(String)`
+//    - Keywords (if, when, expect, crash) take arguments without parentheses
+//
+// 4. **Binary operators**: `:` and `=` are operators with defined precedence
+//
+// 5. **Blocks**: `{ expr1, expr2, ... }` contain comma-separated expressions
+//    - Semantic analysis determines interpretation (record literal, block, etc.)
+//
+// 6. **Qualified names**: Dot-separated identifiers like `Foo.Bar.baz`
+//
+// This design keeps parsing context-free, with semantic analysis handling disambiguation.
+
 /// Calculate whether this region is - or will be - multiline
 pub fn regionIsMultiline(self: *Self, region: TokenizedRegion) bool {
     if (region.start >= region.end) return false;
