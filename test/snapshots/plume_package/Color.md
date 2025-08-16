@@ -125,7 +125,7 @@ But it should be one of:
     _RGBA(U8, U8, U8, Dec)_
 
 **TYPE MISMATCH**
-The first argument to this function is not what I expect:
+The first argument being passed here doesn't fit the type the function expects:
 **Color.md:29:13:29:26:**
 ```roc
     bytes = str.to_utf8()
@@ -133,10 +133,10 @@ The first argument to this function is not what I expect:
             ^^^^^^^^^^^^^
 
 This argument is of type:
-    _Str -> Result(Error, [InvalidHex(Str)])_
+    _Str_
 
 But the function needs the first argument to be:
-    _{ to_utf8: List(Num(_size2)) } -> Result(Error, [InvalidHex(Str)]_others2)_
+    _{ to_utf8: List(Num(_size3)) }_
 
 # TOKENS
 ~~~zig
@@ -198,7 +198,8 @@ UpperIdent(65:9-65:12),NoSpaceOpenRound(65:12-65:13),UpperIdent(65:13-65:25),NoS
 LowerIdent(67:1-67:15),OpAssign(67:16-67:17),OpBar(67:18-67:19),LowerIdent(67:19-67:22),OpBar(67:22-67:23),OpenCurly(67:23-67:24),
 LowerIdent(68:5-68:11),OpAssign(68:12-68:13),UpperIdent(68:14-68:17),NoSpaceDotLowerIdent(68:17-68:27),NoSpaceOpenRound(68:27-68:28),OpenSquare(68:28-68:29),StringStart(68:29-68:30),StringPart(68:30-68:39),StringEnd(68:39-68:40),Comma(68:40-68:41),StringStart(68:42-68:43),StringPart(68:43-68:55),StringEnd(68:55-68:56),Comma(68:56-68:57),StringStart(68:58-68:59),StringPart(68:59-68:63),StringEnd(68:63-68:64),CloseSquare(68:64-68:65),CloseRound(68:65-68:66),
 LowerIdent(70:5-70:11),NoSpaceDotLowerIdent(70:11-70:20),NoSpaceOpenRound(70:20-70:21),LowerIdent(70:21-70:24),CloseRound(70:24-70:25),
-CloseCurly(71:1-71:2),EndOfFile(71:2-71:2),
+CloseCurly(71:1-71:2),
+EndOfFile(72:1-72:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -646,6 +647,7 @@ is_named_color = |str| {
 
 	colors.contains(str)
 }
+
 ~~~
 # CANONICALIZE
 ~~~clojure

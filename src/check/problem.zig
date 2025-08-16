@@ -102,6 +102,7 @@ pub const TypeMismatchDetail = union(enum) {
     invalid_nominal_tag,
     cross_module_import: CrossModuleImport,
     incompatible_fn_call_arg: IncompatibleFnCallArg,
+    incompatible_fn_return_type: IncompatibleFnReturnType,
     incompatible_fn_args_bound_var: IncompatibleFnArgsBoundVar,
 };
 
@@ -118,12 +119,18 @@ pub const CrossModuleImport = struct {
     module_idx: CIR.Import.Idx,
 };
 
-/// Problem data when
+/// Problem data when function argument types don't match
 pub const IncompatibleFnCallArg = struct {
     fn_name: ?Ident.Idx,
     arg_var: Var,
     incompatible_arg_index: u32, // 0-based index of the incompatible arg
     num_args: u32, // Total number of fn args
+};
+
+/// Problem data when function return type doesn't match
+pub const IncompatibleFnReturnType = struct {
+    fn_name: ?Ident.Idx,
+    return_var: Var,
 };
 
 /// Problem data when function arguments have incompatible types but are bound by the same type variable
@@ -279,6 +286,9 @@ pub const ReportBuilder = struct {
                         .incompatible_fn_call_arg => |data| {
                             return self.buildIncompatibleFnCallArg(&snapshot_writer, mismatch.types, data);
                         },
+                        .incompatible_fn_return_type => |data| {
+                            return self.buildIncompatibleFnReturnType(&snapshot_writer, mismatch.types, data);
+                        },
                         .incompatible_fn_args_bound_var => |data| {
                             return self.buildIncompatibleFnArgsBoundVar(&snapshot_writer, mismatch.types, data);
                         },
@@ -336,20 +346,40 @@ pub const ReportBuilder = struct {
             types.actual_var;
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(region_var)));
 
-        // Check if both types are functions and their return types unify by examining snapshots
-        // If so, this should be reported as a function argument mismatch instead
+        // Check if both types are functions to provide more specific error messages
         if (types.from_annotation) {
             // Check the snapshot content to determine if we have function types
             const expected_content = self.snapshots.getContent(types.expected_snapshot);
             const actual_content = self.snapshots.getContent(types.actual_snapshot);
 
             if (self.areBothFunctionSnapshots(expected_content, actual_content)) {
-                if (self.functionSnapshotsHaveUnifiableReturnTypes(expected_content, actual_content)) {
-                    // Return types unify, so this is likely a function argument mismatch
-                    // Create IncompatibleFnCallArg error instead
+                // Both are functions - determine if it's an argument or return type mismatch
+                // Extract argument and return types
+                const expected_arg = self.extractFirstArgTypeFromFunctionSnapshot(types.expected_snapshot);
+                const actual_arg = self.extractFirstArgTypeFromFunctionSnapshot(types.actual_snapshot);
+
+                // Check if arguments match by comparing their string representations
+                var args_match = false;
+                if (expected_arg != null and actual_arg != null) {
+                    self.buf.clearRetainingCapacity();
+                    snapshot_writer.write(expected_arg.?) catch {};
+                    const expected_arg_str = self.gpa.dupe(u8, self.buf.items) catch "";
+
+                    self.buf.clearRetainingCapacity();
+                    snapshot_writer.write(actual_arg.?) catch {};
+                    const actual_arg_str = self.buf.items;
+
+                    args_match = std.mem.eql(u8, expected_arg_str, actual_arg_str);
+                    self.gpa.free(expected_arg_str);
+                }
+
+                // Only use specialized function error messages when we have constraint_origin_var
+                // which indicates this is actually about a function call argument mismatch
+                if (types.constraint_origin_var != null and !args_match) {
+                    // Argument type mismatch (e.g., str.to_utf8())
                     return self.buildIncompatibleFnCallArg(snapshot_writer, types, .{
                         .fn_name = null,
-                        .arg_var = types.constraint_origin_var orelse types.expected_var,
+                        .arg_var = types.constraint_origin_var.?,
                         .incompatible_arg_index = 0, // First argument
                         .num_args = 1, // Single argument lambda
                     });
@@ -1209,7 +1239,7 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for cross-module import type mismatch
+    /// Build a report for function argument type mismatch
     fn buildIncompatibleFnCallArg(
         self: *Self,
         snapshot_writer: *snapshot.SnapshotWriter,
@@ -1222,17 +1252,21 @@ pub const ReportBuilder = struct {
         try appendOrdinal(&self.buf, data.incompatible_arg_index + 1);
         const arg_index = try report.addOwnedString(self.buf.items);
 
+        // Extract only the argument types from the function snapshots
+        const actual_arg_type = self.extractFirstArgTypeFromFunctionSnapshot(types.actual_snapshot) orelse types.actual_snapshot;
+        const expected_arg_type = self.extractFirstArgTypeFromFunctionSnapshot(types.expected_snapshot) orelse types.expected_snapshot;
+
         self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.actual_snapshot);
+        try snapshot_writer.write(actual_arg_type);
         const actual_type = try report.addOwnedString(self.buf.items);
 
         self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.expected_snapshot);
+        try snapshot_writer.write(expected_arg_type);
         const expected_type = try report.addOwnedString(self.buf.items);
 
         try report.document.addText("The ");
         try report.document.addText(arg_index);
-        try report.document.addText(" argument to this function is not what I expect:");
+        try report.document.addText(" argument being passed here doesn't fit the type the function expects:");
         try report.document.addLineBreak();
 
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.arg_var)));
@@ -1264,6 +1298,65 @@ pub const ReportBuilder = struct {
         try report.document.addReflowingText(" needs the ");
         try report.document.addReflowingText(arg_index);
         try report.document.addReflowingText(" argument to be:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(expected_type, .type_variable);
+
+        return report;
+    }
+
+    /// Build a report for function return type mismatch
+    fn buildIncompatibleFnReturnType(
+        self: *Self,
+        snapshot_writer: *snapshot.SnapshotWriter,
+        types: TypePair,
+        data: IncompatibleFnReturnType,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+
+        // Extract only the return types from the function snapshots
+        const actual_return_type = self.extractReturnTypeFromFunctionSnapshot(types.actual_snapshot) orelse types.actual_snapshot;
+        const expected_return_type = self.extractReturnTypeFromFunctionSnapshot(types.expected_snapshot) orelse types.expected_snapshot;
+
+        self.buf.clearRetainingCapacity();
+        try snapshot_writer.write(actual_return_type);
+        const actual_type = try report.addOwnedString(self.buf.items);
+
+        self.buf.clearRetainingCapacity();
+        try snapshot_writer.write(expected_return_type);
+        const expected_type = try report.addOwnedString(self.buf.items);
+
+        try report.document.addText("This function's return type is not what I expect:");
+        try report.document.addLineBreak();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.return_var)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("This returns:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("But ");
+        if (data.fn_name) |fn_name_ident| {
+            self.buf.clearRetainingCapacity();
+            const fn_name = try report.addOwnedString(self.can_ir.getIdent(fn_name_ident));
+            try report.document.addReflowingText("the annotation on ");
+            try report.document.addAnnotated(fn_name, .inline_code);
+            try report.document.addReflowingText(" says it should return:");
+        } else {
+            try report.document.addReflowingText("the annotation says it should return:");
+        }
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(expected_type, .type_variable);
@@ -1693,6 +1786,38 @@ pub const ReportBuilder = struct {
 
         // Simple heuristic: if we get here, the return types probably unify
         return true;
+    }
+
+    /// Extract the first argument type from a function snapshot (if available)
+    fn extractFirstArgTypeFromFunctionSnapshot(self: *Self, func_snapshot: SnapshotContentIdx) ?SnapshotContentIdx {
+        const content = self.snapshots.getContent(func_snapshot);
+
+        return switch (content) {
+            .structure => |structure| switch (structure) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    const args = self.snapshots.sliceVars(func.args);
+                    if (args.len > 0) {
+                        return args[0];
+                    }
+                    return null;
+                },
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    /// Extract the return type from a function snapshot
+    fn extractReturnTypeFromFunctionSnapshot(self: *Self, func_snapshot: SnapshotContentIdx) ?SnapshotContentIdx {
+        const content = self.snapshots.getContent(func_snapshot);
+
+        return switch (content) {
+            .structure => |structure| switch (structure) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| func.ret,
+                else => null,
+            },
+            else => null,
+        };
     }
 };
 
