@@ -85,7 +85,10 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
         switch (err) {
             error.OutOfMemory => @panic("OOM"),
             error.NoSpaceLeft => @panic("No Space Left"),
-            error.TooNested => @panic("Too much nesting"),
+            error.TooNested => {
+                // This comes from the parser, so don't treat it as a canonicalize error
+                return;
+            },
             else => {},
         }
     };
