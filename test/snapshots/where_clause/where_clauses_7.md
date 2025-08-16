@@ -26,71 +26,11 @@ Decode(a) : a
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:3:1:10:26
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:12:1:16:9
 # PROBLEMS
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **module** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-Here is the problematic code:
-**where_clauses_7.md:10:5:10:11:**
-```roc
-				module(hasher).Hasher
-```
-				^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_arrow`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**where_clauses_7.md:9:7:9:13:**
-```roc
-						hasher, # After first clause
-```
-						^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**where_clauses_7.md:10:12:10:18:**
-```roc
-				module(hasher).Hasher
-```
-				       ^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**where_clauses_7.md:10:18:10:19:**
-```roc
-				module(hasher).Hasher
-```
-				             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**where_clauses_7.md:10:19:10:26:**
-```roc
-				module(hasher).Hasher
-```
-				              ^^^^^^^
-
-
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
 
 You're attempting do this here:
-**where_clauses_7.md:3:1:10:12:**
+**where_clauses_7.md:3:1:10:26:**
 ```roc
 Hash(a, hasher) # After header
 	: # After colon
@@ -141,20 +81,18 @@ CloseRound(16:3-16:4),OpArrow(16:5-16:7),LowerIdent(16:8-16:9),EndOfFile(16:9-16
 		(exposes @1.8-1.14
 			(exposed-upper-ident @1.9-1.13 (text "Hash"))))
 	(statements
-		(s-type-decl @3.1-10.12
+		(s-type-decl @3.1-10.26
 			(header @3.1-3.16 (name "Hash")
 				(args
 					(ty-var @3.6-3.7 (raw "a"))
 					(ty-var @3.9-3.15 (raw "hasher"))))
 			(ty-var @5.3-5.4 (raw "a"))
 			(where
-				(method @7.5-10.12 (module-of "a") (name "hash")
+				(method @7.5-9.13 (module-of "a") (name "hash")
 					(args
 						(ty-var @7.22-7.28 (raw "hasher")))
-					(ty-malformed @9.7-10.12 (tag "expected_arrow")))))
-		(s-malformed @10.12-10.18 (tag "statement_unexpected_token"))
-		(s-malformed @10.18-10.19 (tag "statement_unexpected_token"))
-		(s-malformed @10.19-10.26 (tag "statement_unexpected_token"))
+					(ty-var @9.7-9.13 (raw "hasher")))
+				(alias @10.5-10.26 (module-of "hasher") (name "Hasher"))))
 		(s-type-decl @12.1-16.9
 			(header @12.1-12.10 (name "Decode")
 				(args
@@ -178,8 +116,8 @@ Hash(a, hasher) # After header
 			where # After where
 				module(a).hash : hasher # After method
 					-> # After arrow
-						
-
+						hasher, # After first clause
+				module(hasher).Hasher
 
 Decode(a) : a
 	where
@@ -188,7 +126,7 @@ Decode(a) : a
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-alias-decl @3.1-10.12
+	(s-alias-decl @3.1-10.26
 		(ty-header @3.1-3.16 (name "Hash")
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))
@@ -205,7 +143,7 @@ Decode(a) : a
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-10.12 (type "Hash(a, hasher)")
+		(alias @3.1-10.26 (type "Hash(a, hasher)")
 			(ty-header @3.1-3.16 (name "Hash")
 				(ty-args
 					(ty-var @3.6-3.7 (name "a"))

@@ -1245,6 +1245,12 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!?AST.State
     }
 
     if (statementType == .top_level) {
+        // Check if this might be a multi-arrow type pattern
+        if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
+            // Look back to see if the previous statement was a type annotation
+            // If so, this is likely an attempt to write "a -> b -> c" style
+            return try self.pushMalformed(AST.Statement.Idx, .multi_arrow_needs_parens, self.pos);
+        }
         return try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
     }
 
@@ -2538,22 +2544,21 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                     .region = .{ .start = after_round, .end = self.pos },
                 } });
                 self.advance();
-                anno = try self.store.addTypeAnno(.{ .parens = .{
+                return try self.store.addTypeAnno(.{ .parens = .{
                     .anno = function,
                     .region = .{ .start = start, .end = self.pos },
                 } });
-            } else {
-                if (self.peek() != .CloseRound) {
-                    self.store.clearScratchTypeAnnosFrom(scratch_top);
-                    return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, start);
-                }
-                self.advance(); // Advance past CloseRound
-                const annos = try self.store.typeAnnoSpanFrom(scratch_top);
-                anno = try self.store.addTypeAnno(.{ .tuple = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .annos = annos,
-                } });
             }
+            if (self.peek() != .CloseRound) {
+                self.store.clearScratchTypeAnnosFrom(scratch_top);
+                return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, start);
+            }
+            self.advance(); // Advance past CloseRound
+            const annos = try self.store.typeAnnoSpanFrom(scratch_top);
+            anno = try self.store.addTypeAnno(.{ .tuple = .{
+                .region = .{ .start = start, .end = self.pos },
+                .annos = annos,
+            } });
         },
         .OpenCurly => {
             self.advance(); // Advance past OpenCurly
@@ -2606,10 +2611,9 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         const curr_is_arrow = curr == .OpArrow or curr == .OpFatArrow;
         const next_is_not_lower_ident = next_tok != .LowerIdent;
         const not_followed_by_colon = two_away_tok != .OpColon;
-        const two_away_is_arrow = two_away_tok == .OpArrow or two_away_tok == .OpFatArrow;
         if ((looking_for_args == .not_looking_for_args) and
             (curr_is_arrow or
-                (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and next_tok != .CloseCurly)))
+                (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon) and next_tok != .CloseCurly)))
         {
             const scratch_top = self.store.scratchTypeAnnoTop();
             try self.store.addScratchTypeAnno(an);
@@ -2624,7 +2628,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             const effectful = self.peek() == .OpFatArrow;
             self.advance(); // Advance past arrow
             // TODO: Handle thin vs fat arrow
-            const ret = try self.parseTypeAnno(.not_looking_for_args);
+            const ret = try self.parseTypeAnno(.looking_for_args);
             return try self.store.addTypeAnno(.{ .@"fn" = .{
                 .region = .{ .start = start, .end = self.pos },
                 .args = args,

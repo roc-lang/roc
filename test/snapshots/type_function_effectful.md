@@ -13,22 +13,64 @@ runEffect! = |fn!, x| fn!(x)
 main! = |_| {}
 ~~~
 # EXPECTED
+PARSE ERROR - type_function_effectful.md:3:25:3:27
+PARSE ERROR - type_function_effectful.md:3:28:3:30
 PARSE ERROR - type_function_effectful.md:3:31:3:33
 PARSE ERROR - type_function_effectful.md:3:34:3:36
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_function_effectful.md:4:14:4:29:**
+**PARSE ERROR**
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+
+Here is the problematic code:
+**type_function_effectful.md:3:25:3:27:**
 ```roc
-runEffect! = |fn!, x| fn!(x)
+runEffect! : (_a => _b) -> _a => _b
 ```
-             ^^^^^^^^^^^^^^^
+                        ^^
 
-The type annotation says it should have the type:
-    __a => _b -> _a => _b_
 
-But here it's being used as:
-    __arg -> _a => _b, _arg2 -> _a => _b_
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_function_effectful.md:3:28:3:30:**
+```roc
+runEffect! : (_a => _b) -> _a => _b
+```
+                           ^^
+
+
+**PARSE ERROR**
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+
+Here is the problematic code:
+**type_function_effectful.md:3:31:3:33:**
+```roc
+runEffect! : (_a => _b) -> _a => _b
+```
+                              ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**type_function_effectful.md:3:34:3:36:**
+```roc
+runEffect! : (_a => _b) -> _a => _b
+```
+                                 ^^
+
 
 # TOKENS
 ~~~zig
@@ -52,14 +94,14 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.36 (name "runEffect!")
-			(ty-fn @3.14-3.36
-				(ty-fn @3.15-3.23
-					(underscore-ty-var @3.15-3.17 (raw "_a"))
-					(underscore-ty-var @3.21-3.23 (raw "_b")))
-				(ty-fn @3.28-3.36
-					(underscore-ty-var @3.28-3.30 (raw "_a"))
-					(underscore-ty-var @3.34-3.36 (raw "_b")))))
+		(s-type-anno @3.1-3.24 (name "runEffect!")
+			(ty-fn @3.15-3.23
+				(underscore-ty-var @3.15-3.17 (raw "_a"))
+				(underscore-ty-var @3.21-3.23 (raw "_b"))))
+		(s-malformed @3.25-3.27 (tag "multi_arrow_needs_parens"))
+		(s-malformed @3.28-3.30 (tag "statement_unexpected_token"))
+		(s-malformed @3.31-3.33 (tag "multi_arrow_needs_parens"))
+		(s-malformed @3.34-3.36 (tag "statement_unexpected_token"))
 		(s-decl @4.1-4.29
 			(p-ident @4.1-4.11 (raw "runEffect!"))
 			(e-lambda @4.14-4.29
@@ -80,7 +122,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-runEffect! : (_a => _b) -> (_a => _b)
+runEffect! : (_a => _b)
+
 runEffect! = |fn!, x| fn!(x)
 
 main! = |_| {}
@@ -98,17 +141,7 @@ main! = |_| {}
 				(e-lookup-local @4.23-4.26
 					(p-assign @4.15-4.18 (ident "fn!")))
 				(e-lookup-local @4.27-4.28
-					(p-assign @4.20-4.21 (ident "x")))))
-		(annotation @4.1-4.11
-			(declared-type
-				(ty-fn @3.14-3.36 (effectful false)
-					(ty-parens @3.14-3.24
-						(ty-fn @3.15-3.23 (effectful true)
-							(ty-var @3.15-3.17 (name "_a"))
-							(ty-var @3.21-3.23 (name "_b"))))
-					(ty-fn @3.28-3.36 (effectful true)
-						(ty-var @3.28-3.30 (name "_a"))
-						(ty-var @3.34-3.36 (name "_b")))))))
+					(p-assign @4.20-4.21 (ident "x"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
@@ -120,9 +153,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.11 (type "Error"))
+		(patt @4.1-4.11 (type "_arg -> ret, _arg2 -> ret2"))
 		(patt @6.1-6.6 (type "_arg -> {}")))
 	(expressions
-		(expr @4.14-4.29 (type "Error"))
+		(expr @4.14-4.29 (type "_arg -> ret, _arg2 -> ret2"))
 		(expr @6.9-6.15 (type "_arg -> {}"))))
 ~~~
