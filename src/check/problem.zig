@@ -314,6 +314,7 @@ pub const ReportBuilder = struct {
         types: TypePair,
     ) !Report {
         var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
 
         self.buf.clearRetainingCapacity();
         try snapshot_writer.write(types.actual_snapshot);
@@ -347,6 +348,7 @@ pub const ReportBuilder = struct {
                 // a specific constraint like a dot access (e.g., str.to_utf8()).
                 // In this case, show a specialized argument type mismatch error.
                 if (types.constraint_origin_var) |origin_var| {
+                    report.deinit();
                     return self.buildIncompatibleFnCallArg(snapshot_writer, types, .{
                         .fn_name = null,
                         .arg_var = origin_var,
@@ -422,6 +424,7 @@ pub const ReportBuilder = struct {
         data: IncompatibleListElements,
     ) !Report {
         var report = Report.init(self.gpa, "INCOMPATIBLE LIST ELEMENTS", .runtime_error);
+        errdefer report.deinit();
 
         // Create owned strings
         self.buf.clearRetainingCapacity();
@@ -556,6 +559,7 @@ pub const ReportBuilder = struct {
         types: TypePair,
     ) !Report {
         var report = Report.init(self.gpa, "INVALID IF CONDITION", .runtime_error);
+        errdefer report.deinit();
 
         // Create owned strings
         self.buf.clearRetainingCapacity();
@@ -641,6 +645,7 @@ pub const ReportBuilder = struct {
         const is_only_if_else = data.num_branches == 2;
 
         var report = Report.init(self.gpa, "INCOMPATIBLE IF BRANCHES", .runtime_error);
+        errdefer report.deinit();
 
         // Create owned strings
         self.buf.clearRetainingCapacity();
@@ -779,6 +784,7 @@ pub const ReportBuilder = struct {
         data: IncompatibleMatchPatterns,
     ) !Report {
         var report = Report.init(self.gpa, "INCOMPATIBLE MATCH PATTERNS", .runtime_error);
+        errdefer report.deinit();
 
         // Create owned strings
         self.buf.clearRetainingCapacity();
@@ -904,6 +910,7 @@ pub const ReportBuilder = struct {
         std.debug.assert(data.problem_branch_index > 0);
 
         var report = Report.init(self.gpa, "INCOMPATIBLE MATCH BRANCHES", .runtime_error);
+        errdefer report.deinit();
 
         // Create owned strings
         self.buf.clearRetainingCapacity();
@@ -1026,6 +1033,7 @@ pub const ReportBuilder = struct {
         data: InvalidBoolBinop,
     ) !Report {
         var report = Report.init(self.gpa, "INVALID BOOL OPERATION", .runtime_error);
+        errdefer report.deinit();
 
         // Create owned strings
         self.buf.clearRetainingCapacity();
@@ -1116,6 +1124,7 @@ pub const ReportBuilder = struct {
         types: TypePair,
     ) !Report {
         var report = Report.init(self.gpa, "INVALID NOMINAL TAG", .runtime_error);
+        errdefer report.deinit();
 
         // Create actual tag str
         const actual_content = self.snapshots.getContent(types.actual_snapshot);
@@ -1217,6 +1226,7 @@ pub const ReportBuilder = struct {
         data: IncompatibleFnCallArg,
     ) !Report {
         var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
 
         self.buf.clearRetainingCapacity();
         try appendOrdinal(&self.buf, data.incompatible_arg_index + 1);
@@ -1282,6 +1292,7 @@ pub const ReportBuilder = struct {
         data: IncompatibleFnArgsBoundVar,
     ) !Report {
         var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
 
         self.buf.clearRetainingCapacity();
         try appendOrdinal(&self.buf, data.first_arg_index + 1);
@@ -1415,6 +1426,7 @@ pub const ReportBuilder = struct {
             }
         };
         var report = Report.init(self.gpa, title, .runtime_error);
+        errdefer report.deinit();
 
         const type_name = try report.addOwnedString(self.can_ir.getIdent(data.type_name));
 
@@ -1461,6 +1473,7 @@ pub const ReportBuilder = struct {
         data: NumberDoesNotFit,
     ) !Report {
         var report = Report.init(self.gpa, "NUMBER DOES NOT FIT IN TYPE", .runtime_error);
+        errdefer report.deinit();
 
         self.buf.clearRetainingCapacity();
         try snapshot_writer.write(data.expected_type);
@@ -1501,6 +1514,7 @@ pub const ReportBuilder = struct {
         data: NegativeUnsignedInt,
     ) !Report {
         var report = Report.init(self.gpa, "NEGATIVE UNSIGNED INTEGER", .runtime_error);
+        errdefer report.deinit();
 
         self.buf.clearRetainingCapacity();
         try snapshot_writer.write(data.expected_type);
@@ -1548,6 +1562,7 @@ pub const ReportBuilder = struct {
         data: CrossModuleImport,
     ) !Report {
         var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
 
         try report.document.addText("This value is being used in an unexpected way.");
         try report.document.addLineBreak();
