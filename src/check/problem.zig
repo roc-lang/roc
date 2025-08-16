@@ -1266,7 +1266,7 @@ pub const ReportBuilder = struct {
 
         try report.document.addText("The ");
         try report.document.addText(arg_index);
-        try report.document.addText(" argument being passed here doesn't fit the type the function expects:");
+        try report.document.addText(" argument being passed to this function has the wrong type:");
         try report.document.addLineBreak();
 
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.arg_var)));

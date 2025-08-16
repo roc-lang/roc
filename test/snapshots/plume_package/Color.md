@@ -125,7 +125,7 @@ But it should be one of:
     _RGBA(U8, U8, U8, Dec)_
 
 **TYPE MISMATCH**
-The first argument being passed here doesn't fit the type the function expects:
+The first argument being passed to this function has the wrong type:
 **Color.md:29:13:29:26:**
 ```roc
     bytes = str.to_utf8()

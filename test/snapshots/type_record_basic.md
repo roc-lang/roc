@@ -16,7 +16,7 @@ main! = |_| getName({name: "luke", age:21})
 TYPE MISMATCH - type_record_basic.md:6:21:6:43
 # PROBLEMS
 **TYPE MISMATCH**
-The first argument being passed here doesn't fit the type the function expects:
+The first argument being passed to this function has the wrong type:
 **type_record_basic.md:6:21:6:43:**
 ```roc
 main! = |_| getName({name: "luke", age:21})
