@@ -34,7 +34,7 @@ Here is the problematic code:
 ```roc
 nums : List U8
 ```
-              
+              ^
 
 
 **EXPOSED BUT NOT DEFINED**

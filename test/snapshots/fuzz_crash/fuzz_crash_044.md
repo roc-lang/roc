@@ -101,7 +101,7 @@ Here is the problematic code:
 ```roc
 ""
 ```
- 
+ ^
 
 
 **PARSE ERROR**

@@ -32,7 +32,7 @@ Here is the problematic code:
 ```roc
 module[}0}.a
 ```
-            
+            ^
 
 
 # TOKENS

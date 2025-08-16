@@ -92,7 +92,7 @@ The unused variable is declared here:
 ```roc
     [first, ..rest] => 0 # invalid rest pattern should error
 ```
-              
+              ^
 
 
 **UNUSED VARIABLE**
@@ -104,7 +104,7 @@ The unused variable is declared here:
 ```roc
     [..rest, last] => 1 # invalid rest pattern should error
 ```
-       
+       ^
 
 
 **UNUSED VARIABLE**
@@ -140,7 +140,7 @@ The unused variable is declared here:
 ```roc
     [x, ..rest, y] => 2 # invalid rest pattern should error
 ```
-          
+          ^
 
 
 **UNUSED VARIABLE**

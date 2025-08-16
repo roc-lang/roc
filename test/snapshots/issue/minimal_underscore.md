@@ -19,7 +19,7 @@ Underscores are not allowed in type alias declarations.
 ```roc
 module []
 ```
-
+^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 

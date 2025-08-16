@@ -23,7 +23,7 @@ Here is the problematic code:
 ```roc
     [] -> Err(EmptyList)
 ```
-       
+       ^
 
 
 **PARSE ERROR**
@@ -34,7 +34,7 @@ Here is the problematic code:
 ```roc
     [.., e] -> Ok(e)
 ```
-            
+            ^
 
 
 **UNDEFINED VARIABLE**

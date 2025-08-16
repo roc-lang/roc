@@ -555,24 +555,7 @@ The unused variable is declared here:
 ```roc
 # This is a module comment!
 ```
-
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: alternatives pattern outside match expression
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-**UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_023.md:1:1:1:1:**
-```roc
-# This is a module comment!
-```
-
+^
 
 
 **NOT IMPLEMENTED**
@@ -589,7 +572,24 @@ The unused variable is declared here:
 ```roc
 # This is a module comment!
 ```
+^
 
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: alternatives pattern outside match expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+**UNUSED VARIABLE**
+Variable `rest` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:1:1:1:1:**
+```roc
+# This is a module comment!
+```
+^
 
 
 **NOT IMPLEMENTED**

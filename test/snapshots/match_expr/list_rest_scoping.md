@@ -76,7 +76,7 @@ The unused variable is declared here:
 ```roc
     [first, ..rest] => first + 1
 ```
-              
+              ^
 
 
 **UNUSED VARIABLE**
@@ -88,7 +88,7 @@ The unused variable is declared here:
 ```roc
     [..rest, last] => last + 2
 ```
-       
+       ^
 
 
 **UNUSED VARIABLE**
@@ -100,7 +100,7 @@ The unused variable is declared here:
 ```roc
     [x, ..rest, y] => x + y
 ```
-          
+          ^
 
 
 # TOKENS

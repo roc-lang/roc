@@ -551,7 +551,7 @@ The unused variable is declared here:
 ```roc
 # Thnt!
 ```
-
+^
 
 
 **NOT IMPLEMENTED**
@@ -568,7 +568,7 @@ The unused variable is declared here:
 ```roc
 # Thnt!
 ```
-
+^
 
 
 **UNUSED VARIABLE**

@@ -97,7 +97,7 @@ Here is the problematic code:
 ```roc
     "onmo %
 ```
-           
+           ^
 
 
 # TOKENS

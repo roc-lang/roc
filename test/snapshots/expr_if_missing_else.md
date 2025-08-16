@@ -22,7 +22,7 @@ Here is the problematic code:
 ```roc
 foo = if tru 0
 ```
-              
+              ^
 
 
 **UNKNOWN OPERATOR**
@@ -32,7 +32,7 @@ This looks like an operator, but it's not one I recognize!
 ```roc
 foo = if tru 0
 ```
-              
+              ^
 
 Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
 

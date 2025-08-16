@@ -197,7 +197,7 @@ Here is the problematic code:
 ```roc
 	match a {lue  {
 ```
-	              
+	              ^
 
 
 **PARSE ERROR**
@@ -209,7 +209,7 @@ Here is the problematic code:
 ```roc
 			1	"for" => 20[1, ] # t
 ```
-			
+			^
 
 
 **PARSE ERROR**
@@ -221,7 +221,7 @@ Here is the problematic code:
 ```roc
 		ment
 ```
-		
+		^
 
 
 **PARSE ERROR**
@@ -233,7 +233,7 @@ Here is the problematic code:
 ```roc
 		[1, 2, 3,est]123
 ```
-		             
+		             ^
 
 
 **PARSE ERROR**
@@ -245,7 +245,7 @@ Here is the problematic code:
 ```roc
 		] 23
 ```
-		  
+		  ^
 
 
 **PARSE ERROR**
@@ -257,7 +257,7 @@ Here is the problematic code:
 ```roc
 		3.1 314
 ```
-		    
+		    ^
 
 
 **PARSE ERROR**
@@ -269,7 +269,7 @@ Here is the problematic code:
 ```roc
 		(1, 2, 3)123
 ```
-		         
+		         ^
 
 
 **UNDECLARED TYPE**
