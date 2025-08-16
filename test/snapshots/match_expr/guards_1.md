@@ -67,7 +67,7 @@ Here is the problematic code:
 **IF WITHOUT ELSE**
 This `if` is being used as an expression, but it doesn't have an `else`.
 
-When `if` is used as an expression (to produce a value), it must have an `else` branch to handle the case when the condition is false.
+When `if` is used as an expression (to evaluate to a value), it must have an `else` branch to specify what value to use when the condition is `False`.
 
 Here is the problematic code:
 **guards_1.md:2:7:2:9:**
@@ -212,7 +212,7 @@ Here is the problematic code:
 **IF WITHOUT ELSE**
 This `if` is being used as an expression, but it doesn't have an `else`.
 
-When `if` is used as an expression (to produce a value), it must have an `else` branch to handle the case when the condition is false.
+When `if` is used as an expression (to evaluate to a value), it must have an `else` branch to specify what value to use when the condition is `False`.
 
 Here is the problematic code:
 **guards_1.md:3:7:3:9:**

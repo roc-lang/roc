@@ -143,17 +143,18 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
 
     var report = reporting.Report.init(allocator, title, .runtime_error);
     try report.document.addText(body);
-    
+
     // Add the region information from the diagnostic if valid
-    if (diagnostic.region.start.offset < diagnostic.region.end.offset and 
-        diagnostic.region.end.offset <= self.env.source.len) {
-        
+    if (diagnostic.region.start.offset < diagnostic.region.end.offset and
+        diagnostic.region.end.offset <= self.env.source.len)
+    {
+
         // Calculate line starts if not already done
         var env = self.env.*;
         if (env.line_starts.items.items.len == 0) {
             try env.calcLineStarts(allocator);
         }
-        
+
         // Convert region to RegionInfo
         const region_info = base.RegionInfo.position(
             self.env.source,
@@ -164,7 +165,7 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
             // If we can't calculate region info, just return the report without source context
             return report;
         };
-        
+
         // Add source region to the report
         try report.document.addSourceRegion(
             region_info,
@@ -174,7 +175,7 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
             env.line_starts.items.items,
         );
     }
-    
+
     return report;
 }
 
@@ -541,9 +542,11 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addLineBreak();
             try report.document.addReflowingText("When ");
             try report.document.addKeyword("if");
-            try report.document.addReflowingText(" is used as an expression (to produce a value), it must have an ");
+            try report.document.addReflowingText(" is used as an expression (to evaluate to a value), it must have an ");
             try report.document.addKeyword("else");
-            try report.document.addReflowingText(" branch to handle the case when the condition is false.");
+            try report.document.addReflowingText(" branch to specify what value to use when the condition is ");
+            try report.document.addKeyword("False");
+            try report.document.addReflowingText(".");
         },
         else => {
             const tag_name = @tagName(diagnostic.tag);

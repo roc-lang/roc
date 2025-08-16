@@ -16,7 +16,7 @@ UNKNOWN OPERATOR - expr_if_missing_else.md:3:7:3:15
 **IF WITHOUT ELSE**
 This `if` is being used as an expression, but it doesn't have an `else`.
 
-When `if` is used as an expression (to produce a value), it must have an `else` branch to handle the case when the condition is false.
+When `if` is used as an expression (to evaluate to a value), it must have an `else` branch to specify what value to use when the condition is `False`.
 
 Here is the problematic code:
 **expr_if_missing_else.md:3:7:3:9:**
