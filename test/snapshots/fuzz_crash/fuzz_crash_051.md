@@ -15,7 +15,6 @@ PARSE ERROR - fuzz_crash_051.md:1:22:1:22
 A parsing error occurred: `exposed_item_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_051.md:1:8:1:9:**
 ```roc
 module[}{0      0)(0}
@@ -27,7 +26,6 @@ module[}{0      0)(0}
 A parsing error occurred: `header_expected_close_square`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_051.md:1:22:1:22:**
 ```roc
 module[}{0      0)(0}

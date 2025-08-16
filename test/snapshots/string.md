@@ -29,100 +29,62 @@ INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
 INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
 INVALID ESCAPE SEQUENCE - :0:0:0:0
 UNCLOSED STRING - :0:0:0:0
-UNEXPECTED TOKEN IN STRING - string.md:6:5:6:5
-UNEXPECTED TOKEN IN STRING - string.md:7:6:7:6
-UNEXPECTED TOKEN IN STRING - string.md:8:6:8:6
-UNEXPECTED TOKEN IN STRING - string.md:9:7:9:7
-UNEXPECTED TOKEN IN STRING - string.md:10:8:10:8
 PARSE ERROR - string.md:15:1:15:2
 PARSE ERROR - string.md:15:2:15:3
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
-
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
-
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
-
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
-
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
-
-**INVALID ESCAPE SEQUENCE**
-This escape sequence is not recognized.
-
-**UNCLOSED STRING**
-This string is missing a closing quote.
-
-**UNEXPECTED TOKEN IN STRING**
-The token **<unknown>** is not expected in a string literal.
-String literals should be enclosed in double quotes.
-
-Here is the problematic code:
-**string.md:6:5:6:5:**
-```roc
+This Unicode escape sequence is not valid.```roc
 	"\u",
 ```
-	   ^
+	 ^^
 
 
-**UNEXPECTED TOKEN IN STRING**
-The token **<unknown>** is not expected in a string literal.
-String literals should be enclosed in double quotes.
-
-Here is the problematic code:
-**string.md:7:6:7:6:**
-```roc
+**INVALID UNICODE ESCAPE SEQUENCE**
+This Unicode escape sequence is not valid.```roc
 	"\u)",
 ```
-	    ^
+	 ^^
 
 
-**UNEXPECTED TOKEN IN STRING**
-The token **<unknown>** is not expected in a string literal.
-String literals should be enclosed in double quotes.
-
-Here is the problematic code:
-**string.md:8:6:8:6:**
-```roc
+**INVALID UNICODE ESCAPE SEQUENCE**
+This Unicode escape sequence is not valid.```roc
 	"\u(",
 ```
-	    ^
+	 ^^^
 
 
-**UNEXPECTED TOKEN IN STRING**
-The token **<unknown>** is not expected in a string literal.
-String literals should be enclosed in double quotes.
-
-Here is the problematic code:
-**string.md:9:7:9:7:**
-```roc
+**INVALID UNICODE ESCAPE SEQUENCE**
+This Unicode escape sequence is not valid.```roc
 	"\u()",
 ```
-	     ^
+	 ^^^^
 
 
-**UNEXPECTED TOKEN IN STRING**
-The token **<unknown>** is not expected in a string literal.
-String literals should be enclosed in double quotes.
-
-Here is the problematic code:
-**string.md:10:8:10:8:**
-```roc
+**INVALID UNICODE ESCAPE SEQUENCE**
+This Unicode escape sequence is not valid.```roc
 	"\u(K)",
 ```
-	      ^
+	 ^^^^^
+
+
+**INVALID ESCAPE SEQUENCE**
+This escape sequence is not recognized.```roc
+"\
+```
+ ^
+
+
+**UNCLOSED STRING**
+This string is missing a closing quote.```roc
+"\
+```
+^^
 
 
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **string.md:15:1:15:2:**
 ```roc
 "\
@@ -134,7 +96,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **string.md:15:2:15:3:**
 ```roc
 "\

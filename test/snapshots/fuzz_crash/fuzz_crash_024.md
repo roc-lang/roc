@@ -25,17 +25,20 @@ PARSE ERROR - fuzz_crash_024.md:4:1:4:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:4:8:4:9
 PARSE ERROR - fuzz_crash_024.md:7:1:7:4
 MALFORMED TYPE - fuzz_crash_024.md:1:24:1:32
-UNKNOWN OPERATOR - fuzz_crash_024.md:4:8:4:9
+UNRECOGNIZED SYNTAX - fuzz_crash_024.md:4:8:4:9
 DUPLICATE DEFINITION - fuzz_crash_024.md:7:5:7:6
 # PROBLEMS
 **UNCLOSED STRING**
-This string is missing a closing quote.
+This string is missing a closing quote.```roc
+module [module ] { pf: platform ".-/main._]where # A
+```
+                                ^^^^^^^^^^^^^^^^^^^^
+
 
 **PARSE ERROR**
 A parsing error occurred: `exposed_item_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_024.md:1:9:1:15:**
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
@@ -47,7 +50,6 @@ module [module ] { pf: platform ".-/main._]where # A
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_024.md:1:18:1:19:**
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
@@ -59,7 +61,6 @@ module [module ] { pf: platform ".-/main._]where # A
 The token **platform** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-Here is the problematic code:
 **fuzz_crash_024.md:1:24:1:32:**
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
@@ -71,7 +72,6 @@ module [module ] { pf: platform ".-/main._]where # A
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_024.md:1:33:1:34:**
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
@@ -83,7 +83,6 @@ module [module ] { pf: platform ".-/main._]where # A
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_024.md:1:34:1:53:**
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
@@ -95,7 +94,6 @@ module [module ] { pf: platform ".-/main._]where # A
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_024.md:1:53:1:53:**
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
@@ -107,7 +105,6 @@ module [module ] { pf: platform ".-/main._]where # A
 A parsing error occurred: `var_only_allowed_in_a_body`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_024.md:4:1:4:4:**
 ```roc
 var t= ]
@@ -119,7 +116,6 @@ var t= ]
 The token **]** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **fuzz_crash_024.md:4:8:4:9:**
 ```roc
 var t= ]
@@ -131,7 +127,6 @@ var t= ]
 A parsing error occurred: `var_only_allowed_in_a_body`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_024.md:7:1:7:4:**
 ```roc
 var t= 0
@@ -149,8 +144,8 @@ module [module ] { pf: platform ".-/main._]where # A
                        ^^^^^^^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
 **fuzz_crash_024.md:4:8:4:9:**
 ```roc
@@ -158,7 +153,7 @@ var t= ]
 ```
        ^
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+This might be a syntax error, an unsupported language feature, or a typo.
 
 **DUPLICATE DEFINITION**
 The name `t` is being redeclared in this scope.

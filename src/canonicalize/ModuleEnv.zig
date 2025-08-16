@@ -473,8 +473,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .expr_not_canonicalized => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = Report.init(allocator, "UNKNOWN OPERATOR", .runtime_error);
-            try report.document.addReflowingText("This looks like an operator, but it's not one I recognize!");
+            var report = Report.init(allocator, "UNRECOGNIZED SYNTAX", .runtime_error);
+            try report.document.addReflowingText("I don't recognize this syntax.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
@@ -488,13 +488,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             );
 
             try report.document.addLineBreak();
-            try report.document.addReflowingText("Check the spelling and make sure you're using a valid Roc operator like ");
-            try report.document.addBinaryOperator("+");
-            try report.document.addReflowingText(", ");
-            try report.document.addBinaryOperator("-");
-            try report.document.addReflowingText(", ");
-            try report.document.addBinaryOperator("==");
-            try report.document.addReflowingText(".");
+            try report.document.addReflowingText("This might be a syntax error, an unsupported language feature, or a typo.");
 
             break :blk report;
         },

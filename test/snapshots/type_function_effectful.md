@@ -23,7 +23,6 @@ Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
         a -> (b -> c) for a **curried** function (a function that **returns** another function)
         (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
 
-Here is the problematic code:
 **type_function_effectful.md:3:31:3:33:**
 ```roc
 runEffect! : (_a => _b) -> _a => _b
@@ -35,7 +34,6 @@ runEffect! : (_a => _b) -> _a => _b
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **type_function_effectful.md:3:34:3:36:**
 ```roc
 runEffect! : (_a => _b) -> _a => _b

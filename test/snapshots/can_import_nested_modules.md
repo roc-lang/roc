@@ -64,7 +64,6 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:26:24:26:41
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **can_import_nested_modules.md:3:19:3:26:**
 ```roc
 import json.Parser.Config
@@ -76,7 +75,6 @@ import json.Parser.Config
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **can_import_nested_modules.md:4:19:4:24:**
 ```roc
 import http.Client.Auth as HttpAuth
@@ -88,7 +86,6 @@ import http.Client.Auth as HttpAuth
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **can_import_nested_modules.md:4:25:4:27:**
 ```roc
 import http.Client.Auth as HttpAuth
@@ -112,7 +109,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **can_import_nested_modules.md:5:1:5:7:**
 ```roc
 import utils.String.Format exposing [padLeft]
@@ -124,7 +120,6 @@ import utils.String.Format exposing [padLeft]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **can_import_nested_modules.md:5:8:5:13:**
 ```roc
 import utils.String.Format exposing [padLeft]
@@ -136,7 +131,6 @@ import utils.String.Format exposing [padLeft]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **can_import_nested_modules.md:5:13:5:20:**
 ```roc
 import utils.String.Format exposing [padLeft]
@@ -148,7 +142,6 @@ import utils.String.Format exposing [padLeft]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **can_import_nested_modules.md:5:20:5:27:**
 ```roc
 import utils.String.Format exposing [padLeft]
@@ -160,7 +153,6 @@ import utils.String.Format exposing [padLeft]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **can_import_nested_modules.md:5:28:5:36:**
 ```roc
 import utils.String.Format exposing [padLeft]
@@ -172,7 +164,6 @@ import utils.String.Format exposing [padLeft]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **can_import_nested_modules.md:5:37:5:38:**
 ```roc
 import utils.String.Format exposing [padLeft]
@@ -184,7 +175,6 @@ import utils.String.Format exposing [padLeft]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **can_import_nested_modules.md:5:38:5:45:**
 ```roc
 import utils.String.Format exposing [padLeft]
@@ -196,7 +186,6 @@ import utils.String.Format exposing [padLeft]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **can_import_nested_modules.md:5:45:5:46:**
 ```roc
 import utils.String.Format exposing [padLeft]
@@ -428,7 +417,7 @@ LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17
 		(s-import @4.1-4.19 (raw "http.Client"))
 		(s-malformed @4.19-4.24 (tag "statement_unexpected_token"))
 		(s-malformed @4.25-4.27 (tag "statement_unexpected_token"))
-		(s-malformed @4.28-5.7 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @5.1-5.7 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @5.8-5.13 (tag "statement_unexpected_token"))
 		(s-malformed @5.13-5.20 (tag "statement_unexpected_token"))
 		(s-malformed @5.20-5.27 (tag "statement_unexpected_token"))
@@ -517,6 +506,7 @@ module []
 import json.Parser
 
 import http.Client
+
 
 
 # Test multi-level type qualification

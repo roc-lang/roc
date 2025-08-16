@@ -16,7 +16,6 @@ MALFORMED TYPE - type_constrained_record.md:1:37:1:45
 The token **..** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-Here is the problematic code:
 **type_constrained_record.md:1:42:1:44:**
 ```roc
 process_user! : { name : Str, age : U32, ..a } => Str
@@ -28,7 +27,6 @@ process_user! : { name : Str, age : U32, ..a } => Str
 A parsing error occurred: `expected_arrow`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **type_constrained_record.md:1:37:1:40:**
 ```roc
 process_user! : { name : Str, age : U32, ..a } => Str

@@ -16,7 +16,6 @@ MODULE NOT IMPORTED - fuzz_crash_042.md:1:25:1:30
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_042.md:1:19:1:20:**
 ```roc
 module[]import u.R}g:r->R.a.E

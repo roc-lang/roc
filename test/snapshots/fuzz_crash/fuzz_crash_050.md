@@ -17,7 +17,6 @@ PARSE ERROR - fuzz_crash_050.md:3:2:3:2
 The token **)** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **fuzz_crash_050.md:2:1:2:2:**
 ```roc
 )
@@ -29,7 +28,6 @@ Here is the problematic code:
 A parsing error occurred: `expected_expr_close_curly`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_050.md:3:2:3:2:**
 ```roc
  

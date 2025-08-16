@@ -10,31 +10,31 @@ module []
 foo = if tru 0
 ~~~
 # EXPECTED
-PARSE ERROR - expr_if_missing_else.md:3:15:3:15
-UNKNOWN OPERATOR - expr_if_missing_else.md:3:15:3:15
+IF WITHOUT ELSE - expr_if_missing_else.md:3:7:3:9
+UNRECOGNIZED SYNTAX - expr_if_missing_else.md:3:7:3:15
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `no_else`
-This is an unexpected parsing error. Please check your syntax.
+**IF WITHOUT ELSE**
+This `if` is being used as an expression, but it doesn't have an `else`.
 
-Here is the problematic code:
-**expr_if_missing_else.md:3:15:3:15:**
+When `if` is used as an expression (to evaluate to a value), it must have an `else` branch to specify what value to use when the condition is `False`.
+
+**expr_if_missing_else.md:3:7:3:9:**
 ```roc
 foo = if tru 0
 ```
-              ^
+      ^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
-**expr_if_missing_else.md:3:15:3:15:**
+**expr_if_missing_else.md:3:7:3:15:**
 ```roc
 foo = if tru 0
 ```
-              ^
+      ^^^^^^^^
 
-Check the spelling and make sure you're using a valid Roc operator like `+`, `-`, `==`.
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -49,7 +49,7 @@ LowerIdent(3:1-3:4),OpAssign(3:5-3:6),KwIf(3:7-3:9),LowerIdent(3:10-3:13),Int(3:
 	(statements
 		(s-decl @3.1-3.15
 			(p-ident @3.1-3.4 (raw "foo"))
-			(e-malformed @3.15-3.15 (reason "no_else")))))
+			(e-malformed @3.7-3.15 (reason "no_else")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -70,5 +70,5 @@ foo =
 	(defs
 		(patt @3.1-3.4 (type "Error")))
 	(expressions
-		(expr @3.15-3.15 (type "Error"))))
+		(expr @3.7-3.15 (type "Error"))))
 ~~~

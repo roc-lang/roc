@@ -31,7 +31,6 @@ UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
 A parsing error occurred: `expected_type_field_name`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **type_shadowing_across_scopes.md:11:5:11:11:**
 ```roc
     Result : [Success, Failure]
@@ -43,7 +42,6 @@ Here is the problematic code:
 A parsing error occurred: `expected_ty_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **type_shadowing_across_scopes.md:11:24:11:31:**
 ```roc
     Result : [Success, Failure]
@@ -55,7 +53,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **type_shadowing_across_scopes.md:11:31:11:32:**
 ```roc
     Result : [Success, Failure]
@@ -67,7 +64,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **type_shadowing_across_scopes.md:12:1:12:2:**
 ```roc
 }
