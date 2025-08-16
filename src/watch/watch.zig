@@ -382,12 +382,8 @@ pub const Watcher = struct {
         self.is_ready.store(false, .seq_cst);
         self.thread = try std.Thread.spawn(.{}, watchLoop, .{self});
 
-        // Wait for the watcher to be ready (max 1 second)
-        const start_time = std.time.milliTimestamp();
+        // Wait for the watcher to be ready
         while (!self.is_ready.load(.seq_cst)) {
-            if (std.time.milliTimestamp() - start_time > 1000) {
-                return error.WatcherInitTimeout;
-            }
             std.Thread.yield() catch {};
         }
     }
@@ -752,7 +748,7 @@ pub const Watcher = struct {
         self.impl.stop_event = std.os.windows.kernel32.CreateEventExW(
             null,
             null,
-            0,
+            std.os.windows.CREATE_EVENT_MANUAL_RESET,
             std.os.windows.GENERIC_ALL,
         );
         if (self.impl.stop_event == null) {
@@ -792,10 +788,6 @@ pub const Watcher = struct {
         }
 
         // Signal that we're ready to receive events
-        std.debug.print("DEBUG: Windows watcher ready, watching {} paths with {} handles\n", .{ self.paths.len, wait_handles.len });
-        for (self.paths, 0..) |path, i| {
-            std.debug.print("DEBUG: Watching path[{}]: {s}\n", .{ i, path });
-        }
         self.is_ready.store(true, .seq_cst);
 
         while (!self.should_stop.load(.seq_cst)) {
@@ -803,20 +795,21 @@ pub const Watcher = struct {
                 @intCast(wait_handles.len),
                 wait_handles.ptr,
                 0,
-                2000, // 2 second timeout for debugging - should be INFINITE once fixed
+                100, // 100ms timeout, similar to macOS (100ms) and Linux (50ms poll)
             );
 
             if (wait_result == std.os.windows.WAIT_OBJECT_0) {
+                // Stop event was signaled
                 break;
             } else if (wait_result > std.os.windows.WAIT_OBJECT_0 and
                 wait_result < std.os.windows.WAIT_OBJECT_0 + wait_handles.len)
             {
+                // File change event
                 const index = wait_result - std.os.windows.WAIT_OBJECT_0 - 1;
                 self.handleWindowsDirectoryEvent(index);
                 self.issueWindowsRead(index);
             } else if (wait_result == std.os.windows.WAIT_TIMEOUT) {
-                // DEBUGGING: This should not happen with proper file watching
-                std.debug.print("DEBUG: WaitForMultipleObjects timed out after 2s - no file events detected\n", .{});
+                // Timeout occurred, loop will check should_stop and continue
                 continue;
             } else if (wait_result == std.os.windows.WAIT_FAILED) {
                 std.debug.panic("WaitForMultipleObjects failed with error", .{});
@@ -854,11 +847,7 @@ pub const Watcher = struct {
         );
 
         if (result == 0) {
-            const error_code = std.os.windows.kernel32.GetLastError();
-            std.debug.print("DEBUG: ReadDirectoryChangesW failed for path {s} with error {}\n", .{ data.path, error_code });
             std.debug.panic("ReadDirectoryChangesW failed for index {}", .{index});
-        } else {
-            std.debug.print("DEBUG: ReadDirectoryChangesW succeeded for path {s}\n", .{data.path});
         }
     }
 
@@ -970,10 +959,7 @@ fn waitForEvents(event_count: *std.atomic.Value(u32), expected: u32, max_wait_ms
     while (event_count.load(.seq_cst) < expected) {
         const elapsed = std.time.milliTimestamp() - start;
         if (elapsed > max_wait_ms) {
-            const actual = event_count.load(.seq_cst);
-            std.debug.print("FATAL: File watching failed - expected {} events but got {} after {}ms\n", .{ expected, actual, elapsed });
-            std.debug.print("This means our file watching implementation is not detecting file changes!\n", .{});
-            return error.FileWatchingNotWorking;
+            return error.EventsNotReceived;
         }
         std.Thread.yield() catch {};
     }
