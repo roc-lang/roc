@@ -52,7 +52,7 @@ pub const ModuleType = enum {
             .ipc => &.{},
             .repl => &.{ .base, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval },
             .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy },
-            .watch => &.{},
+            .watch => &.{.build_options},
         };
     }
 };

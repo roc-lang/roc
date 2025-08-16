@@ -3,6 +3,14 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
+
+// Use real FSEvents only when building natively for macOS
+// Cross-compilation detection: Use build system's isNative() check
+const target_is_macos = builtin.os.tag == .macos;
+const target_is_native = build_options.target_is_native;
+const use_real_fsevents = target_is_macos and target_is_native;
+const use_stubs = !use_real_fsevents;
 
 // macOS FSEvents type declarations (always needed for struct definitions)
 const FSEventStreamRef = *anyopaque;
@@ -35,9 +43,9 @@ const FSEventStreamContext = extern struct {
 // We use a weak linkage approach to handle cross-compilation
 const is_native_macos = builtin.os.tag == .macos;
 
-// On macOS, declare external functions with weak linkage for cross-compilation support
-const macos_externs = if (builtin.os.tag == .macos) struct {
-    // Use weak linkage so these symbols are optional
+// Only declare real externs when we're actually using them
+const macos_externs = if (use_real_fsevents) struct {
+    // Mark functions as weak so they're optional during cross-compilation
     extern "c" fn FSEventStreamCreate(
         allocator: CFAllocatorRef,
         callback: *const fn (
@@ -207,11 +215,6 @@ const macos_stubs = struct {
 
     const kCFRunLoopDefaultMode: CFStringRef = @ptrFromInt(1);
 };
-
-// Use stubs when not on macOS
-// When cross-compiling, the linker will fail if we try to use real functions
-// So we always use stubs except when building natively on macOS
-const use_stubs = builtin.os.tag != .macos;
 
 const FSEventStreamCreate = if (use_stubs) macos_stubs.FSEventStreamCreate else macos_externs.FSEventStreamCreate;
 const FSEventStreamScheduleWithRunLoop = if (use_stubs) macos_stubs.FSEventStreamScheduleWithRunLoop else macos_externs.FSEventStreamScheduleWithRunLoop;
@@ -452,12 +455,12 @@ pub const Watcher = struct {
     }
 
     fn watchLoopMacOS(self: *Watcher) void {
-        // When cross-compiling, the FSEvents functions won't work
-        // So we just poll in that case
+        // Using stubs - just mark as ready and wait for stop
+        // This works for both cross-compilation and testing
         if (use_stubs) {
             self.is_ready.store(true, .seq_cst);
             while (!self.should_stop.load(.seq_cst)) {
-                std.time.sleep(100 * std.time.ns_per_ms);
+                std.Thread.yield() catch {};
             }
             return;
         }
@@ -801,7 +804,10 @@ pub const Watcher = struct {
         const data = &self.impl.overlapped_data.items[index];
         const handle = self.impl.handles.items[index];
 
-        _ = std.os.windows.kernel32.ResetEvent(data.overlapped.hEvent.?);
+        const ResetEvent = struct {
+            extern "kernel32" fn ResetEvent(hEvent: std.os.windows.HANDLE) callconv(.winapi) std.os.windows.BOOL;
+        }.ResetEvent;
+        _ = ResetEvent(data.overlapped.hEvent.?);
 
         var bytes_returned: std.os.windows.DWORD = 0;
         const notify_filter = std.os.windows.FileNotifyChangeFilter{
