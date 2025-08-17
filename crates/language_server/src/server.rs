@@ -371,10 +371,25 @@ where
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     env_logger::Builder::from_env("ROCLS_LOG").init();
 
+    // Tokio uses a smaller stack size for threads by default,
+    // this can lead to stack overflows that don't show up with the roc release bin!
+    let stack_size = 8 * 1024 * 1024; // 8MB
+
+    // Build a custom Tokio runtime with configured thread stack size
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(stack_size)
+        .enable_all()
+        .build()
+        .expect("Failed to create Tokio runtime");
+
+    // Run the async main function on our custom runtime
+    runtime.block_on(async_main());
+}
+
+async fn async_main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
