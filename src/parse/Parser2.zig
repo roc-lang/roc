@@ -131,14 +131,7 @@ fn currentPosition(self: *Parser) Position {
 
 /// Get the identifier at the current position (if it's an identifier token)
 fn currentIdent(self: *Parser) ?Ident.Idx {
-    const tag = self.peek();
-    // Only access extra field if we have an identifier token
-    if (tag == .UpperIdent or tag == .LowerIdent) {
-        const extra = self.tok_buf.tokens.items(.extra)[self.pos];
-        // For identifier tokens, we know extra contains interned
-        return extra.interned;
-    }
-    return null;
+    return self.tok_buf.resolveIdentifier(self.pos);
 }
 
 /// add a diagnostic error

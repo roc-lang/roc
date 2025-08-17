@@ -127,4 +127,5 @@ test "parser tests" {
     std.testing.refAllDecls(@import("Parser2.zig"));
     std.testing.refAllDecls(@import("tokenize.zig"));
     std.testing.refAllDecls(@import("test/ast_node_store_test.zig"));
+    std.testing.refAllDecls(@import("test/parse_test.zig"));
 }
