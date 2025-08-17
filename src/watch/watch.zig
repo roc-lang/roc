@@ -435,11 +435,21 @@ pub const Watcher = struct {
                     self.impl.stop_event = null;
                 }
 
-                // Close directory handles
+                // Close directory handles and overlapped events
                 for (self.impl.handles.items) |handle| {
                     _ = std.os.windows.CloseHandle(handle);
                 }
                 self.impl.handles.clearRetainingCapacity();
+                
+                // Close event handles and clear overlapped data
+                for (self.impl.overlapped_data.items) |*data| {
+                    if (data.overlapped.hEvent) |event| {
+                        _ = std.os.windows.CloseHandle(event);
+                    }
+                    self.allocator.free(data.buffer);
+                    self.allocator.free(data.path);
+                }
+                self.impl.overlapped_data.clearRetainingCapacity();
             },
             else => {},
         }
@@ -761,13 +771,19 @@ pub const Watcher = struct {
                 continue;
             };
         }
+        
+        // Debug: check if we have any handles
+        if (self.impl.handles.items.len == 0) {
+            std.log.err("No directory handles were created", .{});
+            return;
+        }
 
         // Signal that we're ready to receive events
         self.is_ready.store(true, .seq_cst);
 
         // Main event loop
-        const max_handles = self.impl.handles.items.len + 1; // +1 for stop event
-        if (max_handles == 0) return;
+        const max_handles = self.impl.overlapped_data.items.len + 1; // +1 for stop event
+        if (max_handles == 1) return; // Only stop event, no directories to watch
 
         var handles = self.allocator.alloc(std.os.windows.HANDLE, max_handles) catch {
             std.log.err("Failed to allocate handles array", .{});
@@ -775,9 +791,9 @@ pub const Watcher = struct {
         };
         defer self.allocator.free(handles);
 
-        // Copy directory handles
-        for (self.impl.handles.items, 0..) |handle, i| {
-            handles[i] = handle;
+        // Copy OVERLAPPED event handles (not directory handles!)
+        for (self.impl.overlapped_data.items, 0..) |data, i| {
+            handles[i] = data.overlapped.hEvent.?;
         }
         // Add stop event as last handle
         handles[handles.len - 1] = self.impl.stop_event.?;
@@ -800,12 +816,14 @@ pub const Watcher = struct {
             );
 
             // Check if stop event was signaled or timeout occurred
-            if (result == std.os.windows.WAIT_TIMEOUT or result == handles.len - 1) {
+            const WAIT_TIMEOUT = 258; // 0x102
+            if (result == WAIT_TIMEOUT or result == handles.len - 1) {
                 continue;
             }
 
             // Check for errors
-            if (result >= 0x80 and result <= 0xFF) {
+            const WAIT_FAILED = 0xFFFFFFFF;
+            if (result == WAIT_FAILED) {
                 std.log.err("WaitForMultipleObjects failed", .{});
                 break;
             }
@@ -892,7 +910,8 @@ pub const Watcher = struct {
         try self.impl.overlapped_data.append(overlapped_data);
 
         // Start the first ReadDirectoryChangesW operation
-        try self.startWindowsRead(self.impl.overlapped_data.items.len - 1);
+        // Both arrays should have the same length, use handles.len for consistency
+        try self.startWindowsRead(self.impl.handles.items.len - 1);
     }
 
     fn startWindowsRead(self: *Watcher, index: usize) !void {
@@ -991,7 +1010,7 @@ pub const Watcher = struct {
             // Convert filename from UTF-16 to UTF-8
             const filename_utf16 = @as([*]const u16, @ptrCast(@alignCast(&buffer[offset + @sizeOf(std.os.windows.FILE_NOTIFY_INFORMATION)])))[0 .. info.FileNameLength / 2];
 
-            var filename_utf8_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            var filename_utf8_buf: [std.fs.max_path_bytes]u8 = undefined;
             const filename_utf8_len = std.unicode.utf16LeToUtf8(filename_utf8_buf[0..], filename_utf16) catch {
                 // Skip this file if we can't convert the name
                 if (info.NextEntryOffset == 0) break;
@@ -1505,18 +1524,37 @@ test "windows long path handling" {
     defer allocator.free(temp_path);
 
     // Create a nested directory structure to test long paths
-    var current_dir = temp_dir.dir;
     const long_dir_name = "very_long_directory_name_that_helps_test_path_length_handling";
-
-    // Create several levels of nested directories
+    
+    // Build the nested path
+    var path_components = std.ArrayList([]const u8).init(allocator);
+    defer {
+        for (path_components.items) |component| {
+            allocator.free(component);
+        }
+        path_components.deinit();
+    }
+    
     for (0..5) |i| {
         const dir_name = try std.fmt.allocPrint(allocator, "{s}_{d}", .{ long_dir_name, i });
-        defer allocator.free(dir_name);
-
-        try current_dir.makeDir(dir_name);
-        current_dir = try current_dir.openDir(dir_name, .{});
-        defer current_dir.close();
+        try path_components.append(dir_name);
     }
+    
+    // Create the nested directories
+    var current_path = std.ArrayList(u8).init(allocator);
+    defer current_path.deinit();
+    
+    for (path_components.items) |component| {
+        if (current_path.items.len > 0) {
+            try current_path.append(std.fs.path.sep);
+        }
+        try current_path.appendSlice(component);
+        try temp_dir.dir.makePath(current_path.items);
+    }
+    
+    // Open the deepest directory
+    var current_dir = try temp_dir.dir.openDir(current_path.items, .{});
+    defer current_dir.close();
 
     const global = struct {
         var event_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
