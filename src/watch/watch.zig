@@ -752,6 +752,7 @@ pub const Watcher = struct {
             std.os.windows.GENERIC_ALL,
         );
         if (self.impl.stop_event == null) {
+            self.is_ready.store(true, .seq_cst); // Signal ready even on failure
             return;
         }
         defer {
@@ -770,6 +771,7 @@ pub const Watcher = struct {
         // Check if we reach here after adding watches
         if (self.impl.overlapped_data.items.len == 0) {
             // No watches were successfully added
+            self.is_ready.store(true, .seq_cst); // Signal ready even with no watches
             return;
         }
 
@@ -778,6 +780,7 @@ pub const Watcher = struct {
         }
 
         var wait_handles = self.allocator.alloc(std.os.windows.HANDLE, self.impl.overlapped_data.items.len + 1) catch {
+            self.is_ready.store(true, .seq_cst); // Signal ready even on allocation failure
             return;
         };
         defer self.allocator.free(wait_handles);
@@ -795,7 +798,7 @@ pub const Watcher = struct {
                 @intCast(wait_handles.len),
                 wait_handles.ptr,
                 0,
-                100, // 100ms timeout, similar to macOS (100ms) and Linux (50ms poll)
+                std.os.windows.INFINITE,
             );
 
             if (wait_result == std.os.windows.WAIT_OBJECT_0) {
@@ -808,11 +811,9 @@ pub const Watcher = struct {
                 const index = wait_result - std.os.windows.WAIT_OBJECT_0 - 1;
                 self.handleWindowsDirectoryEvent(index);
                 self.issueWindowsRead(index);
-            } else if (wait_result == std.os.windows.WAIT_TIMEOUT) {
-                // Timeout occurred, loop will check should_stop and continue
-                continue;
             } else if (wait_result == std.os.windows.WAIT_FAILED) {
-                std.debug.panic("WaitForMultipleObjects failed with error", .{});
+                const error_code = std.os.windows.kernel32.GetLastError();
+                std.debug.panic("WaitForMultipleObjects failed with error: {}", .{error_code});
             } else {
                 std.debug.panic("Unexpected wait result: {}", .{wait_result});
             }
