@@ -381,22 +381,10 @@ pub const Watcher = struct {
         self.should_stop.store(false, .seq_cst);
         self.is_ready.store(false, .seq_cst);
 
-        // Spawn thread - if this fails on Windows, just mark as ready and continue
-        self.thread = std.Thread.spawn(.{}, watchLoop, .{self}) catch {
-            self.is_ready.store(true, .seq_cst);
-            return error.ThreadSpawnFailed;
-        };
+        self.thread = try std.Thread.spawn(.{}, watchLoop, .{self});
 
-        // Wait for the watcher to be ready, with a safety limit
-        var wait_cycles: u32 = 0;
+        // Wait for the watcher to be ready
         while (!self.is_ready.load(.seq_cst)) {
-            wait_cycles += 1;
-            if (wait_cycles > 10000) {
-                // Thread probably crashed before setting is_ready
-                // Force it to be ready to prevent hang
-                self.is_ready.store(true, .seq_cst);
-                break;
-            }
             std.Thread.yield() catch {};
         }
     }
@@ -444,21 +432,7 @@ pub const Watcher = struct {
                     }.SetEvent;
                     _ = SetEvent(stop_event);
                 }
-
-                for (self.impl.handles.items) |handle| {
-                    _ = std.os.windows.CloseHandle(handle);
-                }
-                self.impl.handles.clearRetainingCapacity();
-
-                // Clean up overlapped data to keep arrays in sync
-                for (self.impl.overlapped_data.items) |*data| {
-                    if (data.overlapped.hEvent) |event| {
-                        _ = std.os.windows.CloseHandle(event);
-                    }
-                    self.allocator.free(data.buffer);
-                    self.allocator.free(data.path);
-                }
-                self.impl.overlapped_data.clearRetainingCapacity();
+                // The thread will clean up its own resources
             },
             else => {},
         }
@@ -840,10 +814,27 @@ pub const Watcher = struct {
 
         // Clean up
         self.allocator.free(wait_handles);
+
+        // Clean up stop event
         if (self.impl.stop_event) |event| {
             _ = std.os.windows.CloseHandle(event);
             self.impl.stop_event = null;
         }
+
+        // Clean up handles and overlapped data
+        for (self.impl.handles.items) |handle| {
+            _ = std.os.windows.CloseHandle(handle);
+        }
+        self.impl.handles.clearRetainingCapacity();
+
+        for (self.impl.overlapped_data.items) |*data| {
+            if (data.overlapped.hEvent) |event| {
+                _ = std.os.windows.CloseHandle(event);
+            }
+            self.allocator.free(data.buffer);
+            self.allocator.free(data.path);
+        }
+        self.impl.overlapped_data.clearRetainingCapacity();
     }
 
     fn issueWindowsRead(self: *Watcher, index: usize) void {
