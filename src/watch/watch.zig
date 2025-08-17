@@ -892,7 +892,7 @@ pub const Watcher = struct {
         overlapped.hEvent = std.os.windows.kernel32.CreateEventExW(
             null,
             null,
-            0, // Auto-reset, initially non-signaled
+            std.os.windows.CREATE_EVENT_MANUAL_RESET, // Manual-reset for proper overlapped I/O
             std.os.windows.EVENT_ALL_ACCESS,
         );
         if (overlapped.hEvent == null) {
@@ -1006,6 +1006,11 @@ test "basic file watching" {
 
     try watcher.start();
 
+    // Give the watcher a moment to fully initialize on Windows
+    if (builtin.os.tag == .windows) {
+        std.time.sleep(100 * std.time.ns_per_ms);
+    }
+
     // Create .roc files and wait for events (or skip if using stubs)
     try temp_dir.dir.writeFile(.{ .sub_path = "test1.roc", .data = "content1" });
     try waitForEvents(&global.event_count, 1, 5000);
@@ -1048,6 +1053,11 @@ test "recursive directory watching" {
 
     try watcher.start();
 
+    // Give the watcher a moment to fully initialize on Windows
+    if (builtin.os.tag == .windows) {
+        std.time.sleep(100 * std.time.ns_per_ms);
+    }
+
     try temp_dir.dir.writeFile(.{ .sub_path = "subdir/nested.roc", .data = "nested content" });
     try waitForEvents(&global.event_count, 1, 5000);
 
@@ -1084,6 +1094,11 @@ test "multiple directories watching" {
     defer watcher.deinit();
 
     try watcher.start();
+
+    // Give the watcher a moment to fully initialize on Windows
+    if (builtin.os.tag == .windows) {
+        std.time.sleep(100 * std.time.ns_per_ms);
+    }
 
     try temp_dir1.dir.writeFile(.{ .sub_path = "file1.roc", .data = "content1" });
     try waitForEvents(&global.event_count, 1, 5000);
@@ -1123,6 +1138,11 @@ test "file modification detection" {
 
     try watcher.start();
 
+    // Give the watcher a moment to fully initialize on Windows
+    if (builtin.os.tag == .windows) {
+        std.time.sleep(100 * std.time.ns_per_ms);
+    }
+
     try temp_dir.dir.writeFile(.{ .sub_path = "modify.roc", .data = "modified content that is different" });
     try waitForEvents(&global.event_count, 1, 5000);
 
@@ -1155,6 +1175,11 @@ test "rapid file creation" {
     defer watcher.deinit();
 
     try watcher.start();
+
+    // Give the watcher a moment to fully initialize on Windows
+    if (builtin.os.tag == .windows) {
+        std.time.sleep(100 * std.time.ns_per_ms);
+    }
 
     const start_time = std.time.milliTimestamp();
 
