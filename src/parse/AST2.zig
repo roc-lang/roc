@@ -193,7 +193,7 @@ pub fn binOp(self: *const Ast, idx: Node.Idx) Node.BinOp {
 /// Given the idx to a lambda, return the region of just its args (the `| ... |` including the pipes)
 pub fn lambdaArgsRegion(self: *const Ast, idx: Node.Idx, raw_src: []u8, ident_store: *const Ident.Store) Region {
     // Opening `|` args delimiter
-    const region_start = self.start(idx).src_bytes_start;
+    const region_start = self.start(idx);
 
     // The closing `|` delimiter is the next token after the end of the last arg node.
     const args = self.lambda(idx).args;
@@ -299,7 +299,7 @@ pub fn region(
         .var_lc => {
             const ident_idx = self.payload(idx).ident;
             const ident_len = ident_store.getText(ident_idx).len;
-            const region_start_pos = self.start(idx).src_bytes_start;
+            const region_start_pos = self.start(idx);
 
             // region_start begins at the `var`; skip over "var " and any whitespace/comments after it.
             // TODO get "var" from a kw constant, not hardcoded string literal
@@ -329,7 +329,7 @@ pub fn region(
         // str_literal_big, // Byte length followed by UTF-8 bytes (across multiple AstData entries) with all escapes resolved.
         .str_interpolation => {
             // Opening quote
-            const region_start = self.start(idx).src_bytes_start;
+            const region_start = self.start(idx);
 
             // If the last node is a string literal, then it ends in a quote and we can just
             // use its ending region.
@@ -370,7 +370,7 @@ pub fn region(
         },
         .block => {
             // Opening curly brace
-            const region_start = self.start(idx).src_bytes_start;
+            const region_start = self.start(idx);
 
             // The closing curly brace is the next token after the end of the last node in the block
             const nodes = self.nodesInBlock(idx);
@@ -385,13 +385,13 @@ pub fn region(
         },
         .empty_record, .empty_list => {
             return .{
-                .start = self.start(idx).src_bytes_start,
+                .start = self.start(idx),
                 .end = self.payload(idx).src_bytes_end,
             };
         },
         .lambda => {
             // Opening `|`
-            const region_start = self.start(idx).src_bytes_start;
+            const region_start = self.start(idx);
 
             // The closing `|` is the next token after the end of the last arg node.
             // (We provide the region of the `| ... |` rather than the entire lambda expression,
@@ -418,7 +418,7 @@ pub fn region(
 
 /// Given a Node.Idx that refers to an ident, return the region of the ident itself in the source bytes.
 fn identRegion(self: *const Ast, idx: Node.Idx, ident_store: *const Ident.Store) Region {
-    const region_start = self.start(idx).src_bytes_start;
+    const region_start = self.start(idx);
     const ident_idx = self.payload(idx).ident;
     const ident_len = ident_store.getText(ident_idx).len;
 
@@ -458,9 +458,9 @@ fn isWhitespace(char: u8) bool {
 }
 
 pub const Node = struct {
-    tag: Node.Tag, // 1B
-    start: Node.Start, // 4B
-    payload: Node.Payload, // 4B
+    tag: Node.Tag, // u8 discriminant
+    start: Position, // u32 UTF-8 bytes from start of source bytes where this begins
+    payload: Node.Payload, // u32 union of extra information that varies based on tag
 
     pub const Idx = enum(u32) {
         _,
@@ -541,7 +541,8 @@ pub const Node = struct {
         crash, // e.g. `crash "blah"` - stores the expr in Node.Payload
         malformed, // e.g. tokenization or parsing failed (stores a Diagnostic.Tag)
 
-        pub fn isBinOp(self: Tag) bool {
+        fn isBinOp(self: Tag) bool {
+            // This is intentionally exhasustive so we don't forget to handle new variants that get added later.
             return switch (self) {
                 .binop_equals,
                 .binop_double_equals,
@@ -563,17 +564,46 @@ pub const Node = struct {
                 .binop_or,
                 .binop_pipe,
                 => true,
-                else => false,
+
+                .uc,
+                .lc,
+                .var_lc,
+                .neg_lc,
+                .not_lc,
+                .dot_lc,
+                .double_dot_lc,
+                .dot_num,
+                .num_literal_i32,
+                .int_literal_i32,
+                .frac_literal_small,
+                .str_literal_small,
+                .num_literal_big,
+                .int_literal_big,
+                .frac_literal_big,
+                .str_literal_big,
+                .str_interpolation,
+                .list_literal,
+                .tuple_literal,
+                .record_literal,
+                .apply,
+                .block,
+                .empty_record,
+                .empty_list,
+                .lambda,
+                .match,
+                .if_else,
+                .if_without_else,
+                .unary_not,
+                .unary_neg,
+                .unary_double_dot,
+                .ret,
+                .for_loop,
+                .while_loop,
+                .crash,
+                .malformed,
+                => false,
             };
         }
-    };
-
-    // TODO assert that Node.Start is the same size as Node.Idx in non-debug builds
-    pub const Start = union {
-        src_bytes_start: Position, // The first byte where this node appeared in the source code. Used in error reporting.
-        // TODO just have binops store exactly 2 entries in NodeSlices, it's +4B but WAY fewer cache misses.
-        // binop_lhs: Node.Idx, // If this is a binop, its lhs node. We can infer binop region using lhs and rhs region info.
-        // first_interpolated_str_node: Node.Idx, // If this is an interpolated string, the first node in the interpolated list.
     };
 
     // TODO assert that Node.Payload is 4B in non-debug builds
@@ -610,7 +640,7 @@ fn tag(self: *const Ast, idx: Node.Idx) Node.Tag {
     return self.nodes.fieldItem(.tag, multi_list_idx);
 }
 
-fn start(self: *const Ast, idx: Node.Idx) Node.Start {
+fn start(self: *const Ast, idx: Node.Idx) Position {
     const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
     return self.nodes.fieldItem(.start, multi_list_idx);
 }
