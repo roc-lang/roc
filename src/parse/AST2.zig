@@ -49,6 +49,27 @@ const Ast = @This();
 nodes: collections.SafeMultiList(Node),
 node_slices: NodeSlices, // Slices of node indices for things like list literals, used during other compilation stages
 byte_slices: ByteSlices, // Slices of backing bytes for things like string literals and number literals, used at runtime
+header: ?Header, // Optional module header (app, package, platform, etc.) - not used if we're parsing a standalone expression
+
+/// Initialize a new AST with pre-allocated capacity
+pub fn initCapacity(allocator: Allocator, estimated_node_count: usize) Allocator.Error!Ast {
+    var nodes = collections.SafeMultiList(Node){};
+    try nodes.ensureTotalCapacity(allocator, estimated_node_count);
+
+    return .{
+        .nodes = nodes,
+        .node_slices = .{ .entries = .{} },
+        .byte_slices = .{ .entries = .{} },
+        .header = null,
+    };
+}
+
+/// Deinitialize the AST and free all memory
+pub fn deinit(self: *Ast, allocator: Allocator) void {
+    self.nodes.deinit(allocator);
+    self.node_slices.entries.deinit(allocator);
+    self.byte_slices.entries.deinit(allocator);
+}
 
 pub const NodeSlices = struct {
     entries: collections.SafeList(NodeSlices.Entry),
@@ -627,6 +648,73 @@ pub const Node = struct {
         str_literal_big: ByteSlices.Idx, // Stores length followed by UTF-8 bytes (which can include \0 bytes).
         str_interpolated_nodes: NodeSlices.Idx, // Stores length followed by node indices (some will be string literal nodes)
     };
+};
+
+// Diagnostic system for error reporting
+pub const Diagnostic = struct {
+    tag: Tag,
+    region: Region,
+
+    pub const Tag = enum {
+        // Header errors
+        missing_header,
+        invalid_header,
+
+        // Expression errors
+        expr_unexpected_token,
+        expr_incomplete,
+
+        // Pattern errors
+        pattern_unexpected_token,
+        pattern_incomplete,
+
+        // Type annotation errors
+        type_unexpected_token,
+        type_incomplete,
+
+        // Add more as needed
+    };
+};
+
+// Module header structures
+pub const Header = union(enum) {
+    app: struct {
+        provides: NodeSlices.Idx, // List of exposed items (as nodes)
+        platform_idx: Node.Idx, // Platform specification node
+        packages: NodeSlices.Idx, // List of package nodes
+        region: Position, // Start position
+    },
+    module: struct {
+        exposes: NodeSlices.Idx, // List of exposed items (as nodes)
+        region: Position,
+    },
+    package: struct {
+        exposes: NodeSlices.Idx, // List of exposed items (as nodes)
+        packages: NodeSlices.Idx, // List of package nodes
+        region: Position,
+    },
+    platform: struct {
+        name: Node.Idx, // Platform name identifier
+        requires_rigids: NodeSlices.Idx, // List of type variables
+        requires_signatures: Node.Idx, // Type annotation node
+        exposes: NodeSlices.Idx, // List of exposed items
+        packages: NodeSlices.Idx, // List of packages
+        provides: NodeSlices.Idx, // List of provided items
+        region: Position,
+    },
+    hosted: struct {
+        exposes: NodeSlices.Idx, // List of exposed items
+        region: Position,
+    },
+    interface: struct {
+        exposes: NodeSlices.Idx, // List of exposed items
+        imports: NodeSlices.Idx, // List of import nodes
+        region: Position,
+    },
+    malformed: struct {
+        diagnostic_tag: u32, // Error tag (we'll add proper diagnostics later)
+        region: Position,
+    },
 };
 
 fn tag(self: *const Ast, idx: Node.Idx) Node.Tag {
