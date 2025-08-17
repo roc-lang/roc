@@ -236,6 +236,28 @@ fn generateParseOutput(allocator: std.mem.Allocator, source: []const u8, test_ty
             try writeHeader(&output, &ast, &env, header, 1);
         }
         
+        // Check if there's a block node (contains the statements)
+        // The block should be the last node if there are any statements
+        if (ast.nodes.len() > 0) {
+            const last_idx = @as(AST2.Node.Idx, @enumFromInt(ast.nodes.len() - 1));
+            if (ast.tag(last_idx) == .block) {
+                // Output the statements
+                try output.appendSlice("  (statements\n");
+                const block_nodes = ast.node_slices.slice(ast.payload(last_idx).block_nodes);
+                std.debug.print("Block has {d} statements\n", .{block_nodes.len});
+                std.debug.print("Total nodes in AST: {d}\n", .{ast.nodes.len()});
+                for (0..ast.nodes.len()) |i| {
+                    const node_idx = @as(AST2.Node.Idx, @enumFromInt(i));
+                    std.debug.print("  Node {d}: {s} @{d}\n", .{i, @tagName(ast.tag(node_idx)), ast.start(node_idx).offset});
+                }
+                for (block_nodes, 0..) |stmt_idx, i| {
+                    std.debug.print("  Statement {d}: idx={d}, tag={s}\n", .{i, @intFromEnum(stmt_idx), @tagName(ast.tag(stmt_idx))});
+                    try writeNode(&output, &ast, &env, stmt_idx, 2);
+                }
+                try output.appendSlice("  )\n");
+            }
+        }
+        
         try output.appendSlice(")\n");
     } else {
         // For expressions, output the root node returned by parseExpr
@@ -430,6 +452,7 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
         .binop_thick_arrow, .binop_thin_arrow,
         .binop_and, .binop_or, .binop_pipe => {
             const binop = ast.binOp(idx);
+            std.debug.print("  binop at idx={d}: lhs={d}, rhs={d}\n", .{@intFromEnum(idx), @intFromEnum(binop.lhs), @intFromEnum(binop.rhs)});
             try output.appendSlice(" ");
             try writeNodeInline(output, ast, env, binop.lhs);
             try output.appendSlice(" ");
@@ -715,6 +738,7 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
                     .binop_thick_arrow, .binop_thin_arrow,
                     .binop_and, .binop_or, .binop_pipe => {
                         const binop = ast.binOp(idx);
+                        std.debug.print("writeNode binop at idx={d}: lhs={d}, rhs={d}\n", .{@intFromEnum(idx), @intFromEnum(binop.lhs), @intFromEnum(binop.rhs)});
                         try output.appendSlice(" @");
                         try output.writer().print("{d}\n", .{start_pos.offset});
                         try output.writer().print("{s}  lhs: ", .{indent_str});
