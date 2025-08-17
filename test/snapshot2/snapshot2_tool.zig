@@ -215,7 +215,11 @@ fn generateParseOutput(allocator: std.mem.Allocator, source: []const u8, test_ty
 
     // Parse
     var parser = try Parser2.init(result.tokens, allocator, &ast);
-    defer parser.deinit();
+    defer {
+        // Clean up parser diagnostics
+        parser.diagnostics.deinit(allocator);
+        parser.deinit();
+    }
     
     var expr_root: ?AST2.Node.Idx = null;
     if (test_type == .file) {

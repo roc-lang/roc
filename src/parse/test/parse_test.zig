@@ -23,7 +23,11 @@ fn parseTestFile(allocator: std.mem.Allocator, source: []const u8) !AST2 {
 
     // Parse the tokenized source
     var parser = try Parser2.init(result.tokens, allocator, &ast);
-    defer parser.deinit();
+    defer {
+        // Clean up parser diagnostics in tests
+        parser.diagnostics.deinit(allocator);
+        parser.deinit();
+    }
     _ = try parser.parseFile();
 
     return ast;
@@ -47,7 +51,11 @@ fn parseTestExpr(allocator: std.mem.Allocator, source: []const u8) !AST2 {
 
     // Parse the tokenized source as an expression
     var parser = try Parser2.init(result.tokens, allocator, &ast);
-    defer parser.deinit();
+    defer {
+        // Clean up parser diagnostics in tests
+        parser.diagnostics.deinit(allocator);
+        parser.deinit();
+    }
     _ = try parser.parseExpr();
 
     return ast;
@@ -57,7 +65,7 @@ fn parseTestExpr(allocator: std.mem.Allocator, source: []const u8) !AST2 {
 
 test "parse simple app module header" {
     const allocator = testing.allocator;
-    
+
     // Source from formatting/multiline/app.md
     const source =
         \\app [
@@ -78,7 +86,7 @@ test "parse simple app module header" {
 
 test "parse simple platform module header" {
     const allocator = testing.allocator;
-    
+
     // Simplified platform header
     const source =
         \\platform "foo"
@@ -94,7 +102,7 @@ test "parse simple platform module header" {
 
 test "parse simple package module header" {
     const allocator = testing.allocator;
-    
+
     // Source from package_header_nonempty_multiline_1.md
     const source =
         \\package # This comment is here
@@ -110,7 +118,7 @@ test "parse simple package module header" {
 
 test "parse simple module header" {
     const allocator = testing.allocator;
-    
+
     // Source from primitive/expr_int.md
     const source =
         \\module [foo]
@@ -138,7 +146,7 @@ test "parse integer literal expression" {
 
 test "parse string literal expression" {
     const allocator = testing.allocator;
-    const source = 
+    const source =
         \\"hello world"
     ;
 
@@ -192,7 +200,7 @@ test "parse tuple expression" {
 test "parse block expression" {
     const allocator = testing.allocator;
     // Source from expr/tuple_comprehensive.md
-    const source = 
+    const source =
         \\{
         \\    x = 10
         \\    y = 20
@@ -219,7 +227,7 @@ test "parse if-then-else expression" {
 test "parse match expression" {
     const allocator = testing.allocator;
     // Source adapted from match_expr/list_patterns.md
-    const source = 
+    const source =
         \\match numbers {
         \\    [] => acc
         \\    [first, ..rest] => 0
@@ -305,7 +313,7 @@ test "parse invalid list rest pattern" {
 
 test "parse unclosed string literal" {
     const allocator = testing.allocator;
-    const source = 
+    const source =
         \\"hello
     ;
 
@@ -429,4 +437,62 @@ test "parse tag with payload" {
     defer ast.deinit(allocator);
 
     try testing.expect(ast.nodes.len() > 0);
+}
+
+test "Parser2: simple assignment binop uses correct nodes" {
+    const allocator = testing.allocator;
+    const source = "module [x]\nx = 42";
+
+    var ast = try parseTestFile(allocator, source);
+    defer ast.deinit(allocator);
+
+    // Check nodes
+    // Should have: exposes node, x from assignment, 42, binop_equals, block
+    try testing.expectEqual(@as(usize, 5), ast.nodes.len());
+
+    // Node 0: x from exposes
+    // Node 1: x from assignment LHS
+    // Node 2: 42
+    // Node 3: binop_equals
+    const binop_idx = @as(AST2.Node.Idx, @enumFromInt(3));
+    try testing.expectEqual(AST2.Node.Tag.binop_equals, ast.tag(binop_idx));
+
+    // Get the binop operands
+    const binop_payload = ast.payload(binop_idx).binop;
+    const binop = ast.node_slices.binOp(binop_payload);
+
+    // The binop should have lhs=1 (x from assignment) and rhs=2 (42)
+    // NOT lhs=0 (x from exposes) and rhs=1 (x from assignment)
+    try testing.expectEqual(@as(u32, 1), @intFromEnum(binop.lhs));
+    try testing.expectEqual(@as(u32, 2), @intFromEnum(binop.rhs));
+
+    // Verify the nodes are correct
+    try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(binop.lhs));
+    try testing.expectEqual(AST2.Node.Tag.num_literal_i32, ast.tag(binop.rhs));
+    try testing.expectEqual(@as(i32, 42), ast.payload(binop.rhs).num_literal_i32);
+}
+
+test "Parser2: lambda expression parsing" {
+    const allocator = testing.allocator;
+    const source = "|x| x + 1";
+
+    var ast = try parseTestExpr(allocator, source);
+    defer ast.deinit(allocator);
+
+    // Check it's a lambda
+    const lambda_idx = @as(AST2.Node.Idx, @enumFromInt(ast.nodes.len() - 1));
+    try testing.expectEqual(AST2.Node.Tag.lambda, ast.tag(lambda_idx));
+
+    // Get lambda parts
+    const lambda = ast.lambda(lambda_idx);
+
+    // Should have one argument
+    try testing.expectEqual(@as(usize, 1), lambda.args.len);
+
+    // The argument should be 'x'
+    const arg = lambda.args[0];
+    try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(arg));
+
+    // The body should be a binop_plus
+    try testing.expectEqual(AST2.Node.Tag.binop_plus, ast.tag(lambda.body));
 }

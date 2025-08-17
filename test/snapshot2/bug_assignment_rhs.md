@@ -23,8 +23,8 @@ KwModule(0-6),OpenSquare(7-8),LowerIdent(8-9),CloseSquare(9-10),LowerIdent(11-12
   )
   (statements
     (binop_equals @13
-      lhs: (lc "x" @8)
-      rhs: (lc "x" @11)
+      lhs: (lc "x" @11)
+      rhs: (num_literal_i32 42 @15)
   )
 )
 

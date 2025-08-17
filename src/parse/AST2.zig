@@ -147,7 +147,7 @@ pub const NodeSlices = struct {
     pub fn slice(self: *const NodeSlices, idx: NodeSlices.Idx) []Node.Idx {
         const slice_len = @as(usize, @intCast(self.entries.items.items[idx.asUsize()].node_len));
         const slice_start = idx.asUsize() + 1;
-        
+
         // BUG FIX: The original implementation tried to cast the entire entries array to Node.Idx,
         // but Entry is a union that's 8 bytes (not 4 bytes like Node.Idx), so the cast was incorrect.
         // We need to extract the node_idx values from the union entries.
@@ -164,10 +164,14 @@ pub const NodeSlices = struct {
     }
 
     pub fn binOp(self: *const NodeSlices, idx: NodeSlices.Idx) Node.BinOp {
-        const lhs_idx = idx.asUsize();
+        const entry_idx = idx.asUsize();
+        // The binop entries are stored as .binop_lhs and .binop_rhs
+        // We need to extract the actual node indices from these entries
+        const lhs = self.entries.items.items[entry_idx].binop_lhs;
+        const rhs = self.entries.items.items[entry_idx + 1].binop_rhs;
         return .{
-            .lhs = self.nodes()[lhs_idx],
-            .rhs = self.nodes()[lhs_idx + 1],
+            .lhs = lhs,
+            .rhs = rhs,
         };
     }
 
@@ -179,7 +183,6 @@ pub const NodeSlices = struct {
         return @as([*]Node.Idx, @ptrCast(self.entries.items.items.ptr))[0..self.entries.items.items.len];
     }
 };
-
 
 /// Returns a slice of all the nodes in a block.
 /// Panics in debug builds if the given Node.Idx does not refer to a .block node.
