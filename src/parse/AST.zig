@@ -143,6 +143,8 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
 
     var report = reporting.Report.init(allocator, title, .runtime_error);
     try report.document.addText(body);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
 
     // Add the region information from the diagnostic if valid
     if (diagnostic.region.start.offset < diagnostic.region.end.offset and

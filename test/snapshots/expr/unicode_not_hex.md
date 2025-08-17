@@ -11,7 +11,9 @@ type=expr
 INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.```roc
+This Unicode escape sequence is not valid.
+
+```roc
 "abc\u(zzzz)def"
 ```
     ^^^^^^^^

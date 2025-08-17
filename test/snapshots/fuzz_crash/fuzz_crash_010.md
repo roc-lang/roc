@@ -24,8 +24,12 @@ PARSE ERROR - fuzz_crash_010.md:5:35:5:35
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
 
+
+
 **UNCLOSED STRING**
-This string is missing a closing quote.```roc
+This string is missing a closing quote.
+
+```roc
     "on        (string 'onmo %')))
 ```
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -15,7 +15,9 @@ PARSE ERROR - fuzz_crash_061.md:2:11:2:12
 PARSE ERROR - fuzz_crash_061.md:2:16:2:22
 # PROBLEMS
 **UNCLOSED STRING**
-This string is missing a closing quote.```roc
+This string is missing a closing quote.
+
+```roc
 platform"
 ```
         ^
