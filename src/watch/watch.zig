@@ -440,7 +440,7 @@ pub const Watcher = struct {
                     _ = std.os.windows.CloseHandle(handle);
                 }
                 self.impl.handles.clearRetainingCapacity();
-                
+
                 // Close event handles and clear overlapped data
                 for (self.impl.overlapped_data.items) |*data| {
                     if (data.overlapped.hEvent) |event| {
@@ -771,7 +771,7 @@ pub const Watcher = struct {
                 continue;
             };
         }
-        
+
         // Debug: check if we have any handles
         if (self.impl.handles.items.len == 0) {
             std.log.err("No directory handles were created", .{});
@@ -1525,7 +1525,7 @@ test "windows long path handling" {
 
     // Create a nested directory structure to test long paths
     const long_dir_name = "very_long_directory_name_that_helps_test_path_length_handling";
-    
+
     // Build the nested path
     var path_components = std.ArrayList([]const u8).init(allocator);
     defer {
@@ -1534,16 +1534,16 @@ test "windows long path handling" {
         }
         path_components.deinit();
     }
-    
+
     for (0..5) |i| {
         const dir_name = try std.fmt.allocPrint(allocator, "{s}_{d}", .{ long_dir_name, i });
         try path_components.append(dir_name);
     }
-    
+
     // Create the nested directories
     var current_path = std.ArrayList(u8).init(allocator);
     defer current_path.deinit();
-    
+
     for (path_components.items) |component| {
         if (current_path.items.len > 0) {
             try current_path.append(std.fs.path.sep);
@@ -1551,7 +1551,7 @@ test "windows long path handling" {
         try current_path.appendSlice(component);
         try temp_dir.dir.makePath(current_path.items);
     }
-    
+
     // Open the deepest directory
     var current_dir = try temp_dir.dir.openDir(current_path.items, .{});
     defer current_dir.close();
