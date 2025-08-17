@@ -71,6 +71,31 @@ pub fn deinit(self: *Ast, allocator: Allocator) void {
     self.byte_slices.entries.deinit(allocator);
 }
 
+/// Append a new node to the AST
+pub fn appendNode(self: *Ast, allocator: Allocator, start_pos: Position, node_tag: Node.Tag, node_payload: Node.Payload) Allocator.Error!Node.Idx {
+    const idx = @intFromEnum(try self.nodes.append(allocator, .{
+        .tag = node_tag,
+        .start = start_pos,
+        .payload = node_payload,
+    }));
+    return @as(Node.Idx, @enumFromInt(idx));
+}
+
+/// Append a slice of nodes and return an index to access them later
+pub fn appendNodeSlice(self: *Ast, allocator: Allocator, nodes: []const Node.Idx) Allocator.Error!NodeSlices.Idx {
+    return try self.node_slices.append(allocator, nodes);
+}
+
+/// Append binop operands and return an index to access them later
+pub fn appendBinOp(self: *Ast, allocator: Allocator, lhs: Node.Idx, rhs: Node.Idx) Allocator.Error!NodeSlices.Idx {
+    return try self.node_slices.appendBinOp(allocator, lhs, rhs);
+}
+
+/// Append bytes for literals and return an index to access them later
+pub fn appendByteSlice(self: *Ast, allocator: Allocator, bytes: []const u8) Allocator.Error!ByteSlices.Idx {
+    return try self.byte_slices.append(allocator, bytes);
+}
+
 pub const NodeSlices = struct {
     entries: collections.SafeList(NodeSlices.Entry),
 
@@ -88,6 +113,35 @@ pub const NodeSlices = struct {
         binop_lhs: Node.Idx, // This is a BinOp's lhs node, and its rhs will be stored immediately after this entry.
         binop_rhs: Node.Idx, // This is a BinOp's rhs node, and its lhs will be stored immediately before this entry.
     };
+
+    pub fn append(self: *NodeSlices, allocator: Allocator, node_slice: []const Node.Idx) Allocator.Error!NodeSlices.Idx {
+        const idx = @as(NodeSlices.Idx, @enumFromInt(self.entries.items.items.len));
+
+        // Reserve capacity for length + all nodes
+        try self.entries.items.ensureUnusedCapacity(allocator, 1 + node_slice.len);
+
+        // Append the length
+        self.entries.items.appendAssumeCapacity(.{ .node_len = @as(u32, @intCast(node_slice.len)) });
+
+        // Append all the node indices
+        for (node_slice) |node| {
+            self.entries.items.appendAssumeCapacity(.{ .node_idx = node });
+        }
+
+        return idx;
+    }
+
+    pub fn appendBinOp(self: *NodeSlices, allocator: Allocator, lhs: Node.Idx, rhs: Node.Idx) Allocator.Error!NodeSlices.Idx {
+        const idx = @as(NodeSlices.Idx, @enumFromInt(self.entries.items.items.len));
+
+        // Reserve capacity for both nodes
+        try self.entries.items.ensureUnusedCapacity(allocator, 2);
+
+        self.entries.items.appendAssumeCapacity(.{ .binop_lhs = lhs });
+        self.entries.items.appendAssumeCapacity(.{ .binop_rhs = rhs });
+
+        return idx;
+    }
 
     pub fn slice(self: *const NodeSlices, idx: NodeSlices.Idx) []Node.Idx {
         const slice_len = @as(usize, @intCast(self.entries.items.items[idx.asUsize()].node_len));
@@ -133,9 +187,9 @@ pub const ByteSlices = struct {
     /// Appends the given slice inline to the bytes, with the u32 length written first
     /// (after up to three zeros for alignment padding as necessary), then returns
     /// the index of the length.
-    pub fn append(self: *ByteSlices, allocator: Allocator, bytes: []u8) Allocator.Error!ByteSlices.Idx {
+    pub fn append(self: *ByteSlices, allocator: Allocator, bytes: []const u8) Allocator.Error!ByteSlices.Idx {
         // We may need some alignment padding bytes to store a u32 in our bytes array.
-        const current_len = self.entries.items.len;
+        const current_len = self.entries.items.items.len;
         const len_type = u32;
         const len_size = @sizeOf(len_type);
         const len_alignment = @alignOf(len_type);
@@ -145,7 +199,7 @@ pub const ByteSlices = struct {
         const len_idx = current_len + padding;
 
         // Reserve enough space for alignment padding, u32 length, and the actual bytes.
-        try self.entries.ensureUnusedCapacity(allocator, padding + len_size + bytes.len);
+        try self.entries.items.ensureUnusedCapacity(allocator, padding + len_size + bytes.len);
 
         // Branchlessly zero out the padding by appending three zeros.
         // There will definitely be enough space, because we just reserved
@@ -153,20 +207,20 @@ pub const ByteSlices = struct {
         // we didn't need any padding, the length will override these anyway.
         // This approach guarantees we don't pay for a branch misprediction.
         inline for (0..len_size - 1) |_| {
-            self.entries.appendAssumeCapacity(0);
+            self.entries.items.appendAssumeCapacity(0);
         }
 
         // Now that we've padded our way to the correct alignment, write the length.
-        std.debug.assert(@intFromPtr(self.entries.items.ptr + len_idx) % len_alignment == 0);
-        const len_ptr = @as(*len_type, @ptrCast(@alignCast(self.entries.items.ptr + len_idx)));
+        std.debug.assert(@intFromPtr(self.entries.items.items.ptr + len_idx) % len_alignment == 0);
+        const len_ptr = @as(*len_type, @ptrCast(@alignCast(self.entries.items.items.ptr + len_idx)));
         len_ptr.* = @as(len_type, @intCast(bytes.len));
-        self.entries.items.len = len_idx + len_size;
+        self.entries.items.items.len = len_idx + len_size;
 
         // Append the bytes after the length.
-        self.entries.appendSliceAssumeCapacity(bytes);
+        self.entries.items.appendSliceAssumeCapacity(bytes);
 
         // Return the index where the length was written
-        return @as(ByteSlices.Idx, @enumFromInt(@as(len_size, @intCast(len_idx))));
+        return @as(ByteSlices.Idx, @enumFromInt(@as(u32, @intCast(len_idx))));
     }
 };
 
@@ -647,6 +701,8 @@ pub const Node = struct {
         str_literal_small: [4]u8, // Null-terminated ASCII bytes (if there's a '\0' in it, then it must be .str_literal_big
         str_literal_big: ByteSlices.Idx, // Stores length followed by UTF-8 bytes (which can include \0 bytes).
         str_interpolated_nodes: NodeSlices.Idx, // Stores length followed by node indices (some will be string literal nodes)
+
+        malformed: Diagnostic.Tag, // Malformed nodes store the diagnostic tag
     };
 };
 
@@ -657,22 +713,116 @@ pub const Diagnostic = struct {
 
     pub const Tag = enum {
         // Header errors
+        multiple_platforms,
+        no_platform,
         missing_header,
-        invalid_header,
-
-        // Expression errors
-        expr_unexpected_token,
-        expr_incomplete,
+        missing_arrow,
+        expected_exposes,
+        expected_exposes_close_square,
+        expected_exposes_open_square,
+        expected_imports,
+        expected_package_or_platform_name,
+        expected_package_or_platform_colon,
+        expected_package_or_platform_string,
+        expected_package_platform_close_curly,
+        expected_package_platform_open_curly,
+        expected_packages,
+        expected_packages_close_curly,
+        expected_packages_open_curly,
+        expected_platform_name_end,
+        expected_platform_name_start,
+        expected_platform_name_string,
+        expected_platform_string,
+        expected_provides,
+        expected_provides_close_square,
+        expected_provides_open_square,
+        expected_requires,
+        expected_requires_rigids_close_curly,
+        expected_requires_rigids_open_curly,
+        expected_requires_signatures_close_curly,
+        expected_requires_signatures_open_curly,
+        header_expected_open_square,
+        header_expected_close_square,
 
         // Pattern errors
         pattern_unexpected_token,
-        pattern_incomplete,
+        pattern_list_rest_old_syntax,
+        pattern_unexpected_eof,
+        bad_as_pattern_name,
+        expected_lower_ident_pat_field_name,
+        expected_colon_after_pat_field_name,
 
         // Type annotation errors
-        type_unexpected_token,
-        type_incomplete,
+        ty_anno_unexpected_token,
+        expected_type_field_name,
+        expected_colon_after_type_field_name,
+        expected_arrow,
+        multi_arrow_needs_parens,
+        expected_ty_close_curly_or_comma,
+        expected_ty_close_square_or_comma,
+        expected_ty_apply_close_round,
+        expected_ty_anno_close_round,
+        expected_ty_anno_close_round_or_comma,
+        invalid_type_arg,
 
-        // Add more as needed
+        // Statement errors
+        statement_unexpected_token,
+        expected_colon_after_type_annotation,
+        import_must_be_top_level,
+
+        // String errors
+        string_unexpected_token,
+        string_expected_close_interpolation,
+        string_unclosed,
+
+        // Expression errors
+        expr_unexpected_token,
+        expr_no_space_dot_int,
+        no_else,
+        expected_expr_bar,
+        expected_expr_close_curly_or_comma,
+        expected_expr_close_round_or_comma,
+        expected_expr_close_square_or_comma,
+        expected_close_curly_at_end_of_match,
+        expected_open_curly_after_match,
+        expected_expr_record_field_name,
+        expected_expr_apply_close_round,
+        expr_arrow_expects_ident,
+        expected_expr_comma,
+        expected_expr_close_curly,
+        expr_dot_suffix_not_allowed,
+
+        // Import/Export errors
+        import_exposing_no_open,
+        import_exposing_no_close,
+        expected_lower_name_after_exposed_item_as,
+        expected_upper_name_after_exposed_item_as,
+        exposed_item_unexpected_token,
+        expected_upper_name_after_import_as,
+
+        // Where clause errors
+        where_expected_mod_open,
+        where_expected_var,
+        where_expected_mod_close,
+        where_expected_arg_open,
+        where_expected_arg_close,
+        where_expected_method_arrow,
+        where_expected_method_or_alias_name,
+        where_expected_module,
+        where_expected_colon,
+        where_expected_constraints,
+
+        // Var errors
+        var_only_allowed_in_a_body,
+        var_must_have_ident,
+        var_expected_equals,
+
+        // For loop errors
+        for_expected_in,
+
+        // Match errors
+        match_branch_wrong_arrow,
+        match_branch_missing_arrow,
     };
 };
 
@@ -717,17 +867,17 @@ pub const Header = union(enum) {
     },
 };
 
-fn tag(self: *const Ast, idx: Node.Idx) Node.Tag {
+pub fn tag(self: *const Ast, idx: Node.Idx) Node.Tag {
     const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
     return self.nodes.fieldItem(.tag, multi_list_idx);
 }
 
-fn start(self: *const Ast, idx: Node.Idx) Position {
+pub fn start(self: *const Ast, idx: Node.Idx) Position {
     const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
     return self.nodes.fieldItem(.start, multi_list_idx);
 }
 
-fn payload(self: *const Ast, idx: Node.Idx) Node.Payload {
+pub fn payload(self: *const Ast, idx: Node.Idx) Node.Payload {
     const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
     return self.nodes.fieldItem(.payload, multi_list_idx);
 }
