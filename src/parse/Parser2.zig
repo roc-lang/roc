@@ -10,10 +10,8 @@ const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
 
-const AST = @import("AST.zig");
-const Node = @import("Node.zig");
-const NodeStore = @import("NodeStore.zig");
-const NodeList = AST.NodeList;
+const AST = @import("AST2.zig");
+const Node = AST.Node;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
 const TokenIdx = Token.Idx;
@@ -28,28 +26,22 @@ pub const Parser = @This();
 gpa: std.mem.Allocator,
 pos: TokenIdx,
 tok_buf: TokenizedBuffer,
-store: NodeStore,
+ast: AST,
 scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
 diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
 nesting_counter: u8,
-scratch_statements: base.Scratch(AST.Statement.Idx),
-scratch_tokens: base.Scratch(Token.Idx),
-scratch_unified_exprs: base.Scratch(AST.UnifiedExpr.Idx),
-scratch_match_branches: base.Scratch(AST.MatchBranch.Idx),
-scratch_exposed_items: base.Scratch(AST.ExposedItem.Idx),
-scratch_where_clauses: base.Scratch(AST.WhereClause.Idx),
 
 /// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.Error!Parser {
     const estimated_node_count = tokens.tokens.len;
-    const store = try NodeStore.initCapacity(gpa, estimated_node_count);
+    const ast = try AST.initCapacity(gpa, estimated_node_count);
 
     return Parser{
         .gpa = gpa,
         .pos = 0,
         .tok_buf = tokens,
-        .store = store,
+        .ast = ast,
         .scratch_nodes = .{},
         .diagnostics = .{},
         .cached_malformed_node = null,

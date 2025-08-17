@@ -30,6 +30,9 @@ pub const AST = @import("AST.zig");
 /// New version of the AST module for development.
 pub const AST2 = @import("AST2.zig");
 
+/// New version of the Parser module for development.
+// pub const Parser2 = @import("Parser2.zig"); // TODO: Uncomment once AST2 has header support
+
 fn runParse(env: *CommonEnv, gpa: std.mem.Allocator, parserCall: *const fn (*Parser) Parser.Error!u32) Parser.Error!AST {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -121,6 +124,7 @@ test "parser tests" {
     std.testing.refAllDecls(@import("Node.zig"));
     std.testing.refAllDecls(@import("NodeStore.zig"));
     std.testing.refAllDecls(@import("Parser.zig"));
+    // std.testing.refAllDecls(@import("Parser2.zig")); // TODO: Uncomment once AST2 has header support
     std.testing.refAllDecls(@import("tokenize.zig"));
     std.testing.refAllDecls(@import("test/ast_node_store_test.zig"));
 }
