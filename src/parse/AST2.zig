@@ -38,6 +38,7 @@
 const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
+const tokenize = @import("tokenize.zig");
 
 const Region = base.Region;
 const Position = Region.Position;
@@ -231,7 +232,7 @@ pub fn binOpSymbolRegion(self: *const Ast, idx: Node.Idx, raw_src: []u8, ident_s
     var binop_end = binop_start + 1;
     var src_byte = raw_src[binop_end];
 
-    while (!isWhitespace(src_byte) and (binop_end + 1) < rhs_start) {
+    while (!tokenize.Token.isWhitespace(src_byte) and (binop_end + 1) < rhs_start) {
         binop_end += 1;
         std.debug.assert(binop_end < raw_src.len); // We should never run off the end.
         src_byte = raw_src[binop_end];
@@ -302,9 +303,8 @@ pub fn region(
             const region_start_pos = self.start(idx);
 
             // region_start begins at the `var`; skip over "var " and any whitespace/comments after it.
-            // TODO get "var" from a kw constant, not hardcoded string literal
             var region_start_offset = region_start_pos.offset;
-            region_start_offset += "var".len + 2; // +1 for the mandatory whitespace after `var`, +1 for ident start
+            region_start_offset += tokenize.Token.KW_VAR.len + 2; // +1 for the mandatory whitespace after `var`, +1 for ident start
             region_start_offset += @as(u32, @intCast(nextTokenIndex(raw_src[region_start_offset..])));
 
             return .{
@@ -440,7 +440,7 @@ fn nextTokenIndex(bytes: []u8) usize {
     var is_in_comment = false;
 
     // Skip past whitespace and_or comments
-    while (isWhitespace(byte) or is_in_comment) {
+    while (tokenize.Token.isWhitespace(byte) or is_in_comment) {
         // Branchlessly deal with entering and exiting line comments
         is_in_comment = byte == '#' or (is_in_comment and byte != '\n');
         index += 1;
@@ -450,11 +450,6 @@ fn nextTokenIndex(bytes: []u8) usize {
     }
 
     return index;
-}
-
-/// TODO this should probably be centralized in tokenize (e.g. to centralize our policy around '\r')
-fn isWhitespace(char: u8) bool {
-    return char == ' ' or char == '\t' or char == '\n' or char == '\r';
 }
 
 pub const Node = struct {
@@ -606,7 +601,6 @@ pub const Node = struct {
         }
     };
 
-    // TODO assert that Node.Payload is 4B in non-debug builds
     pub const Payload = union {
         src_bytes_end: Position, // The last byte where this node appeared in the source code. Used in error reporting.
 

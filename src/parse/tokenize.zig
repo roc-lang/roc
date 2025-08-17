@@ -364,6 +364,18 @@ pub const Token = struct {
         }
     };
 
+    // Keyword string constants
+    pub const KW_VAR = "var";
+
+    /// Determines if a character is whitespace.
+    /// In tokenize, whitespace includes space, tab, newline, carriage return.
+    pub fn isWhitespace(char: u8) bool {
+        return switch (char) {
+            ' ', '\t', '\n', '\r' => true,
+            else => false,
+        };
+    }
+
     pub const keywords = std.StaticStringMap(Tag).initComptime(.{
         .{ "and", .OpAnd },
         .{ "app", .KwApp },
@@ -393,7 +405,7 @@ pub const Token = struct {
         .{ "provides", .KwProvides },
         .{ "requires", .KwRequires },
         .{ "return", .KwReturn },
-        .{ "var", .KwVar },
+        .{ KW_VAR, .KwVar },
         .{ "where", .KwWhere },
         .{ "with", .KwWith },
     });
