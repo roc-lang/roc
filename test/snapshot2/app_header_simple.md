@@ -18,18 +18,9 @@ KwApp(0-3),OpenSquare(4-5),LowerIdent(5-10),CloseSquare(10-11),OpenCurly(12-13),
 ~~~clojure
 (file
   (app-header
-    (provides [(lc "main!" @5)])
+    (provides (lc "main!" @5))
     (platform (record_literal ((lc "pf" @14), (str_literal_big "<big>" @27), (lc "other" @42), (str_literal_big "<big>" @49)) @12))
-    (packages [(lc "main!" @5)])
-  )
-  (nodes
-    (lc "main!" @5)
-    (str_literal_big "<big>" @27)
-    (lc "pf" @14)
-    (str_literal_big "<big>" @49)
-    (lc "other" @42)
-    (record_literal @12
-      ((lc "pf" @14), (str_literal_big "<big>" @27), (lc "other" @42), (str_literal_big "<big>" @49))
+    (packages (lc "main!" @5))
   )
 )
 

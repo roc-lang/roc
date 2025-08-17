@@ -18,11 +18,7 @@ KwModule(0-6),OpenSquare(7-8),LowerIdent(8-17),Comma(17-18),UpperIdent(19-27),Cl
 ~~~clojure
 (file
   (module-header
-    (exposes [(lc "something" @8), (uc "SomeType" @19)])
-  )
-  (nodes
-    (lc "something" @8)
-    (uc "SomeType" @19)
+    (exposes (lc "something" @8), (uc "SomeType" @19))
   )
 )
 

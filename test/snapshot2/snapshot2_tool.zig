@@ -217,10 +217,11 @@ fn generateParseOutput(allocator: std.mem.Allocator, source: []const u8, test_ty
     var parser = try Parser2.init(result.tokens, allocator, &ast);
     defer parser.deinit();
     
+    var expr_root: ?AST2.Node.Idx = null;
     if (test_type == .file) {
         _ = try parser.parseFile();
     } else {
-        _ = try parser.parseExpr();
+        expr_root = try parser.parseExpr();
     }
 
     // Generate S-expression output
@@ -235,21 +236,10 @@ fn generateParseOutput(allocator: std.mem.Allocator, source: []const u8, test_ty
             try writeHeader(&output, &ast, &env, header, 1);
         }
         
-        // Output nodes
-        if (ast.nodes.len() > 0) {
-            try output.appendSlice("  (nodes\n");
-            for (0..ast.nodes.len()) |i| {
-                const idx = @as(AST2.Node.Idx, @enumFromInt(i));
-                try writeNode(&output, &ast, &env, idx, 2);
-            }
-            try output.appendSlice("  )\n");
-        }
-        
         try output.appendSlice(")\n");
     } else {
-        // For expressions, just output the root node
-        if (ast.nodes.len() > 0) {
-            const root_idx = @as(AST2.Node.Idx, @enumFromInt(0));
+        // For expressions, output the root node returned by parseExpr
+        if (expr_root) |root_idx| {
             try writeNodeInline(&output, &ast, &env, root_idx);
             try output.appendSlice("\n");
         }
@@ -335,12 +325,10 @@ fn writeHeader(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Co
 
 fn writeNodeSlice(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.CommonEnv, slice_idx: AST2.NodeSlices.Idx, _: usize) !void {
     const slice = ast.node_slices.slice(slice_idx);
-    try output.appendSlice("[");
     for (slice, 0..) |node_idx, i| {
         if (i > 0) try output.appendSlice(", ");
         try writeNodeInline(output, ast, env, node_idx);
     }
-    try output.appendSlice("]");
 }
 
 fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.CommonEnv, idx: AST2.Node.Idx) !void {
@@ -349,7 +337,12 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
     const tag = ast.tag(idx);
     const start_pos = ast.start(idx);
     
-    try output.writer().print("({s}", .{@tagName(tag)});
+    // Simplify some tag names for better readability
+    const tag_name = switch (tag) {
+        .list_literal => "list",
+        else => @tagName(tag),
+    };
+    try output.writer().print("({s}", .{tag_name});
     
     // Write node-specific content based on tag
     switch (tag) {
@@ -375,14 +368,34 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
             try output.writer().print(" \"<big>\"", .{});
         },
         .list_literal => {
-            const nodes_idx = ast.payload(idx).block_nodes;
-            const nodes = ast.node_slices.slice(nodes_idx);
-            try output.appendSlice(" [");
-            for (nodes, 0..) |node_idx, i| {
-                if (i > 0) try output.appendSlice(", ");
-                try writeNodeInline(output, ast, env, node_idx);
+            // List literal stores the count, not a slice index
+            // The elements are the preceding nodes in the AST
+            const elem_count = ast.payload(idx).list_elems;
+            const list_idx_num = @intFromEnum(idx);
+            
+            // The elements are the nodes before this list_literal node
+            const start_idx = list_idx_num - elem_count;
+            
+            for (0..elem_count) |i| {
+                try output.appendSlice(" (");
+                
+                const elem_idx = @as(AST2.Node.Idx, @enumFromInt(start_idx + i));
+                const node_tag = ast.tag(elem_idx);
+                const node_pos = ast.start(elem_idx);
+                
+                // Write simplified node type and value inline
+                switch (node_tag) {
+                    .num_literal_i32 => {
+                        const value = ast.payload(elem_idx).num_literal_i32;
+                        try output.writer().print("i32 {d} @{d}", .{value, node_pos.offset});
+                    },
+                    else => {
+                        // For other types, use the full inline representation
+                        try writeNodeInline(output, ast, env, elem_idx);
+                    },
+                }
+                try output.appendSlice(")");
             }
-            try output.appendSlice("]");
         },
         .tuple_literal, .record_literal, .block => {
             const nodes_idx = ast.payload(idx).block_nodes;
