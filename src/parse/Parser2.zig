@@ -460,13 +460,104 @@ fn parseHostedHeader(self: *Parser, start_token: TokenIdx) Error!AST.Header {
 }
 
 fn parsePlatformSpecification(self: *Parser) Error!Node.Idx {
-    _ = self;
-    @panic("TODO: parsePlatformSpecification");
+    const start = self.pos;
+    
+    // Parse platform specification like { pf: platform "..." } or just platform "..."
+    if (self.peek() == .OpenCurly) {
+        self.advance();
+        
+        const scratch_start = self.scratch_nodes.items.len;
+        defer { self.scratch_nodes.items.len = scratch_start; }
+        
+        // Parse key-value pairs
+        while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+            // Parse field name
+            if (self.peek() != .LowerIdent) {
+                return self.pushMalformed(.expr_unexpected_token, start);
+            }
+            
+            const field_ident = self.currentIdent();
+            const field_pos = self.currentPosition();
+            self.advance();
+            
+            self.expect(.OpColon) catch {
+                return self.pushMalformed(.expected_colon_after_pat_field_name, start);
+            };
+            
+            // Parse field value (could be platform keyword or expression)
+            const value = if (self.peek() == .KwPlatform) blk: {
+                self.advance();
+                // Parse platform URL/path
+                const path = try self.parseExpr();
+                break :blk path;
+            } else try self.parseExpr();
+            
+            // Create field node
+            if (field_ident) |id| {
+                const field_node = try self.ast.appendNode(self.gpa, field_pos, .lc, .{ .ident = id });
+                try self.scratch_nodes.append(self.gpa, field_node);
+                try self.scratch_nodes.append(self.gpa, value);
+            }
+            
+            if (self.peek() == .Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        
+        self.expect(.CloseCurly) catch {
+            try self.pushDiagnostic(.expected_expr_close_curly, self.tokenToPosition(start), self.currentPosition());
+        };
+        
+        const nodes = self.scratch_nodes.items[scratch_start..];
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
+        return try self.ast.appendNode(self.gpa, self.tokenToPosition(start), .record_literal, .{ .block_nodes = nodes_idx });
+    } else {
+        // Just parse as expression (e.g., platform "...")
+        return try self.parseExpr();
+    }
 }
 
 fn parsePackageList(self: *Parser) Error!AST.NodeSlices.Idx {
-    _ = self;
-    @panic("TODO: parsePackageList");
+    const scratch_start = self.scratch_nodes.items.len;
+    defer { self.scratch_nodes.items.len = scratch_start; }
+    
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        // Parse package name
+        if (self.peek() != .LowerIdent) {
+            _ = try self.pushMalformed(.expr_unexpected_token, self.pos);
+            break;
+        }
+        
+        const pkg_ident = self.currentIdent();
+        const pkg_pos = self.currentPosition();
+        self.advance();
+        
+        self.expect(.OpColon) catch {
+            _ = try self.pushMalformed(.expected_colon_after_pat_field_name, self.pos);
+            break;
+        };
+        
+        // Parse package path
+        const path = try self.parseExpr();
+        
+        // Create package entry
+        if (pkg_ident) |id| {
+            const pkg_node = try self.ast.appendNode(self.gpa, pkg_pos, .lc, .{ .ident = id });
+            try self.scratch_nodes.append(self.gpa, pkg_node);
+            try self.scratch_nodes.append(self.gpa, path);
+        }
+        
+        if (self.peek() == .Comma) {
+            self.advance();
+        } else {
+            break;
+        }
+    }
+    
+    const packages = self.scratch_nodes.items[scratch_start..];
+    return try self.ast.appendNodeSlice(self.gpa, packages);
 }
 
 fn parseExposedList(self: *Parser, end_token: Token.Tag) Error!AST.NodeSlices.Idx {
@@ -573,8 +664,73 @@ pub fn parseStmt(self: *Parser) Error!?Node.Idx {
 }
 
 fn parseImport(self: *Parser) Error!?Node.Idx {
-    _ = self;
-    @panic("TODO: parseImport");
+    const start_pos = self.currentPosition();
+    self.advance(); // consume import
+    
+    const scratch_start = self.scratch_nodes.items.len;
+    defer { self.scratch_nodes.items.len = scratch_start; }
+    
+    // Parse module path (e.g., pf.Stdout)
+    var path_parts = std.ArrayList(u8).init(self.gpa);
+    defer path_parts.deinit();
+    
+    while (true) {
+        if (self.peek() == .LowerIdent or self.peek() == .UpperIdent) {
+            const ident = self.currentIdent();
+            if (ident) |id| {
+                // TODO: Properly handle module path
+                const node = try self.ast.appendNode(self.gpa, self.currentPosition(), .lc, .{ .ident = id });
+                try self.scratch_nodes.append(self.gpa, node);
+            }
+            self.advance();
+            
+            if (self.peek() == .Dot or self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
+                self.advance();
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    
+    // Parse optional as clause
+    if (self.peek() == .KwAs) {
+        self.advance();
+        
+        if (self.peek() == .LowerIdent or self.peek() == .UpperIdent) {
+            const alias_ident = self.currentIdent();
+            if (alias_ident) |id| {
+                const alias_node = try self.ast.appendNode(self.gpa, self.currentPosition(), .lc, .{ .ident = id });
+                try self.scratch_nodes.append(self.gpa, alias_node);
+            }
+            self.advance();
+        }
+    }
+    
+    // Parse optional exposing clause
+    if (self.peek() == .KwExposing) {
+        self.advance();
+        self.expect(.OpenSquare) catch {};
+        
+        while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+            const exposed = try self.parseExposedItem();
+            try self.scratch_nodes.append(self.gpa, exposed);
+            
+            if (self.peek() == .Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        
+        self.expect(.CloseSquare) catch {};
+    }
+    
+    const nodes = self.scratch_nodes.items[scratch_start..];
+    const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
+    // TODO: Add import node type to AST2
+    return try self.ast.appendNode(self.gpa, start_pos, .block, .{ .block_nodes = nodes_idx });
 }
 
 /// Parse a pattern
@@ -629,23 +785,166 @@ pub fn parsePattern(self: *Parser) Error!Node.Idx {
 }
 
 fn parseStringPattern(self: *Parser) Error!Node.Idx {
-    _ = self;
-    @panic("TODO: parseStringPattern");
+    // String patterns are parsed the same as string expressions
+    return self.parseStringExpr();
 }
 
 fn parseListPattern(self: *Parser) Error!Node.Idx {
-    _ = self;
-    @panic("TODO: parseListPattern");
+    const start_pos = self.currentPosition();
+    self.advance(); // consume [
+    
+    if (self.peek() == .CloseSquare) {
+        self.advance();
+        return try self.ast.appendNode(self.gpa, start_pos, .empty_list, .{ .src_bytes_end = self.currentPosition() });
+    }
+    
+    const scratch_start = self.scratch_nodes.items.len;
+    defer { self.scratch_nodes.items.len = scratch_start; }
+    
+    while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+        // Check for list rest pattern
+        if (self.peek() == .DoubleDot) {
+            const rest_pos = self.currentPosition();
+            self.advance();
+            
+            // Parse rest pattern (e.g., ..rest or .. as rest)
+            if (self.peek() == .KwAs) {
+                self.advance();
+                const rest_pattern = try self.parsePattern();
+                try self.scratch_nodes.append(self.gpa, rest_pattern);
+            } else if (self.peek() == .LowerIdent) {
+                // Handle ..rest syntax (which should be an error per snapshot)
+                const rest_pattern = try self.parsePattern();
+                try self.scratch_nodes.append(self.gpa, rest_pattern);
+                try self.pushDiagnostic(.pattern_list_rest_old_syntax, rest_pos, self.currentPosition());
+            } else {
+                // Just .. without binding - use double_dot_lc with a dummy ident
+                const dummy_ident = @as(Ident.Idx, @bitCast(@as(u32, 0)));
+                const rest_node = try self.ast.appendNode(self.gpa, rest_pos, .double_dot_lc, .{ .ident = dummy_ident });
+                try self.scratch_nodes.append(self.gpa, rest_node);
+            }
+            
+            // Rest should be last element
+            break;
+        } else {
+            const elem = try self.parsePattern();
+            try self.scratch_nodes.append(self.gpa, elem);
+        }
+        
+        if (self.peek() == .Comma) {
+            self.advance();
+        } else {
+            break;
+        }
+    }
+    
+    self.expect(.CloseSquare) catch {
+        try self.pushDiagnostic(.expected_expr_close_square_or_comma, start_pos, self.currentPosition());
+    };
+    
+    const elems = self.scratch_nodes.items[scratch_start..];
+    const elems_idx = try self.ast.appendNodeSlice(self.gpa, elems);
+    return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .block_nodes = elems_idx });
 }
 
 fn parseRecordPattern(self: *Parser) Error!Node.Idx {
-    _ = self;
-    @panic("TODO: parseRecordPattern");
+    const start_pos = self.currentPosition();
+    self.advance(); // consume {
+    
+    if (self.peek() == .CloseCurly) {
+        self.advance();
+        return try self.ast.appendNode(self.gpa, start_pos, .empty_record, .{ .src_bytes_end = self.currentPosition() });
+    }
+    
+    const scratch_start = self.scratch_nodes.items.len;
+    defer { self.scratch_nodes.items.len = scratch_start; }
+    
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        // Parse field pattern (could be just name or name: pattern)
+        if (self.peek() == .LowerIdent) {
+            const field_ident = self.currentIdent();
+            const field_pos = self.currentPosition();
+            self.advance();
+            
+            if (field_ident) |id| {
+                const field_node = try self.ast.appendNode(self.gpa, field_pos, .lc, .{ .ident = id });
+                try self.scratch_nodes.append(self.gpa, field_node);
+                
+                // Check for : pattern
+                if (self.peek() == .OpColon) {
+                    self.advance();
+                    const pattern = try self.parsePattern();
+                    try self.scratch_nodes.append(self.gpa, pattern);
+                }
+            }
+        } else {
+            _ = try self.pushMalformed(.pattern_unexpected_token, self.pos);
+            break;
+        }
+        
+        if (self.peek() == .Comma) {
+            self.advance();
+        } else {
+            break;
+        }
+    }
+    
+    self.expect(.CloseCurly) catch {
+        try self.pushDiagnostic(.expected_expr_close_curly, start_pos, self.currentPosition());
+    };
+    
+    const fields = self.scratch_nodes.items[scratch_start..];
+    const fields_idx = try self.ast.appendNodeSlice(self.gpa, fields);
+    return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .block_nodes = fields_idx });
 }
 
 fn parseTupleOrParenthesizedPattern(self: *Parser) Error!Node.Idx {
-    _ = self;
-    @panic("TODO: parseTupleOrParenthesizedPattern");
+    const start_pos = self.currentPosition();
+    self.advance(); // consume (
+    
+    const scratch_start = self.scratch_nodes.items.len;
+    defer { self.scratch_nodes.items.len = scratch_start; }
+    
+    // Check for empty tuple
+    if (self.peek() == .CloseRound) {
+        self.advance();
+        // Empty tuple pattern
+        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = @enumFromInt(0) });
+    }
+    
+    const first = try self.parsePattern();
+    try self.scratch_nodes.append(self.gpa, first);
+    
+    // Check if it's a tuple (has comma) or just parenthesized pattern
+    if (self.peek() == .Comma) {
+        self.advance();
+        
+        while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
+            const elem = try self.parsePattern();
+            try self.scratch_nodes.append(self.gpa, elem);
+            
+            if (self.peek() == .Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        
+        self.expect(.CloseRound) catch {
+            try self.pushDiagnostic(.expected_expr_close_round_or_comma, start_pos, self.currentPosition());
+        };
+        
+        const elems = self.scratch_nodes.items[scratch_start..];
+        const elems_idx = try self.ast.appendNodeSlice(self.gpa, elems);
+        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = elems_idx });
+    } else {
+        self.expect(.CloseRound) catch {
+            try self.pushDiagnostic(.expected_expr_close_round_or_comma, start_pos, self.currentPosition());
+        };
+        
+        // Just a parenthesized pattern
+        return first;
+    }
 }
 
 /// Parse an expression
@@ -778,15 +1077,100 @@ fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
 
 fn parseNumLiteral(self: *Parser) Error!Node.Idx {
     const pos = self.currentPosition();
+    const tag = self.peek();
+    
+    // Get the actual token text to parse the number
+    const token_region = self.tok_buf.tokens.items(.region)[self.pos];
+    const token_start = token_region.start.offset;
+    const token_end = token_region.end.offset;
+    
+    const num_str = self.tok_buf.env.source[token_start..token_end];
     self.advance();
     
-    // TODO: Actually parse the number and determine if it's small or big
-    return try self.ast.appendNode(self.gpa, pos, .num_literal_i32, .{ .num_literal_i32 = 0 });
+    // Parse based on token type
+    if (tag == .Float) {
+        // Parse as float
+        const value = std.fmt.parseFloat(f64, num_str) catch 0.0;
+        const bits = @as(u64, @bitCast(value));
+        if (bits <= 0xFFFFFFFF) {
+            // For now, store floats as i32
+            return try self.ast.appendNode(self.gpa, pos, .num_literal_i32, .{ .num_literal_i32 = @as(i32, @intCast(bits)) });
+        } else {
+            // Store as big float
+            const bytes = std.mem.asBytes(&value);
+            const bytes_idx = try self.ast.appendByteSlice(self.gpa, bytes);
+            return try self.ast.appendNode(self.gpa, pos, .num_literal_big, .{ .num_literal_big = bytes_idx });
+        }
+    } else {
+        // Parse as integer
+        const value = std.fmt.parseInt(i64, num_str, 10) catch 0;
+        if (value >= std.math.minInt(i32) and value <= std.math.maxInt(i32)) {
+            return try self.ast.appendNode(self.gpa, pos, .num_literal_i32, .{ .num_literal_i32 = @as(i32, @intCast(value)) });
+        } else {
+            // Store as big integer
+            const bytes = std.mem.asBytes(&value);
+            const bytes_idx = try self.ast.appendByteSlice(self.gpa, bytes);
+            return try self.ast.appendNode(self.gpa, pos, .num_literal_big, .{ .num_literal_big = bytes_idx });
+        }
+    }
 }
 
 fn parseStringExpr(self: *Parser) Error!Node.Idx {
-    _ = self;
-    @panic("TODO: parseStringExpr");
+    const start_pos = self.currentPosition();
+    const start = self.pos;
+    
+    self.expect(.StringStart) catch {
+        return self.pushMalformed(.expr_unexpected_token, start);
+    };
+    
+    const scratch_start = self.scratch_nodes.items.len;
+    defer { self.scratch_nodes.items.len = scratch_start; }
+    
+    var total_bytes: usize = 0;
+    
+    // Parse string parts
+    while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+        switch (self.peek()) {
+            .StringPart => {
+                // Get the string content from the token
+                const token_region = self.tok_buf.tokens.items(.region)[self.pos];
+                const token_start = token_region.start.offset;
+                const token_end = token_region.end.offset;
+                
+                const str_bytes = self.tok_buf.env.source[token_start..token_end];
+                total_bytes += str_bytes.len;
+                self.advance();
+            },
+            .OpenStringInterpolation => {
+                // Handle string interpolation
+                self.advance();
+                const expr = try self.parseExpr();
+                try self.scratch_nodes.append(self.gpa, expr);
+                self.expect(.CloseStringInterpolation) catch {};
+            },
+            else => break,
+        }
+    }
+    
+    self.expect(.StringEnd) catch {
+        return self.pushMalformed(.string_unclosed, start);
+    };
+    
+    // For now, create a simple string literal node
+    // TODO: Properly handle string content and interpolation
+    if (total_bytes <= 3) {  // str_literal_small is [4]u8 with null terminator
+        const small_bytes: [4]u8 = .{0} ** 4;
+        // TODO: Actually copy the string bytes
+        return try self.ast.appendNode(self.gpa, start_pos, .str_literal_small, .{ .str_literal_small = small_bytes });
+    } else {
+        // For larger strings, we need to store in ByteSlices
+        const dummy_bytes = try self.gpa.alloc(u8, total_bytes);
+        defer self.gpa.free(dummy_bytes);
+        @memset(dummy_bytes, 'x'); // Placeholder
+        
+        const bytes_idx = try self.ast.appendByteSlice(self.gpa, dummy_bytes);
+        return try self.ast.appendNode(self.gpa, start_pos, .str_literal_big, .{ .str_literal_big = bytes_idx });
+    }
 }
 
 fn parseListLiteral(self: *Parser) Error!Node.Idx {

@@ -133,7 +133,7 @@ test "parse integer literal expression" {
     defer ast.deinit(allocator);
 
     // Should have parsed something
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse string literal expression" {
@@ -145,7 +145,7 @@ test "parse string literal expression" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse list literal expression" {
@@ -155,7 +155,7 @@ test "parse list literal expression" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse record literal expression" {
@@ -165,7 +165,7 @@ test "parse record literal expression" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse lambda expression" {
@@ -175,7 +175,7 @@ test "parse lambda expression" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse tuple expression" {
@@ -186,7 +186,7 @@ test "parse tuple expression" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse block expression" {
@@ -203,7 +203,7 @@ test "parse block expression" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse if-then-else expression" {
@@ -213,7 +213,7 @@ test "parse if-then-else expression" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse match expression" {
@@ -229,7 +229,7 @@ test "parse match expression" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse binary operation" {
@@ -239,7 +239,7 @@ test "parse binary operation" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse function application" {
@@ -249,7 +249,7 @@ test "parse function application" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse field access" {
@@ -259,7 +259,7 @@ test "parse field access" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 // ============ Error/Diagnostic Tests ============
@@ -273,7 +273,7 @@ test "parse malformed if expression missing else" {
     defer ast.deinit(allocator);
 
     // Should still parse something (with malformed nodes)
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
     // TODO: Once diagnostics are properly stored, check for them
     // try testing.expect(parser.diagnostics.items.len > 0);
 }
@@ -287,7 +287,7 @@ test "parse empty tuple (should produce diagnostic)" {
     defer ast.deinit(allocator);
 
     // Should parse (even if invalid)
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
     // TODO: Check for empty tuple diagnostic
 }
 
@@ -299,7 +299,7 @@ test "parse invalid list rest pattern" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
     // TODO: Check for diagnostic about bad list rest pattern syntax
 }
 
@@ -313,7 +313,7 @@ test "parse unclosed string literal" {
     defer ast.deinit(allocator);
 
     // Should still parse something
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse unclosed list literal" {
@@ -323,7 +323,7 @@ test "parse unclosed list literal" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse unclosed record literal" {
@@ -333,7 +333,7 @@ test "parse unclosed record literal" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 // ============ Complex Statement Tests ============
@@ -351,7 +351,7 @@ test "parse type annotation and definition" {
     defer ast.deinit(allocator);
 
     try testing.expect(ast.header != null);
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse multiple definitions in module" {
@@ -370,7 +370,7 @@ test "parse multiple definitions in module" {
     defer ast.deinit(allocator);
 
     try testing.expect(ast.header != null);
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse import statements" {
@@ -388,7 +388,7 @@ test "parse import statements" {
     defer ast.deinit(allocator);
 
     try testing.expect(ast.header != null);
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse nested expressions" {
@@ -398,7 +398,7 @@ test "parse nested expressions" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse chained field access" {
@@ -408,7 +408,7 @@ test "parse chained field access" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse tag literal" {
@@ -418,7 +418,7 @@ test "parse tag literal" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
 
 test "parse tag with payload" {
@@ -428,5 +428,5 @@ test "parse tag with payload" {
     var ast = try parseTestExpr(allocator, source);
     defer ast.deinit(allocator);
 
-    try testing.expect(ast.nodes.size() > 0);
+    try testing.expect(ast.nodes.len() > 0);
 }
