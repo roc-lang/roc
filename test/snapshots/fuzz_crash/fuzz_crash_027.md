@@ -232,8 +232,12 @@ TYPE MISMATCH - fuzz_crash_027.md:142:10:142:41
 **LEADING ZERO**
 Numbers cannot have leading zeros.
 
+
+
 **UNCLOSED STRING**
-This string is missing a closing quote.```roc
+This string is missing a closing quote.
+
+```roc
 	crash "Unreachtement
 ```
 	      ^^^^^^^^^^^^^^

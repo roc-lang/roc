@@ -33,49 +33,63 @@ PARSE ERROR - string.md:15:1:15:2
 PARSE ERROR - string.md:15:2:15:3
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.```roc
+This Unicode escape sequence is not valid.
+
+```roc
 	"\u",
 ```
 	 ^^
 
 
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.```roc
+This Unicode escape sequence is not valid.
+
+```roc
 	"\u)",
 ```
 	 ^^
 
 
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.```roc
+This Unicode escape sequence is not valid.
+
+```roc
 	"\u(",
 ```
 	 ^^^
 
 
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.```roc
+This Unicode escape sequence is not valid.
+
+```roc
 	"\u()",
 ```
 	 ^^^^
 
 
 **INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.```roc
+This Unicode escape sequence is not valid.
+
+```roc
 	"\u(K)",
 ```
 	 ^^^^^
 
 
 **INVALID ESCAPE SEQUENCE**
-This escape sequence is not recognized.```roc
+This escape sequence is not recognized.
+
+```roc
 "\
 ```
  ^
 
 
 **UNCLOSED STRING**
-This string is missing a closing quote.```roc
+This string is missing a closing quote.
+
+```roc
 "\
 ```
 ^^

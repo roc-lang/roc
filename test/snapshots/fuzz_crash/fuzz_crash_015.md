@@ -22,6 +22,8 @@ PARSE ERROR - fuzz_crash_015.md:4:1:4:3
 **LEADING ZERO**
 Numbers cannot have leading zeros.
 
+
+
 **MISSING HEADER**
 Roc files must start with a module header.
 
