@@ -52,7 +52,13 @@ byte_slices: ByteSlices, // Slices of backing bytes for things like string liter
 pub const NodeSlices = struct {
     entries: collections.SafeList(NodeSlices.Entry),
 
-    pub const Idx = enum(u32) { _ };
+    pub const Idx = enum(u32) {
+        _,
+
+        fn asUsize(self: Idx) usize {
+            return @intCast(@intFromEnum(self));
+        }
+    };
 
     pub const Entry = union {
         node_len: u32, // The number of Node.Idx values immediately following this. They will all be .node_idx entries.
@@ -62,14 +68,14 @@ pub const NodeSlices = struct {
     };
 
     pub fn slice(self: *const NodeSlices, idx: NodeSlices.Idx) []Node.Idx {
-        const slice_len = @as(usize, @intCast(self[idx].len));
-        const slice_start = @as(usize, @intCast(idx)) + 1;
+        const slice_len = @as(usize, @intCast(self.entries.items.items[idx.asUsize()].node_len));
+        const slice_start = idx.asUsize() + 1;
 
         return self.nodes()[slice_start .. slice_start + slice_len];
     }
 
     pub fn binOp(self: *const NodeSlices, idx: NodeSlices.Idx) Node.BinOp {
-        const lhs_idx = @as(usize, @intCast(idx));
+        const lhs_idx = idx.asUsize();
         return .{
             .lhs = self.nodes()[lhs_idx],
             .rhs = self.nodes()[lhs_idx + 1],
@@ -77,14 +83,22 @@ pub const NodeSlices = struct {
     }
 
     fn nodes(self: *const NodeSlices) []Node.Idx {
-        return self.entries.items.items; // TODO cast this
+        // Cast the entries to Node.Idx - this should only be used internally when returning slices of
+        // entries that are known to be Node.Idx, because not all nodes in this list are Node.Idx!
+        return @as([*]Node.Idx, @ptrCast(self.entries.items.items.ptr))[0..self.entries.items.items.len];
     }
 };
 
 pub const ByteSlices = struct {
     entries: collections.SafeList(u8),
 
-    pub const Idx = enum(u32) { _ };
+    pub const Idx = enum(u32) {
+        _,
+
+        fn asUsize(self: Idx) usize {
+            return @intCast(@intFromEnum(self));
+        }
+    };
 
     pub fn slice(self: *const ByteSlices, idx: ByteSlices.Idx) []u8 {
         const ptr = self.entries.items.items.ptr + idx;
@@ -94,15 +108,43 @@ pub const ByteSlices = struct {
         return self.entries.items.items[slice_start .. slice_start + @as(usize, @intCast(slice_len))];
     }
 
-    /// Appends the given slice inline to the bytes, with the
+    /// Appends the given slice inline to the bytes, with the u32 length written first
+    /// (after up to three zeros for alignment padding as necessary), then returns
+    /// the index of the length.
     pub fn append(self: *ByteSlices, allocator: Allocator, bytes: []u8) Allocator.Error!ByteSlices.Idx {
-        // TODO:
-        // 1. check whether the next byte in self.entries is aligned to @alignOf(u32) - if not, calculate how many bytes of padding would be needed to get to such an address.
-        // 2. use `try` to reserve enough space in self.entries for (padding bytes from previous step + 4 bytes to store u32 length + bytes.len)
-        // 3. call `self.entries.appendSliceAssumeCapacity()` passing a stack-allocated slice of bytes containing exactly three zeros. This will branchlessly zero out any padding bytes, and if it turned out we didn't need padding, it will have written zeros to a space that will be overridden by the length next, so it won't have mattered anyway.
-        // 4. cast bytes.len to u32 and write it in after the padding by dereferencing directly, not using @memcpy (first std.debug.assert that it's aligned properly).
-        // 5. call self.entries.appendSliceAssumeCapacity(bytes)
-        // 6. return the byte index where the length was written inside self.entries (NOT the memory address, but rather the index into that byte array) cast to ByteSlices.Idx
+        // We may need some alignment padding bytes to store a u32 in our bytes array.
+        const current_len = self.entries.items.len;
+        const len_type = u32;
+        const len_size = @sizeOf(len_type);
+        const len_alignment = @alignOf(len_type);
+        const padding = (len_alignment - (current_len % len_alignment)) % len_alignment;
+
+        // Store the length right after the alignment padding.
+        const len_idx = current_len + padding;
+
+        // Reserve enough space for alignment padding, u32 length, and the actual bytes.
+        try self.entries.ensureUnusedCapacity(allocator, padding + len_size + bytes.len);
+
+        // Branchlessly zero out the padding by appending three zeros.
+        // There will definitely be enough space, because we just reserved
+        // space for at *least* the 4-byte length, and if it turned out
+        // we didn't need any padding, the length will override these anyway.
+        // This approach guarantees we don't pay for a branch misprediction.
+        inline for (0..len_size - 1) |_| {
+            self.entries.appendAssumeCapacity(0);
+        }
+
+        // Now that we've padded our way to the correct alignment, write the length.
+        std.debug.assert(@intFromPtr(self.entries.items.ptr + len_idx) % len_alignment == 0);
+        const len_ptr = @as(*len_type, @ptrCast(@alignCast(self.entries.items.ptr + len_idx)));
+        len_ptr.* = @as(len_type, @intCast(bytes.len));
+        self.entries.items.len = len_idx + len_size;
+
+        // Append the bytes after the length.
+        self.entries.appendSliceAssumeCapacity(bytes);
+
+        // Return the index where the length was written
+        return @as(ByteSlices.Idx, @enumFromInt(@as(len_size, @intCast(len_idx))));
     }
 };
 
@@ -111,8 +153,7 @@ pub const ByteSlices = struct {
 pub fn nodesInBlock(self: *const Ast, idx: Node.Idx) []Node.Idx {
     std.debug.assert(self.tag(idx) == .block);
 
-    // TODO need to cast this to Node.Idx
-    return self.ast_data.slice(self.payload(idx).block_nodes);
+    return self.node_slices.slice(self.payload(idx).block_nodes);
 }
 
 /// Returns a slice of all the nodes in a string interpolation.
@@ -120,8 +161,7 @@ pub fn nodesInBlock(self: *const Ast, idx: Node.Idx) []Node.Idx {
 pub fn nodesInInterpolation(self: *const Ast, idx: Node.Idx) []Node.Idx {
     std.debug.assert(self.tag(idx) == .str_interpolation);
 
-    // TODO need to cast this to Node.Idx
-    return self.ast_data.slice(self.payload(idx).str_interpolated_nodes);
+    return self.node_slices.slice(self.payload(idx).str_interpolated_nodes);
 }
 
 /// A lambda expression, e.g. `|a, b| c`
@@ -134,7 +174,7 @@ pub const Lambda = struct {
 pub fn lambda(self: *const Ast, idx: Node.Idx) Lambda {
     std.debug.assert(self.tag(idx) == .lambda);
 
-    const body_then_args = self.ast_data.slice(self.payload(idx).body_then_args);
+    const body_then_args = self.node_slices.slice(self.payload(idx).body_then_args);
 
     return .{
         .body = body_then_args[0],
@@ -146,15 +186,12 @@ pub fn lambda(self: *const Ast, idx: Node.Idx) Lambda {
 pub fn binOp(self: *const Ast, idx: Node.Idx) Node.BinOp {
     std.debug.assert(self.tag(idx).isBinOp());
 
-    return self.node_slices.binOp(self.nodes.fieldItem(.payload, idx).binop_lhs);
-}
-
-pub fn data(self: *const Ast, idx: AstData.Idx) AstData.Entry {
-    return self.ast_data.entries[@as(usize, @intCast(idx))];
+    const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
+    return self.node_slices.binOp(self.nodes.fieldItem(.payload, multi_list_idx).binop);
 }
 
 /// Given the idx to a lambda, return the region of just its args (the `| ... |` including the pipes)
-pub fn lambdaArgsRegion(self: *const Ast, idx: Node.Idx, raw_src: []u8) Region {
+pub fn lambdaArgsRegion(self: *const Ast, idx: Node.Idx, raw_src: []u8, ident_store: *const Ident.Store) Region {
     // Opening `|` args delimiter
     const region_start = self.start(idx).src_bytes_start;
 
@@ -162,25 +199,25 @@ pub fn lambdaArgsRegion(self: *const Ast, idx: Node.Idx, raw_src: []u8) Region {
     const args = self.lambda(idx).args;
     const last_arg_end =
         if (args.len > 0)
-            self.region(args[args.len - 1]).end
+            self.region(args[args.len - 1], raw_src, ident_store).end.offset
         else
-            region_start; // If it had no args, e.g. `||`, start right after the opening `|`
-    const after_last_arg = @as(usize, @intCast(last_arg_end)) + 1;
+            region_start.offset; // If it had no args, e.g. `||`, start right after the opening `|`
+    const after_last_arg = last_arg_end + 1;
     const region_end = after_last_arg + nextTokenIndex(raw_src[after_last_arg..]);
 
     return .{
         .start = region_start,
-        .end = @as(Position, @intCast(region_end)),
+        .end = Position{ .offset = @as(u32, @intCast(region_end)) },
     };
 }
 
 /// Given the idx to a BinOp, return the region of just its symbol (e.g. "*" or "==") etc.
-pub fn binOpSymbolRegion(self: *const Ast, idx: Node.Idx, raw_src: []u8) Region {
+pub fn binOpSymbolRegion(self: *const Ast, idx: Node.Idx, raw_src: []u8, ident_store: *const Ident.Store) Region {
     const binop = self.binOp(idx);
 
     // To find the binop symbol itself, we scan from lhs_end to either rhs_start or first whitespace.
-    const lhs_end: usize = @intCast(self.region(binop.lhs, raw_src).end);
-    const rhs_start: usize = @intCast(self.region(binop.lhs, raw_src).start);
+    const lhs_end: usize = self.region(binop.lhs, raw_src, ident_store).end.offset;
+    const rhs_start: usize = self.region(binop.rhs, raw_src, ident_store).start.offset;
 
     // These relationships should always be true. If not, there is a bug in some earlier step!
     std.debug.assert(lhs_end < rhs_start);
@@ -201,8 +238,8 @@ pub fn binOpSymbolRegion(self: *const Ast, idx: Node.Idx, raw_src: []u8) Region 
     }
 
     return .{
-        .start = @as(Position, @intCast(binop_start)),
-        .end = @as(Position, @intCast(binop_end)),
+        .start = Position{ .offset = @as(u32, @intCast(binop_start)) },
+        .end = Position{ .offset = @as(u32, @intCast(binop_end)) },
     };
 }
 
@@ -242,8 +279,8 @@ pub fn region(
 
             // The binop expression's region spans from the start of the lhs to the end of the rhs
             return .{
-                .start = self.region(binop.lhs, raw_src).start,
-                .end = self.region(binop.rhs, raw_src).end,
+                .start = self.region(binop.lhs, raw_src, ident_store).start,
+                .end = self.region(binop.rhs, raw_src, ident_store).end,
             };
         },
         .uc, .lc => {
@@ -251,31 +288,32 @@ pub fn region(
         },
         .dot_lc, .not_lc, .neg_lc => {
             var ident_region = self.identRegion(idx, ident_store);
-            ident_region.start -= 1; // Account for the dot/bang/minus
+            ident_region.start.offset -= 1; // Account for the dot/bang/minus
             return ident_region;
         },
         .double_dot_lc => {
             var ident_region = self.identRegion(idx, ident_store);
-            ident_region.start -= 2; // Account for the ".."
+            ident_region.start.offset -= 2; // Account for the ".."
             return ident_region;
         },
         .var_lc => {
             const ident_idx = self.payload(idx).ident;
             const ident_len = ident_store.getText(ident_idx).len;
-            var region_start = self.start(idx).src_bytes_start;
+            const region_start_pos = self.start(idx).src_bytes_start;
 
             // region_start begins at the `var`; skip over "var " and any whitespace/comments after it.
             // TODO get "var" from a kw constant, not hardcoded string literal
-            region_start += "var".len + 2; // +1 for the mandatory whitespace after `var`, +1 for ident start
-            region_start += nextTokenIndex(self.src_bytes[region_start..]);
+            var region_start_offset = region_start_pos.offset;
+            region_start_offset += "var".len + 2; // +1 for the mandatory whitespace after `var`, +1 for ident start
+            region_start_offset += @as(u32, @intCast(nextTokenIndex(raw_src[region_start_offset..])));
 
             return .{
-                .start = region_start,
-                .end = region_start + @as(Position, @intCast(ident_len)),
+                .start = Position{ .offset = region_start_offset },
+                .end = Position{ .offset = region_start_offset + @as(u32, @intCast(ident_len)) },
             };
         },
         .dot_num => {
-            // TODO like parsing a num_literal, but -1 for the dot
+            @panic("TODO");
         },
 
         // // Literals that are small enough to be stored right here in .payload's u32 - by far the most common case for numbers
@@ -300,21 +338,21 @@ pub fn region(
             const nodes = self.nodesInInterpolation(idx);
             const last_node_idx = nodes[nodes.len - 1];
             const last_node_tag = self.tag(last_node_idx);
-            var region_end = self.region(last_node_idx).end;
+            var region_end = self.region(last_node_idx, raw_src, ident_store).end;
 
             // Note: It's possible that we end in a string interpolation, but in that case we wouldn't actually
             // end in a quotation mark, because that would look like `"foo${"nested${blah}"}"` - this would be
             // a silly thing to write, but it's technically legal, and we still need to find the closing delimiter.
             if (last_node_tag != .str_literal_small and last_node_tag != .str_literal_big) {
                 // Find the closing `}` after the interpolation's end
-                const interpolation_end = nextTokenIndex(raw_src[region_end..]);
+                const interpolation_end = nextTokenIndex(raw_src[@as(usize, @intCast(region_end.offset))..]);
 
                 // +1 so we end on that close quote rather than on the closing `}` that ends the interpolation
-                region_end += interpolation_end + 1;
+                region_end.offset += @as(u32, @intCast(interpolation_end + 1));
 
                 // Verify that there was in fact a close quote immediately after the `}`
                 // (because otherwise our last node should have been a string literal).
-                std.debug.assert(raw_src[region_end] == '"');
+                std.debug.assert(raw_src[@as(usize, @intCast(region_end.offset))] == '"');
             }
 
             return .{
@@ -328,6 +366,7 @@ pub fn region(
 
         .apply => {
             // e.g. `foo(bar, baz)` or `Foo(bar, baz)` or `(foo(bar, baz))(blah, etc)`
+            @panic("TODO");
         },
         .block => {
             // Opening curly brace
@@ -335,13 +374,13 @@ pub fn region(
 
             // The closing curly brace is the next token after the end of the last node in the block
             const nodes = self.nodesInBlock(idx);
-            const last_node_region = self.region(nodes[nodes.len - 1]);
-            const after_last_node = @as(usize, @intCast(last_node_region.end)) + 1;
-            const region_end = after_last_node + nextTokenIndex(self.src_bytes[after_last_node..]);
+            const last_node_region = self.region(nodes[nodes.len - 1], raw_src, ident_store);
+            const after_last_node = @as(usize, @intCast(last_node_region.end.offset)) + 1;
+            const region_end = after_last_node + nextTokenIndex(raw_src[after_last_node..]);
 
             return .{
                 .start = region_start,
-                .end = @as(Position, @intCast(region_end)),
+                .end = Position{ .offset = @as(u32, @intCast(region_end)) },
             };
         },
         .empty_record, .empty_list => {
@@ -360,40 +399,32 @@ pub fn region(
             const args = self.lambda(idx).args;
             const last_arg_end =
                 if (args.len > 0)
-                    self.region(args[args.len - 1]).end
+                    self.region(args[args.len - 1], raw_src, ident_store).end.offset
                 else
-                    region_start; // If it had no args, e.g. `||`, start right after the opening `|`
+                    region_start.offset; // If it had no args, e.g. `||`, start right after the opening `|`
             const after_last_arg = @as(usize, @intCast(last_arg_end)) + 1;
-            const region_end = after_last_arg + nextTokenIndex(self.src_bytes[after_last_arg..]);
+            const region_end = after_last_arg + nextTokenIndex(raw_src[after_last_arg..]);
 
             return .{
                 .start = region_start,
-                .end = @as(Position, @intCast(region_end)),
+                .end = Position{ .offset = @as(u32, @intCast(region_end)) },
             };
         },
-        // match, // e.g. `match cond { Ok(a) => a Err(b) => b }` - needs to store cond as well as branches
-        // if_else, // e.g. `if cond then_branch else_branch` - needs to store cond as well as branches. if-exprs must have else.
-        // if_without_else, // e.g. `if cond do_something!()` - stores exactly 1 cond node followed by exactly 1 body node
-        // unary_not, // e.g. `!foo`
-        // unary_negate, // e.g. `-foo`
-        // unary_double_dot, // e.g. `..others`
-        // ret, // e.g. `return blah` - stores the expr to return in Node.Payload
-        // for_loop, // e.g. `for x in y { ... }` - stores 3+ nodes: `for node1 in node2 { node3+... }` (length is in Node.Start)
-        // while_loop, // e.g. `while x { ... }` - stores 2+ nodes: `while node1 { node2+... }` (length is in Node.Start)
-        // crash, // e.g. `crash "blah"` - stores the expr in Node.Payload
-        // malformed, // e.g. tokenization or parsing failed (stores a Diagnostic.Tag)
+        .num_literal_i32, .int_literal_i32, .frac_literal_small, .str_literal_small, .num_literal_big, .int_literal_big, .frac_literal_big, .str_literal_big, .list_literal, .tuple_literal, .record_literal, .match, .if_else, .if_without_else, .unary_not, .unary_neg, .unary_double_dot, .ret, .for_loop, .while_loop, .crash, .malformed => {
+            @panic("TODO");
+        },
     }
 }
 
 /// Given a Node.Idx that refers to an ident, return the region of the ident itself in the source bytes.
-fn identRegion(self: *Ast, idx: usize, ident_store: *const Ident.Store) Region {
+fn identRegion(self: *const Ast, idx: Node.Idx, ident_store: *const Ident.Store) Region {
     const region_start = self.start(idx).src_bytes_start;
     const ident_idx = self.payload(idx).ident;
     const ident_len = ident_store.getText(ident_idx).len;
 
     return .{
         .start = region_start,
-        .end = region_start + @as(Position, @intCast(ident_len)),
+        .end = Position{ .offset = region_start.offset + @as(u32, @intCast(ident_len)) },
     };
 }
 
@@ -404,7 +435,7 @@ fn identRegion(self: *Ast, idx: usize, ident_store: *const Ident.Store) Region {
 fn nextTokenIndex(bytes: []u8) usize {
     std.debug.assert(bytes.len > 0);
 
-    var index = 0;
+    var index: usize = 0;
     var byte = bytes[0];
     var is_in_comment = false;
 
@@ -431,7 +462,13 @@ pub const Node = struct {
     start: Node.Start, // 4B
     payload: Node.Payload, // 4B
 
-    pub const Idx = enum(u32) { _ };
+    pub const Idx = enum(u32) {
+        _,
+
+        fn asUsize(self: Idx) usize {
+            return @intCast(@intFromEnum(self));
+        }
+    };
 
     pub const BinOp = struct {
         lhs: Node.Idx,
@@ -503,6 +540,32 @@ pub const Node = struct {
         while_loop, // e.g. `while x { ... }` - payload stores 2+ nodes: `while node1 { node2+... }`
         crash, // e.g. `crash "blah"` - stores the expr in Node.Payload
         malformed, // e.g. tokenization or parsing failed (stores a Diagnostic.Tag)
+
+        pub fn isBinOp(self: Tag) bool {
+            return switch (self) {
+                .binop_equals,
+                .binop_double_equals,
+                .binop_not_equals,
+                .binop_colon,
+                .binop_plus,
+                .binop_minus,
+                .binop_star,
+                .binop_slash,
+                .binop_double_slash,
+                .binop_double_question,
+                .binop_gt,
+                .binop_gte,
+                .binop_lt,
+                .binop_lte,
+                .binop_thick_arrow,
+                .binop_thin_arrow,
+                .binop_and,
+                .binop_or,
+                .binop_pipe,
+                => true,
+                else => false,
+            };
+        }
     };
 
     // TODO assert that Node.Start is the same size as Node.Idx in non-debug builds
@@ -518,8 +581,8 @@ pub const Node = struct {
         src_bytes_end: Position, // The last byte where this node appeared in the source code. Used in error reporting.
 
         list_elems: u32, // Number of elements in the list literal
-        block_nodes: AstData.Idx, // Number of nodes in a block (or fields in a record, if it turns out to be a record)
-        body_then_args: AstData.Idx, // For lambdas, the Node.Idx of the body followed by 0+ Node.Idx entries for args.
+        block_nodes: NodeSlices.Idx, // Number of nodes in a block (or fields in a record, if it turns out to be a record)
+        body_then_args: NodeSlices.Idx, // For lambdas, the Node.Idx of the body followed by 0+ Node.Idx entries for args.
         if_branches: u32, // Branches before the `else` - each branch begins with a conditional node
         match_branches: u32, // Total number of branches - each branch begins with an `if` (if there's a guard) or list (if multiple alternatives) or expr (normal pattern)
         binop: NodeSlices.Idx, // Pass this to NodeSlices.binOp() to get lhs and rhs
@@ -531,25 +594,28 @@ pub const Node = struct {
         frac_literal_small_dec: i32, // e.g. `0.2`
 
         // Number literals that don't fit 4B, and must be instead stored in a side table.
-        num_literal_big: AstData.Idx, // Stores length followed by 1-byte digits, for userspace bignums
-        int_literal_big: AstData.Idx, // Stores length followed by 1-byte digits, for userspace bigints
-        frac_literal_big: AstData.Idx, // Like a bigint literal but stores 2 lengths first, for digits before and after decimal
+        num_literal_big: ByteSlices.Idx, // Stores length followed by 1-byte digits, for userspace bignums
+        int_literal_big: ByteSlices.Idx, // Stores length followed by 1-byte digits, for userspace bigints
+        frac_literal_big: ByteSlices.Idx, // Like a bigint literal but stores 2 lengths first, for digits before and after decimal
 
         // String literals
         str_literal_small: [4]u8, // Null-terminated ASCII bytes (if there's a '\0' in it, then it must be .str_literal_big
-        str_literal_big: AstData.Idx, // Stores length followed by UTF-8 bytes (which can include \0 bytes).
-        str_interpolated_nodes: AstData.Idx, // Stores length followed by node indices (some will be string literal nodes)
+        str_literal_big: ByteSlices.Idx, // Stores length followed by UTF-8 bytes (which can include \0 bytes).
+        str_interpolated_nodes: NodeSlices.Idx, // Stores length followed by node indices (some will be string literal nodes)
     };
 };
 
-fn tag(self: Ast, idx: Node.Idx) Node.Tag {
-    return self.nodes.fieldItem(.tag, idx);
+fn tag(self: *const Ast, idx: Node.Idx) Node.Tag {
+    const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
+    return self.nodes.fieldItem(.tag, multi_list_idx);
 }
 
-fn start(self: Ast, idx: Node.Idx) Node.Start {
-    return self.nodes.fieldItem(.start, idx);
+fn start(self: *const Ast, idx: Node.Idx) Node.Start {
+    const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
+    return self.nodes.fieldItem(.start, multi_list_idx);
 }
 
-fn payload(self: Ast, idx: Node.Idx) Node.Payload {
-    return self.nodes.fieldItem(.payload, idx);
+fn payload(self: *const Ast, idx: Node.Idx) Node.Payload {
+    const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
+    return self.nodes.fieldItem(.payload, multi_list_idx);
 }
