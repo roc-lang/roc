@@ -69,7 +69,7 @@ test "ByteSlices: various lengths requiring different padding" {
     }
 }
 
-test "ByteSlices: alignment padding calculation" {
+test "ByteSlices: variable length encoding layout" {
     const allocator = testing.allocator;
 
     var slices = ByteSlices{ .entries = .{} };
@@ -79,8 +79,7 @@ test "ByteSlices: alignment padding calculation" {
     const first = "x"; // 1 byte
     const idx1 = try slices.append(allocator, first);
 
-    // After storing u32 length (4 bytes) + 1 byte data, we have 5 bytes total
-    // Next u32 should need 3 bytes of padding to align to 8
+    // After storing 1 byte length + 1 byte data, we have 2 bytes total
     const second = "yy"; // 2 bytes
     const idx2 = try slices.append(allocator, second);
 
@@ -88,19 +87,17 @@ test "ByteSlices: alignment padding calculation" {
     try testing.expectEqualSlices(u8, first, slices.slice(idx1));
     try testing.expectEqualSlices(u8, second, slices.slice(idx2));
 
-    // Check the actual buffer layout
+    // Check the actual buffer layout with variable-length encoding
     const buffer = slices.entries.items.items;
 
-    // First entry: 4 bytes for length + 1 byte data = 5 bytes
-    try testing.expectEqual(@as(u32, 1), @as(*const u32, @ptrCast(@alignCast(buffer.ptr))).*);
-    try testing.expectEqual(@as(u8, 'x'), buffer[4]);
+    // First entry: 1 byte for length (value 1) + 1 byte data = 2 bytes
+    try testing.expectEqual(@as(u8, 1), buffer[0]); // Length encoded as single byte
+    try testing.expectEqual(@as(u8, 'x'), buffer[1]);
 
-    // Should have padding at indices 5, 6, 7
-    // Then second length at index 8
-    const second_len_ptr = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + 8)));
-    try testing.expectEqual(@as(u32, 2), second_len_ptr.*);
-    try testing.expectEqual(@as(u8, 'y'), buffer[12]);
-    try testing.expectEqual(@as(u8, 'y'), buffer[13]);
+    // Second entry starts at index 2: 1 byte for length (value 2) + 2 bytes data
+    try testing.expectEqual(@as(u8, 2), buffer[2]); // Length encoded as single byte
+    try testing.expectEqual(@as(u8, 'y'), buffer[3]);
+    try testing.expectEqual(@as(u8, 'y'), buffer[4]);
 }
 
 test "ByteSlices: large strings" {
