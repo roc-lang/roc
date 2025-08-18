@@ -813,16 +813,30 @@ const Formatter = struct {
                 try fmt.push('"');
             },
             .multiline_string => |s| {
-                var add_newline = true;
+                // check if this region starts on a new line
+                var has_newline_before = true;
+                if (s.region.start != 0) {
+                    const start_offset = fmt.ast.tokens.resolve(s.region.start - 1).end.offset;
+                    const end_offset = fmt.ast.tokens.resolve(s.region.start).start.offset;
+                    has_newline_before = std.mem.indexOfScalar(u8, fmt.ast.env.source[start_offset..end_offset], '\n') != null;
+                }
+                if (!has_newline_before) {
+                    fmt.curr_indent += 1;
+                }
+                var add_newline = false;
+                try fmt.pushAll("\"\"\"");
                 for (fmt.ast.store.exprSlice(s.parts)) |idx| {
                     const e = fmt.ast.store.getExpr(idx);
                     switch (e) {
                         .string_part => |str| {
                             if (add_newline) {
-                                try fmt.ensureNewline();
+                                // Comments could be located before the MultilineStringStart token, not the StringPart token
+                                _ = try fmt.flushCommentsBefore(str.region.start - 1);
+                                try ensureNewline(fmt);
                                 try fmt.pushIndent();
                                 try fmt.pushAll("\"\"\"");
                             }
+
                             add_newline = true;
                             try fmt.pushTokenText(str.token);
                         },
@@ -854,6 +868,9 @@ const Formatter = struct {
                             try fmt.push('}');
                         },
                     }
+                }
+                if (!multiline) {
+                    try fmt.pushAll("\"\"\"");
                 }
             },
             .single_quote => |s| {

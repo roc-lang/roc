@@ -1682,6 +1682,34 @@ fn parseSingleQuoteCodepoint(
     }
 }
 
+fn canonicalizeStringLike(
+    self: *Self,
+    e: anytype,
+    is_multiline: bool,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    // Get all the string parts
+    const parts = self.parse_ir.store.exprSlice(e.parts);
+
+    // Extract segments from the string, inserting them into the string interner
+    // For non-string interpolation segments, canonicalize them
+    //
+    // Returns a Expr.Span containing the canonicalized string segments
+    // a string may consist of multiple string literal or expression segments
+    const free_vars_start = self.scratch_free_vars.top();
+    const can_str_span = if (is_multiline)
+        try self.extractMultilineStringSegments(parts)
+    else
+        try self.extractStringSegments(parts);
+
+    const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+    const expr_idx = try self.env.addExprAndTypeVar(Expr{ .e_str = .{
+        .span = can_str_span,
+    } }, Content{ .structure = .str }, region);
+
+    const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
+}
+
 fn canonicalizeSingleQuote(
     self: *Self,
     token_region: AST.TokenizedRegion,
@@ -2230,28 +2258,10 @@ pub fn canonicalizeExpr(
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
         },
         .string => |e| {
-            // Get all the string parts
-            const parts = self.parse_ir.store.exprSlice(e.parts);
-
-            // Extract segments from the string, inserting them into the string interner
-            // For non-string interpolation segments, canonicalize them
-            //
-            // Returns a Expr.Span containing the canonicalized string segments
-            // a string may consist of multiple string literal or expression segments
-            const free_vars_start = self.scratch_free_vars.top();
-            const can_str_span = try self.extractStringSegments(parts);
-
-            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-            const expr_idx = try self.env.addExprAndTypeVar(Expr{ .e_str = .{
-                .span = can_str_span,
-            } }, Content{ .structure = .str }, region);
-
-            const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
+            return try self.canonicalizeStringLike(e, false);
         },
-        .multiline_string => |_| {
-            // TODO implement multiline_string CAN
-            return null;
+        .multiline_string => |e| {
+            return try self.canonicalizeStringLike(e, true);
         },
         .list => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -3322,6 +3332,35 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
     }
 }
 
+/// Helper function to create a string literal expression and add it to the scratch stack
+fn addStringLiteralToScratch(self: *Self, text: []const u8, region: AST.TokenizedRegion) std.mem.Allocator.Error!void {
+    // intern the string in the ModuleEnv
+    const string_idx = try self.env.insertString(text);
+
+    // create a node for the string literal
+    const str_expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{ .e_str_segment = .{
+        .literal = string_idx,
+    } }, Content{ .structure = .str }, self.parse_ir.tokenizedRegionToRegion(region));
+
+    // add the node idx to our scratch expr stack
+    try self.env.store.addScratchExpr(str_expr_idx);
+}
+
+/// Helper function to handle interpolation (non-string-part) expressions inside string literals
+fn addInterpolationToScratch(self: *Self, part: AST.Expr.Idx, part_node: AST.Expr) std.mem.Allocator.Error!void {
+    if (try self.canonicalizeExpr(part)) |can_expr| {
+        // append our interpolated expression
+        try self.env.store.addScratchExpr(can_expr.idx);
+    } else {
+        // unable to canonicalize the interpolation, push a malformed node
+        const region = self.parse_ir.tokenizedRegionToRegion(part_node.to_tokenized_region());
+        const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_string_interpolation = .{
+            .region = region,
+        } });
+        try self.env.store.addScratchExpr(malformed_idx);
+    }
+}
+
 /// Extract string segments from parsed string parts
 fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Allocator.Error!Expr.Span {
     const start = self.env.store.scratchExprTop();
@@ -3332,33 +3371,57 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Alloc
             .string_part => |sp| {
                 // get the raw text of the string part
                 const part_text = self.parse_ir.resolve(sp.token);
-
-                // intern the string in the ModuleEnv
-                const string_idx = try self.env.insertString(part_text);
-
-                // create a node for the string literal
-                const str_expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{ .e_str_segment = .{
-                    .literal = string_idx,
-                } }, Content{ .structure = .str }, self.parse_ir.tokenizedRegionToRegion(part_node.to_tokenized_region()));
-
-                // add the node idx to our scratch expr stack
-                try self.env.store.addScratchExpr(str_expr_idx);
+                try self.addStringLiteralToScratch(part_text, part_node.to_tokenized_region());
             },
             else => {
-                // Any non-string-part is an interpolation
-                if (try self.canonicalizeExpr(part)) |can_expr| {
-                    // append our interpolated expression
-                    try self.env.store.addScratchExpr(can_expr.idx);
-                } else {
-                    // unable to canonicalize the interpolation, push a malformed node
-                    const region = self.parse_ir.tokenizedRegionToRegion(part_node.to_tokenized_region());
-                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_string_interpolation = .{
-                        .region = region,
-                    } });
-                    try self.env.store.addScratchExpr(malformed_idx);
-                }
+                try self.addInterpolationToScratch(part, part_node);
             },
         }
+    }
+
+    return try self.env.store.exprSpanFrom(start);
+}
+
+/// Extract string segments from parsed string parts, combining consecutive string parts with newlines
+fn extractMultilineStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Allocator.Error!Expr.Span {
+    const start = self.env.store.scratchExprTop();
+    var combined_text: []const u8 = "";
+    var combined_region: ?AST.TokenizedRegion = null;
+
+    for (parts) |part| {
+        const part_node = self.parse_ir.store.getExpr(part);
+        switch (part_node) {
+            .string_part => |sp| {
+                // get the raw text of the string part
+                const part_text = self.parse_ir.resolve(sp.token);
+                if (combined_text.len == 0) {
+                    combined_text = part_text;
+                    combined_region = part_node.to_tokenized_region();
+                } else {
+                    // TODO: should this be \n or \\n or even different depending on file encoding
+                    combined_text = try std.fmt.allocPrint(self.env.gpa, "{s}\\n{s}", .{ combined_text, part_text });
+                    combined_region = combined_region.?.spanAcross(part_node.to_tokenized_region());
+                }
+            },
+            else => {
+                // First add any accumulated string parts
+                if (combined_region != null) {
+                    try self.addStringLiteralToScratch(combined_text, combined_region.?);
+
+                    // reset combined state
+                    combined_text = "";
+                    combined_region = null;
+                }
+
+                // Then handle the interpolation
+                try self.addInterpolationToScratch(part, part_node);
+            },
+        }
+    }
+
+    // add any remaining combined string at the end
+    if (combined_text.len > 0) {
+        try self.addStringLiteralToScratch(combined_text, combined_region.?);
     }
 
     return try self.env.store.exprSpanFrom(start);
