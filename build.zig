@@ -191,10 +191,12 @@ pub fn build(b: *std.Build) void {
     roc_modules.addAll(watch_test);
     add_tracy(b, roc_modules.build_options, watch_test, target, false, flag_enable_tracy);
 
-    // Link macOS frameworks for file watching
+    // Link platform-specific libraries for file watching
     if (target.result.os.tag == .macos) {
         watch_test.linkFramework("CoreFoundation");
         watch_test.linkFramework("CoreServices");
+    } else if (target.result.os.tag == .windows) {
+        watch_test.linkSystemLibrary("kernel32");
     }
 
     const run_watch_test = b.addRunArtifact(watch_test);
