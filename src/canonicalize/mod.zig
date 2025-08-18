@@ -6,6 +6,8 @@ const std = @import("std");
 pub const Can = @import("Can.zig");
 /// The Canonical Intermediate Representation (CIR)
 pub const CIR = @import("CIR.zig");
+/// The new (WIP) Canonical Intermediate Representation (CIR)
+pub const CIR2 = @import("CIR2.zig");
 /// The Module Environment after canonicalization (used also for type checking and serialization)
 pub const ModuleEnv = @import("ModuleEnv.zig");
 
@@ -14,6 +16,7 @@ test "compile tests" {
 
     std.testing.refAllDecls(@import("Can.zig"));
     std.testing.refAllDecls(@import("CIR.zig"));
+    std.testing.refAllDecls(@import("CIR2.zig"));
     std.testing.refAllDecls(@import("Diagnostic.zig"));
     std.testing.refAllDecls(@import("Expression.zig"));
     std.testing.refAllDecls(@import("ExternalDecl.zig"));
