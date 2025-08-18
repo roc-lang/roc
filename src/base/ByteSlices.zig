@@ -71,39 +71,32 @@ pub fn append(self: *Self, allocator: Allocator, bytes: []const u8) Allocator.Er
     const current_len = self.entries.items.items.len;
     const len_idx = current_len;
 
-    // Determine how many bytes we need for the length encoding
-    var header_size: usize = undefined;
-    if (bytes.len < 253) {
-        header_size = 1;
-    } else if (bytes.len < (1 << 16)) {
-        header_size = 3; // 1 byte marker + 2 bytes for u16
-    } else if (bytes.len < (1 << 24)) {
-        header_size = 4; // 1 byte marker + 3 bytes for u24
-    } else {
-        header_size = 5; // 1 byte marker + 4 bytes for u32
-    }
-
-    // Reserve enough space for the header and the actual bytes
-    try self.entries.items.ensureUnusedCapacity(allocator, header_size + bytes.len);
-
     // Write the length header
     if (bytes.len < 253) {
         // Single byte encoding
+        const header_size = 1;
+        try self.entries.items.ensureUnusedCapacity(allocator, header_size + bytes.len);
         self.entries.items.appendAssumeCapacity(@as(u8, @intCast(bytes.len)));
     } else if (bytes.len < (1 << 16)) {
         // u16 encoding
+        const header_size = 3; // 1 byte marker + 2 bytes for u16
+        try self.entries.items.ensureUnusedCapacity(allocator, header_size + bytes.len);
         self.entries.items.appendAssumeCapacity(253);
         var buf: [2]u8 = undefined;
         std.mem.writeInt(u16, &buf, @as(u16, @intCast(bytes.len)), .little);
         self.entries.items.appendSliceAssumeCapacity(&buf);
     } else if (bytes.len < (1 << 24)) {
         // u24 encoding
+        const header_size = 4; // 1 byte marker + 3 bytes for u24
+        try self.entries.items.ensureUnusedCapacity(allocator, header_size + bytes.len);
         self.entries.items.appendAssumeCapacity(254);
         var buf: [4]u8 = undefined;
         std.mem.writeInt(u32, &buf, @as(u32, @intCast(bytes.len)), .little);
         self.entries.items.appendSliceAssumeCapacity(buf[0..3]);
     } else {
         // u32 encoding
+        const header_size = 5; // 1 byte marker + 4 bytes for u32
+        try self.entries.items.ensureUnusedCapacity(allocator, header_size + bytes.len);
         self.entries.items.appendAssumeCapacity(255);
         var buf: [4]u8 = undefined;
         std.mem.writeInt(u32, &buf, @as(u32, @intCast(bytes.len)), .little);
