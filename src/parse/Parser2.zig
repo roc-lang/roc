@@ -1170,17 +1170,32 @@ fn parseStringExpr(self: *Parser) Error!Node.Idx {
 
     // Store the actual string content
     const total_bytes = string_bytes.items.len;
-    
-    if (total_bytes <= 3) { // str_literal_small is [4]u8 with null terminator
-        var small_bytes: [4]u8 = .{0} ** 4;
-        // Copy the actual string bytes
-        @memcpy(small_bytes[0..total_bytes], string_bytes.items);
-        return try self.ast.appendNode(self.gpa, start_pos, .str_literal_small, .{ .str_literal_small = small_bytes });
-    } else {
-        // For larger strings, store in ByteSlices with actual content
-        const bytes_idx = try self.ast.appendByteSlice(self.gpa, string_bytes.items);
-        return try self.ast.appendNode(self.gpa, start_pos, .str_literal_big, .{ .str_literal_big = bytes_idx });
+
+    // First check length - most strings are longer than 4 bytes
+    if (total_bytes <= 4) {
+        // Only check byte eligibility for short strings
+        // All bytes must be ASCII excluding null (1-127)
+        var eligible = true;
+        for (string_bytes.items) |byte| {
+            if (byte == 0 or byte >= 128) {
+                eligible = false;
+                break;
+            }
+        }
+
+        if (eligible) {
+            var small_bytes: [4]u8 = .{0} ** 4;
+            // Copy the actual string bytes (up to 4 bytes)
+            @memcpy(small_bytes[0..total_bytes], string_bytes.items);
+            // If last byte is non-zero, we know it's 4 bytes long
+            // Otherwise, count backwards to find the length
+            return try self.ast.appendNode(self.gpa, start_pos, .str_literal_small, .{ .str_literal_small = small_bytes });
+        }
     }
+
+    // For longer strings or those with special characters, store in ByteSlices
+    const bytes_idx = try self.ast.appendByteSlice(self.gpa, string_bytes.items);
+    return try self.ast.appendNode(self.gpa, start_pos, .str_literal_big, .{ .str_literal_big = bytes_idx });
 }
 
 fn parseListLiteral(self: *Parser) Error!Node.Idx {

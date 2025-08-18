@@ -22,9 +22,9 @@ pub const Idx = enum(u32) {
 
 pub fn slice(self: *const ByteSlices, idx: ByteSlices.Idx) []const u8 {
     const idx_usize = idx.asUsize();
-    
+
     // Read the length as a native-endian u32
-    const len_bytes = self.entries.items.items[idx_usize..idx_usize + 4];
+    const len_bytes = self.entries.items.items[idx_usize .. idx_usize + 4];
     const slice_len = std.mem.readInt(u32, len_bytes[0..4], .little);
     const slice_start = idx_usize + @sizeOf(u32);
 
@@ -59,10 +59,10 @@ pub fn append(self: *ByteSlices, allocator: Allocator, bytes: []const u8) Alloca
 
     // Set the length to include the length field first, so we can write to it
     self.entries.items.items.len = len_idx + len_size;
-    
+
     // Now write the length at the aligned position
     std.debug.assert(@intFromPtr(self.entries.items.items.ptr + len_idx) % len_alignment == 0);
-    const len_bytes = self.entries.items.items[len_idx..len_idx + len_size];
+    const len_bytes = self.entries.items.items[len_idx .. len_idx + len_size];
     std.mem.writeInt(len_type, len_bytes[0..len_size], @as(len_type, @intCast(bytes.len)), .little);
 
     // Append the bytes after the length.
