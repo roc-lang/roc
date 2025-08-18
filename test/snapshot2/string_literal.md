@@ -16,6 +16,6 @@ StringStart(0-1),StringPart(1-14),StringEnd(14-15),EndOfFile(15-15)
 
 # PARSE_AST2
 ~~~clojure
-(str "<big>" @0)
+(str "Hello, World!" @0)
 
 ~~~

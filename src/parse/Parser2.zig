@@ -1136,7 +1136,9 @@ fn parseStringExpr(self: *Parser) Error!Node.Idx {
         self.scratch_nodes.items.len = scratch_start;
     }
 
-    var total_bytes: usize = 0;
+    // Collect all string bytes
+    var string_bytes = std.ArrayList(u8).init(self.gpa);
+    defer string_bytes.deinit();
 
     // Parse string parts
     while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
@@ -1148,7 +1150,7 @@ fn parseStringExpr(self: *Parser) Error!Node.Idx {
                 const token_end = token_region.end.offset;
 
                 const str_bytes = self.tok_buf.env.source[token_start..token_end];
-                total_bytes += str_bytes.len;
+                try string_bytes.appendSlice(str_bytes);
                 self.advance();
             },
             .OpenStringInterpolation => {
@@ -1166,19 +1168,17 @@ fn parseStringExpr(self: *Parser) Error!Node.Idx {
         return self.pushMalformed(.string_unclosed, start);
     };
 
-    // For now, create a simple string literal node
-    // TODO: Properly handle string content and interpolation
+    // Store the actual string content
+    const total_bytes = string_bytes.items.len;
+    
     if (total_bytes <= 3) { // str_literal_small is [4]u8 with null terminator
-        const small_bytes: [4]u8 = .{0} ** 4;
-        // TODO: Actually copy the string bytes
+        var small_bytes: [4]u8 = .{0} ** 4;
+        // Copy the actual string bytes
+        @memcpy(small_bytes[0..total_bytes], string_bytes.items);
         return try self.ast.appendNode(self.gpa, start_pos, .str_literal_small, .{ .str_literal_small = small_bytes });
     } else {
-        // For larger strings, we need to store in ByteSlices
-        const dummy_bytes = try self.gpa.alloc(u8, total_bytes);
-        defer self.gpa.free(dummy_bytes);
-        @memset(dummy_bytes, 'x'); // Placeholder
-
-        const bytes_idx = try self.ast.appendByteSlice(self.gpa, dummy_bytes);
+        // For larger strings, store in ByteSlices with actual content
+        const bytes_idx = try self.ast.appendByteSlice(self.gpa, string_bytes.items);
         return try self.ast.appendNode(self.gpa, start_pos, .str_literal_big, .{ .str_literal_big = bytes_idx });
     }
 }
@@ -1509,6 +1509,7 @@ fn parseReturn(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
     self.advance(); // consume return
 
+    // Parse the expression to return - it will be stored as the preceding node
     _ = try self.parseExpr();
     return try self.ast.appendNode(self.gpa, start_pos, .ret, .{ .src_bytes_end = self.currentPosition() });
 }
@@ -1517,8 +1518,8 @@ fn parseCrash(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
     self.advance(); // consume crash
 
-    const expr = try self.parseExpr();
-    _ = expr;
+    // Parse the expression to crash with - it will be stored as the preceding node
+    _ = try self.parseExpr();
     return try self.ast.appendNode(self.gpa, start_pos, .crash, .{ .src_bytes_end = self.currentPosition() });
 }
 

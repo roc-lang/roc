@@ -22,8 +22,10 @@ pub const Idx = enum(u32) {
 
 pub fn slice(self: *const ByteSlices, idx: ByteSlices.Idx) []const u8 {
     const idx_usize = idx.asUsize();
-    const ptr = self.entries.items.items.ptr + idx_usize;
-    const slice_len = *@as(*const u32, @ptrCast(@alignCast(ptr)));
+    
+    // Read the length as a native-endian u32
+    const len_bytes = self.entries.items.items[idx_usize..idx_usize + 4];
+    const slice_len = std.mem.readInt(u32, len_bytes[0..4], .little);
     const slice_start = idx_usize + @sizeOf(u32);
 
     return self.entries.items.items[slice_start .. slice_start + @as(usize, @intCast(slice_len))];
@@ -55,11 +57,13 @@ pub fn append(self: *ByteSlices, allocator: Allocator, bytes: []const u8) Alloca
         self.entries.items.appendAssumeCapacity(0);
     }
 
-    // Now that we've padded our way to the correct alignment, write the length.
-    std.debug.assert(@intFromPtr(self.entries.items.items.ptr + len_idx) % len_alignment == 0);
-    const len_ptr = @as(*len_type, @ptrCast(@alignCast(self.entries.items.items.ptr + len_idx)));
-    len_ptr.* = @as(len_type, @intCast(bytes.len));
+    // Set the length to include the length field first, so we can write to it
     self.entries.items.items.len = len_idx + len_size;
+    
+    // Now write the length at the aligned position
+    std.debug.assert(@intFromPtr(self.entries.items.items.ptr + len_idx) % len_alignment == 0);
+    const len_bytes = self.entries.items.items[len_idx..len_idx + len_size];
+    std.mem.writeInt(len_type, len_bytes[0..len_size], @as(len_type, @intCast(bytes.len)), .little);
 
     // Append the bytes after the length.
     self.entries.items.appendSliceAssumeCapacity(bytes);

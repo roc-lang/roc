@@ -408,7 +408,13 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
             try output.appendSlice("\"");
         },
         .str_literal_big => {
-            try output.writer().print(" \"<big>\"", .{});
+            const bytes_idx = ast.payload(idx).str_literal_big;
+            const string_bytes = ast.byte_slices.slice(bytes_idx);
+            try output.writer().print(" \"", .{});
+            for (string_bytes) |b| {
+                try output.append(b);
+            }
+            try output.writer().print("\"", .{});
         },
         .list_literal => {
             // List literal stores the count, not a slice index
@@ -523,16 +529,11 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
                 }
             }
         },
-        .unary_not, .unary_neg, .unary_double_dot => {
-            // Unary operators store their operand as the preceding node
+        .unary_not, .unary_neg, .unary_double_dot, .ret, .crash => {
+            // These operators store their operand as the preceding node
             const child_idx = @as(AST2.Node.Idx, @enumFromInt(@intFromEnum(idx) - 1));
             try output.appendSlice(" ");
             try writeNodeInline(output, ast, env, child_idx);
-        },
-        .ret, .crash => {
-            // ret and crash probably store their expressions inline somehow
-            // For now just mark them as having no operand
-            try output.appendSlice(" <operand>");
         },
         .for_loop => {
             const nodes_idx = ast.payload(idx).block_nodes;
@@ -644,8 +645,14 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
             try output.writer().print("\" @{d})\n", .{start_pos.offset});
         },
         .str_literal_big => {
-            // TODO: Fix ByteSlices.slice alignment issue
-            try output.writer().print(" \"<big>\" @{d})\n", .{start_pos.offset});
+            // Now that ByteSlices is fixed, we can display the actual content
+            const bytes_idx = ast.payload(idx).str_literal_big;
+            const string_bytes = ast.byte_slices.slice(bytes_idx);
+            try output.writer().print(" \"", .{});
+            for (string_bytes) |b| {
+                try output.append(b);
+            }
+            try output.writer().print("\" @{d})\n", .{start_pos.offset});
         },
         .list_literal => {
             const nodes_idx = ast.payload(idx).block_nodes;
@@ -752,16 +759,12 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
             }
             try output.writer().print(" @{d})\n", .{start_pos.offset});
         },
-        .unary_not, .unary_neg, .unary_double_dot => {
-            // Unary operators store their operand as the preceding node
+        .unary_not, .unary_neg, .unary_double_dot, .ret, .crash => {
+            // These operators store their operand as the preceding node
             const child_idx = @as(AST2.Node.Idx, @enumFromInt(@intFromEnum(idx) - 1));
             try output.appendSlice(" ");
             try writeNodeInline(output, ast, env, child_idx);
             try output.writer().print(" @{d})\n", .{start_pos.offset});
-        },
-        .ret, .crash => {
-            // ret and crash probably store their expressions inline somehow
-            try output.writer().print(" <operand> @{d})\n", .{start_pos.offset});
         },
         .malformed => {
             const diag = ast.payload(idx).malformed;

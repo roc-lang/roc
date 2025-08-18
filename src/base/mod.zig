@@ -23,6 +23,7 @@ pub const CommonEnv = @import("CommonEnv.zig");
 
 test {
     _ = @import("Ident.zig");
+    _ = @import("ByteSlices_test.zig");
 }
 
 /// Whether a function calls itself.
