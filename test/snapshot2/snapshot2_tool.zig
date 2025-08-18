@@ -168,6 +168,36 @@ fn parseMeta(snapshot: *Snapshot, content: []const u8) !void {
     }
 }
 
+fn getSimplifiedTagName(tag: AST2.Node.Tag) []const u8 {
+    return switch (tag) {
+        .binop_equals => "=",
+        .binop_double_equals => "==",
+        .binop_not_equals => "!=",
+        .binop_plus => "+",
+        .binop_minus => "-",
+        .binop_star => "*",
+        .binop_slash => "/",
+        .binop_double_slash => "//",
+        .binop_gt => ">",
+        .binop_gte => ">=",
+        .binop_lt => "<",
+        .binop_lte => "<=",
+        .binop_and => "and",
+        .binop_or => "or",
+        .binop_pipe => "|>",
+        .binop_colon => ":",
+        .binop_thick_arrow => "=>",
+        .binop_thin_arrow => "->",
+        .binop_double_question => "??",
+        .num_literal_i32, .num_literal_big => "num",
+        .int_literal_i32, .int_literal_big => "int",
+        .frac_literal_small, .frac_literal_big => "frac",
+        .str_literal_small, .str_literal_big => "str",
+        .list_literal => "list",
+        else => @tagName(tag),
+    };
+}
+
 fn generateTokensOutput(allocator: std.mem.Allocator, source: []const u8) ![]const u8 {
     var env = try base.CommonEnv.init(allocator, source);
     defer env.deinit(allocator);
@@ -246,7 +276,7 @@ fn generateParseOutput(allocator: std.mem.Allocator, source: []const u8, test_ty
             const last_idx = @as(AST2.Node.Idx, @enumFromInt(ast.nodes.len() - 1));
             if (ast.tag(last_idx) == .block) {
                 // Output the statements
-                try output.appendSlice("  (statements\n");
+                // Output the statements directly without wrapper
                 const block_nodes = ast.node_slices.slice(ast.payload(last_idx).block_nodes);
                 std.debug.print("Block has {d} statements\n", .{block_nodes.len});
                 std.debug.print("Total nodes in AST: {d}\n", .{ast.nodes.len()});
@@ -256,9 +286,8 @@ fn generateParseOutput(allocator: std.mem.Allocator, source: []const u8, test_ty
                 }
                 for (block_nodes, 0..) |stmt_idx, i| {
                     std.debug.print("  Statement {d}: idx={d}, tag={s}\n", .{i, @intFromEnum(stmt_idx), @tagName(ast.tag(stmt_idx))});
-                    try writeNode(&output, &ast, &env, stmt_idx, 2);
+                    try writeNode(&output, &ast, &env, stmt_idx, 1);
                 }
-                try output.appendSlice("  )\n");
             }
         }
         
@@ -280,7 +309,7 @@ fn writeHeader(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Co
     
     switch (header) {
         .app => |app| {
-            try output.writer().print("{s}(app-header\n", .{indent_str});
+            try output.writer().print("{s}(app\n", .{indent_str});
             try output.writer().print("{s}  (provides ", .{indent_str});
             try writeNodeSlice(output, ast, env, app.provides, indent_level + 1);
             try output.appendSlice(")\n");
@@ -293,14 +322,14 @@ fn writeHeader(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Co
             try output.writer().print("{s})\n", .{indent_str});
         },
         .module => |mod| {
-            try output.writer().print("{s}(module-header\n", .{indent_str});
+            try output.writer().print("{s}(module\n", .{indent_str});
             try output.writer().print("{s}  (exposes ", .{indent_str});
             try writeNodeSlice(output, ast, env, mod.exposes, indent_level + 1);
             try output.appendSlice(")\n");
             try output.writer().print("{s})\n", .{indent_str});
         },
         .package => |pkg| {
-            try output.writer().print("{s}(package-header\n", .{indent_str});
+            try output.writer().print("{s}(package\n", .{indent_str});
             try output.writer().print("{s}  (exposes ", .{indent_str});
             try writeNodeSlice(output, ast, env, pkg.exposes, indent_level + 1);
             try output.appendSlice(")\n");
@@ -310,7 +339,7 @@ fn writeHeader(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Co
             try output.writer().print("{s})\n", .{indent_str});
         },
         .platform => |plat| {
-            try output.writer().print("{s}(platform-header\n", .{indent_str});
+            try output.writer().print("{s}(platform\n", .{indent_str});
             try output.writer().print("{s}  (name ", .{indent_str});
             try writeNodeInline(output, ast, env, plat.name);
             try output.appendSlice(")\n");
@@ -332,7 +361,7 @@ fn writeHeader(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Co
             try output.writer().print("{s})\n", .{indent_str});
         },
         .hosted => |host| {
-            try output.writer().print("{s}(hosted-header\n", .{indent_str});
+            try output.writer().print("{s}(hosted\n", .{indent_str});
             try output.writer().print("{s}  (exposes ", .{indent_str});
             try writeNodeSlice(output, ast, env, host.exposes, indent_level + 1);
             try output.appendSlice(")\n");
@@ -363,12 +392,9 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
     const tag = ast.tag(idx);
     const start_pos = ast.start(idx);
     
-    // Simplify some tag names for better readability
-    const tag_name = switch (tag) {
-        .list_literal => "list",
-        else => @tagName(tag),
-    };
-    try output.writer().print("({s}", .{tag_name});
+    // Use simplified tag names for better readability
+    const simplified_name = getSimplifiedTagName(tag);
+    try output.writer().print("({s}", .{simplified_name});
     
     // Write node-specific content based on tag
     switch (tag) {
@@ -413,7 +439,7 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
                 switch (node_tag) {
                     .num_literal_i32 => {
                         const value = ast.payload(elem_idx).num_literal_i32;
-                        try output.writer().print("i32 {d} @{d}", .{value, node_pos.offset});
+                        try output.writer().print("num {d} @{d}", .{value, node_pos.offset});
                     },
                     else => {
                         // For other types, use the full inline representation
@@ -593,10 +619,11 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
     
     const tag = ast.tag(idx);
     const start_pos = ast.start(idx);
+    const simplified_name = getSimplifiedTagName(tag);
     
     try output.writer().print("{s}({s}", .{
         indent_str,
-        @tagName(tag),
+        simplified_name,
     });
     
     // Write node-specific content based on tag
@@ -743,14 +770,11 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
                     .binop_and, .binop_or, .binop_pipe => {
                         const binop = ast.binOp(idx);
                         std.debug.print("writeNode binop at idx={d}: lhs={d}, rhs={d}\n", .{@intFromEnum(idx), @intFromEnum(binop.lhs), @intFromEnum(binop.rhs)});
-                        try output.appendSlice(" @");
-                        try output.writer().print("{d}\n", .{start_pos.offset});
-                        try output.writer().print("{s}  lhs: ", .{indent_str});
+                        try output.appendSlice(" ");
                         try writeNodeInline(output, ast, env, binop.lhs);
-                        try output.appendSlice("\n");
-                        try output.writer().print("{s}  rhs: ", .{indent_str});
+                        try output.appendSlice(" ");
                         try writeNodeInline(output, ast, env, binop.rhs);
-                        try output.appendSlice("\n");
+                        try output.writer().print(" @{d})\n", .{start_pos.offset});
                     },
                     else => {
                         try output.writer().print(" unhandled @{d})\n", .{start_pos.offset});

@@ -108,7 +108,10 @@ pub const NodeSlices = struct {
         }
     };
 
-    pub const Entry = union {
+    /// This cannot be an untagged union because we sometimes have to cast a slice
+    /// of these to a slice of Node.Idx values, and that doesn't work if these are 8B
+    /// (because of the untagged union feature) whereas the Node.Idx values are 4B.
+    pub const Entry = extern union {
         node_len: u32, // The number of Node.Idx values immediately following this. They will all be .node_idx entries.
         node_idx: Node.Idx, // An individual Node.Idx in a slice. (The slice will begin with a .node_len entry.)
         binop_lhs: Node.Idx, // This is a BinOp's lhs node, and its rhs will be stored immediately after this entry.
@@ -148,19 +151,10 @@ pub const NodeSlices = struct {
         const slice_len = @as(usize, @intCast(self.entries.items.items[idx.asUsize()].node_len));
         const slice_start = idx.asUsize() + 1;
 
-        // BUG FIX: The original implementation tried to cast the entire entries array to Node.Idx,
-        // but Entry is a union that's 8 bytes (not 4 bytes like Node.Idx), so the cast was incorrect.
-        // We need to extract the node_idx values from the union entries.
-        //
-        // TODO: This uses page_allocator which leaks memory. A proper fix would be to either:
-        // 1. Store node indices separately from other entry types
-        // 2. Use an arena allocator that gets cleaned up properly
-        // 3. Pre-allocate a buffer for slices
-        const result_buf = std.heap.page_allocator.alloc(Node.Idx, slice_len) catch unreachable;
-        for (0..slice_len) |i| {
-            result_buf[i] = self.entries.items.items[slice_start + i].node_idx;
-        }
-        return result_buf;
+        // The entries after the length are all .node_idx, so it's safe to cast them to Node.Idx.
+        const entries_ptr = self.entries.items.items.ptr + slice_start;
+        const nodes_ptr = @as([*]Node.Idx, @ptrCast(entries_ptr));
+        return nodes_ptr[0..slice_len];
     }
 
     pub fn binOp(self: *const NodeSlices, idx: NodeSlices.Idx) Node.BinOp {
@@ -173,14 +167,6 @@ pub const NodeSlices = struct {
             .lhs = lhs,
             .rhs = rhs,
         };
-    }
-
-    fn nodes(self: *const NodeSlices) []Node.Idx {
-        // Cast the entries to Node.Idx - this should only be used internally when returning slices of
-        // entries that are known to be Node.Idx, because not all nodes in this list are Node.Idx!
-        // NOTE: This is incorrect! We can't cast a union array like this.
-        // The union has a tag field that makes it larger than just Node.Idx
-        return @as([*]Node.Idx, @ptrCast(self.entries.items.items.ptr))[0..self.entries.items.items.len];
     }
 };
 

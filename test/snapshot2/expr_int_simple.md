@@ -16,6 +16,6 @@ Int(0-2),EndOfFile(2-2)
 
 # PARSE_AST2
 ~~~clojure
-(num_literal_i32 42 @0)
+(num 42 @0)
 
 ~~~

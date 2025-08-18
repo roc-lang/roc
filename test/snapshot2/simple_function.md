@@ -18,14 +18,10 @@ KwModule(0-6),OpenSquare(7-8),LowerIdent(8-13),CloseSquare(13-14),LowerIdent(15-
 # PARSE_AST2
 ~~~clojure
 (file
-  (module-header
+  (module
     (exposes (lc "greet" @8))
   )
-  (statements
-    (binop_equals @21
-      lhs: (lc "greet" @15)
-      rhs: (str_literal_big "<big>" @23)
-  )
+  (= (lc "greet" @15) (str "<big>" @23) @21)
 )
 
 ~~~

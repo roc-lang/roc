@@ -18,14 +18,10 @@ KwModule(0-6),OpenSquare(7-8),LowerIdent(8-9),CloseSquare(9-10),LowerIdent(11-12
 # PARSE_AST2
 ~~~clojure
 (file
-  (module-header
+  (module
     (exposes (lc "f" @8))
   )
-  (statements
-    (binop_equals @13
-      lhs: (lc "f" @11)
-      rhs: (lambda [(lc "x" @16)] (binop_plus (lc "x" @19) (num_literal_i32 1 @23) @21) @15)
-  )
+  (= (lc "f" @11) (lambda [(lc "x" @16)] (+ (lc "x" @19) (num 1 @23) @21) @15) @13)
 )
 
 ~~~

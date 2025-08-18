@@ -19,17 +19,11 @@ KwModule(0-6),OpenSquare(7-8),LowerIdent(8-11),Comma(11-12),LowerIdent(13-21),Cl
 # PARSE_AST2
 ~~~clojure
 (file
-  (module-header
+  (module
     (exposes (lc "add" @8), (lc "multiply" @13))
   )
-  (statements
-    (binop_equals @27
-      lhs: (lc "add" @23)
-      rhs: (lambda [(lc "a" @30), (lc "b" @33)] (binop_plus (lc "a" @36) (lc "b" @40) @38) @29)
-    (binop_equals @51
-      lhs: (lc "multiply" @42)
-      rhs: (lambda [(lc "x" @54), (lc "y" @57)] (binop_star (lc "x" @60) (lc "y" @64) @62) @53)
-  )
+  (= (lc "add" @23) (lambda [(lc "a" @30), (lc "b" @33)] (+ (lc "a" @36) (lc "b" @40) @38) @29) @27)
+  (= (lc "multiply" @42) (lambda [(lc "x" @54), (lc "y" @57)] (* (lc "x" @60) (lc "y" @64) @62) @53) @51)
 )
 
 ~~~
