@@ -336,6 +336,34 @@ pub fn region(
         .dot_num => {
             @panic("TODO");
         },
+        .underscore => {
+            // Underscore is just a single character
+            const region_start = self.start(idx);
+            return .{
+                .start = region_start,
+                .end = Position{ .offset = region_start.offset + 1 },
+            };
+        },
+        .import => {
+            // Import statement spans from the 'import' keyword to the end of the imported items
+            const region_start = self.start(idx);
+            const imported_nodes = self.node_slices.slice(self.payload(idx).import_nodes);
+
+            if (imported_nodes.len > 0) {
+                const last_node = imported_nodes[imported_nodes.len - 1];
+                const last_node_region = self.region(last_node, raw_src, ident_store);
+                return .{
+                    .start = region_start,
+                    .end = last_node_region.end,
+                };
+            } else {
+                // Empty import? Just use the keyword length
+                return .{
+                    .start = region_start,
+                    .end = Position{ .offset = region_start.offset + 6 }, // "import" is 6 chars
+                };
+            }
+        },
 
         // // Literals that are small enough to be stored right here in .payload's u32 - by far the most common case for numbers
         // num_literal_i32, // e.g. `42`
@@ -522,6 +550,8 @@ pub const Node = struct {
         dot_lc, // dot followed by lowercase identifier (e.g. `.foo`)
         double_dot_lc, // two dots followed by lowercase identifier (e.g. `..others`)
         dot_num, // dot followed by number (e.g. `.0`) - this is a tuple accessor
+        underscore, // underscore pattern (e.g. `_`) - no payload needed
+        import, // import statement (e.g. `import foo`) - payload stores imported nodes
 
         // Literals that are small enough to be stored right here in .payload's u32 - by far the most common case for numbers
         num_literal_i32, // e.g. `42`
@@ -589,6 +619,8 @@ pub const Node = struct {
                 .dot_lc,
                 .double_dot_lc,
                 .dot_num,
+                .underscore,
+                .import,
                 .num_literal_i32,
                 .int_literal_i32,
                 .frac_literal_small,
@@ -647,6 +679,8 @@ pub const Node = struct {
         str_literal_small: [4]u8, // Null-terminated ASCII bytes (if there's a '\0' in it, then it must be .str_literal_big
         str_literal_big: ByteSlices.Idx, // Stores length followed by UTF-8 bytes (which can include \0 bytes).
         str_interpolated_nodes: NodeSlices.Idx, // Stores length followed by node indices (some will be string literal nodes)
+
+        import_nodes: NodeSlices.Idx, // Stores imported module nodes for import statements
 
         malformed: Diagnostic.Tag, // Malformed nodes store the diagnostic tag
     };

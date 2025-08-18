@@ -674,11 +674,13 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
     defer path_parts.deinit();
 
     while (true) {
-        if (self.peek() == .LowerIdent or self.peek() == .UpperIdent) {
+        const token = self.peek();
+        if (token == .LowerIdent or token == .UpperIdent) {
             const ident = self.currentIdent();
             if (ident) |id| {
-                // TODO: Properly handle module path
-                const node = try self.ast.appendNode(self.gpa, self.currentPosition(), .lc, .{ .ident = id });
+                // Use the correct node type based on identifier case
+                const node_tag: AST.Node.Tag = if (token == .UpperIdent) .uc else .lc;
+                const node = try self.ast.appendNode(self.gpa, self.currentPosition(), node_tag, .{ .ident = id });
                 try self.scratch_nodes.append(self.gpa, node);
             }
             self.advance();
@@ -697,10 +699,12 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
     if (self.peek() == .KwAs) {
         self.advance();
 
-        if (self.peek() == .LowerIdent or self.peek() == .UpperIdent) {
+        const alias_token = self.peek();
+        if (alias_token == .LowerIdent or alias_token == .UpperIdent) {
             const alias_ident = self.currentIdent();
             if (alias_ident) |id| {
-                const alias_node = try self.ast.appendNode(self.gpa, self.currentPosition(), .lc, .{ .ident = id });
+                const alias_tag: AST.Node.Tag = if (alias_token == .UpperIdent) .uc else .lc;
+                const alias_node = try self.ast.appendNode(self.gpa, self.currentPosition(), alias_tag, .{ .ident = id });
                 try self.scratch_nodes.append(self.gpa, alias_node);
             }
             self.advance();
@@ -728,8 +732,8 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
 
     const nodes = self.scratch_nodes.items[scratch_start..];
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-    // TODO: Add import node type to AST2
-    return try self.ast.appendNode(self.gpa, start_pos, .block, .{ .block_nodes = nodes_idx });
+    // Use the new import node type
+    return try self.ast.appendNode(self.gpa, start_pos, .import, .{ .import_nodes = nodes_idx });
 }
 
 /// Parse a pattern
@@ -770,9 +774,8 @@ pub fn parsePattern(self: *Parser) Error!Node.Idx {
         .Underscore => {
             const pos = self.currentPosition();
             self.advance();
-            // TODO: handle underscore specially - for now use a dummy identifier
-            const dummy_ident = @as(Ident.Idx, @bitCast(@as(u32, 0)));
-            return try self.ast.appendNode(self.gpa, pos, .lc, .{ .ident = dummy_ident });
+            // Use the new underscore node type
+            return try self.ast.appendNode(self.gpa, pos, .underscore, .{ .src_bytes_end = pos });
         },
         .StringStart => return self.parseStringPattern(),
         .Int, .Float => return self.parseNumLiteral(),

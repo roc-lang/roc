@@ -46,31 +46,23 @@ pub fn main() !void {
         const snapshot2_dir = "test/snapshot2";
         var dir = try std.fs.cwd().openDir(snapshot2_dir, .{ .iterate = true });
         defer dir.close();
-        
+
         var walker = try dir.walk(allocator);
         defer walker.deinit();
-        
+
         var count: usize = 0;
         while (try walker.next()) |entry| {
             if (entry.kind == .file and std.mem.endsWith(u8, entry.basename, ".md")) {
-                const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{snapshot2_dir, entry.path});
+                const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ snapshot2_dir, entry.path });
                 defer allocator.free(full_path);
-                
-                std.debug.print("Processing {s}...\n", .{full_path});
+
                 try processSnapshot(allocator, full_path);
                 count += 1;
             }
         }
-        
-        if (count == 0) {
-            std.debug.print("No .md files found in {s}\n", .{snapshot2_dir});
-        } else {
-            std.debug.print("Processed {d} snapshot files.\n", .{count});
-        }
     } else {
         // Process specific file(s) given as arguments
         for (args[1..]) |snapshot_path| {
-            std.debug.print("Processing {s}...\n", .{snapshot_path});
             try processSnapshot(allocator, snapshot_path);
         }
     }
@@ -86,7 +78,7 @@ fn processSnapshot(allocator: std.mem.Allocator, path: []const u8) !void {
     // Generate new outputs
     const tokens_output = try generateTokensOutput(allocator, snapshot.source);
     defer allocator.free(tokens_output);
-    
+
     const parse_output = try generateParseOutput(allocator, snapshot.source, snapshot.test_type);
     defer allocator.free(parse_output);
 
@@ -194,6 +186,8 @@ fn getSimplifiedTagName(tag: AST2.Node.Tag) []const u8 {
         .frac_literal_small, .frac_literal_big => "frac",
         .str_literal_small, .str_literal_big => "str",
         .list_literal => "list",
+        .underscore => "_",
+        .import => "import",
         else => @tagName(tag),
     };
 }
@@ -215,10 +209,10 @@ fn generateTokensOutput(allocator: std.mem.Allocator, source: []const u8) ![]con
     const token_count = result.tokens.tokens.len;
     for (0..token_count) |i| {
         if (i > 0) try output.appendSlice(",");
-        
+
         const tag = result.tokens.tokens.items(.tag)[i];
         const region = result.tokens.tokens.items(.region)[i];
-        
+
         try output.writer().print("{s}({d}-{d})", .{
             @tagName(tag),
             region.start.offset,
@@ -250,7 +244,7 @@ fn generateParseOutput(allocator: std.mem.Allocator, source: []const u8, test_ty
         parser.diagnostics.deinit(allocator);
         parser.deinit();
     }
-    
+
     var expr_root: ?AST2.Node.Idx = null;
     if (test_type == .file) {
         _ = try parser.parseFile();
@@ -264,12 +258,12 @@ fn generateParseOutput(allocator: std.mem.Allocator, source: []const u8, test_ty
 
     if (test_type == .file) {
         try output.appendSlice("(file\n");
-        
+
         // Output header if present
         if (ast.header) |header| {
             try writeHeader(&output, &ast, &env, header, 1);
         }
-        
+
         // Check if there's a block node (contains the statements)
         // The block should be the last node if there are any statements
         if (ast.nodes.len() > 0) {
@@ -278,19 +272,12 @@ fn generateParseOutput(allocator: std.mem.Allocator, source: []const u8, test_ty
                 // Output the statements
                 // Output the statements directly without wrapper
                 const block_nodes = ast.node_slices.slice(ast.payload(last_idx).block_nodes);
-                std.debug.print("Block has {d} statements\n", .{block_nodes.len});
-                std.debug.print("Total nodes in AST: {d}\n", .{ast.nodes.len()});
-                for (0..ast.nodes.len()) |i| {
-                    const node_idx = @as(AST2.Node.Idx, @enumFromInt(i));
-                    std.debug.print("  Node {d}: {s} @{d}\n", .{i, @tagName(ast.tag(node_idx)), ast.start(node_idx).offset});
-                }
-                for (block_nodes, 0..) |stmt_idx, i| {
-                    std.debug.print("  Statement {d}: idx={d}, tag={s}\n", .{i, @intFromEnum(stmt_idx), @tagName(ast.tag(stmt_idx))});
+                for (block_nodes) |stmt_idx| {
                     try writeNode(&output, &ast, &env, stmt_idx, 1);
                 }
             }
         }
-        
+
         try output.appendSlice(")\n");
     } else {
         // For expressions, output the root node returned by parseExpr
@@ -305,8 +292,8 @@ fn generateParseOutput(allocator: std.mem.Allocator, source: []const u8, test_ty
 
 fn writeHeader(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.CommonEnv, header: AST2.Header, indent_level: usize) !void {
     const indent = "  " ** 10;
-    const indent_str = indent[0..indent_level * 2];
-    
+    const indent_str = indent[0 .. indent_level * 2];
+
     switch (header) {
         .app => |app| {
             try output.writer().print("{s}(app\n", .{indent_str});
@@ -323,8 +310,12 @@ fn writeHeader(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Co
         },
         .module => |mod| {
             try output.writer().print("{s}(module\n", .{indent_str});
-            try output.writer().print("{s}  (exposes ", .{indent_str});
-            try writeNodeSlice(output, ast, env, mod.exposes, indent_level + 1);
+            try output.writer().print("{s}  (exposes", .{indent_str});
+            const exposes = ast.node_slices.slice(mod.exposes);
+            if (exposes.len > 0) {
+                try output.appendSlice(" ");
+                try writeNodeSlice(output, ast, env, mod.exposes, indent_level + 1);
+            }
             try output.appendSlice(")\n");
             try output.writer().print("{s})\n", .{indent_str});
         },
@@ -391,11 +382,11 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
     // but still with full structure
     const tag = ast.tag(idx);
     const start_pos = ast.start(idx);
-    
+
     // Use simplified tag names for better readability
     const simplified_name = getSimplifiedTagName(tag);
     try output.writer().print("({s}", .{simplified_name});
-    
+
     // Write node-specific content based on tag
     switch (tag) {
         .uc, .lc, .var_lc, .neg_lc, .not_lc, .dot_lc, .double_dot_lc => {
@@ -424,22 +415,22 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
             // The elements are the preceding nodes in the AST
             const elem_count = ast.payload(idx).list_elems;
             const list_idx_num = @intFromEnum(idx);
-            
+
             // The elements are the nodes before this list_literal node
             const start_idx = list_idx_num - elem_count;
-            
+
             for (0..elem_count) |i| {
                 try output.appendSlice(" (");
-                
+
                 const elem_idx = @as(AST2.Node.Idx, @enumFromInt(start_idx + i));
                 const node_tag = ast.tag(elem_idx);
                 const node_pos = ast.start(elem_idx);
-                
+
                 // Write simplified node type and value inline
                 switch (node_tag) {
                     .num_literal_i32 => {
                         const value = ast.payload(elem_idx).num_literal_i32;
-                        try output.writer().print("num {d} @{d}", .{value, node_pos.offset});
+                        try output.writer().print("num {d} @{d}", .{ value, node_pos.offset });
                     },
                     else => {
                         // For other types, use the full inline representation
@@ -475,14 +466,20 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
                 }
             }
         },
-        .binop_equals, .binop_double_equals, .binop_not_equals,
-        .binop_colon, .binop_plus, .binop_minus, .binop_star,
-        .binop_slash, .binop_double_slash, .binop_double_question,
-        .binop_gt, .binop_gte, .binop_lt, .binop_lte,
-        .binop_thick_arrow, .binop_thin_arrow,
-        .binop_and, .binop_or, .binop_pipe => {
+        .underscore => {
+            // Underscore has no additional content
+        },
+        .import => {
+            const nodes_idx = ast.payload(idx).import_nodes;
+            const nodes = ast.node_slices.slice(nodes_idx);
+            for (nodes, 0..) |node_idx, i| {
+                try output.appendSlice(" ");
+                if (i > 0) try output.appendSlice(" ");
+                try writeNodeInline(output, ast, env, node_idx);
+            }
+        },
+        .binop_equals, .binop_double_equals, .binop_not_equals, .binop_colon, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_thick_arrow, .binop_thin_arrow, .binop_and, .binop_or, .binop_pipe => {
             const binop = ast.binOp(idx);
-            std.debug.print("  binop at idx={d}: lhs={d}, rhs={d}\n", .{@intFromEnum(idx), @intFromEnum(binop.lhs), @intFromEnum(binop.rhs)});
             try output.appendSlice(" ");
             try writeNodeInline(output, ast, env, binop.lhs);
             try output.appendSlice(" ");
@@ -509,7 +506,7 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
             }
         },
         .match => {
-            const branches = ast.payload(idx).match_branches;  
+            const branches = ast.payload(idx).match_branches;
             const branches_idx = @as(AST2.NodeSlices.Idx, @enumFromInt(branches));
             const branch_nodes = ast.node_slices.slice(branches_idx);
             // match has condition followed by pattern-body pairs
@@ -609,33 +606,33 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
             try output.writer().print(" error:{s}", .{@tagName(diag)});
         },
     }
-    
+
     try output.writer().print(" @{d})", .{start_pos.offset});
 }
 
 fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.CommonEnv, idx: AST2.Node.Idx, indent_level: usize) !void {
     const indent = "  " ** 10;
-    const indent_str = indent[0..indent_level * 2];
-    
+    const indent_str = indent[0 .. indent_level * 2];
+
     const tag = ast.tag(idx);
     const start_pos = ast.start(idx);
     const simplified_name = getSimplifiedTagName(tag);
-    
+
     try output.writer().print("{s}({s}", .{
         indent_str,
         simplified_name,
     });
-    
+
     // Write node-specific content based on tag
     switch (tag) {
         .uc, .lc, .var_lc, .neg_lc, .not_lc, .dot_lc, .double_dot_lc => {
             const ident_idx = ast.payload(idx).ident;
             const ident_text = env.getIdent(ident_idx);
-            try output.writer().print(" \"{s}\" @{d})\n", .{ident_text, start_pos.offset});
+            try output.writer().print(" \"{s}\" @{d})\n", .{ ident_text, start_pos.offset });
         },
         .num_literal_i32 => {
             const value = ast.payload(idx).num_literal_i32;
-            try output.writer().print(" {d} @{d})\n", .{value, start_pos.offset});
+            try output.writer().print(" {d} @{d})\n", .{ value, start_pos.offset });
         },
         .str_literal_small => {
             try output.writer().print(" \"", .{});
@@ -743,6 +740,18 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
         .empty_list, .empty_record => {
             try output.writer().print(" @{d})\n", .{start_pos.offset});
         },
+        .underscore => {
+            try output.writer().print(" @{d})\n", .{start_pos.offset});
+        },
+        .import => {
+            const nodes_idx = ast.payload(idx).import_nodes;
+            const nodes = ast.node_slices.slice(nodes_idx);
+            for (nodes) |node_idx| {
+                try output.appendSlice(" ");
+                try writeNodeInline(output, ast, env, node_idx);
+            }
+            try output.writer().print(" @{d})\n", .{start_pos.offset});
+        },
         .unary_not, .unary_neg, .unary_double_dot => {
             // Unary operators store their operand as the preceding node
             const child_idx = @as(AST2.Node.Idx, @enumFromInt(@intFromEnum(idx) - 1));
@@ -756,20 +765,14 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
         },
         .malformed => {
             const diag = ast.payload(idx).malformed;
-            try output.writer().print(" error:{s} @{d})\n", .{@tagName(diag), start_pos.offset});
+            try output.writer().print(" error:{s} @{d})\n", .{ @tagName(diag), start_pos.offset });
         },
         else => {
             // Check if it's a binary operator by trying to get binOp
             if (@hasField(AST2.Node.Payload, "binop")) {
                 switch (tag) {
-                    .binop_equals, .binop_double_equals, .binop_not_equals,
-                    .binop_colon, .binop_plus, .binop_minus, .binop_star,
-                    .binop_slash, .binop_double_slash, .binop_double_question,
-                    .binop_gt, .binop_gte, .binop_lt, .binop_lte,
-                    .binop_thick_arrow, .binop_thin_arrow,
-                    .binop_and, .binop_or, .binop_pipe => {
+                    .binop_equals, .binop_double_equals, .binop_not_equals, .binop_colon, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_thick_arrow, .binop_thin_arrow, .binop_and, .binop_or, .binop_pipe => {
                         const binop = ast.binOp(idx);
-                        std.debug.print("writeNode binop at idx={d}: lhs={d}, rhs={d}\n", .{@intFromEnum(idx), @intFromEnum(binop.lhs), @intFromEnum(binop.rhs)});
                         try output.appendSlice(" ");
                         try writeNodeInline(output, ast, env, binop.lhs);
                         try output.appendSlice(" ");
