@@ -2119,7 +2119,6 @@ pub const WhereClause = union(enum) {
         reason: Diagnostic.Tag,
         region: TokenizedRegion,
     },
-
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .mod_method => |m| {
