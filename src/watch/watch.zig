@@ -439,17 +439,11 @@ pub const Watcher = struct {
     }
 
     fn watchLoop(self: *Watcher) void {
-        // ALWAYS signal ready, even if we hit unreachable
-        defer self.is_ready.store(true, .seq_cst);
-
         switch (builtin.os.tag) {
             .macos => self.watchLoopMacOS(),
             .linux => self.watchLoopLinux(),
-            .windows => self.watchLoopWindows(),
-            else => {
-                // Don't crash on unsupported OS, just do nothing
-                return;
-            },
+            .windows => @panic("TODO have Windows do the equivalent of what Linux and macOS do"),
+            else => unreachable,
         }
     }
 
@@ -736,237 +730,6 @@ pub const Watcher = struct {
             }
         }
     }
-
-    fn watchLoopWindows(self: *Watcher) void {
-        // Define the constant locally in case it's missing
-        const CREATE_EVENT_MANUAL_RESET = 0x00000001;
-
-        self.impl.stop_event = std.os.windows.kernel32.CreateEventExW(
-            null,
-            null,
-            CREATE_EVENT_MANUAL_RESET,
-            std.os.windows.GENERIC_ALL,
-        );
-        if (self.impl.stop_event == null) {
-            return;
-        }
-
-        for (self.paths) |path| {
-            self.addWatchWindows(path) catch |err| {
-                std.log.err("Failed to watch {s}: {}", .{ path, err });
-            };
-        }
-
-        // Check if we reach here after adding watches
-        if (self.impl.overlapped_data.items.len == 0) {
-            // No watches were successfully added
-            if (self.impl.stop_event) |event| {
-                _ = std.os.windows.CloseHandle(event);
-            }
-            return;
-        }
-
-        for (0..self.impl.overlapped_data.items.len) |i| {
-            self.issueWindowsRead(i);
-        }
-
-        var wait_handles = self.allocator.alloc(std.os.windows.HANDLE, self.impl.overlapped_data.items.len + 1) catch {
-            if (self.impl.stop_event) |event| {
-                _ = std.os.windows.CloseHandle(event);
-            }
-            return;
-        };
-
-        wait_handles[0] = self.impl.stop_event.?;
-        for (1..wait_handles.len) |i| {
-            wait_handles[i] = self.impl.overlapped_data.items[i - 1].overlapped.hEvent.?;
-        }
-
-        while (!self.should_stop.load(.seq_cst)) {
-            const wait_result = std.os.windows.kernel32.WaitForMultipleObjects(
-                @intCast(wait_handles.len),
-                wait_handles.ptr,
-                0,
-                std.os.windows.INFINITE,
-            );
-
-            if (wait_result == std.os.windows.WAIT_OBJECT_0) {
-                // Stop event was signaled
-                break;
-            } else if (wait_result > std.os.windows.WAIT_OBJECT_0 and
-                wait_result < std.os.windows.WAIT_OBJECT_0 + wait_handles.len)
-            {
-                // File change event
-                const index = wait_result - std.os.windows.WAIT_OBJECT_0 - 1;
-                self.handleWindowsDirectoryEvent(index);
-                self.issueWindowsRead(index);
-            } else if (wait_result == std.os.windows.WAIT_FAILED) {
-                const error_code = std.os.windows.kernel32.GetLastError();
-                std.log.err("WaitForMultipleObjects failed with error: {}", .{error_code});
-                // Exit the loop on wait failure
-                break;
-            } else {
-                std.log.err("Unexpected wait result: {}", .{wait_result});
-                // Continue rather than panic
-                continue;
-            }
-        }
-
-        // Clean up
-        self.allocator.free(wait_handles);
-
-        // Clean up stop event
-        if (self.impl.stop_event) |event| {
-            _ = std.os.windows.CloseHandle(event);
-            self.impl.stop_event = null;
-        }
-
-        // Clean up handles and overlapped data
-        for (self.impl.handles.items) |handle| {
-            _ = std.os.windows.CloseHandle(handle);
-        }
-        self.impl.handles.clearRetainingCapacity();
-
-        for (self.impl.overlapped_data.items) |*data| {
-            if (data.overlapped.hEvent) |event| {
-                _ = std.os.windows.CloseHandle(event);
-            }
-            self.allocator.free(data.buffer);
-            self.allocator.free(data.path);
-        }
-        self.impl.overlapped_data.clearRetainingCapacity();
-    }
-
-    fn issueWindowsRead(self: *Watcher, index: usize) void {
-        const data = &self.impl.overlapped_data.items[index];
-        const handle = self.impl.handles.items[index];
-
-        const ResetEvent = struct {
-            extern "kernel32" fn ResetEvent(hEvent: std.os.windows.HANDLE) callconv(.winapi) std.os.windows.BOOL;
-        }.ResetEvent;
-        _ = ResetEvent(data.overlapped.hEvent.?);
-
-        const notify_filter = std.os.windows.FileNotifyChangeFilter{
-            .file_name = true,
-            .dir_name = true,
-            .last_write = true,
-            .creation = true,
-        };
-
-        const result = std.os.windows.kernel32.ReadDirectoryChangesW(
-            handle,
-            data.buffer.ptr,
-            @intCast(data.buffer.len),
-            1,
-            notify_filter,
-            null, // Must be null for overlapped I/O
-            &data.overlapped,
-            null,
-        );
-
-        if (result == 0) {
-            // Log error but don't panic - just skip this directory
-            const error_code = std.os.windows.kernel32.GetLastError();
-            std.log.err("ReadDirectoryChangesW failed for index {} with error {}", .{ index, error_code });
-        }
-    }
-
-    fn handleWindowsDirectoryEvent(self: *Watcher, index: usize) void {
-        const data = &self.impl.overlapped_data.items[index];
-        const handle = self.impl.handles.items[index];
-        var bytes_returned: std.os.windows.DWORD = 0;
-
-        if (std.os.windows.kernel32.GetOverlappedResult(handle, &data.overlapped, &bytes_returned, 0) != 0) {
-            if (bytes_returned > 0) {
-                self.processWindowsNotifications(data.buffer[0..bytes_returned], data.path);
-            }
-            // If 0 bytes, just ignore - no events to process
-        } else {
-            // Log error but don't panic
-            const error_code = std.os.windows.kernel32.GetLastError();
-            std.log.err("GetOverlappedResult failed with error {}", .{error_code});
-        }
-    }
-
-    fn addWatchWindows(self: *Watcher, path: []const u8) !void {
-        const path_w = try std.unicode.utf8ToUtf16LeAllocZ(self.allocator, path);
-        defer self.allocator.free(path_w);
-
-        const handle = std.os.windows.kernel32.CreateFileW(
-            path_w,
-            std.os.windows.FILE_LIST_DIRECTORY,
-            std.os.windows.FILE_SHARE_READ | std.os.windows.FILE_SHARE_WRITE | std.os.windows.FILE_SHARE_DELETE,
-            null,
-            std.os.windows.OPEN_EXISTING,
-            std.os.windows.FILE_FLAG_BACKUP_SEMANTICS | std.os.windows.FILE_FLAG_OVERLAPPED,
-            null,
-        );
-
-        if (handle == std.os.windows.INVALID_HANDLE_VALUE) {
-            return error.FailedToOpenDirectory;
-        }
-
-        const buffer = try self.allocator.alignedAlloc(u8, @alignOf(std.os.windows.FILE_NOTIFY_INFORMATION), 64 * 1024);
-        errdefer self.allocator.free(buffer);
-
-        var overlapped = std.mem.zeroes(std.os.windows.OVERLAPPED);
-        overlapped.hEvent = std.os.windows.kernel32.CreateEventExW(
-            null,
-            null,
-            0x00000001, // CREATE_EVENT_MANUAL_RESET
-            std.os.windows.EVENT_ALL_ACCESS,
-        );
-        if (overlapped.hEvent == null) {
-            std.log.err("Failed to create overlapped event", .{});
-            self.allocator.free(buffer);
-            _ = std.os.windows.CloseHandle(handle);
-            return error.FailedToCreateEvent;
-        }
-
-        const path_copy = try self.allocator.dupe(u8, path);
-        errdefer self.allocator.free(path_copy);
-
-        // Only append to arrays after all allocations succeed to keep them in sync
-        try self.impl.handles.append(handle);
-        errdefer _ = self.impl.handles.pop();
-
-        try self.impl.overlapped_data.append(.{
-            .overlapped = overlapped,
-            .buffer = buffer,
-            .path = path_copy,
-        });
-    }
-
-    fn processWindowsNotifications(self: *Watcher, buffer: []const u8, base_path: []const u8) void {
-        var offset: usize = 0;
-        while (offset < buffer.len) {
-            const info = @as(*const std.os.windows.FILE_NOTIFY_INFORMATION, @ptrCast(@alignCast(&buffer[offset])));
-
-            if (info.FileNameLength > 0) {
-                const name_slice = @as([*]const u16, @ptrCast(@alignCast(&buffer[offset + @sizeOf(std.os.windows.FILE_NOTIFY_INFORMATION)])))[0 .. info.FileNameLength / 2];
-
-                const name_utf8 = std.unicode.utf16LeToUtf8Alloc(self.allocator, name_slice) catch {
-                    if (info.NextEntryOffset == 0) break;
-                    offset += info.NextEntryOffset;
-                    continue;
-                };
-                defer self.allocator.free(name_utf8);
-
-                if (std.mem.endsWith(u8, name_utf8, ".roc")) {
-                    const full_path = std.fs.path.join(self.allocator, &.{ base_path, name_utf8 }) catch {
-                        if (info.NextEntryOffset == 0) break;
-                        offset += info.NextEntryOffset;
-                        continue;
-                    };
-                    defer self.allocator.free(full_path);
-                    self.callback(.{ .path = full_path });
-                }
-            }
-
-            if (info.NextEntryOffset == 0) break;
-            offset += info.NextEntryOffset;
-        }
-    }
 };
 
 // ===== TESTS =====
@@ -1069,11 +832,6 @@ test "recursive directory watching" {
 
     try watcher.start();
 
-    // Give the watcher a moment to fully initialize on Windows
-    if (builtin.os.tag == .windows) {
-        std.time.sleep(100 * std.time.ns_per_ms);
-    }
-
     try temp_dir.dir.writeFile(.{ .sub_path = "subdir/nested.roc", .data = "nested content" });
     try waitForEvents(&global.event_count, 1, 5000);
 
@@ -1110,11 +868,6 @@ test "multiple directories watching" {
     defer watcher.deinit();
 
     try watcher.start();
-
-    // Give the watcher a moment to fully initialize on Windows
-    if (builtin.os.tag == .windows) {
-        std.time.sleep(100 * std.time.ns_per_ms);
-    }
 
     try temp_dir1.dir.writeFile(.{ .sub_path = "file1.roc", .data = "content1" });
     try waitForEvents(&global.event_count, 1, 5000);
@@ -1154,11 +907,6 @@ test "file modification detection" {
 
     try watcher.start();
 
-    // Give the watcher a moment to fully initialize on Windows
-    if (builtin.os.tag == .windows) {
-        std.time.sleep(100 * std.time.ns_per_ms);
-    }
-
     try temp_dir.dir.writeFile(.{ .sub_path = "modify.roc", .data = "modified content that is different" });
     try waitForEvents(&global.event_count, 1, 5000);
 
@@ -1191,11 +939,6 @@ test "rapid file creation" {
     defer watcher.deinit();
 
     try watcher.start();
-
-    // Give the watcher a moment to fully initialize on Windows
-    if (builtin.os.tag == .windows) {
-        std.time.sleep(100 * std.time.ns_per_ms);
-    }
 
     const start_time = std.time.milliTimestamp();
 
