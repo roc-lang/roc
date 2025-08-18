@@ -21,7 +21,7 @@ KwModule(0-6),OpenSquare(7-8),LowerIdent(8-13),CloseSquare(13-14),LowerIdent(15-
   (module
     (exposes (lc "greet" @8))
   )
-  (= (lc "greet" @15) (str "<big>" @23) @21)
+  (= (lc "greet" @15) (str "Hello, World!" @23) @21)
 )
 
 ~~~

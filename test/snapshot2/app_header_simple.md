@@ -19,7 +19,7 @@ KwApp(0-3),OpenSquare(4-5),LowerIdent(5-10),CloseSquare(10-11),OpenCurly(12-13),
 (file
   (app
     (provides (lc "main!" @5))
-    (platform (record_literal ((lc "pf" @14), (str "<big>" @27), (lc "other" @42), (str "<big>" @49)) @12))
+    (platform (record_literal ((lc "pf" @14), (str "../main.roc" @27), (lc "other" @42), (str "../../other/main.roc" @49)) @12))
     (packages (lc "main!" @5))
   )
 )

@@ -25,7 +25,7 @@ KwModule(0-6),OpenSquare(7-8),LowerIdent(8-18),CloseSquare(18-19),LowerIdent(20-
   (module
     (exposes (lc "isPositive" @8))
   )
-  (= (lc "isPositive" @20) (lambda [(lc "n" @34)] (if_else(> (lc "n" @45) (num 0 @49) @47) (str "<big>" @60) (str "<big>" @88) @41) @33) @31)
+  (= (lc "isPositive" @20) (lambda [(lc "n" @34)] (if_else(> (lc "n" @45) (num 0 @49) @47) (str "positive" @60) (str "not positive" @88) @41) @33) @31)
 )
 
 ~~~
