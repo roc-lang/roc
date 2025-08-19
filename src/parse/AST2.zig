@@ -171,7 +171,7 @@ pub const NodeSlices = struct {
 
         pub fn next(self: *Iterator) ?Node.Idx {
             if (self.done) return null;
-            
+
             // Bounds check
             if (self.index >= self.entries.len) {
                 self.done = true;
@@ -234,7 +234,7 @@ pub const NodeSlices = struct {
 pub fn nodesInBlock(self: *const Ast, idx: Node.Idx) NodeSlices.Iterator {
     std.debug.assert(self.tag(idx) == .block);
 
-    return self.node_slices.nodes(self.payload(idx).block_nodes);
+    return self.node_slices.nodes(self.payload(idx).nodes);
 }
 
 /// Returns an iterator over all the nodes in a string interpolation.
@@ -251,11 +251,24 @@ pub const Lambda = struct {
     args_idx: NodeSlices.Idx, // Index to access args via iterator
 };
 
+/// A while loop, e.g. `while condition body`
+pub const WhileLoop = struct {
+    condition: Node.Idx,
+    body: Node.Idx,
+};
+
+/// A for loop, e.g. `for pattern in expr body`
+pub const ForLoop = struct {
+    pattern: Node.Idx,
+    iterable: Node.Idx,
+    body: Node.Idx,
+};
+
 /// Iterator for lambda args
 pub const LambdaArgsIterator = struct {
     iter: NodeSlices.Iterator,
     skipped_body: bool,
-    
+
     pub fn next(self: *LambdaArgsIterator) ?Node.Idx {
         if (!self.skipped_body) {
             _ = self.iter.next(); // Skip the body
@@ -271,10 +284,10 @@ pub fn lambda(self: *const Ast, idx: Node.Idx) Lambda {
 
     const body_then_args_idx = self.payload(idx).body_then_args;
     var iter = self.node_slices.nodes(body_then_args_idx);
-    
+
     // First node is the body
     const body = iter.next() orelse unreachable; // Lambda must have at least a body
-    
+
     return Lambda{
         .body = body,
         .args_idx = body_then_args_idx,
@@ -285,10 +298,41 @@ pub fn lambda(self: *const Ast, idx: Node.Idx) Lambda {
 pub fn lambdaNoArgsBody(self: *const Ast, idx: Node.Idx) Node.Idx {
     std.debug.assert(self.tag(idx) == .lambda_no_args);
     // For lambda_no_args, we store the body node index directly as a u32 in block_nodes
-    const body_idx = @intFromEnum(self.payload(idx).block_nodes);
+    const body_idx = @intFromEnum(self.payload(idx).nodes);
     return @enumFromInt(body_idx);
 }
 
+/// Panics in debug builds if the given Node.Idx does not refer to a .while_loop node.
+pub fn whileLoop(self: *const Ast, idx: Node.Idx) WhileLoop {
+    std.debug.assert(self.tag(idx) == .while_loop);
+    const nodes_idx = self.payload(idx).nodes;
+    var iter = self.node_slices.nodes(nodes_idx);
+
+    const condition = iter.next() orelse unreachable;
+    const body = iter.next() orelse unreachable;
+
+    return WhileLoop{
+        .condition = condition,
+        .body = body,
+    };
+}
+
+/// Panics in debug builds if the given Node.Idx does not refer to a .for_loop node.
+pub fn forLoop(self: *const Ast, idx: Node.Idx) ForLoop {
+    std.debug.assert(self.tag(idx) == .for_loop);
+    const nodes_idx = self.payload(idx).nodes;
+    var iter = self.node_slices.nodes(nodes_idx);
+
+    const pattern = iter.next() orelse unreachable;
+    const iterable = iter.next() orelse unreachable;
+    const body = iter.next() orelse unreachable;
+
+    return ForLoop{
+        .pattern = pattern,
+        .iterable = iterable,
+        .body = body,
+    };
+}
 
 /// Get an iterator for lambda args
 pub fn lambdaArgs(self: *const Ast, lambda_val: Lambda) LambdaArgsIterator {
@@ -314,13 +358,13 @@ pub fn lambdaArgsRegion(self: *const Ast, idx: Node.Idx, raw_src: []u8, ident_st
     // The closing `|` delimiter is the next token after the end of the last arg node.
     const lambda_val = self.lambda(idx);
     var args_iter = self.lambdaArgs(lambda_val);
-    
+
     // Find the last arg by iterating through all args
     var last_arg: ?Node.Idx = null;
     while (args_iter.next()) |arg| {
         last_arg = arg;
     }
-    
+
     const last_arg_end =
         if (last_arg) |arg|
             self.region(arg, raw_src, ident_store).end.offset
@@ -460,8 +504,8 @@ pub fn region(
         .apply_lc, .apply_uc, .apply_anon => {
             // Function application: func(args...)
             // The payload should contain nodes for func and args
-            const nodes_idx = self.payload(idx).block_nodes;
-            
+            const nodes_idx = self.payload(idx).nodes;
+
             // Check if this is an empty apply (no arguments)
             if (nodes_idx.isNil()) {
                 // For empty apply, we need to determine the function name from the tag
@@ -474,18 +518,18 @@ pub fn region(
                     .end = Position{ .offset = region_start.offset + 2 }, // Rough estimate for "()"
                 };
             }
-            
+
             var iter = self.node_slices.nodes(nodes_idx);
-            
+
             // Get the first node (the function)
             const first_node = iter.next() orelse unreachable; // Should have at least the function
-            
+
             // Find the last node (last argument or the function if no args)
             var last_node = first_node;
             while (iter.next()) |node| {
                 last_node = node;
             }
-            
+
             // The region spans from the function to the closing paren after the last arg
             const last_region = self.region(last_node, raw_src, ident_store);
             // Add 1 for the closing paren
@@ -574,15 +618,15 @@ pub fn region(
             return self.containerRegion(idx, nodes_iter, tokenize.Token.DELIM_CLOSE_CURLY, raw_src, ident_store);
         },
         .list_literal => {
-            const nodes_iter = self.node_slices.nodes(self.payload(idx).block_nodes);
+            const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
             return self.containerRegion(idx, nodes_iter, tokenize.Token.DELIM_CLOSE_SQUARE, raw_src, ident_store);
         },
         .tuple_literal => {
-            const nodes_iter = self.node_slices.nodes(self.payload(idx).block_nodes);
+            const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
             return self.containerRegion(idx, nodes_iter, tokenize.Token.DELIM_CLOSE_ROUND, raw_src, ident_store);
         },
         .record_literal => {
-            const nodes_iter = self.node_slices.nodes(self.payload(idx).block_nodes);
+            const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
             return self.containerRegion(idx, nodes_iter, tokenize.Token.DELIM_CLOSE_CURLY, raw_src, ident_store);
         },
         .lambda => {
@@ -624,11 +668,11 @@ pub fn region(
             // `!` followed by expression - the payload should contain the operand node
             // For now, assume the operand is stored in block_nodes as a single-element slice
             const region_start = self.start(idx);
-            const nodes_iter = self.node_slices.nodes(self.payload(idx).block_nodes);
+            const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
             var iter = nodes_iter;
             const operand = iter.next() orelse unreachable; // Should have the operand
             const operand_region = self.region(operand, raw_src, ident_store);
-            
+
             return .{
                 .start = region_start, // Start includes the `!`
                 .end = operand_region.end,
@@ -637,11 +681,11 @@ pub fn region(
         .unary_neg => {
             // `-` followed by expression - the payload should contain the operand node
             const region_start = self.start(idx);
-            const nodes_iter = self.node_slices.nodes(self.payload(idx).block_nodes);
+            const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
             var iter = nodes_iter;
             const operand = iter.next() orelse unreachable; // Should have the operand
             const operand_region = self.region(operand, raw_src, ident_store);
-            
+
             return .{
                 .start = region_start, // Start includes the `-`
                 .end = operand_region.end,
@@ -650,11 +694,11 @@ pub fn region(
         .unary_double_dot => {
             // `..` followed by expression - the payload should contain the operand node
             const region_start = self.start(idx);
-            const nodes_iter = self.node_slices.nodes(self.payload(idx).block_nodes);
+            const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
             var iter = nodes_iter;
             const operand = iter.next() orelse unreachable; // Should have the operand
             const operand_region = self.region(operand, raw_src, ident_store);
-            
+
             return .{
                 .start = region_start, // Start includes the `..`
                 .end = operand_region.end,
@@ -663,11 +707,11 @@ pub fn region(
         .ret => {
             // `return` followed by expression
             const region_start = self.start(idx);
-            const nodes_iter = self.node_slices.nodes(self.payload(idx).block_nodes);
+            const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
             var iter = nodes_iter;
             const expr = iter.next() orelse unreachable; // Should have the expression to return
             const expr_region = self.region(expr, raw_src, ident_store);
-            
+
             return .{
                 .start = region_start, // Start at the 'return' keyword
                 .end = expr_region.end, // End at the end of the expression
@@ -676,17 +720,37 @@ pub fn region(
         .crash => {
             // `crash` followed by expression
             const region_start = self.start(idx);
-            const nodes_iter = self.node_slices.nodes(self.payload(idx).block_nodes);
+            const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
             var iter = nodes_iter;
             const expr = iter.next() orelse unreachable; // Should have the expression to crash with
             const expr_region = self.region(expr, raw_src, ident_store);
-            
+
             return .{
                 .start = region_start, // Start at the 'crash' keyword
                 .end = expr_region.end, // End at the end of the expression
             };
         },
-        .num_literal_i32, .int_literal_i32, .frac_literal_small, .str_literal_small, .num_literal_big, .int_literal_big, .frac_literal_big, .str_literal_big, .match, .if_else, .if_without_else, .for_loop, .while_loop, .malformed => {
+        .while_loop => {
+            // while condition body
+            const while_val = self.whileLoop(idx);
+            const region_start = self.start(idx);
+            const body_region = self.region(while_val.body, raw_src, ident_store);
+            return .{
+                .start = region_start,
+                .end = body_region.end,
+            };
+        },
+        .for_loop => {
+            // for pattern in expr body
+            const for_val = self.forLoop(idx);
+            const region_start = self.start(idx);
+            const body_region = self.region(for_val.body, raw_src, ident_store);
+            return .{
+                .start = region_start,
+                .end = body_region.end,
+            };
+        },
+        .num_literal_i32, .int_literal_i32, .frac_literal_small, .str_literal_small, .num_literal_big, .int_literal_big, .frac_literal_big, .str_literal_big, .match, .if_else, .if_without_else, .malformed => {
             @panic("TODO");
         },
     }
@@ -739,21 +803,21 @@ fn containerRegion(
     ident_store: *const Ident.Store,
 ) Region {
     const region_start = self.start(idx);
-    
+
     // Find the last node in the container
     var iter = nodes_iter;
     var last_node_idx: ?Node.Idx = null;
     while (iter.next()) |node| {
         last_node_idx = node;
     }
-    
+
     const closing_delim_offset = if (last_node_idx) |last_node| blk: {
         // Has nodes - find closing delimiter after last node
         const last_node_region = self.region(last_node, raw_src, ident_store);
         const after_last_node = @as(usize, @intCast(last_node_region.end.offset)) + 1;
         const next_token_offset = nextTokenIndex(raw_src[after_last_node..]);
         const delim_offset = after_last_node + next_token_offset;
-        
+
         // Verify we found the expected delimiter
         std.debug.assert(raw_src[delim_offset] == closing_delimiter);
         break :blk delim_offset;
@@ -762,12 +826,12 @@ fn containerRegion(
         const after_open = @as(usize, @intCast(region_start.offset)) + 1;
         const next_token_offset = nextTokenIndex(raw_src[after_open..]);
         const delim_offset = after_open + next_token_offset;
-        
+
         // Verify we found the expected delimiter
         std.debug.assert(raw_src[delim_offset] == closing_delimiter);
         break :blk delim_offset;
     };
-    
+
     return .{
         .start = region_start,
         .end = Position{ .offset = @as(u32, @intCast(closing_delim_offset)) },
@@ -812,7 +876,7 @@ pub const Node = struct {
         binop_double_question, //  ??
         binop_gt, //               >
         binop_gte, //              >=
-        binop_lt, //               <-
+        binop_lt, //               <
         binop_lte, //              <=
         binop_thick_arrow, //      =>
         binop_thin_arrow, //       ->
@@ -947,7 +1011,7 @@ pub const Node = struct {
         src_bytes_end: Position, // The last byte where this node appeared in the source code. Used in error reporting.
 
         list_elems: u32, // Number of elements in the list literal
-        block_nodes: NodeSlices.Idx, // Number of nodes in a block (or fields in a record, if it turns out to be a record)
+        nodes: NodeSlices.Idx, // Nested nodes inside this one (e.g. statements in a block)
         body_then_args: NodeSlices.Idx, // For lambdas, the Node.Idx of the body followed by 0+ Node.Idx entries for args.
         if_branches: u32, // Branches before the `else` - each branch begins with a conditional node
         match_branches: u32, // Total number of branches - each branch begins with an `if` (if there's a guard) or list (if multiple alternatives) or expr (normal pattern)

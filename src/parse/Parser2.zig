@@ -1105,6 +1105,7 @@ fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
         .OpBar => return self.parseLambda(),
         .KwVar => return self.parseVar(),
         .KwFor => return self.parseFor(),
+        .KwWhile => return self.parseWhile(),
         .KwReturn => return self.parseReturn(),
         .KwCrash => return self.parseCrash(),
         .OpBang => {
@@ -1620,33 +1621,14 @@ fn parseFor(self: *Parser) Error!Node.Idx {
     const iterable = try self.parseExpr();
     try self.scratch_nodes.append(self.gpa, iterable);
     
-    // Parse the body block
-    if (self.peek() != .OpenCurly) {
-        try self.pushDiagnostic(.expected_open_curly_after_match, start_pos, self.currentPosition());
-        return try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = .expected_open_curly_after_match });
-    }
-    
-    self.advance(); // consume '{'
-    
-    // Parse body statements
-    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-        const stmt = try self.parseExpr();
-        try self.scratch_nodes.append(self.gpa, stmt);
-        
-        // Optional comma or newline between statements
-        if (self.peek() == .Comma) {
-            self.advance();
-        }
-    }
-    
-    self.expect(.CloseCurly) catch {
-        try self.pushDiagnostic(.expected_close_curly_at_end_of_match, start_pos, self.currentPosition());
-    };
+    // Parse the body (just an expression, similar to while and lambda body)
+    const body = try self.parseExpr();
+    try self.scratch_nodes.append(self.gpa, body);
     
     const nodes = self.scratch_nodes.items[scratch_start..];
     
-    // A for loop must have at least pattern and iterable
-    if (nodes.len < 2) {
+    // A for loop must have exactly pattern, iterable, and body
+    if (nodes.len != 3) {
         return try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = .statement_unexpected_token });
     }
     
@@ -1667,33 +1649,14 @@ fn parseWhile(self: *Parser) Error!Node.Idx {
     const condition = try self.parseExpr();
     try self.scratch_nodes.append(self.gpa, condition);
     
-    // Parse the body block
-    if (self.peek() != .OpenCurly) {
-        try self.pushDiagnostic(.expected_open_curly_after_match, start_pos, self.currentPosition());
-        return try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = .expected_open_curly_after_match });
-    }
-    
-    self.advance(); // consume '{'
-    
-    // Parse body statements
-    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-        const stmt = try self.parseExpr();
-        try self.scratch_nodes.append(self.gpa, stmt);
-        
-        // Optional comma or newline between statements
-        if (self.peek() == .Comma) {
-            self.advance();
-        }
-    }
-    
-    self.expect(.CloseCurly) catch {
-        try self.pushDiagnostic(.expected_close_curly_at_end_of_match, start_pos, self.currentPosition());
-    };
+    // Parse the body (just an expression, similar to lambda body)
+    const body = try self.parseExpr();
+    try self.scratch_nodes.append(self.gpa, body);
     
     const nodes = self.scratch_nodes.items[scratch_start..];
     
-    // A while loop must have at least a condition
-    if (nodes.len < 1) {
+    // A while loop must have exactly condition and body
+    if (nodes.len != 2) {
         return try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = .statement_unexpected_token });
     }
     

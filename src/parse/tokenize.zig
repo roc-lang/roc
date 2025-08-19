@@ -162,6 +162,7 @@ pub const Token = struct {
         KwReturn,
         KwVar,
         KwWhere,
+        KwWhile,
         KwWith,
 
         MalformedUnknownToken,
@@ -197,6 +198,7 @@ pub const Token = struct {
                 .KwReturn,
                 .KwVar,
                 .KwWhere,
+                .KwWhile,
                 .KwWith,
                 => true,
                 else => false,
@@ -299,6 +301,7 @@ pub const Token = struct {
                 .KwReturn,
                 .KwVar,
                 .KwWhere,
+                .KwWhile,
                 .KwWith,
                 => false,
 
@@ -415,6 +418,7 @@ pub const Token = struct {
         .{ "return", .KwReturn },
         .{ KW_VAR, .KwVar },
         .{ "where", .KwWhere },
+        .{ "while", .KwWhile },
         .{ "with", .KwWith },
     });
 
@@ -2221,6 +2225,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .KwWhere => {
                 try buf2.appendSlice(alloc, "where");
+            },
+            .KwWhile => {
+                try buf2.appendSlice(alloc, "while");
             },
             .KwWith => {
                 try buf2.appendSlice(alloc, "with");

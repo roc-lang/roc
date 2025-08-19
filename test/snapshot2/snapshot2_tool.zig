@@ -271,7 +271,7 @@ fn generateParseOutput(allocator: std.mem.Allocator, source: []const u8, test_ty
             if (ast.tag(last_idx) == .block) {
                 // Output the statements
                 // Output the statements directly without wrapper
-                var iter = ast.node_slices.nodes(ast.payload(last_idx).block_nodes);
+                var iter = ast.node_slices.nodes(ast.payload(last_idx).nodes);
                 while (iter.next()) |stmt_idx| {
                     try writeNode(&output, &ast, &env, stmt_idx, 1);
                 }
@@ -452,7 +452,7 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
             }
         },
         .tuple_literal, .record_literal, .block => {
-            const nodes_idx = ast.payload(idx).block_nodes;
+            const nodes_idx = ast.payload(idx).nodes;
             var iter = ast.node_slices.nodes(nodes_idx);
             try output.appendSlice(" (");
             var i: usize = 0;
@@ -534,23 +534,23 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
             try writeNodeInline(output, ast, env, child_idx);
         },
         .for_loop => {
-            const nodes_idx = ast.payload(idx).block_nodes;
+            const nodes_idx = ast.payload(idx).nodes;
             var iter = ast.node_slices.nodes(nodes_idx);
-            
+
             // for x in y { ... }
             if (iter.next()) |pattern| {
                 try output.appendSlice(" ");
                 try writeNodeInline(output, ast, env, pattern);
-                
+
                 if (iter.next()) |iterable| {
                     try output.appendSlice(" ");
                     try writeNodeInline(output, ast, env, iterable);
-                    
+
                     // Check if there are body nodes
                     if (iter.next()) |first_body| {
                         try output.appendSlice(" [");
                         try writeNodeInline(output, ast, env, first_body);
-                        
+
                         // Write remaining body nodes
                         while (iter.next()) |body_node| {
                             try output.appendSlice(", ");
@@ -562,19 +562,19 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
             }
         },
         .while_loop => {
-            const nodes_idx = ast.payload(idx).block_nodes;
+            const nodes_idx = ast.payload(idx).nodes;
             var iter = ast.node_slices.nodes(nodes_idx);
-            
+
             // while x { ... }
             if (iter.next()) |condition| {
                 try output.appendSlice(" ");
                 try writeNodeInline(output, ast, env, condition);
-                
+
                 // Check if there are body nodes
                 if (iter.next()) |first_body| {
                     try output.appendSlice(" [");
                     try writeNodeInline(output, ast, env, first_body);
-                    
+
                     // Write remaining body nodes
                     while (iter.next()) |body_node| {
                         try output.appendSlice(", ");
@@ -606,7 +606,7 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
             try output.writer().print(" {d}", .{value});
         },
         .str_interpolation => {
-            const nodes_idx = ast.payload(idx).block_nodes;
+            const nodes_idx = ast.payload(idx).nodes;
             var iter = ast.node_slices.nodes(nodes_idx);
             try output.appendSlice(" [");
             var i: usize = 0;
@@ -670,7 +670,7 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
             try output.writer().print("\" @{d})\n", .{start_pos.offset});
         },
         .list_literal => {
-            const nodes_idx = ast.payload(idx).block_nodes;
+            const nodes_idx = ast.payload(idx).nodes;
             var iter = ast.node_slices.nodes(nodes_idx);
             try output.appendSlice(" @");
             try output.writer().print("{d}\n", .{start_pos.offset});
@@ -684,7 +684,7 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
             try output.appendSlice("]\n");
         },
         .tuple_literal, .record_literal, .block => {
-            const nodes_idx = ast.payload(idx).block_nodes;
+            const nodes_idx = ast.payload(idx).nodes;
             var iter = ast.node_slices.nodes(nodes_idx);
             try output.appendSlice(" @");
             try output.writer().print("{d}\n", .{start_pos.offset});
@@ -715,7 +715,7 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
             try output.appendSlice("\n");
         },
         .apply_lc, .apply_uc, .apply_anon => {
-            const nodes_idx = ast.payload(idx).block_nodes;
+            const nodes_idx = ast.payload(idx).nodes;
             var iter = ast.node_slices.nodes(nodes_idx);
             try output.appendSlice(" @");
             try output.writer().print("{d}\n", .{start_pos.offset});
@@ -723,12 +723,12 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
                 try output.writer().print("{s}  func: ", .{indent_str});
                 try writeNodeInline(output, ast, env, func);
                 try output.appendSlice("\n");
-                
+
                 // Check if there are args
                 if (iter.next()) |first_arg| {
                     try output.writer().print("{s}  args: [", .{indent_str});
                     try writeNodeInline(output, ast, env, first_arg);
-                    
+
                     // Write remaining args
                     while (iter.next()) |arg_idx| {
                         try output.appendSlice(", ");
@@ -763,12 +763,12 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
                 try output.writer().print("{s}  cond: ", .{indent_str});
                 try writeNodeInline(output, ast, env, cond);
                 try output.appendSlice("\n");
-                
+
                 // Check if there are branches
                 if (iter.next()) |first_branch| {
                     try output.writer().print("{s}  branches: [", .{indent_str});
                     try writeNodeInline(output, ast, env, first_branch);
-                    
+
                     // Write remaining branches
                     while (iter.next()) |branch_idx| {
                         try output.appendSlice(", ");
