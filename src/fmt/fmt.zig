@@ -751,6 +751,33 @@ const Formatter = struct {
         no_indent_on_access,
     };
 
+    fn formatStringInterpolation(fmt: *Formatter, idx: AST.Expr.Idx) !void {
+        try fmt.pushAll("${");
+        const part_region = fmt.nodeRegion(@intFromEnum(idx));
+        // Parts don't include the StringInterpolationStart and StringInterpolationEnd tokens
+        // That means they won't include any of the newlines between them and the actual expr.
+        // So we'll widen the region by one token for calculating multliline.
+        // Ideally, we'd also check if the expr itself is multiline, and if we will end up flushing, but
+        // we'll leave it as is for now
+        const part_is_multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = part_region.start - 1, .end = part_region.end + 1 }) or
+            fmt.nodeWillBeMultiline(AST.Expr.Idx, idx);
+
+        if (part_is_multiline) {
+            _ = try fmt.flushCommentsBefore(part_region.start);
+            try fmt.ensureNewline();
+            fmt.curr_indent += 1;
+            try fmt.pushIndent();
+        }
+        _ = try fmt.formatExpr(idx);
+        if (part_is_multiline) {
+            _ = try fmt.flushCommentsBefore(part_region.end);
+            try fmt.ensureNewline();
+            fmt.curr_indent -= 1;
+            try fmt.pushIndent();
+        }
+        try fmt.push('}');
+    }
+
     fn formatExpr(fmt: *Formatter, ei: AST.Expr.Idx) anyerror!AST.TokenizedRegion {
         return formatExprInner(fmt, ei, .normal);
     }
@@ -782,32 +809,7 @@ const Formatter = struct {
                         .string_part => |str| {
                             try fmt.pushTokenText(str.token);
                         },
-                        else => {
-                            try fmt.pushAll("${");
-                            const part_region = fmt.nodeRegion(@intFromEnum(idx));
-                            // Parts don't include the StringInterpolationStart and StringInterpolationEnd tokens
-                            // That means they won't include any of the newlines between them and the actual expr.
-                            // So we'll widen the region by one token for calculating multliline.
-                            // Ideally, we'd also check if the expr itself is multiline, and if we will end up flushing, but
-                            // we'll leave it as is for now
-                            const part_is_multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = part_region.start - 1, .end = part_region.end + 1 }) or
-                                fmt.nodeWillBeMultiline(AST.Expr.Idx, idx);
-
-                            if (part_is_multiline) {
-                                _ = try fmt.flushCommentsBefore(part_region.start);
-                                try fmt.ensureNewline();
-                                fmt.curr_indent += 1;
-                                try fmt.pushIndent();
-                            }
-                            _ = try fmt.formatExpr(idx);
-                            if (part_is_multiline) {
-                                _ = try fmt.flushCommentsBefore(part_region.end);
-                                try fmt.ensureNewline();
-                                fmt.curr_indent -= 1;
-                                try fmt.pushIndent();
-                            }
-                            try fmt.push('}');
-                        },
+                        else => try fmt.formatStringInterpolation(idx),
                     }
                 }
                 try fmt.push('"');
@@ -842,30 +844,7 @@ const Formatter = struct {
                         },
                         else => {
                             add_newline = false;
-                            try fmt.pushAll("${");
-                            const part_region = fmt.nodeRegion(@intFromEnum(idx));
-                            // Parts don't include the StringInterpolationStart and StringInterpolationEnd tokens
-                            // That means they won't include any of the newlines between them and the actual expr.
-                            // So we'll widen the region by one token for calculating multliline.
-                            // Ideally, we'd also check if the expr itself is multiline, and if we will end up flushing, but
-                            // we'll leave it as is for now
-                            const part_is_multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = part_region.start - 1, .end = part_region.end + 1 }) or
-                                fmt.nodeWillBeMultiline(AST.Expr.Idx, idx);
-
-                            if (part_is_multiline) {
-                                _ = try fmt.flushCommentsBefore(part_region.start);
-                                try fmt.ensureNewline();
-                                fmt.curr_indent += 1;
-                                try fmt.pushIndent();
-                            }
-                            _ = try fmt.formatExpr(idx);
-                            if (part_is_multiline) {
-                                _ = try fmt.flushCommentsBefore(part_region.end);
-                                try fmt.ensureNewline();
-                                fmt.curr_indent -= 1;
-                                try fmt.pushIndent();
-                            }
-                            try fmt.push('}');
+                            try fmt.formatStringInterpolation(idx);
                         },
                     }
                 }
