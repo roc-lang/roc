@@ -12,12 +12,12 @@
 //! - up to 2^32: first byte is 255, followed by 4 bytes (u32 little-endian)
 
 const std = @import("std");
-const collections = @import("collections");
+const SafeList = @import("safe_list.zig").SafeList;
 const Allocator = std.mem.Allocator;
 
 const Self = @This();
 
-entries: collections.SafeList(u8),
+entries: SafeList(u8),
 
 pub const Idx = enum(u32) {
     _,

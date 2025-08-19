@@ -99,7 +99,9 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
                 var messages: [128]tokenize.Diagnostic = undefined;
                 const msg_slice = messages[0..];
 
-                var tokenizer = try tokenize.Tokenizer.init(&env.?.common, gpa, roc_file.content, msg_slice);
+                var byte_slices = collections.ByteSlices{ .entries = .{} };
+                defer byte_slices.entries.deinit(gpa);
+                var tokenizer = try tokenize.Tokenizer.init(&env.?.common, gpa, roc_file.content, msg_slice, &byte_slices);
                 try tokenizer.tokenize(gpa);
                 var result = tokenizer.finishAndDeinit(gpa);
                 iteration_tokens += result.tokens.tokens.len;

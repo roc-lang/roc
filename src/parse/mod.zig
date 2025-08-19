@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const tracy = @import("tracy");
 
 pub const tokenize = @import("tokenize.zig");

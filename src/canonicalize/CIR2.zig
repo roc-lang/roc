@@ -6,6 +6,8 @@ const collections = @import("collections");
 const base = @import("base");
 const reporting = @import("reporting");
 const builtins = @import("builtins");
+const parse = @import("parse");
+const Diagnostic = parse.AST2.Diagnostic;
 
 const CompactWriter = collections.CompactWriter;
 const Ident = base.Ident;
@@ -16,7 +18,7 @@ const Position = Region.Position;
 const SExprTree = base.SExprTree;
 const SExpr = base.SExpr;
 const TypeVar = types_mod.Var;
-const ByteSlices = base.ByteSlices;
+const ByteSlices = collections.ByteSlices;
 // TODO: Import NodeSlices from parse.AST2 when needed
 
 // In AST, we have a Node type which represents uncategorized AST nodes.
@@ -55,6 +57,11 @@ pub const Stmt = struct {
         while_loop, // .while_loop
         crash, // .crash
     };
+
+    pub const Payload = union {
+        src_bytes_end: Position, // The last byte where this node appeared in the source code. Used in error reporting.
+        // Add other payload fields as needed
+    };
 };
 
 pub const Patt = struct {
@@ -90,6 +97,11 @@ pub const Patt = struct {
         underscore, // .underscore
         empty_record, // e.g. `{}` - no data inside; we just store region and that's it.
         empty_list, // e.g. `[]` - no data inside; we just store region and that's it.
+    };
+
+    pub const Payload = union {
+        src_bytes_end: Position, // The last byte where this node appeared in the source code. Used in error reporting.
+        // Add other payload fields as needed
     };
 };
 

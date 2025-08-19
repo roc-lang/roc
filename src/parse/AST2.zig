@@ -38,12 +38,12 @@
 const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
-const tokenize = @import("tokenize.zig");
+const tokenize = @import("tokenize2.zig");
 
 const Region = base.Region;
 const Position = Region.Position;
 const Ident = base.Ident;
-const ByteSlices = base.ByteSlices;
+const ByteSlices = collections.ByteSlices;
 const Allocator = std.mem.Allocator;
 const Ast = @This();
 
@@ -292,14 +292,6 @@ pub fn lambda(self: *const Ast, idx: Node.Idx) Lambda {
         .body = body,
         .args_idx = body_then_args_idx,
     };
-}
-
-/// Returns the body node for a lambda with no arguments
-pub fn lambdaNoArgsBody(self: *const Ast, idx: Node.Idx) Node.Idx {
-    std.debug.assert(self.tag(idx) == .lambda_no_args);
-    // For lambda_no_args, we store the body node index directly as a u32 in block_nodes
-    const body_idx = @intFromEnum(self.payload(idx).nodes);
-    return @enumFromInt(body_idx);
 }
 
 /// Panics in debug builds if the given Node.Idx does not refer to a .while_loop node.
@@ -750,7 +742,241 @@ pub fn region(
                 .end = body_region.end,
             };
         },
-        .num_literal_i32, .int_literal_i32, .frac_literal_small, .str_literal_small, .num_literal_big, .int_literal_big, .frac_literal_big, .str_literal_big, .match, .if_else, .if_without_else, .malformed => {
+        .num_literal_i32, .int_literal_i32 => {
+            // For inline number literals, scan from the start position to find the end
+            const start_pos = self.start(idx);
+            const start_offset = @as(usize, @intCast(start_pos.offset));
+            
+            // Scan for the end of the number literal
+            var end_offset = start_offset;
+            
+            // Check for negative sign
+            if (end_offset < raw_src.len and raw_src[end_offset] == '-') {
+                end_offset += 1;
+            }
+            
+            // Check for hex/octal/binary prefix
+            if (self.tag(idx) == .int_literal_i32 and end_offset + 1 < raw_src.len and raw_src[end_offset] == '0') {
+                const next_char = raw_src[end_offset + 1];
+                if (next_char == 'x' or next_char == 'X' or next_char == 'o' or next_char == 'b') {
+                    end_offset += 2; // Skip "0x", "0o", or "0b"
+                    
+                    // Scan hex/octal/binary digits
+                    while (end_offset < raw_src.len) : (end_offset += 1) {
+                        const c = raw_src[end_offset];
+                        if (next_char == 'x' or next_char == 'X') {
+                            // Hex digits
+                            if (!std.ascii.isHex(c) and c != '_') break;
+                        } else if (next_char == 'o') {
+                            // Octal digits
+                            if ((c < '0' or c > '7') and c != '_') break;
+                        } else if (next_char == 'b') {
+                            // Binary digits
+                            if (c != '0' and c != '1' and c != '_') break;
+                        }
+                    }
+                } else {
+                    // Regular decimal number
+                    while (end_offset < raw_src.len and (std.ascii.isDigit(raw_src[end_offset]) or raw_src[end_offset] == '_')) {
+                        end_offset += 1;
+                    }
+                }
+            } else {
+                // Regular decimal number
+                while (end_offset < raw_src.len and (std.ascii.isDigit(raw_src[end_offset]) or raw_src[end_offset] == '_')) {
+                    end_offset += 1;
+                }
+            }
+            
+            return base.Region{ 
+                .start = start_pos, 
+                .end = Position{ .offset = @as(u32, @intCast(end_offset)) }
+            };
+        },
+        .frac_literal_small => {
+            // For inline fraction literals, scan from the start position to find the end
+            const start_pos = self.start(idx);
+            const start_offset = @as(usize, @intCast(start_pos.offset));
+            
+            var end_offset = start_offset;
+            
+            // Check for negative sign
+            if (end_offset < raw_src.len and raw_src[end_offset] == '-') {
+                end_offset += 1;
+            }
+            
+            // Scan integer part
+            while (end_offset < raw_src.len and (std.ascii.isDigit(raw_src[end_offset]) or raw_src[end_offset] == '_')) {
+                end_offset += 1;
+            }
+            
+            // Scan decimal point and fractional part
+            if (end_offset < raw_src.len and raw_src[end_offset] == '.') {
+                end_offset += 1;
+                while (end_offset < raw_src.len and (std.ascii.isDigit(raw_src[end_offset]) or raw_src[end_offset] == '_')) {
+                    end_offset += 1;
+                }
+            }
+            
+            // Check for exponent
+            if (end_offset < raw_src.len and (raw_src[end_offset] == 'e' or raw_src[end_offset] == 'E')) {
+                end_offset += 1;
+                if (end_offset < raw_src.len and (raw_src[end_offset] == '+' or raw_src[end_offset] == '-')) {
+                    end_offset += 1;
+                }
+                while (end_offset < raw_src.len and (std.ascii.isDigit(raw_src[end_offset]) or raw_src[end_offset] == '_')) {
+                    end_offset += 1;
+                }
+            }
+            
+            return base.Region{ 
+                .start = start_pos, 
+                .end = Position{ .offset = @as(u32, @intCast(end_offset)) }
+            };
+        },
+        .str_literal_small => {
+            // For small string literals, scan from the start to find the closing quote
+            const start_pos = self.start(idx);
+            const start_offset = @as(usize, @intCast(start_pos.offset));
+            
+            var end_offset = start_offset;
+            
+            // Skip opening quote
+            if (end_offset < raw_src.len and raw_src[end_offset] == '"') {
+                end_offset += 1;
+                
+                // Scan until closing quote (handling escapes)
+                while (end_offset < raw_src.len) {
+                    if (raw_src[end_offset] == '\\' and end_offset + 1 < raw_src.len) {
+                        end_offset += 2; // Skip escape sequence
+                    } else if (raw_src[end_offset] == '"') {
+                        end_offset += 1; // Include closing quote
+                        break;
+                    } else {
+                        end_offset += 1;
+                    }
+                }
+            }
+            
+            return base.Region{ 
+                .start = start_pos, 
+                .end = Position{ .offset = @as(u32, @intCast(end_offset)) }
+            };
+        },
+        .num_literal_big, .int_literal_big, .frac_literal_big => {
+            // For big number literals stored in ByteSlices, we need to scan the source
+            const start_pos = self.start(idx);
+            const start_offset = @as(usize, @intCast(start_pos.offset));
+            
+            var end_offset = start_offset;
+            
+            // Check for negative sign
+            if (end_offset < raw_src.len and raw_src[end_offset] == '-') {
+                end_offset += 1;
+            }
+            
+            // Check for hex/octal/binary prefix for int_literal_big
+            if (self.tag(idx) == .int_literal_big and end_offset + 1 < raw_src.len and raw_src[end_offset] == '0') {
+                const next_char = raw_src[end_offset + 1];
+                if (next_char == 'x' or next_char == 'X' or next_char == 'o' or next_char == 'b') {
+                    end_offset += 2;
+                    
+                    // Scan appropriate digits
+                    while (end_offset < raw_src.len) : (end_offset += 1) {
+                        const c = raw_src[end_offset];
+                        if (next_char == 'x' or next_char == 'X') {
+                            if (!std.ascii.isHex(c) and c != '_') break;
+                        } else if (next_char == 'o') {
+                            if ((c < '0' or c > '7') and c != '_') break;
+                        } else if (next_char == 'b') {
+                            if (c != '0' and c != '1' and c != '_') break;
+                        }
+                    }
+                } else {
+                    // Regular decimal
+                    while (end_offset < raw_src.len and (std.ascii.isDigit(raw_src[end_offset]) or raw_src[end_offset] == '_')) {
+                        end_offset += 1;
+                    }
+                }
+            } else {
+                // Regular decimal or fraction
+                while (end_offset < raw_src.len and (std.ascii.isDigit(raw_src[end_offset]) or raw_src[end_offset] == '_')) {
+                    end_offset += 1;
+                }
+                
+                // For fractions, check for decimal point
+                if (self.tag(idx) == .frac_literal_big and end_offset < raw_src.len and raw_src[end_offset] == '.') {
+                    end_offset += 1;
+                    while (end_offset < raw_src.len and (std.ascii.isDigit(raw_src[end_offset]) or raw_src[end_offset] == '_')) {
+                        end_offset += 1;
+                    }
+                    
+                    // Check for exponent
+                    if (end_offset < raw_src.len and (raw_src[end_offset] == 'e' or raw_src[end_offset] == 'E')) {
+                        end_offset += 1;
+                        if (end_offset < raw_src.len and (raw_src[end_offset] == '+' or raw_src[end_offset] == '-')) {
+                            end_offset += 1;
+                        }
+                        while (end_offset < raw_src.len and (std.ascii.isDigit(raw_src[end_offset]) or raw_src[end_offset] == '_')) {
+                            end_offset += 1;
+                        }
+                    }
+                }
+            }
+            
+            return base.Region{ 
+                .start = start_pos, 
+                .end = Position{ .offset = @as(u32, @intCast(end_offset)) }
+            };
+        },
+        .str_literal_big => {
+            // For big string literals, scan from the start to find the closing quote or end of multiline string
+            const start_pos = self.start(idx);
+            const start_offset = @as(usize, @intCast(start_pos.offset));
+            
+            var end_offset = start_offset;
+            
+            // Check if it's a multiline string (starts with """)
+            if (end_offset + 2 < raw_src.len and 
+                raw_src[end_offset] == '"' and 
+                raw_src[end_offset + 1] == '"' and 
+                raw_src[end_offset + 2] == '"') {
+                // Multiline string
+                end_offset += 3; // Skip opening """
+                
+                // Scan until closing """
+                while (end_offset + 2 < raw_src.len) {
+                    if (raw_src[end_offset] == '"' and 
+                        raw_src[end_offset + 1] == '"' and 
+                        raw_src[end_offset + 2] == '"') {
+                        end_offset += 3; // Include closing """
+                        break;
+                    }
+                    end_offset += 1;
+                }
+            } else if (end_offset < raw_src.len and raw_src[end_offset] == '"') {
+                // Regular string
+                end_offset += 1; // Skip opening quote
+                
+                // Scan until closing quote (handling escapes)
+                while (end_offset < raw_src.len) {
+                    if (raw_src[end_offset] == '\\' and end_offset + 1 < raw_src.len) {
+                        end_offset += 2; // Skip escape sequence
+                    } else if (raw_src[end_offset] == '"') {
+                        end_offset += 1; // Include closing quote
+                        break;
+                    } else {
+                        end_offset += 1;
+                    }
+                }
+            }
+            
+            return base.Region{ 
+                .start = start_pos, 
+                .end = Position{ .offset = @as(u32, @intCast(end_offset)) }
+            };
+        },
+        .match, .if_else, .if_without_else, .malformed => {
             @panic("TODO");
         },
     }
@@ -1007,6 +1233,12 @@ pub const Node = struct {
         }
     };
 
+    /// Represents a small decimal as numerator / (10^power)
+    pub const SmallDec = struct {
+        numerator: i16,
+        denominator_power_of_ten: u8,
+    };
+
     pub const Payload = union {
         src_bytes_end: Position, // The last byte where this node appeared in the source code. Used in error reporting.
 
@@ -1021,9 +1253,9 @@ pub const Node = struct {
         // Number literals that are small enough to be stored inline right here - by far the most common case
         num_literal_i32: i32, // e.g. `42`
         int_literal_i32: i32, // e.g. `0x42`
-        frac_literal_small_dec: i32, // e.g. `0.2`
+        frac_literal_small: SmallDec, // e.g. `0.2` - fits in a 32-bit SmallDec
 
-        // Number literals that don't fit 4B, and must be instead stored in a side table.
+        // Number literals that don't fit inline, and must be instead stored in ByteSlices.
         num_literal_big: ByteSlices.Idx, // Stores length followed by 1-byte digits, for userspace bignums
         int_literal_big: ByteSlices.Idx, // Stores length followed by 1-byte digits, for userspace bigints
         frac_literal_big: ByteSlices.Idx, // Like a bigint literal but stores 2 lengths first, for digits before and after decimal

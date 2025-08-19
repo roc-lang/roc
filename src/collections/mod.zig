@@ -20,6 +20,7 @@ pub const SafeStringHashMap = @import("safe_hash_map.zig").SafeStringHashMap;
 pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuilder;
 pub const ExposedItems = @import("ExposedItems.zig").ExposedItems;
 pub const CompactWriter = @import("CompactWriter.zig");
+pub const ByteSlices = @import("ByteSlices.zig");
 
 /// Re-exported alignment constant from CompactWriter for convenience.
 /// This alignment is required for all serialization buffers to ensure proper memory access.

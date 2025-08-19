@@ -16,7 +16,7 @@ const Position = base.Region.Position;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
 const TokenIdx = Token.Idx;
-const tokenize = @import("tokenize.zig");
+const tokenize = @import("tokenize2.zig");
 const Ident = base.Ident;
 
 const MAX_PARSE_DIAGNOSTICS: usize = 1_000;
@@ -29,18 +29,20 @@ gpa: std.mem.Allocator,
 pos: TokenIdx,
 tok_buf: TokenizedBuffer,
 ast: *AST,
+byte_slices: *collections.ByteSlices, // Reference to tokenizer's ByteSlices
 scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
 diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
 nesting_counter: u8,
 
 /// init the parser from a buffer of tokens
-pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator, ast: *AST) std.mem.Allocator.Error!Parser {
+pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator, ast: *AST, byte_slices: *collections.ByteSlices) std.mem.Allocator.Error!Parser {
     return Parser{
         .gpa = gpa,
         .pos = 0,
         .tok_buf = tokens,
         .ast = ast,
+        .byte_slices = byte_slices,
         .scratch_nodes = .{},
         .diagnostics = .{},
         .cached_malformed_node = null,
@@ -189,7 +191,7 @@ pub fn parseFile(self: *Parser) Error!void {
     const statements = self.scratch_nodes.items[scratch_start..];
     if (statements.len > 0) {
         const body_idx = try self.ast.appendNodeSlice(self.gpa, statements);
-        _ = try self.ast.appendNode(self.gpa, self.tokenToPosition(0), .block, .{ .block_nodes = body_idx });
+        _ = try self.ast.appendNode(self.gpa, self.tokenToPosition(0), .block, .{ .nodes = body_idx });
     }
 }
 
@@ -503,7 +505,7 @@ fn parsePlatformSpecification(self: *Parser) Error!Node.Idx {
 
         const nodes = self.scratch_nodes.items[scratch_start..];
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-        return try self.ast.appendNode(self.gpa, self.tokenToPosition(start), .record_literal, .{ .block_nodes = nodes_idx });
+        return try self.ast.appendNode(self.gpa, self.tokenToPosition(start), .record_literal, .{ .nodes = nodes_idx });
     } else {
         // Just parse as expression (e.g., platform "...")
         return try self.parseExpr();
@@ -789,8 +791,9 @@ pub fn parsePattern(self: *Parser) Error!Node.Idx {
             // Use the new underscore node type
             return try self.ast.appendNode(self.gpa, pos, .underscore, .{ .src_bytes_end = pos });
         },
+        .String, .MultilineString, .SingleQuote => return self.parseStoredStringPattern(),
         .StringStart => return self.parseStringPattern(),
-        .Int, .Float => return self.parseNumLiteral(),
+        .Int, .Float, .IntBase => return self.parseNumLiteral(),
         .OpenSquare => return self.parseListPattern(),
         .OpenCurly => return self.parseRecordPattern(),
         .OpenRound => return self.parseTupleOrParenthesizedPattern(),
@@ -811,7 +814,7 @@ fn parseListPattern(self: *Parser) Error!Node.Idx {
         self.advance();
         const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .block_nodes = nodes_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .nodes = nodes_idx });
     }
 
     const scratch_start = self.scratch_nodes.items.len;
@@ -866,11 +869,11 @@ fn parseListPattern(self: *Parser) Error!Node.Idx {
     if (elems.len == 0) {
         const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .block_nodes = nodes_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .nodes = nodes_idx });
     }
     
     const elems_idx = try self.ast.appendNodeSlice(self.gpa, elems);
-    return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .block_nodes = elems_idx });
+    return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .nodes = elems_idx });
 }
 
 fn parseRecordPattern(self: *Parser) Error!Node.Idx {
@@ -881,7 +884,7 @@ fn parseRecordPattern(self: *Parser) Error!Node.Idx {
         self.advance();
         const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .block_nodes = nodes_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .nodes = nodes_idx });
     }
 
     const scratch_start = self.scratch_nodes.items.len;
@@ -929,11 +932,11 @@ fn parseRecordPattern(self: *Parser) Error!Node.Idx {
     if (fields.len == 0) {
         const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .block_nodes = nodes_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .nodes = nodes_idx });
     }
     
     const fields_idx = try self.ast.appendNodeSlice(self.gpa, fields);
-    return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .block_nodes = fields_idx });
+    return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .nodes = fields_idx });
 }
 
 fn parseTupleOrParenthesizedPattern(self: *Parser) Error!Node.Idx {
@@ -951,7 +954,7 @@ fn parseTupleOrParenthesizedPattern(self: *Parser) Error!Node.Idx {
         // Empty tuple pattern
         const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = nodes_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = nodes_idx });
     }
 
     const first = try self.parsePattern();
@@ -982,11 +985,11 @@ fn parseTupleOrParenthesizedPattern(self: *Parser) Error!Node.Idx {
         if (elems.len == 0) {
             const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = nodes_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = nodes_idx });
         }
         
         const elems_idx = try self.ast.appendNodeSlice(self.gpa, elems);
-        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = elems_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = elems_idx });
     } else {
         self.expect(.CloseRound) catch {
             try self.pushDiagnostic(.expected_expr_close_round_or_comma, start_pos, self.currentPosition());
@@ -1095,7 +1098,8 @@ fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
                 return self.pushMalformed(.expr_unexpected_token, start);
             }
         },
-        .Int, .Float => return self.parseNumLiteral(),
+        .Int, .Float, .IntBase => return self.parseNumLiteral(),
+        .String, .MultilineString, .SingleQuote => return self.parseStoredStringExpr(),
         .StringStart => return self.parseStringExpr(),
         .OpenSquare => return self.parseListLiteral(),
         .OpenCurly => return self.parseBlockOrRecord(),
@@ -1115,7 +1119,7 @@ fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
             const operand = try self.parseExprWithBp(100); // High precedence for unary
             const operand_slice = [_]Node.Idx{operand};
             const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &operand_slice);
-            return try self.ast.appendNode(self.gpa, pos, .unary_not, .{ .block_nodes = nodes_idx });
+            return try self.ast.appendNode(self.gpa, pos, .unary_not, .{ .nodes = nodes_idx });
         },
         .OpBinaryMinus, .OpUnaryMinus => {
             const pos = self.currentPosition();
@@ -1124,7 +1128,7 @@ fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
             const operand = try self.parseExprWithBp(100); // High precedence for unary
             const operand_slice = [_]Node.Idx{operand};
             const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &operand_slice);
-            return try self.ast.appendNode(self.gpa, pos, .unary_neg, .{ .block_nodes = nodes_idx });
+            return try self.ast.appendNode(self.gpa, pos, .unary_neg, .{ .nodes = nodes_idx });
         },
         .DoubleDot => {
             const pos = self.currentPosition();
@@ -1133,7 +1137,7 @@ fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
             const operand = try self.parseExprWithBp(100); // High precedence for unary
             const operand_slice = [_]Node.Idx{operand};
             const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &operand_slice);
-            return try self.ast.appendNode(self.gpa, pos, .unary_double_dot, .{ .block_nodes = nodes_idx });
+            return try self.ast.appendNode(self.gpa, pos, .unary_double_dot, .{ .nodes = nodes_idx });
         },
         else => return self.pushMalformed(.expr_unexpected_token, start),
     };
@@ -1142,41 +1146,96 @@ fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
 fn parseNumLiteral(self: *Parser) Error!Node.Idx {
     const pos = self.currentPosition();
     const tag = self.peek();
-
-    // Get the actual token text to parse the number
-    const token_region = self.tok_buf.tokens.items(.region)[self.pos];
-    const token_start = token_region.start.offset;
-    const token_end = token_region.end.offset;
-
-    const num_str = self.tok_buf.env.source[token_start..token_end];
+    const extra = self.tok_buf.tokens.items(.extra)[self.pos];
+    // const token_region = self.tok_buf.tokens.items(.region)[self.pos];
+    // const end_pos = token_region.end; // TODO: Use this for better region calculation
+    
     self.advance();
 
-    // Parse based on token type
-    if (tag == .Float) {
-        // Parse as float
-        const value = std.fmt.parseFloat(f64, num_str) catch 0.0;
-        const bits = @as(u64, @bitCast(value));
-        if (bits <= 0xFFFFFFFF) {
-            // For now, store floats as i32
-            return try self.ast.appendNode(self.gpa, pos, .num_literal_i32, .{ .num_literal_i32 = @as(i32, @intCast(bits)) });
-        } else {
-            // Store as big float
-            const bytes = std.mem.asBytes(&value);
-            const bytes_idx = try self.ast.appendByteSlice(self.gpa, bytes);
-            return try self.ast.appendNode(self.gpa, pos, .num_literal_big, .{ .num_literal_big = bytes_idx });
-        }
-    } else {
-        // Parse as integer
-        const value = std.fmt.parseInt(i64, num_str, 10) catch 0;
-        if (value >= std.math.minInt(i32) and value <= std.math.maxInt(i32)) {
-            return try self.ast.appendNode(self.gpa, pos, .num_literal_i32, .{ .num_literal_i32 = @as(i32, @intCast(value)) });
-        } else {
-            // Store as big integer
-            const bytes = std.mem.asBytes(&value);
-            const bytes_idx = try self.ast.appendByteSlice(self.gpa, bytes);
-            return try self.ast.appendNode(self.gpa, pos, .num_literal_big, .{ .num_literal_big = bytes_idx });
+    // Handle different number literal types based on token tag and extra data
+    switch (tag) {
+        .Int, .IntBase => {
+            // Integer literals (base-10 or other bases)
+            switch (extra) {
+                .num_literal_i32 => |value| {
+                    // Small integer that fits in i32
+                    return try self.ast.appendNode(self.gpa, pos, .num_literal_i32, .{ .num_literal_i32 = value });
+                },
+                .bytes_idx => |idx| {
+                    // Big integer stored in ByteSlices
+                    // For IntBase, it's stored as base-10 in ByteSlices
+                    const ast_tag: Node.Tag = if (tag == .IntBase) .int_literal_big else .num_literal_big;
+                    return try self.ast.appendNode(self.gpa, pos, ast_tag, .{ .num_literal_big = idx });
+                },
+                else => {
+                    // Shouldn't happen with well-formed tokens
+                    return try self.ast.appendNode(self.gpa, pos, .num_literal_i32, .{ .num_literal_i32 = 0 });
+                },
+            }
+        },
+        .Float => {
+            // Floating point literals
+            switch (extra) {
+                .frac_literal_small => |small_dec| {
+                    // Small fraction that fits in SmallDec - convert from Token.SmallDec to AST.SmallDec
+                    const ast_small_dec = AST.Node.SmallDec{
+                        .numerator = small_dec.numerator,
+                        .denominator_power_of_ten = small_dec.denominator_power_of_ten,
+                    };
+                    return try self.ast.appendNode(self.gpa, pos, .frac_literal_small, .{ .frac_literal_small = ast_small_dec });
+                },
+                .bytes_idx => |idx| {
+                    // Big fraction stored in ByteSlices
+                    return try self.ast.appendNode(self.gpa, pos, .frac_literal_big, .{ .frac_literal_big = idx });
+                },
+                else => {
+                    // Shouldn't happen with well-formed tokens
+                    return try self.ast.appendNode(self.gpa, pos, .num_literal_i32, .{ .num_literal_i32 = 0 });
+                },
+            }
+        },
+        else => {
+            // Not a number literal token
+            return try self.ast.appendNode(self.gpa, pos, .num_literal_i32, .{ .num_literal_i32 = 0 });
         }
     }
+}
+
+fn parseStoredStringExpr(self: *Parser) Error!Node.Idx {
+    const pos = self.currentPosition();
+    const extra = self.tok_buf.tokens.items(.extra)[self.pos];
+    
+    self.advance();
+    
+    // The string content is stored in ByteSlices with escapes already resolved
+    switch (extra) {
+        .bytes_idx => |idx| {
+            // Get the string from ByteSlices
+            const str_content = self.byte_slices.slice(idx);
+            
+            // Check if it fits in small string
+            if (str_content.len <= 4 and std.mem.indexOfAny(u8, str_content, "\x00") == null) {
+                // Small string that fits inline
+                var buf: [4]u8 = [_]u8{0} ** 4;
+                @memcpy(buf[0..str_content.len], str_content);
+                return try self.ast.appendNode(self.gpa, pos, .str_literal_small, .{ .str_literal_small = buf });
+            } else {
+                // Store in AST's ByteSlices
+                const ast_idx = try self.ast.byte_slices.append(self.gpa, str_content);
+                return try self.ast.appendNode(self.gpa, pos, .str_literal_big, .{ .str_literal_big = ast_idx });
+            }
+        },
+        else => {
+            // Shouldn't happen with well-formed tokens
+            const empty_buf: [4]u8 = [_]u8{0} ** 4;
+            return try self.ast.appendNode(self.gpa, pos, .str_literal_small, .{ .str_literal_small = empty_buf });
+        },
+    }
+}
+
+fn parseStoredStringPattern(self: *Parser) Error!Node.Idx {
+    // For patterns, strings work the same as expressions
+    return self.parseStoredStringExpr();
 }
 
 fn parseStringExpr(self: *Parser) Error!Node.Idx {
@@ -1262,7 +1321,7 @@ fn parseListLiteral(self: *Parser) Error!Node.Idx {
         self.advance();
         const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .block_nodes = nodes_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .nodes = nodes_idx });
     }
 
     const scratch_start = self.scratch_nodes.items.len;
@@ -1300,7 +1359,7 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
         self.advance();
         const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .block_nodes = nodes_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .nodes = nodes_idx });
     }
 
     const scratch_start = self.scratch_nodes.items.len;
@@ -1345,7 +1404,7 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
 
     const tag: Node.Tag = if (is_record) .record_literal else .block;
-    return try self.ast.appendNode(self.gpa, start_pos, tag, .{ .block_nodes = nodes_idx });
+    return try self.ast.appendNode(self.gpa, start_pos, tag, .{ .nodes = nodes_idx });
 }
 
 fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
@@ -1362,7 +1421,7 @@ fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
         self.advance();
         const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = nodes_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = nodes_idx });
     }
 
     const first = try self.parseExpr();
@@ -1393,11 +1452,11 @@ fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
         if (elems.len == 0) {
             const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = nodes_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = nodes_idx });
         }
         
         const elems_idx = try self.ast.appendNodeSlice(self.gpa, elems);
-        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = elems_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = elems_idx });
     } else {
         self.expect(.CloseRound) catch {
             try self.pushDiagnostic(.expected_expr_close_round_or_comma, start_pos, self.currentPosition());
@@ -1446,7 +1505,7 @@ fn parseApply(self: *Parser, func: Node.Idx) Error!Node.Idx {
     };
     
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-    return try self.ast.appendNode(self.gpa, start_pos, tag, .{ .block_nodes = nodes_idx });
+    return try self.ast.appendNode(self.gpa, start_pos, tag, .{ .nodes = nodes_idx });
 }
 
 fn parseIf(self: *Parser) Error!Node.Idx {
@@ -1565,7 +1624,7 @@ fn parseLambda(self: *Parser) Error!Node.Idx {
     if (params.len == 0) {
         // No arguments - use lambda_no_args which is more memory efficient
         // Store the body node index directly in block_nodes
-        return try self.ast.appendNode(self.gpa, start_pos, .lambda_no_args, .{ .block_nodes = @enumFromInt(@intFromEnum(body)) });
+        return try self.ast.appendNode(self.gpa, start_pos, .lambda_no_args, .{ .nodes = @enumFromInt(@intFromEnum(body)) });
     }
     
     var body_then_args = try self.gpa.alloc(Node.Idx, 1 + params.len);
@@ -1633,7 +1692,7 @@ fn parseFor(self: *Parser) Error!Node.Idx {
     }
     
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-    return try self.ast.appendNode(self.gpa, start_pos, .for_loop, .{ .block_nodes = nodes_idx });
+    return try self.ast.appendNode(self.gpa, start_pos, .for_loop, .{ .nodes = nodes_idx });
 }
 
 fn parseWhile(self: *Parser) Error!Node.Idx {
@@ -1661,7 +1720,7 @@ fn parseWhile(self: *Parser) Error!Node.Idx {
     }
     
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-    return try self.ast.appendNode(self.gpa, start_pos, .while_loop, .{ .block_nodes = nodes_idx });
+    return try self.ast.appendNode(self.gpa, start_pos, .while_loop, .{ .nodes = nodes_idx });
 }
 
 fn parseReturn(self: *Parser) Error!Node.Idx {
@@ -1672,7 +1731,7 @@ fn parseReturn(self: *Parser) Error!Node.Idx {
     const expr = try self.parseExpr();
     const expr_slice = [_]Node.Idx{expr};
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &expr_slice);
-    return try self.ast.appendNode(self.gpa, start_pos, .ret, .{ .block_nodes = nodes_idx });
+    return try self.ast.appendNode(self.gpa, start_pos, .ret, .{ .nodes = nodes_idx });
 }
 
 fn parseCrash(self: *Parser) Error!Node.Idx {
@@ -1683,7 +1742,7 @@ fn parseCrash(self: *Parser) Error!Node.Idx {
     const expr = try self.parseExpr();
     const expr_slice = [_]Node.Idx{expr};
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &expr_slice);
-    return try self.ast.appendNode(self.gpa, start_pos, .crash, .{ .block_nodes = nodes_idx });
+    return try self.ast.appendNode(self.gpa, start_pos, .crash, .{ .nodes = nodes_idx });
 }
 
 /// Parse a type annotation
@@ -1796,7 +1855,7 @@ fn parseTypeApply(self: *Parser, type_ctor: Node.Idx) Error!Node.Idx {
     }
     
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-    return try self.ast.appendNode(self.gpa, start_pos, .apply_uc, .{ .block_nodes = nodes_idx });
+    return try self.ast.appendNode(self.gpa, start_pos, .apply_uc, .{ .nodes = nodes_idx });
 }
 
 fn parseRecordType(self: *Parser) Error!Node.Idx {
@@ -1808,7 +1867,7 @@ fn parseRecordType(self: *Parser) Error!Node.Idx {
         self.advance();
         const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .block_nodes = nodes_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .nodes = nodes_idx });
     }
 
     const scratch_start = self.scratch_nodes.items.len;
@@ -1864,11 +1923,11 @@ fn parseRecordType(self: *Parser) Error!Node.Idx {
     if (fields.len == 0) {
         const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .block_nodes = nodes_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .nodes = nodes_idx });
     }
 
     const fields_idx = try self.ast.appendNodeSlice(self.gpa, fields);
-    return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .block_nodes = fields_idx });
+    return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .nodes = fields_idx });
 }
 
 fn parseListType(self: *Parser) Error!Node.Idx {
@@ -1880,7 +1939,7 @@ fn parseListType(self: *Parser) Error!Node.Idx {
         self.advance();
         const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .block_nodes = nodes_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .nodes = nodes_idx });
     }
 
     // Parse the element type
@@ -1892,7 +1951,7 @@ fn parseListType(self: *Parser) Error!Node.Idx {
 
     // List types are stored as: [elem_type]
     const types_idx = try self.ast.appendNodeSlice(self.gpa, &[_]Node.Idx{elem_type});
-    return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .block_nodes = types_idx });
+    return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .nodes = types_idx });
 }
 
 fn parseTupleOrParenthesizedType(self: *Parser) Error!Node.Idx {
@@ -1911,7 +1970,7 @@ fn parseTupleOrParenthesizedType(self: *Parser) Error!Node.Idx {
         try self.pushDiagnostic(.ty_anno_unexpected_token, start_pos, self.currentPosition());
         const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = nodes_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = nodes_idx });
     }
 
     // Parse first type
@@ -1939,7 +1998,7 @@ fn parseTupleOrParenthesizedType(self: *Parser) Error!Node.Idx {
 
         const types = self.scratch_nodes.items[scratch_start..];
         const types_idx = try self.ast.appendNodeSlice(self.gpa, types);
-        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = types_idx });
+        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = types_idx });
     } else {
         // It's a parenthesized type - just return the inner type
         self.expect(.CloseRound) catch {

@@ -1,9 +1,10 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
+const collections = @import("collections");
 const AST2 = @import("../AST2.zig");
 const Parser2 = @import("../Parser2.zig");
-const tokenize = @import("../tokenize.zig");
+const tokenize = @import("../tokenize2.zig");
 
 fn parseTestFile(allocator: std.mem.Allocator, source: []const u8) !AST2 {
     var ast = try AST2.initCapacity(allocator, 100);
@@ -16,13 +17,15 @@ fn parseTestFile(allocator: std.mem.Allocator, source: []const u8) !AST2 {
     // Tokenize the source
     var messages: [128]tokenize.Diagnostic = undefined;
     const msg_slice = messages[0..];
-    var tokenizer = try tokenize.Tokenizer.init(&env, allocator, source, msg_slice);
+    var byte_slices = collections.ByteSlices{ .entries = .{} };
+    defer byte_slices.entries.deinit(allocator);
+    var tokenizer = try tokenize.Tokenizer.init(&env, allocator, source, msg_slice, &byte_slices);
     try tokenizer.tokenize(allocator);
     var result = tokenizer.finishAndDeinit(allocator);
     defer result.tokens.deinit(allocator);
 
     // Parse the tokenized source
-    var parser = try Parser2.init(result.tokens, allocator, &ast);
+    var parser = try Parser2.init(result.tokens, allocator, &ast, &byte_slices);
     defer {
         // Clean up parser diagnostics in tests
         parser.diagnostics.deinit(allocator);
@@ -44,13 +47,15 @@ fn parseTestExpr(allocator: std.mem.Allocator, source: []const u8) !AST2 {
     // Tokenize the source
     var messages: [128]tokenize.Diagnostic = undefined;
     const msg_slice = messages[0..];
-    var tokenizer = try tokenize.Tokenizer.init(&env, allocator, source, msg_slice);
+    var byte_slices = collections.ByteSlices{ .entries = .{} };
+    defer byte_slices.entries.deinit(allocator);
+    var tokenizer = try tokenize.Tokenizer.init(&env, allocator, source, msg_slice, &byte_slices);
     try tokenizer.tokenize(allocator);
     var result = tokenizer.finishAndDeinit(allocator);
     defer result.tokens.deinit(allocator);
 
     // Parse the tokenized source as an expression
-    var parser = try Parser2.init(result.tokens, allocator, &ast);
+    var parser = try Parser2.init(result.tokens, allocator, &ast, &byte_slices);
     defer {
         // Clean up parser diagnostics in tests
         parser.diagnostics.deinit(allocator);

@@ -197,7 +197,9 @@ fn generateTokensOutput(allocator: std.mem.Allocator, source: []const u8) ![]con
     defer env.deinit(allocator);
 
     var messages: [128]tokenize.Diagnostic = undefined;
-    var tokenizer = try tokenize.Tokenizer.init(&env, allocator, source, messages[0..]);
+    var byte_slices = base.ByteSlices{ .entries = .{} };
+    defer byte_slices.entries.deinit(allocator);
+    var tokenizer = try tokenize.Tokenizer.init(&env, allocator, source, messages[0..], &byte_slices);
     try tokenizer.tokenize(allocator);
     var result = tokenizer.finishAndDeinit(allocator);
     defer result.tokens.deinit(allocator);
@@ -232,13 +234,15 @@ fn generateParseOutput(allocator: std.mem.Allocator, source: []const u8, test_ty
 
     // Tokenize
     var messages: [128]tokenize.Diagnostic = undefined;
-    var tokenizer = try tokenize.Tokenizer.init(&env, allocator, source, messages[0..]);
+    var byte_slices = base.ByteSlices{ .entries = .{} };
+    defer byte_slices.entries.deinit(allocator);
+    var tokenizer = try tokenize.Tokenizer.init(&env, allocator, source, messages[0..], &byte_slices);
     try tokenizer.tokenize(allocator);
     var result = tokenizer.finishAndDeinit(allocator);
     defer result.tokens.deinit(allocator);
 
     // Parse
-    var parser = try Parser2.init(result.tokens, allocator, &ast);
+    var parser = try Parser2.init(result.tokens, allocator, &ast, &byte_slices);
     defer {
         // Clean up parser diagnostics
         parser.diagnostics.deinit(allocator);
@@ -584,12 +588,8 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
                 }
             }
         },
-        .empty_record, .empty_tuple => {
-            // No inner content for empty record/tuple
-        },
-        .empty_list => {
-            // No inner content for empty list
-        },
+        // Note: AST2 doesn't have separate empty_record, empty_tuple, empty_list tags
+        // Empty collections are just list_literal/record_literal/tuple_literal with no nodes
         .dot_num => {
             const value = ast.payload(idx).num_literal_i32;
             try output.writer().print(" .{d}", .{value});
@@ -616,6 +616,14 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
                 i += 1;
             }
             try output.appendSlice("]");
+        },
+        .lambda_no_args => {
+            const body_idx = ast.payload(idx).nodes;
+            var nodes_iter = ast.node_slices.nodes(body_idx);
+            if (nodes_iter.next()) |body| {
+                try output.appendSlice(" || ");
+                try writeNodeInline(output, ast, env, body);
+            }
         },
         .malformed => {
             const diag = ast.payload(idx).malformed;
@@ -778,9 +786,6 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
                 }
             }
         },
-        .empty_list, .empty_record, .empty_tuple => {
-            try output.writer().print(" @{d})\n", .{start_pos.offset});
-        },
         .underscore => {
             try output.writer().print(" @{d})\n", .{start_pos.offset});
         },
@@ -798,6 +803,15 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
             const child_idx = @as(AST2.Node.Idx, @enumFromInt(@intFromEnum(idx) - 1));
             try output.appendSlice(" ");
             try writeNodeInline(output, ast, env, child_idx);
+            try output.writer().print(" @{d})\n", .{start_pos.offset});
+        },
+        .lambda_no_args => {
+            const body_idx = ast.payload(idx).nodes;
+            var nodes_iter = ast.node_slices.nodes(body_idx);
+            if (nodes_iter.next()) |body| {
+                try output.appendSlice(" || ");
+                try writeNodeInline(output, ast, env, body);
+            }
             try output.writer().print(" @{d})\n", .{start_pos.offset});
         },
         .malformed => {
