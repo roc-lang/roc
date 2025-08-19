@@ -388,7 +388,7 @@ pub const Token = struct {
 
     // Keyword string constants
     pub const KW_VAR = "var";
-    
+
     // Delimiter constants
     pub const DELIM_OPEN_ROUND = '(';
     pub const DELIM_CLOSE_ROUND = ')';
@@ -1172,69 +1172,69 @@ pub const Tokenizer = struct {
     fn parseBase10Integer(self: *Tokenizer, gpa: std.mem.Allocator, text: []const u8) !Token.Extra {
         var i: usize = 0;
         var negative = false;
-        
+
         // Check for negative sign
         if (text.len > 0 and text[0] == '-') {
             negative = true;
             i = 1;
         }
-        
+
         // For negative numbers, accumulate as negative to handle i32::MIN correctly
         if (negative) {
             var result: i32 = 0;
-            
+
             while (i < text.len) : (i += 1) {
                 const c = text[i];
                 if (c == '_') continue; // Skip underscores
-                
+
                 const digit = charToDigit(c) orelse break;
-                
+
                 // Check for overflow before multiplying
                 if (result < std.math.minInt(i32) / 10) {
                     return self.storeBigNumber(gpa, text);
                 }
-                
+
                 result = result * 10;
-                
+
                 // Check for overflow before subtracting
                 if (result < std.math.minInt(i32) + @as(i32, digit)) {
                     return self.storeBigNumber(gpa, text);
                 }
-                
+
                 result = result - @as(i32, digit);
             }
-            
+
             return Token.Extra{ .num_literal_i32 = result };
         } else {
             // For positive numbers, use u32 to detect overflow
             var result: u32 = 0;
-            
+
             while (i < text.len) : (i += 1) {
                 const c = text[i];
                 if (c == '_') continue; // Skip underscores
-                
+
                 const digit = charToDigit(c) orelse break;
-                
+
                 // Check for overflow before multiplying
                 if (result > std.math.maxInt(u32) / 10) {
                     return self.storeBigNumber(gpa, text);
                 }
-                
+
                 result = result * 10;
-                
+
                 // Check for overflow before adding
                 if (result > std.math.maxInt(u32) - @as(u32, digit)) {
                     return self.storeBigNumber(gpa, text);
                 }
-                
+
                 result = result + digit;
             }
-            
+
             // Check if it fits in i32
             if (result > std.math.maxInt(i32)) {
                 return self.storeBigNumber(gpa, text);
             }
-            
+
             return Token.Extra{ .num_literal_i32 = @as(i32, @intCast(result)) };
         }
     }
@@ -1247,25 +1247,25 @@ pub const Tokenizer = struct {
         while (i < text.len) : (i += 1) {
             const c = text[i];
             if (c == '_') continue;
-            
+
             const digit = switch (number_base) {
                 16 => charToHexDigit(c),
                 8 => charToOctalDigit(c),
                 2 => charToBinaryDigit(c),
                 else => unreachable,
             } orelse break;
-            
+
             // Check for overflow
             if (result > std.math.maxInt(u32) / @as(u32, number_base)) {
                 return self.storeBigNumber(gpa, text);
             }
-            
+
             result = result * number_base;
-            
+
             if (result > std.math.maxInt(u32) - @as(u32, digit)) {
                 return self.storeBigNumber(gpa, text);
             }
-            
+
             result = result + digit;
         }
 
@@ -1284,17 +1284,17 @@ pub const Tokenizer = struct {
         if (smallDec) |dec| {
             return Token.Extra{ .frac_literal_small = dec };
         }
-        
+
         // If it doesn't fit in SmallDec, store in ByteSlices
         return self.storeBigFraction(gpa, text);
     }
-    
+
     /// Try to parse a fractional literal as a small dec (numerator/10^power)
     fn tryParseSmallDec(self: *Tokenizer, text: []const u8) ?Token.SmallDec {
         _ = self;
         // Return null if input is too long to fit in our 32-byte buffer
         if (text.len > 32) return null;
-        
+
         // For negative zero, we'll return null to force ByteSlices path
         if (text.len > 0 and text[0] == '-') {
             const rest = text[1..];
@@ -1308,7 +1308,7 @@ pub const Tokenizer = struct {
             }
             if (all_zeros) return null;
         }
-        
+
         // Find the decimal point
         var dot_pos: ?usize = null;
         for (text, 0..) |c, i| {
@@ -1317,12 +1317,12 @@ pub const Tokenizer = struct {
                 break;
             }
         }
-        
+
         const decimal_index = dot_pos orelse {
             // No decimal point - shouldn't happen for fractions, but handle it
             return null;
         };
-        
+
         // Count digits after decimal point (excluding underscores)
         var after_decimal_count: u8 = 0;
         var i = decimal_index + 1;
@@ -1331,31 +1331,31 @@ pub const Tokenizer = struct {
                 after_decimal_count += 1;
             }
         }
-        
+
         if (after_decimal_count > 255) return null; // Too many decimal places
-        
+
         // Build the numerator by concatenating all digits (removing decimal and underscores)
         var numerator: i32 = 0;
         var negative = false;
         i = 0;
-        
+
         if (text[0] == '-') {
             negative = true;
             i = 1;
         }
-        
+
         while (i < text.len) : (i += 1) {
             const c = text[i];
             if (c == '.' or c == '_') continue;
-            
+
             const digit = charToDigit(c) orelse continue;
-            
+
             // Check for overflow
             if (numerator > (std.math.maxInt(i32) / 10)) {
                 return null;
             }
             numerator = numerator * 10;
-            
+
             if (negative) {
                 if (numerator < std.math.minInt(i32) + @as(i32, digit)) {
                     return null;
@@ -1368,18 +1368,18 @@ pub const Tokenizer = struct {
                 numerator = numerator + @as(i32, digit);
             }
         }
-        
+
         // Check if numerator fits in i16
         if (numerator < -32768 or numerator > 32767) {
             return null;
         }
-        
+
         return Token.SmallDec{
             .numerator = @as(i16, @intCast(numerator)),
             .denominator_power_of_ten = after_decimal_count,
         };
     }
-    
+
     /// Store a big fraction in ByteSlices
     fn storeBigFraction(self: *Tokenizer, gpa: std.mem.Allocator, text: []const u8) !Token.Extra {
         // Find the decimal point
@@ -1390,36 +1390,36 @@ pub const Tokenizer = struct {
                 break;
             }
         }
-        
+
         const decimal_index = dot_pos orelse text.len;
-        
+
         // Count digits before and after decimal (excluding underscores)
         var before_count: u32 = 0;
         var after_count: u32 = 0;
-        
+
         for (text[0..decimal_index]) |c| {
             if (c != '_' and c != '-') {
                 before_count += 1;
             }
         }
-        
+
         if (decimal_index < text.len) {
-            for (text[decimal_index + 1..]) |c| {
+            for (text[decimal_index + 1 ..]) |c| {
                 if (c != '_') {
                     after_count += 1;
                 }
             }
         }
-        
+
         // Allocate buffer for: 2 lengths (4 bytes each) + digits
         const total_size = 8 + before_count + after_count;
         var buf = try gpa.alloc(u8, total_size);
         defer gpa.free(buf);
-        
+
         // Write the two lengths first (as u32 little-endian)
         std.mem.writeInt(u32, buf[0..4], before_count, .little);
         std.mem.writeInt(u32, buf[4..8], after_count, .little);
-        
+
         // Copy digits (without decimal point, underscores, or minus sign)
         var j: usize = 8;
         for (text) |c| {
@@ -1428,7 +1428,7 @@ pub const Tokenizer = struct {
                 j += 1;
             }
         }
-        
+
         const idx = try self.byte_slices.append(gpa, buf);
         return Token.Extra{ .bytes_idx = idx };
     }
@@ -1440,16 +1440,16 @@ pub const Tokenizer = struct {
         // Disallow other control characters (0x00-0x08, 0x0B-0x0C, 0x0E-0x1F, 0x7F)
         return (c < 0x20 and c != '\t' and c != '\n' and c != '\r') or c == 0x7F;
     }
-    
+
     fn parseStringLiteral(self: *Tokenizer, gpa: std.mem.Allocator, text: []const u8) !Token.Extra {
         // Allocate a buffer that's at least as large as the input (escapes make it smaller)
         var result = try std.ArrayList(u8).initCapacity(gpa, text.len);
         defer result.deinit();
-        
+
         var i: usize = 0;
         while (i < text.len) : (i += 1) {
             const c = text[i];
-            
+
             if (c == '\\' and i + 1 < text.len) {
                 // Handle escape sequences
                 i += 1;
@@ -1467,12 +1467,12 @@ pub const Tokenizer = struct {
                         if (i + 1 < text.len and text[i + 1] == '{') {
                             i += 2; // Skip 'u{'
                             const hex_start = i;
-                            
+
                             // Find the closing '}'
                             while (i < text.len and text[i] != '}') {
                                 i += 1;
                             }
-                            
+
                             if (i < text.len) {
                                 // Parse the hex value
                                 const hex_str = text[hex_start..i];
@@ -1481,7 +1481,7 @@ pub const Tokenizer = struct {
                                     const digit = charToHexDigit(hex_char) orelse 0;
                                     codepoint = codepoint * 16 + digit;
                                 }
-                                
+
                                 // Encode as UTF-8
                                 if (codepoint <= 0x7F) {
                                     try result.append(@intCast(codepoint));
@@ -1509,17 +1509,17 @@ pub const Tokenizer = struct {
                 }
             } else {
                 // Regular character - check if it's non-printable
-                // Note: We detect non-printable characters here but can't report 
+                // Note: We detect non-printable characters here but can't report
                 // them with exact positions as we don't have cursor position info.
                 // The actual reporting happens during tokenization.
                 try result.append(c);
             }
         }
-        
+
         const idx = try self.byte_slices.append(gpa, result.items);
         return Token.Extra{ .bytes_idx = idx };
     }
-    
+
     /// Parse a single-quoted character literal
     fn parseSingleQuoteLiteral(self: *Tokenizer, gpa: std.mem.Allocator, text: []const u8) !Token.Extra {
         // Single quotes should contain exactly one character (possibly escaped)
@@ -1529,13 +1529,13 @@ pub const Tokenizer = struct {
             const idx = try self.byte_slices.append(gpa, text);
             return Token.Extra{ .bytes_idx = idx };
         }
-        
+
         const content = text[1 .. text.len - 1]; // Remove quotes
-        
+
         // Process escape if present
         var char_bytes: [4]u8 = undefined;
         var char_len: usize = 0;
-        
+
         if (content.len > 0 and content[0] == '\\' and content.len > 1) {
             // Handle escape sequence
             switch (content[1]) {
@@ -1573,7 +1573,7 @@ pub const Tokenizer = struct {
                 char_len = i + 1;
             }
         }
-        
+
         const idx = try self.byte_slices.append(gpa, char_bytes[0..char_len]);
         return Token.Extra{ .bytes_idx = idx };
     }
@@ -1584,12 +1584,12 @@ pub const Tokenizer = struct {
         var number_base: u8 = 10;
         var start_idx: usize = 0;
         var is_negative = false;
-        
+
         if (text.len > 0 and text[0] == '-') {
             is_negative = true;
             start_idx = 1;
         }
-        
+
         if (text.len > start_idx + 1 and text[start_idx] == '0') {
             const prefix = text[start_idx + 1];
             if (prefix == 'x' or prefix == 'X') {
@@ -1603,12 +1603,12 @@ pub const Tokenizer = struct {
                 start_idx += 2;
             }
         }
-        
+
         if (number_base == 10) {
             // For base-10, just remove underscores
             var clean_buf = try gpa.alloc(u8, text.len);
             defer gpa.free(clean_buf);
-            
+
             var j: usize = 0;
             for (text) |c| {
                 if (c != '_') {
@@ -1616,7 +1616,7 @@ pub const Tokenizer = struct {
                     j += 1;
                 }
             }
-            
+
             const idx = try self.byte_slices.append(gpa, clean_buf[0..j]);
             return Token.Extra{ .bytes_idx = idx };
         } else {
@@ -1624,27 +1624,27 @@ pub const Tokenizer = struct {
             // We'll build up the result as base-10 digits
             var result = try std.ArrayList(u8).initCapacity(gpa, text.len * 2); // Rough estimate
             defer result.deinit();
-            
+
             // We'll accumulate the value and convert to decimal string
             // Since it doesn't fit in i32, we need to do big number arithmetic
             // For now, let's use a simple approach: accumulate as array of base-10 digits
-            
+
             // Start with 0
             try result.append('0');
-            
+
             // Process each digit
             var i = start_idx;
             while (i < text.len) : (i += 1) {
                 const c = text[i];
                 if (c == '_') continue;
-                
+
                 const digit_value = switch (number_base) {
                     16 => charToHexDigit(c),
                     8 => charToOctalDigit(c),
                     2 => charToBinaryDigit(c),
                     else => unreachable,
                 } orelse continue;
-                
+
                 // Multiply current result by base
                 var carry: u8 = 0;
                 var j: usize = result.items.len;
@@ -1659,7 +1659,7 @@ pub const Tokenizer = struct {
                     try result.insert(0, '0' + (carry % 10));
                     carry = carry / 10;
                 }
-                
+
                 // Add the new digit
                 carry = digit_value;
                 j = result.items.len;
@@ -1675,12 +1675,12 @@ pub const Tokenizer = struct {
                     carry = carry / 10;
                 }
             }
-            
+
             // Add negative sign if needed
             if (is_negative) {
                 try result.insert(0, '-');
             }
-            
+
             const idx = try self.byte_slices.append(gpa, result.items);
             return Token.Extra{ .bytes_idx = idx };
         }
@@ -1836,10 +1836,10 @@ pub const Tokenizer = struct {
                             self.cursor.pos += 1;
                             const tag = self.cursor.chompNumber();
                             const num_end = self.cursor.pos;
-                            
+
                             // Parse the actual number value (including the minus)
                             const num_text = self.cursor.buf[start..num_end];
-                            
+
                             // Parse the value based on type
                             if (tag == .Int) {
                                 const extra = try self.parseBase10Integer(gpa, num_text);
@@ -2082,10 +2082,10 @@ pub const Tokenizer = struct {
                     const num_start = start;
                     var tag = self.cursor.chompNumber();
                     const num_end = self.cursor.pos;
-                    
+
                     // Parse the actual number value
                     const num_text = self.cursor.buf[num_start..num_end];
-                    
+
                     // Only parse integers for now (skip floats)
                     if (tag == .Int or tag == .IntBase) {
                         // Determine the base
@@ -2147,7 +2147,7 @@ pub const Tokenizer = struct {
                     const tag = self.cursor.chompSingleQuoteLiteral();
                     const quote_end = self.cursor.pos;
                     const quote_text = self.cursor.buf[quote_start..quote_end];
-                    
+
                     // Parse the single quote literal and store in ByteSlices
                     if (tag == .SingleQuote) {
                         const extra = try self.parseSingleQuoteLiteral(gpa, quote_text);
@@ -2201,19 +2201,19 @@ pub const Tokenizer = struct {
     pub fn tokenizeStringLiteral(self: *Tokenizer, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
         const start = self.cursor.pos;
         std.debug.assert(self.cursor.peek() == '"');
-        
+
         // Save the current position
         const saved_pos = self.cursor.pos;
-        
+
         // First, scan to check if this is an interpolated string
         self.cursor.pos += 1; // Skip opening quote
-        
+
         // Check for multiline string
         const is_multiline = self.cursor.peek() == '"' and self.cursor.peekAt(1) == '"';
         if (is_multiline) {
             self.cursor.pos += 2;
         }
-        
+
         // Scan for interpolation marker
         var has_interpolation = false;
         while (self.cursor.pos < self.cursor.buf.len) {
@@ -2233,32 +2233,33 @@ pub const Tokenizer = struct {
                 self.cursor.pos += 1;
             }
         }
-        
+
         // Reset position
         self.cursor.pos = saved_pos;
-        
+
         // If it has interpolation, use the old tokenization method
         if (has_interpolation) {
             try self.tokenizeStringLikeLiteral(gpa);
             return;
         }
-        
+
         // Otherwise, parse as a complete string literal
         const str_start = start;
         var tag: Token.Tag = undefined;
-        
+
         self.cursor.pos += 1; // Skip opening quote
-        
+
         if (is_multiline) {
             // Triple-quoted multiline string
             self.cursor.pos += 2;
             tag = .MultilineString;
-            
+
             // Find the closing triple quote
             while (self.cursor.pos < self.cursor.buf.len) {
-                if (self.cursor.buf[self.cursor.pos] == '"' and 
-                    self.cursor.peekAt(1) == '"' and 
-                    self.cursor.peekAt(2) == '"') {
+                if (self.cursor.buf[self.cursor.pos] == '"' and
+                    self.cursor.peekAt(1) == '"' and
+                    self.cursor.peekAt(2) == '"')
+                {
                     self.cursor.pos += 3;
                     break;
                 }
@@ -2272,7 +2273,7 @@ pub const Tokenizer = struct {
         } else {
             // Single-line string
             tag = .String;
-            
+
             // Find the closing quote
             while (self.cursor.pos < self.cursor.buf.len) {
                 const c = self.cursor.buf[self.cursor.pos];
@@ -2295,10 +2296,10 @@ pub const Tokenizer = struct {
                 }
             }
         }
-        
+
         const str_end = self.cursor.pos;
         const str_text = self.cursor.buf[str_start..str_end];
-        
+
         // Parse the string content and store in ByteSlices
         const extra = try self.parseStringLiteral(gpa, str_text);
         try self.pushTokenWithExtra(gpa, tag, start, extra);
@@ -3005,7 +3006,7 @@ test "tokenizer" {
         .StringPart,
         .StringEnd,
     });
-    // Incomplete multiline string is still tokenized as MultilineString 
+    // Incomplete multiline string is still tokenized as MultilineString
     // (goes to end of file)
     try testTokenization(
         gpa,
@@ -3100,7 +3101,7 @@ test "non-printable characters in string literal" {
 
         const source = try gpa.dupe(u8, &non_printable);
         defer gpa.free(source);
-        
+
         var env = try CommonEnv.init(gpa, source);
         defer env.deinit(gpa);
 
