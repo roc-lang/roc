@@ -502,7 +502,6 @@ fn parsePlatformSpecification(self: *Parser) Error!Node.Idx {
         };
 
         const nodes = self.scratch_nodes.items[scratch_start..];
-        std.debug.assert(nodes.len > 0); // Package config should have fields
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
         return try self.ast.appendNode(self.gpa, self.tokenToPosition(start), .record_literal, .{ .block_nodes = nodes_idx });
     } else {
@@ -810,7 +809,9 @@ fn parseListPattern(self: *Parser) Error!Node.Idx {
 
     if (self.peek() == .CloseSquare) {
         self.advance();
-        return try self.ast.appendNode(self.gpa, start_pos, .empty_list, .{ .src_bytes_end = self.currentPosition() });
+        const empty_slice: []const Node.Idx = &.{};
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .block_nodes = nodes_idx });
     }
 
     const scratch_start = self.scratch_nodes.items.len;
@@ -863,10 +864,11 @@ fn parseListPattern(self: *Parser) Error!Node.Idx {
     
     // If no elements were parsed (due to errors), create empty list
     if (elems.len == 0) {
-        return try self.ast.appendNode(self.gpa, start_pos, .empty_list, .{ .src_bytes_end = self.currentPosition() });
+        const empty_slice: []const Node.Idx = &.{};
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .block_nodes = nodes_idx });
     }
     
-    std.debug.assert(elems.len > 0); // List patterns should have elements
     const elems_idx = try self.ast.appendNodeSlice(self.gpa, elems);
     return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .block_nodes = elems_idx });
 }
@@ -877,7 +879,9 @@ fn parseRecordPattern(self: *Parser) Error!Node.Idx {
 
     if (self.peek() == .CloseCurly) {
         self.advance();
-        return try self.ast.appendNode(self.gpa, start_pos, .empty_record, .{ .src_bytes_end = self.currentPosition() });
+        const empty_slice: []const Node.Idx = &.{};
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .block_nodes = nodes_idx });
     }
 
     const scratch_start = self.scratch_nodes.items.len;
@@ -923,10 +927,11 @@ fn parseRecordPattern(self: *Parser) Error!Node.Idx {
     
     // If no fields were parsed (due to errors), create empty record
     if (fields.len == 0) {
-        return try self.ast.appendNode(self.gpa, start_pos, .empty_record, .{ .src_bytes_end = self.currentPosition() });
+        const empty_slice: []const Node.Idx = &.{};
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .block_nodes = nodes_idx });
     }
     
-    std.debug.assert(fields.len > 0); // Record patterns should have fields
     const fields_idx = try self.ast.appendNodeSlice(self.gpa, fields);
     return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .block_nodes = fields_idx });
 }
@@ -944,7 +949,9 @@ fn parseTupleOrParenthesizedPattern(self: *Parser) Error!Node.Idx {
     if (self.peek() == .CloseRound) {
         self.advance();
         // Empty tuple pattern
-        return try self.ast.appendNode(self.gpa, start_pos, .empty_tuple, .{ .src_bytes_end = self.currentPosition() });
+        const empty_slice: []const Node.Idx = &.{};
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = nodes_idx });
     }
 
     const first = try self.parsePattern();
@@ -973,10 +980,11 @@ fn parseTupleOrParenthesizedPattern(self: *Parser) Error!Node.Idx {
         
         // Safety check: tuples should have at least 2 elements  
         if (elems.len == 0) {
-            return try self.ast.appendNode(self.gpa, start_pos, .empty_tuple, .{ .src_bytes_end = self.currentPosition() });
+            const empty_slice: []const Node.Idx = &.{};
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = nodes_idx });
         }
         
-        std.debug.assert(elems.len > 0); // Tuple patterns should have elements
         const elems_idx = try self.ast.appendNodeSlice(self.gpa, elems);
         return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = elems_idx });
     } else {
@@ -1238,7 +1246,9 @@ fn parseListLiteral(self: *Parser) Error!Node.Idx {
 
     if (self.peek() == .CloseSquare) {
         self.advance();
-        return try self.ast.appendNode(self.gpa, start_pos, .empty_list, .{ .src_bytes_end = self.currentPosition() });
+        const empty_slice: []const Node.Idx = &.{};
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .block_nodes = nodes_idx });
     }
 
     const scratch_start = self.scratch_nodes.items.len;
@@ -1274,7 +1284,9 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
 
     if (self.peek() == .CloseCurly) {
         self.advance();
-        return try self.ast.appendNode(self.gpa, start_pos, .empty_record, .{ .src_bytes_end = self.currentPosition() });
+        const empty_slice: []const Node.Idx = &.{};
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .block_nodes = nodes_idx });
     }
 
     const scratch_start = self.scratch_nodes.items.len;
@@ -1316,7 +1328,6 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
     };
 
     const nodes = self.scratch_nodes.items[scratch_start..];
-    std.debug.assert(nodes.len > 0); // Blocks/records should have content
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
 
     const tag: Node.Tag = if (is_record) .record_literal else .block;
@@ -1335,7 +1346,9 @@ fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
     // Check for empty tuple
     if (self.peek() == .CloseRound) {
         self.advance();
-        return try self.ast.appendNode(self.gpa, start_pos, .empty_tuple, .{ .src_bytes_end = self.currentPosition() });
+        const empty_slice: []const Node.Idx = &.{};
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = nodes_idx });
     }
 
     const first = try self.parseExpr();
@@ -1364,10 +1377,11 @@ fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
         
         // Safety check: tuples should have at least 2 elements  
         if (elems.len == 0) {
-            return try self.ast.appendNode(self.gpa, start_pos, .empty_tuple, .{ .src_bytes_end = self.currentPosition() });
+            const empty_slice: []const Node.Idx = &.{};
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = nodes_idx });
         }
         
-        std.debug.assert(elems.len > 0); // Tuple patterns should have elements
         const elems_idx = try self.ast.appendNodeSlice(self.gpa, elems);
         return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = elems_idx });
     } else {
@@ -1409,13 +1423,6 @@ fn parseApply(self: *Parser, func: Node.Idx) Error!Node.Idx {
     };
 
     const nodes = self.scratch_nodes.items[scratch_start..];
-    
-    // Check if we have no arguments (only the function node)
-    if (nodes.len == 1) {
-        // No arguments - use apply_no_args which is more memory efficient
-        // Store the function node index directly in block_nodes
-        return try self.ast.appendNode(self.gpa, start_pos, .apply_no_args, .{ .block_nodes = @enumFromInt(@intFromEnum(func)) });
-    }
     
     // Determine the tag based on the function node
     const tag: Node.Tag = switch (self.ast.tag(func)) {
@@ -1553,7 +1560,6 @@ fn parseLambda(self: *Parser) Error!Node.Idx {
     body_then_args[0] = body;
     @memcpy(body_then_args[1..], params);
 
-    std.debug.assert(body_then_args.len > 0); // Lambda should have body and args
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, body_then_args);
     return try self.ast.appendNode(self.gpa, start_pos, .lambda, .{ .body_then_args = nodes_idx });
 }
@@ -1809,12 +1815,6 @@ fn parseTypeApply(self: *Parser, type_ctor: Node.Idx) Error!Node.Idx {
         return try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = .ty_anno_unexpected_token });
     }
     
-    // Check if we have no arguments (only the type constructor)
-    if (nodes.len == 1) {
-        // No arguments - use apply_no_args which is more memory efficient
-        return try self.ast.appendNode(self.gpa, start_pos, .apply_no_args, .{ .block_nodes = @enumFromInt(@intFromEnum(type_ctor)) });
-    }
-    
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
     return try self.ast.appendNode(self.gpa, start_pos, .apply_uc, .{ .block_nodes = nodes_idx });
 }
@@ -1826,7 +1826,9 @@ fn parseRecordType(self: *Parser) Error!Node.Idx {
     // Check for empty record type
     if (self.peek() == .CloseCurly) {
         self.advance();
-        return try self.ast.appendNode(self.gpa, start_pos, .empty_record, .{ .src_bytes_end = self.currentPosition() });
+        const empty_slice: []const Node.Idx = &.{};
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .block_nodes = nodes_idx });
     }
 
     const scratch_start = self.scratch_nodes.items.len;
@@ -1880,7 +1882,9 @@ fn parseRecordType(self: *Parser) Error!Node.Idx {
 
     const fields = self.scratch_nodes.items[scratch_start..];
     if (fields.len == 0) {
-        return try self.ast.appendNode(self.gpa, start_pos, .empty_record, .{ .src_bytes_end = self.currentPosition() });
+        const empty_slice: []const Node.Idx = &.{};
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .block_nodes = nodes_idx });
     }
 
     const fields_idx = try self.ast.appendNodeSlice(self.gpa, fields);
@@ -1894,7 +1898,9 @@ fn parseListType(self: *Parser) Error!Node.Idx {
     // Check for empty list type (shouldn't happen in type context, but handle it)
     if (self.peek() == .CloseSquare) {
         self.advance();
-        return try self.ast.appendNode(self.gpa, start_pos, .empty_list, .{ .src_bytes_end = self.currentPosition() });
+        const empty_slice: []const Node.Idx = &.{};
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .block_nodes = nodes_idx });
     }
 
     // Parse the element type
@@ -1923,7 +1929,9 @@ fn parseTupleOrParenthesizedType(self: *Parser) Error!Node.Idx {
         self.advance();
         // Empty tuples are not allowed in type annotations
         try self.pushDiagnostic(.ty_anno_unexpected_token, start_pos, self.currentPosition());
-        return try self.ast.appendNode(self.gpa, start_pos, .empty_tuple, .{ .src_bytes_end = self.currentPosition() });
+        const empty_slice: []const Node.Idx = &.{};
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = nodes_idx });
     }
 
     // Parse first type

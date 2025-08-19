@@ -84,9 +84,6 @@ pub fn appendNode(self: *Ast, allocator: Allocator, start_pos: Position, node_ta
 
 /// Append a slice of nodes and return an index to access them later
 pub fn appendNodeSlice(self: *Ast, allocator: Allocator, nodes: []const Node.Idx) Allocator.Error!NodeSlices.Idx {
-    if (nodes.len == 0) {
-        std.debug.panic("appendNodeSlice called with empty slice! This should never happen.\n", .{});
-    }
     return try self.node_slices.append(allocator, nodes);
 }
 
@@ -106,8 +103,15 @@ pub const NodeSlices = struct {
     pub const Idx = enum(u32) {
         _,
 
+        // NIL sentinel for empty slices - sign bit set (i32 min value)
+        pub const NIL: Idx = @enumFromInt(@as(u32, @bitCast(@as(i32, std.math.minInt(i32)))));
+
         fn asUsize(self: Idx) usize {
             return @intCast(@intFromEnum(self));
+        }
+
+        pub fn isNil(self: Idx) bool {
+            return self == NIL;
         }
     };
 
@@ -121,8 +125,10 @@ pub const NodeSlices = struct {
     };
 
     pub fn append(self: *NodeSlices, allocator: Allocator, node_slice: []const Node.Idx) Allocator.Error!NodeSlices.Idx {
-        // NodeSlices must never be empty
-        std.debug.assert(node_slice.len > 0);
+        // Handle empty slices by returning NIL
+        if (node_slice.len == 0) {
+            return Idx.NIL;
+        }
 
         const idx = @as(NodeSlices.Idx, @enumFromInt(self.entries.items.items.len));
 
@@ -134,10 +140,14 @@ pub const NodeSlices = struct {
             self.entries.items.appendAssumeCapacity(.{ .node_idx = node });
         }
 
-        // Append the last node as negative to mark the end
+        // Append the last node with sign bit set to mark the end
         const last_node = node_slice[node_slice.len - 1];
-        const negated_last = @as(Node.Idx, @enumFromInt(-@intFromEnum(last_node)));
-        self.entries.items.appendAssumeCapacity(.{ .node_idx = negated_last });
+        const last_val = @as(u32, @bitCast(@intFromEnum(last_node)));
+        // Set the sign bit to mark this as the last element
+        const sign_bit = @as(u32, @bitCast(@as(i32, std.math.minInt(i32))));
+        const marked_val = last_val | sign_bit;
+        const marked_last = @as(Node.Idx, @enumFromInt(@as(i32, @bitCast(marked_val))));
+        self.entries.items.appendAssumeCapacity(.{ .node_idx = marked_last });
 
         return idx;
     }
@@ -169,15 +179,17 @@ pub const NodeSlices = struct {
             }
 
             const node_idx = self.entries[self.index].node_idx;
-            const node_val = @intFromEnum(node_idx);
+            const node_val = @as(u32, @bitCast(@intFromEnum(node_idx)));
 
             self.index += 1;
 
-            // If the value is negative, this is the last node
-            if (node_val < 0) {
+            // Check if sign bit is set (marking the end)
+            const sign_bit = @as(u32, @bitCast(@as(i32, std.math.minInt(i32))));
+            if ((node_val & sign_bit) != 0) {
                 self.done = true;
-                // Return the negated (positive) value
-                return @as(Node.Idx, @enumFromInt(-node_val));
+                // Clear the sign bit to get the original value
+                const original_val = node_val & ~sign_bit;
+                return @as(Node.Idx, @enumFromInt(@as(i32, @bitCast(original_val))));
             }
 
             return node_idx;
@@ -185,17 +197,17 @@ pub const NodeSlices = struct {
     };
 
     pub fn nodes(self: *const NodeSlices, idx: NodeSlices.Idx) Iterator {
-        // No length stored anymore - we start reading nodes immediately
-        const slice_start = idx.asUsize();
-        
-        // Special case: if idx is 0 and we have no entries, this is an empty list sentinel
-        if (slice_start == 0 and self.entries.items.items.len == 0) {
+        // Check for NIL sentinel (empty slice)
+        if (idx.isNil()) {
             return .{
                 .entries = self.entries.items.items,
                 .index = 0,
                 .done = true, // Mark as done immediately for empty list
             };
         }
+
+        // No length stored anymore - we start reading nodes immediately
+        const slice_start = idx.asUsize();
 
         return .{
             .entries = self.entries.items.items,
@@ -277,13 +289,6 @@ pub fn lambdaNoArgsBody(self: *const Ast, idx: Node.Idx) Node.Idx {
     return @enumFromInt(body_idx);
 }
 
-/// Returns the function node for an apply with no arguments
-pub fn applyNoArgsFunc(self: *const Ast, idx: Node.Idx) Node.Idx {
-    std.debug.assert(self.tag(idx) == .apply_no_args);
-    // For apply_no_args, we store the function node index directly as a u32 in block_nodes
-    const func_idx = @intFromEnum(self.payload(idx).block_nodes);
-    return @enumFromInt(func_idx);
-}
 
 /// Get an iterator for lambda args
 pub fn lambdaArgs(self: *const Ast, lambda_val: Lambda) LambdaArgsIterator {
@@ -456,16 +461,24 @@ pub fn region(
             // Function application: func(args...)
             // The payload should contain nodes for func and args
             const nodes_idx = self.payload(idx).block_nodes;
+            
+            // Check if this is an empty apply (no arguments)
+            if (nodes_idx.isNil()) {
+                // For empty apply, we need to determine the function name from the tag
+                // and calculate the region based on that
+                const region_start = self.start(idx);
+                // This is tricky without the function node. We might need to keep some info.
+                // For now, estimate based on typical function call pattern
+                return .{
+                    .start = region_start,
+                    .end = Position{ .offset = region_start.offset + 2 }, // Rough estimate for "()"
+                };
+            }
+            
             var iter = self.node_slices.nodes(nodes_idx);
             
             // Get the first node (the function)
-            const first_node = iter.next() orelse {
-                // Empty apply? Use just the position
-                return .{
-                    .start = self.start(idx),
-                    .end = self.start(idx),
-                };
-            };
+            const first_node = iter.next() orelse unreachable; // Should have at least the function
             
             // Find the last node (last argument or the function if no args)
             var last_node = first_node;
@@ -556,42 +569,31 @@ pub fn region(
                 .end = region_end,
             };
         },
-        // list_literal, // e.g. `[1, 2, 3]` - note that this is nonempty; .empty_list has its own variant
-        // tuple_literal, // e.g. `(foo, bar)` - we know it's a tuple literal because of the commas
-        // record_literal, // e.g. `{ foo, bar }` or `{ foo, }` - only records have commas; `{ foo }` is a block
-
-        // TODO: .apply tag seems to be missing from Tag enum
-        // .apply => {
-        //     // e.g. `foo(bar, baz)` or `Foo(bar, baz)` or `(foo(bar, baz))(blah, etc)`
-        //     @panic("TODO");
-        // },
         .block => {
             // Opening curly brace
             const region_start = self.start(idx);
 
             // The closing curly brace is the next token after the end of the last node in the block
             var nodes_iter = self.nodesInBlock(idx);
-            var last_node_idx: Node.Idx = undefined;
-            var has_nodes = false;
+            var last_node_idx: ?Node.Idx = null;
             while (nodes_iter.next()) |node| {
                 last_node_idx = node;
-                has_nodes = true;
             }
-            // Empty blocks should have been parsed as .empty_record instead
-            std.debug.assert(has_nodes);
-            const last_node_region = self.region(last_node_idx, raw_src, ident_store);
-            const after_last_node = @as(usize, @intCast(last_node_region.end.offset)) + 1;
-            const region_end = after_last_node + nextTokenIndex(raw_src[after_last_node..]);
+            
+            const region_end = if (last_node_idx) |last_node| blk: {
+                // Has nodes - find closing brace after last node
+                const last_node_region = self.region(last_node, raw_src, ident_store);
+                const after_last_node = @as(usize, @intCast(last_node_region.end.offset)) + 1;
+                break :blk after_last_node + nextTokenIndex(raw_src[after_last_node..]);
+            } else blk: {
+                // Empty block - find closing brace immediately after opening brace
+                const after_open = @as(usize, @intCast(region_start.offset)) + 1;
+                break :blk after_open + nextTokenIndex(raw_src[after_open..]);
+            };
 
             return .{
                 .start = region_start,
                 .end = Position{ .offset = @as(u32, @intCast(region_end)) },
-            };
-        },
-        .empty_record, .empty_list, .empty_tuple => {
-            return .{
-                .start = self.start(idx),
-                .end = self.payload(idx).src_bytes_end,
             };
         },
         .lambda => {
@@ -627,17 +629,6 @@ pub fn region(
             return .{
                 .start = region_start,
                 .end = Position{ .offset = region_end },
-            };
-        },
-        .apply_no_args => {
-            // Function application with no args: func()
-            // The function node is stored directly in block_nodes
-            const func_node = self.applyNoArgsFunc(idx);
-            const func_region = self.region(func_node, raw_src, ident_store);
-            // Add 2 for the "()" after the function
-            return .{
-                .start = func_region.start,
-                .end = Position{ .offset = func_region.end.offset + 2 },
             };
         },
         .num_literal_i32, .int_literal_i32, .frac_literal_small, .str_literal_small, .num_literal_big, .int_literal_big, .frac_literal_big, .str_literal_big, .list_literal, .tuple_literal, .record_literal, .match, .if_else, .if_without_else, .unary_not, .unary_neg, .unary_double_dot, .ret, .for_loop, .while_loop, .crash, .malformed => {
@@ -763,11 +754,7 @@ pub const Node = struct {
         apply_lc, // e.g. `foo(bar, baz)`
         apply_uc, // e.g. `Foo(bar, baz)` or `(foo(bar, baz))(blah, etc)`
         apply_anon, // e.g. `(foo(bar, baz))(blah, etc)`
-        apply_no_args, // e.g. `foo()` - no arguments, just stores the function node
         block, // Block with curly braces, e.g. `{ expr1, expr2, ... }` - could end up being a record (expr or destructure)
-        empty_record, // e.g. `{}` - no data inside; we just store region and that's it.
-        empty_list, // e.g. `[]` - no data inside; we just store region and that's it.
-        empty_tuple, // e.g. `()` - no data inside; we just store region and that's it. Only used for 0-arg function type sigs.
         lambda, // e.g. `|x, y| x + y` - payload stores a slice of body_then_args
         lambda_no_args, // e.g. `|| x + y` - payload stores only the body node
         match, // e.g. `match cond { Ok(a) => a Err(b) => b }` - needs to store cond as well as branches
@@ -817,7 +804,6 @@ pub const Node = struct {
                 .apply_lc,
                 .apply_uc,
                 .apply_anon,
-                .apply_no_args,
                 .neg_lc,
                 .not_lc,
                 .dot_lc,
@@ -838,9 +824,6 @@ pub const Node = struct {
                 .tuple_literal,
                 .record_literal,
                 .block,
-                .empty_record,
-                .empty_list,
-                .empty_tuple,
                 .lambda,
                 .lambda_no_args,
                 .match,
@@ -1098,12 +1081,17 @@ test "NodeSlices with negative sentinel" {
 
     // Verify the actual storage format
     const entries = node_slices.entries.items.items;
+    const sign_bit = @as(u32, @bitCast(@as(i32, std.math.minInt(i32))));
 
-    // First slice (single node, stored as negative)
-    try testing.expectEqual(@as(i32, -42), @intFromEnum(entries[0].node_idx));
+    // First slice (single node, stored with sign bit set)
+    const first_val = @as(u32, @bitCast(@intFromEnum(entries[0].node_idx)));
+    try testing.expect((first_val & sign_bit) != 0); // Sign bit should be set
+    try testing.expectEqual(@as(u32, 42), first_val & ~sign_bit); // Original value should be 42
 
-    // Second slice (multiple nodes, last one negative)
+    // Second slice (multiple nodes, last one with sign bit set)
     try testing.expectEqual(@as(i32, 10), @intFromEnum(entries[1].node_idx));
     try testing.expectEqual(@as(i32, 20), @intFromEnum(entries[2].node_idx));
-    try testing.expectEqual(@as(i32, -30), @intFromEnum(entries[3].node_idx));
+    const last_val = @as(u32, @bitCast(@intFromEnum(entries[3].node_idx)));
+    try testing.expect((last_val & sign_bit) != 0); // Sign bit should be set
+    try testing.expectEqual(@as(u32, 30), last_val & ~sign_bit); // Original value should be 30
 }
