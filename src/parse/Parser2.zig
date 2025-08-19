@@ -502,6 +502,7 @@ fn parsePlatformSpecification(self: *Parser) Error!Node.Idx {
         };
 
         const nodes = self.scratch_nodes.items[scratch_start..];
+        std.debug.assert(nodes.len > 0); // Package config should have fields
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
         return try self.ast.appendNode(self.gpa, self.tokenToPosition(start), .record_literal, .{ .block_nodes = nodes_idx });
     } else {
@@ -550,6 +551,9 @@ fn parsePackageList(self: *Parser) Error!AST.NodeSlices.Idx {
     }
 
     const packages = self.scratch_nodes.items[scratch_start..];
+    if (packages.len == 0) {
+        return @enumFromInt(0);
+    }
     return try self.ast.appendNodeSlice(self.gpa, packages);
 }
 
@@ -571,6 +575,9 @@ fn parseExposedList(self: *Parser, end_token: Token.Tag) Error!AST.NodeSlices.Id
     }
 
     const items = self.scratch_nodes.items[scratch_start..];
+    if (items.len == 0) {
+        return @enumFromInt(0);
+    }
     return try self.ast.appendNodeSlice(self.gpa, items);
 }
 
@@ -622,6 +629,9 @@ fn parseTypeVariableList(self: *Parser) Error!AST.NodeSlices.Idx {
     }
 
     const vars = self.scratch_nodes.items[scratch_start..];
+    if (vars.len == 0) {
+        return @enumFromInt(0);
+    }
     return try self.ast.appendNodeSlice(self.gpa, vars);
 }
 
@@ -731,6 +741,9 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
     }
 
     const nodes = self.scratch_nodes.items[scratch_start..];
+    if (nodes.len == 0) {
+        return null;
+    }
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
     // Use the new import node type
     return try self.ast.appendNode(self.gpa, start_pos, .import, .{ .import_nodes = nodes_idx });
@@ -847,6 +860,13 @@ fn parseListPattern(self: *Parser) Error!Node.Idx {
     };
 
     const elems = self.scratch_nodes.items[scratch_start..];
+    
+    // If no elements were parsed (due to errors), create empty list
+    if (elems.len == 0) {
+        return try self.ast.appendNode(self.gpa, start_pos, .empty_list, .{ .src_bytes_end = self.currentPosition() });
+    }
+    
+    std.debug.assert(elems.len > 0); // List patterns should have elements
     const elems_idx = try self.ast.appendNodeSlice(self.gpa, elems);
     return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .block_nodes = elems_idx });
 }
@@ -900,6 +920,13 @@ fn parseRecordPattern(self: *Parser) Error!Node.Idx {
     };
 
     const fields = self.scratch_nodes.items[scratch_start..];
+    
+    // If no fields were parsed (due to errors), create empty record
+    if (fields.len == 0) {
+        return try self.ast.appendNode(self.gpa, start_pos, .empty_record, .{ .src_bytes_end = self.currentPosition() });
+    }
+    
+    std.debug.assert(fields.len > 0); // Record patterns should have fields
     const fields_idx = try self.ast.appendNodeSlice(self.gpa, fields);
     return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .block_nodes = fields_idx });
 }
@@ -917,7 +944,7 @@ fn parseTupleOrParenthesizedPattern(self: *Parser) Error!Node.Idx {
     if (self.peek() == .CloseRound) {
         self.advance();
         // Empty tuple pattern
-        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = @enumFromInt(0) });
+        return try self.ast.appendNode(self.gpa, start_pos, .empty_tuple, .{ .src_bytes_end = self.currentPosition() });
     }
 
     const first = try self.parsePattern();
@@ -943,6 +970,13 @@ fn parseTupleOrParenthesizedPattern(self: *Parser) Error!Node.Idx {
         };
 
         const elems = self.scratch_nodes.items[scratch_start..];
+        
+        // Safety check: tuples should have at least 2 elements  
+        if (elems.len == 0) {
+            return try self.ast.appendNode(self.gpa, start_pos, .empty_tuple, .{ .src_bytes_end = self.currentPosition() });
+        }
+        
+        std.debug.assert(elems.len > 0); // Tuple patterns should have elements
         const elems_idx = try self.ast.appendNodeSlice(self.gpa, elems);
         return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = elems_idx });
     } else {
@@ -1228,7 +1262,9 @@ fn parseListLiteral(self: *Parser) Error!Node.Idx {
     };
 
     const elems = self.scratch_nodes.items[scratch_start..];
-    _ = try self.ast.appendNodeSlice(self.gpa, elems);
+    if (elems.len > 0) {
+        _ = try self.ast.appendNodeSlice(self.gpa, elems);
+    }
     return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .list_elems = @intCast(elems.len) });
 }
 
@@ -1280,6 +1316,7 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
     };
 
     const nodes = self.scratch_nodes.items[scratch_start..];
+    std.debug.assert(nodes.len > 0); // Blocks/records should have content
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
 
     const tag: Node.Tag = if (is_record) .record_literal else .block;
@@ -1298,7 +1335,7 @@ fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
     // Check for empty tuple
     if (self.peek() == .CloseRound) {
         self.advance();
-        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = @enumFromInt(0) });
+        return try self.ast.appendNode(self.gpa, start_pos, .empty_tuple, .{ .src_bytes_end = self.currentPosition() });
     }
 
     const first = try self.parseExpr();
@@ -1324,6 +1361,13 @@ fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
         };
 
         const elems = self.scratch_nodes.items[scratch_start..];
+        
+        // Safety check: tuples should have at least 2 elements  
+        if (elems.len == 0) {
+            return try self.ast.appendNode(self.gpa, start_pos, .empty_tuple, .{ .src_bytes_end = self.currentPosition() });
+        }
+        
+        std.debug.assert(elems.len > 0); // Tuple patterns should have elements
         const elems_idx = try self.ast.appendNodeSlice(self.gpa, elems);
         return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = elems_idx });
     } else {
@@ -1365,8 +1409,23 @@ fn parseApply(self: *Parser, func: Node.Idx) Error!Node.Idx {
     };
 
     const nodes = self.scratch_nodes.items[scratch_start..];
+    
+    // Check if we have no arguments (only the function node)
+    if (nodes.len == 1) {
+        // No arguments - use apply_no_args which is more memory efficient
+        // Store the function node index directly in block_nodes
+        return try self.ast.appendNode(self.gpa, start_pos, .apply_no_args, .{ .block_nodes = @enumFromInt(@intFromEnum(func)) });
+    }
+    
+    // Determine the tag based on the function node
+    const tag: Node.Tag = switch (self.ast.tag(func)) {
+        .uc, .uc_dot_ucs => .apply_uc,
+        .lc, .lc_dot_ucs, .var_lc => .apply_lc,
+        else => .apply_anon,
+    };
+    
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-    return try self.ast.appendNode(self.gpa, start_pos, .apply, .{ .block_nodes = nodes_idx });
+    return try self.ast.appendNode(self.gpa, start_pos, tag, .{ .block_nodes = nodes_idx });
 }
 
 fn parseIf(self: *Parser) Error!Node.Idx {
@@ -1481,12 +1540,20 @@ fn parseLambda(self: *Parser) Error!Node.Idx {
 
     // Store body first, then args
     const params = self.scratch_nodes.items[scratch_start..];
+    
+    if (params.len == 0) {
+        // No arguments - use lambda_no_args which is more memory efficient
+        // Store the body node index directly in block_nodes
+        return try self.ast.appendNode(self.gpa, start_pos, .lambda_no_args, .{ .block_nodes = @enumFromInt(@intFromEnum(body)) });
+    }
+    
     var body_then_args = try self.gpa.alloc(Node.Idx, 1 + params.len);
     defer self.gpa.free(body_then_args);
 
     body_then_args[0] = body;
     @memcpy(body_then_args[1..], params);
 
+    std.debug.assert(body_then_args.len > 0); // Lambda should have body and args
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, body_then_args);
     return try self.ast.appendNode(self.gpa, start_pos, .lambda, .{ .body_then_args = nodes_idx });
 }
@@ -1511,13 +1578,108 @@ fn parseVar(self: *Parser) Error!Node.Idx {
 }
 
 fn parseFor(self: *Parser) Error!Node.Idx {
-    _ = self;
-    @panic("TODO: parseFor");
+    const start_pos = self.currentPosition();
+    self.advance(); // consume 'for'
+    
+    const scratch_start = self.scratch_nodes.items.len;
+    defer {
+        self.scratch_nodes.items.len = scratch_start;
+    }
+    
+    // Parse the pattern (e.g., 'x' in 'for x in ...')
+    const pattern = try self.parsePattern();
+    try self.scratch_nodes.append(self.gpa, pattern);
+    
+    // Expect 'in'
+    if (self.peek() != .KwIn) {
+        try self.pushDiagnostic(.for_expected_in, start_pos, self.currentPosition());
+        return try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = .for_expected_in });
+    }
+    self.advance(); // consume 'in'
+    
+    // Parse the iterable expression
+    const iterable = try self.parseExpr();
+    try self.scratch_nodes.append(self.gpa, iterable);
+    
+    // Parse the body block
+    if (self.peek() != .OpenCurly) {
+        try self.pushDiagnostic(.expected_open_curly_after_match, start_pos, self.currentPosition());
+        return try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = .expected_open_curly_after_match });
+    }
+    
+    self.advance(); // consume '{'
+    
+    // Parse body statements
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        const stmt = try self.parseExpr();
+        try self.scratch_nodes.append(self.gpa, stmt);
+        
+        // Optional comma or newline between statements
+        if (self.peek() == .Comma) {
+            self.advance();
+        }
+    }
+    
+    self.expect(.CloseCurly) catch {
+        try self.pushDiagnostic(.expected_close_curly_at_end_of_match, start_pos, self.currentPosition());
+    };
+    
+    const nodes = self.scratch_nodes.items[scratch_start..];
+    
+    // A for loop must have at least pattern and iterable
+    if (nodes.len < 2) {
+        return try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = .statement_unexpected_token });
+    }
+    
+    const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
+    return try self.ast.appendNode(self.gpa, start_pos, .for_loop, .{ .block_nodes = nodes_idx });
 }
 
 fn parseWhile(self: *Parser) Error!Node.Idx {
-    _ = self;
-    @panic("TODO: parseWhile");
+    const start_pos = self.currentPosition();
+    self.advance(); // consume 'while'
+    
+    const scratch_start = self.scratch_nodes.items.len;
+    defer {
+        self.scratch_nodes.items.len = scratch_start;
+    }
+    
+    // Parse the condition
+    const condition = try self.parseExpr();
+    try self.scratch_nodes.append(self.gpa, condition);
+    
+    // Parse the body block
+    if (self.peek() != .OpenCurly) {
+        try self.pushDiagnostic(.expected_open_curly_after_match, start_pos, self.currentPosition());
+        return try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = .expected_open_curly_after_match });
+    }
+    
+    self.advance(); // consume '{'
+    
+    // Parse body statements
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        const stmt = try self.parseExpr();
+        try self.scratch_nodes.append(self.gpa, stmt);
+        
+        // Optional comma or newline between statements
+        if (self.peek() == .Comma) {
+            self.advance();
+        }
+    }
+    
+    self.expect(.CloseCurly) catch {
+        try self.pushDiagnostic(.expected_close_curly_at_end_of_match, start_pos, self.currentPosition());
+    };
+    
+    const nodes = self.scratch_nodes.items[scratch_start..];
+    
+    // A while loop must have at least a condition
+    if (nodes.len < 1) {
+        return try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = .statement_unexpected_token });
+    }
+    
+    const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
+    return try self.ast.appendNode(self.gpa, start_pos, .while_loop, .{ .block_nodes = nodes_idx });
 }
 
 fn parseReturn(self: *Parser) Error!Node.Idx {
@@ -1544,8 +1706,6 @@ pub fn parseTypeAnno(self: *Parser) Error!Node.Idx {
 }
 
 fn parseTypeAnnoWithBp(self: *Parser, min_bp: u8) Error!Node.Idx {
-    const start = self.pos;
-
     // Parse primary type
     var left = try self.parsePrimaryType();
 
@@ -1564,7 +1724,7 @@ fn parseTypeAnnoWithBp(self: *Parser, min_bp: u8) Error!Node.Idx {
         const right = try self.parseTypeAnnoWithBp(bp.right);
 
         const binop_tag = tokenToBinOpTag(op_tag) orelse {
-            return self.pushMalformed(.ty_anno_unexpected_token, start);
+            return self.pushMalformed(.ty_anno_unexpected_token, self.pos);
         };
 
         const binop_idx = try self.ast.appendBinOp(self.gpa, left, right);
@@ -1575,8 +1735,6 @@ fn parseTypeAnnoWithBp(self: *Parser, min_bp: u8) Error!Node.Idx {
 }
 
 fn parsePrimaryType(self: *Parser) Error!Node.Idx {
-    const start = self.pos;
-
     return switch (self.peek()) {
         .LowerIdent => {
             const ident = self.currentIdent();
@@ -1586,7 +1744,7 @@ fn parsePrimaryType(self: *Parser) Error!Node.Idx {
             if (ident) |id| {
                 return try self.ast.appendNode(self.gpa, pos, .lc, .{ .ident = id });
             } else {
-                return self.pushMalformed(.ty_anno_unexpected_token, start);
+                return self.pushMalformed(.ty_anno_unexpected_token, self.pos);
             }
         },
         .UpperIdent => {
@@ -1604,35 +1762,204 @@ fn parsePrimaryType(self: *Parser) Error!Node.Idx {
                     return type_node;
                 }
             } else {
-                return self.pushMalformed(.ty_anno_unexpected_token, start);
+                return self.pushMalformed(.ty_anno_unexpected_token, self.pos);
             }
         },
         .OpenCurly => return self.parseRecordType(),
         .OpenSquare => return self.parseListType(),
         .OpenRound => return self.parseTupleOrParenthesizedType(),
-        else => return self.pushMalformed(.ty_anno_unexpected_token, start),
+        else => return self.pushMalformed(.ty_anno_unexpected_token, self.pos),
     };
 }
 
 fn parseTypeApply(self: *Parser, type_ctor: Node.Idx) Error!Node.Idx {
-    _ = self;
-    _ = type_ctor;
-    @panic("TODO: parseTypeApply");
+    const start_pos = self.ast.start(type_ctor);
+    self.advance(); // consume '('
+    
+    const scratch_start = self.scratch_nodes.items.len;
+    defer {
+        self.scratch_nodes.items.len = scratch_start;
+    }
+    
+    // Add the type constructor as the first node
+    try self.scratch_nodes.append(self.gpa, type_ctor);
+    
+    // Parse type arguments
+    if (self.peek() != .CloseRound) {
+        while (true) {
+            const type_arg = try self.parseTypeAnno();
+            try self.scratch_nodes.append(self.gpa, type_arg);
+            
+            if (self.peek() == .Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+    }
+    
+    self.expect(.CloseRound) catch {
+        try self.pushDiagnostic(.expected_expr_apply_close_round, start_pos, self.currentPosition());
+    };
+    
+    const nodes = self.scratch_nodes.items[scratch_start..];
+    
+    // Should have at least the type constructor
+    if (nodes.len == 0) {
+        return try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = .ty_anno_unexpected_token });
+    }
+    
+    // Check if we have no arguments (only the type constructor)
+    if (nodes.len == 1) {
+        // No arguments - use apply_no_args which is more memory efficient
+        return try self.ast.appendNode(self.gpa, start_pos, .apply_no_args, .{ .block_nodes = @enumFromInt(@intFromEnum(type_ctor)) });
+    }
+    
+    const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
+    return try self.ast.appendNode(self.gpa, start_pos, .apply_uc, .{ .block_nodes = nodes_idx });
 }
 
 fn parseRecordType(self: *Parser) Error!Node.Idx {
-    _ = self;
-    @panic("TODO: parseRecordType");
+    const start_pos = self.currentPosition();
+    self.advance(); // consume {
+
+    // Check for empty record type
+    if (self.peek() == .CloseCurly) {
+        self.advance();
+        return try self.ast.appendNode(self.gpa, start_pos, .empty_record, .{ .src_bytes_end = self.currentPosition() });
+    }
+
+    const scratch_start = self.scratch_nodes.items.len;
+    defer {
+        self.scratch_nodes.items.len = scratch_start;
+    }
+
+    // Parse record fields
+    while (true) {
+        // Parse field name (lowercase identifier)
+        if (self.peek() != .LowerIdent) {
+            try self.pushDiagnostic(.expected_type_field_name, start_pos, self.currentPosition());
+            return self.pushMalformed(.ty_anno_unexpected_token, self.pos);
+        }
+
+        const field_name = self.currentIdent();
+        const field_pos = self.currentPosition();
+        self.advance();
+
+        const field_node = if (field_name) |name|
+            try self.ast.appendNode(self.gpa, field_pos, .lc, .{ .ident = name })
+        else
+            try self.ast.appendNode(self.gpa, field_pos, .malformed, .{ .malformed = .ty_anno_unexpected_token });
+
+        try self.scratch_nodes.append(self.gpa, field_node);
+
+        // Expect colon
+        self.expect(.OpColon) catch {
+            try self.pushDiagnostic(.expected_colon_after_type_field_name, start_pos, self.currentPosition());
+        };
+
+        // Parse field type
+        const field_type = try self.parseTypeAnno();
+        try self.scratch_nodes.append(self.gpa, field_type);
+
+        // Check for comma or end
+        if (self.peek() == .Comma) {
+            self.advance();
+            // Allow trailing comma
+            if (self.peek() == .CloseCurly) {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    self.expect(.CloseCurly) catch {
+        try self.pushDiagnostic(.expected_ty_close_curly_or_comma, start_pos, self.currentPosition());
+    };
+
+    const fields = self.scratch_nodes.items[scratch_start..];
+    if (fields.len == 0) {
+        return try self.ast.appendNode(self.gpa, start_pos, .empty_record, .{ .src_bytes_end = self.currentPosition() });
+    }
+
+    const fields_idx = try self.ast.appendNodeSlice(self.gpa, fields);
+    return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .block_nodes = fields_idx });
 }
 
 fn parseListType(self: *Parser) Error!Node.Idx {
-    _ = self;
-    @panic("TODO: parseListType");
+    const start_pos = self.currentPosition();
+    self.advance(); // consume [
+
+    // Check for empty list type (shouldn't happen in type context, but handle it)
+    if (self.peek() == .CloseSquare) {
+        self.advance();
+        return try self.ast.appendNode(self.gpa, start_pos, .empty_list, .{ .src_bytes_end = self.currentPosition() });
+    }
+
+    // Parse the element type
+    const elem_type = try self.parseTypeAnno();
+
+    self.expect(.CloseSquare) catch {
+        try self.pushDiagnostic(.expected_ty_close_square_or_comma, start_pos, self.currentPosition());
+    };
+
+    // List types are stored as: [elem_type]
+    const types_idx = try self.ast.appendNodeSlice(self.gpa, &[_]Node.Idx{elem_type});
+    return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .block_nodes = types_idx });
 }
 
 fn parseTupleOrParenthesizedType(self: *Parser) Error!Node.Idx {
-    _ = self;
-    @panic("TODO: parseTupleOrParenthesizedType");
+    const start_pos = self.currentPosition();
+    self.advance(); // consume (
+
+    const scratch_start = self.scratch_nodes.items.len;
+    defer {
+        self.scratch_nodes.items.len = scratch_start;
+    }
+
+    // Check for empty tuple
+    if (self.peek() == .CloseRound) {
+        self.advance();
+        // Empty tuples are not allowed in type annotations
+        try self.pushDiagnostic(.ty_anno_unexpected_token, start_pos, self.currentPosition());
+        return try self.ast.appendNode(self.gpa, start_pos, .empty_tuple, .{ .src_bytes_end = self.currentPosition() });
+    }
+
+    // Parse first type
+    const first_type = try self.parseTypeAnno();
+    try self.scratch_nodes.append(self.gpa, first_type);
+
+    // Check if it's a tuple or parenthesized type
+    if (self.peek() == .Comma) {
+        // It's a tuple type
+        while (self.peek() == .Comma) {
+            self.advance();
+            
+            // Check for trailing comma
+            if (self.peek() == .CloseRound) {
+                break;
+            }
+            
+            const elem_type = try self.parseTypeAnno();
+            try self.scratch_nodes.append(self.gpa, elem_type);
+        }
+
+        self.expect(.CloseRound) catch {
+            try self.pushDiagnostic(.expected_ty_anno_close_round, start_pos, self.currentPosition());
+        };
+
+        const types = self.scratch_nodes.items[scratch_start..];
+        const types_idx = try self.ast.appendNodeSlice(self.gpa, types);
+        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .block_nodes = types_idx });
+    } else {
+        // It's a parenthesized type - just return the inner type
+        self.expect(.CloseRound) catch {
+            try self.pushDiagnostic(.expected_ty_anno_close_round, start_pos, self.currentPosition());
+        };
+        
+        return first_type;
+    }
 }
 
 // Operator precedence

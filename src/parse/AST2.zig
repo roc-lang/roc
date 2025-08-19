@@ -84,6 +84,9 @@ pub fn appendNode(self: *Ast, allocator: Allocator, start_pos: Position, node_ta
 
 /// Append a slice of nodes and return an index to access them later
 pub fn appendNodeSlice(self: *Ast, allocator: Allocator, nodes: []const Node.Idx) Allocator.Error!NodeSlices.Idx {
+    if (nodes.len == 0) {
+        std.debug.panic("appendNodeSlice called with empty slice! This should never happen.\n", .{});
+    }
     return try self.node_slices.append(allocator, nodes);
 }
 
@@ -112,25 +115,29 @@ pub const NodeSlices = struct {
     /// of these to a slice of Node.Idx values, and that doesn't work if these are 8B
     /// (because of the untagged union feature) whereas the Node.Idx values are 4B.
     pub const Entry = extern union {
-        node_len: u32, // The number of Node.Idx values immediately following this. They will all be .node_idx entries.
-        node_idx: Node.Idx, // An individual Node.Idx in a slice. (The slice will begin with a .node_len entry.)
+        node_idx: Node.Idx, // An individual Node.Idx in a slice. The last one will be negative to mark the end.
         binop_lhs: Node.Idx, // This is a BinOp's lhs node, and its rhs will be stored immediately after this entry.
         binop_rhs: Node.Idx, // This is a BinOp's rhs node, and its lhs will be stored immediately before this entry.
     };
 
     pub fn append(self: *NodeSlices, allocator: Allocator, node_slice: []const Node.Idx) Allocator.Error!NodeSlices.Idx {
+        // NodeSlices must never be empty
+        std.debug.assert(node_slice.len > 0);
+
         const idx = @as(NodeSlices.Idx, @enumFromInt(self.entries.items.items.len));
 
-        // Reserve capacity for length + all nodes
-        try self.entries.items.ensureUnusedCapacity(allocator, 1 + node_slice.len);
+        // Reserve capacity for all nodes (no length stored anymore)
+        try self.entries.items.ensureUnusedCapacity(allocator, node_slice.len);
 
-        // Append the length
-        self.entries.items.appendAssumeCapacity(.{ .node_len = @as(u32, @intCast(node_slice.len)) });
-
-        // Append all the node indices
-        for (node_slice) |node| {
+        // Append all nodes except the last one
+        for (node_slice[0 .. node_slice.len - 1]) |node| {
             self.entries.items.appendAssumeCapacity(.{ .node_idx = node });
         }
+
+        // Append the last node as negative to mark the end
+        const last_node = node_slice[node_slice.len - 1];
+        const negated_last = @as(Node.Idx, @enumFromInt(-@intFromEnum(last_node)));
+        self.entries.items.appendAssumeCapacity(.{ .node_idx = negated_last });
 
         return idx;
     }
@@ -147,14 +154,54 @@ pub const NodeSlices = struct {
         return idx;
     }
 
-    pub fn slice(self: *const NodeSlices, idx: NodeSlices.Idx) []Node.Idx {
-        const slice_len = @as(usize, @intCast(self.entries.items.items[idx.asUsize()].node_len));
-        const slice_start = idx.asUsize() + 1;
+    pub const Iterator = struct {
+        entries: []const Entry,
+        index: usize,
+        done: bool,
 
-        // The entries after the length are all .node_idx, so it's safe to cast them to Node.Idx.
-        const entries_ptr = self.entries.items.items.ptr + slice_start;
-        const nodes_ptr = @as([*]Node.Idx, @ptrCast(entries_ptr));
-        return nodes_ptr[0..slice_len];
+        pub fn next(self: *Iterator) ?Node.Idx {
+            if (self.done) return null;
+            
+            // Bounds check
+            if (self.index >= self.entries.len) {
+                self.done = true;
+                return null;
+            }
+
+            const node_idx = self.entries[self.index].node_idx;
+            const node_val = @intFromEnum(node_idx);
+
+            self.index += 1;
+
+            // If the value is negative, this is the last node
+            if (node_val < 0) {
+                self.done = true;
+                // Return the negated (positive) value
+                return @as(Node.Idx, @enumFromInt(-node_val));
+            }
+
+            return node_idx;
+        }
+    };
+
+    pub fn nodes(self: *const NodeSlices, idx: NodeSlices.Idx) Iterator {
+        // No length stored anymore - we start reading nodes immediately
+        const slice_start = idx.asUsize();
+        
+        // Special case: if idx is 0 and we have no entries, this is an empty list sentinel
+        if (slice_start == 0 and self.entries.items.items.len == 0) {
+            return .{
+                .entries = self.entries.items.items,
+                .index = 0,
+                .done = true, // Mark as done immediately for empty list
+            };
+        }
+
+        return .{
+            .entries = self.entries.items.items,
+            .index = slice_start,
+            .done = false,
+        };
     }
 
     pub fn binOp(self: *const NodeSlices, idx: NodeSlices.Idx) Node.BinOp {
@@ -170,37 +217,79 @@ pub const NodeSlices = struct {
     }
 };
 
-/// Returns a slice of all the nodes in a block.
+/// Returns an iterator over all the nodes in a block.
 /// Panics in debug builds if the given Node.Idx does not refer to a .block node.
-pub fn nodesInBlock(self: *const Ast, idx: Node.Idx) []Node.Idx {
+pub fn nodesInBlock(self: *const Ast, idx: Node.Idx) NodeSlices.Iterator {
     std.debug.assert(self.tag(idx) == .block);
 
-    return self.node_slices.slice(self.payload(idx).block_nodes);
+    return self.node_slices.nodes(self.payload(idx).block_nodes);
 }
 
-/// Returns a slice of all the nodes in a string interpolation.
+/// Returns an iterator over all the nodes in a string interpolation.
 /// Panics in debug builds if the given Node.Idx does not refer to a .str_interpolation node.
-pub fn nodesInInterpolation(self: *const Ast, idx: Node.Idx) []Node.Idx {
+pub fn nodesInInterpolation(self: *const Ast, idx: Node.Idx) NodeSlices.Iterator {
     std.debug.assert(self.tag(idx) == .str_interpolation);
 
-    return self.node_slices.slice(self.payload(idx).str_interpolated_nodes);
+    return self.node_slices.nodes(self.payload(idx).str_interpolated_nodes);
 }
 
 /// A lambda expression, e.g. `|a, b| c`
 pub const Lambda = struct {
-    args: []Node.Idx,
     body: Node.Idx,
+    args_idx: NodeSlices.Idx, // Index to access args via iterator
+};
+
+/// Iterator for lambda args
+pub const LambdaArgsIterator = struct {
+    iter: NodeSlices.Iterator,
+    skipped_body: bool,
+    
+    pub fn next(self: *LambdaArgsIterator) ?Node.Idx {
+        if (!self.skipped_body) {
+            _ = self.iter.next(); // Skip the body
+            self.skipped_body = true;
+        }
+        return self.iter.next();
+    }
 };
 
 /// Panics in debug builds if the given Node.Idx does not refer to a .lambda node.
 pub fn lambda(self: *const Ast, idx: Node.Idx) Lambda {
     std.debug.assert(self.tag(idx) == .lambda);
 
-    const body_then_args = self.node_slices.slice(self.payload(idx).body_then_args);
+    const body_then_args_idx = self.payload(idx).body_then_args;
+    var iter = self.node_slices.nodes(body_then_args_idx);
+    
+    // First node is the body
+    const body = iter.next() orelse unreachable; // Lambda must have at least a body
+    
+    return Lambda{
+        .body = body,
+        .args_idx = body_then_args_idx,
+    };
+}
 
-    return .{
-        .body = body_then_args[0],
-        .args = body_then_args[1..],
+/// Returns the body node for a lambda with no arguments
+pub fn lambdaNoArgsBody(self: *const Ast, idx: Node.Idx) Node.Idx {
+    std.debug.assert(self.tag(idx) == .lambda_no_args);
+    // For lambda_no_args, we store the body node index directly as a u32 in block_nodes
+    const body_idx = @intFromEnum(self.payload(idx).block_nodes);
+    return @enumFromInt(body_idx);
+}
+
+/// Returns the function node for an apply with no arguments
+pub fn applyNoArgsFunc(self: *const Ast, idx: Node.Idx) Node.Idx {
+    std.debug.assert(self.tag(idx) == .apply_no_args);
+    // For apply_no_args, we store the function node index directly as a u32 in block_nodes
+    const func_idx = @intFromEnum(self.payload(idx).block_nodes);
+    return @enumFromInt(func_idx);
+}
+
+/// Get an iterator for lambda args
+pub fn lambdaArgs(self: *const Ast, lambda_val: Lambda) LambdaArgsIterator {
+    return LambdaArgsIterator{
+        .iter = self.node_slices.nodes(lambda_val.args_idx),
+        .skipped_body = false,
     };
 }
 
@@ -218,10 +307,18 @@ pub fn lambdaArgsRegion(self: *const Ast, idx: Node.Idx, raw_src: []u8, ident_st
     const region_start = self.start(idx);
 
     // The closing `|` delimiter is the next token after the end of the last arg node.
-    const args = self.lambda(idx).args;
+    const lambda_val = self.lambda(idx);
+    var args_iter = self.lambdaArgs(lambda_val);
+    
+    // Find the last arg by iterating through all args
+    var last_arg: ?Node.Idx = null;
+    while (args_iter.next()) |arg| {
+        last_arg = arg;
+    }
+    
     const last_arg_end =
-        if (args.len > 0)
-            self.region(args[args.len - 1], raw_src, ident_store).end.offset
+        if (last_arg) |arg|
+            self.region(arg, raw_src, ident_store).end.offset
         else
             region_start.offset; // If it had no args, e.g. `||`, start right after the opening `|`
     const after_last_arg = last_arg_end + 1;
@@ -281,6 +378,9 @@ pub fn region(
         .binop_double_equals,
         .binop_not_equals,
         .binop_colon,
+        .binop_colon_equals,
+        .binop_dot,
+        .binop_as,
         .binop_plus,
         .binop_minus,
         .binop_star,
@@ -305,7 +405,7 @@ pub fn region(
                 .end = self.region(binop.rhs, raw_src, ident_store).end,
             };
         },
-        .uc, .lc => {
+        .uc, .lc, .lc_dot_ucs, .uc_dot_ucs => {
             return self.identRegion(idx, ident_store);
         },
         .dot_lc, .not_lc, .neg_lc => {
@@ -334,7 +434,15 @@ pub fn region(
             };
         },
         .dot_num => {
-            @panic("TODO");
+            // .dot_num is for tuple accessors like .0, .1, etc.
+            // The payload likely contains the number
+            const region_start = self.start(idx);
+            // Estimate: dot + 1-2 digits typically
+            // Without knowing the exact number, assume 2 chars (.0 to .9 are most common)
+            return .{
+                .start = region_start,
+                .end = Position{ .offset = region_start.offset + 2 },
+            };
         },
         .underscore => {
             // Underscore is just a single character
@@ -344,14 +452,46 @@ pub fn region(
                 .end = Position{ .offset = region_start.offset + 1 },
             };
         },
+        .apply_lc, .apply_uc, .apply_anon => {
+            // Function application: func(args...)
+            // The payload should contain nodes for func and args
+            const nodes_idx = self.payload(idx).block_nodes;
+            var iter = self.node_slices.nodes(nodes_idx);
+            
+            // Get the first node (the function)
+            const first_node = iter.next() orelse {
+                // Empty apply? Use just the position
+                return .{
+                    .start = self.start(idx),
+                    .end = self.start(idx),
+                };
+            };
+            
+            // Find the last node (last argument or the function if no args)
+            var last_node = first_node;
+            while (iter.next()) |node| {
+                last_node = node;
+            }
+            
+            // The region spans from the function to the closing paren after the last arg
+            const last_region = self.region(last_node, raw_src, ident_store);
+            // Add 1 for the closing paren
+            return .{
+                .start = self.region(first_node, raw_src, ident_store).start,
+                .end = Position{ .offset = last_region.end.offset + 1 },
+            };
+        },
         .import => {
             // Import statement spans from the 'import' keyword to the end of the imported items
             const region_start = self.start(idx);
-            const imported_nodes = self.node_slices.slice(self.payload(idx).import_nodes);
+            var iter = self.node_slices.nodes(self.payload(idx).import_nodes);
+            var last_node: ?Node.Idx = null;
+            while (iter.next()) |node| {
+                last_node = node;
+            }
 
-            if (imported_nodes.len > 0) {
-                const last_node = imported_nodes[imported_nodes.len - 1];
-                const last_node_region = self.region(last_node, raw_src, ident_store);
+            if (last_node) |last_node_idx| {
+                const last_node_region = self.region(last_node_idx, raw_src, ident_store);
                 return .{
                     .start = region_start,
                     .end = last_node_region.end,
@@ -384,8 +524,15 @@ pub fn region(
             // use its ending region.
             // However, if it's *not* a string literal - e.g. the interpolation is `"abc${def}"` - then
             // we need to add to get the close quote that must be right after the closing `}` delimiter.
-            const nodes = self.nodesInInterpolation(idx);
-            const last_node_idx = nodes[nodes.len - 1];
+            var nodes_iter = self.nodesInInterpolation(idx);
+            var last_node_idx: Node.Idx = undefined;
+            var has_nodes = false;
+            while (nodes_iter.next()) |node| {
+                last_node_idx = node;
+                has_nodes = true;
+            }
+            // String interpolations should always have at least one node
+            std.debug.assert(has_nodes);
             const last_node_tag = self.tag(last_node_idx);
             var region_end = self.region(last_node_idx, raw_src, ident_store).end;
 
@@ -413,17 +560,26 @@ pub fn region(
         // tuple_literal, // e.g. `(foo, bar)` - we know it's a tuple literal because of the commas
         // record_literal, // e.g. `{ foo, bar }` or `{ foo, }` - only records have commas; `{ foo }` is a block
 
-        .apply => {
-            // e.g. `foo(bar, baz)` or `Foo(bar, baz)` or `(foo(bar, baz))(blah, etc)`
-            @panic("TODO");
-        },
+        // TODO: .apply tag seems to be missing from Tag enum
+        // .apply => {
+        //     // e.g. `foo(bar, baz)` or `Foo(bar, baz)` or `(foo(bar, baz))(blah, etc)`
+        //     @panic("TODO");
+        // },
         .block => {
             // Opening curly brace
             const region_start = self.start(idx);
 
             // The closing curly brace is the next token after the end of the last node in the block
-            const nodes = self.nodesInBlock(idx);
-            const last_node_region = self.region(nodes[nodes.len - 1], raw_src, ident_store);
+            var nodes_iter = self.nodesInBlock(idx);
+            var last_node_idx: Node.Idx = undefined;
+            var has_nodes = false;
+            while (nodes_iter.next()) |node| {
+                last_node_idx = node;
+                has_nodes = true;
+            }
+            // Empty blocks should have been parsed as .empty_record instead
+            std.debug.assert(has_nodes);
+            const last_node_region = self.region(last_node_idx, raw_src, ident_store);
             const after_last_node = @as(usize, @intCast(last_node_region.end.offset)) + 1;
             const region_end = after_last_node + nextTokenIndex(raw_src[after_last_node..]);
 
@@ -432,7 +588,7 @@ pub fn region(
                 .end = Position{ .offset = @as(u32, @intCast(region_end)) },
             };
         },
-        .empty_record, .empty_list => {
+        .empty_record, .empty_list, .empty_tuple => {
             return .{
                 .start = self.start(idx),
                 .end = self.payload(idx).src_bytes_end,
@@ -445,10 +601,15 @@ pub fn region(
             // The closing `|` is the next token after the end of the last arg node.
             // (We provide the region of the `| ... |` rather than the entire lambda expression,
             // because that's trivial: span from the lambda's start region to end of its body region.)
-            const args = self.lambda(idx).args;
+            const lambda_val = self.lambda(idx);
+            var args_iter = self.lambdaArgs(lambda_val);
+            var last_arg: ?Node.Idx = null;
+            while (args_iter.next()) |arg| {
+                last_arg = arg;
+            }
             const last_arg_end =
-                if (args.len > 0)
-                    self.region(args[args.len - 1], raw_src, ident_store).end.offset
+                if (last_arg) |arg|
+                    self.region(arg, raw_src, ident_store).end.offset
                 else
                     region_start.offset; // If it had no args, e.g. `||`, start right after the opening `|`
             const after_last_arg = @as(usize, @intCast(last_arg_end)) + 1;
@@ -457,6 +618,26 @@ pub fn region(
             return .{
                 .start = region_start,
                 .end = Position{ .offset = @as(u32, @intCast(region_end)) },
+            };
+        },
+        .lambda_no_args => {
+            // Just `||` - no args
+            const region_start = self.start(idx);
+            const region_end = region_start.offset + 2; // Two pipes
+            return .{
+                .start = region_start,
+                .end = Position{ .offset = region_end },
+            };
+        },
+        .apply_no_args => {
+            // Function application with no args: func()
+            // The function node is stored directly in block_nodes
+            const func_node = self.applyNoArgsFunc(idx);
+            const func_region = self.region(func_node, raw_src, ident_store);
+            // Add 2 for the "()" after the function
+            return .{
+                .start = func_region.start,
+                .end = Position{ .offset = func_region.end.offset + 2 },
             };
         },
         .num_literal_i32, .int_literal_i32, .frac_literal_small, .str_literal_small, .num_literal_big, .int_literal_big, .frac_literal_big, .str_literal_big, .list_literal, .tuple_literal, .record_literal, .match, .if_else, .if_without_else, .unary_not, .unary_neg, .unary_double_dot, .ret, .for_loop, .while_loop, .crash, .malformed => {
@@ -506,7 +687,11 @@ pub const Node = struct {
     start: Position, // u32 UTF-8 bytes from start of source bytes where this begins
     payload: Node.Payload, // u32 union of extra information that varies based on tag
 
-    pub const Idx = enum(u32) {
+    /// Index to a node in the AST.
+    /// Although this is an i32, node indices are never negative in practice.
+    /// We use i32 instead of u32 so we can use the sign bit as a sentinel
+    /// terminator when storing node indices in collections like NodeSlices.
+    pub const Idx = enum(i32) {
         _,
 
         fn asUsize(self: Idx) usize {
@@ -525,6 +710,8 @@ pub const Node = struct {
         binop_double_equals, //    ==
         binop_not_equals, //       !=
         binop_colon, //            :
+        binop_colon_equals, //     :=
+        binop_dot, //              .
         binop_plus, //             +
         binop_minus, //            -
         binop_star, //             *
@@ -539,6 +726,7 @@ pub const Node = struct {
         binop_thin_arrow, //       ->
         binop_and, //              and
         binop_or, //               or
+        binop_as, //               as
         binop_pipe, //             | for pattern alternatives (maybe we should replace this with `or`, not sure)
 
         // Identifiers, possibly with modifiers
@@ -549,6 +737,8 @@ pub const Node = struct {
         not_lc, // bang followed by lowercase identifier (e.g. `!foo`)
         dot_lc, // dot followed by lowercase identifier (e.g. `.foo`)
         double_dot_lc, // two dots followed by lowercase identifier (e.g. `..others`)
+        uc_dot_ucs, // 2+ uppercase idents separated by dots (e.g. `Module.Type` or `Module.NominalType.TagName`)
+        lc_dot_ucs, // like .uc_dot_ucs except first one is lc (e.g. `pkg.Module` or `pkg.Module.Nominal.Tag`)
         dot_num, // dot followed by number (e.g. `.0`) - this is a tuple accessor
         underscore, // underscore pattern (e.g. `_`) - no payload needed
         import, // import statement (e.g. `import foo`) - payload stores imported nodes
@@ -570,17 +760,22 @@ pub const Node = struct {
         record_literal, // e.g. `{ foo, bar }` or `{ foo, }` - only records have commas; `{ foo }` is a block
 
         // Other
-        apply, // e.g. `foo(bar, baz)` or `Foo(bar, baz)` or `(foo(bar, baz))(blah, etc)`
+        apply_lc, // e.g. `foo(bar, baz)`
+        apply_uc, // e.g. `Foo(bar, baz)` or `(foo(bar, baz))(blah, etc)`
+        apply_anon, // e.g. `(foo(bar, baz))(blah, etc)`
+        apply_no_args, // e.g. `foo()` - no arguments, just stores the function node
         block, // Block with curly braces, e.g. `{ expr1, expr2, ... }` - could end up being a record (expr or destructure)
         empty_record, // e.g. `{}` - no data inside; we just store region and that's it.
         empty_list, // e.g. `[]` - no data inside; we just store region and that's it.
+        empty_tuple, // e.g. `()` - no data inside; we just store region and that's it. Only used for 0-arg function type sigs.
         lambda, // e.g. `|x, y| x + y` - payload stores a slice of body_then_args
+        lambda_no_args, // e.g. `|| x + y` - payload stores only the body node
         match, // e.g. `match cond { Ok(a) => a Err(b) => b }` - needs to store cond as well as branches
         if_else, // e.g. `if cond then_branch else_branch` - needs to store cond as well as branches. if-exprs must have else.
         if_without_else, // e.g. `if cond do_something!()` - stores exactly 1 cond node followed by exactly 1 body node
         unary_not, // e.g. `!(foo())` - note that `!foo` is special-cased to .not_lc instead
         unary_neg, // e.g. `-(foo())` - note that `-foo` is special-cased to .neg_lc instead
-        unary_double_dot, // e.g. `..others`
+        unary_double_dot, // e.g. `..(foo())` - note that `..foo` is special-cased to .double_dot_lc instead)
         ret, // e.g. `return blah` - stores the expr to return in Node.Payload
         for_loop, // e.g. `for x in y { ... }` - payload stores 3+ nodes: `for node1 in node2 { node3+... }`
         while_loop, // e.g. `while x { ... }` - payload stores 2+ nodes: `while node1 { node2+... }`
@@ -594,6 +789,8 @@ pub const Node = struct {
                 .binop_double_equals,
                 .binop_not_equals,
                 .binop_colon,
+                .binop_colon_equals,
+                .binop_dot,
                 .binop_plus,
                 .binop_minus,
                 .binop_star,
@@ -608,12 +805,19 @@ pub const Node = struct {
                 .binop_thin_arrow,
                 .binop_and,
                 .binop_or,
+                .binop_as,
                 .binop_pipe,
                 => true,
 
                 .uc,
                 .lc,
+                .lc_dot_ucs,
+                .uc_dot_ucs,
                 .var_lc,
+                .apply_lc,
+                .apply_uc,
+                .apply_anon,
+                .apply_no_args,
                 .neg_lc,
                 .not_lc,
                 .dot_lc,
@@ -633,11 +837,12 @@ pub const Node = struct {
                 .list_literal,
                 .tuple_literal,
                 .record_literal,
-                .apply,
                 .block,
                 .empty_record,
                 .empty_list,
+                .empty_tuple,
                 .lambda,
+                .lambda_no_args,
                 .match,
                 .if_else,
                 .if_without_else,
@@ -860,4 +1065,45 @@ pub fn start(self: *const Ast, idx: Node.Idx) Position {
 pub fn payload(self: *const Ast, idx: Node.Idx) Node.Payload {
     const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
     return self.nodes.fieldItem(.payload, multi_list_idx);
+}
+
+test "NodeSlices with negative sentinel" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var node_slices = NodeSlices{ .entries = collections.SafeList(NodeSlices.Entry){} };
+    defer node_slices.entries.items.deinit(allocator);
+
+    // Test single node
+    const single = [_]Node.Idx{@as(Node.Idx, @enumFromInt(42))};
+    const idx1 = try node_slices.append(allocator, &single);
+
+    var iter1 = node_slices.nodes(idx1);
+    try testing.expectEqual(@as(Node.Idx, @enumFromInt(42)), iter1.next().?);
+    try testing.expectEqual(@as(?Node.Idx, null), iter1.next());
+
+    // Test multiple nodes
+    const multiple = [_]Node.Idx{
+        @as(Node.Idx, @enumFromInt(10)),
+        @as(Node.Idx, @enumFromInt(20)),
+        @as(Node.Idx, @enumFromInt(30)),
+    };
+    const idx2 = try node_slices.append(allocator, &multiple);
+
+    var iter2 = node_slices.nodes(idx2);
+    try testing.expectEqual(@as(Node.Idx, @enumFromInt(10)), iter2.next().?);
+    try testing.expectEqual(@as(Node.Idx, @enumFromInt(20)), iter2.next().?);
+    try testing.expectEqual(@as(Node.Idx, @enumFromInt(30)), iter2.next().?);
+    try testing.expectEqual(@as(?Node.Idx, null), iter2.next());
+
+    // Verify the actual storage format
+    const entries = node_slices.entries.items.items;
+
+    // First slice (single node, stored as negative)
+    try testing.expectEqual(@as(i32, -42), @intFromEnum(entries[0].node_idx));
+
+    // Second slice (multiple nodes, last one negative)
+    try testing.expectEqual(@as(i32, 10), @intFromEnum(entries[1].node_idx));
+    try testing.expectEqual(@as(i32, 20), @intFromEnum(entries[2].node_idx));
+    try testing.expectEqual(@as(i32, -30), @intFromEnum(entries[3].node_idx));
 }

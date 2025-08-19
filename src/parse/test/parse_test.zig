@@ -463,8 +463,8 @@ test "Parser2: simple assignment binop uses correct nodes" {
 
     // The binop should have lhs=1 (x from assignment) and rhs=2 (42)
     // NOT lhs=0 (x from exposes) and rhs=1 (x from assignment)
-    try testing.expectEqual(@as(u32, 1), @intFromEnum(binop.lhs));
-    try testing.expectEqual(@as(u32, 2), @intFromEnum(binop.rhs));
+    try testing.expectEqual(@as(i32, 1), @intFromEnum(binop.lhs));
+    try testing.expectEqual(@as(i32, 2), @intFromEnum(binop.rhs));
 
     // Verify the nodes are correct
     try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(binop.lhs));
@@ -487,10 +487,11 @@ test "Parser2: lambda expression parsing" {
     const lambda = ast.lambda(lambda_idx);
 
     // Should have one argument
-    try testing.expectEqual(@as(usize, 1), lambda.args.len);
+    var args_iter = ast.lambdaArgs(lambda);
+    const arg = args_iter.next() orelse unreachable; // Should have one arg
+    try testing.expectEqual(@as(?AST2.Node.Idx, null), args_iter.next()); // Should be no more args
 
     // The argument should be 'x'
-    const arg = lambda.args[0];
     try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(arg));
 
     // The body should be a binop_plus
