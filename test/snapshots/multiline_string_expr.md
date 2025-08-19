@@ -30,7 +30,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-string @1.1-2.23
-	(e-literal @1.4-2.23 (string "This is a string\nWith multiple lines")))
+	(e-literal @1.4-1.20 (string "This is a string"))
+	(e-literal @2.1-2.4 (string "\n"))
+	(e-literal @2.4-2.23 (string "With multiple lines")))
 ~~~
 # TYPES
 ~~~clojure

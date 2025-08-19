@@ -3382,46 +3382,32 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Alloc
     return try self.env.store.exprSpanFrom(start);
 }
 
-/// Extract string segments from parsed string parts, combining consecutive string parts with newlines
+/// Extract string segments from parsed multiline string parts, adding newlines between consecutive string parts
 fn extractMultilineStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Allocator.Error!Expr.Span {
     const start = self.env.store.scratchExprTop();
-    var combined_text: []const u8 = "";
-    var combined_region: ?AST.TokenizedRegion = null;
+    var last_string_part_end: ?Token.Idx = null;
 
     for (parts) |part| {
         const part_node = self.parse_ir.store.getExpr(part);
         switch (part_node) {
             .string_part => |sp| {
-                // get the raw text of the string part
-                const part_text = self.parse_ir.resolve(sp.token);
-                if (combined_text.len == 0) {
-                    combined_text = part_text;
-                    combined_region = part_node.to_tokenized_region();
-                } else {
-                    // TODO: should this be \n or \\n or even different depending on file encoding
-                    combined_text = try std.fmt.allocPrint(self.env.gpa, "{s}\\n{s}", .{ combined_text, part_text });
-                    combined_region = combined_region.?.spanAcross(part_node.to_tokenized_region());
+                // Add newline between consecutive string parts
+                if (last_string_part_end != null) {
+                    try self.addStringLiteralToScratch("\\n", .{ .start = last_string_part_end.?, .end = part_node.to_tokenized_region().start });
                 }
+
+                // Get and process the raw text of the string part
+                const part_text = self.parse_ir.resolve(sp.token);
+                if (part_text.len != 0) {
+                    try self.addStringLiteralToScratch(part_text, part_node.to_tokenized_region());
+                }
+                last_string_part_end = part_node.to_tokenized_region().end;
             },
             else => {
-                // First add any accumulated string parts
-                if (combined_region != null) {
-                    try self.addStringLiteralToScratch(combined_text, combined_region.?);
-
-                    // reset combined state
-                    combined_text = "";
-                    combined_region = null;
-                }
-
-                // Then handle the interpolation
+                last_string_part_end = null;
                 try self.addInterpolationToScratch(part, part_node);
             },
         }
-    }
-
-    // add any remaining combined string at the end
-    if (combined_text.len > 0) {
-        try self.addStringLiteralToScratch(combined_text, combined_region.?);
     }
 
     return try self.env.store.exprSpanFrom(start);

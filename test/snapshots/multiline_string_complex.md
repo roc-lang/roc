@@ -97,13 +97,19 @@ NO CHANGE
 	(d-let
 		(p-assign @8.1-8.7 (ident "value3"))
 		(e-string @8.10-10.14
-			(e-literal @8.13-10.5 (string "This is a string\nWith multiple lines\n"))
+			(e-literal @8.13-8.29 (string "This is a string"))
+			(e-literal @9.2-9.5 (string "\n"))
+			(e-literal @9.5-9.24 (string "With multiple lines"))
+			(e-literal @10.2-10.5 (string "\n"))
 			(e-lookup-local @10.7-10.13
 				(p-assign @3.1-3.7 (ident "value1")))))
 	(d-let
 		(p-assign @12.1-12.7 (ident "value4"))
 		(e-string @13.2-16.14
-			(e-literal @13.5-16.5 (string "This is a string\nWith multiple lines\n"))
+			(e-literal @13.5-13.21 (string "This is a string"))
+			(e-literal @15.2-15.5 (string "\n"))
+			(e-literal @15.5-15.24 (string "With multiple lines"))
+			(e-literal @16.2-16.5 (string "\n"))
 			(e-lookup-local @16.7-16.13
 				(p-assign @5.1-5.7 (ident "value2"))))))
 ~~~
