@@ -2305,6 +2305,7 @@ pub fn parseBranch(self: *Parser) Error!AST.MatchBranch.Idx {
     });
 }
 
+/// Parse a multiline string expression with optional interpolations
 pub fn parseMultiLineStringExpr(self: *Parser) Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
