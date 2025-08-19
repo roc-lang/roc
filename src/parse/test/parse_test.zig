@@ -497,3 +497,66 @@ test "Parser2: lambda expression parsing" {
     // The body should be a binop_plus
     try testing.expectEqual(AST2.Node.Tag.binop_plus, ast.tag(lambda.body));
 }
+
+test "Parser2: unary operator parsing" {
+    const allocator = testing.allocator;
+    
+    // Test unary not - verify it stores operand in block_nodes
+    {
+        const source = "!foo";
+        var ast = try parseTestExpr(allocator, source);
+        defer ast.deinit(allocator);
+        
+        // !foo is parsed as unary_not with foo as operand
+        const root_idx = @as(AST2.Node.Idx, @enumFromInt(ast.nodes.len() - 1));
+        try testing.expectEqual(AST2.Node.Tag.unary_not, ast.tag(root_idx));
+        
+        // Verify the operand is stored in block_nodes and we can iterate over it
+        const nodes_iter = ast.node_slices.nodes(ast.payload(root_idx).block_nodes);
+        var iter = nodes_iter;
+        const operand = iter.next() orelse unreachable; // Should have an operand
+        try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(operand)); // Should be 'foo'
+        try testing.expectEqual(@as(?AST2.Node.Idx, null), iter.next()); // Should be only one operand
+    }
+}
+
+test "Parser2: return and crash statements" {
+    const allocator = testing.allocator;
+    
+    // Test return statement
+    {
+        const source = "return 42";
+        var ast = try parseTestExpr(allocator, source);
+        defer ast.deinit(allocator);
+        
+        // Should be parsed as .ret with expression
+        const root_idx = @as(AST2.Node.Idx, @enumFromInt(ast.nodes.len() - 1));
+        try testing.expectEqual(AST2.Node.Tag.ret, ast.tag(root_idx));
+        
+        // Verify the expression is stored in block_nodes
+        const nodes_iter = ast.node_slices.nodes(ast.payload(root_idx).block_nodes);
+        var iter = nodes_iter;
+        const expr = iter.next() orelse unreachable; // Should have the expression
+        try testing.expectEqual(AST2.Node.Tag.num_literal_i32, ast.tag(expr)); // Should be '42'
+        try testing.expectEqual(@as(?AST2.Node.Idx, null), iter.next()); // Should be only one expression
+    }
+    
+    // Test crash statement
+    {
+        const source = "crash \"error message\"";
+        var ast = try parseTestExpr(allocator, source);
+        defer ast.deinit(allocator);
+        
+        // Should be parsed as .crash with expression
+        const root_idx = @as(AST2.Node.Idx, @enumFromInt(ast.nodes.len() - 1));
+        try testing.expectEqual(AST2.Node.Tag.crash, ast.tag(root_idx));
+        
+        // Verify the expression is stored in block_nodes
+        const nodes_iter = ast.node_slices.nodes(ast.payload(root_idx).block_nodes);
+        var iter = nodes_iter;
+        const expr = iter.next() orelse unreachable; // Should have the expression
+        // The string literal could be small or big depending on the content
+        try testing.expect(ast.tag(expr) == .str_literal_small or ast.tag(expr) == .str_literal_big);
+        try testing.expectEqual(@as(?AST2.Node.Idx, null), iter.next()); // Should be only one expression
+    }
+}

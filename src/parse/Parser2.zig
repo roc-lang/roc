@@ -1111,15 +1111,28 @@ fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
             const pos = self.currentPosition();
             self.advance();
 
-            _ = try self.parseExprWithBp(100); // High precedence for unary
-            return try self.ast.appendNode(self.gpa, pos, .unary_not, .{ .src_bytes_end = pos });
+            const operand = try self.parseExprWithBp(100); // High precedence for unary
+            const operand_slice = [_]Node.Idx{operand};
+            const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &operand_slice);
+            return try self.ast.appendNode(self.gpa, pos, .unary_not, .{ .block_nodes = nodes_idx });
         },
         .OpBinaryMinus, .OpUnaryMinus => {
             const pos = self.currentPosition();
             self.advance();
 
-            _ = try self.parseExprWithBp(100); // High precedence for unary
-            return try self.ast.appendNode(self.gpa, pos, .unary_neg, .{ .src_bytes_end = pos });
+            const operand = try self.parseExprWithBp(100); // High precedence for unary
+            const operand_slice = [_]Node.Idx{operand};
+            const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &operand_slice);
+            return try self.ast.appendNode(self.gpa, pos, .unary_neg, .{ .block_nodes = nodes_idx });
+        },
+        .DoubleDot => {
+            const pos = self.currentPosition();
+            self.advance();
+
+            const operand = try self.parseExprWithBp(100); // High precedence for unary
+            const operand_slice = [_]Node.Idx{operand};
+            const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &operand_slice);
+            return try self.ast.appendNode(self.gpa, pos, .unary_double_dot, .{ .block_nodes = nodes_idx });
         },
         else => return self.pushMalformed(.expr_unexpected_token, start),
     };
@@ -1692,18 +1705,22 @@ fn parseReturn(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
     self.advance(); // consume return
 
-    // Parse the expression to return - it will be stored as the preceding node
-    _ = try self.parseExpr();
-    return try self.ast.appendNode(self.gpa, start_pos, .ret, .{ .src_bytes_end = self.currentPosition() });
+    // Parse the expression to return
+    const expr = try self.parseExpr();
+    const expr_slice = [_]Node.Idx{expr};
+    const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &expr_slice);
+    return try self.ast.appendNode(self.gpa, start_pos, .ret, .{ .block_nodes = nodes_idx });
 }
 
 fn parseCrash(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
     self.advance(); // consume crash
 
-    // Parse the expression to crash with - it will be stored as the preceding node
-    _ = try self.parseExpr();
-    return try self.ast.appendNode(self.gpa, start_pos, .crash, .{ .src_bytes_end = self.currentPosition() });
+    // Parse the expression to crash with
+    const expr = try self.parseExpr();
+    const expr_slice = [_]Node.Idx{expr};
+    const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &expr_slice);
+    return try self.ast.appendNode(self.gpa, start_pos, .crash, .{ .block_nodes = nodes_idx });
 }
 
 /// Parse a type annotation

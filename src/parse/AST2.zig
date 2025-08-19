@@ -570,31 +570,20 @@ pub fn region(
             };
         },
         .block => {
-            // Opening curly brace
-            const region_start = self.start(idx);
-
-            // The closing curly brace is the next token after the end of the last node in the block
-            var nodes_iter = self.nodesInBlock(idx);
-            var last_node_idx: ?Node.Idx = null;
-            while (nodes_iter.next()) |node| {
-                last_node_idx = node;
-            }
-            
-            const region_end = if (last_node_idx) |last_node| blk: {
-                // Has nodes - find closing brace after last node
-                const last_node_region = self.region(last_node, raw_src, ident_store);
-                const after_last_node = @as(usize, @intCast(last_node_region.end.offset)) + 1;
-                break :blk after_last_node + nextTokenIndex(raw_src[after_last_node..]);
-            } else blk: {
-                // Empty block - find closing brace immediately after opening brace
-                const after_open = @as(usize, @intCast(region_start.offset)) + 1;
-                break :blk after_open + nextTokenIndex(raw_src[after_open..]);
-            };
-
-            return .{
-                .start = region_start,
-                .end = Position{ .offset = @as(u32, @intCast(region_end)) },
-            };
+            const nodes_iter = self.nodesInBlock(idx);
+            return self.containerRegion(idx, nodes_iter, tokenize.Token.DELIM_CLOSE_CURLY, raw_src, ident_store);
+        },
+        .list_literal => {
+            const nodes_iter = self.node_slices.nodes(self.payload(idx).block_nodes);
+            return self.containerRegion(idx, nodes_iter, tokenize.Token.DELIM_CLOSE_SQUARE, raw_src, ident_store);
+        },
+        .tuple_literal => {
+            const nodes_iter = self.node_slices.nodes(self.payload(idx).block_nodes);
+            return self.containerRegion(idx, nodes_iter, tokenize.Token.DELIM_CLOSE_ROUND, raw_src, ident_store);
+        },
+        .record_literal => {
+            const nodes_iter = self.node_slices.nodes(self.payload(idx).block_nodes);
+            return self.containerRegion(idx, nodes_iter, tokenize.Token.DELIM_CLOSE_CURLY, raw_src, ident_store);
         },
         .lambda => {
             // Opening `|`
@@ -631,7 +620,73 @@ pub fn region(
                 .end = Position{ .offset = region_end },
             };
         },
-        .num_literal_i32, .int_literal_i32, .frac_literal_small, .str_literal_small, .num_literal_big, .int_literal_big, .frac_literal_big, .str_literal_big, .list_literal, .tuple_literal, .record_literal, .match, .if_else, .if_without_else, .unary_not, .unary_neg, .unary_double_dot, .ret, .for_loop, .while_loop, .crash, .malformed => {
+        .unary_not => {
+            // `!` followed by expression - the payload should contain the operand node
+            // For now, assume the operand is stored in block_nodes as a single-element slice
+            const region_start = self.start(idx);
+            const nodes_iter = self.node_slices.nodes(self.payload(idx).block_nodes);
+            var iter = nodes_iter;
+            const operand = iter.next() orelse unreachable; // Should have the operand
+            const operand_region = self.region(operand, raw_src, ident_store);
+            
+            return .{
+                .start = region_start, // Start includes the `!`
+                .end = operand_region.end,
+            };
+        },
+        .unary_neg => {
+            // `-` followed by expression - the payload should contain the operand node
+            const region_start = self.start(idx);
+            const nodes_iter = self.node_slices.nodes(self.payload(idx).block_nodes);
+            var iter = nodes_iter;
+            const operand = iter.next() orelse unreachable; // Should have the operand
+            const operand_region = self.region(operand, raw_src, ident_store);
+            
+            return .{
+                .start = region_start, // Start includes the `-`
+                .end = operand_region.end,
+            };
+        },
+        .unary_double_dot => {
+            // `..` followed by expression - the payload should contain the operand node
+            const region_start = self.start(idx);
+            const nodes_iter = self.node_slices.nodes(self.payload(idx).block_nodes);
+            var iter = nodes_iter;
+            const operand = iter.next() orelse unreachable; // Should have the operand
+            const operand_region = self.region(operand, raw_src, ident_store);
+            
+            return .{
+                .start = region_start, // Start includes the `..`
+                .end = operand_region.end,
+            };
+        },
+        .ret => {
+            // `return` followed by expression
+            const region_start = self.start(idx);
+            const nodes_iter = self.node_slices.nodes(self.payload(idx).block_nodes);
+            var iter = nodes_iter;
+            const expr = iter.next() orelse unreachable; // Should have the expression to return
+            const expr_region = self.region(expr, raw_src, ident_store);
+            
+            return .{
+                .start = region_start, // Start at the 'return' keyword
+                .end = expr_region.end, // End at the end of the expression
+            };
+        },
+        .crash => {
+            // `crash` followed by expression
+            const region_start = self.start(idx);
+            const nodes_iter = self.node_slices.nodes(self.payload(idx).block_nodes);
+            var iter = nodes_iter;
+            const expr = iter.next() orelse unreachable; // Should have the expression to crash with
+            const expr_region = self.region(expr, raw_src, ident_store);
+            
+            return .{
+                .start = region_start, // Start at the 'crash' keyword
+                .end = expr_region.end, // End at the end of the expression
+            };
+        },
+        .num_literal_i32, .int_literal_i32, .frac_literal_small, .str_literal_small, .num_literal_big, .int_literal_big, .frac_literal_big, .str_literal_big, .match, .if_else, .if_without_else, .for_loop, .while_loop, .malformed => {
             @panic("TODO");
         },
     }
@@ -671,6 +726,52 @@ fn nextTokenIndex(bytes: []u8) usize {
     }
 
     return index;
+}
+
+/// Helper function to calculate region for containers with delimiters (blocks, lists, records, tuples)
+/// Takes the nodes iterator and expected closing delimiter character
+fn containerRegion(
+    self: *const Ast,
+    idx: Node.Idx,
+    nodes_iter: NodeSlices.Iterator,
+    closing_delimiter: u8,
+    raw_src: []u8,
+    ident_store: *const Ident.Store,
+) Region {
+    const region_start = self.start(idx);
+    
+    // Find the last node in the container
+    var iter = nodes_iter;
+    var last_node_idx: ?Node.Idx = null;
+    while (iter.next()) |node| {
+        last_node_idx = node;
+    }
+    
+    const closing_delim_offset = if (last_node_idx) |last_node| blk: {
+        // Has nodes - find closing delimiter after last node
+        const last_node_region = self.region(last_node, raw_src, ident_store);
+        const after_last_node = @as(usize, @intCast(last_node_region.end.offset)) + 1;
+        const next_token_offset = nextTokenIndex(raw_src[after_last_node..]);
+        const delim_offset = after_last_node + next_token_offset;
+        
+        // Verify we found the expected delimiter
+        std.debug.assert(raw_src[delim_offset] == closing_delimiter);
+        break :blk delim_offset;
+    } else blk: {
+        // Empty container - find closing delimiter immediately after opening delimiter
+        const after_open = @as(usize, @intCast(region_start.offset)) + 1;
+        const next_token_offset = nextTokenIndex(raw_src[after_open..]);
+        const delim_offset = after_open + next_token_offset;
+        
+        // Verify we found the expected delimiter
+        std.debug.assert(raw_src[delim_offset] == closing_delimiter);
+        break :blk delim_offset;
+    };
+    
+    return .{
+        .start = region_start,
+        .end = Position{ .offset = @as(u32, @intCast(closing_delim_offset)) },
+    };
 }
 
 pub const Node = struct {

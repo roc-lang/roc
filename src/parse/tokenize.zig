@@ -366,6 +366,14 @@ pub const Token = struct {
 
     // Keyword string constants
     pub const KW_VAR = "var";
+    
+    // Delimiter constants
+    pub const DELIM_OPEN_ROUND = '(';
+    pub const DELIM_CLOSE_ROUND = ')';
+    pub const DELIM_OPEN_SQUARE = '[';
+    pub const DELIM_CLOSE_SQUARE = ']';
+    pub const DELIM_OPEN_CURLY = '{';
+    pub const DELIM_CLOSE_CURLY = '}';
 
     /// Determines if a character is whitespace.
     /// In tokenize, whitespace includes space, tab, newline, carriage return.
@@ -1382,11 +1390,11 @@ pub const Tokenizer = struct {
                     }
                 },
 
-                '(' => {
+                Token.DELIM_OPEN_ROUND => {
                     self.cursor.pos += 1;
                     try self.pushTokenNormalHere(gpa, if (sp) .OpenRound else .NoSpaceOpenRound, start);
                 },
-                '[' => {
+                Token.DELIM_OPEN_SQUARE => {
                     self.cursor.pos += 1;
                     try self.pushTokenNormalHere(gpa, .OpenSquare, start);
                 },
@@ -1395,11 +1403,11 @@ pub const Tokenizer = struct {
                     try self.pushTokenNormalHere(gpa, .OpenCurly, start);
                 },
 
-                ')' => {
+                Token.DELIM_CLOSE_ROUND => {
                     self.cursor.pos += 1;
                     try self.pushTokenNormalHere(gpa, .CloseRound, start);
                 },
-                ']' => {
+                Token.DELIM_CLOSE_SQUARE => {
                     self.cursor.pos += 1;
                     try self.pushTokenNormalHere(gpa, .CloseSquare, start);
                 },
