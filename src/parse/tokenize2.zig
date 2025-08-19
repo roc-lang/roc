@@ -1101,7 +1101,7 @@ pub const TokenOutput = struct {
     extra_messages_dropped: usize,
 };
 
-const StringKind = enum {
+pub const StringKind = enum {
     single_line,
     multi_line,
 };
