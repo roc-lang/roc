@@ -44,6 +44,7 @@ pub const Parser = @This();
 gpa: std.mem.Allocator,
 token_iter: tokenize_iter.TokenIterator,
 lookahead: ?Token, // Single token lookahead - LL(1) parser, no more!
+last_position: Position, // Track last valid position for error reporting
 ast: *AST,
 byte_slices: *collections.ByteSlices, // Reference to tokenizer's ByteSlices
 scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
@@ -59,6 +60,7 @@ pub fn init(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []const u8, me
         .gpa = gpa,
         .token_iter = token_iter,
         .lookahead = null,
+        .last_position = Position{ .offset = 0 },
         .ast = ast,
         .byte_slices = byte_slices,
         .scratch_nodes = .{},
@@ -86,6 +88,10 @@ pub fn initFromTokens(tokens: TokenizedBuffer, gpa: std.mem.Allocator, ast: *AST
 fn fillLookahead(self: *Parser) std.mem.Allocator.Error!void {
     if (self.lookahead == null) {
         self.lookahead = try self.token_iter.next(self.gpa);
+        // Initialize last_position from first token if available
+        if (self.lookahead) |token| {
+            self.last_position = token.region.start;
+        }
     }
 }
 
@@ -97,8 +103,25 @@ pub fn deinit(parser: *Parser) void {
     // to be deinitialized by the caller when no longer required
 }
 
+/// Get the diagnostics collected during parsing
+pub fn getDiagnostics(self: *const Parser) []const AST.Diagnostic {
+    return self.diagnostics.items;
+}
+
+/// Take ownership of the diagnostics array
+pub fn takeOwnedDiagnostics(self: *Parser) std.ArrayListUnmanaged(AST.Diagnostic) {
+    const result = self.diagnostics;
+    self.diagnostics = .{};
+    return result;
+}
+
 /// helper to advance the parser by one token
 pub fn advance(self: *Parser) void {
+    // Save current position before advancing
+    if (self.lookahead) |token| {
+        self.last_position = token.region.end;
+    }
+
     // Get next token
     self.lookahead = self.token_iter.next(self.gpa) catch null;
 }
@@ -173,8 +196,14 @@ fn currentPosition(self: *Parser) Position {
     if (self.currentToken()) |token| {
         return token.region.start;
     }
-    // If no current token, return zero position
-    return Position{ .offset = 0 };
+    // If no current token, use last valid position
+    // But make sure we have a reasonable position (not just 0)
+    if (self.last_position.offset == 0) {
+        // If we haven't seen any tokens yet, return position at end of source
+        // This is better than returning 0 which points to nothing
+        return Position{ .offset = @intCast(self.token_iter.env.source.len) };
+    }
+    return self.last_position;
 }
 
 /// Get the identifier at the current position (if it's an identifier token)
@@ -197,6 +226,15 @@ pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, start_pos: Positio
 
 /// add a malformed node
 pub fn pushMalformed(self: *Parser, tag: AST.Diagnostic.Tag, start_pos: Position) Error!Node.Idx {
+    // Use current token position for the error if the provided start_pos is invalid
+    const actual_start_pos = if (start_pos.offset == 0) blk: {
+        if (self.currentPosition().offset > 0) {
+            break :blk self.currentPosition();
+        } else {
+            break :blk self.last_position;
+        }
+    } else start_pos;
+
     const end_pos = self.currentPosition();
 
     if (self.peek() != .EndOfFile) {
@@ -204,12 +242,12 @@ pub fn pushMalformed(self: *Parser, tag: AST.Diagnostic.Tag, start_pos: Position
     }
 
     if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
-        try self.pushDiagnostic(tag, start_pos, end_pos);
-        return try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = tag });
+        try self.pushDiagnostic(tag, actual_start_pos, end_pos);
+        return try self.ast.appendNode(self.gpa, actual_start_pos, .malformed, .{ .malformed = tag });
     } else {
         // Return a cached malformed node to avoid creating excessive nodes when diagnostic limit is exceeded
         if (self.cached_malformed_node == null) {
-            self.cached_malformed_node = try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = AST.Diagnostic.Tag.expr_unexpected_token });
+            self.cached_malformed_node = try self.ast.appendNode(self.gpa, actual_start_pos, .malformed, .{ .malformed = AST.Diagnostic.Tag.expr_unexpected_token });
         }
         return self.cached_malformed_node.?;
     }
@@ -792,29 +830,46 @@ pub fn parseStmt(self: *Parser) Error!?Node.Idx {
     switch (self.peek()) {
         .EndOfFile => return null,
         .KwImport => return self.parseImport(),
+        .KwExpect => return self.parseExpect(),
         else => {
             // Parse the left-hand side as an expression first
-            const start_pos = self.currentPosition();
-            const lhs = try self.parseExpr();
+            // We need to stop at colons to avoid consuming them
+            // Colons have bp=3, so we use min_bp=3 to stop at them
+            const lhs = try self.parseExprWithBp(3);
 
             // Check if this is followed by : or := (making it a type annotation/declaration)
             if (self.peek() == .OpColon or self.peek() == .OpColonEqual) {
                 const is_opaque = self.peek() == .OpColonEqual;
+                const colon_pos = self.currentPosition();
                 self.advance(); // consume : or :=
 
-                // Parse the right-hand side as an expression (unified AST doesn't distinguish)
-                const rhs = try self.parseExpr();
+                // Parse the right-hand side - for type annotations, we need special handling
+                // to support comma-separated parameters and where clauses
+                const rhs = try self.parseTypeAnnotationRHS();
 
                 // Create type annotation/declaration node
                 const tag: AST.Node.Tag = if (is_opaque) .binop_colon_equals else .binop_colon;
                 const binop_idx = try self.ast.appendBinOp(self.gpa, lhs, rhs);
-                return try self.ast.appendNode(self.gpa, start_pos, tag, .{ .binop = binop_idx });
+                return try self.ast.appendNode(self.gpa, colon_pos, tag, .{ .binop = binop_idx });
             }
 
             // Otherwise, it's just a regular expression/statement
             return lhs;
         },
     }
+}
+
+fn parseExpect(self: *Parser) Error!?Node.Idx {
+    _ = self.currentPosition(); // Will be used when we properly implement expect
+    self.advance(); // consume expect
+
+    // Parse the condition expression
+    const condition = try self.parseExpr();
+
+    // For now, just return the condition expression
+    // TODO: Add proper expect support in AST2
+    // This at least allows expect statements to parse without errors
+    return condition;
 }
 
 fn parseImport(self: *Parser) Error!?Node.Idx {
@@ -896,11 +951,6 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
     return try self.ast.appendNode(self.gpa, start_pos, .import, .{ .import_nodes = nodes_idx });
 }
 
-/// Parse a pattern (now just calls parseExpr for unified AST)
-pub fn parsePattern(self: *Parser) Error!Node.Idx {
-    return self.parseExpr();
-}
-
 /// Parse an expression
 pub fn parseExpr(self: *Parser) Error!Node.Idx {
     return self.parseExprWithBp(0);
@@ -913,33 +963,32 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!Node.Idx {
     // Parse prefix/primary expression
     var left = try self.parsePrimaryExpr();
 
-    // Parse infix operators
+    // Parse operators - both infix and postfix, interleaved by precedence
     while (true) {
+        // First check for infix operators
         const op_tag = self.peek();
         const bp = getBindingPower(op_tag);
 
-        if (bp.left <= min_bp) {
-            break;
+        if (bp.left > min_bp) {
+            const op_pos = self.currentPosition();
+            self.advance();
+
+            const right = try self.parseExprWithBp(bp.right);
+
+            const binop_tag = tokenToBinOpTag(op_tag) orelse {
+                return self.pushMalformed(.expr_unexpected_token, op_pos);
+            };
+
+            const binop_idx = try self.ast.appendBinOp(self.gpa, left, right);
+            left = try self.ast.appendNode(self.gpa, op_pos, binop_tag, .{ .binop = binop_idx });
+            continue; // Check for more operators
         }
 
-        const op_pos = self.currentPosition();
-        self.advance();
-
-        const right = try self.parseExprWithBp(bp.right);
-
-        const binop_tag = tokenToBinOpTag(op_tag) orelse {
-            return self.pushMalformed(.expr_unexpected_token, start_position);
-        };
-
-        const binop_idx = try self.ast.appendBinOp(self.gpa, left, right);
-        left = try self.ast.appendNode(self.gpa, op_pos, binop_tag, .{ .binop = binop_idx });
-    }
-
-    // Parse postfix operators
-    while (true) {
+        // Then check for postfix operators
         switch (self.peek()) {
             .OpenRound => {
                 left = try self.parseApply(left);
+                continue; // Check for more operators after apply
             },
             .Dot => {
                 const dot_pos = self.currentPosition();
@@ -977,8 +1026,9 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!Node.Idx {
                 } else {
                     return self.pushMalformed(.expr_dot_suffix_not_allowed, start_position);
                 }
+                continue; // Check for more operators after dot
             },
-            else => break,
+            else => break, // No more operators
         }
     }
 
@@ -986,8 +1036,6 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!Node.Idx {
 }
 
 fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
-    const start_position = self.currentPosition();
-
     return switch (self.peek()) {
         .LowerIdent => {
             const ident = self.currentIdent();
@@ -997,7 +1045,7 @@ fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
             if (ident) |id| {
                 return try self.ast.appendNode(self.gpa, pos, .lc, .{ .ident = id });
             } else {
-                return self.pushMalformed(.expr_unexpected_token, start_position);
+                return self.pushMalformed(.expr_unexpected_token, pos);
             }
         },
         .UpperIdent => {
@@ -1008,7 +1056,7 @@ fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
             if (ident) |id| {
                 return try self.ast.appendNode(self.gpa, pos, .uc, .{ .ident = id });
             } else {
-                return self.pushMalformed(.expr_unexpected_token, start_position);
+                return self.pushMalformed(.expr_unexpected_token, pos);
             }
         },
         .Underscore => {
@@ -1058,7 +1106,48 @@ fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
             const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &operand_slice);
             return try self.ast.appendNode(self.gpa, pos, .unary_double_dot, .{ .nodes = nodes_idx });
         },
-        else => return self.pushMalformed(.expr_unexpected_token, start_position),
+        .KwModule => {
+            // Handle module(arg) for where clauses
+            const pos = self.currentPosition();
+            self.advance();
+
+            if (self.peek() == .OpenRound) {
+                self.advance(); // consume (
+
+                const scratch_start = self.scratch_nodes.items.len;
+                defer {
+                    self.scratch_nodes.items.len = scratch_start;
+                }
+
+                // Parse the argument(s)
+                while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
+                    const arg = try self.parseExpr();
+                    try self.scratch_nodes.append(self.gpa, arg);
+
+                    if (self.peek() == .Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+
+                self.expect(.CloseRound) catch {
+                    try self.pushDiagnostic(.expected_expr_apply_close_round, pos, self.currentPosition());
+                };
+
+                const nodes = self.scratch_nodes.items[scratch_start..];
+                const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
+                return try self.ast.appendNode(self.gpa, pos, .apply_module, .{ .nodes = nodes_idx });
+            } else {
+                // module without parentheses is an error in expression context
+                return self.pushMalformed(.expr_unexpected_token, pos);
+            }
+        },
+        else => {
+            // Use current token position for the error, not start_position
+            const error_pos = if (self.currentPosition().offset > 0) self.currentPosition() else self.last_position;
+            return self.pushMalformed(.expr_unexpected_token, error_pos);
+        },
     };
 }
 
@@ -1286,17 +1375,29 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
     }
 
     // Parse first element to determine if it's a block or record
-    const first_elem = try self.parseExpr();
+    // We parse as a statement which will handle both:
+    // - Type annotations (like `apple : Type`)
+    // - Record fields (like `field : value`)
+    // - Regular expressions in blocks
+    const first_elem_opt = try self.parseStmt();
+
+    if (first_elem_opt == null) {
+        // Empty block/record body - shouldn't happen after we checked for CloseCurly
+        const empty_slice: []const Node.Idx = &.{};
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        return try self.ast.appendNode(self.gpa, start_pos, .block, .{ .nodes = nodes_idx });
+    }
+
+    const first_elem = first_elem_opt.?;
     try self.scratch_nodes.append(self.gpa, first_elem);
 
-    // Determine if this is a record by looking at the structure of the first element
-    // A record field looks like: field_name : field_value
-    // A block statement doesn't have this structure
+    // Determine if this is a record by looking at the structure
+    // Record fields have binop_colon and are followed by comma
+    // Type annotations also have binop_colon but are statements in blocks
     var is_record = false;
-    if (self.ast.tag(first_elem) == .binop_colon) {
+    if (self.ast.tag(first_elem) == .binop_colon and self.peek() == .Comma) {
+        // It's a record field if we have colon AND comma
         is_record = true;
-    } else {
-        is_record = self.peek() == .Comma;
     }
 
     if (is_record and self.peek() == .Comma) {
@@ -1334,8 +1435,11 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
                 }
                 break; // rest should be the last element
             } else {
-                const field = try self.parseExpr();
-                try self.scratch_nodes.append(self.gpa, field);
+                // Parse record field as a statement (to handle field : value)
+                const field_opt = try self.parseStmt();
+                if (field_opt) |field| {
+                    try self.scratch_nodes.append(self.gpa, field);
+                }
 
                 if (self.peek() == .Comma) {
                     self.advance();
@@ -1401,7 +1505,9 @@ fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
         }
 
         self.expect(.CloseRound) catch {
-            try self.pushDiagnostic(.expected_expr_close_round_or_comma, start_pos, self.currentPosition());
+            // Use current position for error, not start_pos
+            const error_pos = if (self.currentPosition().offset > 0) self.currentPosition() else self.last_position;
+            try self.pushDiagnostic(.expected_expr_close_round_or_comma, error_pos, error_pos);
         };
 
         const elems = self.scratch_nodes.items[scratch_start..];
@@ -1417,7 +1523,9 @@ fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
         return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = elems_idx });
     } else {
         self.expect(.CloseRound) catch {
-            try self.pushDiagnostic(.expected_expr_close_round_or_comma, start_pos, self.currentPosition());
+            // Use current position for error, not start_pos
+            const error_pos = if (self.currentPosition().offset > 0) self.currentPosition() else self.last_position;
+            try self.pushDiagnostic(.expected_expr_close_round_or_comma, error_pos, error_pos);
         };
 
         // Just a parenthesized expression
@@ -1744,6 +1852,93 @@ pub fn parseTypeAnno(self: *Parser) Error!Node.Idx {
     return self.parseExpr();
 }
 
+/// Parse the right-hand side of a type annotation, handling special cases
+/// like comma-separated parameters and where clauses
+fn parseTypeAnnotationRHS(self: *Parser) Error!Node.Idx {
+    // First, check if we have comma-separated type parameters
+    // e.g., f(a), (a -> b) -> g(b)
+    const scratch_start = self.scratch_nodes.items.len;
+    defer {
+        self.scratch_nodes.items.len = scratch_start;
+    }
+
+    // Parse the first type term (stops at commas and arrows)
+    const first_term = try self.parseTypeTerm();
+    try self.scratch_nodes.append(self.gpa, first_term);
+
+    // Check for more comma-separated parameters
+    while (self.peek() == .Comma) {
+        self.advance();
+        const term = try self.parseTypeTerm();
+        try self.scratch_nodes.append(self.gpa, term);
+    }
+
+    const params = self.scratch_nodes.items[scratch_start..];
+
+    // Now check for arrow to make this a function type
+    var result: Node.Idx = undefined;
+    if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
+        const is_effectful = self.peek() == .OpFatArrow;
+        const arrow_pos = self.currentPosition();
+        self.advance();
+
+        // Parse the return type recursively
+        const return_type = try self.parseTypeAnnotationRHS();
+
+        // For now, always create regular binary arrows
+        // TODO: Support variadic arrows properly
+        const arrow_tag: Node.Tag = if (is_effectful) .binop_thick_arrow else .binop_thin_arrow;
+
+        if (params.len == 1) {
+            // Single parameter - simple case
+            const binop_idx = try self.ast.appendBinOp(self.gpa, params[0], return_type);
+            result = try self.ast.appendNode(self.gpa, arrow_pos, arrow_tag, .{ .binop = binop_idx });
+        } else {
+            // Multiple parameters - create nested arrows for now
+            // a, b -> c becomes a -> (b -> c)
+            var current = return_type;
+            var i = params.len;
+            while (i > 0) {
+                i -= 1;
+                const binop_idx = try self.ast.appendBinOp(self.gpa, params[i], current);
+                current = try self.ast.appendNode(self.gpa, arrow_pos, arrow_tag, .{ .binop = binop_idx });
+            }
+            result = current;
+        }
+    } else if (params.len == 1) {
+        // No arrow, just a single type expression
+        result = params[0];
+    } else {
+        // Multiple params without arrow - shouldn't happen in valid syntax
+        // but we'll create a tuple for error recovery
+        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, params);
+        result = try self.ast.appendNode(self.gpa, self.currentPosition(), .tuple_literal, .{ .nodes = nodes_idx });
+    }
+
+    // Check for where clause
+    if (self.peek() == .KwWhere) {
+        const where_pos = self.currentPosition();
+        self.advance(); // consume 'where'
+
+        // Parse the constraint as a full expression (including colon as binop)
+        // This will parse module(a).foo : c -> d as one expression
+        const constraint = try self.parseExpr();
+
+        // Create binop_where node with the type as LHS and constraint as RHS
+        const binop_idx = try self.ast.appendBinOp(self.gpa, result, constraint);
+        result = try self.ast.appendNode(self.gpa, where_pos, .binop_where, .{ .binop = binop_idx });
+    }
+
+    return result;
+}
+
+/// Parse a single type term (stops at commas and arrows with low precedence)
+fn parseTypeTerm(self: *Parser) Error!Node.Idx {
+    // In Roc, type applications must use parentheses: Maybe(a), not Maybe a
+    // So we just parse a regular expression with appropriate precedence
+    return self.parseExprWithBp(2);
+}
+
 // Operator precedence
 const BindingPower = struct {
     left: u8,
@@ -1765,6 +1960,7 @@ fn getBindingPower(tag: Token.Tag) BindingPower {
         .OpArrow => .{ .left = 2, .right = 3 },
         .OpFatArrow => .{ .left = 1, .right = 2 },
         .KwAs => .{ .left = 3, .right = 4 }, // Low precedence, binds loosely
+        .KwWhere => .{ .left = 1, .right = 2 }, // Very low precedence, like fat arrow
         else => .{ .left = 0, .right = 0 },
     };
 }
@@ -1791,6 +1987,7 @@ fn tokenToBinOpTag(tag: Token.Tag) ?Node.Tag {
         .OpOr => .binop_or,
         .OpBar => .binop_pipe,
         .KwAs => .binop_as,
+        .KwWhere => .binop_where,
         else => null,
     };
 }

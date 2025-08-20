@@ -37,6 +37,9 @@
 
 const std = @import("std");
 const base = @import("base");
+const reporting = @import("reporting");
+const error_reporting = @import("error_reporting.zig");
+const CommonEnv = base.CommonEnv;
 const collections = @import("collections");
 const tokenize = @import("tokenize2.zig");
 
@@ -115,10 +118,7 @@ pub const NodeSlices = struct {
         }
     };
 
-    /// This cannot be an untagged union because we sometimes have to cast a slice
-    /// of these to a slice of Node.Idx values, and that doesn't work if these are 8B
-    /// (because of the untagged union feature) whereas the Node.Idx values are 4B.
-    pub const Entry = extern union {
+    pub const Entry = union {
         node_idx: Node.Idx, // An individual Node.Idx in a slice. The last one will be negative to mark the end.
         binop_lhs: Node.Idx, // This is a BinOp's lhs node, and its rhs will be stored immediately after this entry.
         binop_rhs: Node.Idx, // This is a BinOp's rhs node, and its lhs will be stored immediately before this entry.
@@ -342,6 +342,61 @@ pub fn binOp(self: *const Ast, idx: Node.Idx) Node.BinOp {
     return self.node_slices.binOp(self.nodes.fieldItem(.payload, multi_list_idx).binop);
 }
 
+/// Special accessor for arrow nodes which may have multiple parameters
+/// Returns the first parameter and return type as a BinOp for compatibility
+pub fn arrowBinOp(self: *const Ast, idx: Node.Idx) Node.BinOp {
+    const node_tag = self.tag(idx);
+    std.debug.assert(node_tag == .binop_thin_arrow or node_tag == .binop_thick_arrow);
+
+    const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
+    const node_payload = self.nodes.fieldItem(.payload, multi_list_idx);
+
+    // Try to interpret as a nodes payload (variadic arrow)
+    // We can tell by checking if the first entry in the slice is a valid node
+    const nodes_idx = node_payload.binop;
+    if (nodes_idx != NodeSlices.Idx.NIL) {
+        var iter = self.node_slices.nodes(nodes_idx);
+        const maybe_first = iter.next();
+
+        // Check if this looks like a valid nodes slice by seeing if we can get nodes from it
+        if (maybe_first) |first_param| {
+            // This is a variadic arrow with multiple parameters
+            // For compatibility, extract first param as lhs and return type as rhs
+
+            // Skip to the last node (return type)
+            var return_type = first_param;
+            while (iter.next()) |node| {
+                return_type = node;
+            }
+
+            return .{
+                .lhs = first_param,
+                .rhs = return_type,
+            };
+        }
+    }
+
+    // Fall back to regular binop
+    return self.node_slices.binOp(node_payload.binop);
+}
+
+/// Returns an iterator over all parameters and return type of an arrow node
+/// The last node in the iteration is the return type, all others are parameters
+pub fn arrowNodes(self: *const Ast, idx: Node.Idx) NodeSlices.Iterator {
+    const node_tag = self.tag(idx);
+    std.debug.assert(node_tag == .binop_thin_arrow or node_tag == .binop_thick_arrow);
+
+    const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
+    const node_payload = self.nodes.fieldItem(.payload, multi_list_idx);
+
+    // For arrow nodes with multiple parameters, we store them using .nodes
+    // For single parameter arrows, we use .binop
+    // We can reinterpret the payload to check which one it is
+    const nodes_idx = node_payload.binop;
+
+    return self.node_slices.nodes(nodes_idx);
+}
+
 /// Given the idx to a lambda, return the region of just its args (the `| ... |` including the pipes)
 pub fn lambdaArgsRegion(self: *const Ast, idx: Node.Idx, raw_src: []u8, ident_store: *const Ident.Store) Region {
     // Opening `|` args delimiter
@@ -422,6 +477,7 @@ pub fn region(
         .binop_colon_equals,
         .binop_dot,
         .binop_as,
+        .binop_where,
         .binop_plus,
         .binop_minus,
         .binop_star,
@@ -493,7 +549,7 @@ pub fn region(
                 .end = Position{ .offset = region_start.offset + 1 },
             };
         },
-        .apply_lc, .apply_uc, .apply_anon => {
+        .apply_lc, .apply_uc, .apply_anon, .apply_module => {
             // Function application: func(args...)
             // The payload should contain nodes for func and args
             const nodes_idx = self.payload(idx).nodes;
@@ -1096,6 +1152,7 @@ pub const Node = struct {
         binop_and, //              and
         binop_or, //               or
         binop_as, //               as
+        binop_where, //            where (for type constraints)
         binop_pipe, //             | for pattern alternatives (maybe we should replace this with `or`, not sure)
 
         // Identifiers, possibly with modifiers
@@ -1132,6 +1189,7 @@ pub const Node = struct {
         apply_lc, // e.g. `foo(bar, baz)`
         apply_uc, // e.g. `Foo(bar, baz)` or `(foo(bar, baz))(blah, etc)`
         apply_anon, // e.g. `(foo(bar, baz))(blah, etc)`
+        apply_module, // e.g. `module(a)` in where clauses
         block, // Block with curly braces, e.g. `{ expr1, expr2, ... }` - could end up being a record (expr or destructure)
         lambda, // e.g. `|x, y| x + y` - payload stores a slice of body_then_args
         lambda_no_args, // e.g. `|| x + y` - payload stores only the body node
@@ -1171,6 +1229,7 @@ pub const Node = struct {
                 .binop_and,
                 .binop_or,
                 .binop_as,
+                .binop_where,
                 .binop_pipe,
                 => true,
 
@@ -1182,6 +1241,7 @@ pub const Node = struct {
                 .apply_lc,
                 .apply_uc,
                 .apply_anon,
+                .apply_module,
                 .neg_lc,
                 .not_lc,
                 .dot_lc,
@@ -1478,4 +1538,126 @@ test "NodeSlices with negative sentinel" {
     const last_val = @as(u32, @bitCast(@intFromEnum(entries[3].node_idx)));
     try testing.expect((last_val & sign_bit) != 0); // Sign bit should be set
     try testing.expectEqual(@as(u32, 30), last_val & ~sign_bit); // Original value should be 30
+}
+
+/// Convert a parse diagnostic to a reporting.Report for error display
+pub fn parseDiagnosticToReport(self: *const @This(), env: *const CommonEnv, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) !reporting.Report {
+    _ = self; // unused for now
+
+    const title = switch (diagnostic.tag) {
+        .missing_header => "MISSING HEADER",
+        .multiple_platforms => "MULTIPLE PLATFORMS",
+        .no_platform => "NO PLATFORM",
+        .missing_arrow => "MISSING ARROW",
+        .expected_exposes => "EXPECTED EXPOSES",
+        .pattern_unexpected_token => "UNEXPECTED TOKEN IN PATTERN",
+        .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
+        .string_unexpected_token => "UNEXPECTED TOKEN IN STRING",
+        .ty_anno_unexpected_token => "UNEXPECTED TOKEN IN TYPE ANNOTATION",
+        .statement_unexpected_token => "UNEXPECTED TOKEN",
+        .import_must_be_top_level => "IMPORT MUST BE TOP LEVEL",
+        .expected_expr_close_square_or_comma => "LIST NOT CLOSED",
+        .no_else => "IF WITHOUT ELSE",
+        else => "PARSE ERROR",
+    };
+
+    var report = reporting.Report.init(allocator, title, .runtime_error);
+
+    // Add detailed error message based on the diagnostic type
+    switch (diagnostic.tag) {
+        .missing_header => {
+            try report.document.addReflowingText("Roc files must start with a module header.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("For example:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("module [main]");
+            try report.document.addLineBreak();
+            try report.document.addText("or for an app:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("app [main!] { pf: platform \"../basic-cli/platform.roc\" }");
+        },
+        .multiple_platforms => {
+            try report.document.addReflowingText("Only one platform declaration is allowed per file.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Remove the duplicate platform declaration.");
+        },
+        .no_platform => {
+            try report.document.addReflowingText("App files must specify a platform.");
+            try report.document.addLineBreak();
+            try report.document.addText("Add a platform specification like:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("{ pf: platform \"../basic-cli/platform.roc\" }");
+        },
+        .missing_arrow => {
+            try report.document.addText("Expected an arrow ");
+            try report.document.addAnnotated("->", .emphasized);
+            try report.document.addText(" here.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Function type annotations require arrows between parameter and return types.");
+        },
+        .expected_exposes => {
+            try report.document.addReflowingText("Module headers must have an ");
+            try report.document.addKeyword("exposing");
+            try report.document.addReflowingText(" section that lists what the module exposes.");
+            try report.document.addLineBreak();
+            try report.document.addText("For example: ");
+            try report.document.addCodeBlock("module [main, add, subtract]");
+        },
+        .no_else => {
+            try report.document.addText("This ");
+            try report.document.addKeyword("if");
+            try report.document.addText(" is being used as an expression, but it doesn't have an ");
+            try report.document.addKeyword("else");
+            try report.document.addText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("When ");
+            try report.document.addKeyword("if");
+            try report.document.addText(" is used as an expression (to evaluate to a value), it must have an ");
+            try report.document.addKeyword("else");
+            try report.document.addText(" branch to specify what value to use when the condition is ");
+            try report.document.addAnnotated("False", .emphasized);
+            try report.document.addText(".");
+        },
+        .expr_unexpected_token => {
+            try report.document.addText("I found an unexpected token while parsing an expression.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("I was expecting a valid expression, but I found something that doesn't belong here.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This could be a missing operator, incorrect syntax, or a token in the wrong place.");
+        },
+        else => {
+            // Generic parse error message
+            try report.document.addText("A parsing error occurred: ");
+            try report.document.addAnnotated(@tagName(diagnostic.tag), .emphasized);
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This is an unexpected parsing error. Please check your syntax.");
+        },
+    }
+
+    // Add source location
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+
+    // Convert region to RegionInfo for reporting
+    const region_info: base.RegionInfo = base.RegionInfo.position(env.source, env.line_starts.items.items, diagnostic.region.start.offset, diagnostic.region.end.offset) catch base.RegionInfo{
+        .start_line_idx = 0,
+        .start_col_idx = 0,
+        .end_line_idx = 0,
+        .end_col_idx = 0,
+    };
+
+    try report.document.addSourceRegion(
+        region_info,
+        .error_highlight,
+        filename,
+        env.source,
+        env.line_starts.items.items,
+    );
+
+    return report;
 }

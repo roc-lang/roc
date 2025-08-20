@@ -9,6 +9,7 @@ const collections = @import("collections");
 const tracy = @import("tracy");
 
 pub const tokenize = @import("tokenize.zig");
+pub const tokenize2 = @import("tokenize2.zig");
 
 const CommonEnv = base.CommonEnv;
 const TokenIndex = tokenize.TokenIndex;
@@ -33,6 +34,9 @@ pub const AST2 = @import("AST2.zig");
 
 /// New version of the Parser module for development.
 pub const Parser2 = @import("Parser2.zig");
+
+/// Token iterator for Parser2
+pub const tokenize_iter = @import("tokenize_iter.zig");
 
 fn runParse(env: *CommonEnv, gpa: std.mem.Allocator, parserCall: *const fn (*Parser) Parser.Error!u32) Parser.Error!AST {
     const trace = tracy.trace(@src());
