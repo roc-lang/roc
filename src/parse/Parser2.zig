@@ -1305,18 +1305,34 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
 
     if (is_record) {
         while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-            // Check for open record syntax `..`
+            // Check for rest syntax `..` or `..identifier`
             if (self.peek() == .DoubleDot) {
+                const dot_pos = self.currentPosition();
                 self.advance(); // consume ..
 
-                // For now, just skip the .. - in unified AST we might handle this differently
-                // The important thing is we don't crash on it
+                // Check if there's an identifier after .. (like ..rest)
+                if (self.peek() == .LowerIdent) {
+                    const ident = self.currentIdent();
+                    _ = self.currentPosition(); // Position tracked in dot_pos
+                    self.advance();
 
-                // Check if there's a comma after .. (optional)
+                    // Create a double_dot_lc node for ..identifier
+                    if (ident) |id| {
+                        const rest_node = try self.ast.appendNode(self.gpa, dot_pos, .double_dot_lc, .{ .ident = id });
+                        try self.scratch_nodes.append(self.gpa, rest_node);
+                    }
+                } else {
+                    // Just .. without an identifier - create an underscore as placeholder
+                    // This represents "ignore the rest"
+                    const rest_node = try self.ast.appendNode(self.gpa, dot_pos, .underscore, .{ .src_bytes_end = dot_pos });
+                    try self.scratch_nodes.append(self.gpa, rest_node);
+                }
+
+                // Check if there's a comma after the rest (optional, but should be last)
                 if (self.peek() == .Comma) {
                     self.advance();
                 }
-                break; // .. should be the last element
+                break; // rest should be the last element
             } else {
                 const field = try self.parseExpr();
                 try self.scratch_nodes.append(self.gpa, field);
@@ -1543,7 +1559,44 @@ fn parseLambda(self: *Parser) Error!Node.Idx {
 
     // Parse parameters
     while (self.peek() != .OpBar and self.peek() != .EndOfFile) {
-        const param = try self.parsePrimaryExpr();
+        // Parse parameter as an expression, but we need to be careful with precedence
+        // We want to stop at | (precedence 10) but allow as (precedence 3)
+        // So we use precedence 11 to stop at |
+        const param = if (self.peek() == .OpenCurly) blk: {
+            // Parse the record first
+            const record = try self.parseBlockOrRecord();
+
+            // Now continue parsing operators that might apply to the record
+            // We manually handle operators here because parseExprWithBp expects to parse
+            // the primary expression itself
+            var result = record;
+            while (true) {
+                const op_tag = self.peek();
+                const bp = getBindingPower(op_tag);
+
+                // Stop at | (precedence 10) or comma (not an operator)
+                // We want to continue if precedence is >= 11 (higher than |)
+                // But 'as' has precedence 3, which is lower, so we still want to parse it
+                // Actually, we want to stop ONLY at | and comma, not at low-precedence ops
+                if (op_tag == .OpBar or op_tag == .Comma) {
+                    break;
+                }
+
+                const op_pos = self.currentPosition();
+                self.advance();
+
+                const right = try self.parseExprWithBp(bp.right);
+
+                const binop_tag = tokenToBinOpTag(op_tag) orelse break;
+                const nodes = [_]Node.Idx{ result, right };
+                const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &nodes);
+                result = try self.ast.appendNode(self.gpa, op_pos, binop_tag, .{ .binop = nodes_idx });
+            }
+            break :blk result;
+        } else
+            // For non-records, parse with precedence 11 to stop at |
+            try self.parseExprWithBp(11);
+
         try self.scratch_nodes.append(self.gpa, param);
 
         if (self.peek() == .Comma) {
@@ -1711,6 +1764,7 @@ fn getBindingPower(tag: Token.Tag) BindingPower {
         .OpColon => .{ .left = 3, .right = 4 },
         .OpArrow => .{ .left = 2, .right = 3 },
         .OpFatArrow => .{ .left = 1, .right = 2 },
+        .KwAs => .{ .left = 3, .right = 4 }, // Low precedence, binds loosely
         else => .{ .left = 0, .right = 0 },
     };
 }
@@ -1736,6 +1790,7 @@ fn tokenToBinOpTag(tag: Token.Tag) ?Node.Tag {
         .OpAnd => .binop_and,
         .OpOr => .binop_or,
         .OpBar => .binop_pipe,
+        .KwAs => .binop_as,
         else => null,
     };
 }
