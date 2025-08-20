@@ -28,8 +28,7 @@ pub const Parser = @This();
 
 gpa: std.mem.Allocator,
 token_iter: tokenize_iter.TokenIterator,
-lookahead: [2]?Token, // 2-token lookahead buffer for peek() and peekNext()
-lookahead_pos: u2, // Current position in the lookahead buffer
+lookahead: ?Token, // 1-token lookahead buffer for peek()
 ast: *AST,
 byte_slices: *collections.ByteSlices, // Reference to tokenizer's ByteSlices
 scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
@@ -44,8 +43,7 @@ pub fn init(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []const u8, me
     var parser = Parser{
         .gpa = gpa,
         .token_iter = token_iter,
-        .lookahead = .{ null, null },
-        .lookahead_pos = 0,
+        .lookahead = null,
         .ast = ast,
         .byte_slices = byte_slices,
         .scratch_nodes = .{},
@@ -71,11 +69,8 @@ pub fn initFromTokens(tokens: TokenizedBuffer, gpa: std.mem.Allocator, ast: *AST
 
 /// Fill the lookahead buffer
 fn fillLookahead(self: *Parser) std.mem.Allocator.Error!void {
-    if (self.lookahead[0] == null) {
-        self.lookahead[0] = try self.token_iter.next(self.gpa);
-    }
-    if (self.lookahead[1] == null) {
-        self.lookahead[1] = try self.token_iter.next(self.gpa);
+    if (self.lookahead == null) {
+        self.lookahead = try self.token_iter.next(self.gpa);
     }
 }
 
@@ -89,9 +84,8 @@ pub fn deinit(parser: *Parser) void {
 
 /// helper to advance the parser by one token
 pub fn advance(self: *Parser) void {
-    // Shift lookahead buffer and get next token
-    self.lookahead[0] = self.lookahead[1];
-    self.lookahead[1] = self.token_iter.next(self.gpa) catch null;
+    // Get next token
+    self.lookahead = self.token_iter.next(self.gpa) catch null;
 }
 
 /// look ahead at the next token and return an error if it does not have the expected tag
@@ -106,40 +100,15 @@ pub fn expect(self: *Parser, expected: Token.Tag) error{ExpectedNotFound}!void {
 ///
 /// **note** caller is responsible to ensure this isn't the last token
 pub fn peek(self: *Parser) Token.Tag {
-    if (self.lookahead[0]) |token| {
+    if (self.lookahead) |token| {
         return token.tag;
     }
-    return .EndOfFile;
-}
-
-/// Peek at the next token
-pub fn peekNext(self: *Parser) Token.Tag {
-    if (self.lookahead[1]) |token| {
-        return token.tag;
-    }
-    return .EndOfFile;
-}
-
-/// Peek at `n` tokens forward
-pub fn peekN(self: *Parser, n: u32) Token.Tag {
-    if (n == 0) {
-        return self.peek();
-    }
-    if (n == 1) {
-        return self.peekNext();
-    }
-    // For n > 1, we only have 2-token lookahead, so return EndOfFile
     return .EndOfFile;
 }
 
 /// Get the current token (if available)
 fn currentToken(self: *Parser) ?Token {
-    return self.lookahead[0];
-}
-
-/// Get the next token (if available)
-fn nextToken(self: *Parser) ?Token {
-    return self.lookahead[1];
+    return self.lookahead;
 }
 
 /// Get the current token's extra data
@@ -776,7 +745,8 @@ fn parseTypeVariableList(self: *Parser) Error!AST.NodeSlices.Idx {
     }
 
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-        const type_var = try self.parseTypeVariable();
+        // Just parse as expression - should be a lowercase identifier
+        const type_var = try self.parsePrimaryExpr();
         try self.scratch_nodes.append(self.gpa, type_var);
 
         if (self.peek() == .Comma) {
@@ -791,24 +761,6 @@ fn parseTypeVariableList(self: *Parser) Error!AST.NodeSlices.Idx {
         return @enumFromInt(0);
     }
     return try self.ast.appendNodeSlice(self.gpa, vars);
-}
-
-fn parseTypeVariable(self: *Parser) Error!Node.Idx {
-    const start_position = self.currentPosition();
-
-    if (self.peek() == .LowerIdent) {
-        const ident = self.currentIdent();
-        const pos = self.currentPosition();
-        self.advance();
-
-        if (ident) |id| {
-            return try self.ast.appendNode(self.gpa, pos, .lc, .{ .ident = id });
-        } else {
-            return self.pushMalformed(.invalid_type_arg, start_position);
-        }
-    } else {
-        return self.pushMalformed(.invalid_type_arg, start_position);
-    }
 }
 
 /// Parse a top-level statement
@@ -931,205 +883,6 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
 /// Parse a pattern (now just calls parseExpr for unified AST)
 pub fn parsePattern(self: *Parser) Error!Node.Idx {
     return self.parseExpr();
-}
-
-fn parseStringPattern(self: *Parser) Error!Node.Idx {
-    // String patterns are parsed the same as string expressions
-    return self.parseStringExpr();
-}
-
-fn parseListPattern(self: *Parser) Error!Node.Idx {
-    const start_pos = self.currentPosition();
-    self.advance(); // consume [
-
-    if (self.peek() == .CloseSquare) {
-        self.advance();
-        const empty_slice: []const Node.Idx = &.{};
-        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .nodes = nodes_idx });
-    }
-
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
-
-    while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-        // Check for list rest pattern
-        if (self.peek() == .DoubleDot) {
-            const rest_pos = self.currentPosition();
-            self.advance();
-
-            // Parse rest pattern (e.g., ..rest or .. as rest)
-            if (self.peek() == .KwAs) {
-                self.advance();
-                const rest_pattern = try self.parseExpr();
-                try self.scratch_nodes.append(self.gpa, rest_pattern);
-            } else if (self.peek() == .LowerIdent) {
-                // Handle ..rest syntax (which should be an error per snapshot)
-                const rest_pattern = try self.parseExpr();
-                try self.scratch_nodes.append(self.gpa, rest_pattern);
-                try self.pushDiagnostic(.pattern_list_rest_old_syntax, rest_pos, self.currentPosition());
-            } else {
-                // Just .. without binding - use double_dot_lc with a dummy ident
-                const dummy_ident = @as(Ident.Idx, @bitCast(@as(u32, 0)));
-                const rest_node = try self.ast.appendNode(self.gpa, rest_pos, .double_dot_lc, .{ .ident = dummy_ident });
-                try self.scratch_nodes.append(self.gpa, rest_node);
-            }
-
-            // Rest should be last element
-            break;
-        } else {
-            const elem = try self.parseExpr();
-            try self.scratch_nodes.append(self.gpa, elem);
-        }
-
-        if (self.peek() == .Comma) {
-            self.advance();
-        } else {
-            break;
-        }
-    }
-
-    self.expect(.CloseSquare) catch {
-        try self.pushDiagnostic(.expected_expr_close_square_or_comma, start_pos, self.currentPosition());
-    };
-
-    const elems = self.scratch_nodes.items[scratch_start..];
-
-    // If no elements were parsed (due to errors), create empty list
-    if (elems.len == 0) {
-        const empty_slice: []const Node.Idx = &.{};
-        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .nodes = nodes_idx });
-    }
-
-    const elems_idx = try self.ast.appendNodeSlice(self.gpa, elems);
-    return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .nodes = elems_idx });
-}
-
-fn parseRecordPattern(self: *Parser) Error!Node.Idx {
-    const start_pos = self.currentPosition();
-    self.advance(); // consume {
-
-    if (self.peek() == .CloseCurly) {
-        self.advance();
-        const empty_slice: []const Node.Idx = &.{};
-        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .nodes = nodes_idx });
-    }
-
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
-
-    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-        // Parse field pattern (could be just name or name: pattern)
-        if (self.peek() == .LowerIdent) {
-            const field_ident = self.currentIdent();
-            const field_pos = self.currentPosition();
-            self.advance();
-
-            if (field_ident) |id| {
-                const field_node = try self.ast.appendNode(self.gpa, field_pos, .lc, .{ .ident = id });
-                try self.scratch_nodes.append(self.gpa, field_node);
-
-                // Check for : pattern
-                if (self.peek() == .OpColon) {
-                    self.advance();
-                    const pattern = try self.parseExpr();
-                    try self.scratch_nodes.append(self.gpa, pattern);
-                }
-            }
-        } else {
-            _ = try self.pushMalformed(.pattern_unexpected_token, self.getCurrentErrorPos());
-            break;
-        }
-
-        if (self.peek() == .Comma) {
-            self.advance();
-        } else {
-            break;
-        }
-    }
-
-    self.expect(.CloseCurly) catch {
-        try self.pushDiagnostic(.expected_expr_close_curly, start_pos, self.currentPosition());
-    };
-
-    const fields = self.scratch_nodes.items[scratch_start..];
-
-    // If no fields were parsed (due to errors), create empty record
-    if (fields.len == 0) {
-        const empty_slice: []const Node.Idx = &.{};
-        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .nodes = nodes_idx });
-    }
-
-    const fields_idx = try self.ast.appendNodeSlice(self.gpa, fields);
-    return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .nodes = fields_idx });
-}
-
-fn parseTupleOrParenthesizedPattern(self: *Parser) Error!Node.Idx {
-    const start_pos = self.currentPosition();
-    self.advance(); // consume (
-
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
-
-    // Check for empty tuple
-    if (self.peek() == .CloseRound) {
-        self.advance();
-        // Empty tuple pattern
-        const empty_slice: []const Node.Idx = &.{};
-        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = nodes_idx });
-    }
-
-    const first = try self.parseExpr();
-    try self.scratch_nodes.append(self.gpa, first);
-
-    // Check if it's a tuple (has comma) or just parenthesized pattern
-    if (self.peek() == .Comma) {
-        self.advance();
-
-        while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
-            const elem = try self.parseExpr();
-            try self.scratch_nodes.append(self.gpa, elem);
-
-            if (self.peek() == .Comma) {
-                self.advance();
-            } else {
-                break;
-            }
-        }
-
-        self.expect(.CloseRound) catch {
-            try self.pushDiagnostic(.expected_expr_close_round_or_comma, start_pos, self.currentPosition());
-        };
-
-        const elems = self.scratch_nodes.items[scratch_start..];
-
-        // Safety check: tuples should have at least 2 elements
-        if (elems.len == 0) {
-            const empty_slice: []const Node.Idx = &.{};
-            const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-            return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = nodes_idx });
-        }
-
-        const elems_idx = try self.ast.appendNodeSlice(self.gpa, elems);
-        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = elems_idx });
-    } else {
-        self.expect(.CloseRound) catch {
-            try self.pushDiagnostic(.expected_expr_close_round_or_comma, start_pos, self.currentPosition());
-        };
-
-        // Just a parenthesized pattern
-        return first;
-    }
 }
 
 /// Parse an expression
@@ -1383,17 +1136,11 @@ fn parseStoredStringExpr(self: *Parser) Error!Node.Idx {
     }
 }
 
-fn parseStoredStringPattern(self: *Parser) Error!Node.Idx {
-    // For patterns, strings work the same as expressions
-    return self.parseStoredStringExpr();
-}
-
 fn parseStringExpr(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
-    const start_position = self.currentPosition();
 
     self.expect(.StringStart) catch {
-        return self.pushMalformed(.expr_unexpected_token, start_position);
+        return self.pushMalformed(.expr_unexpected_token, start_pos);
     };
 
     const scratch_start = self.scratch_nodes.items.len;
@@ -1435,7 +1182,7 @@ fn parseStringExpr(self: *Parser) Error!Node.Idx {
     }
 
     self.expect(.StringEnd) catch {
-        return self.pushMalformed(.string_unclosed, start_position);
+        return self.pushMalformed(.string_unclosed, start_pos);
     };
 
     // Store the actual string content
@@ -1794,11 +1541,10 @@ fn parseLambda(self: *Parser) Error!Node.Idx {
 
 fn parseVar(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
-    const start_position = self.currentPosition();
     self.advance(); // consume var
 
     if (self.peek() != .LowerIdent) {
-        return self.pushMalformed(.var_must_have_ident, start_position);
+        return self.pushMalformed(.var_must_have_ident, start_pos);
     }
 
     const ident = self.currentIdent();
@@ -1807,7 +1553,7 @@ fn parseVar(self: *Parser) Error!Node.Idx {
     if (ident) |id| {
         return try self.ast.appendNode(self.gpa, start_pos, .var_lc, .{ .ident = id });
     } else {
-        return self.pushMalformed(.var_must_have_ident, start_position);
+        return self.pushMalformed(.var_must_have_ident, start_pos);
     }
 }
 
@@ -1903,265 +1649,6 @@ fn parseCrash(self: *Parser) Error!Node.Idx {
 /// Parse a type annotation
 pub fn parseTypeAnno(self: *Parser) Error!Node.Idx {
     return self.parseExpr();
-}
-
-fn parseTypeAnnoWithBp(self: *Parser, min_bp: u8) Error!Node.Idx {
-    // Parse primary type
-    var left = try self.parsePrimaryType();
-
-    // Parse type operators
-    while (true) {
-        const op_tag = self.peek();
-        const bp = getBindingPower(op_tag);
-
-        if (bp.left <= min_bp) {
-            break;
-        }
-
-        const op_pos = self.currentPosition();
-        self.advance();
-
-        const right = try self.parseExprWithBp(bp.right);
-
-        const binop_tag = tokenToBinOpTag(op_tag) orelse {
-            return self.pushMalformed(.ty_anno_unexpected_token, self.getCurrentErrorPos());
-        };
-
-        const binop_idx = try self.ast.appendBinOp(self.gpa, left, right);
-        left = try self.ast.appendNode(self.gpa, op_pos, binop_tag, .{ .binop = binop_idx });
-    }
-
-    return left;
-}
-
-fn parsePrimaryType(self: *Parser) Error!Node.Idx {
-    return switch (self.peek()) {
-        .LowerIdent => {
-            const ident = self.currentIdent();
-            const pos = self.currentPosition();
-            self.advance();
-
-            if (ident) |id| {
-                return try self.ast.appendNode(self.gpa, pos, .lc, .{ .ident = id });
-            } else {
-                return self.pushMalformed(.ty_anno_unexpected_token, self.getCurrentErrorPos());
-            }
-        },
-        .UpperIdent => {
-            const ident = self.currentIdent();
-            const pos = self.currentPosition();
-            self.advance();
-
-            if (ident) |id| {
-                const type_node = try self.ast.appendNode(self.gpa, pos, .uc, .{ .ident = id });
-
-                // Check for type application
-                if (self.peek() == .OpenRound) {
-                    return self.parseTypeApply(type_node);
-                } else {
-                    return type_node;
-                }
-            } else {
-                return self.pushMalformed(.ty_anno_unexpected_token, self.getCurrentErrorPos());
-            }
-        },
-        .OpenCurly => return self.parseRecordType(),
-        .OpenSquare => return self.parseListType(),
-        .OpenRound => return self.parseTupleOrParenthesizedType(),
-        else => return self.pushMalformed(.ty_anno_unexpected_token, self.getCurrentErrorPos()),
-    };
-}
-
-fn parseTypeApply(self: *Parser, type_ctor: Node.Idx) Error!Node.Idx {
-    const start_pos = self.ast.start(type_ctor);
-    self.advance(); // consume '('
-
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
-
-    // Add the type constructor as the first node
-    try self.scratch_nodes.append(self.gpa, type_ctor);
-
-    // Parse type arguments
-    if (self.peek() != .CloseRound) {
-        while (true) {
-            const type_arg = try self.parseExpr();
-            try self.scratch_nodes.append(self.gpa, type_arg);
-
-            if (self.peek() == .Comma) {
-                self.advance();
-            } else {
-                break;
-            }
-        }
-    }
-
-    self.expect(.CloseRound) catch {
-        try self.pushDiagnostic(.expected_expr_apply_close_round, start_pos, self.currentPosition());
-    };
-
-    const nodes = self.scratch_nodes.items[scratch_start..];
-
-    // Should have at least the type constructor
-    if (nodes.len == 0) {
-        return try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = .ty_anno_unexpected_token });
-    }
-
-    const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-    return try self.ast.appendNode(self.gpa, start_pos, .apply_uc, .{ .nodes = nodes_idx });
-}
-
-fn parseRecordType(self: *Parser) Error!Node.Idx {
-    const start_pos = self.currentPosition();
-    self.advance(); // consume {
-
-    // Check for empty record type
-    if (self.peek() == .CloseCurly) {
-        self.advance();
-        const empty_slice: []const Node.Idx = &.{};
-        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .nodes = nodes_idx });
-    }
-
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
-
-    // Parse record fields
-    while (true) {
-        // Parse field name (lowercase identifier)
-        if (self.peek() != .LowerIdent) {
-            try self.pushDiagnostic(.expected_type_field_name, start_pos, self.currentPosition());
-            return self.pushMalformed(.ty_anno_unexpected_token, self.getCurrentErrorPos());
-        }
-
-        const field_name = self.currentIdent();
-        const field_pos = self.currentPosition();
-        self.advance();
-
-        const field_node = if (field_name) |name|
-            try self.ast.appendNode(self.gpa, field_pos, .lc, .{ .ident = name })
-        else
-            try self.ast.appendNode(self.gpa, field_pos, .malformed, .{ .malformed = .ty_anno_unexpected_token });
-
-        try self.scratch_nodes.append(self.gpa, field_node);
-
-        // Expect colon
-        self.expect(.OpColon) catch {
-            try self.pushDiagnostic(.expected_colon_after_type_field_name, start_pos, self.currentPosition());
-        };
-
-        // Parse field type
-        const field_type = try self.parseExpr();
-        try self.scratch_nodes.append(self.gpa, field_type);
-
-        // Check for comma or end
-        if (self.peek() == .Comma) {
-            self.advance();
-            // Allow trailing comma
-            if (self.peek() == .CloseCurly) {
-                break;
-            }
-        } else {
-            break;
-        }
-    }
-
-    self.expect(.CloseCurly) catch {
-        try self.pushDiagnostic(.expected_ty_close_curly_or_comma, start_pos, self.currentPosition());
-    };
-
-    const fields = self.scratch_nodes.items[scratch_start..];
-    if (fields.len == 0) {
-        const empty_slice: []const Node.Idx = &.{};
-        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .nodes = nodes_idx });
-    }
-
-    const fields_idx = try self.ast.appendNodeSlice(self.gpa, fields);
-    return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .nodes = fields_idx });
-}
-
-fn parseListType(self: *Parser) Error!Node.Idx {
-    const start_pos = self.currentPosition();
-    self.advance(); // consume [
-
-    // Check for empty list type (shouldn't happen in type context, but handle it)
-    if (self.peek() == .CloseSquare) {
-        self.advance();
-        const empty_slice: []const Node.Idx = &.{};
-        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .nodes = nodes_idx });
-    }
-
-    // Parse the element type
-    const elem_type = try self.parseExpr();
-
-    self.expect(.CloseSquare) catch {
-        try self.pushDiagnostic(.expected_ty_close_square_or_comma, start_pos, self.currentPosition());
-    };
-
-    // List types are stored as: [elem_type]
-    const types_idx = try self.ast.appendNodeSlice(self.gpa, &[_]Node.Idx{elem_type});
-    return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .nodes = types_idx });
-}
-
-fn parseTupleOrParenthesizedType(self: *Parser) Error!Node.Idx {
-    const start_pos = self.currentPosition();
-    self.advance(); // consume (
-
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
-
-    // Check for empty tuple
-    if (self.peek() == .CloseRound) {
-        self.advance();
-        // Empty tuples are not allowed in type annotations
-        try self.pushDiagnostic(.ty_anno_unexpected_token, start_pos, self.currentPosition());
-        const empty_slice: []const Node.Idx = &.{};
-        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = nodes_idx });
-    }
-
-    // Parse first type
-    const first_type = try self.parseExpr();
-    try self.scratch_nodes.append(self.gpa, first_type);
-
-    // Check if it's a tuple or parenthesized type
-    if (self.peek() == .Comma) {
-        // It's a tuple type
-        while (self.peek() == .Comma) {
-            self.advance();
-
-            // Check for trailing comma
-            if (self.peek() == .CloseRound) {
-                break;
-            }
-
-            const elem_type = try self.parseExpr();
-            try self.scratch_nodes.append(self.gpa, elem_type);
-        }
-
-        self.expect(.CloseRound) catch {
-            try self.pushDiagnostic(.expected_ty_anno_close_round, start_pos, self.currentPosition());
-        };
-
-        const types = self.scratch_nodes.items[scratch_start..];
-        const types_idx = try self.ast.appendNodeSlice(self.gpa, types);
-        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = types_idx });
-    } else {
-        // It's a parenthesized type - just return the inner type
-        self.expect(.CloseRound) catch {
-            try self.pushDiagnostic(.expected_ty_anno_close_round, start_pos, self.currentPosition());
-        };
-
-        return first_type;
-    }
 }
 
 // Operator precedence
