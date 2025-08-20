@@ -1596,8 +1596,6 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
         return;
     }
 
-    try stdout.print("Running {} test(s) in {s}...\n", .{ expects.items.len, args.path });
-
     // Create interpreter infrastructure for test evaluation
     var stack_memory = eval.Stack.initCapacity(gpa, 1024) catch |err| {
         try stderr.print("Failed to create stack memory: {}\n", .{err});
@@ -1678,15 +1676,17 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
 
     // Report results
     if (failed == 0) {
-        // Success case: print nothing, exit with 0
+        // Success case: only print if verbose, exit with 0
         if (args.verbose) {
+            try stdout.print("Ran {} test(s): {} passed, 0 failed in {d:.1}ms\n", .{ passed, passed, elapsed_ms });
             for (test_results.items) |test_result| {
                 try stdout.print("PASS: line {}\n", .{test_result.line_number});
             }
         }
+        // Otherwise print nothing at all
         return; // Exit with 0
     } else {
-        // Failure case: print summary
+        // Failure case: always print summary with timing
         try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms\n", .{ passed + failed, passed, failed, elapsed_ms });
 
         if (args.verbose) {
