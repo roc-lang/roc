@@ -13,6 +13,7 @@ const parse = @import("parse");
 const base = @import("base");
 const can = @import("can");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const reporting = @import("reporting");
 
 const Report = reporting.Report;
@@ -338,7 +339,7 @@ pub const BuildEnv = struct {
     gpa: Allocator,
     mode: Mode,
     max_threads: usize,
-    compiler_version: []const u8 = "roc-zig-dev",
+    compiler_version: []const u8 = build_options.compiler_version,
 
     // Workspace roots for sandboxing (absolute, canonical)
     workspace_roots: std.ArrayList([]const u8),
