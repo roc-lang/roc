@@ -37,7 +37,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .idents = try Ident.Store.initCapacity(gpa, 1024),
         .strings = try StringLiteral.Store.initCapacityBytes(gpa, 4096),
         .exposed_items = ExposedItems.init(),
-        .line_starts = try SafeList(u32).initCapacity(gpa, 256),
+        .line_starts = try RegionInfo.findLineStarts(gpa, source),
         .source = source,
     };
 }

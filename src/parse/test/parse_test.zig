@@ -1069,3 +1069,55 @@ test "manual snapshot comparison - one file" {
 
     std.debug.print("=== End Manual Test ===\n", .{});
 }
+
+test "Parser2: iterative parser simple expression" {
+    const allocator = testing.allocator;
+
+    // Test simple identifier
+    {
+        const source = "foo";
+        var ast = try AST2.initCapacity(allocator, 100);
+        defer ast.deinit(allocator);
+
+        var env = try base.CommonEnv.init(allocator, source);
+        defer env.deinit(allocator);
+
+        var messages: [128]tokenize_iter.Diagnostic = undefined;
+        const msg_slice = messages[0..];
+        var byte_slices = collections.ByteSlices{ .entries = .{} };
+        defer byte_slices.entries.deinit(allocator);
+
+        // Create parser with iterative mode enabled
+        var parser = try Parser2.initWithOptions(&env, allocator, source, msg_slice, &ast, &byte_slices);
+        defer parser.deinit();
+
+        const result = try parser.parseExpr();
+
+        // Should produce a lowercase identifier
+        try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(result));
+    }
+
+    // Test binary operation
+    {
+        const source = "1 + 2";
+        var ast = try AST2.initCapacity(allocator, 100);
+        defer ast.deinit(allocator);
+
+        var env = try base.CommonEnv.init(allocator, source);
+        defer env.deinit(allocator);
+
+        var messages: [128]tokenize_iter.Diagnostic = undefined;
+        const msg_slice = messages[0..];
+        var byte_slices = collections.ByteSlices{ .entries = .{} };
+        defer byte_slices.entries.deinit(allocator);
+
+        // Create parser with iterative mode enabled
+        var parser = try Parser2.initWithOptions(&env, allocator, source, msg_slice, &ast, &byte_slices);
+        defer parser.deinit();
+
+        const result = try parser.parseExpr();
+
+        // Should produce a binary operation
+        try testing.expectEqual(AST2.Node.Tag.binop_plus, ast.tag(result));
+    }
+}

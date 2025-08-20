@@ -486,14 +486,8 @@ pub const Document = struct {
         // Copy the line text to avoid memory safety issues
         const line_text_slice = region_info.calculateLineText(source, line_starts);
 
-        // If we have an empty line text, skip adding the source code region
-        // This can happen when position tracking fails
-        const trimmed = std.mem.trim(u8, line_text_slice, " \t\n\r");
-        if (trimmed.len == 0) {
-            // Don't add a source code region with empty content
-            return;
-        }
-
+        // Always include source region for error reporting, even for empty lines
+        // Empty lines are valid error locations (e.g., unexpected token at EOF or blank line)
         const owned_line_text = try self.allocator.dupe(u8, line_text_slice);
 
         try self.elements.append(.{
