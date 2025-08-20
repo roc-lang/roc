@@ -233,13 +233,27 @@ pub const TokenIterator = struct {
                 // Return as float
                 const text = self.cursor.buf[start_pos..self.cursor.pos];
                 if (std.fmt.parseFloat(f64, text)) |value| {
-                    // Try to fit in SmallDec
-                    const small_dec = Token.SmallDec{ .numerator = @intFromFloat(value * 100), .denominator_power_of_ten = 2 };
-                    return Token{
-                        .tag = .Float,
-                        .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-                        .extra = .{ .frac_literal_small = small_dec },
-                    };
+                    // Try to fit in SmallDec - check bounds first (SmallDec uses i16!)
+                    const scaled = value * 100;
+                    const max_i16 = @as(f64, @floatFromInt(std.math.maxInt(i16)));
+                    const min_i16 = @as(f64, @floatFromInt(std.math.minInt(i16)));
+
+                    if (scaled >= min_i16 and scaled <= max_i16 and !std.math.isNan(scaled) and !std.math.isInf(scaled)) {
+                        const small_dec = Token.SmallDec{ .numerator = @as(i16, @intFromFloat(scaled)), .denominator_power_of_ten = 2 };
+                        return Token{
+                            .tag = .Float,
+                            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
+                            .extra = .{ .frac_literal_small = small_dec },
+                        };
+                    } else {
+                        // Value too large for SmallDec, store as bytes
+                        const bytes_idx = try self.byte_slices.append(gpa, text);
+                        return Token{
+                            .tag = .Float,
+                            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
+                            .extra = .{ .bytes_idx = bytes_idx },
+                        };
+                    }
                 } else |_| {
                     // Store as bytes
                     const bytes_idx = try self.byte_slices.append(gpa, text);

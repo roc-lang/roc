@@ -24,11 +24,26 @@ const MAX_PARSE_DIAGNOSTICS: usize = 1_000;
 const MAX_NESTING_LEVELS: u8 = 128;
 
 /// A parser which tokenizes and parses source code into an abstract syntax tree.
+///
+/// IMPORTANT: This is an LL(1) parser by design. This means:
+/// - We use exactly 1 token of lookahead (via peek())
+/// - We NEVER look ahead more than 1 token
+/// - We NEVER backtrack or rewind
+/// - All parsing decisions are made based on the current token only
+///
+/// This design ensures:
+/// - Predictable O(n) performance
+/// - Minimal memory usage
+/// - Simple, maintainable parsing logic
+///
+/// If you're tempted to add more lookahead or backtracking, please
+/// reconsider the grammar or parsing strategy instead. The goal is
+/// to keep this parser strictly LL(1).
 pub const Parser = @This();
 
 gpa: std.mem.Allocator,
 token_iter: tokenize_iter.TokenIterator,
-lookahead: ?Token, // 1-token lookahead buffer for peek()
+lookahead: ?Token, // Single token lookahead - LL(1) parser, no more!
 ast: *AST,
 byte_slices: *collections.ByteSlices, // Reference to tokenizer's ByteSlices
 scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
@@ -96,7 +111,8 @@ pub fn expect(self: *Parser, expected: Token.Tag) error{ExpectedNotFound}!void {
     self.advance();
 }
 
-/// Peek at the token at the current position
+/// Peek at the token at the current position (1 token lookahead only!)
+/// This is an LL(1) parser - we only ever look at the current token.
 ///
 /// **note** caller is responsible to ensure this isn't the last token
 pub fn peek(self: *Parser) Token.Tag {
@@ -1273,19 +1289,43 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
     const first_elem = try self.parseExpr();
     try self.scratch_nodes.append(self.gpa, first_elem);
 
-    const is_record = self.peek() == .Comma;
+    // Determine if this is a record by looking at the structure of the first element
+    // A record field looks like: field_name : field_value
+    // A block statement doesn't have this structure
+    var is_record = false;
+    if (self.ast.tag(first_elem) == .binop_colon) {
+        is_record = true;
+    } else {
+        is_record = self.peek() == .Comma;
+    }
+
+    if (is_record and self.peek() == .Comma) {
+        self.advance(); // consume comma
+    }
 
     if (is_record) {
-        self.advance(); // consume comma
-
         while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-            const field = try self.parseExpr();
-            try self.scratch_nodes.append(self.gpa, field);
+            // Check for open record syntax `..`
+            if (self.peek() == .DoubleDot) {
+                self.advance(); // consume ..
 
-            if (self.peek() == .Comma) {
-                self.advance();
+                // For now, just skip the .. - in unified AST we might handle this differently
+                // The important thing is we don't crash on it
+
+                // Check if there's a comma after .. (optional)
+                if (self.peek() == .Comma) {
+                    self.advance();
+                }
+                break; // .. should be the last element
             } else {
-                break;
+                const field = try self.parseExpr();
+                try self.scratch_nodes.append(self.gpa, field);
+
+                if (self.peek() == .Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
             }
         }
     } else {
