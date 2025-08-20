@@ -130,4 +130,5 @@ test "parser tests" {
     std.testing.refAllDecls(@import("test/ast_node_store_test.zig"));
     std.testing.refAllDecls(@import("test/parse_test.zig"));
     std.testing.refAllDecls(@import("test/snapshot_comparison_test.zig"));
+    std.testing.refAllDecls(@import("test/test_string_parsing.zig"));
 }

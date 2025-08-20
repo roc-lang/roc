@@ -515,7 +515,7 @@ fn parsePlatformHeader(self: *Parser, start_pos: Position) Error!AST.Header {
         try self.pushDiagnostic(.expected_requires_signatures_open_curly, start_pos, self.currentPosition());
     };
 
-    const signatures_idx = try self.parseTypeAnno();
+    const signatures_idx = try self.parseExpr();
 
     self.expect(.CloseCurly) catch {
         try self.pushDiagnostic(.expected_requires_signatures_close_curly, start_pos, self.currentPosition());
@@ -928,55 +928,9 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
     return try self.ast.appendNode(self.gpa, start_pos, .import, .{ .import_nodes = nodes_idx });
 }
 
-/// Parse a pattern
+/// Parse a pattern (now just calls parseExpr for unified AST)
 pub fn parsePattern(self: *Parser) Error!Node.Idx {
-    const start_position = self.currentPosition();
-
-    return switch (self.peek()) {
-        .LowerIdent => {
-            const ident = self.currentIdent();
-            const pos = self.currentPosition();
-            self.advance();
-
-            if (ident) |id| {
-                return try self.ast.appendNode(self.gpa, pos, .lc, .{ .ident = id });
-            } else {
-                return self.pushMalformed(.pattern_unexpected_token, start_position);
-            }
-        },
-        .UpperIdent => {
-            const ident = self.currentIdent();
-            const pos = self.currentPosition();
-            self.advance();
-
-            // Could be a tag pattern or start of a tag application
-            if (ident) |id| {
-                const tag_node = try self.ast.appendNode(self.gpa, pos, .uc, .{ .ident = id });
-
-                // Check for tag application
-                if (self.peek() == .OpenRound) {
-                    return self.parseApply(tag_node);
-                } else {
-                    return tag_node;
-                }
-            } else {
-                return self.pushMalformed(.pattern_unexpected_token, start_position);
-            }
-        },
-        .Underscore => {
-            const pos = self.currentPosition();
-            self.advance();
-            // Use the new underscore node type
-            return try self.ast.appendNode(self.gpa, pos, .underscore, .{ .src_bytes_end = pos });
-        },
-        .String, .MultilineString, .SingleQuote => return self.parseStoredStringPattern(),
-        .StringStart => return self.parseStringPattern(),
-        .Int, .Float, .IntBase => return self.parseNumLiteral(),
-        .OpenSquare => return self.parseListPattern(),
-        .OpenCurly => return self.parseRecordPattern(),
-        .OpenRound => return self.parseTupleOrParenthesizedPattern(),
-        else => return self.pushMalformed(.pattern_unexpected_token, start_position),
-    };
+    return self.parseExpr();
 }
 
 fn parseStringPattern(self: *Parser) Error!Node.Idx {
@@ -1009,11 +963,11 @@ fn parseListPattern(self: *Parser) Error!Node.Idx {
             // Parse rest pattern (e.g., ..rest or .. as rest)
             if (self.peek() == .KwAs) {
                 self.advance();
-                const rest_pattern = try self.parsePattern();
+                const rest_pattern = try self.parseExpr();
                 try self.scratch_nodes.append(self.gpa, rest_pattern);
             } else if (self.peek() == .LowerIdent) {
                 // Handle ..rest syntax (which should be an error per snapshot)
-                const rest_pattern = try self.parsePattern();
+                const rest_pattern = try self.parseExpr();
                 try self.scratch_nodes.append(self.gpa, rest_pattern);
                 try self.pushDiagnostic(.pattern_list_rest_old_syntax, rest_pos, self.currentPosition());
             } else {
@@ -1026,7 +980,7 @@ fn parseListPattern(self: *Parser) Error!Node.Idx {
             // Rest should be last element
             break;
         } else {
-            const elem = try self.parsePattern();
+            const elem = try self.parseExpr();
             try self.scratch_nodes.append(self.gpa, elem);
         }
 
@@ -1084,7 +1038,7 @@ fn parseRecordPattern(self: *Parser) Error!Node.Idx {
                 // Check for : pattern
                 if (self.peek() == .OpColon) {
                     self.advance();
-                    const pattern = try self.parsePattern();
+                    const pattern = try self.parseExpr();
                     try self.scratch_nodes.append(self.gpa, pattern);
                 }
             }
@@ -1135,7 +1089,7 @@ fn parseTupleOrParenthesizedPattern(self: *Parser) Error!Node.Idx {
         return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = nodes_idx });
     }
 
-    const first = try self.parsePattern();
+    const first = try self.parseExpr();
     try self.scratch_nodes.append(self.gpa, first);
 
     // Check if it's a tuple (has comma) or just parenthesized pattern
@@ -1143,7 +1097,7 @@ fn parseTupleOrParenthesizedPattern(self: *Parser) Error!Node.Idx {
         self.advance();
 
         while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
-            const elem = try self.parsePattern();
+            const elem = try self.parseExpr();
             try self.scratch_nodes.append(self.gpa, elem);
 
             if (self.peek() == .Comma) {
@@ -1287,6 +1241,12 @@ fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
             } else {
                 return self.pushMalformed(.expr_unexpected_token, start_position);
             }
+        },
+        .Underscore => {
+            const pos = self.currentPosition();
+            self.advance();
+            // Use the new underscore node type
+            return try self.ast.appendNode(self.gpa, pos, .underscore, .{ .src_bytes_end = pos });
         },
         .Int, .Float, .IntBase => return self.parseNumLiteral(),
         .String, .MultilineString, .SingleQuote => return self.parseStoredStringExpr(),
@@ -1449,10 +1409,18 @@ fn parseStringExpr(self: *Parser) Error!Node.Idx {
     while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
         switch (self.peek()) {
             .StringPart => {
-                // For now, we don't have access to the original source in the iterator
-                // We'd need to store string content in token extras or ByteSlices
-                // For this temporary fix, just add a placeholder
-                try string_bytes.appendSlice(""); // TODO: Get actual string content
+                // Get the string content from the token's ByteSlices
+                const extra = self.currentExtra();
+                switch (extra) {
+                    .bytes_idx => |idx| {
+                        const str_content = self.byte_slices.slice(idx);
+                        try string_bytes.appendSlice(str_content);
+                    },
+                    else => {
+                        // Shouldn't happen - StringPart should always have bytes_idx
+                        try string_bytes.appendSlice("");
+                    },
+                }
                 self.advance();
             },
             .OpenStringInterpolation => {
@@ -1753,7 +1721,7 @@ fn parseMatch(self: *Parser) Error!Node.Idx {
     // Parse branches
     var branch_count: u32 = 0;
     while (self.peek() != .EndOfFile) {
-        const pattern = try self.parsePattern();
+        const pattern = try self.parseExpr();
         try self.scratch_nodes.append(self.gpa, pattern);
 
         self.expect(.OpFatArrow) catch {
@@ -1788,7 +1756,7 @@ fn parseLambda(self: *Parser) Error!Node.Idx {
 
     // Parse parameters
     while (self.peek() != .OpBar and self.peek() != .EndOfFile) {
-        const param = try self.parsePattern();
+        const param = try self.parsePrimaryExpr();
         try self.scratch_nodes.append(self.gpa, param);
 
         if (self.peek() == .Comma) {
@@ -1853,7 +1821,7 @@ fn parseFor(self: *Parser) Error!Node.Idx {
     }
 
     // Parse the pattern (e.g., 'x' in 'for x in ...')
-    const pattern = try self.parsePattern();
+    const pattern = try self.parseExpr();
     try self.scratch_nodes.append(self.gpa, pattern);
 
     // Expect 'in'
@@ -1934,7 +1902,7 @@ fn parseCrash(self: *Parser) Error!Node.Idx {
 
 /// Parse a type annotation
 pub fn parseTypeAnno(self: *Parser) Error!Node.Idx {
-    return self.parseTypeAnnoWithBp(0);
+    return self.parseExpr();
 }
 
 fn parseTypeAnnoWithBp(self: *Parser, min_bp: u8) Error!Node.Idx {
@@ -1953,7 +1921,7 @@ fn parseTypeAnnoWithBp(self: *Parser, min_bp: u8) Error!Node.Idx {
         const op_pos = self.currentPosition();
         self.advance();
 
-        const right = try self.parseTypeAnnoWithBp(bp.right);
+        const right = try self.parseExprWithBp(bp.right);
 
         const binop_tag = tokenToBinOpTag(op_tag) orelse {
             return self.pushMalformed(.ty_anno_unexpected_token, self.getCurrentErrorPos());
@@ -2019,7 +1987,7 @@ fn parseTypeApply(self: *Parser, type_ctor: Node.Idx) Error!Node.Idx {
     // Parse type arguments
     if (self.peek() != .CloseRound) {
         while (true) {
-            const type_arg = try self.parseTypeAnno();
+            const type_arg = try self.parseExpr();
             try self.scratch_nodes.append(self.gpa, type_arg);
 
             if (self.peek() == .Comma) {
@@ -2087,7 +2055,7 @@ fn parseRecordType(self: *Parser) Error!Node.Idx {
         };
 
         // Parse field type
-        const field_type = try self.parseTypeAnno();
+        const field_type = try self.parseExpr();
         try self.scratch_nodes.append(self.gpa, field_type);
 
         // Check for comma or end
@@ -2130,7 +2098,7 @@ fn parseListType(self: *Parser) Error!Node.Idx {
     }
 
     // Parse the element type
-    const elem_type = try self.parseTypeAnno();
+    const elem_type = try self.parseExpr();
 
     self.expect(.CloseSquare) catch {
         try self.pushDiagnostic(.expected_ty_close_square_or_comma, start_pos, self.currentPosition());
@@ -2161,7 +2129,7 @@ fn parseTupleOrParenthesizedType(self: *Parser) Error!Node.Idx {
     }
 
     // Parse first type
-    const first_type = try self.parseTypeAnno();
+    const first_type = try self.parseExpr();
     try self.scratch_nodes.append(self.gpa, first_type);
 
     // Check if it's a tuple or parenthesized type
@@ -2175,7 +2143,7 @@ fn parseTupleOrParenthesizedType(self: *Parser) Error!Node.Idx {
                 break;
             }
 
-            const elem_type = try self.parseTypeAnno();
+            const elem_type = try self.parseExpr();
             try self.scratch_nodes.append(self.gpa, elem_type);
         }
 
