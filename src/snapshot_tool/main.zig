@@ -2494,10 +2494,10 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
 
     // Split by the » character, each section is a separate REPL input
     var parts = std.mem.splitSequence(u8, content.source, "»");
-    
+
     // Skip the first part (before the first »)
     _ = parts.next();
-    
+
     while (parts.next()) |part| {
         // Trim whitespace and newlines
         const trimmed = std.mem.trim(u8, part, " \t\r\n");
