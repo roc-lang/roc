@@ -824,7 +824,28 @@ pub fn parseStmt(self: *Parser) Error!?Node.Idx {
     switch (self.peek()) {
         .EndOfFile => return null,
         .KwImport => return self.parseImport(),
-        else => return try self.parseExpr(),
+        else => {
+            // Parse the left-hand side as an expression first
+            const start_pos = self.currentPosition();
+            const lhs = try self.parseExpr();
+
+            // Check if this is followed by : or := (making it a type annotation/declaration)
+            if (self.peek() == .OpColon or self.peek() == .OpColonEqual) {
+                const is_opaque = self.peek() == .OpColonEqual;
+                self.advance(); // consume : or :=
+
+                // Parse the right-hand side as an expression (unified AST doesn't distinguish)
+                const rhs = try self.parseExpr();
+
+                // Create type annotation/declaration node
+                const tag: AST.Node.Tag = if (is_opaque) .binop_colon_equals else .binop_colon;
+                const binop_idx = try self.ast.appendBinOp(self.gpa, lhs, rhs);
+                return try self.ast.appendNode(self.gpa, start_pos, tag, .{ .binop = binop_idx });
+            }
+
+            // Otherwise, it's just a regular expression/statement
+            return lhs;
+        },
     }
 }
 

@@ -279,7 +279,7 @@ pub const TokenIterator = struct {
         // Read identifier characters
         while (self.cursor.pos < self.cursor.buf.len) {
             const byte = self.cursor.buf[self.cursor.pos];
-            if (std.ascii.isAlphanumeric(byte) or byte == '_') {
+            if (std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '!') {
                 self.cursor.pos += 1;
             } else {
                 break;
