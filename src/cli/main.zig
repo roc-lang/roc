@@ -1508,6 +1508,9 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // Start timing
+    const start_time = std.time.nanoTimestamp();
+
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
 
@@ -1593,7 +1596,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
         return;
     }
 
-    try stdout.print("Running test(s) in {s}... ", .{args.path});
+    try stdout.print("Running {} test(s) in {s}...\n", .{ expects.items.len, args.path });
 
     // Create interpreter infrastructure for test evaluation
     var stack_memory = eval.Stack.initCapacity(gpa, 1024) catch |err| {
@@ -1618,15 +1621,28 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     defer interpreter.deinit(test_env.get_ops());
     test_env.setInterpreter(&interpreter);
 
+    // Track test results for verbose output
+    const TestResult = struct {
+        line_number: u32,
+        passed: bool,
+        error_msg: ?[]const u8 = null,
+    };
+
+    var test_results = std.ArrayList(TestResult).init(gpa);
+    defer test_results.deinit();
+
     // Evaluate each expect statement
     var passed: u32 = 0;
     var failed: u32 = 0;
 
     for (expects.items) |expect_test| {
+        const region_info = env.calcRegionInfo(expect_test.region);
+        const line_number = region_info.start_line_idx + 1;
+
         // Evaluate the expect expression
         const result = interpreter.eval(expect_test.expr_idx, test_env.get_ops()) catch |err| {
-            const region_info = env.calcRegionInfo(expect_test.region);
-            try stderr.print("Test evaluation failed at line {}: {}\n", .{ region_info.start_line_idx + 1, err });
+            const error_msg = try std.fmt.allocPrint(gpa, "Test evaluation failed: {}", .{err});
+            try test_results.append(.{ .line_number = line_number, .passed = false, .error_msg = error_msg });
             failed += 1;
             continue;
         };
@@ -1635,23 +1651,58 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
         if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .bool) {
             const is_true = result.asBool();
             if (is_true) {
+                try test_results.append(.{ .line_number = line_number, .passed = true });
                 passed += 1;
             } else {
-                const region_info = env.calcRegionInfo(expect_test.region);
-                try stderr.print("Test failed at line {}\n", .{region_info.start_line_idx + 1});
+                try test_results.append(.{ .line_number = line_number, .passed = false });
                 failed += 1;
             }
         } else {
-            // Result is not a boolean - this is a test error
-            const region_info = env.calcRegionInfo(expect_test.region);
-            try stderr.print("Test at line {} did not evaluate to a boolean\n", .{region_info.start_line_idx + 1});
+            const error_msg = try gpa.dupe(u8, "Test did not evaluate to a boolean");
+            try test_results.append(.{ .line_number = line_number, .passed = false, .error_msg = error_msg });
             failed += 1;
         }
     }
 
+    // Calculate elapsed time
+    const end_time = std.time.nanoTimestamp();
+    const elapsed_ns = @as(u64, @intCast(end_time - start_time));
+    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
+
+    // Free allocated error messages
+    for (test_results.items) |test_result| {
+        if (test_result.error_msg) |msg| {
+            gpa.free(msg);
+        }
+    }
+
     // Report results
-    try stdout.print("{} passed, {} failed\n", .{ passed, failed });
-    if (failed > 0) {
+    if (failed == 0) {
+        // Success case: print nothing, exit with 0
+        if (args.verbose) {
+            for (test_results.items) |test_result| {
+                try stdout.print("PASS: line {}\n", .{test_result.line_number});
+            }
+        }
+        return; // Exit with 0
+    } else {
+        // Failure case: print summary
+        try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms\n", .{ passed + failed, passed, failed, elapsed_ms });
+
+        if (args.verbose) {
+            for (test_results.items) |test_result| {
+                if (test_result.passed) {
+                    try stderr.print("PASS: line {}\n", .{test_result.line_number});
+                } else {
+                    if (test_result.error_msg) |msg| {
+                        try stderr.print("FAIL: line {} - {s}\n", .{ test_result.line_number, msg });
+                    } else {
+                        try stderr.print("FAIL: line {}\n", .{test_result.line_number});
+                    }
+                }
+            }
+        }
+
         std.process.exit(1);
     }
 }
