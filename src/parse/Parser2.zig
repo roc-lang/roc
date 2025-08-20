@@ -40,7 +40,7 @@ nesting_counter: u8,
 /// init the parser from source text using TokenIterator
 pub fn init(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []const u8, messages: []tokenize.Diagnostic, ast: *AST, byte_slices: *collections.ByteSlices) std.mem.Allocator.Error!Parser {
     const token_iter = try tokenize_iter.TokenIterator.init(env, gpa, source, messages, byte_slices);
-    
+
     var parser = Parser{
         .gpa = gpa,
         .token_iter = token_iter,
@@ -53,10 +53,10 @@ pub fn init(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []const u8, me
         .cached_malformed_node = null,
         .nesting_counter = MAX_NESTING_LEVELS,
     };
-    
+
     // Fill initial lookahead buffer
     try parser.fillLookahead();
-    
+
     return parser;
 }
 
@@ -82,6 +82,7 @@ fn fillLookahead(self: *Parser) std.mem.Allocator.Error!void {
 pub fn deinit(parser: *Parser) void {
     parser.token_iter.deinit(parser.gpa);
     parser.scratch_nodes.deinit(parser.gpa);
+    parser.diagnostics.deinit(parser.gpa);
     // diagnostics will be kept and passed to the following compiler stage
     // to be deinitialized by the caller when no longer required
 }
@@ -136,7 +137,7 @@ fn currentToken(self: *Parser) ?Token {
     return self.lookahead[0];
 }
 
-/// Get the next token (if available)  
+/// Get the next token (if available)
 fn nextToken(self: *Parser) ?Token {
     return self.lookahead[1];
 }
@@ -292,8 +293,7 @@ pub fn parseHeader(self: *Parser) Error!void {
 }
 
 fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
-
-    // Parse provides
+    // Parse provides list: app [main!] ...
     self.expect(.OpenSquare) catch {
         try self.pushDiagnostic(.header_expected_open_square, start_pos, self.currentPosition());
         return AST.Header{ .app = .{
@@ -310,29 +310,123 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
         try self.pushDiagnostic(.header_expected_close_square, start_pos, self.currentPosition());
     };
 
-    // Parse platform
-    const platform_idx = try self.parsePlatformSpecification();
+    // Parse platform and packages: { pf: platform "...", package1: "...", ... }
+    self.expect(.OpenCurly) catch {
+        try self.pushDiagnostic(.expected_package_platform_open_curly, start_pos, self.currentPosition());
+        return AST.Header{ .app = .{
+            .provides = provides_idx,
+            .platform_idx = @enumFromInt(0),
+            .packages = @enumFromInt(0),
+            .region = start_pos,
+        } };
+    };
 
-    // Parse packages (optional)
-    const packages_idx = if (self.peek() == .OpenCurly) blk: {
+    var platform_field: Node.Idx = @enumFromInt(0);
+    const scratch_start = self.scratch_nodes.items.len;
+    defer {
+        self.scratch_nodes.items.len = scratch_start;
+    }
+
+    // Parse record fields inside {}
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        const field_start = self.currentPosition();
+
+        // Expect field name
+        if (self.peek() != .LowerIdent) {
+            try self.pushDiagnostic(.expected_package_or_platform_name, start_pos, self.currentPosition());
+            break;
+        }
+
+        const field_name = self.currentIdent();
+        const name_pos = self.currentPosition();
         self.advance();
-        const idx = try self.parsePackageList();
-        self.expect(.CloseCurly) catch {
-            try self.pushDiagnostic(.expected_packages_close_curly, start_pos, self.currentPosition());
+
+        // Expect colon
+        self.expect(.OpColon) catch {
+            try self.pushDiagnostic(.expected_package_or_platform_colon, start_pos, self.currentPosition());
+            break;
         };
-        break :blk idx;
-    } else @as(AST.NodeSlices.Idx, @enumFromInt(0));
+
+        // Check if this is the platform field
+        if (self.peek() == .KwPlatform) {
+            if (@intFromEnum(platform_field) != 0) {
+                try self.pushDiagnostic(.multiple_platforms, start_pos, self.currentPosition());
+                break;
+            }
+            self.advance(); // consume 'platform' keyword
+
+            // Parse platform string
+            if (self.peek() != .String) {
+                try self.pushDiagnostic(.expected_platform_string, start_pos, self.currentPosition());
+                break;
+            }
+
+            const platform_value = try self.parseExpr();
+
+            // Create a record field node for the platform
+            if (field_name) |name| {
+                const field_node = try self.ast.appendNode(self.gpa, name_pos, .lc, .{ .ident = name });
+                const binop_idx = try self.ast.appendBinOp(self.gpa, field_node, platform_value);
+                platform_field = try self.ast.appendNode(self.gpa, field_start, .binop_colon, .{ .binop = binop_idx });
+            }
+        } else {
+            // Regular package field
+            if (self.peek() != .String) {
+                try self.pushDiagnostic(.expected_package_or_platform_string, start_pos, self.currentPosition());
+                break;
+            }
+
+            const package_value = try self.parseExpr();
+
+            // Create a record field node for the package
+            if (field_name) |name| {
+                const field_node = try self.ast.appendNode(self.gpa, name_pos, .lc, .{ .ident = name });
+                const binop_idx = try self.ast.appendBinOp(self.gpa, field_node, package_value);
+                const field = try self.ast.appendNode(self.gpa, field_start, .binop_colon, .{ .binop = binop_idx });
+                try self.scratch_nodes.append(self.gpa, field);
+            }
+        }
+
+        // Check for comma (optional)
+        if (self.peek() == .Comma) {
+            self.advance();
+        } else if (self.peek() != .CloseCurly) {
+            // If not comma and not close curly, something's wrong
+            break;
+        }
+    }
+
+    self.expect(.CloseCurly) catch {
+        try self.pushDiagnostic(.expected_package_platform_close_curly, start_pos, self.currentPosition());
+    };
+
+    // Create packages collection from scratch nodes
+    const packages_nodes = self.scratch_nodes.items[scratch_start..];
+    const packages_idx = if (packages_nodes.len > 0)
+        try self.ast.appendNodeSlice(self.gpa, packages_nodes)
+    else
+        @as(AST.NodeSlices.Idx, @enumFromInt(0));
+
+    // Check that we found a platform
+    if (@intFromEnum(platform_field) == 0) {
+        try self.pushDiagnostic(.no_platform, start_pos, self.currentPosition());
+        return AST.Header{ .app = .{
+            .provides = provides_idx,
+            .platform_idx = @enumFromInt(0),
+            .packages = packages_idx,
+            .region = start_pos,
+        } };
+    }
 
     return AST.Header{ .app = .{
         .provides = provides_idx,
-        .platform_idx = platform_idx,
+        .platform_idx = platform_field,
         .packages = packages_idx,
         .region = start_pos,
     } };
 }
 
 fn parseModuleHeader(self: *Parser, start_pos: Position) Error!AST.Header {
-
     self.expect(.OpenSquare) catch {
         try self.pushDiagnostic(.header_expected_open_square, start_pos, self.currentPosition());
         return AST.Header{ .module = .{
@@ -354,7 +448,6 @@ fn parseModuleHeader(self: *Parser, start_pos: Position) Error!AST.Header {
 }
 
 fn parsePackageHeader(self: *Parser, start_pos: Position) Error!AST.Header {
-
     self.expect(.OpenSquare) catch {
         try self.pushDiagnostic(.header_expected_open_square, start_pos, self.currentPosition());
         return AST.Header{ .package = .{
@@ -485,7 +578,6 @@ fn parsePlatformHeader(self: *Parser, start_pos: Position) Error!AST.Header {
 }
 
 fn parseHostedHeader(self: *Parser, start_pos: Position) Error!AST.Header {
-
     self.expect(.KwExposes) catch {
         try self.pushDiagnostic(.expected_exposes, start_pos, self.currentPosition());
         return AST.Header{ .hosted = .{
@@ -661,6 +753,11 @@ fn parseExposedItem(self: *Parser) Error!Node.Idx {
             const ident = self.currentIdent();
             const pos = self.currentPosition();
             self.advance();
+
+            // Check for optional ! suffix (for effectful functions like main!)
+            if (self.peek() == .OpBang) {
+                self.advance(); // consume the !
+            }
 
             if (ident) |id| {
                 return try self.ast.appendNode(self.gpa, pos, .lc, .{ .ident = id });
@@ -1111,6 +1208,18 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!Node.Idx {
                     if (ident) |id| {
                         const field = try self.ast.appendNode(self.gpa, dot_pos, .dot_lc, .{ .ident = id });
                         const binop_idx = try self.ast.appendBinOp(self.gpa, left, field);
+                        left = try self.ast.appendNode(self.gpa, dot_pos, .binop_pipe, .{ .binop = binop_idx });
+                    } else {
+                        return self.pushMalformed(.expr_dot_suffix_not_allowed, start_position);
+                    }
+                } else if (self.peek() == .UpperIdent) {
+                    // Handle qualified tags like Color.Red
+                    const ident = self.currentIdent();
+                    self.advance();
+
+                    if (ident) |id| {
+                        const tag = try self.ast.appendNode(self.gpa, dot_pos, .uc, .{ .ident = id });
+                        const binop_idx = try self.ast.appendBinOp(self.gpa, left, tag);
                         left = try self.ast.appendNode(self.gpa, dot_pos, .binop_pipe, .{ .binop = binop_idx });
                     } else {
                         return self.pushMalformed(.expr_dot_suffix_not_allowed, start_position);

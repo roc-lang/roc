@@ -27,7 +27,7 @@ pub const TokenIterator = struct {
     pub fn init(env: *CommonEnv, gpa: std.mem.Allocator, text: []const u8, messages: []Diagnostic, byte_slices: *collections.ByteSlices) std.mem.Allocator.Error!TokenIterator {
         _ = gpa; // Iterator doesn't allocate at init
         const cursor = tokenize.Cursor.init(text, messages);
-        
+
         return TokenIterator{
             .cursor = cursor,
             .string_interpolation_stack = .{},
@@ -58,7 +58,7 @@ pub const TokenIterator = struct {
         // Tokenize a single token using the existing tokenization logic
         const start_pos = self.cursor.pos;
         const token_result = try self.tokenizeOne(gpa);
-        
+
         // If no progress was made, we're done
         if (self.cursor.pos == start_pos) {
             self.finished = true;
@@ -180,7 +180,7 @@ pub const TokenIterator = struct {
         // For now, just a simple string tokenization
         const start_pos = self.cursor.pos;
         self.cursor.pos += 1; // Skip opening quote
-        
+
         while (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] != '"') {
             if (self.cursor.buf[self.cursor.pos] == '\\' and self.cursor.pos + 1 < self.cursor.buf.len) {
                 self.cursor.pos += 2; // Skip escape sequence
@@ -188,15 +188,15 @@ pub const TokenIterator = struct {
                 self.cursor.pos += 1;
             }
         }
-        
+
         if (self.cursor.pos < self.cursor.buf.len) {
             self.cursor.pos += 1; // Skip closing quote
         }
-        
+
         // Store in ByteSlices
-        const content = self.cursor.buf[start_pos + 1..self.cursor.pos - 1];
+        const content = self.cursor.buf[start_pos + 1 .. self.cursor.pos - 1];
         const bytes_idx = try self.byte_slices.append(gpa, content);
-        
+
         return Token{
             .tag = .String,
             .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
@@ -218,7 +218,7 @@ pub const TokenIterator = struct {
 
     fn tokenizeNumber(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
         const start_pos = self.cursor.pos;
-        
+
         // Simple decimal number parsing
         while (self.cursor.pos < self.cursor.buf.len) {
             const byte = self.cursor.buf[self.cursor.pos];
@@ -253,7 +253,7 @@ pub const TokenIterator = struct {
                 break;
             }
         }
-        
+
         // Parse as integer
         const text = self.cursor.buf[start_pos..self.cursor.pos];
         if (std.fmt.parseInt(i32, text, 10)) |value| {
@@ -275,7 +275,7 @@ pub const TokenIterator = struct {
 
     fn tokenizeIdent(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
         const start_pos = self.cursor.pos;
-        
+
         // Read identifier characters
         while (self.cursor.pos < self.cursor.buf.len) {
             const byte = self.cursor.buf[self.cursor.pos];
@@ -285,9 +285,9 @@ pub const TokenIterator = struct {
                 break;
             }
         }
-        
+
         const text = self.cursor.buf[start_pos..self.cursor.pos];
-        
+
         // Check for keywords first
         const tag = if (tokenize.Token.keywords.get(text)) |keyword_tag|
             keyword_tag
@@ -295,11 +295,11 @@ pub const TokenIterator = struct {
             Token.Tag.UpperIdent
         else
             Token.Tag.LowerIdent;
-        
+
         // Intern the identifier
         const ident = base.Ident.for_text(text);
         const ident_idx = try self.env.idents.insert(gpa, ident);
-        
+
         return Token{
             .tag = tag,
             .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
@@ -311,7 +311,7 @@ pub const TokenIterator = struct {
         _ = gpa;
         const start_pos = self.cursor.pos;
         self.cursor.pos += 1;
-        
+
         if (self.cursor.pos < self.cursor.buf.len) {
             const next_byte = self.cursor.buf[self.cursor.pos];
             if (next_byte == '.') {
@@ -323,7 +323,7 @@ pub const TokenIterator = struct {
                 };
             }
         }
-        
+
         return Token{
             .tag = .Dot,
             .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
@@ -335,7 +335,7 @@ pub const TokenIterator = struct {
         _ = gpa;
         const start_pos = self.cursor.pos;
         self.cursor.pos += 1;
-        
+
         if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '>') {
             self.cursor.pos += 1;
             return Token{
@@ -344,7 +344,7 @@ pub const TokenIterator = struct {
                 .extra = .{ .none = 0 },
             };
         }
-        
+
         return Token{
             .tag = .OpBinaryMinus,
             .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
@@ -356,7 +356,7 @@ pub const TokenIterator = struct {
         _ = gpa;
         const start_pos = self.cursor.pos;
         self.cursor.pos += 1;
-        
+
         if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '/') {
             self.cursor.pos += 1;
             return Token{
@@ -365,7 +365,7 @@ pub const TokenIterator = struct {
                 .extra = .{ .none = 0 },
             };
         }
-        
+
         return Token{
             .tag = .OpSlash,
             .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
@@ -377,7 +377,7 @@ pub const TokenIterator = struct {
         _ = gpa;
         const start_pos = self.cursor.pos;
         self.cursor.pos += 1;
-        
+
         if (self.cursor.pos < self.cursor.buf.len) {
             const next_byte = self.cursor.buf[self.cursor.pos];
             if (next_byte == '=') {
@@ -396,7 +396,7 @@ pub const TokenIterator = struct {
                 };
             }
         }
-        
+
         return Token{
             .tag = .OpAssign,
             .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
@@ -408,7 +408,7 @@ pub const TokenIterator = struct {
         _ = gpa;
         const start_pos = self.cursor.pos;
         self.cursor.pos += 1;
-        
+
         if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '=') {
             self.cursor.pos += 1;
             return Token{
@@ -417,7 +417,7 @@ pub const TokenIterator = struct {
                 .extra = .{ .none = 0 },
             };
         }
-        
+
         return Token{
             .tag = .OpBang,
             .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
@@ -429,7 +429,7 @@ pub const TokenIterator = struct {
         _ = gpa;
         const start_pos = self.cursor.pos;
         self.cursor.pos += 1;
-        
+
         if (self.cursor.pos < self.cursor.buf.len) {
             const next_byte = self.cursor.buf[self.cursor.pos];
             if (next_byte == '=') {
@@ -448,7 +448,7 @@ pub const TokenIterator = struct {
                 };
             }
         }
-        
+
         return Token{
             .tag = .OpLessThan,
             .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
@@ -460,7 +460,7 @@ pub const TokenIterator = struct {
         _ = gpa;
         const start_pos = self.cursor.pos;
         self.cursor.pos += 1;
-        
+
         if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '=') {
             self.cursor.pos += 1;
             return Token{
@@ -469,7 +469,7 @@ pub const TokenIterator = struct {
                 .extra = .{ .none = 0 },
             };
         }
-        
+
         return Token{
             .tag = .OpGreaterThan,
             .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
@@ -481,7 +481,7 @@ pub const TokenIterator = struct {
         _ = gpa;
         const start_pos = self.cursor.pos;
         self.cursor.pos += 1;
-        
+
         if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '&') {
             self.cursor.pos += 1;
             return Token{
@@ -490,7 +490,7 @@ pub const TokenIterator = struct {
                 .extra = .{ .none = 0 },
             };
         }
-        
+
         return Token{
             .tag = .OpAmpersand,
             .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
@@ -502,7 +502,7 @@ pub const TokenIterator = struct {
         _ = gpa;
         const start_pos = self.cursor.pos;
         self.cursor.pos += 1;
-        
+
         if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '|') {
             self.cursor.pos += 1;
             return Token{
@@ -511,7 +511,7 @@ pub const TokenIterator = struct {
                 .extra = .{ .none = 0 },
             };
         }
-        
+
         return Token{
             .tag = .OpBar,
             .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
@@ -523,7 +523,7 @@ pub const TokenIterator = struct {
         _ = gpa;
         const start_pos = self.cursor.pos;
         self.cursor.pos += 1;
-        
+
         if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '?') {
             self.cursor.pos += 1;
             return Token{
@@ -532,7 +532,7 @@ pub const TokenIterator = struct {
                 .extra = .{ .none = 0 },
             };
         }
-        
+
         return Token{
             .tag = .OpQuestion,
             .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
@@ -544,7 +544,7 @@ pub const TokenIterator = struct {
         _ = gpa;
         const start_pos = self.cursor.pos;
         self.cursor.pos += 1;
-        
+
         if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '=') {
             self.cursor.pos += 1;
             return Token{
@@ -553,7 +553,7 @@ pub const TokenIterator = struct {
                 .extra = .{ .none = 0 },
             };
         }
-        
+
         return Token{
             .tag = .OpColon,
             .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),

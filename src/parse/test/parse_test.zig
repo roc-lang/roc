@@ -23,7 +23,7 @@ fn parseTestFile(allocator: std.mem.Allocator, source: []const u8) !AST2 {
     // Parse using new Parser2 with TokenIterator
     var parser = try Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
     defer parser.deinit();
-    
+
     try parser.parseFile();
 
     return ast;
@@ -46,7 +46,7 @@ fn parseTestExpr(allocator: std.mem.Allocator, source: []const u8) !AST2 {
     // Parse expression using new Parser2 with TokenIterator
     var parser = try Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
     defer parser.deinit();
-    
+
     _ = try parser.parseExpr();
 
     return ast;
@@ -1015,4 +1015,57 @@ test "Parser2: current comma parsing behavior" {
 
         try testing.expect(ast1.nodes.len() > 0);
     }
+}
+
+test "manual snapshot comparison - one file" {
+    const allocator = testing.allocator;
+
+    // This is the source from 001.md
+    const source =
+        \\module     [
+        \\# some crazy formatting
+        \\ foo,
+        \\     ]
+        \\
+        \\foo =
+        \\
+        \\    "one"
+    ;
+
+    std.debug.print("\n=== Manual Snapshot Test ===\n", .{});
+    std.debug.print("Expected problems: NIL (no errors)\n", .{});
+    std.debug.print("Source:\n{s}\n\n", .{source});
+
+    var ast = try AST2.initCapacity(allocator, 100);
+    defer ast.deinit(allocator);
+
+    var env = try base.CommonEnv.init(allocator, source);
+    defer env.deinit(allocator);
+
+    var messages: [128]tokenize_iter.Diagnostic = undefined;
+    const msg_slice = messages[0..];
+    var byte_slices = collections.ByteSlices{ .entries = .{} };
+    defer byte_slices.entries.deinit(allocator);
+
+    var parser = try Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
+    defer parser.deinit();
+
+    std.debug.print("Parsing...\n", .{});
+    parser.parseFile() catch |err| {
+        std.debug.print("Parse error: {}\n", .{err});
+    };
+
+    std.debug.print("Parsing completed! Diagnostics: {d}\n", .{parser.diagnostics.items.len});
+
+    for (parser.diagnostics.items, 0..) |diagnostic, i| {
+        std.debug.print("  [{d}] {s}\n", .{ i, @tagName(diagnostic.tag) });
+    }
+
+    if (parser.diagnostics.items.len == 0) {
+        std.debug.print("RESULT: MATCH - No parsing errors (expected NIL)\n", .{});
+    } else {
+        std.debug.print("RESULT: MISMATCH - Found {d} errors (expected NIL)\n", .{parser.diagnostics.items.len});
+    }
+
+    std.debug.print("=== End Manual Test ===\n", .{});
 }
