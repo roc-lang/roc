@@ -97,6 +97,7 @@ pub const EvalError = error{
     StringInterpolationFailed,
     StringSegmentEvaluationFailed,
     StringConversionFailed,
+    StringOrderingNotSupported,
     UnsupportedWorkItem,
     UnexpectedWorkItem,
     RuntimeCrash,
@@ -1526,8 +1527,32 @@ pub const Interpreter = struct {
                         self.traceError("comparison operations on fractional types only support Dec precision", .{});
                         return error.TypeMismatch;
                     }
+                }
+                // Check if both operands are strings
+                else if (lhs_scalar.tag == .str and rhs_scalar.tag == .str) {
+                    const lhs_ptr = @as(*const RocStr, @ptrCast(@alignCast(lhs.ptr.?)));
+                    const rhs_ptr = @as(*const RocStr, @ptrCast(@alignCast(rhs.ptr.?)));
+                    const lhs_str = lhs_ptr.*;
+                    const rhs_str = rhs_ptr.*;
+
+                    const result_layout = Layout.boolType();
+                    var result_value = try self.pushStackValue(result_layout);
+
+                    const bool_result: u8 = switch (kind) {
+                        .w_binop_eq => if (lhs_str.eq(rhs_str)) 1 else 0,
+                        .w_binop_ne => if (!lhs_str.eq(rhs_str)) 1 else 0,
+                        // String ordering comparisons are not implemented yet
+                        .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le => {
+                            self.traceError("string ordering comparisons (>, <, >=, <=) are not supported", .{});
+                            return error.StringOrderingNotSupported;
+                        },
+                        else => unreachable,
+                    };
+
+                    result_value.setBool(bool_result);
+                    self.traceInfo("String comparison: \"{s}\" {s} \"{s}\" = {}", .{ lhs_str.asSlice(), @tagName(kind), rhs_str.asSlice(), bool_result });
                 } else {
-                    self.traceError("comparison operations require operands of the same type (both integers or both decimals)", .{});
+                    self.traceError("comparison operations require operands of the same type (both integers, both decimals, or both strings)", .{});
                     return error.TypeMismatch;
                 }
             },
