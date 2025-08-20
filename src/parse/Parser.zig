@@ -1856,6 +1856,9 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
         .StringStart => {
             expr = try self.parseStringExpr();
         },
+        .MultilineStringStart => {
+            expr = try self.parseMultiLineStringExpr();
+        },
         .OpenSquare => {
             self.advance();
             const scratch_top = self.store.scratchExprTop();
@@ -2300,6 +2303,69 @@ pub fn parseBranch(self: *Parser) Error!AST.MatchBranch.Idx {
         .pattern = p,
         .body = b,
     });
+}
+
+/// Parse a multiline string expression with optional interpolations
+pub fn parseMultiLineStringExpr(self: *Parser) Error!AST.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+    std.debug.assert(self.peek() == .MultilineStringStart);
+    const start = self.pos;
+    self.advance();
+    const scratch_top = self.store.scratchExprTop();
+    while (self.peek() != .EndOfFile) {
+        switch (self.peek()) {
+            .MultilineStringEnd => {
+                self.advance();
+                break;
+            },
+            .MultilineStringStart => {
+                self.advance();
+            },
+            .StringPart => {
+                const part_start = self.pos;
+                self.advance(); // Advance past the StringPart
+                const index = try self.store.addExpr(.{ .string_part = .{
+                    .token = part_start,
+                    .region = .{ .start = part_start, .end = self.pos },
+                } });
+                try self.store.addScratchExpr(index);
+            },
+            .OpenStringInterpolation => {
+                self.advance(); // Advance past OpenStringInterpolation
+                const ex = try self.parseExpr();
+                try self.store.addScratchExpr(ex);
+                if (self.peek() != .CloseStringInterpolation) {
+                    return try self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, start);
+                }
+                self.advance(); // Advance past the CloseString Interpolation
+            },
+            .MalformedStringPart => {
+                self.advance();
+                try self.pushDiagnostic(.string_unexpected_token, .{
+                    .start = self.pos,
+                    .end = self.pos,
+                });
+            },
+            else => {
+                // Multi lins strings just end
+                break;
+            },
+        }
+    }
+
+    const parts = try self.store.exprSpanFrom(scratch_top);
+    const expr = try self.store.addExpr(.{
+        .multiline_string = .{
+            .token = start,
+            .parts = parts,
+            .region = .{
+                .start = start,
+                .end = self.pos,
+            },
+        },
+    });
+    return expr;
 }
 
 /// todo
