@@ -97,6 +97,7 @@ pub const EvalError = error{
     StringInterpolationFailed,
     StringSegmentEvaluationFailed,
     StringConversionFailed,
+    StringOrderingNotSupported,
     UnsupportedWorkItem,
     UnexpectedWorkItem,
     RuntimeCrash,
@@ -438,7 +439,7 @@ pub const Interpreter = struct {
                     try self.evalExpr(work.expr_idx, roc_ops, work.extra.layout_idx);
                 },
                 .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
-                    try self.completeBinop(work.kind);
+                    try self.completeBinop(work.kind, roc_ops);
                 },
                 .w_unary_minus => {
                     try self.completeUnaryMinus();
@@ -1314,7 +1315,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn completeBinop(self: *Interpreter, kind: WorkKind) EvalError!void {
+    fn completeBinop(self: *Interpreter, kind: WorkKind, roc_ops: *RocOps) EvalError!void {
         const rhs = try self.popStackValue();
         const lhs = try self.popStackValue();
 
@@ -1526,8 +1527,41 @@ pub const Interpreter = struct {
                         self.traceError("comparison operations on fractional types only support Dec precision", .{});
                         return error.TypeMismatch;
                     }
+                }
+                // Check if both operands are strings
+                else if (lhs_scalar.tag == .str and rhs_scalar.tag == .str) {
+                    const lhs_ptr = @as(*const RocStr, @ptrCast(@alignCast(lhs.ptr.?)));
+                    const rhs_ptr = @as(*const RocStr, @ptrCast(@alignCast(rhs.ptr.?)));
+                    const lhs_str = lhs_ptr.*;
+                    const rhs_str = rhs_ptr.*;
+
+                    const result_layout = Layout.boolType();
+                    var result_value = try self.pushStackValue(result_layout);
+
+                    const bool_result: u8 = switch (kind) {
+                        .w_binop_eq => if (lhs_str.eq(rhs_str)) 1 else 0,
+                        .w_binop_ne => if (!lhs_str.eq(rhs_str)) 1 else 0,
+                        // String ordering comparisons are not implemented yet
+                        .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le => {
+                            self.traceError("string ordering comparisons (>, <, >=, <=) are not supported", .{});
+                            // Decref strings before returning error
+                            lhs_str.decref(roc_ops);
+                            rhs_str.decref(roc_ops);
+                            return error.StringOrderingNotSupported;
+                        },
+                        else => unreachable,
+                    };
+
+                    result_value.setBool(bool_result);
+                    self.traceInfo("String comparison: \"{s}\" {s} \"{s}\" = {}", .{ lhs_str.asSlice(), @tagName(kind), rhs_str.asSlice(), bool_result });
+
+                    // Decref both strings after we're done with them
+                    // std.debug.print("STR_TRACE: completeBinop - about to decref lhs string \"{s}\" at {*}\n", .{ lhs_str.asSlice(), &lhs_str });
+                    lhs_str.decref(roc_ops);
+                    // std.debug.print("STR_TRACE: completeBinop - about to decref rhs string \"{s}\" at {*}\n", .{ rhs_str.asSlice(), &rhs_str });
+                    rhs_str.decref(roc_ops);
                 } else {
-                    self.traceError("comparison operations require operands of the same type (both integers or both decimals)", .{});
+                    self.traceError("comparison operations require operands of the same type (both integers, both decimals, or both strings)", .{});
                     return error.TypeMismatch;
                 }
             },
@@ -2602,7 +2636,7 @@ pub const Interpreter = struct {
             .assign => |assign_pattern| {
                 const binding = Binding{
                     .pattern_idx = pattern_idx,
-                    .value = value.cloneForBinding(),
+                    .value = value.moveForBinding(),
                 };
                 self.traceInfo("Binding '{s}' (pattern_idx={})", .{
                     self.env.getIdent(assign_pattern.ident),
@@ -2718,7 +2752,7 @@ pub const Interpreter = struct {
         switch (work.kind) {
             // Binary operations
             .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
-                try self.completeBinop(work.kind);
+                try self.completeBinop(work.kind, roc_ops);
             },
 
             // Unary operations
@@ -3329,7 +3363,7 @@ pub const Interpreter = struct {
                 binding.cleanup(roc_ops);
 
                 // Update with the actual value
-                binding.value = actual_value.cloneForBinding();
+                binding.value = actual_value.moveForBinding();
                 found = true;
                 self.traceInfo("Successfully updated recursive binding for '{s}'", .{pattern_name});
                 break;
@@ -3851,10 +3885,14 @@ test "stack-based binary operations" {
     var eval_stack = try stack.Stack.initCapacity(allocator, 1024);
     defer eval_stack.deinit();
 
+    // Create test environment for RocOps
+    var test_env = builtins.utils.TestEnv.init(allocator);
+    defer test_env.deinit();
+
     // Track layouts
     // Create interpreter
     var interpreter = try Interpreter.init(allocator, undefined, &eval_stack, undefined, undefined);
-    defer interpreter.deinit(undefined);
+    defer interpreter.deinit(test_env.getOps());
 
     // Test addition: 2 + 3 = 5
     {
@@ -3876,7 +3914,7 @@ test "stack-based binary operations" {
         @as(*i64, @ptrCast(@alignCast(three_value.ptr.?))).* = 3;
 
         // Perform addition
-        try interpreter.completeBinop(.w_binop_add);
+        try interpreter.completeBinop(.w_binop_add, test_env.getOps());
 
         // Check result
         try std.testing.expectEqual(@as(usize, 1), interpreter.value_stack.items.len);
@@ -3894,9 +3932,13 @@ test "stack-based comparisons" {
     var eval_stack = try stack.Stack.initCapacity(allocator, 1024);
     defer eval_stack.deinit();
 
+    // Create test environment for RocOps
+    var test_env = builtins.utils.TestEnv.init(allocator);
+    defer test_env.deinit();
+
     // Create interpreter
     var interpreter = try Interpreter.init(allocator, undefined, &eval_stack, undefined, undefined);
-    defer interpreter.deinit(undefined);
+    defer interpreter.deinit(test_env.getOps());
 
     // Test 5 > 3 = True (1)
     {
@@ -3917,7 +3959,7 @@ test "stack-based comparisons" {
         @as(*i64, @ptrCast(@alignCast(three_ptr.ptr.?))).* = 3;
 
         // Perform comparison
-        try interpreter.completeBinop(.w_binop_gt);
+        try interpreter.completeBinop(.w_binop_gt, test_env.getOps());
 
         // Check result - should be a u8 with value 1 (true)
         try std.testing.expectEqual(@as(usize, 1), interpreter.value_stack.items.len);

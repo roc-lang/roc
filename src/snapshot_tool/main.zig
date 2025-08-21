@@ -2488,15 +2488,21 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
 
 fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) !bool {
     var success = true;
-    // Parse REPL inputs from the source
-    var lines = std.mem.tokenizeScalar(u8, content.source, '\n');
+    // Parse REPL inputs from the source using » as delimiter
     var inputs = std.ArrayList([]const u8).init(output.gpa);
     defer inputs.deinit();
 
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len > 2 and std.mem.startsWith(u8, trimmed, "» ")) {
-            try inputs.append(trimmed[2..]);
+    // Split by the » character, each section is a separate REPL input
+    var parts = std.mem.splitSequence(u8, content.source, "»");
+
+    // Skip the first part (before the first »)
+    _ = parts.next();
+
+    while (parts.next()) |part| {
+        // Trim whitespace and newlines
+        const trimmed = std.mem.trim(u8, part, " \t\r\n");
+        if (trimmed.len > 0) {
+            try inputs.append(trimmed);
         }
     }
 
