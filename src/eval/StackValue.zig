@@ -462,13 +462,8 @@ pub fn asClosure(self: StackValue) *const Closure {
     return @ptrCast(@alignCast(self.ptr.?));
 }
 
-/// Clone this value for binding (handles ref counting)
-pub fn cloneForBinding(self: StackValue) StackValue {
-    if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
-        const roc_str = self.asRocStr();
-        roc_str.incref(1);
-    }
-    // For non-strings, just reference the same memory
+/// Move this value to binding (transfers ownership, no refcounts change)
+pub fn moveForBinding(self: StackValue) StackValue {
     return self;
 }
 
