@@ -39,6 +39,40 @@ const ResultDest = union(enum) {
 };
 
 /// Parse state for the iterative parser
+/// Info about an operator for precedence parsing
+const OpInfo = struct {
+    left: ?Node.Idx, // null for unary operators
+    op_tag: Token.Tag,
+    op_pos: Position,
+    min_bp: u8,
+};
+
+/// Frame for type annotation parsing
+const TypeFrame = struct {
+    state: enum {
+        parse_params,
+        after_arrow,
+        build_result,
+    },
+    params_start: usize,
+    params_end: usize,
+    is_effectful: bool,
+    arrow_pos: base.Region.Position,
+    result: Node.Idx,
+};
+
+/// Frame for type term parsing
+const TypeTermFrame = struct {
+    state: enum {
+        parse_base,
+        parse_app_args,
+        finish_app,
+    },
+    result: Node.Idx,
+    app_pos: base.Region.Position,
+    app_args_start: usize,
+};
+
 const ParseState = union(enum) {
     /// Parse an expression with binding power
     expr_with_bp: struct {
@@ -151,6 +185,10 @@ last_position: Position, // Track last valid position for error reporting
 ast: *AST,
 byte_slices: *collections.ByteSlices, // Reference to tokenizer's ByteSlices
 scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
+scratch_op_stack: std.ArrayListUnmanaged(OpInfo), // For operator precedence parsing
+scratch_bytes: std.ArrayListUnmanaged(u8), // For string building
+scratch_type_frames: std.ArrayListUnmanaged(TypeFrame), // For type parsing
+scratch_type_term_frames: std.ArrayListUnmanaged(TypeTermFrame), // For type term parsing
 is_in_lambda_args: bool = false, // Track if we're parsing lambda parameters
 diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
@@ -176,6 +214,10 @@ pub fn initWithOptions(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []c
         .ast = ast,
         .byte_slices = byte_slices,
         .scratch_nodes = .{},
+        .scratch_op_stack = .{},
+        .scratch_bytes = .{},
+        .scratch_type_frames = .{},
+        .scratch_type_term_frames = .{},
         .diagnostics = .{},
         .cached_malformed_node = null,
         .parse_stack = .{},
@@ -186,15 +228,6 @@ pub fn initWithOptions(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []c
     try parser.fillLookahead();
 
     return parser;
-}
-
-/// init the parser from a buffer of tokens (legacy compatibility)
-pub fn initFromTokens(tokens: TokenizedBuffer, gpa: std.mem.Allocator, ast: *AST, byte_slices: *collections.ByteSlices) std.mem.Allocator.Error!Parser {
-    _ = tokens;
-    _ = gpa;
-    _ = ast;
-    _ = byte_slices;
-    @panic("initFromTokens is deprecated - use init with source text instead");
 }
 
 /// Fill the lookahead buffer
@@ -211,6 +244,10 @@ fn fillLookahead(self: *Parser) std.mem.Allocator.Error!void {
 pub fn deinit(parser: *Parser) void {
     parser.token_iter.deinit(parser.gpa);
     parser.scratch_nodes.deinit(parser.gpa);
+    parser.scratch_op_stack.deinit(parser.gpa);
+    parser.scratch_bytes.deinit(parser.gpa);
+    parser.scratch_type_frames.deinit(parser.gpa);
+    parser.scratch_type_term_frames.deinit(parser.gpa);
     parser.diagnostics.deinit(parser.gpa);
     parser.parse_stack.deinit(parser.gpa);
     parser.temp_results.deinit(parser.gpa);
@@ -267,6 +304,22 @@ fn storeResult(self: *Parser, result: Node.Idx, dest: ResultDest) Error!void {
             field_info.obj.* = result;
         },
     }
+}
+
+/// Helper to manage scratch node position
+/// Usage: const marker = self.markScratchNodes();
+///        defer self.restoreScratchNodes(marker);
+fn markScratchNodes(self: *const Parser) usize {
+    return self.scratch_nodes.items.len;
+}
+
+fn restoreScratchNodes(self: *Parser, marker: usize) void {
+    self.scratch_nodes.items.len = marker;
+}
+
+/// Get nodes added since marker
+fn getScratchNodesSince(self: *const Parser, marker: usize) []const Node.Idx {
+    return self.scratch_nodes.items[marker..];
 }
 
 /// Process a single parse state
@@ -512,31 +565,16 @@ fn processPrimaryExprIterative(self: *Parser) Error!Node.Idx {
         .KwReturn => return self.parseReturn(),
         .KwCrash => return self.parseCrash(),
         .OpBang => {
-            self.advance();
-            // For unary operators, we need to parse the operand iteratively
-            // For now, use the recursive version as a placeholder
-            const operand = try self.parseExprWithBp(100);
-            const operand_slice = [_]Node.Idx{operand};
-            const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &operand_slice);
-            return try self.ast.appendNode(self.gpa, pos, .unary_not, .{ .nodes = nodes_idx });
+            // Unary operators should be handled by the iterative parser
+            return self.parseExprWithBpIterativeLabeledSwitch(0);
         },
         .OpBinaryMinus, .OpUnaryMinus => {
-            self.advance();
-            // For unary operators, we need to parse the operand iteratively
-            // For now, use the recursive version as a placeholder
-            const operand = try self.parseExprWithBp(100);
-            const operand_slice = [_]Node.Idx{operand};
-            const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &operand_slice);
-            return try self.ast.appendNode(self.gpa, pos, .unary_neg, .{ .nodes = nodes_idx });
+            // Unary operators should be handled by the iterative parser
+            return self.parseExprWithBpIterativeLabeledSwitch(0);
         },
         .DoubleDot => {
-            self.advance();
-            // For unary operators, we need to parse the operand iteratively
-            // For now, use the recursive version as a placeholder
-            const operand = try self.parseExprWithBp(100);
-            const operand_slice = [_]Node.Idx{operand};
-            const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &operand_slice);
-            return try self.ast.appendNode(self.gpa, pos, .unary_double_dot, .{ .nodes = nodes_idx });
+            // Unary operators should be handled by the iterative parser
+            return self.parseExprWithBpIterativeLabeledSwitch(0);
         },
         .KwModule => {
             // Handle module(arg) for where clauses
@@ -558,18 +596,13 @@ fn processPrimaryExprIterative(self: *Parser) Error!Node.Idx {
 }
 
 /// Parse an expression with precedence iteratively using labeled switch
-/// This version uses minimal heap allocation (only for operator stack) and direct computed jumps
+/// This version uses scratch stack for operators to avoid allocations
 pub fn parseExprWithBpIterativeLabeledSwitch(self: *Parser, initial_min_bp: u8) Error!Node.Idx {
-    // Heap-allocated stack for operator precedence (can handle arbitrary nesting)
-    const OpInfo = struct {
-        left: ?Node.Idx, // null for unary operators
-        op_tag: Token.Tag,
-        op_pos: Position,
-        min_bp: u8,
-    };
-
-    var op_stack = std.ArrayList(OpInfo).init(self.gpa);
-    defer op_stack.deinit();
+    // Save current scratch position for cleanup
+    const scratch_op_start = self.scratch_op_stack.items.len;
+    defer {
+        self.scratch_op_stack.items.len = scratch_op_start;
+    }
 
     // Current parsing state
     var left: Node.Idx = undefined;
@@ -643,7 +676,7 @@ pub fn parseExprWithBpIterativeLabeledSwitch(self: *Parser, initial_min_bp: u8) 
                     self.advance();
                     // For unary, we need to parse with high precedence
                     // Push current state and parse operand
-                    try op_stack.append(.{
+                    try self.scratch_op_stack.append(self.gpa, .{
                         .left = null, // null for unary operator
                         .op_tag = .OpBang,
                         .op_pos = pos,
@@ -655,7 +688,7 @@ pub fn parseExprWithBpIterativeLabeledSwitch(self: *Parser, initial_min_bp: u8) 
                 .OpBinaryMinus, .OpUnaryMinus => {
                     const pos = self.currentPosition();
                     self.advance();
-                    try op_stack.append(.{
+                    try self.scratch_op_stack.append(self.gpa, .{
                         .left = null, // null for unary operator
                         .op_tag = .OpUnaryMinus,
                         .op_pos = pos,
@@ -667,7 +700,7 @@ pub fn parseExprWithBpIterativeLabeledSwitch(self: *Parser, initial_min_bp: u8) 
                 .DoubleDot => {
                     const pos = self.currentPosition();
                     self.advance();
-                    try op_stack.append(.{
+                    try self.scratch_op_stack.append(self.gpa, .{
                         .left = null, // null for unary operator
                         .op_tag = .DoubleDot,
                         .op_pos = pos,
@@ -714,7 +747,7 @@ pub fn parseExprWithBpIterativeLabeledSwitch(self: *Parser, initial_min_bp: u8) 
                 self.advance();
 
                 // Save current state to stack
-                try op_stack.append(.{
+                try self.scratch_op_stack.append(self.gpa, .{
                     .left = left,
                     .op_tag = op_tag,
                     .op_pos = op_pos,
@@ -770,7 +803,7 @@ pub fn parseExprWithBpIterativeLabeledSwitch(self: *Parser, initial_min_bp: u8) 
                 else => {
                     // No more operators at this level
                     // Check if we need to combine with a stacked operator
-                    if (op_stack.items.len > 0) {
+                    if (self.scratch_op_stack.items.len > scratch_op_start) {
                         continue :parse .combine_binary;
                     }
                     // We're done!
@@ -786,7 +819,7 @@ pub fn parseExprWithBpIterativeLabeledSwitch(self: *Parser, initial_min_bp: u8) 
 
         .combine_binary => {
             // Pop operator from stack and combine
-            const op_info = op_stack.pop() orelse unreachable; // Stack should never be empty here
+            const op_info = self.scratch_op_stack.pop() orelse unreachable; // Stack should never be empty here
 
             // Check if this is a unary operator (left is null)
             if (op_info.left == null) {
@@ -858,18 +891,16 @@ pub fn parseExprWithBpIterativeHeapBased(self: *Parser, min_bp: u8) Error!Node.I
 // For now, they use the recursive versions or return malformed nodes
 
 fn parseModuleApply(self: *Parser) Error!Node.Idx {
-    // Temporarily create a minimal implementation
     const pos = self.currentPosition();
     self.advance(); // consume (
 
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
-    // Parse arguments using recursive version for now
+    // Parse arguments iteratively
     while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
-        const arg = try self.parseExpr();
+        // Use the iterative parser for each argument
+        const arg = try self.parseExprWithBpIterativeLabeledSwitch(0);
         try self.scratch_nodes.append(self.gpa, arg);
 
         if (self.peek() == .Comma) {
@@ -879,11 +910,19 @@ fn parseModuleApply(self: *Parser) Error!Node.Idx {
         }
     }
 
-    self.expect(.CloseRound) catch {
+    // Always continue parsing - never stop on errors
+    if (self.peek() != .CloseRound) {
         try self.pushDiagnostic(.expected_expr_apply_close_round, pos, self.currentPosition());
-    };
+        // Try to recover by looking for the close paren
+        while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
+            self.advance();
+        }
+    }
+    if (self.peek() == .CloseRound) {
+        self.advance();
+    }
 
-    const nodes = self.scratch_nodes.items[scratch_start..];
+    const nodes = self.getScratchNodesSince(scratch_marker);
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
     return try self.ast.appendNode(self.gpa, pos, .apply_module, .{ .nodes = nodes_idx });
 }
@@ -900,6 +939,8 @@ pub fn advance(self: *Parser) void {
 }
 
 /// look ahead at the next token and return an error if it does not have the expected tag
+/// Following our philosophy to NEVER stop parsing, this returns an error that can be caught
+/// but the caller should always handle it and continue parsing
 pub fn expect(self: *Parser, expected: Token.Tag) error{ExpectedNotFound}!void {
     if (self.peek() != expected) {
         return error.ExpectedNotFound;
@@ -1024,10 +1065,8 @@ pub fn parseFile(self: *Parser) Error!void {
     try self.parseHeader();
 
     // Parse top-level statements
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
     while (self.peek() != .EndOfFile) {
         const stmt = try self.parseTopLevelStatement();
@@ -1037,7 +1076,7 @@ pub fn parseFile(self: *Parser) Error!void {
     }
 
     // Store all statements as the module body
-    const statements = self.scratch_nodes.items[scratch_start..];
+    const statements = self.getScratchNodesSince(scratch_marker);
     if (statements.len > 0) {
         const body_idx = try self.ast.appendNodeSlice(self.gpa, statements);
         _ = try self.ast.appendNode(self.gpa, Position{ .offset = 0 }, .block, .{ .nodes = body_idx });
@@ -1105,10 +1144,8 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
     };
 
     var platform_field: Node.Idx = @enumFromInt(0);
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
     // Parse record fields inside {}
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
@@ -1184,7 +1221,7 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
     };
 
     // Create packages collection from scratch nodes
-    const packages_nodes = self.scratch_nodes.items[scratch_start..];
+    const packages_nodes = self.getScratchNodesSince(scratch_marker);
     const packages_idx = if (packages_nodes.len > 0)
         try self.ast.appendNodeSlice(self.gpa, packages_nodes)
     else
@@ -1392,10 +1429,8 @@ fn parsePlatformSpecification(self: *Parser) Error!Node.Idx {
     if (self.peek() == .OpenCurly) {
         self.advance();
 
-        const scratch_start = self.scratch_nodes.items.len;
-        defer {
-            self.scratch_nodes.items.len = scratch_start;
-        }
+        const scratch_marker = self.markScratchNodes();
+        defer self.restoreScratchNodes(scratch_marker);
 
         // Parse key-value pairs
         while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
@@ -1438,7 +1473,7 @@ fn parsePlatformSpecification(self: *Parser) Error!Node.Idx {
             try self.pushDiagnostic(.expected_expr_close_curly, start_position, self.currentPosition());
         };
 
-        const nodes = self.scratch_nodes.items[scratch_start..];
+        const nodes = self.getScratchNodesSince(scratch_marker);
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
         return try self.ast.appendNode(self.gpa, start_position, .record_literal, .{ .nodes = nodes_idx });
     } else {
@@ -1448,10 +1483,8 @@ fn parsePlatformSpecification(self: *Parser) Error!Node.Idx {
 }
 
 fn parsePackageList(self: *Parser) Error!AST.NodeSlices.Idx {
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         // Parse package name
@@ -1486,7 +1519,7 @@ fn parsePackageList(self: *Parser) Error!AST.NodeSlices.Idx {
         }
     }
 
-    const packages = self.scratch_nodes.items[scratch_start..];
+    const packages = self.getScratchNodesSince(scratch_marker);
     if (packages.len == 0) {
         return @enumFromInt(0);
     }
@@ -1494,10 +1527,8 @@ fn parsePackageList(self: *Parser) Error!AST.NodeSlices.Idx {
 }
 
 fn parseExposedList(self: *Parser, end_token: Token.Tag) Error!AST.NodeSlices.Idx {
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
     while (self.peek() != end_token and self.peek() != .EndOfFile) {
         const item = try self.parseExposedItem();
@@ -1510,7 +1541,7 @@ fn parseExposedList(self: *Parser, end_token: Token.Tag) Error!AST.NodeSlices.Id
         }
     }
 
-    const items = self.scratch_nodes.items[scratch_start..];
+    const items = self.getScratchNodesSince(scratch_marker);
     if (items.len == 0) {
         return @enumFromInt(0);
     }
@@ -1553,10 +1584,8 @@ fn parseExposedItem(self: *Parser) Error!Node.Idx {
 }
 
 fn parseTypeVariableList(self: *Parser) Error!AST.NodeSlices.Idx {
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         // Just parse as expression - should be a lowercase identifier
@@ -1570,7 +1599,7 @@ fn parseTypeVariableList(self: *Parser) Error!AST.NodeSlices.Idx {
         }
     }
 
-    const vars = self.scratch_nodes.items[scratch_start..];
+    const vars = self.getScratchNodesSince(scratch_marker);
     if (vars.len == 0) {
         return @enumFromInt(0);
     }
@@ -1623,13 +1652,13 @@ fn parseExpect(self: *Parser) Error!?Node.Idx {
     // Parse the condition expression
     const condition = try self.parseExpr();
 
-    // Create a slice with just the condition node
-    const nodes = try self.gpa.alloc(Node.Idx, 1);
-    defer self.gpa.free(nodes);
-    nodes[0] = condition;
-    
-    const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-    
+    // Use scratch space for single node
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
+    try self.scratch_nodes.append(self.gpa, condition);
+
+    const nodes_idx = try self.ast.appendNodeSlice(self.gpa, self.getScratchNodesSince(scratch_marker));
+
     // Create the expect node
     return try self.ast.appendNode(self.gpa, start_pos, .expect, .{ .nodes = nodes_idx });
 }
@@ -1638,15 +1667,10 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
     const start_pos = self.currentPosition();
     self.advance(); // consume import
 
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
     // Parse module path (e.g., pf.Stdout)
-    var path_parts = std.ArrayList(u8).init(self.gpa);
-    defer path_parts.deinit();
-
     while (true) {
         const token = self.peek();
         if (token == .LowerIdent or token == .UpperIdent) {
@@ -1704,7 +1728,7 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
         self.expect(.CloseSquare) catch {};
     }
 
-    const nodes = self.scratch_nodes.items[scratch_start..];
+    const nodes = self.getScratchNodesSince(scratch_marker);
     if (nodes.len == 0) {
         return null;
     }
@@ -1825,14 +1849,14 @@ fn parseStringExpr(self: *Parser) Error!Node.Idx {
         return self.pushMalformed(.expr_unexpected_token, start_pos);
     };
 
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
-    // Collect all string bytes
-    var string_bytes = std.ArrayList(u8).init(self.gpa);
-    defer string_bytes.deinit();
+    // Collect all string bytes using scratch buffer
+    const scratch_bytes_start = self.scratch_bytes.items.len;
+    defer {
+        self.scratch_bytes.items.len = scratch_bytes_start;
+    }
 
     // Parse string parts
     while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
@@ -1843,11 +1867,11 @@ fn parseStringExpr(self: *Parser) Error!Node.Idx {
                 switch (extra) {
                     .bytes_idx => |idx| {
                         const str_content = self.byte_slices.slice(idx);
-                        try string_bytes.appendSlice(str_content);
+                        try self.scratch_bytes.appendSlice(self.gpa, str_content);
                     },
                     else => {
                         // Shouldn't happen - StringPart should always have bytes_idx
-                        try string_bytes.appendSlice("");
+                        try self.scratch_bytes.appendSlice(self.gpa, "");
                     },
                 }
                 self.advance();
@@ -1868,14 +1892,15 @@ fn parseStringExpr(self: *Parser) Error!Node.Idx {
     };
 
     // Store the actual string content
-    const total_bytes = string_bytes.items.len;
+    const string_bytes = self.scratch_bytes.items[scratch_bytes_start..];
+    const total_bytes = string_bytes.len;
 
     // First check length - most strings are longer than 4 bytes
     if (total_bytes <= 4) {
         // Only check byte eligibility for short strings
         // All bytes must be ASCII excluding null (1-127)
         var eligible = true;
-        for (string_bytes.items) |byte| {
+        for (string_bytes) |byte| {
             if (byte == 0 or byte >= 128) {
                 eligible = false;
                 break;
@@ -1885,7 +1910,7 @@ fn parseStringExpr(self: *Parser) Error!Node.Idx {
         if (eligible) {
             var small_bytes: [4]u8 = .{0} ** 4;
             // Copy the actual string bytes (up to 4 bytes)
-            @memcpy(small_bytes[0..total_bytes], string_bytes.items);
+            @memcpy(small_bytes[0..total_bytes], string_bytes);
             // If last byte is non-zero, we know it's 4 bytes long
             // Otherwise, count backwards to find the length
             return try self.ast.appendNode(self.gpa, start_pos, .str_literal_small, .{ .str_literal_small = small_bytes });
@@ -1893,7 +1918,7 @@ fn parseStringExpr(self: *Parser) Error!Node.Idx {
     }
 
     // For longer strings or those with special characters, store in ByteSlices
-    const bytes_idx = try self.ast.appendByteSlice(self.gpa, string_bytes.items);
+    const bytes_idx = try self.ast.appendByteSlice(self.gpa, string_bytes);
     return try self.ast.appendNode(self.gpa, start_pos, .str_literal_big, .{ .str_literal_big = bytes_idx });
 }
 
@@ -1908,10 +1933,8 @@ fn parseListLiteral(self: *Parser) Error!Node.Idx {
         return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .nodes = nodes_idx });
     }
 
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
     while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
         const elem = try self.parseExpr();
@@ -1928,7 +1951,7 @@ fn parseListLiteral(self: *Parser) Error!Node.Idx {
         try self.pushDiagnostic(.expected_expr_close_square_or_comma, start_pos, self.currentPosition());
     };
 
-    const elems = self.scratch_nodes.items[scratch_start..];
+    const elems = self.getScratchNodesSince(scratch_marker);
     if (elems.len > 0) {
         _ = try self.ast.appendNodeSlice(self.gpa, elems);
     }
@@ -1947,10 +1970,8 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
         return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .nodes = nodes_idx });
     }
 
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
     // Start by assuming it's a block
     var is_record = false;
@@ -2030,7 +2051,7 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
         try self.pushDiagnostic(.expected_expr_close_curly, start_pos, self.currentPosition());
     };
 
-    const nodes = self.scratch_nodes.items[scratch_start..];
+    const nodes = self.getScratchNodesSince(scratch_marker);
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
 
     const tag: Node.Tag = if (is_record) .record_literal else .block;
@@ -2041,10 +2062,8 @@ fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
     self.advance(); // consume (
 
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
     // Check for empty tuple
     if (self.peek() == .CloseRound) {
@@ -2094,7 +2113,7 @@ fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
             try self.pushDiagnostic(.expected_expr_close_round_or_comma, error_pos, error_pos);
         };
 
-        const elems = self.scratch_nodes.items[scratch_start..];
+        const elems = self.getScratchNodesSince(scratch_marker);
 
         // Safety check: tuples should have at least 2 elements
         if (elems.len == 0) {
@@ -2121,10 +2140,8 @@ fn parseApply(self: *Parser, func: Node.Idx) Error!Node.Idx {
     const start_pos = self.ast.start(func);
     self.advance(); // consume (
 
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
     // First element is the function
     try self.scratch_nodes.append(self.gpa, func);
@@ -2145,7 +2162,7 @@ fn parseApply(self: *Parser, func: Node.Idx) Error!Node.Idx {
         try self.pushDiagnostic(.expected_expr_apply_close_round, start_pos, self.currentPosition());
     };
 
-    const nodes = self.scratch_nodes.items[scratch_start..];
+    const nodes = self.getScratchNodesSince(scratch_marker);
 
     // Determine the tag based on the function node
     const tag: Node.Tag = switch (self.ast.tag(func)) {
@@ -2162,10 +2179,8 @@ fn parseIf(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
     self.advance(); // consume if
 
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
     // Parse condition
     const cond = try self.parseExpr();
@@ -2186,11 +2201,11 @@ fn parseIf(self: *Parser) Error!Node.Idx {
         const else_branch = try self.parseExpr();
         try self.scratch_nodes.append(self.gpa, else_branch);
 
-        const nodes = self.scratch_nodes.items[scratch_start..];
+        const nodes = self.getScratchNodesSince(scratch_marker);
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
         return try self.ast.appendNode(self.gpa, start_pos, .if_else, .{ .if_branches = @intFromEnum(nodes_idx) });
     } else {
-        const nodes = self.scratch_nodes.items[scratch_start..];
+        const nodes = self.getScratchNodesSince(scratch_marker);
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
         return try self.ast.appendNode(self.gpa, start_pos, .if_without_else, .{ .if_branches = @intFromEnum(nodes_idx) });
     }
@@ -2200,10 +2215,8 @@ fn parseMatch(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
     self.advance(); // consume when
 
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
     // Parse scrutinee
     const scrutinee = try self.parseExpr();
@@ -2235,7 +2248,7 @@ fn parseMatch(self: *Parser) Error!Node.Idx {
         self.advance();
     }
 
-    const nodes = self.scratch_nodes.items[scratch_start..];
+    const nodes = self.getScratchNodesSince(scratch_marker);
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
     return try self.ast.appendNode(self.gpa, start_pos, .match, .{ .match_branches = @intFromEnum(nodes_idx) });
 }
@@ -2250,10 +2263,8 @@ fn parseLambda(self: *Parser) Error!Node.Idx {
 
     self.advance(); // consume |
 
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
     // Set flag to treat | as a closing delimiter while parsing parameters
     self.is_in_lambda_args = true;
@@ -2281,15 +2292,16 @@ fn parseLambda(self: *Parser) Error!Node.Idx {
     // Parse body (flag is already reset by defer)
     const body = try self.parseExpr();
 
-    const params = self.scratch_nodes.items[scratch_start..];
+    const params = self.getScratchNodesSince(scratch_marker);
 
-    var body_then_args = try self.gpa.alloc(Node.Idx, 1 + params.len);
-    defer self.gpa.free(body_then_args);
+    // Use a new scratch marker to build body_then_args
+    const temp_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(temp_marker);
 
-    body_then_args[0] = body;
-    @memcpy(body_then_args[1..], params);
+    try self.scratch_nodes.append(self.gpa, body);
+    try self.scratch_nodes.appendSlice(self.gpa, params);
 
-    const nodes_idx = try self.ast.appendNodeSlice(self.gpa, body_then_args);
+    const nodes_idx = try self.ast.appendNodeSlice(self.gpa, self.getScratchNodesSince(temp_marker));
     return try self.ast.appendNode(self.gpa, start_pos, .lambda, .{ .body_then_args = nodes_idx });
 }
 
@@ -2315,10 +2327,8 @@ fn parseFor(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
     self.advance(); // consume 'for'
 
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
     // Parse the pattern (e.g., 'x' in 'for x in ...')
     const pattern = try self.parseExpr();
@@ -2339,7 +2349,7 @@ fn parseFor(self: *Parser) Error!Node.Idx {
     const body = try self.parseExpr();
     try self.scratch_nodes.append(self.gpa, body);
 
-    const nodes = self.scratch_nodes.items[scratch_start..];
+    const nodes = self.getScratchNodesSince(scratch_marker);
 
     // A for loop must have exactly pattern, iterable, and body
     if (nodes.len != 3) {
@@ -2354,10 +2364,8 @@ fn parseWhile(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
     self.advance(); // consume 'while'
 
-    const scratch_start = self.scratch_nodes.items.len;
-    defer {
-        self.scratch_nodes.items.len = scratch_start;
-    }
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
 
     // Parse the condition
     const condition = try self.parseExpr();
@@ -2367,7 +2375,7 @@ fn parseWhile(self: *Parser) Error!Node.Idx {
     const body = try self.parseExpr();
     try self.scratch_nodes.append(self.gpa, body);
 
-    const nodes = self.scratch_nodes.items[scratch_start..];
+    const nodes = self.getScratchNodesSince(scratch_marker);
 
     // A while loop must have exactly condition and body
     if (nodes.len != 2) {
@@ -2408,27 +2416,14 @@ pub fn parseTypeAnno(self: *Parser) Error!Node.Idx {
 /// Parse the right-hand side of a type annotation, handling special cases
 /// like comma-separated parameters and where clauses
 fn parseTypeAnnotationRHS(self: *Parser) Error!Node.Idx {
-    // Stack for managing iterative parsing
-    const TypeParseState = enum {
-        parse_params,
-        after_arrow,
-        build_result,
-    };
-
-    const Frame = struct {
-        state: TypeParseState,
-        params_start: usize,
-        params_end: usize,
-        is_effectful: bool,
-        arrow_pos: base.Region.Position,
-        result: Node.Idx,
-    };
-
-    var stack = std.ArrayList(Frame).init(self.gpa);
-    defer stack.deinit();
+    // Use scratch stack for type parsing to avoid allocations
+    const scratch_start = self.scratch_type_frames.items.len;
+    defer {
+        self.scratch_type_frames.items.len = scratch_start;
+    }
 
     // Initial frame
-    try stack.append(.{
+    try self.scratch_type_frames.append(self.gpa, .{
         .state = .parse_params,
         .params_start = self.scratch_nodes.items.len,
         .params_end = 0,
@@ -2439,8 +2434,8 @@ fn parseTypeAnnotationRHS(self: *Parser) Error!Node.Idx {
 
     var final_result: Node.Idx = undefined;
 
-    parse_loop: while (stack.items.len > 0) {
-        var frame = &stack.items[stack.items.len - 1];
+    parse_loop: while (self.scratch_type_frames.items.len > scratch_start) {
+        var frame = &self.scratch_type_frames.items[self.scratch_type_frames.items.len - 1];
 
         switch (frame.state) {
             .parse_params => {
@@ -2464,7 +2459,7 @@ fn parseTypeAnnotationRHS(self: *Parser) Error!Node.Idx {
                     self.advance();
 
                     // Push new frame to parse return type
-                    try stack.append(.{
+                    try self.scratch_type_frames.append(self.gpa, .{
                         .state = .parse_params,
                         .params_start = self.scratch_nodes.items.len,
                         .params_end = 0,
@@ -2502,7 +2497,7 @@ fn parseTypeAnnotationRHS(self: *Parser) Error!Node.Idx {
             },
             .build_result => {
                 const params = self.scratch_nodes.items[frame.params_start..frame.params_end];
-                
+
                 if (frame.state == .build_result and frame.arrow_pos.offset == 0) {
                     // No arrow case
                     if (params.len == 1) {
@@ -2515,9 +2510,9 @@ fn parseTypeAnnotationRHS(self: *Parser) Error!Node.Idx {
 
                 // Clean up scratch nodes for this frame
                 self.scratch_nodes.items.len = frame.params_start;
-                
+
                 final_result = frame.result;
-                _ = stack.pop();
+                _ = self.scratch_type_frames.pop();
             },
         }
     }
@@ -2536,33 +2531,22 @@ fn parseTypeAnnotationRHS(self: *Parser) Error!Node.Idx {
 
 /// Parse a single type term (stops at commas and arrows with low precedence)
 fn parseTypeTerm(self: *Parser) Error!Node.Idx {
-    // Stack-based iterative parsing to avoid recursion
-    const TypeTermState = enum {
-        parse_base,
-        parse_app_args,
-        finish_app,
-    };
-
-    const TypeTermFrame = struct {
-        state: TypeTermState,
-        result: Node.Idx,
-        app_pos: base.Region.Position,
-        app_args_start: usize,
-    };
-
-    var stack = std.ArrayList(TypeTermFrame).init(self.gpa);
-    defer stack.deinit();
+    // Use scratch stack for type term parsing to avoid allocations
+    const scratch_start = self.scratch_type_term_frames.items.len;
+    defer {
+        self.scratch_type_term_frames.items.len = scratch_start;
+    }
 
     // Push initial frame
-    try stack.append(.{
+    try self.scratch_type_term_frames.append(self.gpa, .{
         .state = .parse_base,
         .result = undefined,
         .app_pos = base.Region.Position{ .offset = 0 },
         .app_args_start = 0,
     });
 
-    parse: while (stack.items.len > 0) {
-        var frame = &stack.items[stack.items.len - 1];
+    parse: while (self.scratch_type_term_frames.items.len > scratch_start) {
+        var frame = &self.scratch_type_term_frames.items[self.scratch_type_term_frames.items.len - 1];
 
         switch (frame.state) {
             .parse_base => {
@@ -2641,8 +2625,8 @@ fn parseTypeTerm(self: *Parser) Error!Node.Idx {
 
                 // Done with this term
                 const result = frame.result;
-                _ = stack.pop();
-                if (stack.items.len > 0) {
+                _ = self.scratch_type_term_frames.pop();
+                if (self.scratch_type_term_frames.items.len > scratch_start) {
                     // Return result to parent frame
                     try self.scratch_nodes.append(self.gpa, result);
                 } else {
@@ -2653,7 +2637,7 @@ fn parseTypeTerm(self: *Parser) Error!Node.Idx {
                 // Parse type arguments iteratively
                 while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
                     // Push new frame to parse each argument
-                    try stack.append(.{
+                    try self.scratch_type_term_frames.append(self.gpa, .{
                         .state = .parse_base,
                         .result = undefined,
                         .app_pos = base.Region.Position{ .offset = 0 },
@@ -2686,12 +2670,14 @@ fn parseTypeTerm(self: *Parser) Error!Node.Idx {
                 const args = self.scratch_nodes.items[frame.app_args_start..];
 
                 // Create a slice with function followed by arguments
-                var full_nodes = std.ArrayList(Node.Idx).init(self.gpa);
-                defer full_nodes.deinit();
-                try full_nodes.append(frame.result);
-                try full_nodes.appendSlice(args);
+                // We need to temporarily insert the function at the beginning
+                const temp_marker = self.markScratchNodes();
+                defer self.restoreScratchNodes(temp_marker);
 
-                const nodes_idx = try self.ast.appendNodeSlice(self.gpa, full_nodes.items);
+                try self.scratch_nodes.append(self.gpa, frame.result);
+                try self.scratch_nodes.appendSlice(self.gpa, args);
+
+                const nodes_idx = try self.ast.appendNodeSlice(self.gpa, self.getScratchNodesSince(temp_marker));
 
                 // Determine tag based on function type
                 const tag: Node.Tag = switch (self.ast.tag(frame.result)) {
@@ -2701,7 +2687,7 @@ fn parseTypeTerm(self: *Parser) Error!Node.Idx {
                 };
 
                 frame.result = try self.ast.appendNode(self.gpa, frame.app_pos, tag, .{ .nodes = nodes_idx });
-                
+
                 // Clean up scratch nodes
                 self.scratch_nodes.items.len = frame.app_args_start;
 

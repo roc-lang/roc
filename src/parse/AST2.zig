@@ -621,7 +621,7 @@ pub fn region(
             // Expect statement spans from the 'expect' keyword to the end of the condition expression
             const region_start = self.start(idx);
             var iter = self.node_slices.nodes(self.payload(idx).nodes);
-            
+
             if (iter.next()) |condition_node| {
                 const condition_region = self.region(condition_node, raw_src, ident_store);
                 return .{
