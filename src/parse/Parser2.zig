@@ -2489,8 +2489,116 @@ fn parseTypeAnnotationRHS(self: *Parser) Error!Node.Idx {
 /// Parse a single type term (stops at commas and arrows with low precedence)
 fn parseTypeTerm(self: *Parser) Error!Node.Idx {
     // In Roc, type applications must use parentheses: Maybe(a), not Maybe a
-    // So we just parse a regular expression with appropriate precedence
-    return self.parseExprWithBp(2);
+    // Parse a primary term first
+    var result = switch (self.peek()) {
+        .LowerIdent => blk: {
+            const ident = self.currentIdent();
+            const pos = self.currentPosition();
+            self.advance();
+            if (ident) |id| {
+                break :blk try self.ast.appendNode(self.gpa, pos, .lc, .{ .ident = id });
+            } else {
+                break :blk try self.pushMalformed(.expr_unexpected_token, pos);
+            }
+        },
+        .UpperIdent => blk: {
+            const ident = self.currentIdent();
+            const pos = self.currentPosition();
+            self.advance();
+            if (ident) |id| {
+                break :blk try self.ast.appendNode(self.gpa, pos, .uc, .{ .ident = id });
+            } else {
+                break :blk try self.pushMalformed(.expr_unexpected_token, pos);
+            }
+        },
+        .Underscore => blk: {
+            const pos = self.currentPosition();
+            self.advance();
+            break :blk try self.ast.appendNode(self.gpa, pos, .underscore, .{ .src_bytes_end = pos });
+        },
+        .OpenRound => try self.parseTupleOrParenthesized(),
+        .OpenCurly => try self.parseBlockOrRecord(),
+        .OpenSquare => try self.parseListLiteral(),
+        else => blk: {
+            const error_pos = self.currentPosition();
+            break :blk try self.pushMalformed(.expr_unexpected_token, error_pos);
+        },
+    };
+
+    // Now handle postfix operations that are allowed in types
+    while (true) {
+        switch (self.peek()) {
+            .NoSpaceOpenRound => {
+                // Type application: Maybe(Int)
+                const pos = self.currentPosition();
+                self.advance(); // consume '('
+                
+                const scratch_start = self.scratch_nodes.items.len;
+                defer self.scratch_nodes.items.len = scratch_start;
+                
+                // Parse type arguments
+                while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
+                    const arg = try self.parseTypeTerm();
+                    try self.scratch_nodes.append(self.gpa, arg);
+                    
+                    if (self.peek() == .Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                
+                self.expect(.CloseRound) catch {
+                    return try self.pushMalformed(.expr_unexpected_token, self.currentPosition());
+                };
+                
+                // Create application node
+                const args = self.scratch_nodes.items[scratch_start..];
+                
+                // Create a slice with function followed by arguments
+                var full_nodes = std.ArrayList(Node.Idx).init(self.gpa);
+                defer full_nodes.deinit();
+                try full_nodes.append(result);
+                try full_nodes.appendSlice(args);
+                
+                const nodes_idx = try self.ast.appendNodeSlice(self.gpa, full_nodes.items);
+                
+                // Determine tag based on function type
+                const tag: Node.Tag = switch (self.ast.tag(result)) {
+                    .uc => .apply_uc,
+                    .lc => .apply_lc,
+                    else => .apply_anon,
+                };
+                
+                result = try self.ast.appendNode(self.gpa, pos, tag, .{ .nodes = nodes_idx });
+            },
+            .Dot => {
+                // Field access: module.Type
+                const pos = self.currentPosition();
+                self.advance(); // consume '.'
+                
+                const field = switch (self.peek()) {
+                    .LowerIdent, .UpperIdent => blk: {
+                        const ident = self.currentIdent();
+                        const field_pos = self.currentPosition();
+                        self.advance();
+                        if (ident) |id| {
+                            break :blk try self.ast.appendNode(self.gpa, field_pos, .lc, .{ .ident = id });
+                        } else {
+                            break :blk try self.pushMalformed(.expr_unexpected_token, field_pos);
+                        }
+                    },
+                    else => try self.pushMalformed(.expr_unexpected_token, self.currentPosition()),
+                };
+                
+                const access_idx = try self.ast.appendBinOp(self.gpa, result, field);
+                result = try self.ast.appendNode(self.gpa, pos, .binop_dot, .{ .binop = access_idx });
+            },
+            else => break,
+        }
+    }
+    
+    return result;
 }
 
 // Operator precedence
