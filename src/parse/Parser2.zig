@@ -1928,6 +1928,7 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
         self.advance();
         const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        // Empty {} defaults to empty record
         return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .nodes = nodes_idx });
     }
 
@@ -1936,86 +1937,76 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
         self.scratch_nodes.items.len = scratch_start;
     }
 
-    // Parse first element to determine if it's a block or record
-    // We parse as a statement which will handle both:
-    // - Type annotations (like `apple : Type`)
-    // - Record fields (like `field : value`)
-    // - Regular expressions in blocks
-    const first_elem_opt = try self.parseStmt();
-
-    if (first_elem_opt == null) {
-        // Empty block/record body - shouldn't happen after we checked for CloseCurly
-        const empty_slice: []const Node.Idx = &.{};
-        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .block, .{ .nodes = nodes_idx });
-    }
-
-    const first_elem = first_elem_opt.?;
-    try self.scratch_nodes.append(self.gpa, first_elem);
-
-    // Determine if this is a record by looking at the structure
-    // Record fields have binop_colon and are followed by comma
-    // Type annotations also have binop_colon but are statements in blocks
+    // Start by assuming it's a block
     var is_record = false;
-    if (self.ast.tag(first_elem) == .binop_colon and self.peek() == .Comma) {
-        // It's a record field if we have colon AND comma
-        is_record = true;
-    }
+    
+    // Parse elements until we hit } or EOF
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        // Special handling for rest syntax in records
+        if (self.peek() == .DoubleDot) {
+            // Seeing .. means this is definitely a record
+            is_record = true;
+            const dot_pos = self.currentPosition();
+            self.advance(); // consume ..
 
-    if (is_record and self.peek() == .Comma) {
-        self.advance(); // consume comma
-    }
+            // Check if there's an identifier after .. (like ..rest)
+            if (self.peek() == .LowerIdent) {
+                const ident = self.currentIdent();
+                self.advance();
 
-    if (is_record) {
-        while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-            // Check for rest syntax `..` or `..identifier`
-            if (self.peek() == .DoubleDot) {
-                const dot_pos = self.currentPosition();
-                self.advance(); // consume ..
-
-                // Check if there's an identifier after .. (like ..rest)
-                if (self.peek() == .LowerIdent) {
-                    const ident = self.currentIdent();
-                    _ = self.currentPosition(); // Position tracked in dot_pos
-                    self.advance();
-
-                    // Create a double_dot_lc node for ..identifier
-                    if (ident) |id| {
-                        const rest_node = try self.ast.appendNode(self.gpa, dot_pos, .double_dot_lc, .{ .ident = id });
-                        try self.scratch_nodes.append(self.gpa, rest_node);
-                    }
-                } else {
-                    // Just .. without an identifier - create an underscore as placeholder
-                    // This represents "ignore the rest"
-                    const rest_node = try self.ast.appendNode(self.gpa, dot_pos, .underscore, .{ .src_bytes_end = dot_pos });
+                // Create a double_dot_lc node for ..identifier
+                if (ident) |id| {
+                    const rest_node = try self.ast.appendNode(self.gpa, dot_pos, .double_dot_lc, .{ .ident = id });
                     try self.scratch_nodes.append(self.gpa, rest_node);
                 }
-
-                // Check if there's a comma after the rest (optional, but should be last)
-                if (self.peek() == .Comma) {
-                    self.advance();
-                }
-                break; // rest should be the last element
             } else {
-                // Parse record field as a statement (to handle field : value)
-                const field_opt = try self.parseStmt();
-                if (field_opt) |field| {
-                    try self.scratch_nodes.append(self.gpa, field);
-                }
+                // Just .. without an identifier - create an underscore as placeholder
+                const rest_node = try self.ast.appendNode(self.gpa, dot_pos, .underscore, .{ .src_bytes_end = dot_pos });
+                try self.scratch_nodes.append(self.gpa, rest_node);
+            }
 
+            // Check if there's a comma after the rest (optional, but should be last)
+            if (self.peek() == .Comma) {
+                self.advance();
+            }
+            break; // rest should be the last element
+        } else {
+            // Parse an element (could be expr or statement)
+            const elem_opt = if (is_record) blk: {
+                // If we already know it's a record, parse as expression
+                const expr = try self.parseExpr();
+                break :blk expr;
+            } else blk: {
+                // Otherwise parse as statement to allow both blocks and records
+                const stmt = try self.parseStmt();
+                break :blk stmt;
+            };
+            
+            if (elem_opt) |elem| {
+                // In lambda args, { a, b } is shorthand for { a: a, b: b }
+                // If we're in lambda args and have a bare identifier, convert it
+                const final_elem = if (self.is_in_lambda_args and self.ast.tag(elem) == .lc) blk: {
+                    // Convert bare identifier to field: identifier
+                    const elem_pos = self.ast.start(elem);
+                    const binop_idx = try self.ast.appendBinOp(self.gpa, elem, elem);
+                    break :blk try self.ast.appendNode(self.gpa, elem_pos, .binop_colon, .{ .binop = binop_idx });
+                } else elem;
+                
+                try self.scratch_nodes.append(self.gpa, final_elem);
+                
+                // Check for comma - if we see one, this is a record!
                 if (self.peek() == .Comma) {
+                    is_record = true;
                     self.advance();
+                } else if (!is_record) {
+                    // In block mode, keep parsing statements
+                    continue;
                 } else {
+                    // In record mode, stop at non-comma
                     break;
                 }
-            }
-        }
-    } else {
-        // It's a block - parse remaining statements
-        while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-            const stmt = try self.parseStmt();
-            if (stmt) |s| {
-                try self.scratch_nodes.append(self.gpa, s);
+            } else {
+                break;
             }
         }
     }
