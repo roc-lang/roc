@@ -1046,8 +1046,87 @@ pub fn region(
 
             return base.Region{ .start = start_pos, .end = Position{ .offset = @as(u32, @intCast(end_offset)) } };
         },
-        .match, .if_else, .if_without_else, .malformed => {
-            @panic("TODO");
+        .match => {
+            // Match expressions contain: scrutinee, then branch patterns and bodies
+            // The region spans from the 'match' keyword to the end of the last branch
+            const region_start = self.start(idx);
+            var iter = self.node_slices.nodes(self.payload(idx).nodes);
+            
+            var last_node: ?Node.Idx = null;
+            while (iter.next()) |node| {
+                last_node = node;
+            }
+            
+            if (last_node) |last_node_idx| {
+                const last_node_region = self.region(last_node_idx, raw_src, ident_store);
+                return .{
+                    .start = region_start,
+                    .end = last_node_region.end,
+                };
+            } else {
+                // Empty match? Just use the keyword length
+                return .{
+                    .start = region_start,
+                    .end = Position{ .offset = region_start.offset + 5 }, // "match" is 5 chars
+                };
+            }
+        },
+        .if_else => {
+            // If-else contains: condition, then branch, else branch
+            const region_start = self.start(idx);
+            var iter = self.node_slices.nodes(self.payload(idx).nodes);
+            
+            var last_node: ?Node.Idx = null;
+            while (iter.next()) |node| {
+                last_node = node;
+            }
+            
+            if (last_node) |last_node_idx| {
+                const last_node_region = self.region(last_node_idx, raw_src, ident_store);
+                return .{
+                    .start = region_start,
+                    .end = last_node_region.end,
+                };
+            } else {
+                // Empty if? Just use the keyword length
+                return .{
+                    .start = region_start,
+                    .end = Position{ .offset = region_start.offset + 2 }, // "if" is 2 chars
+                };
+            }
+        },
+        .if_without_else => {
+            // If without else contains: condition, then branch
+            const region_start = self.start(idx);
+            var iter = self.node_slices.nodes(self.payload(idx).nodes);
+            
+            var last_node: ?Node.Idx = null;
+            while (iter.next()) |node| {
+                last_node = node;
+            }
+            
+            if (last_node) |last_node_idx| {
+                const last_node_region = self.region(last_node_idx, raw_src, ident_store);
+                return .{
+                    .start = region_start,
+                    .end = last_node_region.end,
+                };
+            } else {
+                // Empty if? Just use the keyword length
+                return .{
+                    .start = region_start,
+                    .end = Position{ .offset = region_start.offset + 2 }, // "if" is 2 chars
+                };
+            }
+        },
+        .malformed => {
+            // Malformed nodes only have a start position
+            // We return a zero-width region at that position
+            const region_start = self.start(idx);
+            return .{
+                .start = region_start,
+                .end = region_start,
+            };
         },
     }
 }
@@ -1466,6 +1545,9 @@ pub const Diagnostic = struct {
         // Match errors
         match_branch_wrong_arrow,
         match_branch_missing_arrow,
+        
+        // Internal parser errors (should not happen in correct parser)
+        internal_parser_error,
     };
 };
 

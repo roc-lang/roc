@@ -835,13 +835,17 @@ pub fn parseExprWithBpIterativeLabeledSwitch(self: *Parser, initial_min_bp: u8) 
         },
 
         .parse_rhs => {
-            // Not used in this version - we jump directly to parse_primary
-            unreachable;
+            // This state should not be reached in the labeled switch version
+            // If we get here, it's a logic error in the parser
+            return self.pushMalformed(.internal_parser_error, self.currentPosition());
         },
 
         .combine_binary => {
             // Pop operator from stack and combine
-            const op_info = self.scratch_op_stack.pop() orelse unreachable; // Stack should never be empty here
+            const op_info = self.scratch_op_stack.pop() orelse {
+                // Stack underflow - should not happen with correct parser logic
+                return self.pushMalformed(.internal_parser_error, self.currentPosition());
+            };
 
             // Check if this is a unary operator (left is null)
             if (op_info.left == null) {
@@ -854,7 +858,10 @@ pub fn parseExprWithBpIterativeLabeledSwitch(self: *Parser, initial_min_bp: u8) 
                     .OpBang => try self.ast.appendNode(self.gpa, op_info.op_pos, .unary_not, .{ .nodes = nodes_idx }),
                     .OpUnaryMinus => try self.ast.appendNode(self.gpa, op_info.op_pos, .unary_neg, .{ .nodes = nodes_idx }),
                     .DoubleDot => try self.ast.appendNode(self.gpa, op_info.op_pos, .unary_double_dot, .{ .nodes = nodes_idx }),
-                    else => unreachable,
+                    else => {
+                        // Unexpected unary operator type
+                        return self.pushMalformed(.expr_unexpected_token, op_info.op_pos);
+                    },
                 };
             } else {
                 // Binary operator - combine left and right
@@ -1778,8 +1785,8 @@ fn parseNumLiteral(self: *Parser) Error!Node.Idx {
     const pos = self.currentPosition();
     const tag = self.peek();
     const extra = self.currentExtra();
-    // const token_region = self.currentRegion();
-    // const end_pos = token_region.end; // TODO: Use this for better region calculation
+    // Note: We use the start position here. The full region is calculated
+    // later in AST2.region() based on the actual token content in the source.
 
     self.advance();
 
@@ -2412,8 +2419,9 @@ fn parseReturn(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
     self.advance(); // consume return
 
-    // Parse the expression to return
-    const expr = try self.parseExpr();
+    // Parse the expression to return using the iterative parser directly
+    // This avoids mutual recursion since we're calling the iterative version
+    const expr = try self.parseExprWithBpIterativeLabeledSwitch(0);
     const expr_slice = [_]Node.Idx{expr};
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &expr_slice);
     return try self.ast.appendNode(self.gpa, start_pos, .ret, .{ .nodes = nodes_idx });
@@ -2423,8 +2431,9 @@ fn parseCrash(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
     self.advance(); // consume crash
 
-    // Parse the expression to crash with
-    const expr = try self.parseExpr();
+    // Parse the expression to crash with using the iterative parser directly
+    // This avoids mutual recursion since we're calling the iterative version
+    const expr = try self.parseExprWithBpIterativeLabeledSwitch(0);
     const expr_slice = [_]Node.Idx{expr};
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &expr_slice);
     return try self.ast.appendNode(self.gpa, start_pos, .crash, .{ .nodes = nodes_idx });
