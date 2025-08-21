@@ -20,20 +20,6 @@ foo = |num| {
 # EXPECTED
 INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:5:11:5:11
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**return_stmt_block_example.md:5:21:5:23:**
-```roc
-    str = if (num > 10) {
-```
-                    ^^
-
-It has the type:
-    _Num(_size)_
-
-But here it's being used as:
-    _U64_
-
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:
 **return_stmt_block_example.md:5:11:**
