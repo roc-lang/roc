@@ -1619,7 +1619,6 @@ expect {
 		(p-assign @75.1-75.3 (ident "ma"))
 		(e-closure @75.5-111.2
 			(captures
-				(capture @97.2-97.3 (ident "t"))
 				(capture @49.1-49.3 (ident "me")))
 			(e-lambda @75.5-111.2
 				(args
@@ -1645,6 +1644,7 @@ expect {
 							(e-lookup-local @84.2-84.4
 								(p-assign @49.1-49.3 (ident "me")))
 							(e-not-implemented @1.1-1.1)))
+					(s-runtime-error (tag "crash_expects_string"))
 					(s-expr @86.11-86.17
 						(e-string @86.11-86.17
 							(e-literal @86.12-86.16 (string "Unr!"))))
@@ -1664,6 +1664,7 @@ expect {
 										(p-assign @77.2-77.14 (ident "er"))))
 								(e-int @89.16-89.19 (value "456"))
 								(e-int @90.1-90.2 (value "9")))))
+					(s-runtime-error (tag "not_implemented"))
 					(s-let @96.2-96.59
 						(p-assign @96.2-96.4 (ident "rd"))
 						(e-record @96.7-96.59

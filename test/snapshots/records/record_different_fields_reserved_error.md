@@ -32,10 +32,24 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:19:
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:5:7:7
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:7:7:8
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:19:7:20
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:2:5:2:23
 MALFORMED TYPE - record_different_fields_reserved_error.md:3:11:3:12
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:3:12:3:25
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:3:25:3:26
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:3:26:3:27
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:4:11:4:12
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:4:29:4:30
 NOT IMPLEMENTED - :0:0:0:0
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:5:11:5:12
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:5:26:5:27
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:5:6:8
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:8:6:9
 UNDEFINED VARIABLE - record_different_fields_reserved_error.md:6:10:6:19
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:19:6:20
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:5:7:7
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:7:7:8
 UNDEFINED VARIABLE - record_different_fields_reserved_error.md:7:9:7:19
+UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:19:7:20
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **:** is not expected in an expression.
@@ -225,6 +239,17 @@ Expressions can be identifiers, literals, function calls, or operators.
                   ^
 
 
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_reserved_error.md:2:5:2:23:**
+```roc
+    if: "conditional",
+```
+    ^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
@@ -235,10 +260,109 @@ This type annotation is malformed or contains invalid syntax.
           ^
 
 
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_reserved_error.md:3:12:3:25:**
+```roc
+    when: "pattern match",
+```
+           ^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_reserved_error.md:3:25:3:26:**
+```roc
+    when: "pattern match",
+```
+                        ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_reserved_error.md:3:26:3:27:**
+```roc
+    when: "pattern match",
+```
+                         ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_reserved_error.md:4:11:4:12:**
+```roc
+    expect: "test assertion",
+```
+          ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_reserved_error.md:4:29:4:30:**
+```roc
+    expect: "test assertion",
+```
+                            ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented: statement type in block
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_reserved_error.md:5:11:5:12:**
+```roc
+    import: "module load",
+```
+          ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_reserved_error.md:5:26:5:27:**
+```roc
+    import: "module load",
+```
+                         ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_reserved_error.md:6:5:6:8:**
+```roc
+    and: Bool.true,
+```
+    ^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_reserved_error.md:6:8:6:9:**
+```roc
+    and: Bool.true,
+```
+       ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 **UNDEFINED VARIABLE**
 Nothing is named `true` in this scope.
@@ -251,6 +375,39 @@ Is there an `import` or `exposing` missing up-top?
          ^^^^^^^^^
 
 
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_reserved_error.md:6:19:6:20:**
+```roc
+    and: Bool.true,
+```
+                  ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_reserved_error.md:7:5:7:7:**
+```roc
+    or: Bool.false,
+```
+    ^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_reserved_error.md:7:7:7:8:**
+```roc
+    or: Bool.false,
+```
+      ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
 **UNDEFINED VARIABLE**
 Nothing is named `false` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -261,6 +418,17 @@ Is there an `import` or `exposing` missing up-top?
 ```
         ^^^^^^^^^^
 
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_reserved_error.md:7:19:7:20:**
+```roc
+    or: Bool.false,
+```
+                  ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -322,21 +490,48 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-8.2
+	(s-expr @2.5-2.23
+		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-type-anno @3.5-3.12 (name "when")
 		(ty-malformed @3.11-3.12))
+	(s-expr @3.12-3.25
+		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-expr @3.25-3.26
+		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-expr @3.26-3.27
+		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-expect @4.5-4.12
+		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr @4.13-4.29
 		(e-string @4.13-4.29
 			(e-literal @4.14-4.28 (string "test assertion"))))
+	(s-expr @4.29-4.30
+		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-runtime-error (tag "not_implemented"))
+	(s-expr @5.11-5.12
+		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr @5.13-5.26
 		(e-string @5.13-5.26
 			(e-literal @5.14-5.25 (string "module load"))))
+	(s-expr @5.26-5.27
+		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-expr @6.5-6.8
+		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-expr @6.8-6.9
+		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr @6.10-6.19
 		(e-runtime-error (tag "ident_not_in_scope")))
+	(s-expr @6.19-6.20
+		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-expr @7.5-7.7
+		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-expr @7.7-7.8
+		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr @7.9-7.19
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(e-empty_record @1.1-8.2))
+	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-8.2 (type "{}"))
+(expr @1.1-8.2 (type "Error"))
 ~~~

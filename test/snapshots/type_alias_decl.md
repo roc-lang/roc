@@ -366,7 +366,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @27.1-27.6 (type "_arg -> Num(_size2)")))
+		(patt @27.1-27.6 (type "_arg -> U64")))
 	(type_decls
 		(alias @4.1-4.13 (type "UserId")
 			(ty-header @4.1-4.7 (name "UserId")))
@@ -393,5 +393,5 @@ main! = |_| {
 				(ty-args
 					(ty-var @22.11-22.15 (name "item"))))))
 	(expressions
-		(expr @27.9-39.2 (type "_arg -> Num(_size2)"))))
+		(expr @27.9-39.2 (type "_arg -> U64"))))
 ~~~

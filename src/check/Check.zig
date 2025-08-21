@@ -827,11 +827,28 @@ pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type:
 }
 
 fn checkExprWithExpectedAndAnnotation(self: *Self, expr_idx: CIR.Expr.Idx, expected_type: ?Var, from_annotation: bool) std.mem.Allocator.Error!bool {
+    const does_fx = self.checkExprWithExpectedAndAnnotationHelp(expr_idx, expected_type, from_annotation);
+    if (expected_type) |expected| {
+        if (from_annotation) {
+            _ = try self.unifyWithAnnotation(ModuleEnv.varFrom(expr_idx), expected);
+        } else {
+            _ = try self.unify(ModuleEnv.varFrom(expr_idx), expected);
+        }
+    }
+    return does_fx;
+}
+
+/// Do not use directly, use `checkExprWithExpectedAndAnnotation`
+///
+/// Checks the types of an expression, optionally against
+fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, expected_type: ?Var, from_annotation: bool) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const expr = self.cir.store.getExpr(expr_idx);
+    const expr_var = ModuleEnv.varFrom(expr_idx);
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
+
     var does_fx = false; // Does this expression potentially perform any side effects?
     switch (expr) {
         .e_int => |_| {
@@ -876,8 +893,6 @@ fn checkExprWithExpectedAndAnnotation(self: *Self, expr_idx: CIR.Expr.Idx, expec
             _ = try self.unify(lookup_var, pattern_var);
         },
         .e_lookup_external => |e| {
-            const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-
             const module_idx = @intFromEnum(e.module_idx);
             if (module_idx < self.other_modules.len) {
                 const other_module_cir = self.other_modules[module_idx];
@@ -1045,7 +1060,6 @@ fn checkExprWithExpectedAndAnnotation(self: *Self, expr_idx: CIR.Expr.Idx, expec
                             }
                         },
                         .fn_unbound => |_| {
-                            // Create TypeWriter for converting types to strings
                             if (self.types.needsInstantiation(cur_call_func_var)) {
                                 const expected_func_var = try self.instantiateVarAnon(cur_call_func_var, .{ .explicit = expr_region });
                                 const resolved_expected_func = self.types.resolveVar(expected_func_var);
@@ -1099,7 +1113,6 @@ fn checkExprWithExpectedAndAnnotation(self: *Self, expr_idx: CIR.Expr.Idx, expec
             // 3. For each field, unify the field type var with the field value type var
             // 4. Unification propagates concrete types through the type system
 
-            const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
             const record_var_resolved = self.types.resolveVar(expr_var);
             const record_var_content = record_var_resolved.desc.content;
 
@@ -1185,12 +1198,21 @@ fn checkExprWithExpectedAndAnnotation(self: *Self, expr_idx: CIR.Expr.Idx, expec
                     .s_decl => |decl_stmt| {
                         // Check pattern and expression, then unify
                         try self.checkPattern(decl_stmt.pattern);
-                        does_fx = try self.checkExpr(decl_stmt.expr) or does_fx;
+                        if (decl_stmt.anno) |anno_idx| {
+                            // TODO: When instantiating, use the parent type variables
+                            // map here to allow `forall` behavior
+                            const annotation = self.cir.store.getAnnotation(anno_idx);
+                            try self.checkAnnotation(annotation.type_anno);
+
+                            does_fx = try self.checkExprWithExpectedAndAnnotation(decl_stmt.expr, ModuleEnv.varFrom(annotation.type_anno), true) or does_fx;
+                        } else {
+                            does_fx = try self.checkExpr(decl_stmt.expr) or does_fx;
+                        }
 
                         // Unify the pattern with the expression
-                        const pattern_var: Var = @enumFromInt(@intFromEnum(decl_stmt.pattern));
-                        const expr_var: Var = @enumFromInt(@intFromEnum(decl_stmt.expr));
-                        _ = try self.unify(pattern_var, expr_var);
+                        const decl_pattern_var: Var = @enumFromInt(@intFromEnum(decl_stmt.pattern));
+                        const decl_expr_var: Var = @enumFromInt(@intFromEnum(decl_stmt.expr));
+                        _ = try self.unify(decl_pattern_var, decl_expr_var);
                     },
                     .s_reassign => |reassign| {
                         does_fx = try self.checkExpr(reassign.expr) or does_fx;
@@ -1228,7 +1250,7 @@ fn checkExprWithExpectedAndAnnotation(self: *Self, expr_idx: CIR.Expr.Idx, expec
             _ = try self.unify(closure_var, lambda_var);
         },
         .e_lambda => |lambda| {
-            does_fx = try self.checkLambdaWithAnno(expr_idx, expr_region, lambda, null);
+            does_fx = try self.checkLambdaWithAnno(expr_idx, expr_region, lambda, expected_type);
         },
         .e_tuple => |tuple| {
             // Check tuple elements

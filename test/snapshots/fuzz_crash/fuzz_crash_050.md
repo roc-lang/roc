@@ -12,6 +12,7 @@ module[]_0={
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_050.md:2:1:2:2
 PARSE ERROR - fuzz_crash_050.md:3:2:3:2
+UNRECOGNIZED SYNTAX - fuzz_crash_050.md:2:1:2:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **)** is not expected in an expression.
@@ -34,6 +35,17 @@ This is an unexpected parsing error. Please check your syntax.
 ```
  ^
 
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**fuzz_crash_050.md:2:1:2:2:**
+```roc
+)
+```
+^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -67,13 +79,13 @@ _0 = {
 	(d-let
 		(p-assign @1.9-1.11 (ident "_0"))
 		(e-block @1.12-2.2
-			(e-empty_record @1.12-2.2))))
+			(e-runtime-error (tag "expr_not_canonicalized")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @1.9-1.11 (type "{}")))
+		(patt @1.9-1.11 (type "Error")))
 	(expressions
-		(expr @1.12-2.2 (type "{}"))))
+		(expr @1.12-2.2 (type "Error"))))
 ~~~
