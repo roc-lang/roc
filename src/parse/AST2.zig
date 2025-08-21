@@ -549,6 +549,14 @@ pub fn region(
                 .end = Position{ .offset = region_start.offset + 1 },
             };
         },
+        .ellipsis => {
+            // Ellipsis is three characters
+            const region_start = self.start(idx);
+            return .{
+                .start = region_start,
+                .end = Position{ .offset = region_start.offset + 3 },
+            };
+        },
         .apply_lc, .apply_uc, .apply_anon, .apply_module => {
             // Function application: func(args...)
             // The payload should contain nodes for func and args
@@ -1167,6 +1175,7 @@ pub const Node = struct {
         lc_dot_ucs, // like .uc_dot_ucs except first one is lc (e.g. `pkg.Module` or `pkg.Module.Nominal.Tag`)
         dot_num, // dot followed by number (e.g. `.0`) - this is a tuple accessor
         underscore, // underscore pattern (e.g. `_`) - no payload needed
+        ellipsis, // triple dot (e.g. `...`) - represents "not yet implemented"
         import, // import statement (e.g. `import foo`) - payload stores imported nodes
 
         // Literals that are small enough to be stored right here in .payload's u32 - by far the most common case for numbers
@@ -1248,6 +1257,7 @@ pub const Node = struct {
                 .double_dot_lc,
                 .dot_num,
                 .underscore,
+                .ellipsis,
                 .import,
                 .num_literal_i32,
                 .int_literal_i32,

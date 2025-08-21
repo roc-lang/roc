@@ -492,6 +492,11 @@ fn processPrimaryExprIterative(self: *Parser) Error!Node.Idx {
             self.advance();
             return try self.ast.appendNode(self.gpa, pos, .underscore, .{ .src_bytes_end = pos });
         },
+        .TripleDot => {
+            self.advance();
+            // ... represents "not yet implemented" or "todo"
+            return try self.ast.appendNode(self.gpa, pos, .ellipsis, .{ .src_bytes_end = pos });
+        },
         .Int, .Float, .IntBase => return self.parseNumLiteral(),
         .String, .MultilineString, .SingleQuote => return self.parseStoredStringExpr(),
         .StringStart => return self.parseStringExpr(),
@@ -608,6 +613,11 @@ pub fn parseExprWithBpIterativeLabeledSwitch(self: *Parser, initial_min_bp: u8) 
                     const pos = self.currentPosition();
                     self.advance();
                     break :blk try self.ast.appendNode(self.gpa, pos, .underscore, .{ .src_bytes_end = pos });
+                },
+                .TripleDot => blk: {
+                    const pos = self.currentPosition();
+                    self.advance();
+                    break :blk try self.ast.appendNode(self.gpa, pos, .ellipsis, .{ .src_bytes_end = pos });
                 },
                 .Int, .Float, .IntBase => try self.parseNumLiteral(),
                 .String, .MultilineString, .SingleQuote => try self.parseStoredStringExpr(),
@@ -1939,7 +1949,7 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
 
     // Start by assuming it's a block
     var is_record = false;
-    
+
     // Parse elements until we hit } or EOF
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         // Special handling for rest syntax in records
@@ -1981,7 +1991,7 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
                 const stmt = try self.parseStmt();
                 break :blk stmt;
             };
-            
+
             if (elem_opt) |elem| {
                 // In lambda args, { a, b } is shorthand for { a: a, b: b }
                 // If we're in lambda args and have a bare identifier, convert it
@@ -1991,9 +2001,9 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
                     const binop_idx = try self.ast.appendBinOp(self.gpa, elem, elem);
                     break :blk try self.ast.appendNode(self.gpa, elem_pos, .binop_colon, .{ .binop = binop_idx });
                 } else elem;
-                
+
                 try self.scratch_nodes.append(self.gpa, final_elem);
-                
+
                 // Check for comma - if we see one, this is a record!
                 if (self.peek() == .Comma) {
                     is_record = true;
