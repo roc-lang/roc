@@ -1617,16 +1617,21 @@ pub fn parseStmt(self: *Parser) Error!?Node.Idx {
 }
 
 fn parseExpect(self: *Parser) Error!?Node.Idx {
-    _ = self.currentPosition(); // Will be used when we properly implement expect
+    const start_pos = self.currentPosition();
     self.advance(); // consume expect
 
     // Parse the condition expression
     const condition = try self.parseExpr();
 
-    // For now, just return the condition expression
-    // TODO: Add proper expect support in AST2
-    // This at least allows expect statements to parse without errors
-    return condition;
+    // Create a slice with just the condition node
+    const nodes = try self.gpa.alloc(Node.Idx, 1);
+    defer self.gpa.free(nodes);
+    nodes[0] = condition;
+    
+    const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
+    
+    // Create the expect node
+    return try self.ast.appendNode(self.gpa, start_pos, .expect, .{ .nodes = nodes_idx });
 }
 
 fn parseImport(self: *Parser) Error!?Node.Idx {

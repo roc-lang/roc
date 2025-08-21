@@ -617,6 +617,25 @@ pub fn region(
                 };
             }
         },
+        .expect => {
+            // Expect statement spans from the 'expect' keyword to the end of the condition expression
+            const region_start = self.start(idx);
+            var iter = self.node_slices.nodes(self.payload(idx).nodes);
+            
+            if (iter.next()) |condition_node| {
+                const condition_region = self.region(condition_node, raw_src, ident_store);
+                return .{
+                    .start = region_start,
+                    .end = condition_region.end,
+                };
+            } else {
+                // Empty expect? Just use the keyword length
+                return .{
+                    .start = region_start,
+                    .end = Position{ .offset = region_start.offset + 6 }, // "expect" is 6 chars
+                };
+            }
+        },
 
         // // Literals that are small enough to be stored right here in .payload's u32 - by far the most common case for numbers
         // num_literal_i32, // e.g. `42`
@@ -1177,6 +1196,7 @@ pub const Node = struct {
         underscore, // underscore pattern (e.g. `_`) - no payload needed
         ellipsis, // triple dot (e.g. `...`) - represents "not yet implemented"
         import, // import statement (e.g. `import foo`) - payload stores imported nodes
+        expect, // expect statement (e.g. `expect foo == bar`) - payload stores the condition expression
 
         // Literals that are small enough to be stored right here in .payload's u32 - by far the most common case for numbers
         num_literal_i32, // e.g. `42`
@@ -1259,6 +1279,7 @@ pub const Node = struct {
                 .underscore,
                 .ellipsis,
                 .import,
+                .expect,
                 .num_literal_i32,
                 .int_literal_i32,
                 .frac_literal_small,
