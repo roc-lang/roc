@@ -3,7 +3,7 @@ const base = @import("base");
 const collections = @import("collections");
 const parse = @import("parse");
 const tokenize_old = parse.tokenize;
-const tokenize2 = parse.tokenize2;
+const tokenize_iter = parse.tokenize_iter;
 const AST2 = parse.AST2;
 const Parser2 = parse.Parser2;
 const reporting = @import("reporting");
@@ -384,7 +384,7 @@ fn generateParseWithDiagnostics(allocator: std.mem.Allocator, source: []const u8
     defer env.deinit(allocator);
 
     // Create diagnostics buffer for Parser2
-    var messages: [128]tokenize2.Diagnostic = undefined;
+    var messages: [128]tokenize_iter.Diagnostic = undefined;
     var byte_slices = collections.ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
     
@@ -469,7 +469,7 @@ fn generateParseOutput(allocator: std.mem.Allocator, source: []const u8, test_ty
     defer env.deinit(allocator);
 
     // Create diagnostics buffer for Parser2
-    var messages: [128]tokenize2.Diagnostic = undefined;
+    var messages: [128]tokenize_iter.Diagnostic = undefined;
     var byte_slices = collections.ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
     

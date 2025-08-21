@@ -47,32 +47,6 @@ const OpInfo = struct {
     min_bp: u8,
 };
 
-/// Frame for type annotation parsing
-const TypeFrame = struct {
-    state: enum {
-        parse_params,
-        after_arrow,
-        build_result,
-    },
-    params_start: usize,
-    params_end: usize,
-    is_effectful: bool,
-    arrow_pos: base.Region.Position,
-    result: Node.Idx,
-};
-
-/// Frame for type term parsing
-const TypeTermFrame = struct {
-    state: enum {
-        parse_base,
-        parse_app_args,
-        finish_app,
-    },
-    result: Node.Idx,
-    app_pos: base.Region.Position,
-    app_args_start: usize,
-};
-
 const ParseState = union(enum) {
     /// Parse an expression with binding power
     expr_with_bp: struct {
@@ -187,8 +161,6 @@ byte_slices: *collections.ByteSlices, // Reference to tokenizer's ByteSlices
 scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
 scratch_op_stack: std.ArrayListUnmanaged(OpInfo), // For operator precedence parsing
 scratch_bytes: std.ArrayListUnmanaged(u8), // For string building
-scratch_type_frames: std.ArrayListUnmanaged(TypeFrame), // For type parsing
-scratch_type_term_frames: std.ArrayListUnmanaged(TypeTermFrame), // For type term parsing
 is_in_lambda_args: bool = false, // Track if we're parsing lambda parameters
 diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
@@ -216,8 +188,6 @@ pub fn initWithOptions(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []c
         .scratch_nodes = .{},
         .scratch_op_stack = .{},
         .scratch_bytes = .{},
-        .scratch_type_frames = .{},
-        .scratch_type_term_frames = .{},
         .diagnostics = .{},
         .cached_malformed_node = null,
         .parse_stack = .{},
@@ -246,8 +216,6 @@ pub fn deinit(parser: *Parser) void {
     parser.scratch_nodes.deinit(parser.gpa);
     parser.scratch_op_stack.deinit(parser.gpa);
     parser.scratch_bytes.deinit(parser.gpa);
-    parser.scratch_type_frames.deinit(parser.gpa);
-    parser.scratch_type_term_frames.deinit(parser.gpa);
     parser.diagnostics.deinit(parser.gpa);
     parser.parse_stack.deinit(parser.gpa);
     parser.temp_results.deinit(parser.gpa);
@@ -730,6 +698,60 @@ pub fn parseExprWithBpIterativeLabeledSwitch(self: *Parser, initial_min_bp: u8) 
         },
 
         .check_operators => {
+            // Special case: comma before arrow creates curried functions
+            // This works uniformly in both type and expression contexts
+            // Only at top level (min_bp == 0) to avoid interfering with normal comma usage
+            if (self.peek() == .Comma and min_bp == 0) {
+                // We're at the top level - check if this is comma-before-arrow
+                const scratch_start = self.scratch_nodes.items.len;
+                defer {
+                    self.scratch_nodes.items.len = scratch_start;
+                }
+
+                // Collect the first parameter
+                try self.scratch_nodes.append(self.gpa, left);
+
+                // Collect comma-separated parameters
+                while (self.peek() == .Comma) {
+                    self.advance(); // consume comma
+                    const param = try self.parseExprWithBpIterativeLabeledSwitch(4); // Higher than arrow precedence
+                    try self.scratch_nodes.append(self.gpa, param);
+                }
+
+                // Check if arrow follows
+                if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
+                    const is_effectful = self.peek() == .OpFatArrow;
+                    const arrow_tag: Node.Tag = if (is_effectful) .binop_thick_arrow else .binop_thin_arrow;
+                    const arrow_pos = self.currentPosition();
+                    self.advance();
+
+                    // Parse return type (which may itself have comma-arrow)
+                    const return_type = try self.parseExprWithBpIterativeLabeledSwitch(0);
+
+                    // Build nested arrows (right-associative)
+                    const params = self.scratch_nodes.items[scratch_start..];
+                    var current = return_type;
+                    var i = params.len;
+                    while (i > 0) {
+                        i -= 1;
+                        const binop_idx = try self.ast.appendBinOp(self.gpa, params[i], current);
+                        current = try self.ast.appendNode(self.gpa, arrow_pos, arrow_tag, .{ .binop = binop_idx });
+                    }
+                    return current;
+                } else {
+                    // No arrow - this is a tuple or will be an error at a higher level
+                    const params = self.scratch_nodes.items[scratch_start..];
+                    if (params.len == 1) {
+                        left = params[0];
+                    } else {
+                        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, params);
+                        left = try self.ast.appendNode(self.gpa, self.currentPosition(), .tuple_literal, .{ .nodes = nodes_idx });
+                    }
+                    // Continue checking for more operators
+                    continue :parse .check_operators;
+                }
+            }
+
             // Check for infix operators
             const op_tag = self.peek();
 
@@ -1629,9 +1651,9 @@ pub fn parseStmt(self: *Parser) Error!?Node.Idx {
                 const colon_pos = self.currentPosition();
                 self.advance(); // consume : or :=
 
-                // Parse the right-hand side - for type annotations, we need special handling
-                // to support comma-separated parameters and where clauses
-                const rhs = try self.parseTypeAnnotationRHS();
+                // Parse the right-hand side as a regular expression
+                // The expression parser will handle comma-before-arrow uniformly
+                const rhs = try self.parseExpr();
 
                 // Create type annotation/declaration node
                 const tag: AST.Node.Tag = if (is_opaque) .binop_colon_equals else .binop_colon;
@@ -2413,294 +2435,6 @@ pub fn parseTypeAnno(self: *Parser) Error!Node.Idx {
     return self.parseExpr();
 }
 
-/// Parse the right-hand side of a type annotation, handling special cases
-/// like comma-separated parameters and where clauses
-fn parseTypeAnnotationRHS(self: *Parser) Error!Node.Idx {
-    // Use scratch stack for type parsing to avoid allocations
-    const scratch_start = self.scratch_type_frames.items.len;
-    defer {
-        self.scratch_type_frames.items.len = scratch_start;
-    }
-
-    // Initial frame
-    try self.scratch_type_frames.append(self.gpa, .{
-        .state = .parse_params,
-        .params_start = self.scratch_nodes.items.len,
-        .params_end = 0,
-        .is_effectful = false,
-        .arrow_pos = base.Region.Position{ .offset = 0 },
-        .result = undefined,
-    });
-
-    var final_result: Node.Idx = undefined;
-
-    parse_loop: while (self.scratch_type_frames.items.len > scratch_start) {
-        var frame = &self.scratch_type_frames.items[self.scratch_type_frames.items.len - 1];
-
-        switch (frame.state) {
-            .parse_params => {
-                // Parse the first type term
-                const first_term = try self.parseTypeTerm();
-                try self.scratch_nodes.append(self.gpa, first_term);
-
-                // Check for more comma-separated parameters
-                while (self.peek() == .Comma) {
-                    self.advance();
-                    const term = try self.parseTypeTerm();
-                    try self.scratch_nodes.append(self.gpa, term);
-                }
-
-                frame.params_end = self.scratch_nodes.items.len;
-
-                // Check for arrow
-                if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
-                    frame.is_effectful = self.peek() == .OpFatArrow;
-                    frame.arrow_pos = self.currentPosition();
-                    self.advance();
-
-                    // Push new frame to parse return type
-                    try self.scratch_type_frames.append(self.gpa, .{
-                        .state = .parse_params,
-                        .params_start = self.scratch_nodes.items.len,
-                        .params_end = 0,
-                        .is_effectful = false,
-                        .arrow_pos = base.Region.Position{ .offset = 0 },
-                        .result = undefined,
-                    });
-                    frame.state = .after_arrow;
-                } else {
-                    frame.state = .build_result;
-                    continue :parse_loop;
-                }
-            },
-            .after_arrow => {
-                // We've parsed the return type, now build the arrow
-                const return_type = final_result;
-                const params = self.scratch_nodes.items[frame.params_start..frame.params_end];
-                const arrow_tag: Node.Tag = if (frame.is_effectful) .binop_thick_arrow else .binop_thin_arrow;
-
-                if (params.len == 1) {
-                    const binop_idx = try self.ast.appendBinOp(self.gpa, params[0], return_type);
-                    frame.result = try self.ast.appendNode(self.gpa, frame.arrow_pos, arrow_tag, .{ .binop = binop_idx });
-                } else {
-                    // Multiple parameters - create nested arrows
-                    var current = return_type;
-                    var i = params.len;
-                    while (i > 0) {
-                        i -= 1;
-                        const binop_idx = try self.ast.appendBinOp(self.gpa, params[i], current);
-                        current = try self.ast.appendNode(self.gpa, frame.arrow_pos, arrow_tag, .{ .binop = binop_idx });
-                    }
-                    frame.result = current;
-                }
-                frame.state = .build_result;
-            },
-            .build_result => {
-                const params = self.scratch_nodes.items[frame.params_start..frame.params_end];
-
-                if (frame.state == .build_result and frame.arrow_pos.offset == 0) {
-                    // No arrow case
-                    if (params.len == 1) {
-                        frame.result = params[0];
-                    } else {
-                        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, params);
-                        frame.result = try self.ast.appendNode(self.gpa, self.currentPosition(), .tuple_literal, .{ .nodes = nodes_idx });
-                    }
-                }
-
-                // Clean up scratch nodes for this frame
-                self.scratch_nodes.items.len = frame.params_start;
-
-                final_result = frame.result;
-                _ = self.scratch_type_frames.pop();
-            },
-        }
-    }
-
-    // Check for where clause
-    if (self.peek() == .KwWhere) {
-        const where_pos = self.currentPosition();
-        self.advance();
-        const constraint = try self.parseExpr();
-        const binop_idx = try self.ast.appendBinOp(self.gpa, final_result, constraint);
-        final_result = try self.ast.appendNode(self.gpa, where_pos, .binop_where, .{ .binop = binop_idx });
-    }
-
-    return final_result;
-}
-
-/// Parse a single type term (stops at commas and arrows with low precedence)
-fn parseTypeTerm(self: *Parser) Error!Node.Idx {
-    // Use scratch stack for type term parsing to avoid allocations
-    const scratch_start = self.scratch_type_term_frames.items.len;
-    defer {
-        self.scratch_type_term_frames.items.len = scratch_start;
-    }
-
-    // Push initial frame
-    try self.scratch_type_term_frames.append(self.gpa, .{
-        .state = .parse_base,
-        .result = undefined,
-        .app_pos = base.Region.Position{ .offset = 0 },
-        .app_args_start = 0,
-    });
-
-    parse: while (self.scratch_type_term_frames.items.len > scratch_start) {
-        var frame = &self.scratch_type_term_frames.items[self.scratch_type_term_frames.items.len - 1];
-
-        switch (frame.state) {
-            .parse_base => {
-                // Parse a primary term first
-                frame.result = switch (self.peek()) {
-                    .LowerIdent => blk: {
-                        const ident = self.currentIdent();
-                        const pos = self.currentPosition();
-                        self.advance();
-                        if (ident) |id| {
-                            break :blk try self.ast.appendNode(self.gpa, pos, .lc, .{ .ident = id });
-                        } else {
-                            break :blk try self.pushMalformed(.expr_unexpected_token, pos);
-                        }
-                    },
-                    .UpperIdent => blk: {
-                        const ident = self.currentIdent();
-                        const pos = self.currentPosition();
-                        self.advance();
-                        if (ident) |id| {
-                            break :blk try self.ast.appendNode(self.gpa, pos, .uc, .{ .ident = id });
-                        } else {
-                            break :blk try self.pushMalformed(.expr_unexpected_token, pos);
-                        }
-                    },
-                    .Underscore => blk: {
-                        const pos = self.currentPosition();
-                        self.advance();
-                        break :blk try self.ast.appendNode(self.gpa, pos, .underscore, .{ .src_bytes_end = pos });
-                    },
-                    .OpenRound => try self.parseTupleOrParenthesized(),
-                    .OpenCurly => try self.parseBlockOrRecord(),
-                    .OpenSquare => try self.parseListLiteral(),
-                    else => blk: {
-                        const error_pos = self.currentPosition();
-                        break :blk try self.pushMalformed(.expr_unexpected_token, error_pos);
-                    },
-                };
-
-                // Now handle postfix operations
-                postfix: while (true) {
-                    switch (self.peek()) {
-                        .NoSpaceOpenRound => {
-                            // Type application: Maybe(Int)
-                            frame.app_pos = self.currentPosition();
-                            self.advance(); // consume '('
-                            frame.app_args_start = self.scratch_nodes.items.len;
-                            frame.state = .parse_app_args;
-                            continue :parse;
-                        },
-                        .Dot => {
-                            // Field access: module.Type
-                            const pos = self.currentPosition();
-                            self.advance(); // consume '.'
-
-                            const field = switch (self.peek()) {
-                                .LowerIdent, .UpperIdent => blk: {
-                                    const ident = self.currentIdent();
-                                    const field_pos = self.currentPosition();
-                                    self.advance();
-                                    if (ident) |id| {
-                                        break :blk try self.ast.appendNode(self.gpa, field_pos, .lc, .{ .ident = id });
-                                    } else {
-                                        break :blk try self.pushMalformed(.expr_unexpected_token, field_pos);
-                                    }
-                                },
-                                else => try self.pushMalformed(.expr_unexpected_token, self.currentPosition()),
-                            };
-
-                            const access_idx = try self.ast.appendBinOp(self.gpa, frame.result, field);
-                            frame.result = try self.ast.appendNode(self.gpa, pos, .binop_dot, .{ .binop = access_idx });
-                        },
-                        else => break :postfix,
-                    }
-                }
-
-                // Done with this term
-                const result = frame.result;
-                _ = self.scratch_type_term_frames.pop();
-                if (self.scratch_type_term_frames.items.len > scratch_start) {
-                    // Return result to parent frame
-                    try self.scratch_nodes.append(self.gpa, result);
-                } else {
-                    return result;
-                }
-            },
-            .parse_app_args => {
-                // Parse type arguments iteratively
-                while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
-                    // Push new frame to parse each argument
-                    try self.scratch_type_term_frames.append(self.gpa, .{
-                        .state = .parse_base,
-                        .result = undefined,
-                        .app_pos = base.Region.Position{ .offset = 0 },
-                        .app_args_start = 0,
-                    });
-                    frame.state = .finish_app;
-                    continue :parse;
-                }
-
-                // No more arguments
-                frame.state = .finish_app;
-                continue :parse;
-            },
-            .finish_app => {
-                // Check if we need to consume comma
-                if (self.peek() == .Comma) {
-                    self.advance();
-                    // Check if there are more arguments after the comma
-                    if (self.peek() != .CloseRound) {
-                        frame.state = .parse_app_args;
-                        continue :parse;
-                    }
-                }
-
-                self.expect(.CloseRound) catch {
-                    return try self.pushMalformed(.expr_unexpected_token, self.currentPosition());
-                };
-
-                // Create application node
-                const args = self.scratch_nodes.items[frame.app_args_start..];
-
-                // Create a slice with function followed by arguments
-                // We need to temporarily insert the function at the beginning
-                const temp_marker = self.markScratchNodes();
-                defer self.restoreScratchNodes(temp_marker);
-
-                try self.scratch_nodes.append(self.gpa, frame.result);
-                try self.scratch_nodes.appendSlice(self.gpa, args);
-
-                const nodes_idx = try self.ast.appendNodeSlice(self.gpa, self.getScratchNodesSince(temp_marker));
-
-                // Determine tag based on function type
-                const tag: Node.Tag = switch (self.ast.tag(frame.result)) {
-                    .uc => .apply_uc,
-                    .lc => .apply_lc,
-                    else => .apply_anon,
-                };
-
-                frame.result = try self.ast.appendNode(self.gpa, frame.app_pos, tag, .{ .nodes = nodes_idx });
-
-                // Clean up scratch nodes
-                self.scratch_nodes.items.len = frame.app_args_start;
-
-                // Check for more postfix operations
-                frame.state = .parse_base;
-                continue :parse;
-            },
-        }
-    }
-
-    unreachable;
-}
-
 // Operator precedence
 const BindingPower = struct {
     left: u8,
@@ -2721,8 +2455,8 @@ fn getBindingPower(tag: Token.Tag) BindingPower {
         .OpColon => .{ .left = 3, .right = 4 },
         .OpArrow => .{ .left = 2, .right = 3 },
         .OpFatArrow => .{ .left = 1, .right = 2 },
-        .KwAs => .{ .left = 3, .right = 4 }, // Low precedence, binds loosely
-        .KwWhere => .{ .left = 1, .right = 2 }, // Very low precedence, like fat arrow
+        .KwAs => .{ .left = 3, .right = 4 },
+        .KwWhere => .{ .left = 1, .right = 2 },
         else => .{ .left = 0, .right = 0 },
     };
 }
