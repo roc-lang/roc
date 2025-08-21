@@ -236,7 +236,6 @@ const Binding = struct {
     pub fn cleanup(self: *const Binding, roc_ops: *RocOps) void {
         if (self.value.layout.tag == .scalar and self.value.layout.data.scalar.tag == .str) {
             const roc_str = self.value.asRocStr();
-            // std.debug.print("STR_TRACE: binding cleanup - about to decref string \"{s}\" at {*}\n", .{ roc_str.asSlice(), roc_str });
             roc_str.decref(roc_ops);
         }
     }
@@ -488,7 +487,7 @@ pub const Interpreter = struct {
                     const pattern_idx: CIR.Pattern.Idx = work.extra.decl_pattern_idx;
                     const value = try self.peekStackValue(1); // Don't pop!
 
-                    try self.bindPattern(pattern_idx, value, roc_ops); // Ownership moved to binding (immutable semantics)
+                    try self.bindPattern(pattern_idx, value, roc_ops); // Value stays on stack for the block's lifetime
                 },
                 .w_recursive_bind_init => {
                     const pattern_idx: CIR.Pattern.Idx = work.extra.decl_pattern_idx;
@@ -1200,7 +1199,6 @@ pub const Interpreter = struct {
                 const roc_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
                 self.traceInfo("e_str_segment: About to call RocStr.fromSlice with content: \"{s}\"", .{literal_content});
                 roc_str.* = builtins.str.RocStr.fromSlice(literal_content, roc_ops);
-                self.traceInfo("STR_TRACE: String allocated at {*} with content \"{s}\" (length={})", .{ roc_str, roc_str.asSlice(), roc_str.len() });
                 self.traceInfo("e_str_segment: RocStr initialized successfully", .{});
             },
 
