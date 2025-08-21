@@ -23,115 +23,12 @@ const Ident = base.Ident;
 const MAX_PARSE_DIAGNOSTICS: usize = 1_000;
 const MAX_PARSE_STACK_SIZE: usize = 10_000;
 
-/// Represents where a parse result should be stored
-const ResultDest = union(enum) {
-    /// Return this value as the final result
-    return_value: void,
-    /// Store in a variable
-    store_in_var: *Node.Idx,
-    /// Append to a list
-    append_to_list: *std.ArrayListUnmanaged(Node.Idx),
-    /// Store in a field
-    store_in_field: struct {
-        obj: *Node.Idx,
-        field: []const u8,
-    },
-};
-
-/// Parse state for the iterative parser
 /// Info about an operator for precedence parsing
 const OpInfo = struct {
     left: ?Node.Idx, // null for unary operators
     op_tag: Token.Tag,
     op_pos: Position,
     min_bp: u8,
-};
-
-const ParseState = union(enum) {
-    /// Parse an expression with binding power
-    expr_with_bp: struct {
-        min_bp: u8,
-        dest: ResultDest,
-    },
-
-    /// Parse a primary expression
-    primary_expr: struct {
-        dest: ResultDest,
-    },
-
-    /// Continue parsing binary operator RHS
-    parse_binary_rhs: struct {
-        left: ?Node.Idx, // Optional - null when coming from expr_with_bp
-        op_tag: Token.Tag,
-        op_pos: Position,
-        right_bp: u8,
-        min_bp: u8,
-        dest: ResultDest,
-    },
-
-    /// Combine binary operator results
-    parse_binary_combine: struct {
-        left: Node.Idx,
-        op_tag: Token.Tag,
-        op_pos: Position,
-        min_bp: u8,
-        dest: ResultDest,
-    },
-
-    /// Parse list elements
-    parse_list_elements: struct {
-        elements: *std.ArrayListUnmanaged(Node.Idx),
-        dest: ResultDest,
-    },
-
-    /// Parse record fields
-    parse_record_fields: struct {
-        fields: *std.ArrayListUnmanaged(Node.Idx),
-        dest: ResultDest,
-    },
-
-    /// Parse if condition
-    parse_if_condition: struct {
-        dest: ResultDest,
-    },
-
-    /// Parse if then branch
-    parse_if_then: struct {
-        condition: Node.Idx,
-        dest: ResultDest,
-    },
-
-    /// Parse if else branch
-    parse_if_else: struct {
-        condition: Node.Idx,
-        then_branch: Node.Idx,
-        dest: ResultDest,
-    },
-
-    /// Parse function application arguments
-    parse_apply_args: struct {
-        func: Node.Idx,
-        args: *std.ArrayListUnmanaged(Node.Idx),
-        dest: ResultDest,
-    },
-
-    /// Parse match scrutinee
-    parse_match_scrutinee: struct {
-        dest: ResultDest,
-    },
-
-    /// Parse match arms
-    parse_match_arms: struct {
-        scrutinee: Node.Idx,
-        arms: *std.ArrayListUnmanaged(Node.Idx),
-        dest: ResultDest,
-    },
-
-    /// Parse lambda body
-    parse_lambda_body: struct {
-        params: []const Node.Idx,
-        dest: ResultDest,
-    },
 };
 
 /// A parser which tokenizes and parses source code into an abstract syntax tree.
@@ -164,11 +61,6 @@ scratch_bytes: std.ArrayListUnmanaged(u8), // For string building
 is_in_lambda_args: bool = false, // Track if we're parsing lambda parameters
 diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
-/// Stack for iterative parsing to avoid recursion
-parse_stack: std.ArrayListUnmanaged(ParseState),
-/// Temporary results storage for intermediate values
-temp_results: std.ArrayListUnmanaged(Node.Idx),
-/// Use iterative parser (for testing)
 /// init the parser from source text using TokenIterator
 pub fn init(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []const u8, messages: []tokenize.Diagnostic, ast: *AST, byte_slices: *collections.ByteSlices) std.mem.Allocator.Error!Parser {
     return initWithOptions(env, gpa, source, messages, ast, byte_slices);
@@ -190,8 +82,6 @@ pub fn initWithOptions(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []c
         .scratch_bytes = .{},
         .diagnostics = .{},
         .cached_malformed_node = null,
-        .parse_stack = .{},
-        .temp_results = .{},
     };
 
     // Fill initial lookahead buffer
@@ -217,8 +107,6 @@ pub fn deinit(parser: *Parser) void {
     parser.scratch_op_stack.deinit(parser.gpa);
     parser.scratch_bytes.deinit(parser.gpa);
     parser.diagnostics.deinit(parser.gpa);
-    parser.parse_stack.deinit(parser.gpa);
-    parser.temp_results.deinit(parser.gpa);
     // diagnostics will be kept and passed to the following compiler stage
     // to be deinitialized by the caller when no longer required
 }
@@ -233,45 +121,6 @@ pub fn takeOwnedDiagnostics(self: *Parser) std.ArrayListUnmanaged(AST.Diagnostic
     const result = self.diagnostics;
     self.diagnostics = .{};
     return result;
-}
-
-/// Push a parse state onto the stack
-fn pushParseState(self: *Parser, state: ParseState) Error!void {
-    if (self.parse_stack.items.len >= MAX_PARSE_STACK_SIZE) {
-        // Create malformed node instead of crashing
-        return self.handleStackOverflow();
-    }
-    try self.parse_stack.append(self.gpa, state);
-}
-
-/// Handle stack overflow by creating a malformed node
-fn handleStackOverflow(self: *Parser) Error!void {
-    // Clear the parse stack to recover
-    self.parse_stack.clearRetainingCapacity();
-
-    // Add a diagnostic for the overflow - use expr_unexpected_token as a generic error
-    const pos = self.currentPosition();
-    try self.pushDiagnostic(.expr_unexpected_token, pos, pos);
-}
-
-/// Store a result based on the destination
-fn storeResult(self: *Parser, result: Node.Idx, dest: ResultDest) Error!void {
-    switch (dest) {
-        .return_value => {
-            try self.temp_results.append(self.gpa, result);
-        },
-        .store_in_var => |ptr| {
-            ptr.* = result;
-        },
-        .append_to_list => |list| {
-            try list.append(self.gpa, result);
-        },
-        .store_in_field => |field_info| {
-            // This would require more complex handling
-            // For now, we'll just store in the object
-            field_info.obj.* = result;
-        },
-    }
 }
 
 /// Helper to manage scratch node position
@@ -290,282 +139,9 @@ fn getScratchNodesSince(self: *const Parser, marker: usize) []const Node.Idx {
     return self.scratch_nodes.items[marker..];
 }
 
-/// Process a single parse state
-fn processParseState(self: *Parser, state: ParseState) Error!void {
-    switch (state) {
-        .expr_with_bp => |expr_state| {
-            // First push a state to continue with operators after we get the primary expr
-            try self.pushParseState(.{
-                .parse_binary_rhs = .{
-                    .left = null, // Will be filled by primary_expr via temp_results
-                    .op_tag = .EndOfFile, // Dummy value
-                    .op_pos = Position{ .offset = 0 },
-                    .right_bp = 0,
-                    .min_bp = expr_state.min_bp,
-                    .dest = expr_state.dest,
-                },
-            });
-
-            // Then push state to parse primary expression
-            try self.pushParseState(.{
-                .primary_expr = .{
-                    .dest = .return_value, // Store in temp_results
-                },
-            });
-        },
-        .primary_expr => |primary_state| {
-            const result = try self.processPrimaryExprIterative();
-            try self.storeResult(result, primary_state.dest);
-        },
-        .parse_binary_rhs => |rhs_state| {
-            // Get the left operand from temp_results if needed
-            var left = if (rhs_state.left) |l|
-                l
-            else blk: {
-                if (self.temp_results.items.len > 0) {
-                    const result = self.temp_results.items[self.temp_results.items.len - 1];
-                    self.temp_results.items.len -= 1;
-                    break :blk result;
-                } else {
-                    // Error: no left operand available
-                    const pos = self.currentPosition();
-                    break :blk try self.pushMalformed(.expr_unexpected_token, pos);
-                }
-            };
-
-            // Check for operators
-            while (true) {
-                const op_tag = self.peek();
-                const bp = getBindingPower(op_tag);
-
-                if (bp.left > rhs_state.min_bp) {
-                    const op_pos = self.currentPosition();
-                    self.advance();
-
-                    // We need to parse the right side with higher precedence
-                    // Push a continuation to combine the results
-                    try self.pushParseState(.{ .parse_binary_combine = .{
-                        .left = left,
-                        .op_tag = op_tag,
-                        .op_pos = op_pos,
-                        .min_bp = rhs_state.min_bp,
-                        .dest = rhs_state.dest,
-                    } });
-
-                    // Parse the right operand with higher precedence
-                    try self.pushParseState(.{ .expr_with_bp = .{
-                        .min_bp = bp.right,
-                        .dest = .return_value,
-                    } });
-                    return;
-                }
-
-                // Also check for postfix operators (function application, dot access)
-                switch (self.peek()) {
-                    .OpenRound => {
-                        // Function application
-                        left = try self.parseApply(left);
-                        continue;
-                    },
-                    .Dot => {
-                        // Dot access - handle inline for now
-                        const dot_pos = self.currentPosition();
-                        self.advance();
-
-                        if (self.peek() == .LowerIdent) {
-                            const ident = self.currentIdent();
-                            self.advance();
-
-                            if (ident) |id| {
-                                const field = try self.ast.appendNode(self.gpa, dot_pos, .dot_lc, .{ .ident = id });
-                                const binop_idx = try self.ast.appendBinOp(self.gpa, left, field);
-                                left = try self.ast.appendNode(self.gpa, dot_pos, .binop_pipe, .{ .binop = binop_idx });
-                            } else {
-                                const pos = self.currentPosition();
-                                left = try self.pushMalformed(.expr_dot_suffix_not_allowed, pos);
-                            }
-                        } else if (self.peek() == .UpperIdent) {
-                            const ident = self.currentIdent();
-                            self.advance();
-
-                            if (ident) |id| {
-                                const field = try self.ast.appendNode(self.gpa, dot_pos, .uc, .{ .ident = id });
-                                const binop_idx = try self.ast.appendBinOp(self.gpa, left, field);
-                                left = try self.ast.appendNode(self.gpa, dot_pos, .binop_pipe, .{ .binop = binop_idx });
-                            } else {
-                                const pos = self.currentPosition();
-                                left = try self.pushMalformed(.expr_dot_suffix_not_allowed, pos);
-                            }
-                        } else {
-                            const pos = self.currentPosition();
-                            left = try self.pushMalformed(.expr_dot_suffix_not_allowed, pos);
-                        }
-                        continue;
-                    },
-                    else => {
-                        // No more operators, store result
-                        try self.storeResult(left, rhs_state.dest);
-                        return;
-                    },
-                }
-            }
-        },
-        .parse_binary_combine => |combine_state| {
-            // Get the right operand from temp_results
-            const right = if (self.temp_results.items.len > 0) blk: {
-                const result = self.temp_results.items[self.temp_results.items.len - 1];
-                self.temp_results.items.len -= 1;
-                break :blk result;
-            } else blk: {
-                // Error: no right operand available
-                const pos = self.currentPosition();
-                break :blk try self.pushMalformed(.expr_unexpected_token, pos);
-            };
-
-            // Create the binary operation node
-            const binop_tag = tokenToBinOpTag(combine_state.op_tag) orelse {
-                const pos = self.currentPosition();
-                const malformed = try self.pushMalformed(.expr_unexpected_token, pos);
-                try self.storeResult(malformed, combine_state.dest);
-                return;
-            };
-
-            const binop_idx = try self.ast.appendBinOp(self.gpa, combine_state.left, right);
-            const result = try self.ast.appendNode(self.gpa, combine_state.op_pos, binop_tag, .{ .binop = binop_idx });
-
-            // Continue parsing with the new left operand
-            try self.pushParseState(.{
-                .parse_binary_rhs = .{
-                    .left = result,
-                    .op_tag = .EndOfFile, // Dummy value
-                    .op_pos = Position{ .offset = 0 },
-                    .right_bp = 0,
-                    .min_bp = combine_state.min_bp,
-                    .dest = combine_state.dest,
-                },
-            });
-        },
-        .parse_list_elements => |list_state| {
-            // Parse list elements iteratively
-            _ = list_state;
-        },
-        .parse_record_fields => |record_state| {
-            // Parse record fields iteratively
-            _ = record_state;
-        },
-        .parse_if_condition => |if_state| {
-            // Parse if condition
-            _ = if_state;
-        },
-        .parse_if_then => |then_state| {
-            // Parse then branch
-            _ = then_state;
-        },
-        .parse_if_else => |else_state| {
-            // Parse else branch
-            _ = else_state;
-        },
-        .parse_apply_args => |apply_state| {
-            // Parse function application arguments
-            _ = apply_state;
-        },
-        .parse_match_scrutinee => |match_state| {
-            // Parse match scrutinee
-            _ = match_state;
-        },
-        .parse_match_arms => |arms_state| {
-            // Parse match arms
-            _ = arms_state;
-        },
-        .parse_lambda_body => |lambda_state| {
-            // Parse lambda body
-            _ = lambda_state;
-        },
-    }
-}
-
-/// Process primary expression iteratively
-fn processPrimaryExprIterative(self: *Parser) Error!Node.Idx {
-    const pos = self.currentPosition();
-
-    return switch (self.peek()) {
-        .LowerIdent => {
-            const ident = self.currentIdent();
-            self.advance();
-
-            if (ident) |id| {
-                return try self.ast.appendNode(self.gpa, pos, .lc, .{ .ident = id });
-            } else {
-                return self.pushMalformed(.expr_unexpected_token, pos);
-            }
-        },
-        .UpperIdent => {
-            const ident = self.currentIdent();
-            self.advance();
-
-            if (ident) |id| {
-                return try self.ast.appendNode(self.gpa, pos, .uc, .{ .ident = id });
-            } else {
-                return self.pushMalformed(.expr_unexpected_token, pos);
-            }
-        },
-        .Underscore => {
-            self.advance();
-            return try self.ast.appendNode(self.gpa, pos, .underscore, .{ .src_bytes_end = pos });
-        },
-        .TripleDot => {
-            self.advance();
-            // ... represents "not yet implemented" or "todo"
-            return try self.ast.appendNode(self.gpa, pos, .ellipsis, .{ .src_bytes_end = pos });
-        },
-        .Int, .Float, .IntBase => return self.parseNumLiteral(),
-        .String, .MultilineString, .SingleQuote => return self.parseStoredStringExpr(),
-        .StringStart => return self.parseStringExpr(),
-        .OpenSquare => return self.parseListLiteral(),
-        .OpenCurly => return self.parseBlockOrRecord(),
-        .OpenRound => return self.parseTupleOrParenthesized(),
-        .KwIf => return self.parseIf(),
-        .KwMatch => return self.parseMatch(),
-        .OpBar => return self.parseLambda(),
-        .KwVar => return self.parseVar(),
-        .KwFor => return self.parseFor(),
-        .KwWhile => return self.parseWhile(),
-        .KwReturn => return self.parseReturn(),
-        .KwCrash => return self.parseCrash(),
-        .OpBang => {
-            // Unary operators should be handled by the iterative parser
-            return self.parseExprWithBpIterativeLabeledSwitch(0);
-        },
-        .OpBinaryMinus, .OpUnaryMinus => {
-            // Unary operators should be handled by the iterative parser
-            return self.parseExprWithBpIterativeLabeledSwitch(0);
-        },
-        .DoubleDot => {
-            // Unary operators should be handled by the iterative parser
-            return self.parseExprWithBpIterativeLabeledSwitch(0);
-        },
-        .KwModule => {
-            // Handle module(arg) for where clauses
-            self.advance();
-
-            if (self.peek() == .OpenRound) {
-                return self.parseModuleApply();
-            } else {
-                // module without parentheses is an error in expression context
-                return self.pushMalformed(.expr_unexpected_token, pos);
-            }
-        },
-        else => {
-            // Always use current token position for error reporting
-            const error_pos = self.currentPosition();
-            return self.pushMalformed(.expr_unexpected_token, error_pos);
-        },
-    };
-}
-
-/// Parse an expression with precedence iteratively using labeled switch
-/// This version uses scratch stack for operators to avoid allocations
-pub fn parseExprWithBpIterativeLabeledSwitch(self: *Parser, initial_min_bp: u8) Error!Node.Idx {
+/// Parse an expression with specific operator precedence
+/// This is the core expression parser that handles all operators and precedence
+pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx {
     // Save current scratch position for cleanup
     const scratch_op_start = self.scratch_op_stack.items.len;
     defer {
@@ -714,7 +290,7 @@ pub fn parseExprWithBpIterativeLabeledSwitch(self: *Parser, initial_min_bp: u8) 
                 // Collect comma-separated parameters
                 while (self.peek() == .Comma) {
                     self.advance(); // consume comma
-                    const param = try self.parseExprWithBpIterativeLabeledSwitch(4); // Higher than arrow precedence
+                    const param = try self.parseExprWithPrecedence(4); // Higher than arrow precedence
                     try self.scratch_nodes.append(self.gpa, param);
                 }
 
@@ -726,7 +302,7 @@ pub fn parseExprWithBpIterativeLabeledSwitch(self: *Parser, initial_min_bp: u8) 
                     self.advance();
 
                     // Parse return type (which may itself have comma-arrow)
-                    const return_type = try self.parseExprWithBpIterativeLabeledSwitch(0);
+                    const return_type = try self.parseExprWithPrecedence(0);
 
                     // Build nested arrows (right-associative)
                     const params = self.scratch_nodes.items[scratch_start..];
@@ -886,39 +462,6 @@ pub fn parseExprWithBpIterativeLabeledSwitch(self: *Parser, initial_min_bp: u8) 
     return left;
 }
 
-/// Old heap-based iterative version (kept for reference/comparison)
-pub fn parseExprWithBpIterativeHeapBased(self: *Parser, min_bp: u8) Error!Node.Idx {
-    var result: Node.Idx = @enumFromInt(0);
-
-    // Clear any previous state
-    self.parse_stack.clearRetainingCapacity();
-    self.temp_results.clearRetainingCapacity();
-
-    // Push initial state
-    try self.pushParseState(.{ .expr_with_bp = .{
-        .min_bp = min_bp,
-        .dest = .{ .store_in_var = &result },
-    } });
-
-    // Main iterative loop
-    while (self.parse_stack.items.len > 0) {
-        const state = self.parse_stack.items[self.parse_stack.items.len - 1];
-        self.parse_stack.items.len -= 1;
-        try self.processParseState(state);
-    }
-
-    // If we didn't get a result, return a malformed node
-    if (@intFromEnum(result) == 0) {
-        const pos = self.currentPosition();
-        return self.pushMalformed(.expr_unexpected_token, pos);
-    }
-
-    return result;
-}
-
-// Placeholder iterative functions - these will be implemented to be fully iterative
-// For now, they use the recursive versions or return malformed nodes
-
 fn parseModuleApply(self: *Parser) Error!Node.Idx {
     const pos = self.currentPosition();
     self.advance(); // consume (
@@ -926,10 +469,9 @@ fn parseModuleApply(self: *Parser) Error!Node.Idx {
     const scratch_marker = self.markScratchNodes();
     defer self.restoreScratchNodes(scratch_marker);
 
-    // Parse arguments iteratively
+    // Parse arguments
     while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
-        // Use the iterative parser for each argument
-        const arg = try self.parseExprWithBpIterativeLabeledSwitch(0);
+        const arg = try self.parseExprWithPrecedence(0);
         try self.scratch_nodes.append(self.gpa, arg);
 
         if (self.peek() == .Comma) {
@@ -1618,7 +1160,7 @@ fn parseTypeVariableList(self: *Parser) Error!AST.NodeSlices.Idx {
 
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         // Just parse as expression - should be a lowercase identifier
-        const type_var = try self.parsePrimaryExpr();
+        const type_var = try self.parseExprWithPrecedence(0);
         try self.scratch_nodes.append(self.gpa, type_var);
 
         if (self.peek() == .Comma) {
@@ -1650,7 +1192,7 @@ pub fn parseStmt(self: *Parser) Error!?Node.Idx {
             // Parse the left-hand side as an expression first
             // We need to stop at colons to avoid consuming them
             // Colons have bp=3, so we use min_bp=3 to stop at them
-            const lhs = try self.parseExprWithBp(3);
+            const lhs = try self.parseExprWithPrecedence(3);
 
             // Check if this is followed by : or := (making it a type annotation/declaration)
             if (self.peek() == .OpColon or self.peek() == .OpColonEqual) {
@@ -1768,17 +1310,7 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
 
 /// Parse an expression
 pub fn parseExpr(self: *Parser) Error!Node.Idx {
-    // Use the labeled switch version for zero allocations and better performance
-    return self.parseExprWithBpIterativeLabeledSwitch(0);
-}
-
-/// Parse an expression with precedence
-pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!Node.Idx {
-    return self.parseExprWithBpIterativeLabeledSwitch(min_bp);
-}
-
-fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
-    return self.processPrimaryExprIterative();
+    return self.parseExprWithPrecedence(0);
 }
 
 fn parseNumLiteral(self: *Parser) Error!Node.Idx {
@@ -2419,9 +1951,9 @@ fn parseReturn(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
     self.advance(); // consume return
 
-    // Parse the expression to return using the iterative parser directly
-    // This avoids mutual recursion since we're calling the iterative version
-    const expr = try self.parseExprWithBpIterativeLabeledSwitch(0);
+    // Parse the expression to return
+    // This avoids mutual recursion since we're calling parseExprWithPrecedence directly
+    const expr = try self.parseExprWithPrecedence(0);
     const expr_slice = [_]Node.Idx{expr};
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &expr_slice);
     return try self.ast.appendNode(self.gpa, start_pos, .ret, .{ .nodes = nodes_idx });
@@ -2431,9 +1963,9 @@ fn parseCrash(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
     self.advance(); // consume crash
 
-    // Parse the expression to crash with using the iterative parser directly
-    // This avoids mutual recursion since we're calling the iterative version
-    const expr = try self.parseExprWithBpIterativeLabeledSwitch(0);
+    // Parse the expression to crash with
+    // This avoids mutual recursion since we're calling parseExprWithPrecedence directly
+    const expr = try self.parseExprWithPrecedence(0);
     const expr_slice = [_]Node.Idx{expr};
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &expr_slice);
     return try self.ast.appendNode(self.gpa, start_pos, .crash, .{ .nodes = nodes_idx });

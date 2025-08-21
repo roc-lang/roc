@@ -286,6 +286,8 @@ pub fn lambda(self: *const Ast, idx: Node.Idx) Lambda {
     var iter = self.node_slices.nodes(body_then_args_idx);
 
     // First node is the body
+    // Safe: Parser always ensures lambda nodes have at least a body
+    // The parser constructs lambda nodes with body_then_args containing body first
     const body = iter.next() orelse unreachable; // Lambda must have at least a body
 
     return Lambda{
@@ -300,6 +302,8 @@ pub fn whileLoop(self: *const Ast, idx: Node.Idx) WhileLoop {
     const nodes_idx = self.payload(idx).nodes;
     var iter = self.node_slices.nodes(nodes_idx);
 
+    // Safe: Parser always ensures while_loop nodes have exactly 2 children (condition, body)
+    // The parser constructs while_loop nodes with these two nodes in parseWhile()
     const condition = iter.next() orelse unreachable;
     const body = iter.next() orelse unreachable;
 
@@ -315,6 +319,8 @@ pub fn forLoop(self: *const Ast, idx: Node.Idx) ForLoop {
     const nodes_idx = self.payload(idx).nodes;
     var iter = self.node_slices.nodes(nodes_idx);
 
+    // Safe: Parser always ensures for_loop nodes have exactly 3 children (pattern, iterable, body)
+    // The parser constructs for_loop nodes with these three nodes in parseFor()
     const pattern = iter.next() orelse unreachable;
     const iterable = iter.next() orelse unreachable;
     const body = iter.next() orelse unreachable;
@@ -578,6 +584,8 @@ pub fn region(
             var iter = self.node_slices.nodes(nodes_idx);
 
             // Get the first node (the function)
+            // Safe: Parser ensures apply nodes always have at least the function node
+            // The parseApply() function always includes the function as the first node
             const first_node = iter.next() orelse unreachable; // Should have at least the function
 
             // Find the last node (last argument or the function if no args)
@@ -745,6 +753,8 @@ pub fn region(
             const region_start = self.start(idx);
             const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
             var iter = nodes_iter;
+            // Safe: Parser ensures unary_not nodes always have exactly one operand
+            // The parser creates these with a single operand
             const operand = iter.next() orelse unreachable; // Should have the operand
             const operand_region = self.region(operand, raw_src, ident_store);
 
@@ -758,6 +768,8 @@ pub fn region(
             const region_start = self.start(idx);
             const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
             var iter = nodes_iter;
+            // Safe: Parser ensures unary_neg nodes always have exactly one operand
+            // The parser creates these with a single operand
             const operand = iter.next() orelse unreachable; // Should have the operand
             const operand_region = self.region(operand, raw_src, ident_store);
 
@@ -771,6 +783,8 @@ pub fn region(
             const region_start = self.start(idx);
             const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
             var iter = nodes_iter;
+            // Safe: Parser ensures unary_double_dot nodes always have exactly one operand
+            // The parser creates these with a single operand
             const operand = iter.next() orelse unreachable; // Should have the operand
             const operand_region = self.region(operand, raw_src, ident_store);
 
@@ -784,6 +798,8 @@ pub fn region(
             const region_start = self.start(idx);
             const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
             var iter = nodes_iter;
+            // Safe: Parser ensures ret nodes always have exactly one expression
+            // The parseReturn() function always creates ret nodes with an expression
             const expr = iter.next() orelse unreachable; // Should have the expression to return
             const expr_region = self.region(expr, raw_src, ident_store);
 
@@ -797,6 +813,8 @@ pub fn region(
             const region_start = self.start(idx);
             const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
             var iter = nodes_iter;
+            // Safe: Parser ensures crash nodes always have exactly one expression
+            // The parseCrash() function always creates crash nodes with an expression
             const expr = iter.next() orelse unreachable; // Should have the expression to crash with
             const expr_region = self.region(expr, raw_src, ident_store);
 
@@ -1051,12 +1069,12 @@ pub fn region(
             // The region spans from the 'match' keyword to the end of the last branch
             const region_start = self.start(idx);
             var iter = self.node_slices.nodes(self.payload(idx).nodes);
-            
+
             var last_node: ?Node.Idx = null;
             while (iter.next()) |node| {
                 last_node = node;
             }
-            
+
             if (last_node) |last_node_idx| {
                 const last_node_region = self.region(last_node_idx, raw_src, ident_store);
                 return .{
@@ -1075,12 +1093,12 @@ pub fn region(
             // If-else contains: condition, then branch, else branch
             const region_start = self.start(idx);
             var iter = self.node_slices.nodes(self.payload(idx).nodes);
-            
+
             var last_node: ?Node.Idx = null;
             while (iter.next()) |node| {
                 last_node = node;
             }
-            
+
             if (last_node) |last_node_idx| {
                 const last_node_region = self.region(last_node_idx, raw_src, ident_store);
                 return .{
@@ -1099,12 +1117,12 @@ pub fn region(
             // If without else contains: condition, then branch
             const region_start = self.start(idx);
             var iter = self.node_slices.nodes(self.payload(idx).nodes);
-            
+
             var last_node: ?Node.Idx = null;
             while (iter.next()) |node| {
                 last_node = node;
             }
-            
+
             if (last_node) |last_node_idx| {
                 const last_node_region = self.region(last_node_idx, raw_src, ident_store);
                 return .{
@@ -1545,7 +1563,7 @@ pub const Diagnostic = struct {
         // Match errors
         match_branch_wrong_arrow,
         match_branch_missing_arrow,
-        
+
         // Internal parser errors (should not happen in correct parser)
         internal_parser_error,
     };
