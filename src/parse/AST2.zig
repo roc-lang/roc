@@ -41,7 +41,7 @@ const reporting = @import("reporting");
 const error_reporting = @import("error_reporting.zig");
 const CommonEnv = base.CommonEnv;
 const collections = @import("collections");
-const tokenize = @import("tokenize2.zig");
+const tokenize = @import("tokenize_iter.zig");
 
 const Region = base.Region;
 const Position = Region.Position;

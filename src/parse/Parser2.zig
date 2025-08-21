@@ -16,7 +16,7 @@ const Position = base.Region.Position;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
 const TokenIdx = Token.Idx;
-const tokenize = @import("tokenize2.zig");
+const tokenize = @import("tokenize_iter.zig");
 const tokenize_iter = @import("tokenize_iter.zig");
 const Ident = base.Ident;
 
@@ -2532,51 +2532,51 @@ fn parseTypeTerm(self: *Parser) Error!Node.Idx {
                 // Type application: Maybe(Int)
                 const pos = self.currentPosition();
                 self.advance(); // consume '('
-                
+
                 const scratch_start = self.scratch_nodes.items.len;
                 defer self.scratch_nodes.items.len = scratch_start;
-                
+
                 // Parse type arguments
                 while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
                     const arg = try self.parseTypeTerm();
                     try self.scratch_nodes.append(self.gpa, arg);
-                    
+
                     if (self.peek() == .Comma) {
                         self.advance();
                     } else {
                         break;
                     }
                 }
-                
+
                 self.expect(.CloseRound) catch {
                     return try self.pushMalformed(.expr_unexpected_token, self.currentPosition());
                 };
-                
+
                 // Create application node
                 const args = self.scratch_nodes.items[scratch_start..];
-                
+
                 // Create a slice with function followed by arguments
                 var full_nodes = std.ArrayList(Node.Idx).init(self.gpa);
                 defer full_nodes.deinit();
                 try full_nodes.append(result);
                 try full_nodes.appendSlice(args);
-                
+
                 const nodes_idx = try self.ast.appendNodeSlice(self.gpa, full_nodes.items);
-                
+
                 // Determine tag based on function type
                 const tag: Node.Tag = switch (self.ast.tag(result)) {
                     .uc => .apply_uc,
                     .lc => .apply_lc,
                     else => .apply_anon,
                 };
-                
+
                 result = try self.ast.appendNode(self.gpa, pos, tag, .{ .nodes = nodes_idx });
             },
             .Dot => {
                 // Field access: module.Type
                 const pos = self.currentPosition();
                 self.advance(); // consume '.'
-                
+
                 const field = switch (self.peek()) {
                     .LowerIdent, .UpperIdent => blk: {
                         const ident = self.currentIdent();
@@ -2590,14 +2590,14 @@ fn parseTypeTerm(self: *Parser) Error!Node.Idx {
                     },
                     else => try self.pushMalformed(.expr_unexpected_token, self.currentPosition()),
                 };
-                
+
                 const access_idx = try self.ast.appendBinOp(self.gpa, result, field);
                 result = try self.ast.appendNode(self.gpa, pos, .binop_dot, .{ .binop = access_idx });
             },
             else => break,
         }
     }
-    
+
     return result;
 }
 
