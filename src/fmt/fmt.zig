@@ -719,6 +719,12 @@ const Formatter = struct {
             }
             _ = try formatter(fmt, item_idx);
             if (multiline) {
+                const node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(item_idx)));
+                // special case for multiline_strings
+                if (node.tag == .multiline_string) {
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                }
                 try fmt.push(',');
             } else if (i < (items.len - 1)) {
                 try fmt.pushAll(", ");
@@ -940,6 +946,15 @@ const Formatter = struct {
                     }
                     const field_region = try fmt.formatRecordField(field_idx);
                     if (multiline) {
+                        const field = fmt.ast.store.getRecordField(field_idx);
+                        if (field.value) |v| {
+                            const node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(v)));
+                            // special case for multiline_strings
+                            if (node.tag == .multiline_string) {
+                                try fmt.ensureNewline();
+                                try fmt.pushIndent();
+                            }
+                        }
                         try fmt.push(',');
                         _ = try fmt.flushCommentsAfter(field_region.end);
                         try fmt.ensureNewline();
