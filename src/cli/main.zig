@@ -410,7 +410,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     };
 }
 
-fn generatePlatformHostShim(gpa: Allocator, cache_dir: []const u8, entrypoint_name: []const u8) !?[]const u8 {
+fn generatePlatformHostShim(gpa: Allocator, cache_dir: []const u8, entrypoint_names: []const []const u8) !?[]const u8 {
     // Check if LLVM is available (this is a compile-time check)
     if (!llvm_available) {
         std.log.debug("LLVM not available, skipping platform host shim generation", .{});
@@ -430,13 +430,16 @@ fn generatePlatformHostShim(gpa: Allocator, cache_dir: []const u8, entrypoint_na
     };
     defer llvm_builder.deinit();
 
-    // Define single hardcoded entrypoint with entry_idx = 0
-    const entrypoints = [_]platform_host_shim.EntryPoint{
-        .{ .name = entrypoint_name, .idx = 0 },
-    };
+    // Create entrypoints array from the provided names
+    var entrypoints = std.ArrayList(platform_host_shim.EntryPoint).init(gpa);
+    defer entrypoints.deinit();
+    
+    for (entrypoint_names, 0..) |name, idx| {
+        try entrypoints.append(.{ .name = name, .idx = @intCast(idx) });
+    }
 
     // Create the complete platform shim
-    platform_host_shim.createInterpreterShim(&llvm_builder, &entrypoints) catch |err| {
+    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items) catch |err| {
         std.log.err("Failed to create interpreter shim: {}", .{err});
         return err;
     };
@@ -550,11 +553,31 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     };
     defer gpa.free(exe_path);
 
-    // Extract entrypoint from platform header
-    const entrypoint_name = extractEntrypointFromPlatform(gpa, args.path) catch |err| {
-        std.log.err("Failed to extract entrypoint from platform header: {}\n", .{err});
+    // Resolve platform paths from app header
+    const platform_paths = resolvePlatformPaths(gpa, args.path) catch |err| {
+        std.log.err("Failed to resolve platform: {}\n", .{err});
         std.process.exit(1);
     };
+    defer platform_paths.deinit(gpa);
+
+    // Extract entrypoints from platform source file
+    var entrypoints = std.ArrayList([]const u8).init(gpa);
+    defer {
+        for (entrypoints.items) |entrypoint| {
+            gpa.free(entrypoint);
+        }
+        entrypoints.deinit();
+    }
+    
+    if (platform_paths.platform_source_path) |platform_source| {
+        extractEntrypointsFromPlatform(gpa, platform_source, &entrypoints) catch |err| {
+            std.log.err("Failed to extract entrypoints from platform header: {}\n", .{err});
+            std.process.exit(1);
+        };
+    } else {
+        std.log.err("No platform source file found for entrypoint extraction\n", .{});
+        std.process.exit(1);
+    }
 
     // Check if the interpreter executable already exists (cached)
     const exe_exists = if (args.no_cache) false else blk: {
@@ -565,13 +588,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     };
 
     if (!exe_exists) {
-
-        // Resolve platform from app header
-        const host_path = resolvePlatformHost(gpa, args.path) catch |err| {
-            std.log.err("Failed to resolve platform: {}\n", .{err});
-            std.process.exit(1);
-        };
-        defer gpa.free(host_path);
 
         // Check for cached shim library, extract if not present
         const shim_filename = if (builtin.target.os.tag == .windows) "roc_shim.lib" else "libroc_shim.a";
@@ -597,9 +613,9 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
             };
         }
 
-        // Generate platform host shim using the detected entrypoint name
+        // Generate platform host shim using the detected entrypoints
 
-        const platform_shim_path = generatePlatformHostShim(gpa, exe_cache_dir, entrypoint_name) catch |err| {
+        const platform_shim_path = generatePlatformHostShim(gpa, exe_cache_dir, entrypoints.items) catch |err| {
             std.log.err("Failed to generate platform host shim: {}\n", .{err});
             std.process.exit(1);
         };
@@ -621,7 +637,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         // Create object files list - include platform shim if available
         var object_files = std.ArrayList([]const u8).init(gpa);
         defer object_files.deinit();
-        object_files.append(host_path) catch {
+        object_files.append(platform_paths.host_lib_path) catch {
             std.log.err("Failed to add host path to object files\n", .{});
             std.process.exit(1);
         };
@@ -649,7 +665,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
                 // Fallback to clang when LLVM is not available
                 const link_result = std.process.Child.run(.{
                     .allocator = gpa,
-                    .argv = &.{ "clang", "-o", exe_path, host_path, shim_path },
+                    .argv = &.{ "clang", "-o", exe_path, platform_paths.host_lib_path, shim_path },
                 }) catch |clang_err| {
                     std.log.err("Failed to link executable with both LLD and clang: LLD unavailable, clang error: {}\n", .{clang_err});
                     std.process.exit(1);
@@ -679,7 +695,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     }
 
     // Set up shared memory with ModuleEnv
-    const shm_handle = setupSharedMemoryWithModuleEnv(gpa, args.path, entrypoint_name) catch |err| {
+    const shm_handle = setupSharedMemoryWithModuleEnv(gpa, args.path) catch |err| {
         std.log.err("Failed to set up shared memory with ModuleEnv: {}\n", .{err});
         std.process.exit(1);
     };
@@ -905,7 +921,8 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 /// Set up shared memory with a compiled ModuleEnv from a Roc file.
 /// This parses, canonicalizes, and type-checks the Roc file, with the resulting ModuleEnv
 /// ending up in shared memory because all allocations were done into shared memory.
-pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8, entrypoint_name: []const u8) !SharedMemoryHandle {
+/// Looks for a 'main' function as the entrypoint to evaluate.
+pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size);
@@ -962,8 +979,7 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();
 
-    // Find the entrypoint definition in the module
-    // Look through all definitions to find one named with the entrypoint name
+    // Find the main function definition in the module
     var main_expr_idx: ?u32 = null;
     const defs = env.store.sliceDefs(env.all_defs);
     for (defs) |def_idx| {
@@ -972,16 +988,16 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
         if (pattern == .assign) {
             const ident_idx = pattern.assign.ident;
             const ident_text = env.getIdent(ident_idx);
-            if (std.mem.eql(u8, ident_text, entrypoint_name)) {
+            if (std.mem.eql(u8, ident_text, "main")) {
                 main_expr_idx = @intFromEnum(def.expr);
                 break;
             }
         }
     }
 
-    // Store the entrypoint expression index for the child
+    // Store the main expression index for the child to evaluate
     expr_idx_ptr[0] = main_expr_idx orelse {
-        std.log.err("No '{s}' definition found in module\n", .{entrypoint_name});
+        std.log.err("No 'main' function found in module\n", .{});
         return error.NoMainFunction;
     };
 
@@ -1060,8 +1076,21 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
     };
 }
 
-/// Resolve platform specification from a Roc file to find the host library
-pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (std.mem.Allocator.Error || error{ NoPlatformFound, PlatformNotSupported })![]u8 {
+/// Platform resolution result containing both host library and platform source paths
+pub const PlatformPaths = struct {
+    host_lib_path: []const u8,
+    platform_source_path: ?[]const u8, // Optional - may not exist for some platforms
+    
+    pub fn deinit(self: *const PlatformPaths, gpa: std.mem.Allocator) void {
+        gpa.free(self.host_lib_path);
+        if (self.platform_source_path) |path| {
+            gpa.free(path);
+        }
+    }
+};
+
+/// Resolve platform specification from a Roc file to find both host library and platform source
+pub fn resolvePlatformPaths(gpa: std.mem.Allocator, roc_file_path: []const u8) (std.mem.Allocator.Error || error{ NoPlatformFound, PlatformNotSupported })!PlatformPaths {
     // Read the Roc file to parse the app header
     const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return error.NoPlatformFound,
@@ -1108,11 +1137,33 @@ pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (s
                                 return error.PlatformNotSupported;
                             };
 
-                            return try gpa.dupe(u8, host_path);
+                            // Try to find platform source file (commonly main.roc but could be anything)
+                            const platform_source_path = blk: {
+                                // First try the exact path if it's a .roc file
+                                if (std.mem.endsWith(u8, platform_path, ".roc")) {
+                                    std.fs.cwd().access(platform_path, .{}) catch break :blk null;
+                                    break :blk try gpa.dupe(u8, platform_path);
+                                }
+                                
+                                // Try common platform source names in the platform directory
+                                const common_names = [_][]const u8{ "main.roc", "platform.roc", "Platform.roc" };
+                                for (common_names) |name| {
+                                    const source_path = try std.fs.path.join(gpa, &.{ platform_dir, name });
+                                    defer gpa.free(source_path);
+                                    std.fs.cwd().access(source_path, .{}) catch continue;
+                                    break :blk try gpa.dupe(u8, source_path);
+                                }
+                                break :blk null;
+                            };
+
+                            return PlatformPaths{
+                                .host_lib_path = try gpa.dupe(u8, host_path),
+                                .platform_source_path = platform_source_path,
+                            };
                         }
 
-                        // Try to resolve platform to a local host library
-                        return resolvePlatformSpecToHostLib(gpa, platform_spec);
+                        // Try to resolve platform to a local host library and source
+                        return resolvePlatformSpecToPaths(gpa, platform_spec);
                     }
                 }
             }
@@ -1122,13 +1173,13 @@ pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (s
     return error.NoPlatformFound;
 }
 
-/// Resolve a platform specification to a local host library path
-fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})![]u8 {
+/// Resolve a platform specification to both host library and platform source paths
+fn resolvePlatformSpecToPaths(gpa: std.mem.Allocator, platform_spec: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})!PlatformPaths {
 
     // Check for common platform names and map them to host libraries
     if (std.mem.eql(u8, platform_spec, "cli")) {
         // Try to find CLI platform host library
-        const cli_paths = if (comptime builtin.target.os.tag == .windows)
+        const cli_host_paths = if (comptime builtin.target.os.tag == .windows)
             [_][]const u8{
                 "zig-out/lib/platform_host_cli.lib",
                 "platform/cli/host.lib",
@@ -1141,13 +1192,30 @@ fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u
                 "platforms/cli/host.a",
             };
 
-        for (cli_paths) |path| {
-            std.fs.cwd().access(path, .{}) catch continue;
-            return try gpa.dupe(u8, path);
+        const cli_source_paths = [_][]const u8{
+            "platform/cli/platform.roc",
+            "platforms/cli/platform.roc",
+        };
+
+        for (cli_host_paths) |host_path| {
+            std.fs.cwd().access(host_path, .{}) catch continue;
+            
+            // Found host library, now try to find platform source
+            var platform_source_path: ?[]const u8 = null;
+            for (cli_source_paths) |source_path| {
+                std.fs.cwd().access(source_path, .{}) catch continue;
+                platform_source_path = try gpa.dupe(u8, source_path);
+                break;
+            }
+            
+            return PlatformPaths{
+                .host_lib_path = try gpa.dupe(u8, host_path),
+                .platform_source_path = platform_source_path,
+            };
         }
     } else if (std.mem.eql(u8, platform_spec, "basic-cli")) {
         // Try to find basic-cli platform host library
-        const basic_cli_paths = if (comptime builtin.target.os.tag == .windows)
+        const basic_cli_host_paths = if (comptime builtin.target.os.tag == .windows)
             [_][]const u8{
                 "zig-out/lib/platform_host_basic_cli.lib",
                 "platform/basic-cli/host.lib",
@@ -1160,9 +1228,26 @@ fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u
                 "platforms/basic-cli/host.a",
             };
 
-        for (basic_cli_paths) |path| {
-            std.fs.cwd().access(path, .{}) catch continue;
-            return try gpa.dupe(u8, path);
+        const basic_cli_source_paths = [_][]const u8{
+            "platform/basic-cli/platform.roc",
+            "platforms/basic-cli/platform.roc",
+        };
+
+        for (basic_cli_host_paths) |host_path| {
+            std.fs.cwd().access(host_path, .{}) catch continue;
+            
+            // Found host library, now try to find platform source
+            var platform_source_path: ?[]const u8 = null;
+            for (basic_cli_source_paths) |source_path| {
+                std.fs.cwd().access(source_path, .{}) catch continue;
+                platform_source_path = try gpa.dupe(u8, source_path);
+                break;
+            }
+            
+            return PlatformPaths{
+                .host_lib_path = try gpa.dupe(u8, host_path),
+                .platform_source_path = platform_source_path,
+            };
         }
     } else if (std.mem.startsWith(u8, platform_spec, "http")) {
         // This is a URL - for production, would download and resolve
@@ -1175,12 +1260,26 @@ fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u
         return error.PlatformNotSupported;
     };
 
-    return try gpa.dupe(u8, platform_spec);
+    // For direct file paths, we need to determine if it's a host library or platform source
+    // Host libraries typically have .a/.lib extensions, platform sources have .roc extension
+    if (std.mem.endsWith(u8, platform_spec, ".roc")) {
+        // This is a platform source file
+        return PlatformPaths{
+            .host_lib_path = try gpa.dupe(u8, ""), // No host library for direct .roc files
+            .platform_source_path = try gpa.dupe(u8, platform_spec),
+        };
+    } else {
+        // Assume it's a host library file
+        return PlatformPaths{
+            .host_lib_path = try gpa.dupe(u8, platform_spec),
+            .platform_source_path = null,
+        };
+    }
 }
 
-/// Extract entrypoint name from platform header provides record
+/// Extract all entrypoint names from platform header provides record into ArrayList
 /// TODO: Replace this with proper BuildEnv solution in the future
-fn extractEntrypointFromPlatform(gpa: std.mem.Allocator, roc_file_path: []const u8) ![]const u8 {
+fn extractEntrypointsFromPlatform(gpa: std.mem.Allocator, roc_file_path: []const u8, entrypoints: *std.ArrayList([]const u8)) !void {
     // Read the Roc file
     const source = std.fs.cwd().readFileAlloc(gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
     defer gpa.free(source);
@@ -1213,14 +1312,16 @@ fn extractEntrypointFromPlatform(gpa: std.mem.Allocator, roc_file_path: []const 
             const provides_coll = parse_ast.store.getCollection(platform_header.provides);
             const provides_fields = parse_ast.store.recordFieldSlice(.{ .span = provides_coll.span });
 
-            // Return the first field name as the entrypoint
-            if (provides_fields.len > 0) {
-                const first_field = parse_ast.store.getRecordField(provides_fields[0]);
-                const field_name = parse_ast.resolve(first_field.name);
-                return try gpa.dupe(u8, field_name);
+            // Extract all field names as entrypoints
+            for (provides_fields) |field_idx| {
+                const field = parse_ast.store.getRecordField(field_idx);
+                const field_name = parse_ast.resolve(field.name);
+                try entrypoints.append(try gpa.dupe(u8, field_name));
             }
 
-            return error.NoEntrypointFound;
+            if (provides_fields.len == 0) {
+                return error.NoEntrypointFound;
+            }
         },
         else => return error.NotPlatformFile,
     }
