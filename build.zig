@@ -363,7 +363,20 @@ fn addMainExe(
     // Force bundle compiler-rt to resolve math symbols
     builtins_lib.bundle_compiler_rt = true;
 
-    // Create shim static library at build time
+    // Create libc stubs object (Linux only) to provide missing libc symbols
+    const libc_stubs_obj = if (target.result.os.tag == .linux) blk: {
+        const obj = b.addObject(.{
+            .name = "libc_stubs",
+            .root_source_file = b.path("src/interpreter_shim/libc_stubs.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .pic = true,
+        });
+        break :blk obj;
+    } else null;
+
+    // Create shim static library at build time - fully static without libc
     const shim_lib = b.addStaticLibrary(.{
         .name = "roc_shim",
         .root_source_file = b.path("src/interpreter_shim/main.zig"),
@@ -377,6 +390,10 @@ fn addMainExe(
     roc_modules.addAll(shim_lib);
     // Link against the pre-built builtins library
     shim_lib.linkLibrary(builtins_lib);
+    // Add libc stubs for Linux to provide missing symbols
+    if (libc_stubs_obj) |stubs| {
+        shim_lib.addObject(stubs);
+    }
     // Force bundle compiler-rt to resolve math symbols
     shim_lib.bundle_compiler_rt = true;
 

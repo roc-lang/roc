@@ -63,34 +63,22 @@ export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr
     };
 }
 
-// Global shared memory allocator to persist across entrypoint calls
-var global_shm: ?SharedMemoryAllocator = null;
-var global_env: ?*ModuleEnv = null;
-
 /// Cross-platform shared memory evaluation
 fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) ShimError!void {
     const allocator = std.heap.page_allocator;
 
-    // Reuse global shared memory allocator or create new one
-    if (global_shm == null) {
-        // Get page size
-        const page_size = SharedMemoryAllocator.getSystemPageSize() catch 4096;
+    // Get page size
+    const page_size = SharedMemoryAllocator.getSystemPageSize() catch 4096;
 
-        // Create shared memory allocator from coordination info
-        global_shm = SharedMemoryAllocator.fromCoordination(allocator, page_size) catch |err| {
-            std.log.err("Failed to create shared memory allocator: {s}", .{@errorName(err)});
-            return error.SharedMemoryError;
-        };
-    }
+    // Create shared memory allocator from coordination info
+    var shm = SharedMemoryAllocator.fromCoordination(allocator, page_size) catch |err| {
+        std.log.err("Failed to create shared memory allocator: {s}", .{@errorName(err)});
+        return error.SharedMemoryError;
+    };
+    defer shm.deinit(allocator);
 
-    var shm = &global_shm.?;
-
-    // Reuse global ModuleEnv or set it up from shared memory
-    if (global_env == null) {
-        global_env = try setupModuleEnv(shm);
-    }
-
-    const env_ptr = global_env.?;
+    // Set up ModuleEnv from shared memory
+    const env_ptr = try setupModuleEnv(&shm);
 
     // Set up interpreter infrastructure
     var interpreter = try createInterpreter(env_ptr);
