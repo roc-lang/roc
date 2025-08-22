@@ -58,8 +58,9 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaqu
     @panic(message);
 }
 
-// External symbol provided by the Roc runtime object file
+// External symbols provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
+extern fn roc__addInts(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
 extern fn roc__multiplyInts(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
 
 // Windows __main stub for MinGW-style initialization
@@ -104,22 +105,47 @@ pub fn main() !void {
         .b = b,
     };
 
-    // Call the Roc entrypoint - pass argument pointer for functions, null for values
-    var result: i64 = undefined;
-    roc__multiplyInts(&roc_ops, @as(*anyopaque, @ptrCast(&result)), @as(*anyopaque, @ptrCast(&args)));
-
-    // Calculate expected result
-    const expected = a *% b; // Use wrapping multiplication to match Roc behavior
-
-    // Print interesting display
     try stdout.print("Generated numbers: a = {}, b = {}\n", .{ a, b });
-    try stdout.print("Expected result: {}\n", .{expected});
-    try stdout.print("Roc computed: {}\n", .{result});
 
-    if (result == expected) {
-        try stdout.print("\x1b[32mSUCCESS\x1b[0m: Results match!\n", .{});
+    // Test first entrypoint: addInts (entry_idx = 0)
+    try stdout.print("\n=== Testing addInts (entry_idx = 0) ===\n", .{});
+    var add_result: i64 = undefined;
+    roc__addInts(&roc_ops, @as(*anyopaque, @ptrCast(&add_result)), @as(*anyopaque, @ptrCast(&args)));
+
+    const expected_add = a +% b; // Use wrapping addition to match Roc behavior
+    try stdout.print("Expected add result: {}\n", .{expected_add});
+    try stdout.print("Roc computed add: {}\n", .{add_result});
+
+    var success_count: u32 = 0;
+    if (add_result == expected_add) {
+        try stdout.print("\x1b[32mSUCCESS\x1b[0m: addInts results match!\n", .{});
+        success_count += 1;
     } else {
-        try stdout.print("\x1b[31mFAIL\x1b[0m: Results differ!\n", .{});
+        try stdout.print("\x1b[31mFAIL\x1b[0m: addInts results differ!\n", .{});
+    }
+
+    // Test second entrypoint: multiplyInts (entry_idx = 1)
+    try stdout.print("\n=== Testing multiplyInts (entry_idx = 1) ===\n", .{});
+    var multiply_result: i64 = undefined;
+    roc__multiplyInts(&roc_ops, @as(*anyopaque, @ptrCast(&multiply_result)), @as(*anyopaque, @ptrCast(&args)));
+
+    const expected_multiply = a *% b; // Use wrapping multiplication to match Roc behavior
+    try stdout.print("Expected multiply result: {}\n", .{expected_multiply});
+    try stdout.print("Roc computed multiply: {}\n", .{multiply_result});
+
+    if (multiply_result == expected_multiply) {
+        try stdout.print("\x1b[32mSUCCESS\x1b[0m: multiplyInts results match!\n", .{});
+        success_count += 1;
+    } else {
+        try stdout.print("\x1b[31mFAIL\x1b[0m: multiplyInts results differ!\n", .{});
+    }
+
+    // Final summary
+    try stdout.print("\n=== FINAL RESULT ===\n", .{});
+    if (success_count == 2) {
+        try stdout.print("\x1b[32mALL TESTS PASSED\x1b[0m: Both entrypoints work correctly!\n", .{});
+    } else {
+        try stdout.print("\x1b[31mSOME TESTS FAILED\x1b[0m: {}/2 tests passed\n", .{success_count});
         std.process.exit(1);
     }
 }

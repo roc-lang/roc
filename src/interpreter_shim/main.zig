@@ -48,18 +48,15 @@ const ShimError = error{
 /// Returns a RocStr to the caller
 /// Expected format in shared memory: [u64 parent_address][ModuleEnv data]
 export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void {
-    // For now, we only support single entrypoint platforms, so entry_idx should be 0
-    if (entry_idx != 0) {
-        std.log.warn("entry_idx {} received, but only 0 is currently supported", .{entry_idx});
-    }
-
-    evaluateFromSharedMemory(ops, ret_ptr, arg_ptr) catch |err| {
+    std.log.debug("roc_entrypoint called with entry_idx: {}", .{entry_idx});
+    
+    evaluateFromSharedMemory(entry_idx, ops, ret_ptr, arg_ptr) catch |err| {
         std.log.err("Error evaluating from shared memory: {s}", .{@errorName(err)});
     };
 }
 
 /// Cross-platform shared memory evaluation
-fn evaluateFromSharedMemory(roc_ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) ShimError!void {
+fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) ShimError!void {
     const allocator = std.heap.page_allocator;
 
     // Get page size
@@ -86,6 +83,12 @@ fn evaluateFromSharedMemory(roc_ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*an
             return error.MemoryLayoutInvalid;
         },
     );
+
+    std.log.debug("About to evaluate expression with entry_idx: {}", .{entry_idx});
+    
+    // TODO: For now, we ignore entry_idx and always evaluate the first function
+    // This is a temporary hack until we implement proper multi-entrypoint support
+    // in setupSharedMemoryWithModuleEnv
 
     // Evaluate the expression (with optional arguments)
     try interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr);
