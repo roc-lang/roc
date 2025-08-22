@@ -934,7 +934,7 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 /// Set up shared memory with a compiled ModuleEnv from a Roc file.
 /// This parses, canonicalizes, and type-checks the Roc file, with the resulting ModuleEnv
 /// ending up in shared memory because all allocations were done into shared memory.
-/// Looks for a 'main' function as the entrypoint to evaluate.
+/// Stores all exported definitions for multi-entrypoint evaluation.
 pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
@@ -945,16 +945,22 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
 
     // Allocate space for the offset value at the beginning
     const offset_ptr = try shm_allocator.alloc(u64, 1);
-    // Also store the canonicalized expression index for the child to evaluate
-    const expr_idx_ptr = try shm_allocator.alloc(u32, 1);
+    // Also store the entry count and expression indices for the child to evaluate
+    const entry_count_ptr = try shm_allocator.alloc(u32, 1);
+    
+    // Allocate ModuleEnv early so we know its address
+    const env_ptr = try shm_allocator.create(ModuleEnv);
+    
+    // Store the ModuleEnv address so the child can find it
+    const env_addr_ptr = try shm_allocator.alloc(u64, 1);
+    env_addr_ptr[0] = @intFromPtr(env_ptr);
 
     // Store the base address of the shared memory mapping (for ASLR-safe relocation)
     // The child will calculate the offset from its own base address
     const shm_base_addr = @intFromPtr(shm.base_ptr);
     offset_ptr[0] = shm_base_addr;
 
-    // Allocate and store a pointer to the ModuleEnv
-    const env_ptr = try shm_allocator.create(ModuleEnv);
+    // env_ptr was already allocated earlier (line 968)
 
     // Read the actual Roc file
     const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| {
@@ -992,68 +998,26 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();
 
-    // Get the app header to find exposed functions
-    const file_node = parse_ast.store.getFile();
-    const header = parse_ast.store.getHeader(file_node.header);
-
-    var exposed_functions = std.ArrayList([]const u8).init(shm_allocator);
-    defer exposed_functions.deinit();
-
-    switch (header) {
-        .app => |app_header| {
-            // Get the provides collection from app header
-            const provides_coll = parse_ast.store.getCollection(app_header.provides);
-            const provides_items = parse_ast.store.exposedItemSlice(.{ .span = provides_coll.span });
-
-            // Collect all exposed function names
-            for (provides_items) |item_idx| {
-                const item = parse_ast.store.getExposedItem(item_idx);
-                switch (item) {
-                    .lower_ident => |lower_ident| {
-                        const ident_text = parse_ast.resolve(lower_ident.ident);
-                        try exposed_functions.append(try shm_allocator.dupe(u8, ident_text));
-                    },
-                    else => return error.UnexpectedAppExposedItem,
-                }
-            }
-        },
-        else => {
-            std.log.err("Expected app file, but found different header type\n", .{});
-            return error.NoMainFunction;
-        },
-    }
-
-    if (exposed_functions.items.len == 0) {
-        std.log.err("No exposed functions found in app module\n", .{});
+    // Validation check - ensure exports were populated during canonicalization
+    if (env.exports.span.len == 0) {
+        std.log.err("No exported definitions found after canonicalization\n", .{});
         return error.NoMainFunction;
     }
 
-    // For now, use the first exposed function as the entrypoint
-    // TODO: This should be based on entry_idx passed to the interpreter
-    const first_exposed = exposed_functions.items[0];
-    std.log.debug("Using first exposed function as entrypoint: {s}\n", .{first_exposed});
+    // Get the exported definitions from the canonicalization process
+    const exports_slice = env.store.sliceDefs(env.exports);
+    
+    // Store entry count based on exports
+    entry_count_ptr[0] = @intCast(exports_slice.len);
 
-    // Find the definition for the first exposed function
-    var main_expr_idx: ?u32 = null;
-    const defs = env.store.sliceDefs(env.all_defs);
-    for (defs) |def_idx| {
-        const def = env.store.getDef(def_idx);
-        const pattern = env.store.getPattern(def.pattern);
-        if (pattern == .assign) {
-            const ident_idx = pattern.assign.ident;
-            const ident_text = env.getIdent(ident_idx);
-            if (std.mem.eql(u8, ident_text, first_exposed)) {
-                main_expr_idx = @intFromEnum(def.expr);
-                break;
-            }
-        }
+    // Allocate space for exported def indices array
+    const def_indices_ptr = try shm_allocator.alloc(u32, exports_slice.len);
+
+    // Store definition index for each exported function
+    for (exports_slice, 0..) |def_idx, i| {
+        def_indices_ptr[i] = @intFromEnum(def_idx);
+        std.log.debug("Exported def entry_idx {} -> def_idx {}", .{ i, @intFromEnum(def_idx) });
     }
-
-    // Store the expression index for the child to evaluate
-    expr_idx_ptr[0] = main_expr_idx orelse {
-        std.log.err("No definition found for exposed function '{s}'\n", .{first_exposed});
-        return error.NoMainFunction;
-    };
 
     // Type check the module
     var checker = try Check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions);
