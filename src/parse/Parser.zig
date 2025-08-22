@@ -2315,10 +2315,6 @@ pub fn parseMultiLineStringExpr(self: *Parser) Error!AST.Expr.Idx {
     const scratch_top = self.store.scratchExprTop();
     while (self.peek() != .EndOfFile) {
         switch (self.peek()) {
-            .MultilineStringEnd => {
-                self.advance();
-                break;
-            },
             .MultilineStringStart => {
                 self.advance();
             },

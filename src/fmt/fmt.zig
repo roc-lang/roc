@@ -848,9 +848,6 @@ const Formatter = struct {
                         },
                     }
                 }
-                if (!multiline) {
-                    try fmt.pushAll("\"\"\"");
-                }
             },
             .single_quote => |s| {
                 try fmt.pushTokenText(s.token);

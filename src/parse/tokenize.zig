@@ -47,7 +47,6 @@ pub const Token = struct {
         StringStart, // the " that starts a string
         StringEnd, // the " that ends a string
         MultilineStringStart, // the """ that starts a multiline string
-        MultilineStringEnd, // the """ that ends a multiline string
         StringPart,
         MalformedStringPart, // malformed, but should be treated similar to a StringPart in the parser
         SingleQuote,
@@ -213,7 +212,6 @@ pub const Token = struct {
                 .StringStart,
                 .StringEnd,
                 .MultilineStringStart,
-                .MultilineStringEnd,
                 .StringPart,
                 .SingleQuote,
                 .Int,
@@ -1564,12 +1562,6 @@ pub const Tokenizer = struct {
                 self.cursor.pos += 1;
                 try self.pushTokenNormalHere(gpa, .StringEnd, string_part_end);
                 return;
-            } else if (kind == .multi_line and c == '"' and self.cursor.peekAt(1) == '"' and self.cursor.peekAt(2) == '"') {
-                try self.pushTokenNormalHere(gpa, string_part_tag, start);
-                const quote_start = self.cursor.pos;
-                self.cursor.pos += 3;
-                try self.pushTokenNormalHere(gpa, .MultilineStringEnd, quote_start);
-                return;
             } else {
                 // Handle UTF-8 sequences with printable character validation
                 _ = self.cursor.chompUTF8CodepointWithValidation();
@@ -1825,7 +1817,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .StringStart, .StringEnd => {
                 try buf2.append(alloc, '"');
             },
-            .MultilineStringStart, .MultilineStringEnd => {
+            .MultilineStringStart => {
                 try buf2.append(alloc, '"');
                 try buf2.append(alloc, '"');
                 try buf2.append(alloc, '"');
@@ -2288,7 +2280,7 @@ test "tokenizer" {
         gpa,
         \\"""abc"""
     ,
-        &[_]Token.Tag{ .MultilineStringStart, .StringPart, .MultilineStringEnd },
+        &[_]Token.Tag{ .MultilineStringStart, .StringPart },
     );
     try testTokenization(
         gpa,
