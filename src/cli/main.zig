@@ -554,13 +554,11 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     defer gpa.free(exe_path);
 
     // First, parse the app file to get the platform reference
-    std.log.debug("Parsing app file: {s}\n", .{args.path});
     const platform_spec = extractPlatformSpecFromApp(gpa, args.path) catch |err| {
         std.log.err("Failed to extract platform spec from app file: {}\n", .{err});
         std.process.exit(1);
     };
     defer gpa.free(platform_spec);
-    std.log.debug("Found platform spec: {s}\n", .{platform_spec});
 
     // Resolve platform paths from the platform spec (relative to app file directory)
     const app_dir = std.fs.path.dirname(args.path) orelse ".";
@@ -569,7 +567,6 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         std.process.exit(1);
     };
     defer platform_paths.deinit(gpa);
-    std.log.debug("Resolved platform paths - host: {s}, source: {?s}\n", .{ platform_paths.host_lib_path, platform_paths.platform_source_path });
 
     // Extract entrypoints from platform source file
     var entrypoints = std.ArrayList([]const u8).init(gpa);
@@ -581,12 +578,10 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     }
 
     if (platform_paths.platform_source_path) |platform_source| {
-        std.log.debug("Extracting entrypoints from platform source: {s}\n", .{platform_source});
         extractEntrypointsFromPlatform(gpa, platform_source, &entrypoints) catch |err| {
             std.log.err("Failed to extract entrypoints from platform header: {}\n", .{err});
             std.process.exit(1);
         };
-        std.log.debug("Extracted {} entrypoints\n", .{entrypoints.items.len});
     } else {
         std.log.err("No platform source file found for entrypoint extraction\n", .{});
         std.process.exit(1);
@@ -953,20 +948,16 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     };
     
     const header_ptr = try shm_allocator.create(Header);
-    std.log.debug("Allocated header at offset: {} (0x{x})", .{@intFromPtr(header_ptr) - @intFromPtr(shm.base_ptr), @intFromPtr(header_ptr) - @intFromPtr(shm.base_ptr)});
-    std.log.debug("Header address: 0x{x}, alignment: {}", .{@intFromPtr(header_ptr), @intFromPtr(header_ptr) % @alignOf(Header)});
 
     // Store the base address of the shared memory mapping (for ASLR-safe relocation)
     // The child will calculate the offset from its own base address
     const shm_base_addr = @intFromPtr(shm.base_ptr);
     header_ptr.parent_base_addr = shm_base_addr;
-    std.log.debug("Set parent_base_addr: 0x{x}", .{header_ptr.parent_base_addr});
 
     // Allocate the ModuleEnv right after the header for predictable layout
     const env_ptr = try shm_allocator.create(ModuleEnv);
     const module_env_offset = @intFromPtr(env_ptr) - @intFromPtr(shm.base_ptr);
     header_ptr.module_env_offset = module_env_offset;
-    std.log.debug("Allocated ModuleEnv at offset: {} (0x{x})", .{module_env_offset, module_env_offset});
 
     // Read the actual Roc file
     const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| {
@@ -1015,21 +1006,17 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     
     // Store entry count based on exports
     header_ptr.entry_count = @intCast(exports_slice.len);
-    std.log.debug("Set entry_count: {}", .{header_ptr.entry_count});
 
     // Allocate space for exported def indices array
     const def_indices_ptr = try shm_allocator.alloc(u32, exports_slice.len);
-    std.log.debug("Allocated def_indices array at offset: {} (0x{x})", .{@intFromPtr(def_indices_ptr.ptr) - @intFromPtr(shm.base_ptr), @intFromPtr(def_indices_ptr.ptr) - @intFromPtr(shm.base_ptr)});
     
     // Store the def_indices location in the header
     const def_indices_location = @intFromPtr(def_indices_ptr.ptr) - @intFromPtr(shm.base_ptr);
     header_ptr.def_indices_offset = def_indices_location;
-    std.log.debug("Set def_indices_offset: {} (0x{x})", .{header_ptr.def_indices_offset, header_ptr.def_indices_offset});
 
     // Store definition index for each exported function
     for (exports_slice, 0..) |def_idx, i| {
         def_indices_ptr[i] = @intFromEnum(def_idx);
-        std.log.debug("Exported def entry_idx {} -> def_idx {}", .{ i, @intFromEnum(def_idx) });
     }
 
     // Type check the module
@@ -1221,7 +1208,6 @@ fn extractPlatformSpecFromApp(gpa: std.mem.Allocator, app_file_path: []const u8)
                 const after_quote = start_idx + 14; // length of "pf: platform \""
                 if (std.mem.indexOfScalarPos(u8, trimmed, after_quote, '"')) |end_idx| {
                     const platform_path = trimmed[after_quote..end_idx];
-                    std.log.debug("Extracted platform string: '{s}'\n", .{platform_path});
                     return try gpa.dupe(u8, platform_path);
                 }
             }
@@ -1230,7 +1216,6 @@ fn extractPlatformSpecFromApp(gpa: std.mem.Allocator, app_file_path: []const u8)
                 const quote_start = start_idx + 10; // length of "platform \""
                 if (std.mem.indexOfScalarPos(u8, trimmed, quote_start, '"')) |end_idx| {
                     const platform_path = trimmed[quote_start..end_idx];
-                    std.log.debug("Extracted platform string: '{s}'\n", .{platform_path});
                     return try gpa.dupe(u8, platform_path);
                 }
             }
@@ -1390,18 +1375,14 @@ fn extractEntrypointsFromPlatform(gpa: std.mem.Allocator, roc_file_path: []const
     // Check if this is a platform file with a platform header
     switch (header) {
         .platform => |platform_header| {
-            std.log.debug("Found platform header, analyzing provides collection\n", .{});
-
             // Get the provides collection and its record fields
             const provides_coll = parse_ast.store.getCollection(platform_header.provides);
             const provides_fields = parse_ast.store.recordFieldSlice(.{ .span = provides_coll.span });
-            std.log.debug("Found {} record fields in provides\n", .{provides_fields.len});
 
             // Extract all field names as entrypoints
             for (provides_fields) |field_idx| {
                 const field = parse_ast.store.getRecordField(field_idx);
                 const field_name = parse_ast.resolve(field.name);
-                std.log.debug("Adding entrypoint: {s}\n", .{field_name});
                 try entrypoints.append(try gpa.dupe(u8, field_name));
             }
 
@@ -1410,7 +1391,6 @@ fn extractEntrypointsFromPlatform(gpa: std.mem.Allocator, roc_file_path: []const
             }
         },
         else => {
-            std.log.debug("Not a platform file - header type: {}\n", .{header});
             return error.NotPlatformFile;
         },
     }

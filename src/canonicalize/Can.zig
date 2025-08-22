@@ -583,8 +583,6 @@ pub fn canonicalizeFile(
     // Track the start of scratch defs and statements
     const scratch_defs_start = self.env.store.scratchDefTop();
     const scratch_statements_start = self.env.store.scratch_statements.top();
-    
-    std.log.debug("Starting canonicalization: scratch_defs_start = {}", .{scratch_defs_start});
 
     // First pass: Process all type declarations to introduce them into scope
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
@@ -940,11 +938,7 @@ pub fn canonicalizeFile(
     self.env.all_defs = try self.env.store.defSpanFrom(scratch_defs_start);
     self.env.all_statements = try self.env.store.statementSpanFrom(scratch_statements_start);
     
-    const all_defs_slice = self.env.store.sliceDefs(self.env.all_defs);
-    std.log.debug("After canonicalization: found {} total definitions", .{all_defs_slice.len});
-    
     // Create the span of exported defs by finding definitions that correspond to exposed items
-    std.log.debug("Calling populateExports after canonicalization", .{});
     try self.populateExports();
 
     // Assert that everything is in-sync
@@ -1147,20 +1141,14 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
     // Use the already-created all_defs span
     const defs_slice = self.env.store.sliceDefs(self.env.all_defs);
     
-    std.log.debug("populateExports: Found {} canonicalized definitions", .{defs_slice.len});
-    
     // Check each definition to see if it corresponds to an exposed item
     for (defs_slice) |def_idx| {
         const def = self.env.store.getDef(def_idx);
         const pattern = self.env.store.getPattern(def.pattern);
         
         if (pattern == .assign) {
-            const ident_text = self.env.getIdent(pattern.assign.ident);
-            std.log.debug("populateExports: Checking def '{s}' against exposed items", .{ident_text});
-            
             // Check if this definition's identifier is in the exposed items
             if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(pattern.assign.ident))) {
-                std.log.debug("populateExports: Found match for '{s}' - adding to exports", .{ident_text});
                 // Add this definition to the exports scratch space
                 try self.env.store.addScratchDef(def_idx);
             }
@@ -1169,7 +1157,6 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
     
     // Create the exports span from the scratch space
     self.env.exports = try self.env.store.defSpanFrom(scratch_exports_start);
-    std.log.debug("populateExports: Created exports span with {} items", .{self.env.exports.span.len});
 }
 
 fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
