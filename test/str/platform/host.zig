@@ -80,7 +80,7 @@ fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.C) no
 
 // External symbol provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc_entrypoint(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
+extern fn roc__processString(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
 
 // Windows __main stub for MinGW-style initialization
 pub export fn __main() void {}
@@ -124,7 +124,7 @@ pub export fn main() void {
 
     // Call the Roc entrypoint - pass argument pointer for functions, null for values
     var roc_str: RocStr = undefined;
-    roc_entrypoint(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)), @as(*anyopaque, @ptrCast(&args)));
+    roc__processString(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)), @as(*anyopaque, @ptrCast(&args)));
     defer roc_str.decref(&roc_ops);
 
     // Get the string as a slice and print it

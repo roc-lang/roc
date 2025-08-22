@@ -60,7 +60,7 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaqu
 
 // External symbol provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
+extern fn roc__multiplyInts(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
 
 // Windows __main stub for MinGW-style initialization
 pub export fn __main() void {}
@@ -106,7 +106,7 @@ pub fn main() !void {
 
     // Call the Roc entrypoint - pass argument pointer for functions, null for values
     var result: i64 = undefined;
-    roc_entrypoint(&roc_ops, @as(*anyopaque, @ptrCast(&result)), @as(*anyopaque, @ptrCast(&args)));
+    roc__multiplyInts(&roc_ops, @as(*anyopaque, @ptrCast(&result)), @as(*anyopaque, @ptrCast(&args)));
 
     // Calculate expected result
     const expected = a *% b; // Use wrapping multiplication to match Roc behavior
