@@ -4,6 +4,7 @@
 const std = @import("std");
 const Builder = std.zig.llvm.Builder;
 const WipFunction = Builder.WipFunction;
+const builtin = @import("builtin");
 
 /// Represents a single entrypoint that a Roc platform host expects to call.
 /// Each entrypoint corresponds to a specific function the host can invoke,
@@ -35,8 +36,14 @@ fn addRocEntrypoint(builder: *Builder) !Builder.Function.Index {
     const entrypoint_params = [_]Builder.Type{ .i32, ptr_type, ptr_type, ptr_type };
     const entrypoint_type = try builder.fnType(.void, &entrypoint_params, .normal);
 
-    // Create function name
-    const fn_name = try builder.strtabString("roc_entrypoint");
+    // Create function name with platform-specific prefix
+    const base_name = "roc_entrypoint";
+    const fn_name_str = if (builtin.target.os.tag == .macos)
+        try std.fmt.allocPrint(builder.gpa, "_{s}", .{base_name})
+    else
+        try builder.gpa.dupe(u8, base_name);
+    defer builder.gpa.free(fn_name_str);
+    const fn_name = try builder.strtabString(fn_name_str);
 
     // Add the extern function declaration (no body)
     const entrypoint_fn = try builder.addFunction(entrypoint_type, fn_name, .default);
@@ -74,8 +81,13 @@ fn addRocExportedFunction(builder: *Builder, entrypoint_fn: Builder.Function.Ind
     const roc_fn_params = [_]Builder.Type{ ptr_type, ptr_type, ptr_type };
     const roc_fn_type = try builder.fnType(.void, &roc_fn_params, .normal);
 
-    // Create function name with roc__ prefix
-    const full_name = try std.fmt.allocPrint(builder.gpa, "roc__{s}", .{name});
+    // Create function name with roc__ prefix and platform-specific prefix
+    const base_name = try std.fmt.allocPrint(builder.gpa, "roc__{s}", .{name});
+    defer builder.gpa.free(base_name);
+    const full_name = if (builtin.target.os.tag == .macos)
+        try std.fmt.allocPrint(builder.gpa, "_{s}", .{base_name})
+    else
+        try builder.gpa.dupe(u8, base_name);
     defer builder.gpa.free(full_name);
     const fn_name = try builder.strtabString(full_name);
 

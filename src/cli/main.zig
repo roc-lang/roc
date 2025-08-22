@@ -30,6 +30,12 @@ const platform_host_shim = @import("platform_host_shim.zig");
 /// External C functions from zig_llvm.cpp - only available when LLVM is enabled
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
 
+const ZigLLVMABIType = enum(c_int) {
+    ZigLLVMABITypeDefault = 0,
+    ZigLLVMABITypeSoft,
+    ZigLLVMABITypeHard,
+};
+
 // External C functions from zig_llvm.cpp and LLVM C API - only available when LLVM is enabled
 const llvm_externs = if (llvm_available) struct {
     extern fn ZigLLVMTargetMachineEmitToFile(
@@ -52,20 +58,18 @@ const llvm_externs = if (llvm_available) struct {
         cpu: [*:0]const u8,
         features: [*:0]const u8,
         level: c_int, // LLVMCodeGenOptLevel
-        reloc: c_int, // LLVMRelocMode  
+        reloc: c_int, // LLVMRelocMode
         code_model: c_int, // LLVMCodeModel
         function_sections: bool,
         data_sections: bool,
-        float_abi: c_int,
+        float_abi: ZigLLVMABIType,
         abi_name: ?[*:0]const u8,
     ) ?*anyopaque;
-    
-    // LLVM C API functions  
-    extern fn LLVMInitializeAllTargetInfos() void;
-    extern fn LLVMInitializeAllTargets() void;
-    extern fn LLVMInitializeAllTargetMCs() void;
-    extern fn LLVMInitializeAllAsmParsers() void;
-    extern fn LLVMInitializeAllAsmPrinters() void;
+
+    // LLVM wrapper functions
+    extern fn ZigLLVMInitializeAllTargets() void;
+
+    // LLVM C API functions
     extern fn LLVMGetDefaultTargetTriple() [*:0]u8;
     extern fn LLVMGetTargetFromTriple(triple: [*:0]const u8, target: *?*anyopaque, error_message: *[*:0]u8) c_int;
     extern fn LLVMDisposeMessage(message: [*:0]u8) void;
@@ -73,6 +77,8 @@ const llvm_externs = if (llvm_available) struct {
     extern fn LLVMParseBitcode(mem_buf: ?*anyopaque, out_module: *?*anyopaque, out_message: *[*:0]u8) c_int;
     extern fn LLVMDisposeMemoryBuffer(mem_buf: ?*anyopaque) void;
     extern fn LLVMDisposeModule(module: ?*anyopaque) void;
+    extern fn LLVMDisposeTargetMachine(target_machine: ?*anyopaque) void;
+    extern fn LLVMSetTarget(module: ?*anyopaque, triple: [*:0]const u8) void;
 } else struct {};
 
 // LLVM Constants
@@ -487,28 +493,103 @@ fn compileWithEmbeddedLLVM(gpa: Allocator, bitcode_path: []const u8, object_path
     if (comptime !llvm_available) {
         return error.LLVMNotAvailable;
     }
+
+    const externs = llvm_externs;
+
+    std.log.info("Using embedded LLVM to compile bitcode to object file", .{});
+    std.log.info("Input: {s} -> Output: {s}", .{ bitcode_path, object_path });
+
+    // 1. Initialize LLVM targets
+    externs.ZigLLVMInitializeAllTargets();
+
+    // 2. Load bitcode file
+    var mem_buf: ?*anyopaque = null;
+    var error_message: [*:0]u8 = undefined;
+
+    const bitcode_path_z = try gpa.dupeZ(u8, bitcode_path);
+    defer gpa.free(bitcode_path_z);
+
+    if (externs.LLVMCreateMemoryBufferWithContentsOfFile(bitcode_path_z.ptr, &mem_buf, &error_message) != 0) {
+        std.log.err("Failed to load bitcode file: {s}", .{error_message});
+        externs.LLVMDisposeMessage(error_message);
+        return false;
+    }
+    defer if (mem_buf) |buf| externs.LLVMDisposeMemoryBuffer(buf);
+
+    // 3. Parse bitcode into module
+    var module: ?*anyopaque = null;
+    if (externs.LLVMParseBitcode(mem_buf, &module, &error_message) != 0) {
+        std.log.err("Failed to parse bitcode: {s}", .{error_message});
+        externs.LLVMDisposeMessage(error_message);
+        return false;
+    }
+    defer if (module) |mod| externs.LLVMDisposeModule(mod);
+
+    // 4. Get target triple and set it on the module  
+    // Use a macOS-specific target triple that generates Mach-O
+    const macos_triple = "arm64-apple-macosx14.0.0";
+    const target_triple_z = try gpa.dupeZ(u8, macos_triple);
+    defer gpa.free(target_triple_z);
     
-    // For now, demonstrate that embedded LLVM infrastructure is available
-    // but fall back to clang for the actual compilation.
-    // This verifies that the embedded LLVM library is properly linked and accessible.
-    
-    // Suppress unused parameter warnings
-    _ = gpa;
-    _ = bitcode_path;
-    _ = object_path;
-    
-    std.log.info("Embedded LLVM library is available and properly linked", .{});
-    std.log.info("LLVM infrastructure ready for full implementation", .{});
-    
-    // Return false to trigger clang fallback for now
-    // In a full implementation, this would:
-    // 1. Initialize LLVM targets (LLVMInitializeAll* functions)
-    // 2. Load bitcode file using LLVMCreateMemoryBufferWithContentsOfFile
-    // 3. Parse bitcode using LLVMParseBitcode  
-    // 4. Create target machine with ZigLLVMCreateTargetMachine
-    // 5. Emit object file with ZigLLVMTargetMachineEmitToFile
-    
-    return false;
+    std.log.info("Using target triple: {s}", .{macos_triple});
+    externs.LLVMSetTarget(module, target_triple_z.ptr);
+
+    // 5. Create target
+
+    var target: ?*anyopaque = null;
+    if (externs.LLVMGetTargetFromTriple(target_triple_z.ptr, &target, &error_message) != 0) {
+        std.log.err("Failed to get target from triple: {s}", .{error_message});
+        externs.LLVMDisposeMessage(error_message);
+        return false;
+    }
+
+    // 6. Create target machine
+    const target_machine = externs.ZigLLVMCreateTargetMachine(
+        target,
+        target_triple_z.ptr,
+        "", // CPU
+        "", // Features
+        2, // LLVMCodeGenLevelDefault
+        0, // LLVMRelocDefault
+        0, // LLVMCodeModelDefault
+        false, // function_sections
+        false, // data_sections
+        .ZigLLVMABITypeDefault, // float_abi
+        null, // abi_name
+    );
+    if (target_machine == null) {
+        std.log.err("Failed to create target machine", .{});
+        return false;
+    }
+    defer externs.LLVMDisposeTargetMachine(target_machine);
+
+    // 7. Prepare output path
+    const object_path_z = try gpa.dupeZ(u8, object_path);
+    defer gpa.free(object_path_z);
+
+    // 8. Emit object file
+    var emit_error_message: [*:0]u8 = undefined;
+    if (externs.ZigLLVMTargetMachineEmitToFile(
+        target_machine,
+        module,
+        &emit_error_message,
+        false, // is_debug
+        false, // is_small
+        false, // time_report
+        false, // tsan
+        false, // lto
+        null, // asm_filename
+        object_path_z.ptr, // bin_filename
+        null, // llvm_ir_filename
+        null, // bitcode_filename
+    )) {
+        std.log.err("Failed to emit object file: {s}", .{emit_error_message});
+        externs.LLVMDisposeMessage(emit_error_message);
+        return false;
+    }
+
+    std.log.info("Successfully compiled bitcode to object file using embedded LLVM", .{});
+    return true;
 }
 
 fn generatePlatformHostShim(gpa: Allocator, cache_dir: []const u8, entrypoint_name: []const u8) !?[]const u8 {
@@ -586,7 +667,7 @@ fn generatePlatformHostShim(gpa: Allocator, cache_dir: []const u8, entrypoint_na
 
     // Compile to object file using embedded LLVM library or fallback to clang
     var use_clang_fallback = false;
-    
+
     if (comptime llvm_available) {
         if (compileWithEmbeddedLLVM(gpa, bitcode_path, object_path)) |success| {
             if (!success) {
@@ -600,7 +681,7 @@ fn generatePlatformHostShim(gpa: Allocator, cache_dir: []const u8, entrypoint_na
     } else {
         use_clang_fallback = true;
     }
-    
+
     if (use_clang_fallback) {
         // Fallback to clang when LLVM compilation fails
         std.log.warn("Using clang as fallback for bitcode compilation", .{});
@@ -725,7 +806,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         }
 
         // Generate platform host shim using the detected entrypoint name
-            
+
         const platform_shim_path = generatePlatformHostShim(gpa, exe_cache_dir, entrypoint_name) catch |err| {
             std.log.err("Failed to generate platform host shim: {}\n", .{err});
             std.process.exit(1);

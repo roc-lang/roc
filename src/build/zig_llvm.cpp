@@ -409,6 +409,15 @@ void ZigLLVMParseCommandLineOptions(size_t argc, const char *const *argv) {
     cl::ParseCommandLineOptions(argc, argv);
 }
 
+// Initialize all LLVM targets for compilation
+void ZigLLVMInitializeAllTargets() {
+    LLVMInitializeAllTargetInfos();
+    LLVMInitializeAllTargets();
+    LLVMInitializeAllTargetMCs();
+    LLVMInitializeAllAsmParsers();
+    LLVMInitializeAllAsmPrinters();
+}
+
 void ZigLLVMSetModulePICLevel(LLVMModuleRef module) {
     unwrap(module)->setPICLevel(PICLevel::Level::BigPIC);
 }
