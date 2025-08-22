@@ -110,7 +110,7 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
 
     const def_offset = header_ptr.def_indices_offset + entry_idx * @sizeOf(u32);
 
-    const def_idx_raw = safe_memory.safeRead(u32, base_ptr, def_offset, shm.total_size) catch |err| {
+    const def_idx_raw = safe_memory.safeRead(u32, base_ptr, @intCast(def_offset), shm.total_size) catch |err| {
         std.log.err("Failed to read def_idx: {}", .{err});
         return error.MemoryLayoutInvalid;
     };
@@ -153,7 +153,7 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator) ShimError!*ModuleEnv {
     }
 
     // Get ModuleEnv pointer from the offset stored in the header
-    const env_addr = @intFromPtr(base_ptr) + header_ptr.module_env_offset;
+    const env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(header_ptr.module_env_offset));
     const env_ptr: *ModuleEnv = @ptrFromInt(env_addr);
 
     // Set up the environment
