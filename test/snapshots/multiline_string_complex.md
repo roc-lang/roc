@@ -37,6 +37,11 @@ value5 = {
 		,
 	],
 }
+
+x = {
+	"""
+	"""
+}
 ~~~
 # EXPECTED
 NIL
@@ -68,11 +73,15 @@ LowerIdent(28:2-28:3),OpColon(28:3-28:4),OpenSquare(28:5-28:6),
 MultilineStringStart(29:3-29:6),StringPart(29:6-29:15),
 Comma(30:3-30:4),
 CloseSquare(31:2-31:3),Comma(31:3-31:4),
-CloseCurly(32:1-32:2),EndOfFile(32:2-32:2),
+CloseCurly(32:1-32:2),
+LowerIdent(34:1-34:2),OpAssign(34:3-34:4),OpenCurly(34:5-34:6),
+MultilineStringStart(35:2-35:5),StringPart(35:5-35:5),
+MultilineStringStart(36:2-36:5),StringPart(36:5-36:5),
+CloseCurly(37:1-37:2),EndOfFile(37:2-37:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-32.2
+(file @1.1-37.2
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
@@ -115,7 +124,14 @@ CloseCurly(32:1-32:2),EndOfFile(32:2-32:2),
 				(field (field "c")
 					(e-list @28.5-31.3
 						(e-multiline-string @29.3-29.15
-							(e-string-part @29.6-29.15 (raw "multiline")))))))))
+							(e-string-part @29.6-29.15 (raw "multiline")))))))
+		(s-decl @34.1-37.2
+			(p-ident @34.1-34.2 (raw "x"))
+			(e-block @34.5-37.2
+				(statements
+					(e-multiline-string @35.2-36.5
+						(e-string-part @35.5-35.5 (raw ""))
+						(e-string-part @36.5-36.5 (raw ""))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -168,7 +184,12 @@ NO CHANGE
 					(e-list @28.5-31.3
 						(elems
 							(e-string @29.3-29.15
-								(e-literal @29.6-29.15 (string "multiline"))))))))))
+								(e-literal @29.6-29.15 (string "multiline")))))))))
+	(d-let
+		(p-assign @34.1-34.2 (ident "x"))
+		(e-block @34.5-37.2
+			(e-string @35.2-36.5
+				(e-literal @36.2-36.5 (string "\n"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -178,11 +199,13 @@ NO CHANGE
 		(patt @5.1-5.7 (type "Str"))
 		(patt @8.1-8.7 (type "Str"))
 		(patt @12.1-12.7 (type "Str"))
-		(patt @18.1-18.7 (type "{ a: Str, b: (Str, Str), c: List(Str) }")))
+		(patt @18.1-18.7 (type "{ a: Str, b: (Str, Str), c: List(Str) }"))
+		(patt @34.1-34.2 (type "Str")))
 	(expressions
 		(expr @3.10-3.50 (type "Str"))
 		(expr @6.2-6.42 (type "Str"))
 		(expr @8.10-10.14 (type "Str"))
 		(expr @13.2-16.14 (type "Str"))
-		(expr @18.10-32.2 (type "{ a: Str, b: (Str, Str), c: List(Str) }"))))
+		(expr @18.10-32.2 (type "{ a: Str, b: (Str, Str), c: List(Str) }"))
+		(expr @34.5-37.2 (type "Str"))))
 ~~~

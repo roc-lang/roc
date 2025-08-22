@@ -307,23 +307,15 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 {
 	
 	when : 
-	
-	
-	
+			
 	expect 
 	"test assertion"
 	
+			"module load"
 	
+			Bool.true
 	
-	"module load"
-	
-	
-	
-	Bool.true
-	
-	
-	
-	Bool.false
+			Bool.false
 	
 }
 ~~~

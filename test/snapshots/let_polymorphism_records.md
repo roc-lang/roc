@@ -239,8 +239,7 @@ list_container = make_container(my_empty_list)
 # Polymorphic record update
 update_data = |container, new_value| {
 	container
-	
-	data : new_value
+		data : new_value
 }
 
 # Used with different record types

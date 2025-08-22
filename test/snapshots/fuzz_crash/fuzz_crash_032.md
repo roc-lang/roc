@@ -308,8 +308,7 @@ LocalStatus : lue => Loc
 
 olor : _ -> tus
 olor = |color| {
-	
-	Color.RGB
+		Color.RGB
 
 	match color {
 		RGB => LocalStatus.Pending

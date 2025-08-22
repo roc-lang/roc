@@ -821,14 +821,7 @@ const Formatter = struct {
                 try fmt.push('"');
             },
             .multiline_string => |s| {
-                // check if this region starts on a new line
-                var has_newline_before = true;
-                if (s.region.start != 0) {
-                    const start_offset = fmt.ast.tokens.resolve(s.region.start - 1).end.offset;
-                    const end_offset = fmt.ast.tokens.resolve(s.region.start).start.offset;
-                    has_newline_before = std.mem.indexOfScalar(u8, fmt.ast.env.source[start_offset..end_offset], '\n') != null;
-                }
-                if (!has_newline_before) {
+                if (!fmt.has_newline) {
                     fmt.curr_indent += 1;
                 }
                 var add_newline = false;
@@ -1983,7 +1976,9 @@ const Formatter = struct {
     }
 
     fn push(fmt: *Formatter, c: u8) !void {
-        fmt.has_newline = c == '\n';
+        if (c != '\t') {
+            fmt.has_newline = c == '\n';
+        }
         try fmt.buffer.writer().writeByte(c);
     }
 
@@ -1991,12 +1986,17 @@ const Formatter = struct {
         if (str.len == 0) {
             return;
         }
-        fmt.has_newline = str[str.len - 1] == '\n';
+        const all_tabs = for (str) |c| {
+            if (c != '\t') break false;
+        } else true;
+        if (!all_tabs) {
+            fmt.has_newline = str[str.len - 1] == '\n';
+        }
         try fmt.buffer.writer().writeAll(str);
     }
 
     fn pushIndent(fmt: *Formatter) !void {
-        if (fmt.curr_indent == 0) {
+        if (fmt.curr_indent == 0 or !fmt.has_newline) {
             return;
         }
         for (0..fmt.curr_indent) |_| {
