@@ -992,7 +992,48 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();
 
-    // Find the main function definition in the module
+    // Get the app header to find exposed functions
+    const file_node = parse_ast.store.getFile();
+    const header = parse_ast.store.getHeader(file_node.header);
+
+    var exposed_functions = std.ArrayList([]const u8).init(shm_allocator);
+    defer exposed_functions.deinit();
+
+    switch (header) {
+        .app => |app_header| {
+            // Get the provides collection from app header
+            const provides_coll = parse_ast.store.getCollection(app_header.provides);
+            const provides_items = parse_ast.store.exposedItemSlice(.{ .span = provides_coll.span });
+
+            // Collect all exposed function names
+            for (provides_items) |item_idx| {
+                const item = parse_ast.store.getExposedItem(item_idx);
+                switch (item) {
+                    .lower_ident => |lower_ident| {
+                        const ident_text = parse_ast.resolve(lower_ident.ident);
+                        try exposed_functions.append(try shm_allocator.dupe(u8, ident_text));
+                    },
+                    else => return error.UnexpectedAppExposedItem,
+                }
+            }
+        },
+        else => {
+            std.log.err("Expected app file, but found different header type\n", .{});
+            return error.NoMainFunction;
+        },
+    }
+
+    if (exposed_functions.items.len == 0) {
+        std.log.err("No exposed functions found in app module\n", .{});
+        return error.NoMainFunction;
+    }
+
+    // For now, use the first exposed function as the entrypoint
+    // TODO: This should be based on entry_idx passed to the interpreter
+    const first_exposed = exposed_functions.items[0];
+    std.log.debug("Using first exposed function as entrypoint: {s}\n", .{first_exposed});
+
+    // Find the definition for the first exposed function
     var main_expr_idx: ?u32 = null;
     const defs = env.store.sliceDefs(env.all_defs);
     for (defs) |def_idx| {
@@ -1001,16 +1042,16 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
         if (pattern == .assign) {
             const ident_idx = pattern.assign.ident;
             const ident_text = env.getIdent(ident_idx);
-            if (std.mem.eql(u8, ident_text, "main")) {
+            if (std.mem.eql(u8, ident_text, first_exposed)) {
                 main_expr_idx = @intFromEnum(def.expr);
                 break;
             }
         }
     }
 
-    // Store the main expression index for the child to evaluate
+    // Store the expression index for the child to evaluate
     expr_idx_ptr[0] = main_expr_idx orelse {
-        std.log.err("No 'main' function found in module\n", .{});
+        std.log.err("No definition found for exposed function '{s}'\n", .{first_exposed});
         return error.NoMainFunction;
     };
 
