@@ -71,7 +71,7 @@ fn addRocEntrypoint(builder: *Builder) !Builder.Function.Index {
 /// 1. The host to call specific named functions (roc__init, roc__render, etc.)
 /// 2. The pre-built Roc interpreter to handle all calls through a single dispatch mechanism
 /// 3. Efficient code generation since each wrapper is just a simple function call
-/// 4. Easy addition/removal of platform functions without changing the pre-built interpreter binary which is embedded in the roc cli exectuable.
+/// 4. Easy addition/removal of platform functions without changing the pre-built interpreter binary which is embedded in the roc cli executable.
 fn addRocExportedFunction(builder: *Builder, entrypoint_fn: Builder.Function.Index, name: []const u8, entry_idx: u32) !Builder.Function.Index {
     // Create pointer type for generic pointers
     const ptr_type = try builder.ptrType(.default);

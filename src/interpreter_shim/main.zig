@@ -52,7 +52,7 @@ export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr
     if (entry_idx != 0) {
         std.log.warn("entry_idx {} received, but only 0 is currently supported", .{entry_idx});
     }
-    
+
     evaluateFromSharedMemory(ops, ret_ptr, arg_ptr) catch |err| {
         std.log.err("Error evaluating from shared memory: {s}", .{@errorName(err)});
     };

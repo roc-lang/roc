@@ -525,12 +525,12 @@ fn compileWithEmbeddedLLVM(gpa: Allocator, bitcode_path: []const u8, object_path
     }
     defer if (module) |mod| externs.LLVMDisposeModule(mod);
 
-    // 4. Get target triple and set it on the module  
+    // 4. Get target triple and set it on the module
     // Use a macOS-specific target triple that generates Mach-O
     const macos_triple = "arm64-apple-macosx14.0.0";
     const target_triple_z = try gpa.dupeZ(u8, macos_triple);
     defer gpa.free(target_triple_z);
-    
+
     std.log.info("Using target triple: {s}", .{macos_triple});
     externs.LLVMSetTarget(module, target_triple_z.ptr);
 
