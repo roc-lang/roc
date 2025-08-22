@@ -28,10 +28,6 @@ test "ModuleEnv.Serialized roundtrip" {
 
     try original.addExposedById(hello_idx);
 
-    _ = try original.common.line_starts.append(gpa, 0);
-    _ = try original.common.line_starts.append(gpa, 10);
-    _ = try original.common.line_starts.append(gpa, 20);
-
     // Initialize CIR fields to ensure imports are available
     try original.initCIRFields(gpa, "TestModule");
 
@@ -114,8 +110,8 @@ test "ModuleEnv.Serialized roundtrip" {
 
     try testing.expectEqual(@as(usize, 3), env.common.line_starts.len());
     try testing.expectEqual(@as(u32, 0), env.common.line_starts.items.items[0]);
-    try testing.expectEqual(@as(u32, 10), env.common.line_starts.items.items[1]);
-    try testing.expectEqual(@as(u32, 20), env.common.line_starts.items.items[2]);
+    try testing.expectEqual(@as(u32, 12), env.common.line_starts.items.items[1]); // after "hello world\n"
+    try testing.expectEqual(@as(u32, 24), env.common.line_starts.items.items[2]); // after "test line 2\n"
 
     // TODO restore source using CommonEnv
     // try testing.expectEqualStrings(source, env.source);

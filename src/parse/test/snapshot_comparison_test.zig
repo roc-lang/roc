@@ -339,11 +339,11 @@ test "snapshot comparison - new Parser2 vs existing snapshots" {
             defer allocator.free(full_path);
 
             // Only print progress every 50 files to reduce output
-            if ((file_count + 1) % 50 == 0 or file_count == 0) {
-                std.debug.print("Processing file {}: {s}\n", .{ file_count + 1, entry.path });
-            }
-            const result = processSnapshot(allocator, full_path) catch |err| {
-                std.debug.print("  Error processing file {}: {}\n", .{ file_count + 1, err });
+            // if ((file_count + 1) % 50 == 0 or file_count == 0) {
+            //     std.debug.print("Processing file {}: {s}\n", .{ file_count + 1, entry.path });
+            // }
+            const result = processSnapshot(allocator, full_path) catch {
+                // std.debug.print("  Error processing file\n", .{});
                 continue;
             };
             try results.append(result);

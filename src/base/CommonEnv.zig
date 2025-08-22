@@ -296,10 +296,6 @@ test "CommonEnv.Serialized roundtrip" {
     _ = try original.insertString(gpa, "test string");
     try original.addExposedById(gpa, hello_idx);
 
-    _ = try original.line_starts.append(gpa, 0);
-    _ = try original.line_starts.append(gpa, 10);
-    _ = try original.line_starts.append(gpa, 20);
-
     // Create a CompactWriter
     var writer = CompactWriter.init();
     defer writer.deinit(gpa);
@@ -334,8 +330,8 @@ test "CommonEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 1), env.exposed_items.count());
     try testing.expectEqual(@as(usize, 3), env.line_starts.len());
     try testing.expectEqual(@as(u32, 0), env.line_starts.items.items[0]);
-    try testing.expectEqual(@as(u32, 10), env.line_starts.items.items[1]);
-    try testing.expectEqual(@as(u32, 20), env.line_starts.items.items[2]);
+    try testing.expectEqual(@as(u32, 12), env.line_starts.items.items[1]); // after "hello world\n"
+    try testing.expectEqual(@as(u32, 24), env.line_starts.items.items[2]); // after "test line 2\n"
 
     try testing.expectEqualStrings(source, env.source);
 }

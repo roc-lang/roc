@@ -97,10 +97,10 @@ pub fn main() !void {
                 // Skip problematic files that cause recursive panics in Parser2
                 if (std.mem.eql(u8, entry.basename, "syntax_grab_bag.md") or 
                     std.mem.startsWith(u8, entry.path, "fuzz_crash/")) {
-                    std.debug.print("Skipping problematic file: {s}\n", .{entry.path});
+                    // std.debug.print("Skipping problematic file: {s}\n", .{entry.path});
                     continue;
                 }
-                std.debug.print("Processing file: {s}\n", .{entry.path});
+                // std.debug.print("Processing file: {s}\n", .{entry.path});
                 const input_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ snapshots_dir, entry.path });
                 defer allocator.free(input_path);
                 

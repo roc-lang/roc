@@ -1764,11 +1764,11 @@ fn parseIf(self: *Parser) Error!Node.Idx {
 
         const nodes = self.getScratchNodesSince(scratch_marker);
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-        return try self.ast.appendNode(self.gpa, start_pos, .if_else, .{ .if_branches = @intFromEnum(nodes_idx) });
+        return try self.ast.appendNode(self.gpa, start_pos, .if_else, .{ .if_branches = @as(u32, @bitCast(@intFromEnum(nodes_idx))) });
     } else {
         const nodes = self.getScratchNodesSince(scratch_marker);
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-        return try self.ast.appendNode(self.gpa, start_pos, .if_without_else, .{ .if_branches = @intFromEnum(nodes_idx) });
+        return try self.ast.appendNode(self.gpa, start_pos, .if_without_else, .{ .if_branches = @as(u32, @bitCast(@intFromEnum(nodes_idx))) });
     }
 }
 
@@ -1811,7 +1811,7 @@ fn parseMatch(self: *Parser) Error!Node.Idx {
 
     const nodes = self.getScratchNodesSince(scratch_marker);
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-    return try self.ast.appendNode(self.gpa, start_pos, .match, .{ .match_branches = @intFromEnum(nodes_idx) });
+    return try self.ast.appendNode(self.gpa, start_pos, .match, .{ .match_branches = @as(u32, @bitCast(@intFromEnum(nodes_idx))) });
 }
 
 fn parseLambda(self: *Parser) Error!Node.Idx {

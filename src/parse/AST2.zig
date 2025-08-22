@@ -103,11 +103,11 @@ pub fn appendByteSlice(self: *Ast, allocator: Allocator, bytes: []const u8) Allo
 pub const NodeSlices = struct {
     entries: collections.SafeList(NodeSlices.Entry),
 
-    pub const Idx = enum(u32) {
+    pub const Idx = enum(i32) {
         _,
 
         // NIL sentinel for empty slices - sign bit set (i32 min value)
-        pub const NIL: Idx = @enumFromInt(@as(u32, @bitCast(@as(i32, std.math.minInt(i32)))));
+        pub const NIL: Idx = @enumFromInt(std.math.minInt(i32));
 
         fn asUsize(self: Idx) usize {
             return @intCast(@intFromEnum(self));
@@ -130,6 +130,19 @@ pub const NodeSlices = struct {
             return Idx.NIL;
         }
 
+        // OPTIMIZATION: For single elements, encode the Node.Idx directly with sign bit set
+        // This saves 4 bytes by avoiding an indirection through NodeSlices
+        if (node_slice.len == 1) {
+            const node_val = @intFromEnum(node_slice[0]);
+            // To avoid conflict with NIL (which is minInt(i32)), we need to ensure
+            // we never produce that exact value. We'll add 1 before encoding.
+            // This means valid single elements will be in range [minInt(i32)+1, -1]
+            const shifted_val = node_val + 1;
+            // Set the sign bit to indicate this is a direct Node.Idx, not a NodeSlices.Idx
+            const encoded_val = shifted_val | std.math.minInt(i32);
+            return @as(NodeSlices.Idx, @enumFromInt(encoded_val));
+        }
+
         const idx = @as(NodeSlices.Idx, @enumFromInt(self.entries.items.items.len));
 
         // Reserve capacity for all nodes (no length stored anymore)
@@ -142,11 +155,11 @@ pub const NodeSlices = struct {
 
         // Append the last node with sign bit set to mark the end
         const last_node = node_slice[node_slice.len - 1];
-        const last_val = @as(u32, @bitCast(@intFromEnum(last_node)));
+        const last_val = @intFromEnum(last_node);
         // Set the sign bit to mark this as the last element
-        const sign_bit = @as(u32, @bitCast(@as(i32, std.math.minInt(i32))));
+        const sign_bit = std.math.minInt(i32);
         const marked_val = last_val | sign_bit;
-        const marked_last = @as(Node.Idx, @enumFromInt(@as(i32, @bitCast(marked_val))));
+        const marked_last = @as(Node.Idx, @enumFromInt(marked_val));
         self.entries.items.appendAssumeCapacity(.{ .node_idx = marked_last });
 
         return idx;
@@ -168,9 +181,21 @@ pub const NodeSlices = struct {
         entries: []const Entry,
         index: usize,
         done: bool,
+        single_element: ?Node.Idx, // For single-element optimization
 
         pub fn next(self: *Iterator) ?Node.Idx {
             if (self.done) return null;
+
+            // Handle single-element case
+            if (self.single_element) |node| {
+                self.done = true;
+                // Clear the sign bit and subtract 1 to get the original node
+                const node_val = @intFromEnum(node);
+                const sign_bit = std.math.minInt(i32);
+                const cleared_val = node_val & ~@as(i32, sign_bit);
+                const original_val = cleared_val - 1; // Undo the shift we applied during encoding
+                return @as(Node.Idx, @enumFromInt(original_val));
+            }
 
             // Bounds check
             if (self.index >= self.entries.len) {
@@ -179,45 +204,65 @@ pub const NodeSlices = struct {
             }
 
             const node_idx = self.entries[self.index].node_idx;
-            const node_val = @as(u32, @bitCast(@intFromEnum(node_idx)));
+            const node_val = @intFromEnum(node_idx);
 
             self.index += 1;
 
             // Check if sign bit is set (marking the end)
-            const sign_bit = @as(u32, @bitCast(@as(i32, std.math.minInt(i32))));
-            if ((node_val & sign_bit) != 0) {
+            if (node_val < 0) {
                 self.done = true;
                 // Clear the sign bit to get the original value
-                const original_val = node_val & ~sign_bit;
-                return @as(Node.Idx, @enumFromInt(@as(i32, @bitCast(original_val))));
+                const sign_bit = std.math.minInt(i32);
+                const original_val = node_val & ~@as(i32, sign_bit);
+                return @as(Node.Idx, @enumFromInt(original_val));
             }
 
             return node_idx;
         }
     };
 
-    pub fn nodes(self: *const NodeSlices, idx: NodeSlices.Idx) Iterator {
+    pub fn nodes(self: *const NodeSlices, idx_ptr: *const NodeSlices.Idx) Iterator {
+        const idx = idx_ptr.*;
+
         // Check for NIL sentinel (empty slice)
-        if (idx.isNil()) {
+        if (idx == NodeSlices.Idx.NIL) {
             return .{
                 .entries = self.entries.items.items,
                 .index = 0,
                 .done = true, // Mark as done immediately for empty list
+                .single_element = null,
             };
         }
 
-        // No length stored anymore - we start reading nodes immediately
-        const slice_start = idx.asUsize();
+        // Check if this is a single element encoded directly (sign bit set)
+        const idx_val = @intFromEnum(idx);
+        if (idx_val < 0) {
+            // This is a single Node.Idx encoded directly (negative value due to sign bit)
+            // Store it for the iterator to return
+            return .{
+                .entries = self.entries.items.items,
+                .index = 0,
+                .done = false,
+                .single_element = @as(Node.Idx, @enumFromInt(idx_val)), // Store with sign bit still set
+            };
+        }
+
+        // Multiple elements - start reading from entries
+        const slice_start = @as(usize, @intCast(idx_val));
 
         return .{
             .entries = self.entries.items.items,
             .index = slice_start,
             .done = false,
+            .single_element = null,
         };
     }
 
     pub fn binOp(self: *const NodeSlices, idx: NodeSlices.Idx) Node.BinOp {
-        const entry_idx = idx.asUsize();
+        // BinOps should never be single elements or NIL
+        std.debug.assert(@intFromEnum(idx) >= 0); // Not encoded directly
+
+        const entry_idx = @as(usize, @intCast(@intFromEnum(idx)));
         // The binop entries are stored as .binop_lhs and .binop_rhs
         // We need to extract the actual node indices from these entries
         const lhs = self.entries.items.items[entry_idx].binop_lhs;
@@ -234,7 +279,13 @@ pub const NodeSlices = struct {
 pub fn nodesInBlock(self: *const Ast, idx: Node.Idx) NodeSlices.Iterator {
     std.debug.assert(self.tag(idx) == .block);
 
-    return self.node_slices.nodes(self.payload(idx).nodes);
+    return self.node_slices.nodes(&self.payloadPtr(idx).nodes);
+}
+
+/// Get a pointer to the payload (for the optimization where we pass pointers to nodes())
+pub fn payloadPtr(self: *const Ast, idx: Node.Idx) *const Node.Payload {
+    const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
+    return &self.nodes.fieldItem(.payload, multi_list_idx);
 }
 
 /// Returns an iterator over all the nodes in a string interpolation.
@@ -242,7 +293,7 @@ pub fn nodesInBlock(self: *const Ast, idx: Node.Idx) NodeSlices.Iterator {
 pub fn nodesInInterpolation(self: *const Ast, idx: Node.Idx) NodeSlices.Iterator {
     std.debug.assert(self.tag(idx) == .str_interpolation);
 
-    return self.node_slices.nodes(self.payload(idx).str_interpolated_nodes);
+    return self.node_slices.nodes(&self.payloadPtr(idx).str_interpolated_nodes);
 }
 
 /// A lambda expression, e.g. `|a, b| c`
@@ -283,7 +334,7 @@ pub fn lambda(self: *const Ast, idx: Node.Idx) Lambda {
     std.debug.assert(self.tag(idx) == .lambda);
 
     const body_then_args_idx = self.payload(idx).body_then_args;
-    var iter = self.node_slices.nodes(body_then_args_idx);
+    var iter = self.node_slices.nodes(&body_then_args_idx);
 
     // First node is the body
     // Safe: Parser always ensures lambda nodes have at least a body
@@ -300,7 +351,7 @@ pub fn lambda(self: *const Ast, idx: Node.Idx) Lambda {
 pub fn whileLoop(self: *const Ast, idx: Node.Idx) WhileLoop {
     std.debug.assert(self.tag(idx) == .while_loop);
     const nodes_idx = self.payload(idx).nodes;
-    var iter = self.node_slices.nodes(nodes_idx);
+    var iter = self.node_slices.nodes(&nodes_idx);
 
     // Safe: Parser always ensures while_loop nodes have exactly 2 children (condition, body)
     // The parser constructs while_loop nodes with these two nodes in parseWhile()
@@ -317,7 +368,7 @@ pub fn whileLoop(self: *const Ast, idx: Node.Idx) WhileLoop {
 pub fn forLoop(self: *const Ast, idx: Node.Idx) ForLoop {
     std.debug.assert(self.tag(idx) == .for_loop);
     const nodes_idx = self.payload(idx).nodes;
-    var iter = self.node_slices.nodes(nodes_idx);
+    var iter = self.node_slices.nodes(&nodes_idx);
 
     // Safe: Parser always ensures for_loop nodes have exactly 3 children (pattern, iterable, body)
     // The parser constructs for_loop nodes with these three nodes in parseFor()
@@ -335,7 +386,7 @@ pub fn forLoop(self: *const Ast, idx: Node.Idx) ForLoop {
 /// Get an iterator for lambda args
 pub fn lambdaArgs(self: *const Ast, lambda_val: Lambda) LambdaArgsIterator {
     return LambdaArgsIterator{
-        .iter = self.node_slices.nodes(lambda_val.args_idx),
+        .iter = self.node_slices.nodes(&lambda_val.args_idx),
         .skipped_body = false,
     };
 }
@@ -361,7 +412,7 @@ pub fn arrowBinOp(self: *const Ast, idx: Node.Idx) Node.BinOp {
     // We can tell by checking if the first entry in the slice is a valid node
     const nodes_idx = node_payload.binop;
     if (nodes_idx != NodeSlices.Idx.NIL) {
-        var iter = self.node_slices.nodes(nodes_idx);
+        var iter = self.node_slices.nodes(&nodes_idx);
         const maybe_first = iter.next();
 
         // Check if this looks like a valid nodes slice by seeing if we can get nodes from it
@@ -400,7 +451,7 @@ pub fn arrowNodes(self: *const Ast, idx: Node.Idx) NodeSlices.Iterator {
     // We can reinterpret the payload to check which one it is
     const nodes_idx = node_payload.binop;
 
-    return self.node_slices.nodes(nodes_idx);
+    return self.node_slices.nodes(&nodes_idx);
 }
 
 /// Given the idx to a lambda, return the region of just its args (the `| ... |` including the pipes)
@@ -581,7 +632,7 @@ pub fn region(
                 };
             }
 
-            var iter = self.node_slices.nodes(nodes_idx);
+            var iter = self.node_slices.nodes(&nodes_idx);
 
             // Get the first node (the function)
             // Safe: Parser ensures apply nodes always have at least the function node
@@ -605,7 +656,7 @@ pub fn region(
         .import => {
             // Import statement spans from the 'import' keyword to the end of the imported items
             const region_start = self.start(idx);
-            var iter = self.node_slices.nodes(self.payload(idx).import_nodes);
+            var iter = self.node_slices.nodes(&self.payloadPtr(idx).import_nodes);
             var last_node: ?Node.Idx = null;
             while (iter.next()) |node| {
                 last_node = node;
@@ -628,7 +679,7 @@ pub fn region(
         .expect => {
             // Expect statement spans from the 'expect' keyword to the end of the condition expression
             const region_start = self.start(idx);
-            var iter = self.node_slices.nodes(self.payload(idx).nodes);
+            var iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
 
             if (iter.next()) |condition_node| {
                 const condition_region = self.region(condition_node, raw_src, ident_store);
@@ -701,15 +752,15 @@ pub fn region(
             return self.containerRegion(idx, nodes_iter, tokenize.Token.DELIM_CLOSE_CURLY, raw_src, ident_store);
         },
         .list_literal => {
-            const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
+            const nodes_iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
             return self.containerRegion(idx, nodes_iter, tokenize.Token.DELIM_CLOSE_SQUARE, raw_src, ident_store);
         },
         .tuple_literal => {
-            const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
+            const nodes_iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
             return self.containerRegion(idx, nodes_iter, tokenize.Token.DELIM_CLOSE_ROUND, raw_src, ident_store);
         },
         .record_literal => {
-            const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
+            const nodes_iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
             return self.containerRegion(idx, nodes_iter, tokenize.Token.DELIM_CLOSE_CURLY, raw_src, ident_store);
         },
         .lambda => {
@@ -751,7 +802,7 @@ pub fn region(
             // `!` followed by expression - the payload should contain the operand node
             // For now, assume the operand is stored in block_nodes as a single-element slice
             const region_start = self.start(idx);
-            const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
+            const nodes_iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
             var iter = nodes_iter;
             // Safe: Parser ensures unary_not nodes always have exactly one operand
             // The parser creates these with a single operand
@@ -766,7 +817,7 @@ pub fn region(
         .unary_neg => {
             // `-` followed by expression - the payload should contain the operand node
             const region_start = self.start(idx);
-            const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
+            const nodes_iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
             var iter = nodes_iter;
             // Safe: Parser ensures unary_neg nodes always have exactly one operand
             // The parser creates these with a single operand
@@ -781,7 +832,7 @@ pub fn region(
         .unary_double_dot => {
             // `..` followed by expression - the payload should contain the operand node
             const region_start = self.start(idx);
-            const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
+            const nodes_iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
             var iter = nodes_iter;
             // Safe: Parser ensures unary_double_dot nodes always have exactly one operand
             // The parser creates these with a single operand
@@ -796,7 +847,7 @@ pub fn region(
         .ret => {
             // `return` followed by expression
             const region_start = self.start(idx);
-            const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
+            const nodes_iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
             var iter = nodes_iter;
             // Safe: Parser ensures ret nodes always have exactly one expression
             // The parseReturn() function always creates ret nodes with an expression
@@ -811,7 +862,7 @@ pub fn region(
         .crash => {
             // `crash` followed by expression
             const region_start = self.start(idx);
-            const nodes_iter = self.node_slices.nodes(self.payload(idx).nodes);
+            const nodes_iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
             var iter = nodes_iter;
             // Safe: Parser ensures crash nodes always have exactly one expression
             // The parseCrash() function always creates crash nodes with an expression
@@ -1068,7 +1119,7 @@ pub fn region(
             // Match expressions contain: scrutinee, then branch patterns and bodies
             // The region spans from the 'match' keyword to the end of the last branch
             const region_start = self.start(idx);
-            var iter = self.node_slices.nodes(self.payload(idx).nodes);
+            var iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
 
             var last_node: ?Node.Idx = null;
             while (iter.next()) |node| {
@@ -1092,7 +1143,7 @@ pub fn region(
         .if_else => {
             // If-else contains: condition, then branch, else branch
             const region_start = self.start(idx);
-            var iter = self.node_slices.nodes(self.payload(idx).nodes);
+            var iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
 
             var last_node: ?Node.Idx = null;
             while (iter.next()) |node| {
@@ -1116,7 +1167,7 @@ pub fn region(
         .if_without_else => {
             // If without else contains: condition, then branch
             const region_start = self.start(idx);
-            var iter = self.node_slices.nodes(self.payload(idx).nodes);
+            var iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
 
             var last_node: ?Node.Idx = null;
             while (iter.next()) |node| {
@@ -1636,7 +1687,7 @@ test "NodeSlices with negative sentinel" {
     const single = [_]Node.Idx{@as(Node.Idx, @enumFromInt(42))};
     const idx1 = try node_slices.append(allocator, &single);
 
-    var iter1 = node_slices.nodes(idx1);
+    var iter1 = node_slices.nodes(&idx1);
     try testing.expectEqual(@as(Node.Idx, @enumFromInt(42)), iter1.next().?);
     try testing.expectEqual(@as(?Node.Idx, null), iter1.next());
 
@@ -1648,27 +1699,43 @@ test "NodeSlices with negative sentinel" {
     };
     const idx2 = try node_slices.append(allocator, &multiple);
 
-    var iter2 = node_slices.nodes(idx2);
-    try testing.expectEqual(@as(Node.Idx, @enumFromInt(10)), iter2.next().?);
-    try testing.expectEqual(@as(Node.Idx, @enumFromInt(20)), iter2.next().?);
-    try testing.expectEqual(@as(Node.Idx, @enumFromInt(30)), iter2.next().?);
+    // idx2 should be 0 since single element was stored directly, not in entries
+    try testing.expectEqual(@as(i32, 0), @intFromEnum(idx2));
+
+    // Get entries to verify storage
+    const entries = node_slices.entries.items.items;
+
+    // First verify entries are correct before iterating
+    try testing.expectEqual(@as(usize, 3), entries.len);
+    try testing.expectEqual(@as(i32, 10), @intFromEnum(entries[0].node_idx));
+    try testing.expectEqual(@as(i32, 20), @intFromEnum(entries[1].node_idx));
+
+    var iter2 = node_slices.nodes(&idx2);
+    const first = iter2.next().?;
+    try testing.expectEqual(@as(Node.Idx, @enumFromInt(10)), first);
+    const second = iter2.next().?;
+    try testing.expectEqual(@as(Node.Idx, @enumFromInt(20)), second);
+    const third = iter2.next().?;
+    try testing.expectEqual(@as(Node.Idx, @enumFromInt(30)), third);
     try testing.expectEqual(@as(?Node.Idx, null), iter2.next());
 
     // Verify the actual storage format
-    const entries = node_slices.entries.items.items;
-    const sign_bit = @as(u32, @bitCast(@as(i32, std.math.minInt(i32))));
+    const sign_bit = std.math.minInt(i32);
 
-    // First slice (single node, stored with sign bit set)
-    const first_val = @as(u32, @bitCast(@intFromEnum(entries[0].node_idx)));
-    try testing.expect((first_val & sign_bit) != 0); // Sign bit should be set
-    try testing.expectEqual(@as(u32, 42), first_val & ~sign_bit); // Original value should be 42
+    // Single element is NOT stored in entries (optimization)
+    // It's encoded directly in idx1 with sign bit set
+    const idx1_val = @intFromEnum(idx1);
+    try testing.expect(idx1_val < 0); // Sign bit should be set
+    // We add 1 during encoding, so we expect 43 after clearing sign bit
+    try testing.expectEqual(@as(i32, 43), idx1_val & ~@as(i32, sign_bit)); // Shifted value should be 43
 
-    // Second slice (multiple nodes, last one with sign bit set)
-    try testing.expectEqual(@as(i32, 10), @intFromEnum(entries[1].node_idx));
-    try testing.expectEqual(@as(i32, 20), @intFromEnum(entries[2].node_idx));
-    const last_val = @as(u32, @bitCast(@intFromEnum(entries[3].node_idx)));
-    try testing.expect((last_val & sign_bit) != 0); // Sign bit should be set
-    try testing.expectEqual(@as(u32, 30), last_val & ~sign_bit); // Original value should be 30
+    // Multiple nodes ARE stored in entries (last one with sign bit set)
+    try testing.expectEqual(@as(usize, 3), entries.len);
+    try testing.expectEqual(@as(i32, 10), @intFromEnum(entries[0].node_idx));
+    try testing.expectEqual(@as(i32, 20), @intFromEnum(entries[1].node_idx));
+    const last_val = @intFromEnum(entries[2].node_idx);
+    try testing.expect(last_val < 0); // Sign bit should be set
+    try testing.expectEqual(@as(i32, 30), last_val & ~@as(i32, sign_bit)); // Original value should be 30
 }
 
 /// Convert a parse diagnostic to a reporting.Report for error display

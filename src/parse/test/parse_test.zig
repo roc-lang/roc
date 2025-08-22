@@ -503,7 +503,8 @@ test "Parser2: unary operator parsing" {
         try testing.expectEqual(AST2.Node.Tag.unary_not, ast.tag(root_idx));
 
         // Verify the operand is stored in block_nodes and we can iterate over it
-        const nodes_iter = ast.node_slices.nodes(ast.payload(root_idx).nodes);
+        const payload_ptr = ast.payloadPtr(root_idx);
+        const nodes_iter = ast.node_slices.nodes(&payload_ptr.nodes);
         var iter = nodes_iter;
         const operand = iter.next() orelse unreachable; // Should have an operand
         try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(operand)); // Should be 'foo'
@@ -636,7 +637,8 @@ test "Parser2: return and crash statements" {
         try testing.expectEqual(AST2.Node.Tag.ret, ast.tag(root_idx));
 
         // Verify the expression is stored in block_nodes
-        const nodes_iter = ast.node_slices.nodes(ast.payload(root_idx).nodes);
+        const payload_ptr2 = ast.payloadPtr(root_idx);
+        const nodes_iter = ast.node_slices.nodes(&payload_ptr2.nodes);
         var iter = nodes_iter;
         const expr = iter.next() orelse unreachable; // Should have the expression
         try testing.expectEqual(AST2.Node.Tag.num_literal_i32, ast.tag(expr)); // Should be '42'
@@ -654,7 +656,8 @@ test "Parser2: return and crash statements" {
         try testing.expectEqual(AST2.Node.Tag.crash, ast.tag(root_idx));
 
         // Verify the expression is stored in block_nodes
-        const nodes_iter = ast.node_slices.nodes(ast.payload(root_idx).nodes);
+        const payload_ptr2 = ast.payloadPtr(root_idx);
+        const nodes_iter = ast.node_slices.nodes(&payload_ptr2.nodes);
         var iter = nodes_iter;
         const expr = iter.next() orelse unreachable; // Should have the expression
         // The string literal could be small or big depending on the content
