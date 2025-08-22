@@ -1,5 +1,5 @@
 //! Roc command line interface for the new compiler. Entrypoint of the Roc binary.
-//! Build with `zig build -Dllvm -Dfuzz -Dsystem-afl=false`.
+//! Build with `zig build -Dfuzz -Dsystem-afl=false`.
 //! Result is at `./zig-out/bin/roc`
 
 const std = @import("std");
@@ -413,7 +413,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
 fn generatePlatformHostShim(gpa: Allocator, cache_dir: []const u8, entrypoint_name: []const u8) !?[]const u8 {
     // Check if LLVM is available (this is a compile-time check)
     if (!llvm_available) {
-        std.log.info("LLVM not available, skipping platform host shim generation", .{});
+        std.log.debug("LLVM not available, skipping platform host shim generation", .{});
         return null;
     }
 
@@ -483,54 +483,25 @@ fn generatePlatformHostShim(gpa: Allocator, cache_dir: []const u8, entrypoint_na
         return err;
     };
 
-    // Compile to object file using embedded LLVM library or fallback to clang
-    var use_clang_fallback = false;
+    const compile_config = builder.CompileConfig{
+        .input_path = bitcode_path,
+        .output_path = object_path,
+        .optimization = .speed,
+        .target = builder.RocTarget.detectNative(),
+    };
 
-    if (llvm_available) {
-        const compile_config = builder.CompileConfig{
-            .input_path = bitcode_path,
-            .output_path = object_path,
-            .optimization = .speed,
-            .target = builder.RocTarget.detectNative(),
-        };
-        if (builder.compileBitcodeToObject(gpa, compile_config)) |success| {
-            if (!success) {
-                std.log.warn("LLVM compilation not ready, falling back to clang", .{});
-                use_clang_fallback = true;
-            }
-        } else |err| {
-            std.log.warn("Failed to compile with embedded LLVM: {}, falling back to clang", .{err});
-            use_clang_fallback = true;
+    if (builder.compileBitcodeToObject(gpa, compile_config)) |success| {
+        if (!success) {
+            std.log.warn("LLVM compilation not ready, falling back to clang", .{});
+            return error.LLVMCompilationFailed;
         }
-    } else {
-        use_clang_fallback = true;
+    } else |err| {
+        std.log.warn("Failed to compile with embedded LLVM: {}, falling back to clang", .{err});
+        return error.LLVMCompilationFailed;
     }
 
-    if (use_clang_fallback) {
-        // Fallback to clang when LLVM compilation fails
-        std.log.warn("Using clang as fallback for bitcode compilation", .{});
-        const compile_result = std.process.Child.run(.{
-            .allocator = gpa,
-            .argv = &.{ "clang", "-c", bitcode_path, "-o", object_path },
-        }) catch |err| {
-            std.log.err("Failed to compile bitcode to object file: {}", .{err});
-            gpa.free(object_path);
-            return err;
-        };
-        defer gpa.free(compile_result.stdout);
-        defer gpa.free(compile_result.stderr);
+    std.log.debug("Generated platform host shim: {s}", .{object_path});
 
-        if (compile_result.term.Exited != 0) {
-            std.log.err("Clang failed to compile bitcode with exit code: {}", .{compile_result.term.Exited});
-            if (compile_result.stderr.len > 0) {
-                std.log.err("Clang stderr: {s}", .{compile_result.stderr});
-            }
-            gpa.free(object_path);
-            return error.CompilationFailed;
-        }
-    }
-
-    std.log.info("Generated platform host shim: {s}", .{object_path});
     return object_path;
 }
 

@@ -6,7 +6,7 @@ This directory contains a primitive test platform for Roc and demonstrates passi
 - **Description**: Takes a string from the host and returns a processed string
 
 ```bash
-zig build -Dllvm
+zig build
 
 # Run (ignore cached files)
 ./zig-out/bin/roc --no-cache test/str/app.roc
