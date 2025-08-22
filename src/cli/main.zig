@@ -945,22 +945,16 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
 
     // Allocate space for the offset value at the beginning
     const offset_ptr = try shm_allocator.alloc(u64, 1);
-    // Also store the entry count and expression indices for the child to evaluate
+    // Also store the entry count (replaces old expr_idx_ptr for multi-entrypoint support)  
     const entry_count_ptr = try shm_allocator.alloc(u32, 1);
-    
-    // Allocate ModuleEnv early so we know its address
-    const env_ptr = try shm_allocator.create(ModuleEnv);
-    
-    // Store the ModuleEnv address so the child can find it
-    const env_addr_ptr = try shm_allocator.alloc(u64, 1);
-    env_addr_ptr[0] = @intFromPtr(env_ptr);
 
     // Store the base address of the shared memory mapping (for ASLR-safe relocation)
     // The child will calculate the offset from its own base address
     const shm_base_addr = @intFromPtr(shm.base_ptr);
     offset_ptr[0] = shm_base_addr;
 
-    // env_ptr was already allocated earlier (line 968)
+    // Allocate and store a pointer to the ModuleEnv
+    const env_ptr = try shm_allocator.create(ModuleEnv);
 
     // Read the actual Roc file
     const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| {
@@ -1012,6 +1006,13 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
 
     // Allocate space for exported def indices array
     const def_indices_ptr = try shm_allocator.alloc(u32, exports_slice.len);
+    
+    // Store the def_indices location at a known offset for the interpreter
+    const def_indices_location = @intFromPtr(def_indices_ptr.ptr) - @intFromPtr(shm.base_ptr);
+    // Overwrite the entry_count with a structure containing both entry_count and def_indices_offset
+    // Layout: [parent_addr][entry_count][def_indices_offset]
+    const def_indices_offset_ptr = try shm_allocator.alloc(u64, 1);
+    def_indices_offset_ptr[0] = def_indices_location;
 
     // Store definition index for each exported function
     for (exports_slice, 0..) |def_idx, i| {
