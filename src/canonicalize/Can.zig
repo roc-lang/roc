@@ -937,7 +937,7 @@ pub fn canonicalizeFile(
     // Create the span of all top-level defs and statements
     self.env.all_defs = try self.env.store.defSpanFrom(scratch_defs_start);
     self.env.all_statements = try self.env.store.statementSpanFrom(scratch_statements_start);
-    
+
     // Create the span of exported defs by finding definitions that correspond to exposed items
     try self.populateExports();
 
@@ -1137,15 +1137,15 @@ fn createExposedScope(
 fn populateExports(self: *Self) std.mem.Allocator.Error!void {
     // Start a new scratch space for exports
     const scratch_exports_start = self.env.store.scratchDefTop();
-    
+
     // Use the already-created all_defs span
     const defs_slice = self.env.store.sliceDefs(self.env.all_defs);
-    
+
     // Check each definition to see if it corresponds to an exposed item
     for (defs_slice) |def_idx| {
         const def = self.env.store.getDef(def_idx);
         const pattern = self.env.store.getPattern(def.pattern);
-        
+
         if (pattern == .assign) {
             // Check if this definition's identifier is in the exposed items
             if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(pattern.assign.ident))) {
@@ -1154,7 +1154,7 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
             }
         }
     }
-    
+
     // Create the exports span from the scratch space
     self.env.exports = try self.env.store.defSpanFrom(scratch_exports_start);
 }

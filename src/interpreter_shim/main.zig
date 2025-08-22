@@ -22,7 +22,7 @@ const RocOps = builtins.host_abi.RocOps;
 const Interpreter = eval.Interpreter;
 const safe_memory = base.safe_memory;
 
-// Constants for shared memory layout  
+// Constants for shared memory layout
 const FIRST_ALLOC_OFFSET = 504; // 0x1f8 - First allocation starts at this offset
 const MODULE_ENV_OFFSET = 0x10; // 8 bytes for u64, 4 bytes for u32, 4 bytes padding
 
@@ -82,14 +82,14 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
             return error.SharedMemoryError;
         };
     }
-    
+
     var shm = &global_shm.?;
 
     // Reuse global ModuleEnv or set it up from shared memory
     if (global_env == null) {
         global_env = try setupModuleEnv(shm);
     }
-    
+
     const env_ptr = global_env.?;
 
     // Set up interpreter infrastructure
@@ -98,29 +98,29 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
 
     // Get expression info from shared memory using entry_idx
     const base_ptr = shm.getBasePtr();
-    
+
     // Read the header structure from shared memory
     const header_addr = @intFromPtr(base_ptr) + FIRST_ALLOC_OFFSET;
     const header_ptr: *const Header = @ptrFromInt(header_addr);
-    
+
     if (entry_idx >= header_ptr.entry_count) {
-        std.log.err("Invalid entry_idx {} >= entry_count {}", .{entry_idx, header_ptr.entry_count});
+        std.log.err("Invalid entry_idx {} >= entry_count {}", .{ entry_idx, header_ptr.entry_count });
         return error.InvalidEntryIndex;
     }
-    
+
     const def_offset = header_ptr.def_indices_offset + entry_idx * @sizeOf(u32);
-    
+
     const def_idx_raw = safe_memory.safeRead(u32, base_ptr, def_offset, shm.total_size) catch |err| {
         std.log.err("Failed to read def_idx: {}", .{err});
         return error.MemoryLayoutInvalid;
     };
-    
+
     const def_idx: CIR.Def.Idx = @enumFromInt(def_idx_raw);
 
     // Get the definition and extract its expression
     const def = env_ptr.store.getDef(def_idx);
     const expr_idx = def.expr;
-    
+
     // Evaluate the expression (with optional arguments)
     try interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr);
 }

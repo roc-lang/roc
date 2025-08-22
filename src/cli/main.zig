@@ -946,7 +946,7 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
         def_indices_offset: u64,
         module_env_offset: u64,
     };
-    
+
     const header_ptr = try shm_allocator.create(Header);
 
     // Store the base address of the shared memory mapping (for ASLR-safe relocation)
@@ -1003,13 +1003,13 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
 
     // Get the exported definitions from the canonicalization process
     const exports_slice = env.store.sliceDefs(env.exports);
-    
+
     // Store entry count based on exports
     header_ptr.entry_count = @intCast(exports_slice.len);
 
     // Allocate space for exported def indices array
     const def_indices_ptr = try shm_allocator.alloc(u32, exports_slice.len);
-    
+
     // Store the def_indices location in the header
     const def_indices_location = @intFromPtr(def_indices_ptr.ptr) - @intFromPtr(shm.base_ptr);
     header_ptr.def_indices_offset = def_indices_location;
