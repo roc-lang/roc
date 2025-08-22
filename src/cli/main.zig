@@ -433,7 +433,7 @@ fn generatePlatformHostShim(gpa: Allocator, cache_dir: []const u8, entrypoint_na
     // Create entrypoints array from the provided names
     var entrypoints = std.ArrayList(platform_host_shim.EntryPoint).init(gpa);
     defer entrypoints.deinit();
-    
+
     for (entrypoint_names, 0..) |name, idx| {
         try entrypoints.append(.{ .name = name, .idx = @intCast(idx) });
     }
@@ -553,12 +553,23 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     };
     defer gpa.free(exe_path);
 
-    // Resolve platform paths from app header
-    const platform_paths = resolvePlatformPaths(gpa, args.path) catch |err| {
-        std.log.err("Failed to resolve platform: {}\n", .{err});
+    // First, parse the app file to get the platform reference
+    std.log.debug("Parsing app file: {s}\n", .{args.path});
+    const platform_spec = extractPlatformSpecFromApp(gpa, args.path) catch |err| {
+        std.log.err("Failed to extract platform spec from app file: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer gpa.free(platform_spec);
+    std.log.debug("Found platform spec: {s}\n", .{platform_spec});
+
+    // Resolve platform paths from the platform spec (relative to app file directory)
+    const app_dir = std.fs.path.dirname(args.path) orelse ".";
+    const platform_paths = resolvePlatformSpecToPaths(gpa, platform_spec, app_dir) catch |err| {
+        std.log.err("Failed to resolve platform spec '{s}': {}\n", .{ platform_spec, err });
         std.process.exit(1);
     };
     defer platform_paths.deinit(gpa);
+    std.log.debug("Resolved platform paths - host: {s}, source: {?s}\n", .{ platform_paths.host_lib_path, platform_paths.platform_source_path });
 
     // Extract entrypoints from platform source file
     var entrypoints = std.ArrayList([]const u8).init(gpa);
@@ -568,12 +579,14 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         }
         entrypoints.deinit();
     }
-    
+
     if (platform_paths.platform_source_path) |platform_source| {
+        std.log.debug("Extracting entrypoints from platform source: {s}\n", .{platform_source});
         extractEntrypointsFromPlatform(gpa, platform_source, &entrypoints) catch |err| {
             std.log.err("Failed to extract entrypoints from platform header: {}\n", .{err});
             std.process.exit(1);
         };
+        std.log.debug("Extracted {} entrypoints\n", .{entrypoints.items.len});
     } else {
         std.log.err("No platform source file found for entrypoint extraction\n", .{});
         std.process.exit(1);
@@ -1080,7 +1093,7 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
 pub const PlatformPaths = struct {
     host_lib_path: []const u8,
     platform_source_path: ?[]const u8, // Optional - may not exist for some platforms
-    
+
     pub fn deinit(self: *const PlatformPaths, gpa: std.mem.Allocator) void {
         gpa.free(self.host_lib_path);
         if (self.platform_source_path) |path| {
@@ -1144,7 +1157,7 @@ pub fn resolvePlatformPaths(gpa: std.mem.Allocator, roc_file_path: []const u8) (
                                     std.fs.cwd().access(platform_path, .{}) catch break :blk null;
                                     break :blk try gpa.dupe(u8, platform_path);
                                 }
-                                
+
                                 // Try common platform source names in the platform directory
                                 const common_names = [_][]const u8{ "main.roc", "platform.roc", "Platform.roc" };
                                 for (common_names) |name| {
@@ -1173,8 +1186,44 @@ pub fn resolvePlatformPaths(gpa: std.mem.Allocator, roc_file_path: []const u8) (
     return error.NoPlatformFound;
 }
 
+/// Extract platform specification from app file header using simple string parsing
+fn extractPlatformSpecFromApp(gpa: std.mem.Allocator, app_file_path: []const u8) ![]const u8 {
+    // Read the app file
+    const source = std.fs.cwd().readFileAlloc(gpa, app_file_path, std.math.maxInt(usize)) catch return error.FileNotFound;
+    defer gpa.free(source);
+
+    // Simple string parsing to find platform specification
+    // Look for pattern: platform "..." or platform ".../..."
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r\n");
+        if (std.mem.startsWith(u8, trimmed, "app ")) {
+            // Look for pf: platform "..." pattern
+            if (std.mem.indexOf(u8, trimmed, "pf: platform \"")) |start_idx| {
+                const after_quote = start_idx + 14; // length of "pf: platform \""
+                if (std.mem.indexOfScalarPos(u8, trimmed, after_quote, '"')) |end_idx| {
+                    const platform_path = trimmed[after_quote..end_idx];
+                    std.log.debug("Extracted platform string: '{s}'\n", .{platform_path});
+                    return try gpa.dupe(u8, platform_path);
+                }
+            }
+            // Also try alternative format: platform "..."
+            if (std.mem.indexOf(u8, trimmed, "platform \"")) |start_idx| {
+                const quote_start = start_idx + 10; // length of "platform \""
+                if (std.mem.indexOfScalarPos(u8, trimmed, quote_start, '"')) |end_idx| {
+                    const platform_path = trimmed[quote_start..end_idx];
+                    std.log.debug("Extracted platform string: '{s}'\n", .{platform_path});
+                    return try gpa.dupe(u8, platform_path);
+                }
+            }
+        }
+    }
+
+    return error.NotAppFile;
+}
+
 /// Resolve a platform specification to both host library and platform source paths
-fn resolvePlatformSpecToPaths(gpa: std.mem.Allocator, platform_spec: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})!PlatformPaths {
+fn resolvePlatformSpecToPaths(gpa: std.mem.Allocator, platform_spec: []const u8, base_dir: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})!PlatformPaths {
 
     // Check for common platform names and map them to host libraries
     if (std.mem.eql(u8, platform_spec, "cli")) {
@@ -1199,7 +1248,7 @@ fn resolvePlatformSpecToPaths(gpa: std.mem.Allocator, platform_spec: []const u8)
 
         for (cli_host_paths) |host_path| {
             std.fs.cwd().access(host_path, .{}) catch continue;
-            
+
             // Found host library, now try to find platform source
             var platform_source_path: ?[]const u8 = null;
             for (cli_source_paths) |source_path| {
@@ -1207,7 +1256,7 @@ fn resolvePlatformSpecToPaths(gpa: std.mem.Allocator, platform_spec: []const u8)
                 platform_source_path = try gpa.dupe(u8, source_path);
                 break;
             }
-            
+
             return PlatformPaths{
                 .host_lib_path = try gpa.dupe(u8, host_path),
                 .platform_source_path = platform_source_path,
@@ -1235,7 +1284,7 @@ fn resolvePlatformSpecToPaths(gpa: std.mem.Allocator, platform_spec: []const u8)
 
         for (basic_cli_host_paths) |host_path| {
             std.fs.cwd().access(host_path, .{}) catch continue;
-            
+
             // Found host library, now try to find platform source
             var platform_source_path: ?[]const u8 = null;
             for (basic_cli_source_paths) |source_path| {
@@ -1243,7 +1292,7 @@ fn resolvePlatformSpecToPaths(gpa: std.mem.Allocator, platform_spec: []const u8)
                 platform_source_path = try gpa.dupe(u8, source_path);
                 break;
             }
-            
+
             return PlatformPaths{
                 .host_lib_path = try gpa.dupe(u8, host_path),
                 .platform_source_path = platform_source_path,
@@ -1255,23 +1304,38 @@ fn resolvePlatformSpecToPaths(gpa: std.mem.Allocator, platform_spec: []const u8)
         return error.PlatformNotSupported;
     }
 
-    // Try to interpret as a direct file path
-    std.fs.cwd().access(platform_spec, .{}) catch {
+    // Try to interpret as a file path (resolve relative to base_dir)
+    const resolved_path = if (std.fs.path.isAbsolute(platform_spec))
+        try gpa.dupe(u8, platform_spec)
+    else
+        try std.fs.path.join(gpa, &.{ base_dir, platform_spec });
+    defer if (!std.fs.path.isAbsolute(platform_spec)) gpa.free(resolved_path);
+
+    std.fs.cwd().access(resolved_path, .{}) catch {
         return error.PlatformNotSupported;
     };
 
-    // For direct file paths, we need to determine if it's a host library or platform source
+    // For file paths, we need to determine if it's a host library or platform source
     // Host libraries typically have .a/.lib extensions, platform sources have .roc extension
-    if (std.mem.endsWith(u8, platform_spec, ".roc")) {
-        // This is a platform source file
+    if (std.mem.endsWith(u8, resolved_path, ".roc")) {
+        // This is a platform source file - look for host library near it
+        const platform_dir = std.fs.path.dirname(resolved_path) orelse ".";
+        const host_filename = if (comptime builtin.target.os.tag == .windows) "host.lib" else "libhost.a";
+        const host_path = try std.fs.path.join(gpa, &.{ platform_dir, host_filename });
+        defer gpa.free(host_path);
+
+        std.fs.cwd().access(host_path, .{}) catch {
+            return error.PlatformNotSupported;
+        };
+
         return PlatformPaths{
-            .host_lib_path = try gpa.dupe(u8, ""), // No host library for direct .roc files
-            .platform_source_path = try gpa.dupe(u8, platform_spec),
+            .host_lib_path = try gpa.dupe(u8, host_path),
+            .platform_source_path = try gpa.dupe(u8, resolved_path),
         };
     } else {
         // Assume it's a host library file
         return PlatformPaths{
-            .host_lib_path = try gpa.dupe(u8, platform_spec),
+            .host_lib_path = try gpa.dupe(u8, resolved_path),
             .platform_source_path = null,
         };
     }
@@ -1308,14 +1372,18 @@ fn extractEntrypointsFromPlatform(gpa: std.mem.Allocator, roc_file_path: []const
     // Check if this is a platform file with a platform header
     switch (header) {
         .platform => |platform_header| {
+            std.log.debug("Found platform header, analyzing provides collection\n", .{});
+
             // Get the provides collection and its record fields
             const provides_coll = parse_ast.store.getCollection(platform_header.provides);
             const provides_fields = parse_ast.store.recordFieldSlice(.{ .span = provides_coll.span });
+            std.log.debug("Found {} record fields in provides\n", .{provides_fields.len});
 
             // Extract all field names as entrypoints
             for (provides_fields) |field_idx| {
                 const field = parse_ast.store.getRecordField(field_idx);
                 const field_name = parse_ast.resolve(field.name);
+                std.log.debug("Adding entrypoint: {s}\n", .{field_name});
                 try entrypoints.append(try gpa.dupe(u8, field_name));
             }
 
@@ -1323,7 +1391,10 @@ fn extractEntrypointsFromPlatform(gpa: std.mem.Allocator, roc_file_path: []const
                 return error.NoEntrypointFound;
             }
         },
-        else => return error.NotPlatformFile,
+        else => {
+            std.log.debug("Not a platform file - header type: {}\n", .{header});
+            return error.NotPlatformFile;
+        },
     }
 }
 

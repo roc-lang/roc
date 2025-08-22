@@ -3,6 +3,6 @@ platform ""
     exposes []
     packages {}
     imports []
-    provides [multiplyInts]
+    provides { multiplyInts: "multiplyInts" }
 
 multiplyInts : I64, I64 -> I64

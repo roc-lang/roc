@@ -2,7 +2,6 @@ platform ""
     requires {} { processString : Str -> Str }
     exposes []
     packages {}
-    imports []
-    provides [processString]
+    provides { processString: "processString" }
 
 processString : Str -> Str
