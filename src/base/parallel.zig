@@ -72,7 +72,7 @@ fn workerThread(comptime T: type, ctx: WorkerContext(T)) void {
 ///
 /// fn processItem(allocator: Allocator, item: MyWorkItem) bool {
 ///     // Process the work item
-///     std.log.info("processing {s}", .{item.path});
+///     std.log.debug("processing {s}", .{item.path});
 ///     return true; // or false on failure
 /// }
 ///

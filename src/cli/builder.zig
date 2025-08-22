@@ -255,10 +255,10 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
 
     const externs = llvm_externs;
 
-    std.log.info("Compiling bitcode to object file", .{});
-    std.log.info("Input: {s} -> Output: {s}", .{ config.input_path, config.output_path });
-    std.log.info("Target: {} ({s})", .{ config.target, config.target.toTriple() });
-    std.log.info("Optimization: {}", .{config.optimization});
+    std.log.debug("Compiling bitcode to object file", .{});
+    std.log.debug("Input: {s} -> Output: {s}", .{ config.input_path, config.output_path });
+    std.log.debug("Target: {} ({s})", .{ config.target, config.target.toTriple() });
+    std.log.debug("Optimization: {}", .{config.optimization});
 
     // 1. Initialize LLVM targets (safe to call multiple times)
     initializeLLVM();
@@ -291,7 +291,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
     const target_triple_z = try gpa.dupeZ(u8, target_triple);
     defer gpa.free(target_triple_z);
 
-    std.log.info("Using target triple: {s}", .{target_triple});
+    std.log.debug("Using target triple: {s}", .{target_triple});
     externs.LLVMSetTarget(module, target_triple_z.ptr);
 
     // 5. Create target
@@ -352,7 +352,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
         return false;
     }
 
-    std.log.info("Successfully compiled bitcode to object file", .{});
+    std.log.debug("Successfully compiled bitcode to object file", .{});
     return true;
 }
 

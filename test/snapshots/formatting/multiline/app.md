@@ -14,9 +14,29 @@ app [
 }
 ~~~
 # EXPECTED
-NIL
+EXPOSED BUT NOT DEFINED - app.md:3:2:3:5
+EXPOSED BUT NOT DEFINED - app.md:2:2:2:5
 # PROBLEMS
-NIL
+**EXPOSED BUT NOT DEFINED**
+The module header says that `a2!` is exposed, but it is not defined anywhere in this module.
+
+**app.md:3:2:3:5:**
+```roc
+	a2!,
+```
+	^^^
+You can fix this by either defining `a2!` in this module, or by removing it from the list of exposed values.
+
+**EXPOSED BUT NOT DEFINED**
+The module header says that `a1!` is exposed, but it is not defined anywhere in this module.
+
+**app.md:2:2:2:5:**
+```roc
+	a1!,
+```
+	^^^
+You can fix this by either defining `a1!` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),

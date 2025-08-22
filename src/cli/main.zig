@@ -1181,7 +1181,8 @@ pub fn resolvePlatformPaths(gpa: std.mem.Allocator, roc_file_path: []const u8) (
                         }
 
                         // Try to resolve platform to a local host library and source
-                        return resolvePlatformSpecToPaths(gpa, platform_spec);
+                        const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
+                        return resolvePlatformSpecToPaths(gpa, platform_spec, app_dir);
                     }
                 }
             }
