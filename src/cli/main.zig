@@ -161,6 +161,7 @@ const windows = if (is_windows) struct {
         lpProcessInformation: *PROCESS_INFORMATION,
     ) BOOL;
     extern "kernel32" fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) DWORD;
+    extern "kernel32" fn GetExitCodeProcess(hProcess: HANDLE, lpExitCode: *DWORD) BOOL;
 
     const HANDLE_FLAG_INHERIT = 0x00000001;
     const INFINITE = 0xFFFFFFFF;
@@ -395,15 +396,15 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
         .format => |format_args| rocFormat(gpa, arena, format_args),
         .test_cmd => |test_args| rocTest(gpa, test_args),
         .repl => rocRepl(gpa),
-        .version => stdout.print("Roc compiler version {s}\n", .{build_options.compiler_version}),
+        .version => stdout.print("Roc compiler version {s}", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(gpa, docs_args),
         .help => |help_message| stdout.writeAll(help_message),
         .licenses => stdout.writeAll(legalDetailsFileContent),
         .problem => |problem| {
             try switch (problem) {
-                .missing_flag_value => |details| stderr.print("Error: no value was supplied for {s}\n", .{details.flag}),
-                .unexpected_argument => |details| stderr.print("Error: roc {s} received an unexpected argument: `{s}`\n", .{ details.cmd, details.arg }),
-                .invalid_flag_value => |details| stderr.print("Error: `{s}` is not a valid value for {s}. The valid options are {s}\n", .{ details.value, details.flag, details.valid_options }),
+                .missing_flag_value => |details| stderr.print("Error: no value was supplied for {s}", .{details.flag}),
+                .unexpected_argument => |details| stderr.print("Error: roc {s} received an unexpected argument: `{s}`", .{ details.cmd, details.arg }),
+                .invalid_flag_value => |details| stderr.print("Error: `{s}` is not a valid value for {s}. The valid options are {s}", .{ details.value, details.flag, details.valid_options }),
             };
             std.process.exit(1);
         },
@@ -521,12 +522,12 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
     // Create cache directory for linked interpreter executables
     const cache_dir = cache_manager.config.getCacheEntriesDir(gpa) catch |err| {
-        std.log.err("Failed to get cache directory: {}\n", .{err});
+        std.log.err("Failed to get cache directory: {}", .{err});
         std.process.exit(1);
     };
     defer gpa.free(cache_dir);
     const exe_cache_dir = std.fs.path.join(gpa, &.{ cache_dir, "executables" }) catch |err| {
-        std.log.err("Failed to create executable cache path: {}\n", .{err});
+        std.log.err("Failed to create executable cache path: {}", .{err});
         std.process.exit(1);
     };
     defer gpa.free(exe_cache_dir);
@@ -534,7 +535,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     std.fs.cwd().makePath(exe_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => {
-            std.log.err("Failed to create cache directory: {}\n", .{err});
+            std.log.err("Failed to create cache directory: {}", .{err});
             std.process.exit(1);
         },
     };
@@ -542,20 +543,20 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     // Generate executable name based on the roc file path
     // TODO use something more interesting like a hash from the platform.main or platform/host.a etc
     const exe_name = std.fmt.allocPrint(gpa, "roc_run_{}", .{std.hash.crc.Crc32.hash(args.path)}) catch |err| {
-        std.log.err("Failed to generate executable name: {}\n", .{err});
+        std.log.err("Failed to generate executable name: {}", .{err});
         std.process.exit(1);
     };
     defer gpa.free(exe_name);
 
     const exe_path = std.fs.path.join(gpa, &.{ exe_cache_dir, exe_name }) catch |err| {
-        std.log.err("Failed to create executable path: {}\n", .{err});
+        std.log.err("Failed to create executable path: {}", .{err});
         std.process.exit(1);
     };
     defer gpa.free(exe_path);
 
     // First, parse the app file to get the platform reference
     const platform_spec = extractPlatformSpecFromApp(gpa, args.path) catch |err| {
-        std.log.err("Failed to extract platform spec from app file: {}\n", .{err});
+        std.log.err("Failed to extract platform spec from app file: {}", .{err});
         std.process.exit(1);
     };
     defer gpa.free(platform_spec);
@@ -563,7 +564,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     // Resolve platform paths from the platform spec (relative to app file directory)
     const app_dir = std.fs.path.dirname(args.path) orelse ".";
     const platform_paths = resolvePlatformSpecToPaths(gpa, platform_spec, app_dir) catch |err| {
-        std.log.err("Failed to resolve platform spec '{s}': {}\n", .{ platform_spec, err });
+        std.log.err("Failed to resolve platform spec '{s}': {}", .{ platform_spec, err });
         std.process.exit(1);
     };
     defer platform_paths.deinit(gpa);
@@ -579,11 +580,11 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
     if (platform_paths.platform_source_path) |platform_source| {
         extractEntrypointsFromPlatform(gpa, platform_source, &entrypoints) catch |err| {
-            std.log.err("Failed to extract entrypoints from platform header: {}\n", .{err});
+            std.log.err("Failed to extract entrypoints from platform header: {}", .{err});
             std.process.exit(1);
         };
     } else {
-        std.log.err("No platform source file found for entrypoint extraction\n", .{});
+        std.log.err("No platform source file found for entrypoint extraction", .{});
         std.process.exit(1);
     }
 
@@ -600,7 +601,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         // Check for cached shim library, extract if not present
         const shim_filename = if (builtin.target.os.tag == .windows) "roc_shim.lib" else "libroc_shim.a";
         const shim_path = std.fs.path.join(gpa, &.{ exe_cache_dir, shim_filename }) catch |err| {
-            std.log.err("Failed to create shim library path: {}\n", .{err});
+            std.log.err("Failed to create shim library path: {}", .{err});
             std.process.exit(1);
         };
         defer gpa.free(shim_path);
@@ -616,7 +617,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         if (!shim_exists) {
             // Shim not found in cache or cache disabled, extract it
             extractReadRocFilePathShimLibrary(gpa, shim_path) catch |err| {
-                std.log.err("Failed to extract read roc file path shim library: {}\n", .{err});
+                std.log.err("Failed to extract read roc file path shim library: {}", .{err});
                 std.process.exit(1);
             };
         }
@@ -624,7 +625,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         // Generate platform host shim using the detected entrypoints
 
         const platform_shim_path = generatePlatformHostShim(gpa, exe_cache_dir, entrypoints.items) catch |err| {
-            std.log.err("Failed to generate platform host shim: {}\n", .{err});
+            std.log.err("Failed to generate platform host shim: {}", .{err});
             std.process.exit(1);
         };
         defer if (platform_shim_path) |path| gpa.free(path);
@@ -637,7 +638,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         // Add system libraries for macOS
         if (builtin.target.os.tag == .macos) {
             extra_args.append("-lSystem") catch {
-                std.log.err("Failed to allocate memory for linker args\n", .{});
+                std.log.err("Failed to allocate memory for linker args", .{});
                 std.process.exit(1);
             };
         }
@@ -646,16 +647,16 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         var object_files = std.ArrayList([]const u8).init(gpa);
         defer object_files.deinit();
         object_files.append(platform_paths.host_lib_path) catch {
-            std.log.err("Failed to add host path to object files\n", .{});
+            std.log.err("Failed to add host path to object files", .{});
             std.process.exit(1);
         };
         object_files.append(shim_path) catch {
-            std.log.err("Failed to add shim path to object files\n", .{});
+            std.log.err("Failed to add shim path to object files", .{});
             std.process.exit(1);
         };
         if (platform_shim_path) |path| {
             object_files.append(path) catch {
-                std.log.err("Failed to add platform shim path to object files\n", .{});
+                std.log.err("Failed to add platform shim path to object files", .{});
                 std.process.exit(1);
             };
         }
@@ -675,38 +676,40 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
                     .allocator = gpa,
                     .argv = &.{ "clang", "-o", exe_path, platform_paths.host_lib_path, shim_path },
                 }) catch |clang_err| {
-                    std.log.err("Failed to link executable with both LLD and clang: LLD unavailable, clang error: {}\n", .{clang_err});
+                    std.log.err("Failed to link executable with both LLD and clang: LLD unavailable, clang error: {}", .{clang_err});
                     std.process.exit(1);
                 };
                 defer gpa.free(link_result.stdout);
                 defer gpa.free(link_result.stderr);
                 if (link_result.term.Exited != 0) {
-                    std.log.err("Linker failed with exit code: {}\n", .{link_result.term.Exited});
+                    std.log.err("Linker failed with exit code: {}", .{link_result.term.Exited});
                     if (link_result.stderr.len > 0) {
-                        std.log.err("Linker stderr: {s}\n", .{link_result.stderr});
+                        std.log.err("Linker stderr: {s}", .{link_result.stderr});
                     }
                     if (link_result.stdout.len > 0) {
-                        std.log.err("Linker stdout: {s}\n", .{link_result.stdout});
+                        std.log.err("Linker stdout: {s}", .{link_result.stdout});
                     }
                     std.process.exit(1);
                 }
             },
             linker.LinkError.LinkFailed => {
-                std.log.err("LLD linker failed to create executable\n", .{});
+                std.log.err("LLD linker failed to create executable", .{});
                 std.process.exit(1);
             },
             else => {
-                std.log.err("Failed to link executable: {}\n", .{err});
+                std.log.err("Failed to link executable: {}", .{err});
                 std.process.exit(1);
             },
         };
     }
 
     // Set up shared memory with ModuleEnv
+    std.log.debug("Setting up shared memory for Roc file: {s}", .{args.path});
     const shm_handle = setupSharedMemoryWithModuleEnv(gpa, args.path) catch |err| {
-        std.log.err("Failed to set up shared memory with ModuleEnv: {}\n", .{err});
+        std.log.err("Failed to set up shared memory with ModuleEnv: {}", .{err});
         std.process.exit(1);
     };
+    std.log.debug("Shared memory setup complete, size: {} bytes", .{shm_handle.size});
 
     // Ensure we clean up shared memory resources on all exit paths
     defer {
@@ -719,26 +722,30 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         }
     }
 
+    std.log.debug("Launching interpreter executable: {s}", .{exe_path});
     if (comptime is_windows) {
         // Windows: Use handle inheritance approach
+        std.log.debug("Using Windows handle inheritance approach", .{});
         runWithWindowsHandleInheritance(gpa, exe_path, shm_handle) catch |err| {
-            std.log.err("Failed to run with Windows handle inheritance: {}\n", .{err});
+            std.log.err("Failed to run with Windows handle inheritance: {}", .{err});
             std.process.exit(1);
         };
     } else {
         // POSIX: Use existing file descriptor inheritance approach
+        std.log.debug("Using POSIX file descriptor inheritance approach", .{});
         runWithPosixFdInheritance(gpa, exe_path, shm_handle, &cache_manager) catch |err| {
-            std.log.err("Failed to run with POSIX fd inheritance: {}\n", .{err});
+            std.log.err("Failed to run with POSIX fd inheritance: {}", .{err});
             std.process.exit(1);
         };
     }
+    std.log.debug("Interpreter execution completed", .{});
 }
 
 /// Run child process using Windows handle inheritance (idiomatic Windows approach)
 fn runWithWindowsHandleInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: SharedMemoryHandle) !void {
     // Make the shared memory handle inheritable
     if (windows.SetHandleInformation(@ptrCast(shm_handle.fd), windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT) == 0) {
-        std.log.err("Failed to set handle as inheritable\n", .{});
+        std.log.err("Failed to set handle as inheritable", .{});
         return error.HandleInheritanceFailed;
     }
 
@@ -781,28 +788,56 @@ fn runWithWindowsHandleInheritance(gpa: Allocator, exe_path: []const u8, shm_han
     );
 
     if (success == 0) {
-        std.log.err("CreateProcessW failed\n", .{});
+        std.log.err("CreateProcessW failed", .{});
         return error.ProcessCreationFailed;
     }
 
     // Child process spawned successfully
 
     // Wait for the child process to complete
+    std.log.debug("Waiting for child process to complete: {s}", .{exe_path});
     const wait_result = windows.WaitForSingleObject(process_info.hProcess, windows.INFINITE);
     if (wait_result != 0) { // WAIT_OBJECT_0 = 0
-        std.log.err("WaitForSingleObject failed or timed out\n", .{});
+        std.log.err("WaitForSingleObject failed or timed out (result: {})", .{wait_result});
+        // Clean up handles before returning
+        _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
+        _ = ipc.platform.windows.CloseHandle(process_info.hThread);
+        return error.ProcessWaitFailed;
+    }
+
+    // Get the exit code
+    var exit_code: windows.DWORD = undefined;
+    if (windows.GetExitCodeProcess(process_info.hProcess, &exit_code) == 0) {
+        std.log.err("Failed to get exit code for child process", .{});
+        // Clean up handles before returning
+        _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
+        _ = ipc.platform.windows.CloseHandle(process_info.hThread);
+        return error.ProcessExitCodeFailed;
     }
 
     // Clean up process handles
     _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
     _ = ipc.platform.windows.CloseHandle(process_info.hThread);
+
+    // Check exit code
+    if (exit_code != 0) {
+        std.log.err("Child process {s} exited with code: {}", .{ exe_path, exit_code });
+        if (exit_code == 0xC0000005) { // STATUS_ACCESS_VIOLATION
+            std.log.err("Child process crashed with access violation (segfault)", .{});
+        } else if (exit_code >= 0xC0000000) { // NT status codes for exceptions
+            std.log.err("Child process crashed with exception code: 0x{X}", .{exit_code});
+        }
+        return error.ProcessExitedWithError;
+    }
+
+    std.log.debug("Child process completed successfully", .{});
 }
 
 /// Run child process using POSIX file descriptor inheritance (existing approach for Unix)
 fn runWithPosixFdInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: SharedMemoryHandle, cache_manager: *CacheManager) !void {
     // Get cache directory for temporary files
     const temp_cache_dir = cache_manager.config.getTempDir(gpa) catch |err| {
-        std.log.err("Failed to get temp cache directory: {}\n", .{err});
+        std.log.err("Failed to get temp cache directory: {}", .{err});
         return err;
     };
     defer gpa.free(temp_cache_dir);
@@ -811,36 +846,38 @@ fn runWithPosixFdInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: S
     std.fs.cwd().makePath(temp_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => {
-            std.log.err("Failed to create temp cache directory: {}\n", .{err});
+            std.log.err("Failed to create temp cache directory: {}", .{err});
             return err;
         },
     };
 
     // Create temporary directory structure for fd communication
+    std.log.debug("Creating temporary directory structure for fd communication", .{});
     const temp_exe_path = createTempDirStructure(gpa, exe_path, shm_handle, temp_cache_dir) catch |err| {
-        std.log.err("Failed to create temp dir structure: {}\n", .{err});
+        std.log.err("Failed to create temp dir structure: {}", .{err});
         return err;
     };
     defer gpa.free(temp_exe_path);
+    std.log.debug("Temporary executable created at: {s}", .{temp_exe_path});
 
     // Configure fd inheritance
     var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
     if (flags < 0) {
-        std.log.err("Failed to get fd flags: {}\n", .{c._errno().*});
+        std.log.err("Failed to get fd flags: {}", .{c._errno().*});
         return error.FdConfigFailed;
     }
 
     flags &= ~@as(c_int, posix.FD_CLOEXEC);
 
     if (posix.fcntl(shm_handle.fd, posix.F_SETFD, flags) < 0) {
-        std.log.err("Failed to set fd flags: {}\n", .{c._errno().*});
+        std.log.err("Failed to set fd flags: {}", .{c._errno().*});
         return error.FdConfigFailed;
     }
 
     // Run the interpreter as a child process from the temp directory
     var child = std.process.Child.init(&.{temp_exe_path}, gpa);
     child.cwd = std.fs.cwd().realpathAlloc(gpa, ".") catch |err| {
-        std.log.err("Failed to get current directory: {}\n", .{err});
+        std.log.err("Failed to get current directory: {}", .{err});
         return err;
     };
     defer gpa.free(child.cwd.?);
@@ -850,17 +887,50 @@ fn runWithPosixFdInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: S
     child.stderr_behavior = .Inherit;
 
     // Spawn the child process
+    std.log.debug("Spawning child process: {s}", .{temp_exe_path});
+    std.log.debug("Child process working directory: {s}", .{child.cwd.?});
     child.spawn() catch |err| {
-        std.log.err("Failed to spawn {s}: {}\n", .{ exe_path, err });
+        std.log.err("Failed to spawn {s}: {}", .{ temp_exe_path, err });
         return err;
     };
-    // Child process spawned successfully
+    std.log.debug("Child process spawned successfully (PID: {})", .{child.id});
 
     // Wait for child to complete
-    _ = child.wait() catch |err| {
-        std.log.err("Failed waiting for child process: {}\n", .{err});
+    const term = child.wait() catch |err| {
+        std.log.err("Failed waiting for child process: {}", .{err});
         return err;
     };
+
+    // Check the termination status
+    switch (term) {
+        .Exited => |exit_code| {
+            if (exit_code == 0) {
+                std.log.debug("Child process completed successfully", .{});
+            } else {
+                std.log.err("Child process {s} exited with code: {}", .{ temp_exe_path, exit_code });
+                return error.ProcessExitedWithError;
+            }
+        },
+        .Signal => |signal| {
+            std.log.err("Child process {s} killed by signal: {}", .{ temp_exe_path, signal });
+            if (signal == 11) { // SIGSEGV
+                std.log.err("Child process crashed with segmentation fault (SIGSEGV)", .{});
+            } else if (signal == 6) { // SIGABRT
+                std.log.err("Child process aborted (SIGABRT)", .{});
+            } else if (signal == 9) { // SIGKILL
+                std.log.err("Child process was killed (SIGKILL)", .{});
+            }
+            return error.ProcessKilledBySignal;
+        },
+        .Stopped => |signal| {
+            std.log.err("Child process {s} stopped by signal: {}", .{ temp_exe_path, signal });
+            return error.ProcessStopped;
+        },
+        .Unknown => |status| {
+            std.log.err("Child process {s} terminated with unknown status: {}", .{ temp_exe_path, status });
+            return error.ProcessUnknownTermination;
+        },
+    }
 }
 
 /// Handle for cross-platform shared memory operations.
@@ -895,7 +965,7 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
         @intCast(total_size),
         null, // Anonymous - no name needed for handle inheritance
     ) orelse {
-        std.log.err("Failed to create shared memory mapping\n", .{});
+        std.log.err("Failed to create shared memory mapping", .{});
         return error.SharedMemoryCreateFailed;
     };
 
@@ -961,7 +1031,7 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
 
     // Read the actual Roc file
     const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| {
-        std.log.err("Failed to open Roc file '{s}': {}\n", .{ roc_file_path, err });
+        std.log.err("Failed to open Roc file '{s}': {}", .{ roc_file_path, err });
         return error.FileNotFound;
     };
     defer roc_file.close();
@@ -997,7 +1067,7 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
 
     // Validation check - ensure exports were populated during canonicalization
     if (env.exports.span.len == 0) {
-        std.log.err("No exported definitions found after canonicalization\n", .{});
+        std.log.err("No exported definitions found after canonicalization", .{});
         return error.NoMainFunction;
     }
 
@@ -1515,7 +1585,7 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     // Check that all files exist and collect their sizes
     for (paths_to_use) |path| {
         const file = cwd.openFile(path, .{}) catch |err| {
-            try stderr.print("Error: Could not open file '{s}': {}\n", .{ path, err });
+            try stderr.print("Error: Could not open file '{s}': {}", .{ path, err });
             return err;
         };
         defer file.close();
@@ -1597,8 +1667,8 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
         &error_ctx,
     ) catch |err| {
         if (err == error.InvalidPath) {
-            try stderr.print("Error: Invalid file path - {s}\n", .{formatBundlePathValidationReason(error_ctx.reason)});
-            try stderr.print("Path: {s}\n", .{error_ctx.path});
+            try stderr.print("Error: Invalid file path - {s}", .{formatBundlePathValidationReason(error_ctx.reason)});
+            try stderr.print("Path: {s}", .{error_ctx.path});
         }
         return err;
     };
@@ -1624,11 +1694,11 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     // No need to free when using arena allocator
 
     // Print results
-    try stdout.print("Created: {s}\n", .{display_path});
-    try stdout.print("Compressed size: {} bytes\n", .{compressed_size});
-    try stdout.print("Uncompressed size: {} bytes\n", .{uncompressed_size});
-    try stdout.print("Compression ratio: {d:.2}:1\n", .{@as(f64, @floatFromInt(uncompressed_size)) / @as(f64, @floatFromInt(compressed_size))});
-    try stdout.print("Time: {} ms\n", .{elapsed_ms});
+    try stdout.print("Created: {s}", .{display_path});
+    try stdout.print("Compressed size: {} bytes", .{compressed_size});
+    try stdout.print("Uncompressed size: {} bytes", .{uncompressed_size});
+    try stdout.print("Compression ratio: {d:.2}:1", .{@as(f64, @floatFromInt(uncompressed_size)) / @as(f64, @floatFromInt(compressed_size))});
+    try stdout.print("Time: {} ms", .{elapsed_ms});
 }
 
 fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
@@ -1646,7 +1716,7 @@ fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
         if (std.mem.endsWith(u8, basename, ".tar.zst")) {
             dir_name = basename[0 .. basename.len - 8];
         } else {
-            try stderr.print("Error: {s} is not a .tar.zst file\n", .{archive_path});
+            try stderr.print("Error: {s} is not a .tar.zst file", .{archive_path});
             had_errors = true;
             continue;
         }
@@ -1660,7 +1730,7 @@ fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
         };
 
         if (cwd.openDir(dir_name, .{})) |_| {
-            try stderr.print("Error: Directory {s} already exists\n", .{dir_name});
+            try stderr.print("Error: Directory {s} already exists", .{dir_name});
             had_errors = true;
             continue;
         } else |_| {
@@ -1673,7 +1743,7 @@ fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
 
         // Open the archive file
         const archive_file = cwd.openFile(archive_path, .{}) catch |err| {
-            try stderr.print("Error opening {s}: {s}\n", .{ archive_path, @errorName(err) });
+            try stderr.print("Error opening {s}: {s}", .{ archive_path, @errorName(err) });
             had_errors = true;
             continue;
         };
@@ -1690,28 +1760,28 @@ fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
         ) catch |err| {
             switch (err) {
                 error.HashMismatch => {
-                    try stderr.print("Error: Hash mismatch for {s} - file may be corrupted\n", .{archive_path});
+                    try stderr.print("Error: Hash mismatch for {s} - file may be corrupted", .{archive_path});
                     had_errors = true;
                 },
                 error.InvalidFilename => {
-                    try stderr.print("Error: Invalid filename format for {s}\n", .{archive_path});
+                    try stderr.print("Error: Invalid filename format for {s}", .{archive_path});
                     had_errors = true;
                 },
                 error.InvalidPath => {
-                    try stderr.print("Error: Invalid path in archive - {s}\n", .{formatUnbundlePathValidationReason(error_ctx.reason)});
-                    try stderr.print("Path: {s}\n", .{error_ctx.path});
-                    try stderr.print("Archive: {s}\n", .{archive_path});
+                    try stderr.print("Error: Invalid path in archive - {s}", .{formatUnbundlePathValidationReason(error_ctx.reason)});
+                    try stderr.print("Path: {s}", .{error_ctx.path});
+                    try stderr.print("Archive: {s}", .{archive_path});
                     had_errors = true;
                 },
                 else => {
-                    try stderr.print("Error unbundling {s}: {s}\n", .{ archive_path, @errorName(err) });
+                    try stderr.print("Error unbundling {s}: {s}", .{ archive_path, @errorName(err) });
                     had_errors = true;
                 },
             }
             continue; // Skip success message on error
         };
 
-        try stdout.print("Extracted: {s}\n", .{dir_name});
+        try stdout.print("Extracted: {s}", .{dir_name});
     }
 
     if (had_errors) {
@@ -1867,7 +1937,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
 
     // Read the Roc file
     const source = std.fs.cwd().readFileAlloc(gpa, args.path, std.math.maxInt(usize)) catch |err| {
-        try stderr.print("Failed to read file '{s}': {}\n", .{ args.path, err });
+        try stderr.print("Failed to read file '{s}': {}", .{ args.path, err });
         std.process.exit(1);
     };
     defer gpa.free(source);
@@ -1879,7 +1949,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
 
     // Create ModuleEnv
     var env = ModuleEnv.init(gpa, source) catch |err| {
-        try stderr.print("Failed to initialize module environment: {}\n", .{err});
+        try stderr.print("Failed to initialize module environment: {}", .{err});
         std.process.exit(1);
     };
     defer env.deinit();
@@ -1890,7 +1960,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
 
     // Parse the source code as a full module
     var parse_ast = parse.parse(&env.common, gpa) catch |err| {
-        try stderr.print("Failed to parse file: {}\n", .{err});
+        try stderr.print("Failed to parse file: {}", .{err});
         std.process.exit(1);
     };
     defer parse_ast.deinit(gpa);
@@ -1903,26 +1973,26 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
 
     // Create canonicalizer
     var canonicalizer = Can.init(&env, &parse_ast, null) catch |err| {
-        try stderr.print("Failed to initialize canonicalizer: {}\n", .{err});
+        try stderr.print("Failed to initialize canonicalizer: {}", .{err});
         std.process.exit(1);
     };
     defer canonicalizer.deinit();
 
     // Canonicalize the entire module
     canonicalizer.canonicalizeFile() catch |err| {
-        try stderr.print("Failed to canonicalize file: {}\n", .{err});
+        try stderr.print("Failed to canonicalize file: {}", .{err});
         std.process.exit(1);
     };
 
     // Type check the module
     var checker = Check.init(gpa, &env.types, &env, &.{}, &env.store.regions) catch |err| {
-        try stderr.print("Failed to initialize type checker: {}\n", .{err});
+        try stderr.print("Failed to initialize type checker: {}", .{err});
         std.process.exit(1);
     };
     defer checker.deinit();
 
     checker.checkDefs() catch |err| {
-        try stderr.print("Type checking failed: {}\n", .{err});
+        try stderr.print("Type checking failed: {}", .{err});
         std.process.exit(1);
     };
 
@@ -1943,19 +2013,19 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     }
 
     if (expects.items.len == 0) {
-        try stdout.print("No tests found in {s}\n", .{args.path});
+        try stdout.print("No tests found in {s}", .{args.path});
         return;
     }
 
     // Create interpreter infrastructure for test evaluation
     var stack_memory = eval.Stack.initCapacity(gpa, 1024) catch |err| {
-        try stderr.print("Failed to create stack memory: {}\n", .{err});
+        try stderr.print("Failed to create stack memory: {}", .{err});
         std.process.exit(1);
     };
     defer stack_memory.deinit();
 
     var layout_cache = LayoutStore.init(&env, &env.types) catch |err| {
-        try stderr.print("Failed to create layout cache: {}\n", .{err});
+        try stderr.print("Failed to create layout cache: {}", .{err});
         std.process.exit(1);
     };
     defer layout_cache.deinit();
@@ -1964,7 +2034,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     defer test_env.deinit();
 
     var interpreter = Interpreter.init(gpa, &env, &stack_memory, &layout_cache, &env.types) catch |err| {
-        try stderr.print("Failed to create interpreter: {}\n", .{err});
+        try stderr.print("Failed to create interpreter: {}", .{err});
         std.process.exit(1);
     };
     defer interpreter.deinit(test_env.get_ops());
@@ -2029,26 +2099,26 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     if (failed == 0) {
         // Success case: only print if verbose, exit with 0
         if (args.verbose) {
-            try stdout.print("Ran {} test(s): {} passed, 0 failed in {d:.1}ms\n", .{ passed, passed, elapsed_ms });
+            try stdout.print("Ran {} test(s): {} passed, 0 failed in {d:.1}ms", .{ passed, passed, elapsed_ms });
             for (test_results.items) |test_result| {
-                try stdout.print("PASS: line {}\n", .{test_result.line_number});
+                try stdout.print("PASS: line {}", .{test_result.line_number});
             }
         }
         // Otherwise print nothing at all
         return; // Exit with 0
     } else {
         // Failure case: always print summary with timing
-        try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms\n", .{ passed + failed, passed, failed, elapsed_ms });
+        try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms", .{ passed + failed, passed, failed, elapsed_ms });
 
         if (args.verbose) {
             for (test_results.items) |test_result| {
                 if (test_result.passed) {
-                    try stderr.print("PASS: line {}\n", .{test_result.line_number});
+                    try stderr.print("PASS: line {}", .{test_result.line_number});
                 } else {
                     if (test_result.error_msg) |msg| {
-                        try stderr.print("FAIL: line {} - {s}\n", .{ test_result.line_number, msg });
+                        try stderr.print("FAIL: line {} - {s}", .{ test_result.line_number, msg });
                     } else {
-                        try stderr.print("FAIL: line {}\n", .{test_result.line_number});
+                        try stderr.print("FAIL: line {}", .{test_result.line_number});
                     }
                 }
             }
@@ -2095,17 +2165,17 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
 
         elapsed = timer.read();
         if (unformatted_files.items.len > 0) {
-            try stdout.writer().print("The following file(s) failed `roc format --check`:\n", .{});
+            try stdout.writer().print("The following file(s) failed `roc format --check`:", .{});
             for (unformatted_files.items) |file_name| {
-                try stdout.writer().print("    {s}\n", .{file_name});
+                try stdout.writer().print("    {s}", .{file_name});
             }
-            try stdout.writer().print("You can fix this with `roc format FILENAME.roc`.\n", .{});
+            try stdout.writer().print("You can fix this with `roc format FILENAME.roc`.", .{});
             exit_code = 1;
         } else {
-            try stdout.writer().print("All formatting valid\n", .{});
+            try stdout.writer().print("All formatting valid", .{});
         }
         if (failure_count > 0) {
-            try stdout.writer().print("Failed to check {} files.\n", .{failure_count});
+            try stdout.writer().print("Failed to check {} files.", .{failure_count});
             exit_code = 1;
         }
     } else {
@@ -2116,16 +2186,16 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
             failure_count += result.failure;
         }
         elapsed = timer.read();
-        try stdout.writer().print("Successfully formatted {} files\n", .{success_count});
+        try stdout.writer().print("Successfully formatted {} files", .{success_count});
         if (failure_count > 0) {
-            try stdout.writer().print("Failed to format {} files.\n", .{failure_count});
+            try stdout.writer().print("Failed to format {} files.", .{failure_count});
             exit_code = 1;
         }
     }
 
     try stdout.writer().print("Took ", .{});
     try formatElapsedTime(stdout.writer(), elapsed);
-    try stdout.writer().print(".\n", .{});
+    try stdout.writer().print(".", .{});
 
     std.process.exit(exit_code);
 }
@@ -2140,18 +2210,18 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) noret
     stderr.print("Failed to check {s}: ", .{path}) catch {};
     switch (err) {
         // Custom BuildEnv errors - these need special messages
-        error.ExpectedAppHeader => stderr.print("Expected app header but found different header type\n", .{}) catch {},
-        error.ExpectedPlatformString => stderr.print("Expected platform string in header\n", .{}) catch {},
-        error.PathOutsideWorkspace => stderr.print("Dependency path outside workspace not allowed\n", .{}) catch {},
-        error.UnsupportedHeader => stderr.print("Unsupported header type\n", .{}) catch {},
-        error.ExpectedString => stderr.print("Expected string in header\n", .{}) catch {},
-        error.Internal => stderr.print("Internal compiler error\n", .{}) catch {},
-        error.InvalidDependency => stderr.print("Invalid dependency relationship\n", .{}) catch {},
-        error.TooNested => stderr.print("Too deeply nested\n", .{}) catch {},
-        error.InvalidPackageName => stderr.print("Invalid package name\n", .{}) catch {},
+        error.ExpectedAppHeader => stderr.print("Expected app header but found different header type", .{}) catch {},
+        error.ExpectedPlatformString => stderr.print("Expected platform string in header", .{}) catch {},
+        error.PathOutsideWorkspace => stderr.print("Dependency path outside workspace not allowed", .{}) catch {},
+        error.UnsupportedHeader => stderr.print("Unsupported header type", .{}) catch {},
+        error.ExpectedString => stderr.print("Expected string in header", .{}) catch {},
+        error.Internal => stderr.print("Internal compiler error", .{}) catch {},
+        error.InvalidDependency => stderr.print("Invalid dependency relationship", .{}) catch {},
+        error.TooNested => stderr.print("Too deeply nested", .{}) catch {},
+        error.InvalidPackageName => stderr.print("Invalid package name", .{}) catch {},
 
         // Catch-all for any other errors
-        else => stderr.print("{s}\n", .{@errorName(err)}) catch {},
+        else => stderr.print("{s}", .{@errorName(err)}) catch {},
     }
     std.process.exit(1);
 }
@@ -2328,12 +2398,12 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
                 total_warnings,
             }) catch {};
             formatElapsedTime(stderr, elapsed) catch {};
-            stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).\n", .{args.path}) catch {};
+            stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).", .{args.path}) catch {};
             std.process.exit(1);
         } else {
             stdout.print("No errors found in ", .{}) catch {};
             formatElapsedTime(stdout, elapsed) catch {};
-            stdout.print(" for {s} (loaded from cache)\n", .{args.path}) catch {};
+            stdout.print(" for {s} (loaded from cache)", .{args.path}) catch {};
         }
     } else {
         // For fresh compilation, process and display reports normally
@@ -2345,9 +2415,9 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
                 // Render the diagnostic report to stderr
                 reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
-                    stderr.print("Error rendering diagnostic report: {}\n", .{render_err}) catch {};
+                    stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
                     // Fallback to just printing the title
-                    stderr.print("  {s}\n", .{report.title}) catch {};
+                    stderr.print("  {s}", .{report.title}) catch {};
                 };
 
                 if (report.severity == .fatal or report.severity == .runtime_error) {
@@ -2363,13 +2433,13 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
                 check_result.warning_count,
             }) catch {};
             formatElapsedTime(stderr, elapsed) catch {};
-            stderr.print(" for {s}.\n", .{args.path}) catch {};
+            stderr.print(" for {s}.", .{args.path}) catch {};
 
             std.process.exit(1);
         } else {
             stdout.print("No errors found in ", .{}) catch {};
             formatElapsedTime(stdout, elapsed) catch {};
-            stdout.print(" for {s}\n", .{args.path}) catch {};
+            stdout.print(" for {s}", .{args.path}) catch {};
         }
     }
 
@@ -2381,22 +2451,22 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
 fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
     if (timing) |t| {
-        writer.print("\nTiming breakdown:\n", .{}) catch {};
+        writer.print("\nTiming breakdown:", .{}) catch {};
         writer.print("  tokenize + parse:             ", .{}) catch {};
         formatElapsedTime(writer, t.tokenize_parse_ns) catch {};
-        writer.print("  ({} ns)\n", .{t.tokenize_parse_ns}) catch {};
+        writer.print("  ({} ns)", .{t.tokenize_parse_ns}) catch {};
         writer.print("  canonicalize:                 ", .{}) catch {};
         formatElapsedTime(writer, t.canonicalize_ns) catch {};
-        writer.print("  ({} ns)\n", .{t.canonicalize_ns}) catch {};
+        writer.print("  ({} ns)", .{t.canonicalize_ns}) catch {};
         writer.print("  can diagnostics:              ", .{}) catch {};
         formatElapsedTime(writer, t.canonicalize_diagnostics_ns) catch {};
-        writer.print("  ({} ns)\n", .{t.canonicalize_diagnostics_ns}) catch {};
+        writer.print("  ({} ns)", .{t.canonicalize_diagnostics_ns}) catch {};
         writer.print("  type checking:                ", .{}) catch {};
         formatElapsedTime(writer, t.type_checking_ns) catch {};
-        writer.print("  ({} ns)\n", .{t.type_checking_ns}) catch {};
+        writer.print("  ({} ns)", .{t.type_checking_ns}) catch {};
         writer.print("  type checking diagnostics:    ", .{}) catch {};
         formatElapsedTime(writer, t.check_diagnostics_ns) catch {};
-        writer.print("  ({} ns)\n", .{t.check_diagnostics_ns}) catch {};
+        writer.print("  ({} ns)", .{t.check_diagnostics_ns}) catch {};
     }
 }
 
