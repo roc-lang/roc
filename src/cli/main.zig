@@ -943,18 +943,30 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
 
     const shm_allocator = shm.allocator();
 
-    // Allocate space for the offset value at the beginning
-    const offset_ptr = try shm_allocator.alloc(u64, 1);
-    // Also store the entry count (replaces old expr_idx_ptr for multi-entrypoint support)  
-    const entry_count_ptr = try shm_allocator.alloc(u32, 1);
+    // Create a properly aligned header structure
+    const Header = struct {
+        parent_base_addr: u64,
+        entry_count: u32,
+        _padding: u32, // Ensure 8-byte alignment
+        def_indices_offset: u64,
+        module_env_offset: u64,
+    };
+    
+    const header_ptr = try shm_allocator.create(Header);
+    std.log.debug("Allocated header at offset: {} (0x{x})", .{@intFromPtr(header_ptr) - @intFromPtr(shm.base_ptr), @intFromPtr(header_ptr) - @intFromPtr(shm.base_ptr)});
+    std.log.debug("Header address: 0x{x}, alignment: {}", .{@intFromPtr(header_ptr), @intFromPtr(header_ptr) % @alignOf(Header)});
 
     // Store the base address of the shared memory mapping (for ASLR-safe relocation)
     // The child will calculate the offset from its own base address
     const shm_base_addr = @intFromPtr(shm.base_ptr);
-    offset_ptr[0] = shm_base_addr;
+    header_ptr.parent_base_addr = shm_base_addr;
+    std.log.debug("Set parent_base_addr: 0x{x}", .{header_ptr.parent_base_addr});
 
-    // Allocate and store a pointer to the ModuleEnv
+    // Allocate the ModuleEnv right after the header for predictable layout
     const env_ptr = try shm_allocator.create(ModuleEnv);
+    const module_env_offset = @intFromPtr(env_ptr) - @intFromPtr(shm.base_ptr);
+    header_ptr.module_env_offset = module_env_offset;
+    std.log.debug("Allocated ModuleEnv at offset: {} (0x{x})", .{module_env_offset, module_env_offset});
 
     // Read the actual Roc file
     const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| {
@@ -1002,17 +1014,17 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     const exports_slice = env.store.sliceDefs(env.exports);
     
     // Store entry count based on exports
-    entry_count_ptr[0] = @intCast(exports_slice.len);
+    header_ptr.entry_count = @intCast(exports_slice.len);
+    std.log.debug("Set entry_count: {}", .{header_ptr.entry_count});
 
     // Allocate space for exported def indices array
     const def_indices_ptr = try shm_allocator.alloc(u32, exports_slice.len);
+    std.log.debug("Allocated def_indices array at offset: {} (0x{x})", .{@intFromPtr(def_indices_ptr.ptr) - @intFromPtr(shm.base_ptr), @intFromPtr(def_indices_ptr.ptr) - @intFromPtr(shm.base_ptr)});
     
-    // Store the def_indices location at a known offset for the interpreter
+    // Store the def_indices location in the header
     const def_indices_location = @intFromPtr(def_indices_ptr.ptr) - @intFromPtr(shm.base_ptr);
-    // Overwrite the entry_count with a structure containing both entry_count and def_indices_offset
-    // Layout: [parent_addr][entry_count][def_indices_offset]
-    const def_indices_offset_ptr = try shm_allocator.alloc(u64, 1);
-    def_indices_offset_ptr[0] = def_indices_location;
+    header_ptr.def_indices_offset = def_indices_location;
+    std.log.debug("Set def_indices_offset: {} (0x{x})", .{header_ptr.def_indices_offset, header_ptr.def_indices_offset});
 
     // Store definition index for each exported function
     for (exports_slice, 0..) |def_idx, i| {
