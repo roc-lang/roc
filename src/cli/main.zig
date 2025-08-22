@@ -595,7 +595,7 @@ fn compileWithEmbeddedLLVM(gpa: Allocator, bitcode_path: []const u8, object_path
 fn generatePlatformHostShim(gpa: Allocator, cache_dir: []const u8, entrypoint_name: []const u8) !?[]const u8 {
     // Check if LLVM is available (this is a compile-time check)
     if (!llvm_available) {
-        std.log.info("LLVM not available, skipping platform host shim generation");
+        std.log.info("LLVM not available, skipping platform host shim generation", .{});
         return null;
     }
 
