@@ -550,14 +550,11 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     };
     defer gpa.free(exe_path);
 
-    // Detect entrypoint name from the Roc file path - needed for both shim generation and shared memory
-    // For now, hardcode based on common test platform names
-    const entrypoint_name = if (std.mem.indexOf(u8, args.path, "test/str") != null)
-        "processString"
-    else if (std.mem.indexOf(u8, args.path, "test/int") != null)
-        "multiplyInts"
-    else
-        "main"; // default fallback
+    // Extract entrypoint from platform header
+    const entrypoint_name = extractEntrypointFromPlatform(gpa, args.path) catch |err| {
+        std.log.err("Failed to extract entrypoint from platform header: {}\n", .{err});
+        std.process.exit(1);
+    };
 
     // Check if the interpreter executable already exists (cached)
     const exe_exists = if (args.no_cache) false else blk: {
@@ -1179,6 +1176,54 @@ fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u
     };
 
     return try gpa.dupe(u8, platform_spec);
+}
+
+/// Extract entrypoint name from platform header provides record
+/// TODO: Replace this with proper BuildEnv solution in the future
+fn extractEntrypointFromPlatform(gpa: std.mem.Allocator, roc_file_path: []const u8) ![]const u8 {
+    // Read the Roc file
+    const source = std.fs.cwd().readFileAlloc(gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
+    defer gpa.free(source);
+
+    // Extract module name from the file path
+    const basename = std.fs.path.basename(roc_file_path);
+    const module_name = try gpa.dupe(u8, basename);
+    defer gpa.free(module_name);
+
+    // Create ModuleEnv
+    var env = ModuleEnv.init(gpa, source) catch return error.ParseFailed;
+    defer env.deinit();
+
+    env.common.source = source;
+    env.module_name = module_name;
+    try env.common.calcLineStarts(gpa);
+
+    // Parse the source code as a full module
+    var parse_ast = parse.parse(&env.common, gpa) catch return error.ParseFailed;
+    defer parse_ast.deinit(gpa);
+
+    // Look for platform header in the AST
+    const file_node = parse_ast.store.getFile();
+    const header = parse_ast.store.getHeader(file_node.header);
+
+    // Check if this is a platform file with a platform header
+    switch (header) {
+        .platform => |platform_header| {
+            // Get the provides collection and its record fields
+            const provides_coll = parse_ast.store.getCollection(platform_header.provides);
+            const provides_fields = parse_ast.store.recordFieldSlice(.{ .span = provides_coll.span });
+
+            // Return the first field name as the entrypoint
+            if (provides_fields.len > 0) {
+                const first_field = parse_ast.store.getRecordField(provides_fields[0]);
+                const field_name = parse_ast.resolve(first_field.name);
+                return try gpa.dupe(u8, field_name);
+            }
+
+            return error.NoEntrypointFound;
+        },
+        else => return error.NotPlatformFile,
+    }
 }
 
 /// Extract the embedded roc_shim library to the specified path

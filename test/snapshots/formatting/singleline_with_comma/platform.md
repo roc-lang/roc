@@ -10,7 +10,7 @@ platform "pf"
 	exposes [E1, E2,]
 	packages { pa1: "pa1", pa2: "pa2", }
 	# imports [I1.{ I11, I12, }, I2.{ I21, I22, },]
-	provides [pr1, pr2,]
+	provides { pr1: "not implemented", pr2: "not implemented", }
 ~~~
 # EXPECTED
 EXPOSED BUT NOT DEFINED - platform.md:3:11:3:13
@@ -42,12 +42,12 @@ KwPlatform(1:1-1:9),StringStart(1:10-1:11),StringPart(1:11-1:13),StringEnd(1:13-
 KwRequires(2:2-2:10),OpenCurly(2:11-2:12),UpperIdent(2:13-2:15),Comma(2:15-2:16),UpperIdent(2:17-2:19),Comma(2:19-2:20),CloseCurly(2:21-2:22),OpenCurly(2:23-2:24),LowerIdent(2:25-2:27),OpColon(2:28-2:29),UpperIdent(2:30-2:32),OpArrow(2:33-2:35),UpperIdent(2:36-2:38),Comma(2:38-2:39),LowerIdent(2:40-2:42),OpColon(2:43-2:44),UpperIdent(2:45-2:47),OpArrow(2:48-2:50),UpperIdent(2:51-2:53),Comma(2:53-2:54),CloseCurly(2:55-2:56),
 KwExposes(3:2-3:9),OpenSquare(3:10-3:11),UpperIdent(3:11-3:13),Comma(3:13-3:14),UpperIdent(3:15-3:17),Comma(3:17-3:18),CloseSquare(3:18-3:19),
 KwPackages(4:2-4:10),OpenCurly(4:11-4:12),LowerIdent(4:13-4:16),OpColon(4:16-4:17),StringStart(4:18-4:19),StringPart(4:19-4:22),StringEnd(4:22-4:23),Comma(4:23-4:24),LowerIdent(4:25-4:28),OpColon(4:28-4:29),StringStart(4:30-4:31),StringPart(4:31-4:34),StringEnd(4:34-4:35),Comma(4:35-4:36),CloseCurly(4:37-4:38),
-KwProvides(6:2-6:10),OpenSquare(6:11-6:12),LowerIdent(6:12-6:15),Comma(6:15-6:16),LowerIdent(6:17-6:20),Comma(6:20-6:21),CloseSquare(6:21-6:22),EndOfFile(6:22-6:22),
+KwProvides(6:2-6:10),OpenCurly(6:11-6:12),LowerIdent(6:13-6:16),OpColon(6:16-6:17),StringStart(6:18-6:19),StringPart(6:19-6:34),StringEnd(6:34-6:35),Comma(6:35-6:36),LowerIdent(6:37-6:40),OpColon(6:40-6:41),StringStart(6:42-6:43),StringPart(6:43-6:58),StringEnd(6:58-6:59),Comma(6:59-6:60),CloseCurly(6:61-6:62),EndOfFile(6:62-6:62),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.22
-	(platform @1.1-6.22 (name "pf")
+(file @1.1-6.62
+	(platform @1.1-6.62 (name "pf")
 		(rigids @2.11-2.22
 			(exposed-upper-ident @2.13-2.15 (text "R1"))
 			(exposed-upper-ident @2.17-2.19 (text "R2")))
@@ -70,11 +70,13 @@ KwProvides(6:2-6:10),OpenSquare(6:11-6:12),LowerIdent(6:12-6:15),Comma(6:15-6:16
 			(record-field @4.25-4.35 (name "pa2")
 				(e-string @4.30-4.35
 					(e-string-part @4.31-4.34 (raw "pa2")))))
-		(provides @6.11-6.22
-			(exposed-lower-ident @6.12-6.15
-				(text "pr1"))
-			(exposed-lower-ident @6.17-6.20
-				(text "pr2"))))
+		(provides @6.11-6.62
+			(record-field @6.13-6.35 (name "pr1")
+				(e-string @6.18-6.35
+					(e-string-part @6.19-6.34 (raw "not implemented"))))
+			(record-field @6.37-6.59 (name "pr2")
+				(e-string @6.42-6.59
+					(e-string-part @6.43-6.58 (raw "not implemented"))))))
 	(statements))
 ~~~
 # FORMATTED
@@ -96,10 +98,10 @@ platform "pf"
 		pa2: "pa2",
 	}
 	# imports [I1.{ I11, I12, }, I2.{ I21, I22, },]
-	provides [
-		pr1,
-		pr2,
-	]
+	provides {
+		pr1: "not implemented",
+		pr2: "not implemented",
+	}
 ~~~
 # CANONICALIZE
 ~~~clojure
