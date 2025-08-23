@@ -397,29 +397,33 @@ fn generateParseWithDiagnostics(allocator: std.mem.Allocator, source: []const u8
 
     // Try to parse
     var parse_error: bool = false;
+    var parse_result: ?AST2.Node.Idx = null;
     if (test_type == .file) {
-        _ = parser.parseFile() catch |err| {
+        if (parser.parseFile()) |result| {
+            parse_result = result;
+        } else |err| {
             try parse_output.writer().print("PARSE ERROR: {}\n", .{err});
             parse_error = true;
-        };
+        }
     } else {
-        _ = parser.parseExpr() catch |err| {
+        if (parser.parseExpr()) |result| {
+            parse_result = result;
+        } else |err| {
             try parse_output.writer().print("PARSE ERROR: {}\n", .{err});
             parse_error = true;
-        };
+        }
     }
     
     // Get diagnostics and convert to reports
     const diagnostics = parser.getDiagnostics();
     
-    // Only show success if no errors and no diagnostics
-    if (!parse_error and diagnostics.len == 0) {
-        try parse_output.appendSlice("PARSE SUCCESS\n");
-        try parse_output.writer().print("Node count: {}\n", .{ast.nodes.len()});
-    } else if (!parse_error) {
-        // We have diagnostics but didn't crash
-        try parse_output.appendSlice("PARSE ERRORS DETECTED\n");
-        try parse_output.writer().print("Node count: {}\n", .{ast.nodes.len()});
+    // Output the AST as S-expressions if we have a valid parse result
+    if (!parse_error and parse_result != null) {
+        try writeNodeInline(&parse_output, &ast, &env, parse_result.?);
+        try parse_output.appendSlice("\n");
+    } else if (!parse_error and diagnostics.len == 0) {
+        // No result but no errors either (empty file)
+        try parse_output.appendSlice("(empty)\n");
     }
     var problems = std.ArrayList(u8).init(allocator);
     errdefer problems.deinit();
@@ -523,10 +527,10 @@ fn writeHeader(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Co
             try output.writer().print("{s}(module\n", .{indent_str});
             try output.writer().print("{s}  (exposes", .{indent_str});
             // Check if there are any exposes
-            var iter = ast.node_slices.nodes(mod.exposes);
+            var iter = ast.node_slices.nodes(&mod.exposes);
             if (iter.next() != null) {
                 // Reset the iterator since we consumed one
-                iter = ast.node_slices.nodes(mod.exposes);
+                iter = ast.node_slices.nodes(&mod.exposes);
                 try output.appendSlice(" ");
                 try writeNodeSlice(output, ast, env, mod.exposes, indent_level + 1);
             }
@@ -583,8 +587,8 @@ fn writeHeader(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Co
     }
 }
 
-fn writeNodeSlice(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.CommonEnv, slice_idx: AST2.NodeSlices.Idx, _: usize) !void {
-    var iter = ast.node_slices.nodes(slice_idx);
+fn writeNodeSlice(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.CommonEnv, slice_idx: collections.NodeSlices(AST2.Node.Idx).Idx, _: usize) !void {
+    var iter = ast.node_slices.nodes(&slice_idx);
     var i: usize = 0;
     while (iter.next()) |node_idx| {
         if (i > 0) try output.appendSlice(", ");
@@ -605,8 +609,8 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
 
     // Write node-specific content based on tag
     switch (tag) {
-        .binop_where, .apply_module => {
-            // These are new nodes, handle them separately for now
+        .apply_module => {
+            // This is a new node, handle it separately for now
         },
         .uc, .lc, .lc_dot_ucs, .uc_dot_ucs, .var_lc, .neg_lc, .not_lc, .dot_lc, .double_dot_lc => {
             const ident_idx = ast.payload(idx).ident;
@@ -658,7 +662,7 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
         },
         .tuple_literal, .record_literal, .block => {
             const nodes_idx = ast.payload(idx).nodes;
-            var iter = ast.node_slices.nodes(nodes_idx);
+            var iter = ast.node_slices.nodes(&nodes_idx);
             try output.appendSlice(" (");
             var i: usize = 0;
             while (iter.next()) |node_idx| {
@@ -680,7 +684,7 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
             const nodes_idx = ast.payload(idx).nodes;
             
             if (!nodes_idx.isNil()) {
-                var iter = ast.node_slices.nodes(nodes_idx);
+                var iter = ast.node_slices.nodes(&nodes_idx);
                 
                 // First node is the function
                 if (iter.next()) |func_idx| {
@@ -700,7 +704,7 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
         },
         .import => {
             const nodes_idx = ast.payload(idx).import_nodes;
-            var iter = ast.node_slices.nodes(nodes_idx);
+            var iter = ast.node_slices.nodes(&nodes_idx);
             var i: usize = 0;
             while (iter.next()) |node_idx| {
                 try output.appendSlice(" ");
@@ -729,8 +733,8 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
         },
         .if_else, .if_without_else => {
             const branches = ast.payload(idx).if_branches;
-            const branches_idx = @as(AST2.NodeSlices.Idx, @enumFromInt(branches));
-            var iter = ast.node_slices.nodes(branches_idx);
+            const branches_idx = @as(collections.NodeSlices(AST2.Node.Idx).Idx, @enumFromInt(branches));
+            var iter = ast.node_slices.nodes(&branches_idx);
             // if-else has pairs of (condition, body), potentially with final else
             var i: usize = 0;
             while (iter.next()) |node_idx| {
@@ -741,7 +745,7 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
         },
         .match => {
             const branches = ast.payload(idx).match_branches;
-            const branches_idx = @as(AST2.NodeSlices.Idx, @enumFromInt(branches));
+            const branches_idx = @as(collections.NodeSlices(AST2.Node.Idx).Idx, @enumFromInt(branches));
             // TODO: match needs to be rewritten for iterator
             _ = branches_idx;
             @panic("TODO: match handling needs to be rewritten for iterator");
@@ -754,7 +758,7 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
         },
         .for_loop => {
             const nodes_idx = ast.payload(idx).nodes;
-            var iter = ast.node_slices.nodes(nodes_idx);
+            var iter = ast.node_slices.nodes(&nodes_idx);
 
             // for x in y { ... }
             if (iter.next()) |pattern| {
@@ -782,7 +786,7 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
         },
         .while_loop => {
             const nodes_idx = ast.payload(idx).nodes;
-            var iter = ast.node_slices.nodes(nodes_idx);
+            var iter = ast.node_slices.nodes(&nodes_idx);
 
             // while x { ... }
             if (iter.next()) |condition| {
@@ -818,7 +822,7 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
         },
         .str_interpolation => {
             const nodes_idx = ast.payload(idx).nodes;
-            var iter = ast.node_slices.nodes(nodes_idx);
+            var iter = ast.node_slices.nodes(&nodes_idx);
             try output.appendSlice(" [");
             var i: usize = 0;
             while (iter.next()) |node_idx| {
@@ -830,7 +834,7 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
         },
         .lambda_no_args => {
             const body_idx = ast.payload(idx).nodes;
-            var nodes_iter = ast.node_slices.nodes(body_idx);
+            var nodes_iter = ast.node_slices.nodes(&body_idx);
             if (nodes_iter.next()) |body| {
                 try output.appendSlice(" || ");
                 try writeNodeInline(output, ast, env, body);
@@ -839,6 +843,19 @@ fn writeNodeInline(output: *std.ArrayList(u8), ast: *const AST2, env: *const bas
         .malformed => {
             const diag = ast.payload(idx).malformed;
             try output.writer().print(" error:{s}", .{@tagName(diag)});
+        },
+        .ellipsis => {
+            // Triple dot - "not yet implemented" placeholder
+            // No additional payload needed
+        },
+        .expect => {
+            // Expect statement - uses nodes field for the condition
+            const nodes_idx = ast.payload(idx).nodes;
+            var iter = ast.node_slices.nodes(&nodes_idx);
+            if (iter.next()) |expr_idx| {
+                try output.appendSlice(" ");
+                try writeNodeInline(output, ast, env, expr_idx);
+            }
         },
     }
 
@@ -895,7 +912,7 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
         },
         .list_literal => {
             const nodes_idx = ast.payload(idx).nodes;
-            var iter = ast.node_slices.nodes(nodes_idx);
+            var iter = ast.node_slices.nodes(&nodes_idx);
             try output.appendSlice(" @");
             try output.writer().print("{d}\n", .{start_pos.offset});
             try output.writer().print("{s}  [", .{indent_str});
@@ -909,7 +926,7 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
         },
         .tuple_literal, .record_literal, .block => {
             const nodes_idx = ast.payload(idx).nodes;
-            var iter = ast.node_slices.nodes(nodes_idx);
+            var iter = ast.node_slices.nodes(&nodes_idx);
             try output.appendSlice(" @");
             try output.writer().print("{d}\n", .{start_pos.offset});
             try output.writer().print("{s}  (", .{indent_str});
@@ -940,7 +957,7 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
         },
         .apply_lc, .apply_uc, .apply_anon => {
             const nodes_idx = ast.payload(idx).nodes;
-            var iter = ast.node_slices.nodes(nodes_idx);
+            var iter = ast.node_slices.nodes(&nodes_idx);
             try output.appendSlice(" @");
             try output.writer().print("{d}\n", .{start_pos.offset});
             if (iter.next()) |func| {
@@ -964,8 +981,8 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
         },
         .if_else, .if_without_else => {
             const branches = ast.payload(idx).if_branches;
-            const branches_idx = @as(AST2.NodeSlices.Idx, @enumFromInt(branches));
-            var iter = ast.node_slices.nodes(branches_idx);
+            const branches_idx = @as(collections.NodeSlices(AST2.Node.Idx).Idx, @enumFromInt(branches));
+            var iter = ast.node_slices.nodes(&branches_idx);
             try output.appendSlice(" @");
             try output.writer().print("{d}\n", .{start_pos.offset});
             try output.writer().print("{s}  branches: [", .{indent_str});
@@ -979,8 +996,8 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
         },
         .match => {
             const branches = ast.payload(idx).match_branches;
-            const branches_idx = @as(AST2.NodeSlices.Idx, @enumFromInt(branches));
-            var iter = ast.node_slices.nodes(branches_idx);
+            const branches_idx = @as(collections.NodeSlices(AST2.Node.Idx).Idx, @enumFromInt(branches));
+            var iter = ast.node_slices.nodes(&branches_idx);
             try output.appendSlice(" @");
             try output.writer().print("{d}\n", .{start_pos.offset});
             if (iter.next()) |cond| {
@@ -1007,7 +1024,7 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
         },
         .import => {
             const nodes_idx = ast.payload(idx).import_nodes;
-            var iter = ast.node_slices.nodes(nodes_idx);
+            var iter = ast.node_slices.nodes(&nodes_idx);
             while (iter.next()) |node_idx| {
                 try output.appendSlice(" ");
                 try writeNodeInline(output, ast, env, node_idx);
@@ -1023,7 +1040,7 @@ fn writeNode(output: *std.ArrayList(u8), ast: *const AST2, env: *const base.Comm
         },
         .lambda_no_args => {
             const body_idx = ast.payload(idx).nodes;
-            var nodes_iter = ast.node_slices.nodes(body_idx);
+            var nodes_iter = ast.node_slices.nodes(&body_idx);
             if (nodes_iter.next()) |body| {
                 try output.appendSlice(" || ");
                 try writeNodeInline(output, ast, env, body);
