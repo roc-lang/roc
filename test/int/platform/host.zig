@@ -75,6 +75,8 @@ const Args = struct {
 /// Platform host entrypoint -- this is where the roc application starts and does platform things
 /// before the platform calls into Roc to do application-specific things.
 pub fn main() !void {
+    std.io.getStdErr().writer().print("DEBUG HOST: main() started\n", .{}) catch {};
+    std.debug.print("DEBUG HOST: main() started\n", .{});
     var host_env = HostEnv{
         .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
     };
@@ -109,8 +111,10 @@ pub fn main() !void {
 
     // Test first entrypoint: addInts (entry_idx = 0)
     try stdout.print("\n=== Testing addInts (entry_idx = 0) ===\n", .{});
+    std.debug.print("DEBUG HOST: About to call roc__addInts\n", .{});
     var add_result: i64 = undefined;
     roc__addInts(&roc_ops, @as(*anyopaque, @ptrCast(&add_result)), @as(*anyopaque, @ptrCast(&args)));
+    std.debug.print("DEBUG HOST: roc__addInts returned\n", .{});
 
     const expected_add = a +% b; // Use wrapping addition to match Roc behavior
     try stdout.print("Expected add result: {}\n", .{expected_add});
@@ -126,8 +130,10 @@ pub fn main() !void {
 
     // Test second entrypoint: multiplyInts (entry_idx = 1)
     try stdout.print("\n=== Testing multiplyInts (entry_idx = 1) ===\n", .{});
+    std.debug.print("DEBUG HOST: About to call roc__multiplyInts\n", .{});
     var multiply_result: i64 = undefined;
     roc__multiplyInts(&roc_ops, @as(*anyopaque, @ptrCast(&multiply_result)), @as(*anyopaque, @ptrCast(&args)));
+    std.debug.print("DEBUG HOST: roc__multiplyInts returned\n", .{});
 
     const expected_multiply = a *% b; // Use wrapping multiplication to match Roc behavior
     try stdout.print("Expected multiply result: {}\n", .{expected_multiply});

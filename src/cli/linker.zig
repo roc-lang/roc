@@ -115,9 +115,17 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
 
             // Suppress LLD warnings
             try args.append("-w");
+            // Add verbose flags for debugging (uncomment if needed)
+            // try args.append("--verbose");
+            // try args.append("--print-map");
 
             // Use static linking to avoid dynamic linker dependency issues
             try args.append("-static");
+
+            // Force include main symbol from static libraries
+            // without this it will be stripped and unnavailable
+            try args.append("-u");
+            try args.append("main");
         },
         .windows => {
             // Add linker name for Windows COFF

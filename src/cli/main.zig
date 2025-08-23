@@ -650,16 +650,16 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
             std.log.err("Failed to add host path to object files", .{});
             std.process.exit(1);
         };
-        object_files.append(shim_path) catch {
-            std.log.err("Failed to add shim path to object files", .{});
-            std.process.exit(1);
-        };
         if (platform_shim_path) |path| {
             object_files.append(path) catch {
                 std.log.err("Failed to add platform shim path to object files", .{});
                 std.process.exit(1);
             };
         }
+        object_files.append(shim_path) catch {
+            std.log.err("Failed to add shim path to object files", .{});
+            std.process.exit(1);
+        };
 
         const link_config = linker.LinkConfig{
             .output_path = exe_path,
@@ -672,9 +672,25 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         linker.link(gpa, link_config) catch |err| switch (err) {
             linker.LinkError.LLVMNotAvailable => {
                 // Fallback to clang when LLVM is not available
+                var clang_args = std.ArrayList([]const u8).init(gpa);
+                defer clang_args.deinit();
+                clang_args.appendSlice(&.{ "clang", "-o", exe_path, platform_paths.host_lib_path }) catch |alloc_err| {
+                    std.log.err("Failed to allocate clang args: {}", .{alloc_err});
+                    std.process.exit(1);
+                };
+                if (platform_shim_path) |path| {
+                    clang_args.append(path) catch |alloc_err| {
+                        std.log.err("Failed to add platform shim to clang args: {}", .{alloc_err});
+                        std.process.exit(1);
+                    };
+                }
+                clang_args.append(shim_path) catch |alloc_err| {
+                    std.log.err("Failed to add shim to clang args: {}", .{alloc_err});
+                    std.process.exit(1);
+                };
                 const link_result = std.process.Child.run(.{
                     .allocator = gpa,
-                    .argv = &.{ "clang", "-o", exe_path, platform_paths.host_lib_path, shim_path },
+                    .argv = clang_args.items,
                 }) catch |clang_err| {
                     std.log.err("Failed to link executable with both LLD and clang: LLD unavailable, clang error: {}", .{clang_err});
                     std.process.exit(1);

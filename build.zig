@@ -311,43 +311,6 @@ fn addMainExe(
         .link_libc = true,
     });
 
-    // Create test platform host static library (str)
-    const test_platform_host_lib = b.addStaticLibrary(.{
-        .name = "test_platform_str_host",
-        .root_source_file = b.path("test/str/platform/host.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = true,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
-    });
-    test_platform_host_lib.linkLibC();
-    test_platform_host_lib.root_module.addImport("builtins", roc_modules.builtins);
-    // Force bundle compiler-rt to resolve runtime symbols like __main
-    test_platform_host_lib.bundle_compiler_rt = true;
-
-    // Copy the test platform host library to the source directory
-    const copy_test_host = b.addUpdateSourceFiles();
-    const test_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-    copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform", test_host_filename }));
-    b.getInstallStep().dependOn(&copy_test_host.step);
-
-    // Create test platform host static library (int)
-    const test_platform_int_host_lib = b.addStaticLibrary(.{
-        .name = "test_platform_int_host",
-        .root_source_file = b.path("test/int/platform/host.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = true,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
-    });
-    test_platform_int_host_lib.linkLibC();
-    test_platform_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
-
-    // Copy the int test platform host library to the source directory
-    const copy_test_int_host = b.addUpdateSourceFiles();
-    const test_int_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-    copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform", test_int_host_filename }));
-    b.getInstallStep().dependOn(&copy_test_int_host.step);
 
     // Create builtins static library at build time with minimal dependencies
     const builtins_lib = b.addStaticLibrary(.{
@@ -367,7 +330,7 @@ fn addMainExe(
     const libc_stubs_obj = if (target.result.os.tag == .linux) blk: {
         const obj = b.addObject(.{
             .name = "libc_stubs",
-            .root_source_file = b.path("src/interpreter_shim/libc_stubs.zig"),
+            .root_source_file = b.path("src/build/libc_stubs.zig"),
             .target = target,
             .optimize = optimize,
             .strip = strip,
@@ -375,6 +338,54 @@ fn addMainExe(
         });
         break :blk obj;
     } else null;
+
+    // Create test platform host static library (str)
+    const test_platform_host_lib = b.addStaticLibrary(.{
+        .name = "test_platform_str_host",
+        .root_source_file = b.path("test/str/platform/host.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = true,
+        .pic = true, // Enable Position Independent Code for PIE compatibility
+    });
+    // Don't link libc - use stubs instead for self-contained executable
+    test_platform_host_lib.root_module.addImport("builtins", roc_modules.builtins);
+    // Add libc stubs for Linux to provide missing symbols
+    if (libc_stubs_obj) |stubs| {
+        test_platform_host_lib.addObject(stubs);
+    }
+    // Force bundle compiler-rt to resolve runtime symbols like __main
+    test_platform_host_lib.bundle_compiler_rt = true;
+
+    // Copy the test platform host library to the source directory
+    const copy_test_host = b.addUpdateSourceFiles();
+    const test_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+    copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform", test_host_filename }));
+    b.getInstallStep().dependOn(&copy_test_host.step);
+
+    // Create test platform host static library (int)
+    const test_platform_int_host_lib = b.addStaticLibrary(.{
+        .name = "test_platform_int_host",
+        .root_source_file = b.path("test/int/platform/host.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = true,
+        .pic = true, // Enable Position Independent Code for PIE compatibility
+    });
+    // Don't link libc - use stubs instead for self-contained executable
+    test_platform_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
+    // Add libc stubs for Linux to provide missing symbols
+    if (libc_stubs_obj) |stubs| {
+        test_platform_int_host_lib.addObject(stubs);
+    }
+    // Force bundle compiler-rt to resolve runtime symbols like __main
+    test_platform_int_host_lib.bundle_compiler_rt = true;
+
+    // Copy the int test platform host library to the source directory
+    const copy_test_int_host = b.addUpdateSourceFiles();
+    const test_int_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+    copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform", test_int_host_filename }));
+    b.getInstallStep().dependOn(&copy_test_int_host.step);
 
     // Create shim static library at build time - fully static without libc
     const shim_lib = b.addStaticLibrary(.{

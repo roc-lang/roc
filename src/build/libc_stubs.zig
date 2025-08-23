@@ -193,3 +193,24 @@ export fn __zig_probe_stack() callconv(.C) void {
 
 // Environment variable stub
 export var environ: ?[*]?[*:0]const u8 = null;
+
+// Process control functions
+export fn exit(status: c_int) callconv(.C) noreturn {
+    _ = status;
+    syscalls.abort();
+}
+
+// Resource limit functions - minimal implementations
+export fn getrlimit(resource: c_int, rlim: *anyopaque) callconv(.C) c_int {
+    _ = resource;
+    _ = rlim;
+    // Return success but don't modify the structure
+    return 0;
+}
+
+export fn setrlimit(resource: c_int, rlim: *const anyopaque) callconv(.C) c_int {
+    _ = resource;
+    _ = rlim;
+    // Return success but don't actually set anything
+    return 0;
+}
