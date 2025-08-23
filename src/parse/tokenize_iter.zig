@@ -390,26 +390,6 @@ pub const Token = struct {
         }
     };
 
-    // Keyword string constants
-    pub const KW_VAR = "var";
-
-    // Delimiter constants
-    pub const DELIM_OPEN_ROUND = '(';
-    pub const DELIM_CLOSE_ROUND = ')';
-    pub const DELIM_OPEN_SQUARE = '[';
-    pub const DELIM_CLOSE_SQUARE = ']';
-    pub const DELIM_OPEN_CURLY = '{';
-    pub const DELIM_CLOSE_CURLY = '}';
-
-    /// Determines if a character is whitespace.
-    /// In tokenize, whitespace includes space, tab, newline, carriage return.
-    pub fn isWhitespace(char: u8) bool {
-        return switch (char) {
-            ' ', '\t', '\n', '\r' => true,
-            else => false,
-        };
-    }
-
     pub const keywords = std.StaticStringMap(Tag).initComptime(.{
         .{ "and", .OpAnd },
         .{ "app", .KwApp },
@@ -439,9 +419,8 @@ pub const Token = struct {
         .{ "provides", .KwProvides },
         .{ "requires", .KwRequires },
         .{ "return", .KwReturn },
-        .{ KW_VAR, .KwVar },
+        .{ "var", .KwVar },
         .{ "where", .KwWhere },
-        .{ "while", .KwWhile },
         .{ "with", .KwWith },
     });
 
@@ -653,9 +632,6 @@ pub const Cursor = struct {
                         self.chompIntegerBase16() catch {
                             tok = .MalformedNumberNoDigits;
                         };
-                        if (tok != .MalformedNumberNoDigits) {
-                            tok = .IntBase;
-                        }
                         tok = self.chompNumberSuffix(tok);
                         break;
                     },
@@ -667,9 +643,6 @@ pub const Cursor = struct {
                         self.chompIntegerBase8() catch {
                             tok = .MalformedNumberNoDigits;
                         };
-                        if (tok != .MalformedNumberNoDigits) {
-                            tok = .IntBase;
-                        }
                         tok = self.chompNumberSuffix(tok);
                         break;
                     },
@@ -681,9 +654,6 @@ pub const Cursor = struct {
                         self.chompIntegerBase2() catch {
                             tok = .MalformedNumberNoDigits;
                         };
-                        if (tok != .MalformedNumberNoDigits) {
-                            tok = .IntBase;
-                        }
                         tok = self.chompNumberSuffix(tok);
                         break;
                     },
@@ -1105,42 +1075,10 @@ pub const TokenOutput = struct {
     extra_messages_dropped: usize,
 };
 
-pub const StringKind = enum {
+const StringKind = enum {
     single_line,
     multi_line,
 };
-
-// Helper functions for manual digit conversion
-fn charToDigit(c: u8) ?u8 {
-    if (c >= '0' and c <= '9') {
-        return c - '0';
-    }
-    return null;
-}
-
-fn charToHexDigit(c: u8) ?u8 {
-    if (c >= '0' and c <= '9') {
-        return c - '0';
-    } else if (c >= 'a' and c <= 'f') {
-        return c - 'a' + 10;
-    } else if (c >= 'A' and c <= 'F') {
-        return c - 'A' + 10;
-    }
-    return null;
-}
-
-fn charToOctalDigit(c: u8) ?u8 {
-    if (c >= '0' and c <= '7') {
-        return c - '0';
-    }
-    return null;
-}
-
-fn charToBinaryDigit(c: u8) ?u8 {
-    if (c == '0') return 0;
-    if (c == '1') return 1;
-    return null;
-}
 
 /// The tokenizer that uses a Cursor and produces a TokenizedBuffer.
 pub const Tokenizer = struct {
@@ -1148,11 +1086,10 @@ pub const Tokenizer = struct {
     output: TokenizedBuffer,
     string_interpolation_stack: std.ArrayListUnmanaged(StringKind),
     env: *CommonEnv,
-    byte_slices: *collections.ByteSlices, // For storing big numbers and strings
 
     /// Creates a new Tokenizer.
-    /// Note that the caller must also provide a pre-allocated messages buffer and ByteSlices.
-    pub fn init(env: *CommonEnv, gpa: std.mem.Allocator, text: []const u8, messages: []Diagnostic, byte_slices: *collections.ByteSlices) std.mem.Allocator.Error!Tokenizer {
+    /// Note that the caller must also provide a pre-allocated messages buffer.
+    pub fn init(env: *CommonEnv, gpa: std.mem.Allocator, text: []const u8, messages: []Diagnostic) std.mem.Allocator.Error!Tokenizer {
         const cursor = Cursor.init(text, messages);
         // TODO: tune this more. Syntax grab bag is 3:1.
         // Generally, roc code will be less dense than that.
@@ -1162,532 +1099,12 @@ pub const Tokenizer = struct {
             .output = output,
             .string_interpolation_stack = .{},
             .env = env,
-            .byte_slices = byte_slices,
         };
     }
 
     pub fn deinit(self: *Tokenizer, gpa: std.mem.Allocator) void {
         self.output.deinit(gpa);
         self.string_interpolation_stack.deinit(gpa);
-    }
-
-    /// Parse a base-10 integer from the given text, trying to fit it in i32.
-    /// Returns either the i32 value or a ByteSlices index if it doesn't fit.
-    fn parseBase10Integer(self: *Tokenizer, gpa: std.mem.Allocator, text: []const u8) !Token.Extra {
-        var i: usize = 0;
-        var negative = false;
-
-        // Check for negative sign
-        if (text.len > 0 and text[0] == '-') {
-            negative = true;
-            i = 1;
-        }
-
-        // For negative numbers, accumulate as negative to handle i32::MIN correctly
-        if (negative) {
-            var result: i32 = 0;
-
-            while (i < text.len) : (i += 1) {
-                const c = text[i];
-                if (c == '_') continue; // Skip underscores
-
-                const digit = charToDigit(c) orelse break;
-
-                // Check for overflow before multiplying
-                if (result < std.math.minInt(i32) / 10) {
-                    return self.storeBigNumber(gpa, text);
-                }
-
-                result = result * 10;
-
-                // Check for overflow before subtracting
-                if (result < std.math.minInt(i32) + @as(i32, digit)) {
-                    return self.storeBigNumber(gpa, text);
-                }
-
-                result = result - @as(i32, digit);
-            }
-
-            return Token.Extra{ .num_literal_i32 = result };
-        } else {
-            // For positive numbers, use u32 to detect overflow
-            var result: u32 = 0;
-
-            while (i < text.len) : (i += 1) {
-                const c = text[i];
-                if (c == '_') continue; // Skip underscores
-
-                const digit = charToDigit(c) orelse break;
-
-                // Check for overflow before multiplying
-                if (result > std.math.maxInt(u32) / 10) {
-                    return self.storeBigNumber(gpa, text);
-                }
-
-                result = result * 10;
-
-                // Check for overflow before adding
-                if (result > std.math.maxInt(u32) - @as(u32, digit)) {
-                    return self.storeBigNumber(gpa, text);
-                }
-
-                result = result + digit;
-            }
-
-            // Check if it fits in i32
-            if (result > std.math.maxInt(i32)) {
-                return self.storeBigNumber(gpa, text);
-            }
-
-            return Token.Extra{ .num_literal_i32 = @as(i32, @intCast(result)) };
-        }
-    }
-
-    /// Parse a hex/octal/binary integer from the given text, trying to fit it in i32.
-    fn parseNonBase10Integer(self: *Tokenizer, gpa: std.mem.Allocator, text: []const u8, number_base: u8) !Token.Extra {
-        var result: u32 = 0; // Use u32 for unsigned parsing
-        var i: usize = 2; // Skip "0x", "0o", or "0b" prefix
-
-        while (i < text.len) : (i += 1) {
-            const c = text[i];
-            if (c == '_') continue;
-
-            const digit = switch (number_base) {
-                16 => charToHexDigit(c),
-                8 => charToOctalDigit(c),
-                2 => charToBinaryDigit(c),
-                else => unreachable,
-            } orelse break;
-
-            // Check for overflow
-            if (result > std.math.maxInt(u32) / @as(u32, number_base)) {
-                return self.storeBigNumber(gpa, text);
-            }
-
-            result = result * number_base;
-
-            if (result > std.math.maxInt(u32) - @as(u32, digit)) {
-                return self.storeBigNumber(gpa, text);
-            }
-
-            result = result + digit;
-        }
-
-        // Check if it fits in i32
-        if (result > std.math.maxInt(i32)) {
-            return self.storeBigNumber(gpa, text);
-        }
-
-        return Token.Extra{ .num_literal_i32 = @as(i32, @intCast(result)) };
-    }
-
-    /// Parse a fraction from the given text, trying to fit it in SmallDec.
-    fn parseFraction(self: *Tokenizer, gpa: std.mem.Allocator, text: []const u8) !Token.Extra {
-        // First try to parse as SmallDec
-        const smallDec = self.tryParseSmallDec(text);
-        if (smallDec) |dec| {
-            return Token.Extra{ .frac_literal_small = dec };
-        }
-
-        // If it doesn't fit in SmallDec, store in ByteSlices
-        return self.storeBigFraction(gpa, text);
-    }
-
-    /// Try to parse a fractional literal as a small dec (numerator/10^power)
-    fn tryParseSmallDec(self: *Tokenizer, text: []const u8) ?Token.SmallDec {
-        _ = self;
-        // Return null if input is too long to fit in our 32-byte buffer
-        if (text.len > 32) return null;
-
-        // For negative zero, we'll return null to force ByteSlices path
-        if (text.len > 0 and text[0] == '-') {
-            const rest = text[1..];
-            // Check if it's -0, -0.0, -0.00, etc.
-            var all_zeros = true;
-            for (rest) |c| {
-                if (c != '0' and c != '.' and c != '_') {
-                    all_zeros = false;
-                    break;
-                }
-            }
-            if (all_zeros) return null;
-        }
-
-        // Find the decimal point
-        var dot_pos: ?usize = null;
-        for (text, 0..) |c, i| {
-            if (c == '.') {
-                dot_pos = i;
-                break;
-            }
-        }
-
-        const decimal_index = dot_pos orelse {
-            // No decimal point - shouldn't happen for fractions, but handle it
-            return null;
-        };
-
-        // Count digits after decimal point (excluding underscores)
-        var after_decimal_count: u8 = 0;
-        var i = decimal_index + 1;
-        while (i < text.len) : (i += 1) {
-            if (text[i] != '_') {
-                after_decimal_count += 1;
-            }
-        }
-
-        if (after_decimal_count > 255) return null; // Too many decimal places
-
-        // Build the numerator by concatenating all digits (removing decimal and underscores)
-        var numerator: i32 = 0;
-        var negative = false;
-        i = 0;
-
-        if (text[0] == '-') {
-            negative = true;
-            i = 1;
-        }
-
-        while (i < text.len) : (i += 1) {
-            const c = text[i];
-            if (c == '.' or c == '_') continue;
-
-            const digit = charToDigit(c) orelse continue;
-
-            // Check for overflow
-            if (numerator > (std.math.maxInt(i32) / 10)) {
-                return null;
-            }
-            numerator = numerator * 10;
-
-            if (negative) {
-                if (numerator < std.math.minInt(i32) + @as(i32, digit)) {
-                    return null;
-                }
-                numerator = numerator - @as(i32, digit);
-            } else {
-                if (numerator > std.math.maxInt(i32) - @as(i32, digit)) {
-                    return null;
-                }
-                numerator = numerator + @as(i32, digit);
-            }
-        }
-
-        // Check if numerator fits in i16
-        if (numerator < -32768 or numerator > 32767) {
-            return null;
-        }
-
-        return Token.SmallDec{
-            .numerator = @as(i16, @intCast(numerator)),
-            .denominator_power_of_ten = after_decimal_count,
-        };
-    }
-
-    /// Store a big fraction in ByteSlices
-    fn storeBigFraction(self: *Tokenizer, gpa: std.mem.Allocator, text: []const u8) !Token.Extra {
-        // Find the decimal point
-        var dot_pos: ?usize = null;
-        for (text, 0..) |c, i| {
-            if (c == '.') {
-                dot_pos = i;
-                break;
-            }
-        }
-
-        const decimal_index = dot_pos orelse text.len;
-
-        // Count digits before and after decimal (excluding underscores)
-        var before_count: u32 = 0;
-        var after_count: u32 = 0;
-
-        for (text[0..decimal_index]) |c| {
-            if (c != '_' and c != '-') {
-                before_count += 1;
-            }
-        }
-
-        if (decimal_index < text.len) {
-            for (text[decimal_index + 1 ..]) |c| {
-                if (c != '_') {
-                    after_count += 1;
-                }
-            }
-        }
-
-        // Allocate buffer for: 2 lengths (4 bytes each) + digits
-        const total_size = 8 + before_count + after_count;
-        var buf = try gpa.alloc(u8, total_size);
-        defer gpa.free(buf);
-
-        // Write the two lengths first (as u32 little-endian)
-        std.mem.writeInt(u32, buf[0..4], before_count, .little);
-        std.mem.writeInt(u32, buf[4..8], after_count, .little);
-
-        // Copy digits (without decimal point, underscores, or minus sign)
-        var j: usize = 8;
-        for (text) |c| {
-            if (c != '.' and c != '_' and c != '-') {
-                buf[j] = c;
-                j += 1;
-            }
-        }
-
-        const idx = try self.byte_slices.append(gpa, buf);
-        return Token.Extra{ .bytes_idx = idx };
-    }
-
-    /// Parse and store a string literal in ByteSlices with escapes resolved
-    /// Check if a character is non-printable (control characters except tab, newline, carriage return)
-    fn isNonPrintable(c: u8) bool {
-        // Allow tab (0x09), newline (0x0A), and carriage return (0x0D)
-        // Disallow other control characters (0x00-0x08, 0x0B-0x0C, 0x0E-0x1F, 0x7F)
-        return (c < 0x20 and c != '\t' and c != '\n' and c != '\r') or c == 0x7F;
-    }
-
-    fn parseStringLiteral(self: *Tokenizer, gpa: std.mem.Allocator, text: []const u8) !Token.Extra {
-        // Allocate a buffer that's at least as large as the input (escapes make it smaller)
-        var result = try std.ArrayList(u8).initCapacity(gpa, text.len);
-        defer result.deinit();
-
-        var i: usize = 0;
-        while (i < text.len) : (i += 1) {
-            const c = text[i];
-
-            if (c == '\\' and i + 1 < text.len) {
-                // Handle escape sequences
-                i += 1;
-                const next = text[i];
-                switch (next) {
-                    'n' => try result.append('\n'),
-                    'r' => try result.append('\r'),
-                    't' => try result.append('\t'),
-                    '\\' => try result.append('\\'),
-                    '"' => try result.append('"'),
-                    '\'' => try result.append('\''),
-                    '$' => try result.append('$'),
-                    'u' => {
-                        // Unicode escape: \u{NNNNNN}
-                        if (i + 1 < text.len and text[i + 1] == '{') {
-                            i += 2; // Skip 'u{'
-                            const hex_start = i;
-
-                            // Find the closing '}'
-                            while (i < text.len and text[i] != '}') {
-                                i += 1;
-                            }
-
-                            if (i < text.len) {
-                                // Parse the hex value
-                                const hex_str = text[hex_start..i];
-                                var codepoint: u32 = 0;
-                                for (hex_str) |hex_char| {
-                                    const digit = charToHexDigit(hex_char) orelse 0;
-                                    codepoint = codepoint * 16 + digit;
-                                }
-
-                                // Encode as UTF-8
-                                if (codepoint <= 0x7F) {
-                                    try result.append(@intCast(codepoint));
-                                } else if (codepoint <= 0x7FF) {
-                                    try result.append(@intCast(0xC0 | (codepoint >> 6)));
-                                    try result.append(@intCast(0x80 | (codepoint & 0x3F)));
-                                } else if (codepoint <= 0xFFFF) {
-                                    try result.append(@intCast(0xE0 | (codepoint >> 12)));
-                                    try result.append(@intCast(0x80 | ((codepoint >> 6) & 0x3F)));
-                                    try result.append(@intCast(0x80 | (codepoint & 0x3F)));
-                                } else if (codepoint <= 0x10FFFF) {
-                                    try result.append(@intCast(0xF0 | (codepoint >> 18)));
-                                    try result.append(@intCast(0x80 | ((codepoint >> 12) & 0x3F)));
-                                    try result.append(@intCast(0x80 | ((codepoint >> 6) & 0x3F)));
-                                    try result.append(@intCast(0x80 | (codepoint & 0x3F)));
-                                }
-                            }
-                        }
-                    },
-                    else => {
-                        // Unknown escape, just include the backslash and character
-                        try result.append('\\');
-                        try result.append(next);
-                    },
-                }
-            } else {
-                // Regular character - check if it's non-printable
-                // Note: We detect non-printable characters here but can't report
-                // them with exact positions as we don't have cursor position info.
-                // The actual reporting happens during tokenization.
-                try result.append(c);
-            }
-        }
-
-        const idx = try self.byte_slices.append(gpa, result.items);
-        return Token.Extra{ .bytes_idx = idx };
-    }
-
-    /// Parse a single-quoted character literal
-    fn parseSingleQuoteLiteral(self: *Tokenizer, gpa: std.mem.Allocator, text: []const u8) !Token.Extra {
-        // Single quotes should contain exactly one character (possibly escaped)
-        // The text includes the quotes, so strip them
-        if (text.len < 2) {
-            // Malformed, store as-is
-            const idx = try self.byte_slices.append(gpa, text);
-            return Token.Extra{ .bytes_idx = idx };
-        }
-
-        const content = text[1 .. text.len - 1]; // Remove quotes
-
-        // Process escape if present
-        var char_bytes: [4]u8 = undefined;
-        var char_len: usize = 0;
-
-        if (content.len > 0 and content[0] == '\\' and content.len > 1) {
-            // Handle escape sequence
-            switch (content[1]) {
-                'n' => {
-                    char_bytes[0] = '\n';
-                    char_len = 1;
-                },
-                'r' => {
-                    char_bytes[0] = '\r';
-                    char_len = 1;
-                },
-                't' => {
-                    char_bytes[0] = '\t';
-                    char_len = 1;
-                },
-                '\\' => {
-                    char_bytes[0] = '\\';
-                    char_len = 1;
-                },
-                '\'' => {
-                    char_bytes[0] = '\'';
-                    char_len = 1;
-                },
-                else => {
-                    // Unknown escape or unicode, store the content as-is
-                    const idx = try self.byte_slices.append(gpa, content);
-                    return Token.Extra{ .bytes_idx = idx };
-                },
-            }
-        } else {
-            // Regular character(s) - just copy
-            for (content, 0..) |c, i| {
-                if (i >= 4) break;
-                char_bytes[i] = c;
-                char_len = i + 1;
-            }
-        }
-
-        const idx = try self.byte_slices.append(gpa, char_bytes[0..char_len]);
-        return Token.Extra{ .bytes_idx = idx };
-    }
-
-    /// Store a big number in ByteSlices (always in base-10)
-    fn storeBigNumber(self: *Tokenizer, gpa: std.mem.Allocator, text: []const u8) !Token.Extra {
-        // Detect the base
-        var number_base: u8 = 10;
-        var start_idx: usize = 0;
-        var is_negative = false;
-
-        if (text.len > 0 and text[0] == '-') {
-            is_negative = true;
-            start_idx = 1;
-        }
-
-        if (text.len > start_idx + 1 and text[start_idx] == '0') {
-            const prefix = text[start_idx + 1];
-            if (prefix == 'x' or prefix == 'X') {
-                number_base = 16;
-                start_idx += 2;
-            } else if (prefix == 'o' or prefix == 'O') {
-                number_base = 8;
-                start_idx += 2;
-            } else if (prefix == 'b' or prefix == 'B') {
-                number_base = 2;
-                start_idx += 2;
-            }
-        }
-
-        if (number_base == 10) {
-            // For base-10, just remove underscores
-            var clean_buf = try gpa.alloc(u8, text.len);
-            defer gpa.free(clean_buf);
-
-            var j: usize = 0;
-            for (text) |c| {
-                if (c != '_') {
-                    clean_buf[j] = c;
-                    j += 1;
-                }
-            }
-
-            const idx = try self.byte_slices.append(gpa, clean_buf[0..j]);
-            return Token.Extra{ .bytes_idx = idx };
-        } else {
-            // For non-base-10, we need to convert to base-10
-            // We'll build up the result as base-10 digits
-            var result = try std.ArrayList(u8).initCapacity(gpa, text.len * 2); // Rough estimate
-            defer result.deinit();
-
-            // We'll accumulate the value and convert to decimal string
-            // Since it doesn't fit in i32, we need to do big number arithmetic
-            // For now, let's use a simple approach: accumulate as array of base-10 digits
-
-            // Start with 0
-            try result.append('0');
-
-            // Process each digit
-            var i = start_idx;
-            while (i < text.len) : (i += 1) {
-                const c = text[i];
-                if (c == '_') continue;
-
-                const digit_value = switch (number_base) {
-                    16 => charToHexDigit(c),
-                    8 => charToOctalDigit(c),
-                    2 => charToBinaryDigit(c),
-                    else => unreachable,
-                } orelse continue;
-
-                // Multiply current result by base
-                var carry: u8 = 0;
-                var j: usize = result.items.len;
-                while (j > 0) {
-                    j -= 1;
-                    const cur_digit = result.items[j] - '0';
-                    const prod = cur_digit * number_base + carry;
-                    result.items[j] = '0' + (prod % 10);
-                    carry = prod / 10;
-                }
-                while (carry > 0) {
-                    try result.insert(0, '0' + (carry % 10));
-                    carry = carry / 10;
-                }
-
-                // Add the new digit
-                carry = digit_value;
-                j = result.items.len;
-                while (j > 0 and carry > 0) {
-                    j -= 1;
-                    const cur_digit = result.items[j] - '0';
-                    const sum = cur_digit + carry;
-                    result.items[j] = '0' + (sum % 10);
-                    carry = sum / 10;
-                }
-                while (carry > 0) {
-                    try result.insert(0, '0' + (carry % 10));
-                    carry = carry / 10;
-                }
-            }
-
-            // Add negative sign if needed
-            if (is_negative) {
-                try result.insert(0, '-');
-            }
-
-            const idx = try self.byte_slices.append(gpa, result.items);
-            return Token.Extra{ .bytes_idx = idx };
-        }
     }
 
     pub fn finishAndDeinit(self: *Tokenizer, gpa: std.mem.Allocator) TokenOutput {
@@ -1707,16 +1124,6 @@ pub const Tokenizer = struct {
             .tag = tag,
             .region = base.Region.from_raw_offsets(tok_offset, self.cursor.pos),
             .extra = .{ .none = 0 },
-        });
-    }
-
-    /// Pushes a token with the given tag, token offset, and explicit extra value.
-    fn pushTokenWithExtra(self: *Tokenizer, gpa: std.mem.Allocator, tag: Token.Tag, tok_offset: Token.Idx, extra: Token.Extra) std.mem.Allocator.Error!void {
-        std.debug.assert(!tag.isInterned());
-        try self.output.tokens.append(gpa, .{
-            .tag = tag,
-            .region = base.Region.from_raw_offsets(tok_offset, self.cursor.pos),
-            .extra = extra,
         });
     }
 
@@ -1778,8 +1185,7 @@ pub const Tokenizer = struct {
                     const next = self.cursor.peekAt(1);
                     if (next) |n| {
                         if (n == '.') {
-                            const third = self.cursor.peekAt(2);
-                            if (third == '.') {
+                            if (self.cursor.peekAt(2) == '.') {
                                 self.cursor.pos += 3;
                                 try self.pushTokenNormalHere(gpa, .TripleDot, start);
                             } else {
@@ -1840,22 +1246,7 @@ pub const Tokenizer = struct {
                         } else if (n >= '0' and n <= '9') {
                             self.cursor.pos += 1;
                             const tag = self.cursor.chompNumber();
-                            const num_end = self.cursor.pos;
-
-                            // Parse the actual number value (including the minus)
-                            const num_text = self.cursor.buf[start..num_end];
-
-                            // Parse the value based on type
-                            if (tag == .Int) {
-                                const extra = try self.parseBase10Integer(gpa, num_text);
-                                try self.pushTokenWithExtra(gpa, tag, start, extra);
-                            } else if (tag == .Float) {
-                                const extra = try self.parseFraction(gpa, num_text);
-                                try self.pushTokenWithExtra(gpa, tag, start, extra);
-                            } else {
-                                // For malformed numbers, just push without parsing
-                                try self.pushTokenNormalHere(gpa, tag, start);
-                            }
+                            try self.pushTokenNormalHere(gpa, tag, start);
                         } else {
                             self.cursor.pos += 1;
                             // Look at what follows the minus to determine if it's unary
@@ -2005,11 +1396,11 @@ pub const Tokenizer = struct {
                     }
                 },
 
-                Token.DELIM_OPEN_ROUND => {
+                '(' => {
                     self.cursor.pos += 1;
                     try self.pushTokenNormalHere(gpa, if (sp) .OpenRound else .NoSpaceOpenRound, start);
                 },
-                Token.DELIM_OPEN_SQUARE => {
+                '[' => {
                     self.cursor.pos += 1;
                     try self.pushTokenNormalHere(gpa, .OpenSquare, start);
                 },
@@ -2018,11 +1409,11 @@ pub const Tokenizer = struct {
                     try self.pushTokenNormalHere(gpa, .OpenCurly, start);
                 },
 
-                Token.DELIM_CLOSE_ROUND => {
+                ')' => {
                     self.cursor.pos += 1;
                     try self.pushTokenNormalHere(gpa, .CloseRound, start);
                 },
-                Token.DELIM_CLOSE_SQUARE => {
+                ']' => {
                     self.cursor.pos += 1;
                     try self.pushTokenNormalHere(gpa, .CloseSquare, start);
                 },
@@ -2084,48 +1475,8 @@ pub const Tokenizer = struct {
 
                 // Numbers starting with 0-9
                 '0'...'9' => {
-                    const num_start = start;
-                    var tag = self.cursor.chompNumber();
-                    const num_end = self.cursor.pos;
-
-                    // Parse the actual number value
-                    const num_text = self.cursor.buf[num_start..num_end];
-
-                    // Only parse integers for now (skip floats)
-                    if (tag == .Int or tag == .IntBase) {
-                        // Determine the base
-                        var extra: Token.Extra = undefined;
-                        if (num_text.len >= 2 and num_text[0] == '0') {
-                            if (num_text[1] == 'x' or num_text[1] == 'X') {
-                                // Hexadecimal
-                                extra = try self.parseNonBase10Integer(gpa, num_text, 16);
-                                tag = .IntBase;
-                            } else if (num_text[1] == 'o' or num_text[1] == 'O') {
-                                // Octal
-                                extra = try self.parseNonBase10Integer(gpa, num_text, 8);
-                                tag = .IntBase;
-                            } else if (num_text[1] == 'b' or num_text[1] == 'B') {
-                                // Binary
-                                extra = try self.parseNonBase10Integer(gpa, num_text, 2);
-                                tag = .IntBase;
-                            } else {
-                                // Base-10 with leading zero
-                                extra = try self.parseBase10Integer(gpa, num_text);
-                                tag = .Int;
-                            }
-                        } else {
-                            // Base-10
-                            extra = try self.parseBase10Integer(gpa, num_text);
-                            tag = .Int;
-                        }
-                        try self.pushTokenWithExtra(gpa, tag, start, extra);
-                    } else if (tag == .Float) {
-                        const extra = try self.parseFraction(gpa, num_text);
-                        try self.pushTokenWithExtra(gpa, tag, start, extra);
-                    } else {
-                        // For malformed numbers, just push without parsing
-                        try self.pushTokenNormalHere(gpa, tag, start);
-                    }
+                    const tag = self.cursor.chompNumber();
+                    try self.pushTokenNormalHere(gpa, tag, start);
                 },
 
                 // Lowercase identifiers
@@ -2148,24 +1499,14 @@ pub const Tokenizer = struct {
                 },
 
                 '\'' => {
-                    const quote_start = start;
                     const tag = self.cursor.chompSingleQuoteLiteral();
-                    const quote_end = self.cursor.pos;
-                    const quote_text = self.cursor.buf[quote_start..quote_end];
-
-                    // Parse the single quote literal and store in ByteSlices
-                    if (tag == .SingleQuote) {
-                        const extra = try self.parseSingleQuoteLiteral(gpa, quote_text);
-                        try self.pushTokenWithExtra(gpa, tag, start, extra);
-                    } else {
-                        // For malformed single quotes, just push normally
-                        try self.pushTokenNormalHere(gpa, tag, start);
-                    }
+                    try self.pushTokenNormalHere(gpa, tag, start);
                 },
 
                 '"' => {
-                    // Parse the string literal and store in ByteSlices
-                    try self.tokenizeStringLiteral(gpa);
+                    // Note this may return StringStart/StringPart instead of String,
+                    // in the case of a string interpolation.
+                    try self.tokenizeStringLikeLiteral(gpa);
                 },
 
                 // first byte of a UTF-8 sequence
@@ -2202,114 +1543,6 @@ pub const Tokenizer = struct {
         };
     }
 
-    /// Tokenize a string literal, storing the resolved content in ByteSlices
-    pub fn tokenizeStringLiteral(self: *Tokenizer, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
-        const start = self.cursor.pos;
-        std.debug.assert(self.cursor.peek() == '"');
-
-        // Save the current position
-        const saved_pos = self.cursor.pos;
-
-        // First, scan to check if this is an interpolated string
-        self.cursor.pos += 1; // Skip opening quote
-
-        // Check for multiline string
-        const is_multiline = self.cursor.peek() == '"' and self.cursor.peekAt(1) == '"';
-        if (is_multiline) {
-            self.cursor.pos += 2;
-        }
-
-        // Scan for interpolation marker
-        var has_interpolation = false;
-        while (self.cursor.pos < self.cursor.buf.len) {
-            const c = self.cursor.buf[self.cursor.pos];
-            if (c == '$' and self.cursor.peekAt(1) == '{') {
-                has_interpolation = true;
-                break;
-            } else if (!is_multiline and c == '"') {
-                break;
-            } else if (is_multiline and c == '"' and self.cursor.peekAt(1) == '"' and self.cursor.peekAt(2) == '"') {
-                break;
-            } else if (c == '\\' and self.cursor.pos + 1 < self.cursor.buf.len) {
-                self.cursor.pos += 2;
-            } else if (!is_multiline and c == '\n') {
-                break;
-            } else {
-                self.cursor.pos += 1;
-            }
-        }
-
-        // Reset position
-        self.cursor.pos = saved_pos;
-
-        // If it has interpolation, use the old tokenization method
-        if (has_interpolation) {
-            try self.tokenizeStringLikeLiteral(gpa);
-            return;
-        }
-
-        // Otherwise, parse as a complete string literal
-        const str_start = start;
-        var tag: Token.Tag = undefined;
-
-        self.cursor.pos += 1; // Skip opening quote
-
-        if (is_multiline) {
-            // Triple-quoted multiline string
-            self.cursor.pos += 2;
-            tag = .MultilineString;
-
-            // Find the closing triple quote
-            while (self.cursor.pos < self.cursor.buf.len) {
-                if (self.cursor.buf[self.cursor.pos] == '"' and
-                    self.cursor.peekAt(1) == '"' and
-                    self.cursor.peekAt(2) == '"')
-                {
-                    self.cursor.pos += 3;
-                    break;
-                }
-                // Check for non-printable characters in multiline strings
-                const c = self.cursor.buf[self.cursor.pos];
-                if (isNonPrintable(c)) {
-                    self.cursor.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
-                }
-                self.cursor.pos += 1;
-            }
-        } else {
-            // Single-line string
-            tag = .String;
-
-            // Find the closing quote
-            while (self.cursor.pos < self.cursor.buf.len) {
-                const c = self.cursor.buf[self.cursor.pos];
-                if (c == '"') {
-                    self.cursor.pos += 1;
-                    break;
-                } else if (c == '\\' and self.cursor.pos + 1 < self.cursor.buf.len) {
-                    // Skip escape sequence
-                    self.cursor.pos += 2;
-                } else if (c == '\n') {
-                    // Unclosed string
-                    tag = .MalformedString;
-                    break;
-                } else {
-                    // Check for non-printable characters
-                    if (isNonPrintable(c)) {
-                        self.cursor.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
-                    }
-                    self.cursor.pos += 1;
-                }
-            }
-        }
-
-        const str_end = self.cursor.pos;
-        const str_text = self.cursor.buf[str_start..str_end];
-
-        // Parse the string content and store in ByteSlices
-        const extra = try self.parseStringLiteral(gpa, str_text);
-        try self.pushTokenWithExtra(gpa, tag, start, extra);
-    }
-
     pub fn tokenizeStringLikeLiteral(self: *Tokenizer, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
         const start = self.cursor.pos;
         std.debug.assert(self.cursor.peek() == '"');
@@ -2342,26 +1575,18 @@ pub const Tokenizer = struct {
                 try self.string_interpolation_stack.append(gpa, kind);
                 return;
             } else if (c == '\n') {
+                try self.pushTokenNormalHere(gpa, string_part_tag, start);
                 if (kind == .single_line) {
-                    try self.pushTokenNormalHere(gpa, string_part_tag, start);
                     // Include the opening quote in the error region
                     self.cursor.pushMessage(.UnclosedString, @intCast(opening_quote_pos), @intCast(self.cursor.pos));
                     try self.pushTokenNormalHere(gpa, .StringEnd, self.cursor.pos);
-                    return;
                 }
-                // For multiline strings, continue parsing after newline
-                self.cursor.pos += 1;
+                return;
             } else if (kind == .single_line and c == '"') {
                 try self.pushTokenNormalHere(gpa, string_part_tag, start);
                 const string_part_end = self.cursor.pos;
                 self.cursor.pos += 1;
                 try self.pushTokenNormalHere(gpa, .StringEnd, string_part_end);
-                return;
-            } else if (kind == .multi_line and c == '"' and self.cursor.peekAt(1) == '"' and self.cursor.peekAt(2) == '"') {
-                try self.pushTokenNormalHere(gpa, string_part_tag, start);
-                const quote_start = self.cursor.pos;
-                self.cursor.pos += 3;
-                try self.pushTokenNormalHere(gpa, .MultilineStringEnd, quote_start);
                 return;
             } else {
                 // Handle UTF-8 sequences with printable character validation
@@ -2389,9 +1614,7 @@ fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const
     var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
     defer env.deinit(gpa);
 
-    var byte_slices = collections.ByteSlices{ .entries = .{} };
-    defer byte_slices.entries.deinit(gpa);
-    var tokenizer = try Tokenizer.init(&env, gpa, input, &messages, &byte_slices);
+    var tokenizer = try Tokenizer.init(&env, gpa, input, &messages);
     defer tokenizer.deinit(gpa);
 
     try tokenizer.tokenize(gpa);
@@ -2406,12 +1629,116 @@ fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const
 
 /// Assert the invariants of the tokenizer are held.
 pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug: bool) std.mem.Allocator.Error!void {
-    // TODO: Update this function to work with new tokenization approach
-    // For now, skip the invariant checks
-    _ = gpa;
-    _ = input;
-    _ = debug;
-    return;
+    var env = try CommonEnv.init(gpa, gpa.dupe(u8, "") catch unreachable);
+    defer env.deinit(gpa);
+
+    // Initial tokenization.
+    var messages: [32]Diagnostic = undefined;
+    var tokenizer = try Tokenizer.init(&env, gpa, input, &messages);
+    try tokenizer.tokenize(gpa);
+    var output = tokenizer.finishAndDeinit(gpa);
+    defer output.tokens.deinit(gpa);
+
+    if (debug) {
+        std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
+    }
+
+    if (debug) {
+        std.debug.print("Before:\n", .{});
+        for (0..output.tokens.tokens.len) |token_index| {
+            const token = output.tokens.tokens.get(token_index);
+            std.debug.print("\t{any}\n", .{token});
+        }
+        std.debug.print("\n\n", .{});
+    }
+
+    // TODO: apply errors from messages to buffer below.
+    // For now, just skip on tokenizer finding a failure.
+    if (output.messages.len != 0) {
+        return;
+    }
+
+    var buf2 = rebuildBufferForTesting(input, &output.tokens, gpa) catch |err| switch (err) {
+        error.Unsupported => return,
+        error.OutOfMemory => std.debug.panic("OOM", .{}),
+    };
+    defer buf2.deinit(gpa);
+
+    if (debug) {
+        std.debug.print("Intermediate:\n==========\n{s}\n==========\n\n", .{buf2.items});
+    }
+
+    // Second tokenization.
+    tokenizer = try Tokenizer.init(&env, gpa, buf2.items, &messages);
+    try tokenizer.tokenize(gpa);
+    var output2 = tokenizer.finishAndDeinit(gpa);
+    defer output2.tokens.deinit(gpa);
+
+    if (debug) {
+        std.debug.print("After:\n", .{});
+        for (0..output2.tokens.tokens.len) |token_index| {
+            const token = output2.tokens.tokens.get(token_index);
+            std.debug.print("\t{any}\n", .{token});
+        }
+        std.debug.print("\n\n", .{});
+    }
+    // Assert same.
+    var same = output.tokens.tokens.len == output2.tokens.tokens.len;
+    for (0..output.tokens.tokens.len) |token_index| {
+        if (token_index >= output2.tokens.tokens.len) {
+            same = false;
+            break;
+        }
+        const token = output.tokens.tokens.get(token_index);
+        const token2 = output2.tokens.tokens.get(token_index);
+        const region1 = output.tokens.resolve(token_index);
+        const region2 = output2.tokens.resolve(token_index);
+        const length1 = region1.end.offset - region1.start.offset;
+        const length2 = region2.end.offset - region2.start.offset;
+        same = same and (token.tag == token2.tag);
+        same = same and (length1 == length2);
+    }
+
+    if (!same) {
+        var prefix_len: usize = 0;
+        var suffix_len: usize = 0;
+        while (prefix_len < output.tokens.tokens.len and prefix_len < output2.tokens.tokens.len) : (prefix_len += 1) {
+            const token = output.tokens.tokens.get(prefix_len);
+            const token2 = output2.tokens.tokens.get(prefix_len);
+            const region1 = output.tokens.resolve(prefix_len);
+            const region2 = output2.tokens.resolve(prefix_len);
+
+            if (token.tag != token2.tag or region1.start.offset != region2.start.offset) {
+                break;
+            }
+        }
+
+        while (suffix_len < output.tokens.tokens.len - prefix_len and suffix_len < output2.tokens.tokens.len - prefix_len) : (suffix_len += 1) {
+            const token = output.tokens.tokens.get(output.tokens.tokens.len - suffix_len - 1);
+            const token2 = output2.tokens.tokens.get(output2.tokens.tokens.len - suffix_len - 1);
+            const region1 = output.tokens.resolve(output.tokens.tokens.len - suffix_len - 1);
+            const region2 = output2.tokens.resolve(output2.tokens.tokens.len - suffix_len - 1);
+
+            if (token.tag != token2.tag or region1.start.offset != region2.start.offset) {
+                break;
+            }
+        }
+
+        std.debug.print("...\n", .{});
+        for (prefix_len..output.tokens.tokens.len - suffix_len) |token_index| {
+            const region = output.tokens.resolve(token_index);
+            const token = output.tokens.tokens.get(token_index);
+            std.debug.print("\x1b[31m\t- {any}\x1b[0m: {s}\n", .{ token, input[region.start.offset..region.end.offset] });
+        }
+        for (prefix_len..output2.tokens.tokens.len - suffix_len) |token_index| {
+            const region = output2.tokens.resolve(token_index);
+            const token = output2.tokens.tokens.get(token_index);
+            std.debug.print("\x1b[32m\t+ {any}\x1b[0m: {s}\n", .{ token, buf2.items[region.start.offset..region.end.offset] });
+        }
+        std.debug.print("...\n", .{});
+
+        std.debug.assert(same);
+    }
 }
 
 fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std.mem.Allocator) !std.ArrayListUnmanaged(u8) {
@@ -2513,39 +1840,10 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                     try buf2.append(alloc, '\'');
                 }
             },
-            .String => {
-                // Generate a fake string literal
-                try buf2.append(alloc, '"');
-                for (1..length - 1) |_| {
-                    try buf2.append(alloc, 'a');
-                }
-                try buf2.append(alloc, '"');
-            },
-            .MultilineString => {
-                // Generate a fake multiline string literal
-                try buf2.append(alloc, '"');
-                try buf2.append(alloc, '"');
-                try buf2.append(alloc, '"');
-                if (length > 6) {
-                    for (6..length - 3) |_| {
-                        try buf2.append(alloc, 'a');
-                    }
-                }
-                try buf2.append(alloc, '"');
-                try buf2.append(alloc, '"');
-                try buf2.append(alloc, '"');
-            },
-            .MalformedString => {
-                // Generate a malformed string (unclosed)
-                try buf2.append(alloc, '"');
-                for (1..length) |_| {
-                    try buf2.append(alloc, 'a');
-                }
-            },
             .StringStart, .StringEnd => {
                 try buf2.append(alloc, '"');
             },
-            .MultilineStringStart, .MultilineStringEnd => {
+            .MultilineStringStart => {
                 try buf2.append(alloc, '"');
                 try buf2.append(alloc, '"');
                 try buf2.append(alloc, '"');
@@ -2658,23 +1956,6 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 } else {
                     for (0..length) |_| {
                         try buf2.append(alloc, '1');
-                    }
-                }
-            },
-            .IntBase => {
-                // Generate a non-base-10 integer (hex/octal/binary)
-                if (buf[region.start.offset] == '-') {
-                    try buf2.append(alloc, '-');
-                    try buf2.append(alloc, '0');
-                    try buf2.append(alloc, 'x');
-                    for (3..length) |_| {
-                        try buf2.append(alloc, 'F');
-                    }
-                } else {
-                    try buf2.append(alloc, '0');
-                    try buf2.append(alloc, 'x');
-                    for (2..length) |_| {
-                        try buf2.append(alloc, 'F');
                     }
                 }
             },
@@ -2947,9 +2228,6 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .KwWhere => {
                 try buf2.appendSlice(alloc, "where");
             },
-            .KwWhile => {
-                try buf2.appendSlice(alloc, "while");
-            },
             .KwWith => {
                 try buf2.appendSlice(alloc, "with");
             },
@@ -3001,7 +2279,7 @@ test "tokenizer" {
     try testTokenization(gpa, "match", &[_]Token.Tag{.KwMatch});
     try testTokenization(gpa, "var", &[_]Token.Tag{.KwVar});
     try testTokenization(gpa, "{a, b}", &[_]Token.Tag{ .OpenCurly, .LowerIdent, .Comma, .LowerIdent, .CloseCurly });
-    try testTokenization(gpa, "\"abc\"", &[_]Token.Tag{.String});
+    try testTokenization(gpa, "\"abc\"", &[_]Token.Tag{ .StringStart, .StringPart, .StringEnd });
     try testTokenization(gpa, "\"a${b}c\"", &[_]Token.Tag{
         .StringStart,
         .StringPart,
@@ -3011,27 +2289,24 @@ test "tokenizer" {
         .StringPart,
         .StringEnd,
     });
-    // Incomplete multiline string is still tokenized as MultilineString
-    // (goes to end of file)
     try testTokenization(
         gpa,
         \\"""abc
     ,
-        &[_]Token.Tag{.MultilineString},
+        &[_]Token.Tag{ .MultilineStringStart, .StringPart },
     );
-    // The second """ on next line is treated as closing delimiter, leaving "def" as identifier
     try testTokenization(
         gpa,
         \\"""abc
         \\"""def
     ,
-        &[_]Token.Tag{ .MultilineString, .LowerIdent },
+        &[_]Token.Tag{ .MultilineStringStart, .StringPart, .MultilineStringStart, .StringPart },
     );
     try testTokenization(
         gpa,
         \\"""abc"""
     ,
-        &[_]Token.Tag{.MultilineString},
+        &[_]Token.Tag{ .MultilineStringStart, .StringPart },
     );
     try testTokenization(
         gpa,
@@ -3045,56 +2320,51 @@ test "tokenizer" {
             .LowerIdent,
             .CloseStringInterpolation,
             .StringPart,
-            .MultilineStringEnd,
-            .LowerIdent,
+            .MultilineStringStart,
+            .StringPart,
         },
     );
 }
 
-// Commented out: We now assume strings are already valid UTF-8 (validated earlier with SIMD)
-// test "tokenizer with invalid UTF-8" {
-//     const gpa = std.testing.allocator;
-//
-//     // Invalid UTF-8 start byte
-//     {
-//         const invalid_utf8 = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', ' ', 0xFF, ' ', 'w', 'o', 'r', 'l', 'd', '"' };
-//         var diagnostics: [10]Diagnostic = undefined;
-//
-//         var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
-//         defer env.deinit(gpa);
-//
-//         var byte_slices = collections.ByteSlices{ .entries = .{} };
-//         defer byte_slices.entries.deinit(gpa);
-//         var tokenizer = try Tokenizer.init(&env, gpa, &invalid_utf8, &diagnostics, &byte_slices);
-//         defer tokenizer.deinit(gpa);
-//         try tokenizer.tokenize(gpa);
-//
-//         // Should have reported InvalidUtf8InSource
-//         const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
-//         try std.testing.expect(messages.len > 0);
-//         try std.testing.expectEqual(Diagnostic.Tag.InvalidUtf8InSource, messages[0].tag);
-//     }
-//
-//     // Incomplete UTF-8 sequence at end
-//     {
-//         const incomplete_utf8 = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', ' ', 0xC3, '"' }; // 0xC3 expects another byte
-//         var diagnostics: [10]Diagnostic = undefined;
-//
-//         var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
-//         defer env.deinit(gpa);
-//
-//         var byte_slices = collections.ByteSlices{ .entries = .{} };
-//         defer byte_slices.entries.deinit(gpa);
-//         var tokenizer = try Tokenizer.init(&env, gpa, &incomplete_utf8, &diagnostics, &byte_slices);
-//         defer tokenizer.deinit(gpa);
-//         try tokenizer.tokenize(gpa);
-//
-//         // Should have reported InvalidUtf8InSource
-//         const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
-//         try std.testing.expect(messages.len > 0);
-//         try std.testing.expectEqual(Diagnostic.Tag.InvalidUtf8InSource, messages[0].tag);
-//     }
-// }
+test "tokenizer with invalid UTF-8" {
+    const gpa = std.testing.allocator;
+
+    // Invalid UTF-8 start byte
+    {
+        const invalid_utf8 = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', ' ', 0xFF, ' ', 'w', 'o', 'r', 'l', 'd', '"' };
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, &invalid_utf8, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should have reported InvalidUtf8InSource
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.InvalidUtf8InSource, messages[0].tag);
+    }
+
+    // Incomplete UTF-8 sequence at end
+    {
+        const incomplete_utf8 = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', ' ', 0xC3, '"' }; // 0xC3 expects another byte
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, &incomplete_utf8, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should have reported InvalidUtf8InSource
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.InvalidUtf8InSource, messages[0].tag);
+    }
+}
 
 test "non-printable characters in string literal" {
     const gpa = std.testing.allocator;
@@ -3104,59 +2374,45 @@ test "non-printable characters in string literal" {
         const non_printable = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', '\x01', 'w', 'o', 'r', 'l', 'd', '"' }; // 0x01 is SOH (non-printable)
         var diagnostics: [10]Diagnostic = undefined;
 
-        const source = try gpa.dupe(u8, &non_printable);
-        defer gpa.free(source);
-
-        var env = try CommonEnv.init(gpa, source);
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
         defer env.deinit(gpa);
 
-        var byte_slices = collections.ByteSlices{ .entries = .{} };
-        defer byte_slices.entries.deinit(gpa);
-        var tokenizer = try Tokenizer.init(&env, gpa, env.source, &diagnostics, &byte_slices);
+        var tokenizer = try Tokenizer.init(&env, gpa, &non_printable, &diagnostics);
+        defer tokenizer.deinit(gpa);
         try tokenizer.tokenize(gpa);
-        var output = tokenizer.finishAndDeinit(gpa);
-        defer output.tokens.deinit(gpa);
 
         // Should have reported NonPrintableUnicodeInStrLiteral
-        const messages = output.messages;
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
         try std.testing.expect(messages.len > 0);
         try std.testing.expectEqual(Diagnostic.Tag.NonPrintableUnicodeInStrLiteral, messages[0].tag);
     }
 
-    // Non-ASCII Unicode control characters would require UTF-8 decoding to detect properly
-    // Since we assume UTF-8 is valid (checked with SIMD), we only check ASCII control chars
-    // Commenting out this test case:
-    // {
-    //     const control_char = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', ' ', 0xC2, 0x80, ' ', 'w', 'o', 'r', 'l', 'd', '"' }; // U+0080 (C1 control)
-    //     var diagnostics: [10]Diagnostic = undefined;
-    //
-    //     var env = try CommonEnv.init(gpa, try gpa.dupe(u8, &control_char));
-    //     defer env.deinit(gpa);
-    //
-    //     var byte_slices = collections.ByteSlices{ .entries = .{} };
-    //     defer byte_slices.entries.deinit(gpa);
-    //     var tokenizer = try Tokenizer.init(&env, gpa, env.source, &diagnostics, &byte_slices);
-    //     defer tokenizer.deinit(gpa);
-    //     try tokenizer.tokenize(gpa);
-    //
-    //     const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
-    //     try std.testing.expect(messages.len > 0);
-    //     try std.testing.expectEqual(Diagnostic.Tag.NonPrintableUnicodeInStrLiteral, messages[0].tag);
-    // }
+    // Non-printable (but valid) non-ASCII Unicode characters
+    {
+        const control_char = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', ' ', 0xC2, 0x80, ' ', 'w', 'o', 'r', 'l', 'd', '"' }; // U+0080 (C1 control)
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, &control_char, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.NonPrintableUnicodeInStrLiteral, messages[0].tag);
+    }
 
     // No errors should be reported for these
     {
         const valid_chars = [_]u8{ '"', 'H', 'e', 'l', 'l', 'o', '\t', ' ', 'w', 'o', 'r', 'l', 'd', '"' };
         var diagnostics: [10]Diagnostic = undefined;
 
-        const source = try gpa.dupe(u8, &valid_chars);
-        defer gpa.free(source);
-        var env = try CommonEnv.init(gpa, source);
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
         defer env.deinit(gpa);
 
-        var byte_slices = collections.ByteSlices{ .entries = .{} };
-        defer byte_slices.entries.deinit(gpa);
-        var tokenizer = try Tokenizer.init(&env, gpa, env.source, &diagnostics, &byte_slices);
+        var tokenizer = try Tokenizer.init(&env, gpa, &valid_chars, &diagnostics);
         defer tokenizer.deinit(gpa);
         try tokenizer.tokenize(gpa);
 
@@ -3164,13 +2420,15 @@ test "non-printable characters in string literal" {
         try std.testing.expect(messages.len == 0);
     }
 }
-/// Iterator-based tokenizer that produces tokens one at a time
+
+/// Iterator-based tokenizer for Parser2
 pub const TokenIterator = struct {
     cursor: Cursor,
     string_interpolation_stack: std.ArrayListUnmanaged(StringKind),
     env: *CommonEnv,
     byte_slices: *collections.ByteSlices,
     finished: bool,
+    saw_whitespace: bool,
 
     /// Create a new token iterator
     pub fn init(env: *CommonEnv, gpa: std.mem.Allocator, text: []const u8, messages: []Diagnostic, byte_slices: *collections.ByteSlices) std.mem.Allocator.Error!TokenIterator {
@@ -3183,6 +2441,7 @@ pub const TokenIterator = struct {
             .env = env,
             .byte_slices = byte_slices,
             .finished = false,
+            .saw_whitespace = true,
         };
     }
 
@@ -3197,541 +2456,891 @@ pub const TokenIterator = struct {
         // Check if we're at end of file
         if (self.cursor.pos >= self.cursor.buf.len) {
             self.finished = true;
+            const start = self.cursor.pos;
             return Token{
                 .tag = .EndOfFile,
-                .region = base.Region.from_raw_offsets(@intCast(self.cursor.buf.len), @intCast(self.cursor.buf.len)),
+                .region = base.Region{
+                    .start = base.Region.Position{ .offset = @intCast(start) },
+                    .end = base.Region.Position{ .offset = @intCast(start) },
+                },
                 .extra = .{ .none = 0 },
             };
         }
 
-        // Tokenize a single token using the existing tokenization logic
-        const start_pos = self.cursor.pos;
-        const token_result = try self.tokenizeOne(gpa);
-
-        // If no progress was made, we're done
-        if (self.cursor.pos == start_pos) {
-            self.finished = true;
-            return null;
+        // Skip whitespace and comments
+        while (self.cursor.pos < self.cursor.buf.len) {
+            const b = self.cursor.buf[self.cursor.pos];
+            if (b <= 32 or b == '#') {
+                self.cursor.chompTrivia();
+                self.saw_whitespace = true;
+            } else {
+                break;
+            }
         }
 
-        return token_result;
-    }
-
-    /// Get diagnostic messages up to the current position
-    pub fn getMessages(self: *const TokenIterator) []const Diagnostic {
-        const actual_count = @min(self.cursor.message_count, self.cursor.messages.len);
-        return self.cursor.messages[0..actual_count];
-    }
-
-    /// Check if there are more messages than the buffer can hold
-    pub fn hasDroppedMessages(self: *const TokenIterator) bool {
-        return self.cursor.message_count > self.cursor.messages.len;
-    }
-
-    /// Tokenize a single token (internal implementation)
-    fn tokenizeOne(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
-        // Skip whitespace and comments first
-        self.skipWhitespaceAndComments();
-
+        // Check if we're at end of file after skipping whitespace
         if (self.cursor.pos >= self.cursor.buf.len) {
             self.finished = true;
+            const start = self.cursor.pos;
             return Token{
                 .tag = .EndOfFile,
-                .region = base.Region.from_raw_offsets(@intCast(self.cursor.buf.len), @intCast(self.cursor.buf.len)),
+                .region = base.Region{
+                    .start = base.Region.Position{ .offset = @intCast(start) },
+                    .end = base.Region.Position{ .offset = @intCast(start) },
+                },
                 .extra = .{ .none = 0 },
             };
         }
 
-        const start_pos = self.cursor.pos;
-        const byte = self.cursor.buf[self.cursor.pos];
+        const start = self.cursor.pos;
+        self.saw_whitespace = false;
+        const b = self.cursor.buf[self.cursor.pos];
 
-        // Use the existing tokenization logic adapted for single-token production
-        switch (byte) {
-            '"' => return try self.tokenizeString(gpa),
-            '\'' => return try self.tokenizeSingleQuote(gpa),
-            '0'...'9' => return try self.tokenizeNumber(gpa),
-            'a'...'z', 'A'...'Z', '_' => return try self.tokenizeIdent(gpa),
-            '(' => return self.tokenizeSimple(.OpenRound),
-            ')' => return self.tokenizeSimple(.CloseRound),
-            '[' => return self.tokenizeSimple(.OpenSquare),
-            ']' => return self.tokenizeSimple(.CloseSquare),
-            '{' => return self.tokenizeSimple(.OpenCurly),
-            '}' => return self.tokenizeSimple(.CloseCurly),
-            ',' => return self.tokenizeSimple(.Comma),
-            '.' => return try self.tokenizeDot(gpa),
-            '+' => return self.tokenizeSimple(.OpPlus),
-            '-' => return try self.tokenizeMinus(gpa),
-            '*' => return self.tokenizeSimple(.OpStar),
-            '/' => return try self.tokenizeSlash(gpa),
-            '%' => return self.tokenizeSimple(.OpPercent),
-            '^' => return self.tokenizeSimple(.OpCaret),
-            '=' => return try self.tokenizeEquals(gpa),
-            '!' => return try self.tokenizeBang(gpa),
-            '<' => return try self.tokenizeLessThan(gpa),
-            '>' => return try self.tokenizeGreaterThan(gpa),
-            '&' => return try self.tokenizeAmpersand(gpa),
-            '|' => return try self.tokenizeBar(gpa),
-            '?' => return try self.tokenizeQuestion(gpa),
-            ':' => return try self.tokenizeColon(gpa),
-            '\\' => return self.tokenizeSimple(.OpBackslash),
-            '#' => {
-                // Comment - skip to end of line
-                self.skipComment();
-                // Try again after comment
-                return try self.tokenizeOne(gpa);
+        switch (b) {
+            // String literals
+            '"' => {
+                return try self.tokenizeString(gpa, start);
             },
-            else => {
-                // Handle unexpected character
+
+            // Identifiers and keywords
+            'a'...'z' => {
+                return try self.tokenizeLowerIdentOrKeyword(gpa, start);
+            },
+            'A'...'Z' => {
+                return try self.tokenizeUpperIdent(gpa, start);
+            },
+            '_' => {
+                // Check if it's just underscore or a named underscore
+                if (self.cursor.pos + 1 < self.cursor.buf.len) {
+                    const next_char = self.cursor.buf[self.cursor.pos + 1];
+                    if ((next_char >= 'a' and next_char <= 'z') or (next_char >= 'A' and next_char <= 'Z')) {
+                        return try self.tokenizeLowerIdentOrKeyword(gpa, start);
+                    }
+                }
                 self.cursor.pos += 1;
                 return Token{
-                    .tag = .MalformedUnknownToken,
-                    .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
+                    .tag = .Underscore,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
                     .extra = .{ .none = 0 },
                 };
             },
-        }
-    }
 
-    fn skipWhitespaceAndComments(self: *TokenIterator) void {
-        while (self.cursor.pos < self.cursor.buf.len) {
-            const byte = self.cursor.buf[self.cursor.pos];
-            if (Token.isWhitespace(byte)) {
+            // Numbers
+            '0'...'9' => {
+                return try self.tokenizeNumber(gpa, start);
+            },
+
+            // Operators and punctuation
+            '+' => {
                 self.cursor.pos += 1;
-            } else if (byte == '#') {
-                self.skipComment();
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn skipComment(self: *TokenIterator) void {
-        while (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] != '\n') {
-            self.cursor.pos += 1;
-        }
-        if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '\n') {
-            self.cursor.pos += 1; // Skip the newline
-        }
-    }
-
-    fn tokenizeSimple(self: *TokenIterator, tag: Token.Tag) Token {
-        const start_pos = self.cursor.pos;
-        self.cursor.pos += 1;
-        return Token{
-            .tag = tag,
-            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-            .extra = .{ .none = 0 },
-        };
-    }
-
-    // Placeholder implementations - these would be adapted from the existing tokenizer
-    fn tokenizeString(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
-        // For now, just a simple string tokenization
-        const start_pos = self.cursor.pos;
-        self.cursor.pos += 1; // Skip opening quote
-
-        while (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] != '"') {
-            if (self.cursor.buf[self.cursor.pos] == '\\' and self.cursor.pos + 1 < self.cursor.buf.len) {
-                self.cursor.pos += 2; // Skip escape sequence
-            } else {
+                return Token{
+                    .tag = .OpPlus,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '-' => {
                 self.cursor.pos += 1;
-            }
-        }
-
-        if (self.cursor.pos < self.cursor.buf.len) {
-            self.cursor.pos += 1; // Skip closing quote
-        }
-
-        // Store in ByteSlices
-        const content = self.cursor.buf[start_pos + 1 .. self.cursor.pos - 1];
-        const bytes_idx = try self.byte_slices.append(gpa, content);
-
-        return Token{
-            .tag = .String,
-            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-            .extra = .{ .bytes_idx = bytes_idx },
-        };
-    }
-
-    fn tokenizeSingleQuote(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
-        _ = gpa;
-        const start_pos = self.cursor.pos;
-        self.cursor.pos += 1; // Skip the quote
-        // Simple implementation for now
-        return Token{
-            .tag = .SingleQuote,
-            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-            .extra = .{ .none = 0 },
-        };
-    }
-
-    fn tokenizeNumber(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
-        const start_pos = self.cursor.pos;
-
-        // Simple decimal number parsing
-        while (self.cursor.pos < self.cursor.buf.len) {
-            const byte = self.cursor.buf[self.cursor.pos];
-            if (std.ascii.isDigit(byte) or byte == '_') {
-                self.cursor.pos += 1;
-            } else if (byte == '.' and self.cursor.pos + 1 < self.cursor.buf.len and std.ascii.isDigit(self.cursor.buf[self.cursor.pos + 1])) {
-                // Decimal point
-                self.cursor.pos += 1;
-                while (self.cursor.pos < self.cursor.buf.len and (std.ascii.isDigit(self.cursor.buf[self.cursor.pos]) or self.cursor.buf[self.cursor.pos] == '_')) {
-                    self.cursor.pos += 1;
-                }
-                // Return as float
-                const text = self.cursor.buf[start_pos..self.cursor.pos];
-                if (std.fmt.parseFloat(f64, text)) |value| {
-                    // Try to fit in SmallDec - check bounds first (SmallDec uses i16!)
-                    const scaled = value * 100;
-                    const max_i16 = @as(f64, @floatFromInt(std.math.maxInt(i16)));
-                    const min_i16 = @as(f64, @floatFromInt(std.math.minInt(i16)));
-
-                    if (scaled >= min_i16 and scaled <= max_i16 and !std.math.isNan(scaled) and !std.math.isInf(scaled)) {
-                        const small_dec = Token.SmallDec{ .numerator = @as(i16, @intFromFloat(scaled)), .denominator_power_of_ten = 2 };
-                        return Token{
-                            .tag = .Float,
-                            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-                            .extra = .{ .frac_literal_small = small_dec },
-                        };
-                    } else {
-                        // Value too large for SmallDec, store as bytes
-                        const bytes_idx = try self.byte_slices.append(gpa, text);
-                        return Token{
-                            .tag = .Float,
-                            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-                            .extra = .{ .bytes_idx = bytes_idx },
-                        };
-                    }
-                } else |_| {
-                    // Store as bytes
-                    const bytes_idx = try self.byte_slices.append(gpa, text);
-                    return Token{
-                        .tag = .Float,
-                        .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-                        .extra = .{ .bytes_idx = bytes_idx },
-                    };
-                }
-            } else {
-                break;
-            }
-        }
-
-        // Parse as integer
-        const text = self.cursor.buf[start_pos..self.cursor.pos];
-        if (std.fmt.parseInt(i32, text, 10)) |value| {
-            return Token{
-                .tag = .Int,
-                .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-                .extra = .{ .num_literal_i32 = value },
-            };
-        } else |_| {
-            // Store as bytes for big numbers
-            const bytes_idx = try self.byte_slices.append(gpa, text);
-            return Token{
-                .tag = .Int,
-                .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-                .extra = .{ .bytes_idx = bytes_idx },
-            };
-        }
-    }
-
-    fn tokenizeIdent(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
-        const start_pos = self.cursor.pos;
-
-        // Read identifier characters
-        while (self.cursor.pos < self.cursor.buf.len) {
-            const byte = self.cursor.buf[self.cursor.pos];
-            if (std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '!') {
-                self.cursor.pos += 1;
-            } else {
-                break;
-            }
-        }
-
-        const text = self.cursor.buf[start_pos..self.cursor.pos];
-
-        // Check for keywords first
-        const tag = if (Token.keywords.get(text)) |keyword_tag|
-            keyword_tag
-        else if (std.ascii.isUpper(text[0]))
-            Token.Tag.UpperIdent
-        else
-            Token.Tag.LowerIdent;
-
-        // Intern the identifier
-        const ident = base.Ident.for_text(text);
-        const ident_idx = try self.env.idents.insert(gpa, ident);
-
-        return Token{
-            .tag = tag,
-            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-            .extra = .{ .interned = ident_idx },
-        };
-    }
-
-    fn tokenizeDot(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
-        _ = gpa;
-        const start_pos = self.cursor.pos;
-        self.cursor.pos += 1;
-
-        if (self.cursor.pos < self.cursor.buf.len) {
-            const next_byte = self.cursor.buf[self.cursor.pos];
-            if (next_byte == '.') {
-                self.cursor.pos += 1;
-
-                // Check for third dot to make TripleDot
-                if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '.') {
+                // Check for ->
+                if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '>') {
                     self.cursor.pos += 1;
                     return Token{
-                        .tag = .TripleDot,
-                        .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
+                        .tag = .OpArrow,
+                        .region = base.Region{
+                            .start = base.Region.Position{ .offset = @intCast(start) },
+                            .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                        },
                         .extra = .{ .none = 0 },
                     };
                 }
-
+                // Check if there's whitespace after for binary vs unary minus
+                const has_space_after = self.cursor.pos < self.cursor.buf.len and
+                    (self.cursor.buf[self.cursor.pos] == ' ' or self.cursor.buf[self.cursor.pos] == '\t');
                 return Token{
-                    .tag = .DoubleDot,
-                    .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
+                    .tag = if (has_space_after) .OpBinaryMinus else .OpUnaryMinus,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
                     .extra = .{ .none = 0 },
                 };
+            },
+            '*' => {
+                self.cursor.pos += 1;
+                return Token{
+                    .tag = .OpStar,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '/' => {
+                self.cursor.pos += 1;
+                // Check for //
+                if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '/') {
+                    self.cursor.pos += 1;
+                    return Token{
+                        .tag = .OpDoubleSlash,
+                        .region = base.Region{
+                            .start = base.Region.Position{ .offset = @intCast(start) },
+                            .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                        },
+                        .extra = .{ .none = 0 },
+                    };
+                }
+                return Token{
+                    .tag = .OpSlash,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '=' => {
+                self.cursor.pos += 1;
+                // Check for == or =>
+                if (self.cursor.pos < self.cursor.buf.len) {
+                    const next_char = self.cursor.buf[self.cursor.pos];
+                    if (next_char == '=') {
+                        self.cursor.pos += 1;
+                        return Token{
+                            .tag = .OpEquals,
+                            .region = base.Region{
+                                .start = base.Region.Position{ .offset = @intCast(start) },
+                                .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                            },
+                            .extra = .{ .none = 0 },
+                        };
+                    } else if (next_char == '>') {
+                        self.cursor.pos += 1;
+                        return Token{
+                            .tag = .OpFatArrow,
+                            .region = base.Region{
+                                .start = base.Region.Position{ .offset = @intCast(start) },
+                                .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                            },
+                            .extra = .{ .none = 0 },
+                        };
+                    }
+                }
+                return Token{
+                    .tag = .OpAssign,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '(' => {
+                self.cursor.pos += 1;
+                return Token{
+                    .tag = .OpenRound,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            ')' => {
+                self.cursor.pos += 1;
+                return Token{
+                    .tag = .CloseRound,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '[' => {
+                self.cursor.pos += 1;
+                return Token{
+                    .tag = .OpenSquare,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            ']' => {
+                self.cursor.pos += 1;
+                return Token{
+                    .tag = .CloseSquare,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '{' => {
+                self.cursor.pos += 1;
+                return Token{
+                    .tag = .OpenCurly,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '}' => {
+                self.cursor.pos += 1;
+                return Token{
+                    .tag = .CloseCurly,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            ',' => {
+                self.cursor.pos += 1;
+                return Token{
+                    .tag = .Comma,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            ':' => {
+                self.cursor.pos += 1;
+                // Check for :=
+                if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '=') {
+                    self.cursor.pos += 1;
+                    return Token{
+                        .tag = .OpColonEqual,
+                        .region = base.Region{
+                            .start = base.Region.Position{ .offset = @intCast(start) },
+                            .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                        },
+                        .extra = .{ .none = 0 },
+                    };
+                }
+                return Token{
+                    .tag = .OpColon,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '|' => {
+                self.cursor.pos += 1;
+                // Check for ||
+                if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '|') {
+                    self.cursor.pos += 1;
+                    return Token{
+                        .tag = .OpOr,
+                        .region = base.Region{
+                            .start = base.Region.Position{ .offset = @intCast(start) },
+                            .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                        },
+                        .extra = .{ .none = 0 },
+                    };
+                }
+                return Token{
+                    .tag = .OpBar,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '.' => {
+                self.cursor.pos += 1;
+                // Check for .. and ...
+                if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '.') {
+                    self.cursor.pos += 1;
+                    if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '.') {
+                        self.cursor.pos += 1;
+                        return Token{
+                            .tag = .TripleDot,
+                            .region = base.Region{
+                                .start = base.Region.Position{ .offset = @intCast(start) },
+                                .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                            },
+                            .extra = .{ .none = 0 },
+                        };
+                    }
+                    return Token{
+                        .tag = .DoubleDot,
+                        .region = base.Region{
+                            .start = base.Region.Position{ .offset = @intCast(start) },
+                            .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                        },
+                        .extra = .{ .none = 0 },
+                    };
+                }
+                return Token{
+                    .tag = .Dot,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '<' => {
+                self.cursor.pos += 1;
+                // Check for <=, <-
+                if (self.cursor.pos < self.cursor.buf.len) {
+                    const next_char = self.cursor.buf[self.cursor.pos];
+                    if (next_char == '=') {
+                        self.cursor.pos += 1;
+                        return Token{
+                            .tag = .OpLessThanOrEq,
+                            .region = base.Region{
+                                .start = base.Region.Position{ .offset = @intCast(start) },
+                                .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                            },
+                            .extra = .{ .none = 0 },
+                        };
+                    } else if (next_char == '-') {
+                        self.cursor.pos += 1;
+                        return Token{
+                            .tag = .OpBackArrow,
+                            .region = base.Region{
+                                .start = base.Region.Position{ .offset = @intCast(start) },
+                                .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                            },
+                            .extra = .{ .none = 0 },
+                        };
+                    }
+                }
+                return Token{
+                    .tag = .OpLessThan,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '>' => {
+                self.cursor.pos += 1;
+                // Check for >=
+                if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '=') {
+                    self.cursor.pos += 1;
+                    return Token{
+                        .tag = .OpGreaterThanOrEq,
+                        .region = base.Region{
+                            .start = base.Region.Position{ .offset = @intCast(start) },
+                            .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                        },
+                        .extra = .{ .none = 0 },
+                    };
+                }
+                return Token{
+                    .tag = .OpGreaterThan,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '!' => {
+                self.cursor.pos += 1;
+                // Check for !=
+                if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '=') {
+                    self.cursor.pos += 1;
+                    return Token{
+                        .tag = .OpNotEquals,
+                        .region = base.Region{
+                            .start = base.Region.Position{ .offset = @intCast(start) },
+                            .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                        },
+                        .extra = .{ .none = 0 },
+                    };
+                }
+                return Token{
+                    .tag = .OpBang,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '&' => {
+                self.cursor.pos += 1;
+                // Check for &&
+                if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '&') {
+                    self.cursor.pos += 1;
+                    return Token{
+                        .tag = .OpAnd,
+                        .region = base.Region{
+                            .start = base.Region.Position{ .offset = @intCast(start) },
+                            .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                        },
+                        .extra = .{ .none = 0 },
+                    };
+                }
+                return Token{
+                    .tag = .OpAmpersand,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '%' => {
+                self.cursor.pos += 1;
+                return Token{
+                    .tag = .OpPercent,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '^' => {
+                self.cursor.pos += 1;
+                return Token{
+                    .tag = .OpCaret,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '?' => {
+                self.cursor.pos += 1;
+                // Check for ??
+                if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '?') {
+                    self.cursor.pos += 1;
+                    return Token{
+                        .tag = .OpDoubleQuestion,
+                        .region = base.Region{
+                            .start = base.Region.Position{ .offset = @intCast(start) },
+                            .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                        },
+                        .extra = .{ .none = 0 },
+                    };
+                }
+                return Token{
+                    .tag = .OpQuestion,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '\\' => {
+                self.cursor.pos += 1;
+                return Token{
+                    .tag = .OpBackslash,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '@' => {
+                // Opaque name (@Foo)
+                self.cursor.pos += 1;
+                if (self.cursor.pos < self.cursor.buf.len) {
+                    const next_char = self.cursor.buf[self.cursor.pos];
+                    if (next_char >= 'A' and next_char <= 'Z') {
+                        // Consume the opaque name
+                        while (self.cursor.pos < self.cursor.buf.len) {
+                            const c = self.cursor.buf[self.cursor.pos];
+                            if ((c >= 'a' and c <= 'z') or
+                                (c >= 'A' and c <= 'Z') or
+                                (c >= '0' and c <= '9') or
+                                c == '_')
+                            {
+                                self.cursor.pos += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        const name_text = self.cursor.buf[start + 1 .. self.cursor.pos];
+                        const ident = base.Ident.for_text(name_text);
+                        const interned = try self.env.idents.insert(gpa, ident);
+                        return Token{
+                            .tag = .OpaqueName,
+                            .region = base.Region{
+                                .start = base.Region.Position{ .offset = @intCast(start) },
+                                .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                            },
+                            .extra = .{ .interned = interned },
+                        };
+                    }
+                }
+                return Token{
+                    .tag = .MalformedOpaqueNameWithoutName,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+            '\'' => {
+                // Single quote character literal
+                return try self.tokenizeSingleQuote(gpa, start);
+            },
+
+            // Anything else is an unknown token
+            else => {
+                self.cursor.pos += 1;
+                return Token{
+                    .tag = .MalformedUnknownToken,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            },
+        }
+    }
+
+    fn tokenizeLowerIdentOrKeyword(self: *TokenIterator, gpa: std.mem.Allocator, start_pos: usize) std.mem.Allocator.Error!Token {
+        // Consume identifier characters
+        while (self.cursor.pos < self.cursor.buf.len) {
+            const c = self.cursor.buf[self.cursor.pos];
+            if ((c >= 'a' and c <= 'z') or
+                (c >= 'A' and c <= 'Z') or
+                (c >= '0' and c <= '9') or
+                c == '_')
+            {
+                self.cursor.pos += 1;
+            } else {
+                break;
             }
         }
 
-        return Token{
-            .tag = .Dot,
-            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-            .extra = .{ .none = 0 },
-        };
-    }
+        // Get the identifier text
+        const ident_text = self.cursor.buf[start_pos..self.cursor.pos];
 
-    fn tokenizeMinus(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
-        _ = gpa;
-        const start_pos = self.cursor.pos;
-        self.cursor.pos += 1;
+        // Check if it's a keyword
+        const tag: Token.Tag = if (std.mem.eql(u8, ident_text, "app")) .KwApp else if (std.mem.eql(u8, ident_text, "as")) .KwAs else if (std.mem.eql(u8, ident_text, "crash")) .KwCrash else if (std.mem.eql(u8, ident_text, "dbg")) .KwDbg else if (std.mem.eql(u8, ident_text, "debug")) .KwDebug else if (std.mem.eql(u8, ident_text, "else")) .KwElse else if (std.mem.eql(u8, ident_text, "expect")) .KwExpect else if (std.mem.eql(u8, ident_text, "exposes")) .KwExposes else if (std.mem.eql(u8, ident_text, "exposing")) .KwExposing else if (std.mem.eql(u8, ident_text, "for")) .KwFor else if (std.mem.eql(u8, ident_text, "generates")) .KwGenerates else if (std.mem.eql(u8, ident_text, "has")) .KwHas else if (std.mem.eql(u8, ident_text, "hosted")) .KwHosted else if (std.mem.eql(u8, ident_text, "if")) .KwIf else if (std.mem.eql(u8, ident_text, "implements")) .KwImplements else if (std.mem.eql(u8, ident_text, "import")) .KwImport else if (std.mem.eql(u8, ident_text, "imports")) .KwImports else if (std.mem.eql(u8, ident_text, "in")) .KwIn else if (std.mem.eql(u8, ident_text, "interface")) .KwInterface else if (std.mem.eql(u8, ident_text, "match")) .KwMatch else if (std.mem.eql(u8, ident_text, "module")) .KwModule else if (std.mem.eql(u8, ident_text, "package")) .KwPackage else if (std.mem.eql(u8, ident_text, "packages")) .KwPackages else if (std.mem.eql(u8, ident_text, "platform")) .KwPlatform else if (std.mem.eql(u8, ident_text, "provides")) .KwProvides else if (std.mem.eql(u8, ident_text, "requires")) .KwRequires else if (std.mem.eql(u8, ident_text, "return")) .KwReturn else if (std.mem.eql(u8, ident_text, "var")) .KwVar else if (std.mem.eql(u8, ident_text, "where")) .KwWhere else if (std.mem.eql(u8, ident_text, "while")) .KwWhile else if (std.mem.eql(u8, ident_text, "with")) .KwWith else .LowerIdent;
 
-        if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '>') {
-            self.cursor.pos += 1;
+        // For identifiers, we need to intern them
+        if (tag == .LowerIdent) {
+            const ident = base.Ident.for_text(ident_text);
+            const interned = try self.env.idents.insert(gpa, ident);
             return Token{
-                .tag = .OpArrow,
-                .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
+                .tag = tag,
+                .region = base.Region{
+                    .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                    .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                },
+                .extra = .{ .interned = interned },
+            };
+        } else {
+            // Keywords don't need interning
+            return Token{
+                .tag = tag,
+                .region = base.Region{
+                    .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                    .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                },
                 .extra = .{ .none = 0 },
             };
         }
-
-        return Token{
-            .tag = .OpBinaryMinus,
-            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-            .extra = .{ .none = 0 },
-        };
     }
 
-    fn tokenizeSlash(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
-        _ = gpa;
-        const start_pos = self.cursor.pos;
-        self.cursor.pos += 1;
-
-        if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '/') {
-            self.cursor.pos += 1;
-            return Token{
-                .tag = .OpDoubleSlash,
-                .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-                .extra = .{ .none = 0 },
-            };
-        }
-
-        return Token{
-            .tag = .OpSlash,
-            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-            .extra = .{ .none = 0 },
-        };
-    }
-
-    fn tokenizeEquals(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
-        _ = gpa;
-        const start_pos = self.cursor.pos;
-        self.cursor.pos += 1;
-
-        if (self.cursor.pos < self.cursor.buf.len) {
-            const next_byte = self.cursor.buf[self.cursor.pos];
-            if (next_byte == '=') {
+    fn tokenizeUpperIdent(self: *TokenIterator, gpa: std.mem.Allocator, start_pos: usize) std.mem.Allocator.Error!Token {
+        // Consume identifier characters
+        while (self.cursor.pos < self.cursor.buf.len) {
+            const c = self.cursor.buf[self.cursor.pos];
+            if ((c >= 'a' and c <= 'z') or
+                (c >= 'A' and c <= 'Z') or
+                (c >= '0' and c <= '9') or
+                c == '_')
+            {
                 self.cursor.pos += 1;
-                return Token{
-                    .tag = .OpEquals,
-                    .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-                    .extra = .{ .none = 0 },
-                };
-            } else if (next_byte == '>') {
-                self.cursor.pos += 1;
-                return Token{
-                    .tag = .OpFatArrow,
-                    .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-                    .extra = .{ .none = 0 },
-                };
+            } else {
+                break;
             }
         }
 
+        // Get the identifier text and intern it
+        const ident_text = self.cursor.buf[start_pos..self.cursor.pos];
+        const ident = base.Ident.for_text(ident_text);
+        const interned = try self.env.idents.insert(gpa, ident);
+
         return Token{
-            .tag = .OpAssign,
-            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-            .extra = .{ .none = 0 },
+            .tag = .UpperIdent,
+            .region = base.Region{
+                .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+            },
+            .extra = .{ .interned = interned },
         };
     }
 
-    fn tokenizeBang(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
-        _ = gpa;
-        const start_pos = self.cursor.pos;
-        self.cursor.pos += 1;
-
-        if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '=') {
-            self.cursor.pos += 1;
-            return Token{
-                .tag = .OpNotEquals,
-                .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-                .extra = .{ .none = 0 },
-            };
-        }
-
-        return Token{
-            .tag = .OpBang,
-            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-            .extra = .{ .none = 0 },
-        };
-    }
-
-    fn tokenizeLessThan(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
-        _ = gpa;
-        const start_pos = self.cursor.pos;
-        self.cursor.pos += 1;
-
-        if (self.cursor.pos < self.cursor.buf.len) {
-            const next_byte = self.cursor.buf[self.cursor.pos];
-            if (next_byte == '=') {
+    fn tokenizeNumber(self: *TokenIterator, gpa: std.mem.Allocator, start_pos: usize) std.mem.Allocator.Error!Token {
+        // Simple number tokenization - just consume digits
+        // TODO: Handle decimals, hex, octal, binary, underscores, etc.
+        while (self.cursor.pos < self.cursor.buf.len) {
+            const c = self.cursor.buf[self.cursor.pos];
+            if (c >= '0' and c <= '9') {
                 self.cursor.pos += 1;
-                return Token{
-                    .tag = .OpLessThanOrEq,
-                    .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-                    .extra = .{ .none = 0 },
-                };
-            } else if (next_byte == '-') {
-                self.cursor.pos += 1;
-                return Token{
-                    .tag = .OpBackpass,
-                    .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-                    .extra = .{ .none = 0 },
-                };
+            } else if (c == '.') {
+                // Check if it's a decimal point
+                if (self.cursor.pos + 1 < self.cursor.buf.len) {
+                    const next_char = self.cursor.buf[self.cursor.pos + 1];
+                    if (next_char >= '0' and next_char <= '9') {
+                        // It's a decimal number
+                        self.cursor.pos += 1;
+                        // Continue consuming digits after decimal
+                        while (self.cursor.pos < self.cursor.buf.len) {
+                            const dc = self.cursor.buf[self.cursor.pos];
+                            if (dc >= '0' and dc <= '9') {
+                                self.cursor.pos += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        return Token{
+                            .tag = .Float,
+                            .region = base.Region{
+                                .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                                .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                            },
+                            .extra = .{ .none = 0 }, // TODO: Store float value
+                        };
+                    }
+                }
+                break;
+            } else {
+                break;
             }
         }
 
+        // Parse the integer value
+        const num_text = self.cursor.buf[start_pos..self.cursor.pos];
+        const value = std.fmt.parseInt(i32, num_text, 10) catch {
+            // Number too big or invalid, store in ByteSlices
+            const bytes_idx = try self.byte_slices.append(gpa, num_text);
+            return Token{
+                .tag = .Int,
+                .region = base.Region{
+                    .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                    .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                },
+                .extra = .{ .bytes_idx = bytes_idx },
+            };
+        };
+
         return Token{
-            .tag = .OpLessThan,
-            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-            .extra = .{ .none = 0 },
+            .tag = .Int,
+            .region = base.Region{
+                .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+            },
+            .extra = .{ .num_literal_i32 = value },
         };
     }
 
-    fn tokenizeGreaterThan(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
-        _ = gpa;
-        const start_pos = self.cursor.pos;
+    fn tokenizeSingleQuote(self: *TokenIterator, _: std.mem.Allocator, start_pos: usize) std.mem.Allocator.Error!Token {
+        // Start after the opening single quote
         self.cursor.pos += 1;
 
-        if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '=') {
-            self.cursor.pos += 1;
+        if (self.cursor.pos >= self.cursor.buf.len) {
             return Token{
-                .tag = .OpGreaterThanOrEq,
-                .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
+                .tag = .MalformedSingleQuoteUnclosed,
+                .region = base.Region{
+                    .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                    .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                },
                 .extra = .{ .none = 0 },
             };
         }
 
-        return Token{
-            .tag = .OpGreaterThan,
-            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-            .extra = .{ .none = 0 },
-        };
-    }
+        var char_value: u8 = 0;
+        const c = self.cursor.buf[self.cursor.pos];
 
-    fn tokenizeAmpersand(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
-        _ = gpa;
-        const start_pos = self.cursor.pos;
-        self.cursor.pos += 1;
-
-        if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '&') {
+        if (c == '\\') {
+            // Handle escape sequence
+            self.cursor.pos += 1;
+            if (self.cursor.pos >= self.cursor.buf.len) {
+                return Token{
+                    .tag = .MalformedSingleQuoteUnclosed,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
+            }
+            const escaped = self.cursor.buf[self.cursor.pos];
+            switch (escaped) {
+                'n' => char_value = '\n',
+                'r' => char_value = '\r',
+                't' => char_value = '\t',
+                '\\' => char_value = '\\',
+                '\'' => char_value = '\'',
+                else => {
+                    self.cursor.pos += 1;
+                    // Check for closing quote
+                    if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '\'') {
+                        self.cursor.pos += 1;
+                    }
+                    return Token{
+                        .tag = .MalformedSingleQuoteInvalidEscapeSequence,
+                        .region = base.Region{
+                            .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                            .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                        },
+                        .extra = .{ .none = 0 },
+                    };
+                },
+            }
+            self.cursor.pos += 1;
+        } else if (c == '\'') {
+            // Empty single quote
             self.cursor.pos += 1;
             return Token{
-                .tag = .OpAnd,
-                .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
+                .tag = .MalformedSingleQuoteEmpty,
+                .region = base.Region{
+                    .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                    .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                },
+                .extra = .{ .none = 0 },
+            };
+        } else {
+            // Regular character
+            char_value = c;
+            self.cursor.pos += 1;
+        }
+
+        // Check for closing quote
+        if (self.cursor.pos >= self.cursor.buf.len or self.cursor.buf[self.cursor.pos] != '\'') {
+            return Token{
+                .tag = .MalformedSingleQuoteUnclosed,
+                .region = base.Region{
+                    .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                    .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                },
                 .extra = .{ .none = 0 },
             };
         }
+        self.cursor.pos += 1;
 
+        // Store the character value in the extra field
         return Token{
-            .tag = .MalformedOperator,
-            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-            .extra = .{ .none = 0 },
+            .tag = .SingleQuote,
+            .region = base.Region{
+                .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+            },
+            .extra = .{ .none = char_value },
         };
     }
 
-    fn tokenizeBar(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
-        _ = gpa;
-        const start_pos = self.cursor.pos;
+    fn tokenizeString(self: *TokenIterator, gpa: std.mem.Allocator, start_pos: usize) std.mem.Allocator.Error!Token {
+        // Start after the opening quote
         self.cursor.pos += 1;
 
-        if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '|') {
-            self.cursor.pos += 1;
+        // Check for multiline string
+        if (self.cursor.peek() == '"' and self.cursor.peekAt(1) == '"') {
+            // TODO: Handle multiline strings
+            self.cursor.pos += 2;
             return Token{
-                .tag = .OpOr,
-                .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-                .extra = .{ .none = 0 },
+                .tag = .MultilineString,
+                .region = base.Region{
+                    .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                    .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                },
+                .extra = .{ .bytes_idx = @enumFromInt(0) }, // TODO: handle multiline strings properly
             };
         }
 
-        return Token{
-            .tag = .OpBar,
-            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-            .extra = .{ .none = 0 },
-        };
-    }
+        // Parse single-line string content
+        var string_content = std.ArrayList(u8).init(gpa);
+        defer string_content.deinit();
 
-    fn tokenizeQuestion(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
-        _ = gpa;
-        const start_pos = self.cursor.pos;
-        self.cursor.pos += 1;
+        while (self.cursor.pos < self.cursor.buf.len) {
+            const c = self.cursor.buf[self.cursor.pos];
 
-        if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '?') {
-            self.cursor.pos += 1;
-            return Token{
-                .tag = .OpDoubleQuestion,
-                .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-                .extra = .{ .none = 0 },
-            };
+            if (c == '"') {
+                // End of string
+                self.cursor.pos += 1;
+
+                // Store the string content in ByteSlices
+                const bytes_idx = try self.byte_slices.append(gpa, string_content.items);
+
+                return Token{
+                    .tag = .String,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .bytes_idx = bytes_idx },
+                };
+            } else if (c == '\\') {
+                // Handle escape sequences
+                self.cursor.pos += 1;
+                if (self.cursor.pos < self.cursor.buf.len) {
+                    const escaped = self.cursor.buf[self.cursor.pos];
+                    switch (escaped) {
+                        'n' => try string_content.append('\n'),
+                        'r' => try string_content.append('\r'),
+                        't' => try string_content.append('\t'),
+                        '\\' => try string_content.append('\\'),
+                        '"' => try string_content.append('"'),
+                        else => {
+                            // Unknown escape sequence - just add the character
+                            try string_content.append(escaped);
+                        },
+                    }
+                    self.cursor.pos += 1;
+                }
+            } else if (c == '\n') {
+                // Unclosed string
+                const bytes_idx = try self.byte_slices.append(gpa, string_content.items);
+                return Token{
+                    .tag = .MalformedString,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .bytes_idx = bytes_idx },
+                };
+            } else {
+                // Regular character
+                try string_content.append(c);
+                self.cursor.pos += 1;
+            }
         }
 
+        // Reached end of file without closing quote
+        const bytes_idx = try self.byte_slices.append(gpa, string_content.items);
         return Token{
-            .tag = .OpQuestion,
-            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-            .extra = .{ .none = 0 },
-        };
-    }
-
-    fn tokenizeColon(self: *TokenIterator, gpa: std.mem.Allocator) std.mem.Allocator.Error!Token {
-        _ = gpa;
-        const start_pos = self.cursor.pos;
-        self.cursor.pos += 1;
-
-        if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '=') {
-            self.cursor.pos += 1;
-            return Token{
-                .tag = .OpColonEqual,
-                .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-                .extra = .{ .none = 0 },
-            };
-        }
-
-        return Token{
-            .tag = .OpColon,
-            .region = base.Region.from_raw_offsets(@intCast(start_pos), @intCast(self.cursor.pos)),
-            .extra = .{ .none = 0 },
+            .tag = .MalformedString,
+            .region = base.Region{
+                .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+            },
+            .extra = .{ .bytes_idx = bytes_idx },
         };
     }
 };

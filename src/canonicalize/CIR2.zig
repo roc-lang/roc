@@ -883,6 +883,16 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             return asExprIdx(node_idx);
         },
 
+        // String literals
+        .str_literal_small => {
+            self.mutateToExpr(node_idx, .str_literal_small);
+            return asExprIdx(node_idx);
+        },
+        .str_literal_big => {
+            self.mutateToExpr(node_idx, .str_literal_big);
+            return asExprIdx(node_idx);
+        },
+
         // Binary operators
         .binop_plus, .binop_minus, .binop_star, .binop_slash => {
             // Get the binop data from AST's node slices
