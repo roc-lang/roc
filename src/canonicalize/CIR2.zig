@@ -85,12 +85,34 @@ pub const UnifiedTag = enum(u8) {
 
     // === CIR Expression tags ===
     expr_lookup = 160,
+    expr_neg_lookup,
+    expr_not_lookup,
     expr_num_literal_i32,
     expr_int_literal_i32,
+    expr_frac_literal_small,
+    expr_str_literal_small,
+    expr_str_literal_big,
+    expr_list_literal,
+    expr_empty_list,
+    expr_record_literal,
+    expr_empty_record,
+    expr_apply_ident,
+    expr_apply_tag,
+    expr_lambda,
+    expr_if_else,
     expr_binop_plus,
     expr_binop_minus,
     expr_binop_star,
     expr_binop_slash,
+    expr_binop_double_equals,
+    expr_binop_not_equals,
+    expr_binop_gt,
+    expr_binop_gte,
+    expr_binop_lt,
+    expr_binop_lte,
+    expr_binop_and,
+    expr_binop_or,
+    expr_record_access,
     expr_malformed,
 
     // === CIR Pattern tags ===
@@ -151,9 +173,12 @@ pub fn pushDiagnostic(self: *CIR, allocator: Allocator, tag: CanDiagnostic.Tag, 
     });
 }
 
-/// Get a mutable node for in-place tag mutation
-pub fn getNodeMut(self: *CIR, idx: AST2.Node.Idx) *AST2.Node {
-    return self.ast.nodes.getPtr(@enumFromInt(@intFromEnum(idx)));
+/// Get a mutable pointer to a node's tag for in-place mutation
+pub fn getNodeTagPtr(self: *CIR, idx: AST2.Node.Idx) *AST2.Node.Tag {
+    // SafeMultiList stores fields separately, so we get pointer to the tag field
+    const idx_raw = @as(collections.SafeMultiList(AST2.Node).Idx, @enumFromInt(@intFromEnum(idx)));
+    const slice = self.ast.nodes.items.slice();
+    return &slice.items(.tag)[@intFromEnum(idx_raw)];
 }
 
 /// Get an immutable node
@@ -163,10 +188,10 @@ pub fn getNode(self: *const CIR, idx: AST2.Node.Idx) AST2.Node {
 
 /// Mutate a node's tag in place to a CIR tag
 pub fn mutateNodeTag(self: *CIR, idx: AST2.Node.Idx, new_tag: UnifiedTag) void {
-    const node = self.getNodeMut(idx);
+    const tag_ptr = self.getNodeTagPtr(idx);
     // Cast the tag field to u8 and overwrite it
-    const tag_ptr = @as(*u8, @ptrCast(&node.tag));
-    tag_ptr.* = @intFromEnum(new_tag);
+    const tag_u8_ptr = @as(*u8, @ptrCast(tag_ptr));
+    tag_u8_ptr.* = @intFromEnum(new_tag);
 }
 
 /// Cast an AST node index to a Stmt index (same underlying value)
@@ -236,12 +261,34 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
     // Convert UnifiedTag to Expr.Tag
     const expr_tag: Expr.Tag = switch (unified_tag) {
         .expr_lookup => .lookup,
+        .expr_neg_lookup => .neg_lookup,
+        .expr_not_lookup => .not_lookup,
         .expr_num_literal_i32 => .num_literal_i32,
         .expr_int_literal_i32 => .int_literal_i32,
+        .expr_frac_literal_small => .frac_literal_small,
+        .expr_str_literal_small => .str_literal_small,
+        .expr_str_literal_big => .str_literal_big,
+        .expr_list_literal => .list_literal,
+        .expr_empty_list => .empty_list,
+        .expr_record_literal => .record_literal,
+        .expr_empty_record => .empty_record,
+        .expr_apply_ident => .apply_ident,
+        .expr_apply_tag => .apply_tag,
+        .expr_lambda => .lambda,
+        .expr_if_else => .if_else,
         .expr_binop_plus => .binop_plus,
         .expr_binop_minus => .binop_minus,
         .expr_binop_star => .binop_star,
         .expr_binop_slash => .binop_slash,
+        .expr_binop_double_equals => .binop_double_equals,
+        .expr_binop_not_equals => .binop_not_equals,
+        .expr_binop_gt => .binop_gt,
+        .expr_binop_gte => .binop_gte,
+        .expr_binop_lt => .binop_lt,
+        .expr_binop_lte => .binop_lte,
+        .expr_binop_and => .binop_and,
+        .expr_binop_or => .binop_or,
+        .expr_record_access => .record_access,
         .expr_malformed => .malformed,
         else => unreachable, // Should only be called on expression nodes
     };
@@ -288,7 +335,7 @@ pub fn getPatt(self: *const CIR, idx: Patt.Idx) struct {
 
 /// Get a binop from the AST's NodeSlices
 /// The payload already contains the correct index - we just cast the index types
-pub fn getBinOp(self: *const CIR, comptime IdxType: type, binop_idx: IdxType) struct {
+pub fn getBinOp(self: *const CIR, comptime IdxType: type, binop_idx: collections.NodeSlices(AST2.Node.Idx).Idx) struct {
     lhs: IdxType,
     rhs: IdxType,
 } {
@@ -694,16 +741,16 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         // Expression nodes - mutate tag in place
         .num_literal_i32 => {
             self.mutateNodeTag(node_idx, .expr_num_literal_i32);
-            return self.asExprIdx(node_idx);
+            return asExprIdx(node_idx);
         },
         .int_literal_i32 => {
             self.mutateNodeTag(node_idx, .expr_int_literal_i32);
-            return self.asExprIdx(node_idx);
+            return asExprIdx(node_idx);
         },
         .lc, .var_lc => {
             // Identifiers become lookups in expression context
             self.mutateNodeTag(node_idx, .expr_lookup);
-            return self.asExprIdx(node_idx);
+            return asExprIdx(node_idx);
         },
 
         // Binary operators
@@ -725,7 +772,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             };
 
             self.mutateNodeTag(node_idx, unified_tag);
-            return self.asExprIdx(node_idx);
+            return asExprIdx(node_idx);
         },
 
         // Pattern nodes - these are errors in expression context!
@@ -733,28 +780,28 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             // Underscore pattern found in expression context
             try self.pushDiagnostic(allocator, .pattern_in_expr_context, node_region);
             self.mutateNodeTag(node_idx, .expr_malformed);
-            return self.asExprIdx(node_idx);
+            return asExprIdx(node_idx);
         },
         .uc => {
             // Uppercase identifier (tag pattern) in expression context
             // This could be a tag constructor, but for now treat as error
             try self.pushDiagnostic(allocator, .pattern_in_expr_context, node_region);
             self.mutateNodeTag(node_idx, .expr_malformed);
-            return self.asExprIdx(node_idx);
+            return asExprIdx(node_idx);
         },
 
         // Statement nodes - error in expression context
         .import => {
             try self.pushDiagnostic(allocator, .stmt_in_expr_context, node_region);
             self.mutateNodeTag(node_idx, .expr_malformed);
-            return self.asExprIdx(node_idx);
+            return asExprIdx(node_idx);
         },
 
         else => {
             // Unsupported node type
             try self.pushDiagnostic(allocator, .unsupported_node, node_region);
             self.mutateNodeTag(node_idx, .expr_malformed);
-            return self.asExprIdx(node_idx);
+            return asExprIdx(node_idx);
         },
     }
 }
