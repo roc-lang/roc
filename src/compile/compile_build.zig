@@ -787,6 +787,12 @@ pub const BuildEnv = struct {
 
                     const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
                     const v = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
+
+                    // TODO: actually handle duplicate keys
+                    if (info.shorthands.fetchRemove(k)) |e| {
+                        self.gpa.free(e.key);
+                        self.gpa.free(e.value);
+                    }
                     try info.shorthands.put(self.gpa, try self.gpa.dupe(u8, k), v);
                 }
             },
@@ -811,6 +817,12 @@ pub const BuildEnv = struct {
                         self.gpa.free(v);
                         return error.PathOutsideWorkspace;
                     }
+
+                    // TODO: actually handle duplicate keys
+                    if (info.shorthands.fetchRemove(k)) |e| {
+                        self.gpa.free(e.key);
+                        self.gpa.free(e.value);
+                    }
                     try info.shorthands.put(self.gpa, try self.gpa.dupe(u8, k), v);
                 }
             },
@@ -826,12 +838,20 @@ pub const BuildEnv = struct {
                         continue;
                     }
                     const relp = try self.stringFromExpr(&ast, rf.value.?);
+                    defer self.gpa.free(relp);
+
                     const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
                     const v = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
                     // Enforce: platform header deps must be within workspace roots
                     if (!PathUtils.isWithinRoot(v, self.workspace_roots.items)) {
                         self.gpa.free(v);
                         return error.PathOutsideWorkspace;
+                    }
+
+                    // TODO: actually handle duplicate keys
+                    if (info.shorthands.fetchRemove(k)) |e| {
+                        self.gpa.free(e.key);
+                        self.gpa.free(e.value);
                     }
                     try info.shorthands.put(self.gpa, try self.gpa.dupe(u8, k), v);
                 }
