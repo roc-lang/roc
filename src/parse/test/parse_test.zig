@@ -1035,9 +1035,9 @@ test "manual snapshot comparison - one file" {
         \\    "one"
     ;
 
-    std.debug.print("\n=== Manual Snapshot Test ===\n", .{});
-    std.debug.print("Expected problems: NIL (no errors)\n", .{});
-    std.debug.print("Source:\n{s}\n\n", .{source});
+    // std.debug.print("\n=== Manual Snapshot Test ===\n", .{});
+    // std.debug.print("Expected problems: NIL (no errors)\n", .{});
+    // std.debug.print("Source:\n{s}\n\n", .{source});
 
     var ast = try AST2.initCapacity(allocator, 100);
     defer ast.deinit(allocator);
@@ -1053,24 +1053,22 @@ test "manual snapshot comparison - one file" {
     var parser = try Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
     defer parser.deinit();
 
-    std.debug.print("Parsing...\n", .{});
-    parser.parseFile() catch |err| {
-        std.debug.print("Parse error: {}\n", .{err});
-    };
+    // std.debug.print("Parsing...\n", .{});
+    parser.parseFile() catch {};
 
-    std.debug.print("Parsing completed! Diagnostics: {d}\n", .{parser.diagnostics.items.len});
+    // std.debug.print("Parsing completed! Diagnostics: {d}\n", .{parser.diagnostics.items.len});
 
-    for (parser.diagnostics.items, 0..) |diagnostic, i| {
-        std.debug.print("  [{d}] {s}\n", .{ i, @tagName(diagnostic.tag) });
-    }
+    // for (parser.diagnostics.items, 0..) |diagnostic, i| {
+    //     std.debug.print("  [{d}] {s}\n", .{ i, @tagName(diagnostic.tag) });
+    // }
 
     if (parser.diagnostics.items.len == 0) {
-        std.debug.print("RESULT: MATCH - No parsing errors (expected NIL)\n", .{});
+        // std.debug.print("RESULT: MATCH - No parsing errors (expected NIL)\n", .{});
     } else {
-        std.debug.print("RESULT: MISMATCH - Found {d} errors (expected NIL)\n", .{parser.diagnostics.items.len});
+        // std.debug.print("RESULT: MISMATCH - Found {d} errors (expected NIL)\n", .{parser.diagnostics.items.len});
     }
 
-    std.debug.print("=== End Manual Test ===\n", .{});
+    // std.debug.print("=== End Manual Test ===\n", .{});
 }
 
 test "Parser2: iterative parser simple expression" {

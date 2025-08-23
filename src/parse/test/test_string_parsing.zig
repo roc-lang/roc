@@ -33,7 +33,7 @@ test "parse simple string literal" {
             switch (token.extra) {
                 .bytes_idx => |idx| {
                     const content = byte_slices.slice(idx);
-                    std.debug.print("\nTokenized string: '{s}'\n", .{content});
+                    // std.debug.print("\nTokenized string: '{s}'\n", .{content});
                     try testing.expectEqualStrings("hello world", content);
                     found_string = true;
                 },

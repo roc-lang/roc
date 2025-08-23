@@ -351,8 +351,8 @@ test "snapshot comparison - new Parser2 vs existing snapshots" {
         }
     }
 
-    std.debug.print("\n=== SNAPSHOT COMPARISON RESULTS ===\n", .{});
-    std.debug.print("Processed {d} snapshot files\n\n", .{file_count});
+    // std.debug.print("\n=== SNAPSHOT COMPARISON RESULTS ===\n", .{});
+    // std.debug.print("Processed {d} snapshot files\n\n", .{file_count});
 
     var same_count: u32 = 0;
     var different_count: u32 = 0;
@@ -366,8 +366,8 @@ test "snapshot comparison - new Parser2 vs existing snapshots" {
         if (!result.parse_succeeded) {
             parse_failures += 1;
             if (parse_failures <= 5) {
-                std.debug.print("PARSE FAILURE #{} in {s}:\n", .{ parse_failures, result.filename });
-                std.debug.print("  New problems: {s}\n", .{result.new_problems});
+                // std.debug.print("PARSE FAILURE #{} in {s}:\n", .{ parse_failures, result.filename });
+                // std.debug.print("  New problems: {s}\n", .{result.new_problems});
             }
         }
 
@@ -375,23 +375,23 @@ test "snapshot comparison - new Parser2 vs existing snapshots" {
             same_count += 1;
         } else {
             different_count += 1;
-            std.debug.print("DIFF in {s}:\n", .{result.filename});
-            std.debug.print("  Type: {s}\n", .{result.meta.type});
-            std.debug.print("  Description: {s}\n", .{result.meta.description});
+            // std.debug.print("DIFF in {s}:\n", .{result.filename});
+            // std.debug.print("  Type: {s}\n", .{result.meta.type});
+            // std.debug.print("  Description: {s}\n", .{result.meta.description});
 
             if (comparison.missing_in_new.len > 0) {
-                std.debug.print("  MISSING IN NEW:\n    {s}\n", .{comparison.missing_in_new});
+                // std.debug.print("  MISSING IN NEW:\n    {s}\n", .{comparison.missing_in_new});
             }
             if (comparison.new_problems.len > 0) {
-                std.debug.print("  NEW PROBLEMS:\n    {s}\n", .{comparison.new_problems});
+                // std.debug.print("  NEW PROBLEMS:\n    {s}\n", .{comparison.new_problems});
             }
-            std.debug.print("\n", .{});
+            // std.debug.print("\n", .{});
         }
     }
 
-    std.debug.print("=== SUMMARY ===\n", .{});
-    std.debug.print("Same problems: {d}\n", .{same_count});
-    std.debug.print("Different problems: {d}\n", .{different_count});
-    std.debug.print("Parse failures: {d}\n", .{parse_failures});
-    std.debug.print("Total processed: {d}\n", .{file_count});
+    // std.debug.print("=== SUMMARY ===\n", .{});
+    // std.debug.print("Same problems: {d}\n", .{same_count});
+    // std.debug.print("Different problems: {d}\n", .{different_count});
+    // std.debug.print("Parse failures: {d}\n", .{parse_failures});
+    // std.debug.print("Total processed: {d}\n", .{file_count});
 }
