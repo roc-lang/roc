@@ -1668,11 +1668,11 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
 
     // Free allocated error messages
-    for (test_results.items) |test_result| {
+    defer for (test_results.items) |test_result| {
         if (test_result.error_msg) |msg| {
             gpa.free(msg);
         }
-    }
+    };
 
     // Report results
     if (failed == 0) {
