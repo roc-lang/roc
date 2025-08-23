@@ -1939,7 +1939,7 @@ const Formatter = struct {
                     if (found_comment or newline_count > 0) {
                         try fmt.pushIndent();
                     } else if (!fmt.has_newline) {
-                        try fmt.pushAll(" ");
+                        try fmt.push(' ');
                     }
                     try fmt.push('#');
                     const comment_text = between_text[comment_start..comment_end];
@@ -1950,13 +1950,15 @@ const Formatter = struct {
                     found_comment = true;
                 }
                 try fmt.newline();
-                newline_count += 1;
+                newline_count = 1; // reset count to allow an additional newline after a comment
                 i = comment_end;
                 if (i < between_text.len and (between_text[i] == '\n' or between_text[i] == '\r')) {
                     i += 1; // Skip any additional newlines
                 }
             } else if (between_text[i] == '\n') {
-                try fmt.newline();
+                if (newline_count < 2) {
+                    try fmt.newline();
+                }
                 newline_count += 1;
                 i += 1;
             } else {
