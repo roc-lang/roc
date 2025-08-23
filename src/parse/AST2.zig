@@ -1404,6 +1404,7 @@ pub const Diagnostic = struct {
         expr_no_space_dot_int,
         no_else,
         expected_expr_bar,
+        backslash_not_valid_lambda_syntax,
         expected_expr_close_curly_or_comma,
         expected_expr_close_round_or_comma,
         expected_expr_close_square_or_comma,

@@ -262,6 +262,15 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
                         break :blk try self.pushMalformed(.expr_unexpected_token, pos);
                     }
                 },
+                .OpBackslash => blk: {
+                    // Backslash is not valid lambda syntax in Roc
+                    // Provide a helpful error message about the correct syntax
+                    const error_pos = self.currentPosition();
+                    self.advance();
+                    // Push a diagnostic with a helpful message about Roc's lambda syntax
+                    // Roc uses |arg1, arg2| body instead of \arg1, arg2 -> body
+                    break :blk try self.pushMalformed(.backslash_not_valid_lambda_syntax, error_pos);
+                },
                 else => blk: {
                     // Always use current token position for error reporting
                     const error_pos = self.currentPosition();
@@ -1514,10 +1523,13 @@ fn parseListLiteral(self: *Parser) Error!Node.Idx {
     };
 
     const elems = self.getScratchNodesSince(scratch_marker);
-    if (elems.len > 0) {
-        _ = try self.ast.appendNodeSlice(self.gpa, elems);
-    }
-    return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .list_elems = @intCast(elems.len) });
+    const nodes_idx = if (elems.len > 0)
+        try self.ast.appendNodeSlice(self.gpa, elems)
+    else blk: {
+        const empty_slice: []const Node.Idx = &.{};
+        break :blk try self.ast.appendNodeSlice(self.gpa, empty_slice);
+    };
+    return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .nodes = nodes_idx });
 }
 
 fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {

@@ -92,6 +92,8 @@ pub const ExprTag = enum(u8) {
     binop_lte,
     binop_and,
     binop_or,
+    binop_colon, // For record fields
+    block, // Block expression
     record_access,
     malformed,
 };
@@ -420,6 +422,8 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
         .binop_lte => .binop_lte,
         .binop_and => .binop_and,
         .binop_or => .binop_or,
+        .binop_colon => .binop_colon,
+        .block => .block,
         .record_access => .record_access,
         .malformed => .malformed,
     };
@@ -703,6 +707,7 @@ pub const Expr = struct {
         binop_thin_arrow, // .binop_thin_arrow
         binop_and, // .binop_and
         binop_or, // .binop_or
+        binop_colon, // .binop_colon (for record fields)
         record_access, // .binop_dot with .lc for rhs (e.g. `foo.bar`)
         method_call, // .binop_dot with .apply_lc for rhs (e.g. `foo.bar()`)
 
@@ -894,7 +899,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         },
 
         // Binary operators
-        .binop_plus, .binop_minus, .binop_star, .binop_slash => {
+        .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_colon => {
             // Get the binop data from AST's node slices
             const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
 
@@ -908,6 +913,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                 .binop_minus => .binop_minus,
                 .binop_star => .binop_star,
                 .binop_slash => .binop_slash,
+                .binop_colon => .binop_colon,
                 else => unreachable,
             };
             self.mutateToExpr(node_idx, expr_tag);
@@ -926,6 +932,65 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             // This could be a tag constructor, but for now treat as error
             try self.pushDiagnostic(allocator, .pattern_in_expr_context, node_region);
             self.mutateToExpr(node_idx, .malformed);
+            return asExprIdx(node_idx);
+        },
+
+        // Block - could be a single-field record or an actual block
+        .block => {
+            // Get the nodes in the block
+            const nodes_idx = node.payload.nodes;
+            var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+
+            // Count how many nodes we have
+            var count: usize = 0;
+            var first_node: ?AST2.Node.Idx = null;
+            while (iter.next()) |n| {
+                if (count == 0) first_node = n;
+                count += 1;
+            }
+
+            // Check if this is a single-field record case:
+            // { x: Foo } → single field record
+            // { x } → block with single expression
+            // { x: Foo, y: Bar } → would have been parsed as record_literal, not block
+            // { x: Foo x = blah } → block with type annotation
+            if (count == 1) {
+                // Single node in block - check if it's a colon binop
+                if (first_node) |fn_idx| {
+                    const fn_node = self.getNode(fn_idx);
+                    if (fn_node.tag == .binop_colon) {
+                        // Single colon binop → treat as single-field record
+                        self.mutateToExpr(node_idx, .record_literal);
+
+                        // Canonicalize the field (the colon binop)
+                        _ = try self.canonicalizeExpr(allocator, fn_idx);
+
+                        return asExprIdx(node_idx);
+                    }
+                }
+            }
+
+            // Otherwise it's a regular block
+            // Canonicalize all nodes in the block
+            iter = self.ast.*.node_slices.nodes(&nodes_idx);
+            while (iter.next()) |n| {
+                _ = try self.canonicalizeExpr(allocator, n);
+            }
+
+            self.mutateToExpr(node_idx, .block);
+            return asExprIdx(node_idx);
+        },
+
+        // Record literal - definitely a record
+        .record_literal => {
+            // Canonicalize all fields
+            const nodes_idx = node.payload.nodes;
+            var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+            while (iter.next()) |n| {
+                _ = try self.canonicalizeExpr(allocator, n);
+            }
+
+            self.mutateToExpr(node_idx, .record_literal);
             return asExprIdx(node_idx);
         },
 
