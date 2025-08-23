@@ -907,8 +907,8 @@ const Formatter = struct {
                 // Handle extension if present
                 if (r.ext) |ext| {
                     if (multiline) {
-                        _ = try fmt.flushCommentsAfter(r.region.start);
                         fmt.curr_indent += 1;
+                        _ = try fmt.flushCommentsAfter(r.region.start);
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
                     } else {
@@ -927,8 +927,8 @@ const Formatter = struct {
 
                 // Format fields
                 if (multiline and !has_extension and fields.len > 0) {
-                    _ = try fmt.flushCommentsAfter(r.region.start);
                     fmt.curr_indent += 1;
+                    _ = try fmt.flushCommentsAfter(r.region.start);
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
