@@ -915,12 +915,13 @@ const Formatter = struct {
                         try fmt.push(' ');
                     }
                     try fmt.pushAll("..");
-                    _ = try fmt.formatExpr(ext);
+                    const ext_region = try fmt.formatExpr(ext);
                     has_extension = true;
 
                     try fmt.push(',');
                     if (multiline and fields.len > 0) {
-                        try fmt.newline();
+                        _ = try fmt.flushCommentsAfter(ext_region.end);
+                        try fmt.ensureNewline();
                         try fmt.pushIndent();
                     }
                 }
