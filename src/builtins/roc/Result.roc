@@ -5,11 +5,11 @@ module [
     is_eq,
     map_ok,
     map_err,
+    on_err,
+    on_err!,
     map_both,
     map2,
     try,
-    on_err,
-    on_err!,
     with_default,
 ]
 
@@ -19,7 +19,7 @@ import Bool exposing [Bool.*]
 ## okay, or else there was an error of some sort.
 Result(ok, err) := [Ok(ok), Err(err)]
 
-## Returns `Bool.true` if the result indicates a success, else returns `Bool.false`
+## Returns `Bool.true` if the result indicates a success, else returns `Bool.false`.
 ## ```roc
 ## Ok(5).is_ok()
 ## ```
@@ -29,7 +29,7 @@ is_ok = |result| match result {
     Result.Err(_) => Bool.false
 }
 
-## Returns `Bool.true` if the result indicates a failure, else returns `Bool.false`
+## Returns `Bool.true` if the result indicates a failure, else returns `Bool.false`.
 ## ```roc
 ## Err("uh oh").is_err()
 ## ```
@@ -41,9 +41,14 @@ is_err = |result| match result {
 
 ## If the result is `Ok`, returns the value it holds. Otherwise, returns
 ## the given default value.
+##
+## Note: This function should be used sparingly, because it hides that an error
+## happened, which will make debugging harder. Prefer using `?` to forward errors or
+## handle them explicitly with `when`.
 ## ```roc
-## Ok(7).with_default(42)
-## Err("uh oh").with_default(42)
+## Err("uh oh").with_default(42) # = 42
+##
+## Ok(7).with_default(42) # = 7
 ## ```
 with_default : Result(ok, err), ok -> ok
 with_default = |result, default| match result {
@@ -55,8 +60,9 @@ with_default = |result, default| match result {
 ## function on it. Then returns a new `Ok` holding the transformed value. If the
 ## result is `Err`, this has no effect. Use [map_err] to transform an `Err`.
 ## ```roc
-## Ok(12).map_ok(Num.neg)
-## Err("yipes!").map_ok(Num.neg)
+## Ok(12).map_ok(Num.neg) # = Ok(-12)
+##
+## Err("yipes!").map_ok(Num.neg) # = Err("yipes!")
 ## ```
 ##
 ## Functions like `map` are common in Roc; see for example [List.map],
@@ -71,13 +77,48 @@ map_ok = |result, transform| match result {
 ## function on it. Then returns a new `Err` holding the transformed value. If
 ## the result is `Ok`, this has no effect. Use [map] to transform an `Ok`.
 ## ```roc
-## Err("yipes!").map_err(Str.is_empty)
-## Ok(12).map_err(Str.is_empty)
+## [].last().map_err(|_| ProvidedListIsEmpty) # = Err(ProvidedListIsEmpty)
+##
+## [4].last().map_err(|_| ProvidedListIsEmpty) # = Ok(4)
 ## ```
 map_err : Result(ok, a), (a -> b) -> Result(ok, b)
 map_err = |result, transform| match result {
     Result.Ok(v) => Result.Ok(v)
     Result.Err(e) => Result.Err(transform(e))
+}
+
+## If the result is `Err`, transforms the entire result by running a conversion
+## function on the value the `Err` holds. Then returns that new result. If the
+## result is `Ok`, this has no effect. Use `?` or [try] to transform an `Ok`.
+## ```roc
+## Result.on_err(Ok(10), Str.to_u64) # = Ok(10)
+##
+## Result.on_err(Err("42"), Str.to_u64) # = Ok(42)
+##
+## Result.on_err(Err("string"), Str.to_u64) # = Err(InvalidNumStr)
+## ```
+on_err : Result(a, err), (err -> Result(a, other_err)) -> Result(a, other_err)
+on_err = |result, transform| match result {
+    Result.Ok(v) => Result.Ok(v)
+    Result.Err(e) => transform(e)
+}
+
+expect Result.on_err(Ok(10), Str.to_u64) == Result.Ok(10)
+expect Result.on_err(Err("42"), Str.to_u64) == Result.Ok(42)
+expect Result.on_err(Err("string"), Str.to_u64) == Result.Err(InvalidNumStr)
+
+## Like [on_err], but it allows the transformation function to produce effects.
+##
+## ```roc
+## Err("missing user").on_err(|msg| {
+##     Stdout.line!("ERROR: ${msg}")?
+##     Err(msg)
+## })
+## ```
+on_err! : Result(a, err), (err => Result(a, other_err)) => Result(a, other_err)
+on_err! = |result, transform!| match result {
+    Result.Ok(v) => Result.Ok(v)
+    Result.Err(e) => transform!(e)
 }
 
 ## Maps both the `Ok` and `Err` values of a `Result` to new values.
@@ -99,10 +140,14 @@ map2 = |first_result, second_result, transform| match (first_result, second_resu
 ## If the result is `Ok`, transforms the entire result by running a conversion
 ## function on the value the `Ok` holds. Then returns that new result. If the
 ## result is `Err`, this has no effect. Use `on_err` to transform an `Err`.
+##
+## We recommend using `?` instead of `try`, it makes the code easier to read.
 ## ```roc
-## Ok(-1).try(|num| if num < 0 then Err("negative!") else Ok(-num)) # Result.Err("negative!") : Result(U64, Str)
-## Ok(1).try(|num| if num < 0 then Err("negative!") else Ok(-num)) # Result.Ok(-1) : Result(U64, Str)
-## Err("yipes!").try(|num| if num < 0 then Err("negative!") else Ok(-num)) # Result.Err("yipes!") : Result(U64, Str)
+## Ok(-1).try(|num| if num < 0 then Err("negative!") else Ok(-num)) # = Err("negative!")
+##
+## Ok(1).try(|num| if num < 0 then Err("negative!") else Ok(-num)) # = Ok(-1)
+##
+## Err("yipes!").try(|num| if num < 0 then Err("negative!") else Ok(-num)) # = Err("yipes!")
 ## ```
 try : Result(a, err), (a -> Result(b, err)) -> Result(b, err)
 try = |result, transform| match result {
@@ -113,38 +158,6 @@ try = |result, transform| match result {
 expect Ok(-1).try(|num| if num < 0 then Err("negative!") else Ok(-num)) == Result.Err("negative!")
 expect Ok(1).try(|num| if num < 0 then Err("negative!") else Ok(-num)) == Result.Ok(-1)
 expect Err("yipes!").try(|num| if num < 0 then Err("negative!") else Ok(-num)) == Result.Err("yipes!")
-
-## If the result is `Err`, transforms the entire result by running a conversion
-## function on the value the `Err` holds. Then returns that new result. If the
-## result is `Ok`, this has no effect. Use `try` to transform an `Ok`.
-## ```roc
-## Result.on_err(Ok(10), (|error_num| Str.to_u64(error_num))) # Result.Ok(10) : Result(U64, [InvalidNumStr])
-## Result.on_err(Err("42"), (|error_num| Str.to_u64(error_num))) # Result.Ok(42) : Result(U64, [InvalidNumStr])
-## Result.on_err(Err("a2"), Str.to_u64) # Result.Err(InvalidNumStr) : Result(U64, [InvalidNumStr])
-## ```
-on_err : Result(a, err), (err -> Result(a, other_err)) -> Result(a, other_err)
-on_err = |result, transform| match result {
-    Result.Ok(v) => Result.Ok(v)
-    Result.Err(e) => transform(e)
-}
-
-expect Result.on_err(Ok(10), Str.to_u64) == Result.Ok(10)
-expect Result.on_err(Err("42"), Str.to_u64) == Result.Ok(42)
-expect Result.on_err(Err("a2"), Str.to_u64) == Result.Err(InvalidNumStr)
-
-## Like [on_err], but it allows the transformation function to produce effects.
-##
-## ```roc
-## Err("missing user").on_err(|msg| {
-##     Stdout.line!("ERROR: ${msg}")?
-##     Err(msg)
-## })
-## ```
-on_err! : Result(a, err), (err => Result(a, other_err)) => Result(a, other_err)
-on_err! = |result, transform!| match result {
-    Result.Ok(v) => Result.Ok(v)
-    Result.Err(e) => transform!(e)
-}
 
 ## Implementation of [Bool.Eq].  Checks if two results that have both `ok` and `err` types that are `Eq` are themselves equal.
 ##
