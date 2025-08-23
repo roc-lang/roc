@@ -24,7 +24,7 @@ fn parseTestFile(allocator: std.mem.Allocator, source: []const u8) !AST2 {
     var parser = try Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
     defer parser.deinit();
 
-    try parser.parseFile();
+    _ = try parser.parseFile();
 
     return ast;
 }
@@ -1054,7 +1054,7 @@ test "manual snapshot comparison - one file" {
     defer parser.deinit();
 
     // std.debug.print("Parsing...\n", .{});
-    parser.parseFile() catch {};
+    _ = parser.parseFile() catch null;
 
     // std.debug.print("Parsing completed! Diagnostics: {d}\n", .{parser.diagnostics.items.len});
 

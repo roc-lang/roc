@@ -70,6 +70,7 @@ pub const ExprTag = enum(u8) {
     num_literal_i32,
     int_literal_i32,
     frac_literal_small,
+    frac_literal_big,
     str_literal_small,
     str_literal_big,
     list_literal,
@@ -93,6 +94,7 @@ pub const ExprTag = enum(u8) {
     binop_and,
     binop_or,
     binop_colon, // For record fields
+    binop_equals, // For assignments in expression context
     block, // Block expression
     record_access,
     malformed,
@@ -400,6 +402,7 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
         .num_literal_i32 => .num_literal_i32,
         .int_literal_i32 => .int_literal_i32,
         .frac_literal_small => .frac_literal_small,
+        .frac_literal_big => .frac_literal_big,
         .str_literal_small => .str_literal_small,
         .str_literal_big => .str_literal_big,
         .list_literal => .list_literal,
@@ -423,6 +426,7 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
         .binop_and => .binop_and,
         .binop_or => .binop_or,
         .binop_colon => .binop_colon,
+        .binop_equals => .binop_equals,
         .block => .block,
         .record_access => .record_access,
         .malformed => .malformed,
@@ -708,6 +712,7 @@ pub const Expr = struct {
         binop_and, // .binop_and
         binop_or, // .binop_or
         binop_colon, // .binop_colon (for record fields)
+        binop_equals, // .binop_equals (for assignments in expression context)
         record_access, // .binop_dot with .lc for rhs (e.g. `foo.bar`)
         method_call, // .binop_dot with .apply_lc for rhs (e.g. `foo.bar()`)
 
@@ -882,6 +887,14 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             self.mutateToExpr(node_idx, .int_literal_i32);
             return asExprIdx(node_idx);
         },
+        .frac_literal_small => {
+            self.mutateToExpr(node_idx, .frac_literal_small);
+            return asExprIdx(node_idx);
+        },
+        .frac_literal_big => {
+            self.mutateToExpr(node_idx, .frac_literal_big);
+            return asExprIdx(node_idx);
+        },
         .lc, .var_lc => {
             // Identifiers become lookups in expression context
             self.mutateToExpr(node_idx, .lookup);
@@ -899,7 +912,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         },
 
         // Binary operators
-        .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_colon => {
+        .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_colon, .binop_equals => {
             // Get the binop data from AST's node slices
             const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
 
@@ -914,6 +927,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                 .binop_star => .binop_star,
                 .binop_slash => .binop_slash,
                 .binop_colon => .binop_colon,
+                .binop_equals => .binop_equals,
                 else => unreachable,
             };
             self.mutateToExpr(node_idx, expr_tag);

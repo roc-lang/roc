@@ -119,7 +119,7 @@ fn parseWithNewPipeline(allocator: std.mem.Allocator, source: []const u8, snapsh
     defer parser.deinit();
 
     if (std.mem.eql(u8, snapshot_type, "file")) {
-        parser.parseFile() catch {};
+        _ = parser.parseFile() catch null;
     } else {
         _ = parser.parseExpr() catch {};
     }

@@ -2233,19 +2233,30 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
 
             // If the input has malformed tokens, we don't want to assert anything about it (yet)
-            .MalformedNumberBadSuffix,
-            .MalformedNumberUnicodeSuffix,
-            .MalformedNumberNoDigits,
-            .MalformedNumberNoExponentDigits,
-            .MalformedInvalidUnicodeEscapeSequence,
-            .MalformedInvalidEscapeSequence,
-            .MalformedUnicodeIdent,
-            .MalformedDotUnicodeIdent,
-            .MalformedNoSpaceDotUnicodeIdent,
-            .MalformedUnknownToken,
-            .MalformedNamedUnderscoreUnicode,
-            .MalformedOpaqueNameUnicode,
-            .MalformedOpaqueNameWithoutName,
+            .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .MalformedUnicodeIdent, .MalformedDotUnicodeIdent, .MalformedNoSpaceDotUnicodeIdent, .MalformedUnknownToken, .MalformedNamedUnderscoreUnicode, .MalformedOpaqueNameUnicode, .MalformedOpaqueNameWithoutName, .String => {
+                return error.Unsupported;
+            },
+            .MultilineString => {
+                return error.Unsupported;
+            },
+            .MalformedString => {
+                return error.Unsupported;
+            },
+            .MultilineStringEnd => {
+                return error.Unsupported;
+            },
+            .IntBase => {
+                return error.Unsupported;
+            },
+            .OpBackpass => {
+                return error.Unsupported;
+            },
+            .MalformedOperator => {
+                return error.Unsupported;
+            },
+            .KwWhile => {
+                return error.Unsupported;
+            },
             .MalformedSingleQuoteEmpty,
             .MalformedSingleQuoteTooLong,
             .MalformedSingleQuoteUnclosed,
@@ -3098,17 +3109,21 @@ pub const TokenIterator = struct {
 
     fn tokenizeNumber(self: *TokenIterator, gpa: std.mem.Allocator, start_pos: usize) std.mem.Allocator.Error!Token {
         // Simple number tokenization - just consume digits
-        // TODO: Handle decimals, hex, octal, binary, underscores, etc.
+        // TODO: Handle hex, octal, binary, underscores, etc.
+        var has_decimal = false;
+        var has_exponent = false;
+
         while (self.cursor.pos < self.cursor.buf.len) {
             const c = self.cursor.buf[self.cursor.pos];
             if (c >= '0' and c <= '9') {
                 self.cursor.pos += 1;
-            } else if (c == '.') {
+            } else if (c == '.' and !has_decimal and !has_exponent) {
                 // Check if it's a decimal point
                 if (self.cursor.pos + 1 < self.cursor.buf.len) {
                     const next_char = self.cursor.buf[self.cursor.pos + 1];
                     if (next_char >= '0' and next_char <= '9') {
                         // It's a decimal number
+                        has_decimal = true;
                         self.cursor.pos += 1;
                         // Continue consuming digits after decimal
                         while (self.cursor.pos < self.cursor.buf.len) {
@@ -3119,24 +3134,76 @@ pub const TokenIterator = struct {
                                 break;
                             }
                         }
-                        return Token{
-                            .tag = .Float,
-                            .region = base.Region{
-                                .start = base.Region.Position{ .offset = @intCast(start_pos) },
-                                .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
-                            },
-                            .extra = .{ .none = 0 }, // TODO: Store float value
-                        };
+                    } else {
+                        break; // Dot is not part of the number
                     }
+                } else {
+                    break;
                 }
-                break;
+            } else if ((c == 'e' or c == 'E') and !has_exponent) {
+                // Check for scientific notation
+                if (self.cursor.pos + 1 < self.cursor.buf.len) {
+                    var exp_pos = self.cursor.pos + 1;
+                    const next_char = self.cursor.buf[exp_pos];
+
+                    // Check for optional + or - after e
+                    if (next_char == '+' or next_char == '-') {
+                        exp_pos += 1;
+                    }
+
+                    // Check if there's at least one digit after e/E
+                    if (exp_pos < self.cursor.buf.len and self.cursor.buf[exp_pos] >= '0' and self.cursor.buf[exp_pos] <= '9') {
+                        has_exponent = true;
+                        self.cursor.pos = exp_pos;
+                        // Consume exponent digits
+                        while (self.cursor.pos < self.cursor.buf.len) {
+                            const ec = self.cursor.buf[self.cursor.pos];
+                            if (ec >= '0' and ec <= '9') {
+                                self.cursor.pos += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                    } else {
+                        break; // 'e' is not part of the number
+                    }
+                } else {
+                    break;
+                }
             } else {
                 break;
             }
         }
 
-        // Parse the integer value
         const num_text = self.cursor.buf[start_pos..self.cursor.pos];
+
+        // Check if it's a float
+        if (has_decimal or has_exponent) {
+            // Try to parse as SmallDec first
+            if (parseSmallDec(num_text)) |small_dec| {
+                return Token{
+                    .tag = .Float,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .frac_literal_small = small_dec },
+                };
+            } else {
+                // Fallback to ByteSlices for large numbers or scientific notation
+                const bytes_idx = try self.byte_slices.append(gpa, num_text);
+                return Token{
+                    .tag = .Float,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .bytes_idx = bytes_idx },
+                };
+            }
+        }
+
+        // Parse as integer
         const value = std.fmt.parseInt(i32, num_text, 10) catch {
             // Number too big or invalid, store in ByteSlices
             const bytes_idx = try self.byte_slices.append(gpa, num_text);
@@ -3344,3 +3411,55 @@ pub const TokenIterator = struct {
         };
     }
 };
+
+/// Try to parse a fractional literal as a small dec (numerator/10^power)
+fn parseSmallDec(token_text: []const u8) ?Token.SmallDec {
+    // Return null if input is too long to fit in our 32-byte buffer
+    if (token_text.len > 32) return null;
+
+    // For negative zero, we'll return null to force f64 path
+    if (token_text.len > 0 and token_text[0] == '-') {
+        const rest = token_text[1..];
+        // Check if it's -0, -0.0, -0.00, etc.
+        var all_zeros = true;
+        for (rest) |c| {
+            if (c != '0' and c != '.') {
+                all_zeros = false;
+                break;
+            }
+        }
+        if (all_zeros) return null;
+    }
+
+    // Parse as a whole number by removing the decimal point
+    const dot_pos = std.mem.indexOf(u8, token_text, ".") orelse {
+        // No decimal point, parse as integer
+        const val = std.fmt.parseInt(i32, token_text, 10) catch return null;
+        if (val < -32768 or val > 32767) return null;
+        return Token.SmallDec{ .numerator = @as(i16, @intCast(val)), .denominator_power_of_ten = 0 };
+    };
+
+    // Count digits after decimal point
+    const after_decimal_len = token_text.len - dot_pos - 1;
+    if (after_decimal_len > 255) return null; // Too many decimal places
+
+    // Build the string without the decimal point
+    var buf: [32]u8 = undefined;
+    var len: usize = 0;
+
+    // Copy part before decimal
+    @memcpy(buf[0..dot_pos], token_text[0..dot_pos]);
+    len = dot_pos;
+
+    // Copy part after decimal
+    if (after_decimal_len > 0) {
+        @memcpy(buf[len..][0..after_decimal_len], token_text[dot_pos + 1 ..]);
+        len += after_decimal_len;
+    }
+
+    // Parse the combined number
+    const val = std.fmt.parseInt(i32, buf[0..len], 10) catch return null;
+    if (val < -32768 or val > 32767) return null;
+
+    return Token.SmallDec{ .numerator = @as(i16, @intCast(val)), .denominator_power_of_ten = @as(u8, @intCast(after_decimal_len)) };
+}

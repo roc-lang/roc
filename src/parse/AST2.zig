@@ -339,7 +339,7 @@ pub fn binOpSymbolRegion(self: *const Ast, idx: Node.Idx, raw_src: []u8, ident_s
     var binop_end = binop_start + 1;
     var src_byte = raw_src[binop_end];
 
-    while (!tokenize.Token.isWhitespace(src_byte) and (binop_end + 1) < rhs_start) {
+    while (!(src_byte == ' ' or src_byte == '\t' or src_byte == '\n' or src_byte == '\r') and (binop_end + 1) < rhs_start) {
         binop_end += 1;
         std.debug.assert(binop_end < raw_src.len); // We should never run off the end.
         src_byte = raw_src[binop_end];
@@ -415,7 +415,7 @@ pub fn region(
 
             // region_start begins at the `var`; skip over "var " and any whitespace/comments after it.
             var region_start_offset = region_start_pos.offset;
-            region_start_offset += tokenize.Token.KW_VAR.len + 2; // +1 for the mandatory whitespace after `var`, +1 for ident start
+            region_start_offset += 3 + 2; // "var".len + 1 for the mandatory whitespace after `var`, +1 for ident start
             region_start_offset += @as(u32, @intCast(nextTokenIndex(raw_src[region_start_offset..])));
 
             return .{
@@ -585,19 +585,19 @@ pub fn region(
         },
         .block => {
             const nodes_iter = self.nodesInBlock(idx);
-            return self.containerRegion(idx, nodes_iter, tokenize.Token.DELIM_CLOSE_CURLY, raw_src, ident_store);
+            return self.containerRegion(idx, nodes_iter, '}', raw_src, ident_store);
         },
         .list_literal => {
             const nodes_iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
-            return self.containerRegion(idx, nodes_iter, tokenize.Token.DELIM_CLOSE_SQUARE, raw_src, ident_store);
+            return self.containerRegion(idx, nodes_iter, ']', raw_src, ident_store);
         },
         .tuple_literal => {
             const nodes_iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
-            return self.containerRegion(idx, nodes_iter, tokenize.Token.DELIM_CLOSE_ROUND, raw_src, ident_store);
+            return self.containerRegion(idx, nodes_iter, ')', raw_src, ident_store);
         },
         .record_literal => {
             const nodes_iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
-            return self.containerRegion(idx, nodes_iter, tokenize.Token.DELIM_CLOSE_CURLY, raw_src, ident_store);
+            return self.containerRegion(idx, nodes_iter, '}', raw_src, ident_store);
         },
         .lambda => {
             // Opening `|`
@@ -1060,7 +1060,7 @@ fn nextTokenIndex(bytes: []u8) usize {
     var is_in_comment = false;
 
     // Skip past whitespace and_or comments
-    while (tokenize.Token.isWhitespace(byte) or is_in_comment) {
+    while ((byte == ' ' or byte == '\t' or byte == '\n' or byte == '\r') or is_in_comment) {
         // Branchlessly deal with entering and exiting line comments
         is_in_comment = byte == '#' or (is_in_comment and byte != '\n');
         index += 1;

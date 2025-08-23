@@ -1232,7 +1232,7 @@ fn processSnapshotContent(
     // Generate remaining sections that depend on canonicalization
     success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
     try generateProblemsSection(&output, &generated_reports);
-    try generateCanonicalizeSection2(&output, &cir, maybe_expr_idx, maybe_stmt_idx, maybe_patt_idx);
+    try generateCanonicalizeSection2(&output, &cir, &env, maybe_expr_idx, maybe_stmt_idx, maybe_patt_idx);
     try generateSolvedSection(&output, &cir, &env, maybe_expr_idx);
     try generateTypesSection2(&output, &cir, content.meta.node_type, &env, maybe_expr_idx);
 
@@ -2571,9 +2571,11 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
                 else => unreachable,
             };
 
-            // Check if ByteSlices is empty (happens after CIR2 mutation)
-            if (ast.byte_slices.entries.items.items.len == 0) {
-                // ByteSlices is empty - this happens when outputting AST after CIR2 mutation
+            // Check if ByteSlices is empty or index is out of bounds (happens after CIR2 mutation)
+            const byte_slices_len = ast.byte_slices.entries.items.items.len;
+            const idx_usize = @as(usize, @intCast(@intFromEnum(idx)));
+            if (byte_slices_len == 0 or idx_usize >= byte_slices_len) {
+                // ByteSlices is empty or index is invalid - this happens when outputting AST after CIR2 mutation
                 // CIR2 may create new nodes with ByteSlices indices but doesn't populate the ByteSlices
                 try writer.print(" big:<idx:{}>", .{@intFromEnum(idx)});
             } else {
@@ -2681,6 +2683,7 @@ fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: 
 fn generateCanonicalizeSection2(
     output: *DualOutput,
     cir: *const CIR,
+    env: *const base.CommonEnv,
     maybe_expr_idx: ?CIR.Expr.Idx,
     maybe_stmt_idx: ?CIR.Stmt.Idx,
     maybe_patt_idx: ?CIR.Patt.Idx,
@@ -2690,7 +2693,7 @@ fn generateCanonicalizeSection2(
 
     // Output CIR2 structure
     if (maybe_expr_idx) |expr_idx| {
-        try outputCIR2ExprAsSExpr(output.md_writer, cir, expr_idx, 0);
+        try outputCIR2ExprAsSExpr(output.md_writer, cir, env, expr_idx, 0);
     } else if (maybe_stmt_idx) |stmt_idx| {
         try outputCIR2StmtAsSExpr(output.md_writer, cir, stmt_idx, 0);
     } else if (maybe_patt_idx) |patt_idx| {
@@ -2704,7 +2707,7 @@ fn generateCanonicalizeSection2(
 }
 
 /// Helper to output CIR2 expression as S-expression
-fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, expr_idx: CIR.Expr.Idx, indent: usize) !void {
+fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.CommonEnv, expr_idx: CIR.Expr.Idx, indent: usize) !void {
     const expr = cir.getExpr(expr_idx);
 
     // Indent
@@ -2723,11 +2726,43 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, expr_idx: CIR.Expr.Id
         .int_literal_i32 => {
             try writer.print(" {}", .{expr.payload.int_literal_i32});
         },
-        .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .binop_colon => {
+        .frac_literal_small => {
+            // Get the actual AST node to access the SmallDec data
+            const node_idx = @as(AST.Node.Idx, @enumFromInt(@intFromEnum(expr_idx)));
+            const ast_node = cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+            const small_dec = ast_node.payload.frac_literal_small;
+            const decimal_value = @as(f64, @floatFromInt(small_dec.numerator)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(small_dec.denominator_power_of_ten)));
+            try writer.print(" {d}", .{decimal_value});
+        },
+        .frac_literal_big => {
+            // Get the actual AST node to access the ByteSlices index
+            const node_idx = @as(AST.Node.Idx, @enumFromInt(@intFromEnum(expr_idx)));
+            const ast_node = cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+            const idx = ast_node.payload.frac_literal_big;
+            // Check if ByteSlices is empty or index is out of bounds
+            const cir_ast = cir.ast.*;
+            const byte_slices_len = cir_ast.byte_slices.entries.items.items.len;
+            const idx_usize = @as(usize, @intCast(@intFromEnum(idx)));
+            if (byte_slices_len == 0 or idx_usize >= byte_slices_len) {
+                try writer.print(" big:<idx:{}>", .{@intFromEnum(idx)});
+            } else {
+                const slice = cir_ast.byte_slices.slice(idx);
+                try writer.print(" {s}", .{slice});
+            }
+        },
+        .lookup => {
+            // Get the actual AST node to access the ident index
+            const node_idx = @as(AST.Node.Idx, @enumFromInt(@intFromEnum(expr_idx)));
+            const ast_node = cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+            const ident_idx = ast_node.payload.ident;
+            const ident_name = env.idents.getText(ident_idx);
+            try writer.print(" \"{s}\"", .{ident_name});
+        },
+        .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .binop_colon, .binop_equals => {
             const binop = cir.getBinOp(CIR.Expr.Idx, expr.payload.binop);
             try writer.writeAll("\n");
-            try outputCIR2ExprAsSExpr(writer, cir, binop.lhs, indent + 1);
-            try outputCIR2ExprAsSExpr(writer, cir, binop.rhs, indent + 1);
+            try outputCIR2ExprAsSExpr(writer, cir, env, binop.lhs, indent + 1);
+            try outputCIR2ExprAsSExpr(writer, cir, env, binop.rhs, indent + 1);
             for (0..indent) |_| {
                 try writer.writeAll("  ");
             }
@@ -2740,7 +2775,7 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, expr_idx: CIR.Expr.Id
             while (iter.next()) |node_idx| {
                 // The nodes are expression indices
                 const e_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
-                try outputCIR2ExprAsSExpr(writer, cir, e_idx, indent + 1);
+                try outputCIR2ExprAsSExpr(writer, cir, env, e_idx, indent + 1);
             }
             for (0..indent) |_| {
                 try writer.writeAll("  ");
@@ -2931,10 +2966,69 @@ fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeTy
         } else {
             try output.md_writer.writeAll("# No expression found\n");
         }
+    } else if (node_type == .file) {
+        // For type=file, show types of top-level definitions
+        if (maybe_expr_idx) |expr_idx| {
+            const expr = cir.getExpr(expr_idx);
+            // Check if it's a block with assignments (typical for files)
+            if (expr.tag == .block) {
+                // Extract named bindings from the file's top-level block
+                const nodes_idx = expr.payload.nodes;
+                var iter = cir.ast.*.node_slices.nodes(&nodes_idx);
+
+                while (iter.next()) |node_idx| {
+                    const node = cir.getNode(node_idx);
+                    const tag_int = @intFromEnum(node.tag);
+
+                    // Check if this is an assignment (now stored as binop_equals expression)
+                    if (tag_int == @intFromEnum(CIR.ExprTag.binop_equals)) {
+                        // It's a binop_equals expression (assignment)
+                        // Get the pattern (variable name) and expression
+                        const binop = cir.ast.*.node_slices.binOp(node.payload.binop);
+                        const lhs_node = cir.getNode(binop.lhs);
+
+                        // Get the identifier name if it's a simple binding
+                        const lhs_tag_int = @intFromEnum(lhs_node.tag);
+                        // After canonicalization, LHS identifiers become lookup expressions
+                        if (lhs_tag_int == @intFromEnum(CIR.ExprTag.lookup)) {
+                            const ident_idx = lhs_node.payload.ident;
+                            const ident_str = env.idents.getText(ident_idx);
+
+                            // Get the RHS expression and infer its type
+                            const rhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
+
+                            // Infer the type using the existing context
+                            const inferred_type = infer_ctx.inferExpr(rhs_expr_idx) catch {
+                                try output.md_writer.print("{s} : ?\n", .{ident_str});
+                                continue;
+                            };
+
+                            // Format the type using TypeWriter
+                            var type_writer = types.TypeWriter.initFromParts(output.gpa, &types_store, &env.idents) catch {
+                                try output.md_writer.print("{s} : ?\n", .{ident_str});
+                                continue;
+                            };
+                            defer type_writer.deinit();
+
+                            type_writer.write(inferred_type) catch {
+                                try output.md_writer.print("{s} : ?\n", .{ident_str});
+                                continue;
+                            };
+
+                            const type_str = type_writer.get();
+                            try output.md_writer.print("{s} : {s}\n", .{ ident_str, type_str });
+                        }
+                    }
+                }
+            } else {
+                try output.md_writer.writeAll("# File does not contain a block of statements\n");
+            }
+        } else {
+            try output.md_writer.writeAll("# No top-level expression found in file\n");
+        }
     } else {
-        // For non-expr types, we don't show types
-        // (statements and patterns would need different handling)
-        try output.md_writer.writeAll("# Type checking for non-expression nodes not yet implemented\n");
+        // For other non-expr types (patterns, etc.), we don't show types yet
+        try output.md_writer.writeAll("# Type checking for this node type not yet implemented\n");
     }
 
     try output.end_code_block();
