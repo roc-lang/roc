@@ -796,7 +796,7 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
     const packages_idx = if (packages_nodes.len > 0)
         try self.ast.appendNodeSlice(self.gpa, packages_nodes)
     else
-        @as(AST.NodeSlices.Idx, @enumFromInt(0));
+        @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(0));
 
     // Check that we found a platform
     if (@intFromEnum(platform_field) == 0) {
@@ -862,7 +862,7 @@ fn parsePackageHeader(self: *Parser, start_pos: Position) Error!AST.Header {
             try self.pushDiagnostic(.expected_packages_close_curly, start_pos, self.currentPosition());
         };
         break :blk idx;
-    } else @as(AST.NodeSlices.Idx, @enumFromInt(0));
+    } else @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(0));
 
     return AST.Header{ .package = .{
         .exposes = exposes_idx,
@@ -1053,7 +1053,7 @@ fn parsePlatformSpecification(self: *Parser) Error!Node.Idx {
     }
 }
 
-fn parsePackageList(self: *Parser) Error!AST.NodeSlices.Idx {
+fn parsePackageList(self: *Parser) Error!collections.NodeSlices(AST.Node.Idx).Idx {
     const scratch_marker = self.markScratchNodes();
     defer self.restoreScratchNodes(scratch_marker);
 
@@ -1097,7 +1097,7 @@ fn parsePackageList(self: *Parser) Error!AST.NodeSlices.Idx {
     return try self.ast.appendNodeSlice(self.gpa, packages);
 }
 
-fn parseExposedList(self: *Parser, end_token: Token.Tag) Error!AST.NodeSlices.Idx {
+fn parseExposedList(self: *Parser, end_token: Token.Tag) Error!collections.NodeSlices(AST.Node.Idx).Idx {
     const scratch_marker = self.markScratchNodes();
     defer self.restoreScratchNodes(scratch_marker);
 
@@ -1154,7 +1154,7 @@ fn parseExposedItem(self: *Parser) Error!Node.Idx {
     }
 }
 
-fn parseTypeVariableList(self: *Parser) Error!AST.NodeSlices.Idx {
+fn parseTypeVariableList(self: *Parser) Error!collections.NodeSlices(AST.Node.Idx).Idx {
     const scratch_marker = self.markScratchNodes();
     defer self.restoreScratchNodes(scratch_marker);
 

@@ -19,7 +19,7 @@ const SExprTree = base.SExprTree;
 const SExpr = base.SExpr;
 const TypeVar = types_mod.Var;
 const ByteSlices = collections.ByteSlices;
-// TODO: Import NodeSlices from parse.AST2 when needed
+const AST2 = parse.AST2;
 
 // In AST, we have a Node type which represents uncategorized AST nodes.
 // In CIR, we categorize each of these nodes so that we can work with more
@@ -35,11 +35,27 @@ const ByteSlices = collections.ByteSlices;
 // of 1 in memory to mean something else, because we never use Tag number to distinguish
 // between whether we have a Stmt, Expr, Patt, or Type; rather, we only use it to
 // distinguish *within* one of those types.
+//
+// We use the same NodeSlices structure from collections, parameterized with the
+// appropriate index type (e.g., Stmt.Idx, Expr.Idx, etc.). During canonicalization,
+// we'll cast the AST's NodeSlices to the appropriate CIR NodeSlices type.
 
 pub const Stmt = struct {
     tag: Stmt.Tag, // u8 discriminant
     start: Position, // u32 UTF-8 bytes from start of source bytes where this begins
     payload: Stmt.Payload, // u32 union of extra information that varies based on tag
+
+    /// Index to a Stmt in the CIR.
+    /// Although this is an i32, indices are never negative in practice.
+    /// We use i32 instead of u32 so we can use the sign bit as a sentinel
+    /// terminator when storing indices in collections like NodeSlices.
+    pub const Idx = enum(i32) {
+        _,
+
+        fn asUsize(self: Idx) usize {
+            return @intCast(@intFromEnum(self));
+        }
+    };
 
     pub const Tag = enum {
         // The comment after each of these is the AST.Node.Tag it was converted from
@@ -68,6 +84,18 @@ pub const Patt = struct {
     tag: Patt.Tag, // u8 discriminant
     start: Position, // u32 UTF-8 bytes from start of source bytes where this begins
     payload: Patt.Payload, // u32 union of extra information that varies based on tag
+
+    /// Index to a Patt in the CIR.
+    /// Although this is an i32, indices are never negative in practice.
+    /// We use i32 instead of u32 so we can use the sign bit as a sentinel
+    /// terminator when storing indices in collections like NodeSlices.
+    pub const Idx = enum(i32) {
+        _,
+
+        fn asUsize(self: Idx) usize {
+            return @intCast(@intFromEnum(self));
+        }
+    };
 
     pub const Tag = enum {
         // The comment after each of these is the AST.Node.Tag it was converted from
@@ -109,6 +137,18 @@ pub const Expr = struct {
     tag: Expr.Tag, // u8 discriminant
     start: Position, // u32 UTF-8 bytes from start of source bytes where this begins
     payload: Expr.Payload, // u32 union of extra information that varies based on tag
+
+    /// Index to an Expr in the CIR.
+    /// Although this is an i32, indices are never negative in practice.
+    /// We use i32 instead of u32 so we can use the sign bit as a sentinel
+    /// terminator when storing indices in collections like NodeSlices.
+    pub const Idx = enum(i32) {
+        _,
+
+        fn asUsize(self: Idx) usize {
+            return @intCast(@intFromEnum(self));
+        }
+    };
 
     pub const Tag = enum {
         // The comment after each of these is the AST.Node.Tag it was converted from
@@ -173,12 +213,11 @@ pub const Expr = struct {
         src_bytes_end: Position, // The last byte where this node appeared in the source code. Used in error reporting.
 
         list_elems: u32, // Number of elements in the list literal
-        // TODO: NodeSlices needs to be imported from parse module
-        block_nodes: u32, // TODO: Should be NodeSlices.Idx - Number of nodes in a block (or fields in a record, if it turns out to be a record)
-        body_then_args: u32, // TODO: Should be NodeSlices.Idx - For lambdas, the Node.Idx of the body followed by 0+ Node.Idx entries for args.
+        block_nodes: collections.NodeSlices(Expr.Idx).Idx, // Number of nodes in a block (or fields in a record, if it turns out to be a record)
+        body_then_args: collections.NodeSlices(Expr.Idx).Idx, // For lambdas, the Expr.Idx of the body followed by 0+ Expr.Idx entries for args.
         if_branches: u32, // Branches before the `else` - each branch begins with a conditional node
         match_branches: u32, // Total number of branches - each branch begins with an `if` (if there's a guard) or list (if multiple alternatives) or expr (normal pattern)
-        binop: u32, // TODO: Should be NodeSlices.Idx - Pass this to NodeSlices.binOp() to get lhs and rhs
+        binop: collections.NodeSlices(Expr.Idx).Idx, // Pass this to NodeSlices.binOp() to get lhs and rhs
         ident: Ident.Idx, // For both .uc and .lc tags
 
         // Number literals that are small enough to be stored inline right here - by far the most common case
@@ -194,9 +233,9 @@ pub const Expr = struct {
         // String literals
         str_literal_small: [4]u8, // Null-terminated ASCII bytes (if there's a '\0' in it, then it must be .str_literal_big
         str_literal_big: ByteSlices.Idx, // Stores length followed by UTF-8 bytes (which can include \0 bytes).
-        str_interpolated_nodes: u32, // TODO: Should be NodeSlices.Idx - Stores length followed by node indices (some will be string literal nodes)
+        str_interpolated_nodes: collections.NodeSlices(Expr.Idx).Idx, // Stores length followed by node indices (some will be string literal nodes)
 
-        import_nodes: u32, // TODO: Should be NodeSlices.Idx - Stores imported module nodes for import statements
+        import_nodes: collections.NodeSlices(Expr.Idx).Idx, // Stores imported module nodes for import statements
 
         malformed: Diagnostic.Tag, // Malformed nodes store the diagnostic tag
     };
@@ -206,6 +245,18 @@ pub const Type = struct {
     tag: Type.Tag, // u8 discriminant
     start: Position, // u32 UTF-8 bytes from start of source bytes where this begins
     payload: Type.Payload, // u32 union of extra information that varies based on tag
+
+    /// Index to a Type in the CIR.
+    /// Although this is an i32, indices are never negative in practice.
+    /// We use i32 instead of u32 so we can use the sign bit as a sentinel
+    /// terminator when storing indices in collections like NodeSlices.
+    pub const Idx = enum(i32) {
+        _,
+
+        fn asUsize(self: Idx) usize {
+            return @intCast(@intFromEnum(self));
+        }
+    };
 
     pub const Tag = enum {
         // The comment after each of these is the AST.Node.Tag it was converted from

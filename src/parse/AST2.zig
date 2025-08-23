@@ -51,7 +51,7 @@ const Allocator = std.mem.Allocator;
 const Ast = @This();
 
 nodes: collections.SafeMultiList(Node),
-node_slices: NodeSlices, // Slices of node indices for things like list literals, used during other compilation stages
+node_slices: collections.NodeSlices(Node.Idx), // Slices of node indices for things like list literals, used during other compilation stages
 byte_slices: ByteSlices, // Slices of backing bytes for things like string literals and number literals, used at runtime
 header: ?Header, // Optional module header (app, package, platform, etc.) - not used if we're parsing a standalone expression
 
@@ -86,12 +86,12 @@ pub fn appendNode(self: *Ast, allocator: Allocator, start_pos: Position, node_ta
 }
 
 /// Append a slice of nodes and return an index to access them later
-pub fn appendNodeSlice(self: *Ast, allocator: Allocator, nodes: []const Node.Idx) Allocator.Error!NodeSlices.Idx {
+pub fn appendNodeSlice(self: *Ast, allocator: Allocator, nodes: []const Node.Idx) Allocator.Error!collections.NodeSlices(Node.Idx).Idx {
     return try self.node_slices.append(allocator, nodes);
 }
 
 /// Append binop operands and return an index to access them later
-pub fn appendBinOp(self: *Ast, allocator: Allocator, lhs: Node.Idx, rhs: Node.Idx) Allocator.Error!NodeSlices.Idx {
+pub fn appendBinOp(self: *Ast, allocator: Allocator, lhs: Node.Idx, rhs: Node.Idx) Allocator.Error!collections.NodeSlices(Node.Idx).Idx {
     return try self.node_slices.appendBinOp(allocator, lhs, rhs);
 }
 
@@ -100,183 +100,11 @@ pub fn appendByteSlice(self: *Ast, allocator: Allocator, bytes: []const u8) Allo
     return try self.byte_slices.append(allocator, bytes);
 }
 
-pub const NodeSlices = struct {
-    entries: collections.SafeList(NodeSlices.Entry),
-
-    pub const Idx = enum(i32) {
-        _,
-
-        // NIL sentinel for empty slices - sign bit set (i32 min value)
-        pub const NIL: Idx = @enumFromInt(std.math.minInt(i32));
-
-        fn asUsize(self: Idx) usize {
-            return @intCast(@intFromEnum(self));
-        }
-
-        pub fn isNil(self: Idx) bool {
-            return self == NIL;
-        }
-    };
-
-    pub const Entry = union {
-        node_idx: Node.Idx, // An individual Node.Idx in a slice. The last one will be negative to mark the end.
-        binop_lhs: Node.Idx, // This is a BinOp's lhs node, and its rhs will be stored immediately after this entry.
-        binop_rhs: Node.Idx, // This is a BinOp's rhs node, and its lhs will be stored immediately before this entry.
-    };
-
-    pub fn append(self: *NodeSlices, allocator: Allocator, node_slice: []const Node.Idx) Allocator.Error!NodeSlices.Idx {
-        // Handle empty slices by returning NIL
-        if (node_slice.len == 0) {
-            return Idx.NIL;
-        }
-
-        // OPTIMIZATION: For single elements, encode the Node.Idx directly with sign bit set
-        // This saves 4 bytes by avoiding an indirection through NodeSlices
-        if (node_slice.len == 1) {
-            const node_val = @intFromEnum(node_slice[0]);
-            // To avoid conflict with NIL (which is minInt(i32)), we need to ensure
-            // we never produce that exact value. We'll add 1 before encoding.
-            // This means valid single elements will be in range [minInt(i32)+1, -1]
-            const shifted_val = node_val + 1;
-            // Set the sign bit to indicate this is a direct Node.Idx, not a NodeSlices.Idx
-            const encoded_val = shifted_val | std.math.minInt(i32);
-            return @as(NodeSlices.Idx, @enumFromInt(encoded_val));
-        }
-
-        const idx = @as(NodeSlices.Idx, @enumFromInt(self.entries.items.items.len));
-
-        // Reserve capacity for all nodes (no length stored anymore)
-        try self.entries.items.ensureUnusedCapacity(allocator, node_slice.len);
-
-        // Append all nodes except the last one
-        for (node_slice[0 .. node_slice.len - 1]) |node| {
-            self.entries.items.appendAssumeCapacity(.{ .node_idx = node });
-        }
-
-        // Append the last node with sign bit set to mark the end
-        const last_node = node_slice[node_slice.len - 1];
-        const last_val = @intFromEnum(last_node);
-        // Set the sign bit to mark this as the last element
-        const sign_bit = std.math.minInt(i32);
-        const marked_val = last_val | sign_bit;
-        const marked_last = @as(Node.Idx, @enumFromInt(marked_val));
-        self.entries.items.appendAssumeCapacity(.{ .node_idx = marked_last });
-
-        return idx;
-    }
-
-    pub fn appendBinOp(self: *NodeSlices, allocator: Allocator, lhs: Node.Idx, rhs: Node.Idx) Allocator.Error!NodeSlices.Idx {
-        const idx = @as(NodeSlices.Idx, @enumFromInt(self.entries.items.items.len));
-
-        // Reserve capacity for both nodes
-        try self.entries.items.ensureUnusedCapacity(allocator, 2);
-
-        self.entries.items.appendAssumeCapacity(.{ .binop_lhs = lhs });
-        self.entries.items.appendAssumeCapacity(.{ .binop_rhs = rhs });
-
-        return idx;
-    }
-
-    pub const Iterator = struct {
-        entries: []const Entry,
-        index: usize,
-        done: bool,
-        single_element: ?Node.Idx, // For single-element optimization
-
-        pub fn next(self: *Iterator) ?Node.Idx {
-            if (self.done) return null;
-
-            // Handle single-element case
-            if (self.single_element) |node| {
-                self.done = true;
-                // Clear the sign bit and subtract 1 to get the original node
-                const node_val = @intFromEnum(node);
-                const sign_bit = std.math.minInt(i32);
-                const cleared_val = node_val & ~@as(i32, sign_bit);
-                const original_val = cleared_val - 1; // Undo the shift we applied during encoding
-                return @as(Node.Idx, @enumFromInt(original_val));
-            }
-
-            // Bounds check
-            if (self.index >= self.entries.len) {
-                self.done = true;
-                return null;
-            }
-
-            const node_idx = self.entries[self.index].node_idx;
-            const node_val = @intFromEnum(node_idx);
-
-            self.index += 1;
-
-            // Check if sign bit is set (marking the end)
-            if (node_val < 0) {
-                self.done = true;
-                // Clear the sign bit to get the original value
-                const sign_bit = std.math.minInt(i32);
-                const original_val = node_val & ~@as(i32, sign_bit);
-                return @as(Node.Idx, @enumFromInt(original_val));
-            }
-
-            return node_idx;
-        }
-    };
-
-    pub fn nodes(self: *const NodeSlices, idx_ptr: *const NodeSlices.Idx) Iterator {
-        const idx = idx_ptr.*;
-
-        // Check for NIL sentinel (empty slice)
-        if (idx == NodeSlices.Idx.NIL) {
-            return .{
-                .entries = self.entries.items.items,
-                .index = 0,
-                .done = true, // Mark as done immediately for empty list
-                .single_element = null,
-            };
-        }
-
-        // Check if this is a single element encoded directly (sign bit set)
-        const idx_val = @intFromEnum(idx);
-        if (idx_val < 0) {
-            // This is a single Node.Idx encoded directly (negative value due to sign bit)
-            // Store it for the iterator to return
-            return .{
-                .entries = self.entries.items.items,
-                .index = 0,
-                .done = false,
-                .single_element = @as(Node.Idx, @enumFromInt(idx_val)), // Store with sign bit still set
-            };
-        }
-
-        // Multiple elements - start reading from entries
-        const slice_start = @as(usize, @intCast(idx_val));
-
-        return .{
-            .entries = self.entries.items.items,
-            .index = slice_start,
-            .done = false,
-            .single_element = null,
-        };
-    }
-
-    pub fn binOp(self: *const NodeSlices, idx: NodeSlices.Idx) Node.BinOp {
-        // BinOps should never be single elements or NIL
-        std.debug.assert(@intFromEnum(idx) >= 0); // Not encoded directly
-
-        const entry_idx = @as(usize, @intCast(@intFromEnum(idx)));
-        // The binop entries are stored as .binop_lhs and .binop_rhs
-        // We need to extract the actual node indices from these entries
-        const lhs = self.entries.items.items[entry_idx].binop_lhs;
-        const rhs = self.entries.items.items[entry_idx + 1].binop_rhs;
-        return .{
-            .lhs = lhs,
-            .rhs = rhs,
-        };
-    }
-};
+// NodeSlices moved to collections/NodeSlices.zig as a generic type
 
 /// Returns an iterator over all the nodes in a block.
 /// Panics in debug builds if the given Node.Idx does not refer to a .block node.
-pub fn nodesInBlock(self: *const Ast, idx: Node.Idx) NodeSlices.Iterator {
+pub fn nodesInBlock(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).Iterator {
     std.debug.assert(self.tag(idx) == .block);
 
     return self.node_slices.nodes(&self.payloadPtr(idx).nodes);
@@ -290,7 +118,7 @@ pub fn payloadPtr(self: *const Ast, idx: Node.Idx) *const Node.Payload {
 
 /// Returns an iterator over all the nodes in a string interpolation.
 /// Panics in debug builds if the given Node.Idx does not refer to a .str_interpolation node.
-pub fn nodesInInterpolation(self: *const Ast, idx: Node.Idx) NodeSlices.Iterator {
+pub fn nodesInInterpolation(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).Iterator {
     std.debug.assert(self.tag(idx) == .str_interpolation);
 
     return self.node_slices.nodes(&self.payloadPtr(idx).str_interpolated_nodes);
@@ -299,7 +127,7 @@ pub fn nodesInInterpolation(self: *const Ast, idx: Node.Idx) NodeSlices.Iterator
 /// A lambda expression, e.g. `|a, b| c`
 pub const Lambda = struct {
     body: Node.Idx,
-    args_idx: NodeSlices.Idx, // Index to access args via iterator
+    args_idx: collections.NodeSlices(Node.Idx).Idx, // Index to access args via iterator
 };
 
 /// A while loop, e.g. `while condition body`
@@ -317,7 +145,7 @@ pub const ForLoop = struct {
 
 /// Iterator for lambda args
 pub const LambdaArgsIterator = struct {
-    iter: NodeSlices.Iterator,
+    iter: collections.NodeSlices(Node.Idx).Iterator,
     skipped_body: bool,
 
     pub fn next(self: *LambdaArgsIterator) ?Node.Idx {
@@ -392,7 +220,7 @@ pub fn lambdaArgs(self: *const Ast, lambda_val: Lambda) LambdaArgsIterator {
 }
 
 /// Panics in debug builds if the given node is not a BinOp.
-pub fn binOp(self: *const Ast, idx: Node.Idx) Node.BinOp {
+pub fn binOp(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).BinOp {
     std.debug.assert(self.tag(idx).isBinOp());
 
     const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
@@ -401,7 +229,7 @@ pub fn binOp(self: *const Ast, idx: Node.Idx) Node.BinOp {
 
 /// Special accessor for arrow nodes which may have multiple parameters
 /// Returns the first parameter and return type as a BinOp for compatibility
-pub fn arrowBinOp(self: *const Ast, idx: Node.Idx) Node.BinOp {
+pub fn arrowBinOp(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).BinOp {
     const node_tag = self.tag(idx);
     std.debug.assert(node_tag == .binop_thin_arrow or node_tag == .binop_thick_arrow);
 
@@ -411,7 +239,7 @@ pub fn arrowBinOp(self: *const Ast, idx: Node.Idx) Node.BinOp {
     // Try to interpret as a nodes payload (variadic arrow)
     // We can tell by checking if the first entry in the slice is a valid node
     const nodes_idx = node_payload.binop;
-    if (nodes_idx != NodeSlices.Idx.NIL) {
+    if (nodes_idx != collections.NodeSlices(Node.Idx).Idx.NIL) {
         var iter = self.node_slices.nodes(&nodes_idx);
         const maybe_first = iter.next();
 
@@ -439,7 +267,7 @@ pub fn arrowBinOp(self: *const Ast, idx: Node.Idx) Node.BinOp {
 
 /// Returns an iterator over all parameters and return type of an arrow node
 /// The last node in the iteration is the return type, all others are parameters
-pub fn arrowNodes(self: *const Ast, idx: Node.Idx) NodeSlices.Iterator {
+pub fn arrowNodes(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).Iterator {
     const node_tag = self.tag(idx);
     std.debug.assert(node_tag == .binop_thin_arrow or node_tag == .binop_thick_arrow);
 
@@ -1241,7 +1069,7 @@ fn nextTokenIndex(bytes: []u8) usize {
 fn containerRegion(
     self: *const Ast,
     idx: Node.Idx,
-    nodes_iter: NodeSlices.Iterator,
+    nodes_iter: collections.NodeSlices(Node.Idx).Iterator,
     closing_delimiter: u8,
     raw_src: []u8,
     ident_store: *const Ident.Store,
@@ -1299,10 +1127,7 @@ pub const Node = struct {
         }
     };
 
-    pub const BinOp = struct {
-        lhs: Node.Idx,
-        rhs: Node.Idx,
-    };
+    // BinOp moved to NodeSlices in collections
 
     pub const Tag = enum {
         // Binops
@@ -1469,11 +1294,11 @@ pub const Node = struct {
         src_bytes_end: Position, // The last byte where this node appeared in the source code. Used in error reporting.
 
         list_elems: u32, // Number of elements in the list literal
-        nodes: NodeSlices.Idx, // Nested nodes inside this one (e.g. statements in a block)
-        body_then_args: NodeSlices.Idx, // For lambdas, the Node.Idx of the body followed by 0+ Node.Idx entries for args.
+        nodes: collections.NodeSlices(Node.Idx).Idx, // Nested nodes inside this one (e.g. statements in a block)
+        body_then_args: collections.NodeSlices(Node.Idx).Idx, // For lambdas, the Node.Idx of the body followed by 0+ Node.Idx entries for args.
         if_branches: u32, // Branches before the `else` - each branch begins with a conditional node
         match_branches: u32, // Total number of branches - each branch begins with an `if` (if there's a guard) or list (if multiple alternatives) or expr (normal pattern)
-        binop: NodeSlices.Idx, // Pass this to NodeSlices.binOp() to get lhs and rhs
+        binop: collections.NodeSlices(Node.Idx).Idx, // Pass this to NodeSlices.binOp() to get lhs and rhs
         ident: Ident.Idx, // For both .uc and .lc tags
 
         // Number literals that are small enough to be stored inline right here - by far the most common case
@@ -1489,9 +1314,9 @@ pub const Node = struct {
         // String literals
         str_literal_small: [4]u8, // Null-terminated ASCII bytes (if there's a '\0' in it, then it must be .str_literal_big
         str_literal_big: ByteSlices.Idx, // Stores length followed by UTF-8 bytes (which can include \0 bytes).
-        str_interpolated_nodes: NodeSlices.Idx, // Stores length followed by node indices (some will be string literal nodes)
+        str_interpolated_nodes: collections.NodeSlices(Node.Idx).Idx, // Stores length followed by node indices (some will be string literal nodes)
 
-        import_nodes: NodeSlices.Idx, // Stores imported module nodes for import statements
+        import_nodes: collections.NodeSlices(Node.Idx).Idx, // Stores imported module nodes for import statements
 
         malformed: Diagnostic.Tag, // Malformed nodes store the diagnostic tag
     };
@@ -1623,36 +1448,36 @@ pub const Diagnostic = struct {
 // Module header structures
 pub const Header = union(enum) {
     app: struct {
-        provides: NodeSlices.Idx, // List of exposed items (as nodes)
+        provides: collections.NodeSlices(Node.Idx).Idx, // List of exposed items (as nodes)
         platform_idx: Node.Idx, // Platform specification node
-        packages: NodeSlices.Idx, // List of package nodes
+        packages: collections.NodeSlices(Node.Idx).Idx, // List of package nodes
         region: Position, // Start position
     },
     module: struct {
-        exposes: NodeSlices.Idx, // List of exposed items (as nodes)
+        exposes: collections.NodeSlices(Node.Idx).Idx, // List of exposed items (as nodes)
         region: Position,
     },
     package: struct {
-        exposes: NodeSlices.Idx, // List of exposed items (as nodes)
-        packages: NodeSlices.Idx, // List of package nodes
+        exposes: collections.NodeSlices(Node.Idx).Idx, // List of exposed items (as nodes)
+        packages: collections.NodeSlices(Node.Idx).Idx, // List of package nodes
         region: Position,
     },
     platform: struct {
         name: Node.Idx, // Platform name identifier
-        requires_rigids: NodeSlices.Idx, // List of type variables
+        requires_rigids: collections.NodeSlices(Node.Idx).Idx, // List of type variables
         requires_signatures: Node.Idx, // Type annotation node
-        exposes: NodeSlices.Idx, // List of exposed items
-        packages: NodeSlices.Idx, // List of packages
-        provides: NodeSlices.Idx, // List of provided items
+        exposes: collections.NodeSlices(Node.Idx).Idx, // List of exposed items
+        packages: collections.NodeSlices(Node.Idx).Idx, // List of packages
+        provides: collections.NodeSlices(Node.Idx).Idx, // List of provided items
         region: Position,
     },
     hosted: struct {
-        exposes: NodeSlices.Idx, // List of exposed items
+        exposes: collections.NodeSlices(Node.Idx).Idx, // List of exposed items
         region: Position,
     },
     interface: struct {
-        exposes: NodeSlices.Idx, // List of exposed items
-        imports: NodeSlices.Idx, // List of import nodes
+        exposes: collections.NodeSlices(Node.Idx).Idx, // List of exposed items
+        imports: collections.NodeSlices(Node.Idx).Idx, // List of import nodes
         region: Position,
     },
     malformed: struct {
@@ -1676,11 +1501,11 @@ pub fn payload(self: *const Ast, idx: Node.Idx) Node.Payload {
     return self.nodes.fieldItem(.payload, multi_list_idx);
 }
 
-test "NodeSlices with negative sentinel" {
+test "collections.NodeSlices with negative sentinel" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var node_slices = NodeSlices{ .entries = collections.SafeList(NodeSlices.Entry){} };
+    var node_slices = collections.NodeSlices(Node.Idx){ .entries = collections.SafeList(collections.NodeSlices(Node.Idx).Entry){} };
     defer node_slices.entries.items.deinit(allocator);
 
     // Test single node
