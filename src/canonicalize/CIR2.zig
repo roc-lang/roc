@@ -18,6 +18,8 @@ const Position = Region.Position;
 const SExprTree = base.SExprTree;
 const SExpr = base.SExpr;
 const TypeVar = types_mod.Var;
+const TypeStore = types_mod.Store;
+const Content = types_mod.Content;
 const ByteSlices = collections.ByteSlices;
 const AST2 = parse.AST2;
 const Allocator = std.mem.Allocator;
@@ -26,6 +28,9 @@ const CIR = @This();
 
 // Mutable reference to AST - we'll mutate tags in place during canonicalization
 ast: *AST2,
+
+// Type store for managing type variables - shared with ModuleEnv
+types_store: *TypeStore,
 
 // Diagnostics collected during canonicalization
 diagnostics: std.ArrayListUnmanaged(CanDiagnostic),
@@ -69,6 +74,8 @@ pub const ExprTag = enum(u8) {
     not_lookup,
     num_literal_i32,
     int_literal_i32,
+    num_literal_big,
+    int_literal_big,
     frac_literal_small,
     frac_literal_big,
     str_literal_small,
@@ -148,15 +155,16 @@ pub const CanDiagnostic = struct {
     };
 };
 
-/// Initialize a new CIR that shares storage with the AST
-pub fn init(ast: *AST2) CIR {
+/// Initialize a new CIR that shares storage with the AST and TypeStore
+pub fn init(ast: *AST2, type_store: *TypeStore) CIR {
     return .{
         .ast = ast,
+        .types_store = type_store,
         .diagnostics = .{},
     };
 }
 
-/// Initialize CIR with a new AST of the given capacity
+/// Initialize CIR with a new AST of the given capacity and a new TypeStore
 pub fn initCapacity(allocator: Allocator, capacity: u32, byte_slices: *ByteSlices) !CIR {
     // Create a new AST with the specified capacity
     const ast = try AST2.initCapacity(allocator, capacity);
@@ -164,10 +172,15 @@ pub fn initCapacity(allocator: Allocator, capacity: u32, byte_slices: *ByteSlice
     const ast_ptr = try allocator.create(AST2);
     ast_ptr.* = ast;
 
+    // Create a new TypeStore
+    const types_ptr = try allocator.create(TypeStore);
+    types_ptr.* = try TypeStore.initCapacity(allocator, capacity, capacity / 4);
+
     _ = byte_slices; // byte_slices parameter kept for API compatibility but not used
 
     return .{
         .ast = ast_ptr,
+        .types_store = types_ptr,
         .diagnostics = .{},
     };
 }
@@ -180,11 +193,13 @@ pub fn deinit(self: *CIR, allocator: Allocator) void {
     // Tests using initCapacity() should call deinitWithAST() instead.
 }
 
-/// Deinitialize the CIR and also free the AST (for CIRs created with initCapacity)
+/// Deinitialize the CIR and also free the AST and TypeStore (for CIRs created with initCapacity)
 pub fn deinitWithAST(self: *CIR, allocator: Allocator) void {
     self.diagnostics.deinit(allocator);
     self.ast.deinit(allocator);
     allocator.destroy(self.ast);
+    // Note: We only destroy types if it was created by initCapacity
+    // For init(), the TypeStore is owned by ModuleEnv
 }
 
 // Interface to provide compatibility with tests that expect separate collections
@@ -401,6 +416,8 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
         .not_lookup => .not_lookup,
         .num_literal_i32 => .num_literal_i32,
         .int_literal_i32 => .int_literal_i32,
+        .num_literal_big => .num_literal_big,
+        .int_literal_big => .int_literal_big,
         .frac_literal_small => .frac_literal_small,
         .frac_literal_big => .frac_literal_big,
         .str_literal_small => .str_literal_small,
@@ -870,6 +887,17 @@ pub const Type = struct {
     };
 };
 
+/// Ensure that a type variable exists at the given node index
+/// Creates variables as needed to fill gaps
+fn ensureTypeVarExists(self: *CIR, node_idx: AST2.Node.Idx) !void {
+    const target_idx = @intFromEnum(node_idx);
+
+    // Create variables up to the target index if needed
+    while (self.types_store.len() <= target_idx) {
+        _ = try self.types_store.fresh();
+    }
+}
+
 /// Canonicalize an AST node that should be an expression
 /// Mutates the node's tag in place to the appropriate CIR expression tag
 /// Reports errors if the node is not valid in expression context
@@ -881,18 +909,62 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         // Expression nodes - mutate tag in place
         .num_literal_i32 => {
             self.mutateToExpr(node_idx, .num_literal_i32);
+            // Ensure type variable exists
+            try self.ensureTypeVarExists(node_idx);
+            // Set type content for numeric literal
+            const var_idx = @as(TypeVar, @enumFromInt(@intFromEnum(node_idx)));
+            const content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
+            try self.types_store.setVarContent(var_idx, content);
             return asExprIdx(node_idx);
         },
         .int_literal_i32 => {
             self.mutateToExpr(node_idx, .int_literal_i32);
+            // Ensure type variable exists
+            try self.ensureTypeVarExists(node_idx);
+            // Set type content for integer literal
+            const var_idx = @as(TypeVar, @enumFromInt(@intFromEnum(node_idx)));
+            const content = Content{ .structure = .{ .num = .{ .int_precision = .i32 } } };
+            try self.types_store.setVarContent(var_idx, content);
             return asExprIdx(node_idx);
         },
         .frac_literal_small => {
             self.mutateToExpr(node_idx, .frac_literal_small);
+            // Ensure type variable exists
+            try self.ensureTypeVarExists(node_idx);
+            // Set type content for fractional literal
+            const var_idx = @as(TypeVar, @enumFromInt(@intFromEnum(node_idx)));
+            const content = Content{ .structure = .{ .num = .{ .frac_precision = .f64 } } };
+            try self.types_store.setVarContent(var_idx, content);
             return asExprIdx(node_idx);
         },
         .frac_literal_big => {
             self.mutateToExpr(node_idx, .frac_literal_big);
+            // Ensure type variable exists
+            try self.ensureTypeVarExists(node_idx);
+            // Set type content for big fractional literal
+            const var_idx = @as(TypeVar, @enumFromInt(@intFromEnum(node_idx)));
+            const content = Content{ .structure = .{ .num = .{ .frac_precision = .f64 } } };
+            try self.types_store.setVarContent(var_idx, content);
+            return asExprIdx(node_idx);
+        },
+        .num_literal_big => {
+            self.mutateToExpr(node_idx, .num_literal_big);
+            // Ensure type variable exists
+            try self.ensureTypeVarExists(node_idx);
+            // Set type content for big numeric literal
+            const var_idx = @as(TypeVar, @enumFromInt(@intFromEnum(node_idx)));
+            const content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 128 } } } };
+            try self.types_store.setVarContent(var_idx, content);
+            return asExprIdx(node_idx);
+        },
+        .int_literal_big => {
+            self.mutateToExpr(node_idx, .int_literal_big);
+            // Ensure type variable exists
+            try self.ensureTypeVarExists(node_idx);
+            // Set type content for big integer literal
+            const var_idx = @as(TypeVar, @enumFromInt(@intFromEnum(node_idx)));
+            const content = Content{ .structure = .{ .num = .{ .int_precision = .i128 } } };
+            try self.types_store.setVarContent(var_idx, content);
             return asExprIdx(node_idx);
         },
         .lc, .var_lc => {
@@ -904,10 +976,22 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         // String literals
         .str_literal_small => {
             self.mutateToExpr(node_idx, .str_literal_small);
+            // Ensure type variable exists
+            try self.ensureTypeVarExists(node_idx);
+            // Set type content for string literal
+            const var_idx = @as(TypeVar, @enumFromInt(@intFromEnum(node_idx)));
+            const content = Content{ .structure = .{ .str = {} } };
+            try self.types_store.setVarContent(var_idx, content);
             return asExprIdx(node_idx);
         },
         .str_literal_big => {
             self.mutateToExpr(node_idx, .str_literal_big);
+            // Ensure type variable exists
+            try self.ensureTypeVarExists(node_idx);
+            // Set type content for string literal
+            const var_idx = @as(TypeVar, @enumFromInt(@intFromEnum(node_idx)));
+            const content = Content{ .structure = .{ .str = {} } };
+            try self.types_store.setVarContent(var_idx, content);
             return asExprIdx(node_idx);
         },
 
@@ -1199,6 +1283,9 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                     try scope_state.addIdent(allocator, lhs_node.payload.ident, patt_idx);
                     try scope_state.recordVarPattern(allocator, patt_idx);
 
+                    // Add to symbol table so lookups can find this definition
+                    try scope_state.symbol_table.put(allocator, lhs_node.payload.ident, ast_binop.lhs);
+
                     // Canonicalize the expression (rhs)
                     _ = try self.canonicalizeExpr(allocator, ast_binop.rhs);
 
@@ -1249,6 +1336,9 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
 
                         // Register this as an immutable variable
                         try scope_state.addIdent(allocator, ident, patt_idx);
+
+                        // Add to symbol table so lookups can find this definition
+                        try scope_state.symbol_table.put(allocator, ident, ast_binop.lhs);
 
                         // Canonicalize the expression (rhs) - this mutates the expression nodes in place
                         _ = try self.canonicalizeExpr(allocator, ast_binop.rhs);
@@ -1358,6 +1448,74 @@ pub fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_para
     }
 }
 
+/// Canonicalize a header - processes exposed items and generates type information
+pub fn canonicalizeHeader(self: *CIR, allocator: Allocator) !void {
+    // If there's no header, nothing to do
+    if (self.ast.header == null) {
+        return;
+    }
+
+    const header = self.ast.header.?;
+
+    // Process the header based on its type
+    switch (header) {
+        .app => |app| {
+            // For app headers, process the provides list
+            var iter = self.ast.node_slices.nodes(&app.provides);
+            while (iter.next()) |node_idx| {
+                // Each provided item needs to be canonicalized
+                // For now, just mark them as expressions so they get type information
+                _ = try self.canonicalizeExpr(allocator, node_idx);
+            }
+        },
+        .module => |mod| {
+            // For module headers, process the exposes list
+            var iter = self.ast.node_slices.nodes(&mod.exposes);
+            while (iter.next()) |node_idx| {
+                // Each exposed item needs to be canonicalized
+                _ = try self.canonicalizeExpr(allocator, node_idx);
+            }
+        },
+        .package => |pkg| {
+            // For package headers, process the exposes list
+            var iter = self.ast.node_slices.nodes(&pkg.exposes);
+            while (iter.next()) |node_idx| {
+                // Each exposed item needs to be canonicalized
+                _ = try self.canonicalizeExpr(allocator, node_idx);
+            }
+        },
+        .platform => |plat| {
+            // For platform headers, process both exposes and provides
+            var exposes_iter = self.ast.node_slices.nodes(&plat.exposes);
+            while (exposes_iter.next()) |node_idx| {
+                _ = try self.canonicalizeExpr(allocator, node_idx);
+            }
+
+            var provides_iter = self.ast.node_slices.nodes(&plat.provides);
+            while (provides_iter.next()) |node_idx| {
+                _ = try self.canonicalizeExpr(allocator, node_idx);
+            }
+        },
+        .hosted => |host| {
+            // For hosted headers, process the exposes list
+            var iter = self.ast.node_slices.nodes(&host.exposes);
+            while (iter.next()) |node_idx| {
+                _ = try self.canonicalizeExpr(allocator, node_idx);
+            }
+        },
+        .interface => |iface| {
+            // For interface headers, process the exposes list
+            var iter = self.ast.node_slices.nodes(&iface.exposes);
+            while (iter.next()) |node_idx| {
+                _ = try self.canonicalizeExpr(allocator, node_idx);
+            }
+        },
+        .malformed => {
+            // Nothing to canonicalize for malformed headers
+        },
+    }
+}
+
 /// Scope management during canonicalization - follows the pattern from Can.zig
 pub const ScopeState = struct {
     /// Stack of scopes for nested blocks
@@ -1369,6 +1527,10 @@ pub const ScopeState = struct {
     /// Maps var patterns to the function region they were declared in
     /// We only need to track mutable vars here since immutable ones can't be reassigned across boundaries
     var_function_regions: std.AutoHashMapUnmanaged(Patt.Idx, Region) = .{},
+
+    /// Symbol table mapping identifier indices to their definition node indices
+    /// This allows lookups to find their corresponding definitions for type checking
+    symbol_table: std.AutoHashMapUnmanaged(Ident.Idx, AST2.Node.Idx) = .{},
 
     /// Push a new scope onto the stack
     pub fn pushScope(self: *ScopeState, allocator: Allocator, is_function_boundary: bool) !void {
