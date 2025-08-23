@@ -20,6 +20,103 @@ const SExpr = base.SExpr;
 const TypeVar = types_mod.Var;
 const ByteSlices = collections.ByteSlices;
 const AST2 = parse.AST2;
+const Allocator = std.mem.Allocator;
+
+const CIR = @This();
+
+// Storage for canonicalized nodes - these share the same memory layout as AST nodes
+// but have different tags after canonicalization
+stmts: collections.SafeMultiList(Stmt),
+exprs: collections.SafeMultiList(Expr),
+patts: collections.SafeMultiList(Patt),
+types: collections.SafeMultiList(Type),
+
+// Shared slice storage - these can be cast from AST NodeSlices during canonicalization
+stmt_slices: collections.NodeSlices(Stmt.Idx),
+expr_slices: collections.NodeSlices(Expr.Idx),
+patt_slices: collections.NodeSlices(Patt.Idx),
+type_slices: collections.NodeSlices(Type.Idx),
+
+// Shared byte storage - references the same ByteSlices from the AST
+byte_slices: *ByteSlices,
+
+// Diagnostics collected during canonicalization
+diagnostics: std.ArrayListUnmanaged(CanDiagnostic),
+
+/// Diagnostic errors during canonicalization
+pub const CanDiagnostic = struct {
+    tag: Tag,
+    region: Region,
+    
+    pub const Tag = enum {
+        // Node placement errors
+        pattern_in_expr_context, // Pattern node found where expression was expected
+        expr_in_pattern_context, // Expression node found where pattern was expected
+        stmt_in_expr_context, // Statement node found where expression was expected
+        expr_in_stmt_context, // Expression node found where statement was expected (without semicolon)
+        type_in_expr_context, // Type annotation node found where expression was expected
+        
+        // Scope errors
+        ident_not_in_scope,
+        ident_already_defined,
+        
+        // Type errors  
+        type_not_in_scope,
+        
+        // Other errors
+        unsupported_node, // Node type not yet supported in canonicalization
+        malformed_ast, // AST node was already malformed
+    };
+};
+
+/// Initialize a new CIR with pre-allocated capacity
+pub fn initCapacity(allocator: Allocator, estimated_node_count: usize, byte_slices: *ByteSlices) Allocator.Error!CIR {
+    var stmts = collections.SafeMultiList(Stmt){};
+    try stmts.ensureTotalCapacity(allocator, estimated_node_count);
+    
+    var exprs = collections.SafeMultiList(Expr){};
+    try exprs.ensureTotalCapacity(allocator, estimated_node_count);
+    
+    var patts = collections.SafeMultiList(Patt){};
+    try patts.ensureTotalCapacity(allocator, estimated_node_count);
+    
+    var types = collections.SafeMultiList(Type){};
+    try types.ensureTotalCapacity(allocator, estimated_node_count);
+
+    return .{
+        .stmts = stmts,
+        .exprs = exprs,
+        .patts = patts,
+        .types = types,
+        .stmt_slices = .{ .entries = .{} },
+        .expr_slices = .{ .entries = .{} },
+        .patt_slices = .{ .entries = .{} },
+        .type_slices = .{ .entries = .{} },
+        .byte_slices = byte_slices,
+        .diagnostics = .{},
+    };
+}
+
+/// Deinitialize the CIR and free all memory
+pub fn deinit(self: *CIR, allocator: Allocator) void {
+    self.stmts.deinit(allocator);
+    self.exprs.deinit(allocator);
+    self.patts.deinit(allocator);
+    self.types.deinit(allocator);
+    self.stmt_slices.entries.deinit(allocator);
+    self.expr_slices.entries.deinit(allocator);
+    self.patt_slices.entries.deinit(allocator);
+    self.type_slices.entries.deinit(allocator);
+    self.diagnostics.deinit(allocator);
+}
+
+/// Push a diagnostic error
+pub fn pushDiagnostic(self: *CIR, allocator: Allocator, tag: CanDiagnostic.Tag, region: Region) !void {
+    try self.diagnostics.append(allocator, .{
+        .tag = tag,
+        .region = region,
+    });
+}
 
 // In AST, we have a Node type which represents uncategorized AST nodes.
 // In CIR, we categorize each of these nodes so that we can work with more
@@ -319,12 +416,11 @@ pub const Type = struct {
         src_bytes_end: Position, // The last byte where this node appeared in the source code. Used in error reporting.
 
         list_elems: u32, // Number of elements in the list literal
-        // TODO: NodeSlices needs to be imported from parse module
-        block_nodes: u32, // TODO: Should be NodeSlices.Idx - Number of nodes in a block (or fields in a record, if it turns out to be a record)
-        body_then_args: u32, // TODO: Should be NodeSlices.Idx - For lambdas, the Node.Idx of the body followed by 0+ Node.Idx entries for args.
+        block_nodes: collections.NodeSlices(Type.Idx).Idx, // Number of nodes in a block (or fields in a record, if it turns out to be a record)
+        body_then_args: collections.NodeSlices(Type.Idx).Idx, // For lambdas, the Type.Idx of the body followed by 0+ Type.Idx entries for args.
         if_branches: u32, // Branches before the `else` - each branch begins with a conditional node
         match_branches: u32, // Total number of branches - each branch begins with an `if` (if there's a guard) or list (if multiple alternatives) or expr (normal pattern)
-        binop: u32, // TODO: Should be NodeSlices.Idx - Pass this to NodeSlices.binOp() to get lhs and rhs
+        binop: collections.NodeSlices(Type.Idx).Idx, // Pass this to NodeSlices.binOp() to get lhs and rhs
         ident: Ident.Idx, // For both .uc and .lc tags
 
         // Number literals that are small enough to be stored inline right here - by far the most common case
@@ -340,10 +436,321 @@ pub const Type = struct {
         // String literals
         str_literal_small: [4]u8, // Null-terminated ASCII bytes (if there's a '\0' in it, then it must be .str_literal_big
         str_literal_big: ByteSlices.Idx, // Stores length followed by UTF-8 bytes (which can include \0 bytes).
-        str_interpolated_nodes: u32, // TODO: Should be NodeSlices.Idx - Stores length followed by node indices (some will be string literal nodes)
+        str_interpolated_nodes: collections.NodeSlices(Type.Idx).Idx, // Stores length followed by node indices (some will be string literal nodes)
 
-        import_nodes: u32, // TODO: Should be NodeSlices.Idx - Stores imported module nodes for import statements
+        import_nodes: collections.NodeSlices(Type.Idx).Idx, // Stores imported module nodes for import statements
 
         malformed: Diagnostic.Tag, // Malformed nodes store the diagnostic tag
     };
 };
+
+/// Canonicalize an AST node that should be an expression
+/// Reports errors if the node is not valid in expression context
+pub fn canonicalizeExpr(
+    self: *CIR, 
+    allocator: Allocator, 
+    ast: *const AST2, 
+    node_idx: AST2.Node.Idx
+) !Expr.Idx {
+    const node = ast.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+    const node_region = Region{ .start = node.start, .end = node.start }; // Simplified region for now
+    
+    switch (node.tag) {
+        // Expression nodes
+        .num_literal_i32 => {
+            const expr_idx = try self.exprs.append(allocator, .{
+                .tag = .num_literal_i32,
+                .start = node.start,
+                .payload = .{ .num_literal_i32 = node.payload.num_literal_i32 },
+            });
+            return @enumFromInt(@intFromEnum(expr_idx));
+        },
+        .int_literal_i32 => {
+            const expr_idx = try self.exprs.append(allocator, .{
+                .tag = .int_literal_i32,
+                .start = node.start,
+                .payload = .{ .int_literal_i32 = node.payload.int_literal_i32 },
+            });
+            return @enumFromInt(@intFromEnum(expr_idx));
+        },
+        .lc, .var_lc => {
+            // Identifiers become lookups in expression context
+            const expr_idx = try self.exprs.append(allocator, .{
+                .tag = .lookup,
+                .start = node.start,
+                .payload = .{ .ident = node.payload.ident },
+            });
+            return @enumFromInt(@intFromEnum(expr_idx));
+        },
+        
+        // Pattern nodes - these are errors in expression context!
+        .underscore => {
+            // Underscore pattern found in expression context
+            try self.pushDiagnostic(allocator, .pattern_in_expr_context, node_region);
+            const expr_idx = try self.exprs.append(allocator, .{
+                .tag = .malformed,
+                .start = node.start,
+                .payload = .{ .malformed = .statement_unexpected_token },
+            });
+            return @enumFromInt(@intFromEnum(expr_idx));
+        },
+        .uc => {
+            // Uppercase identifier (tag pattern) in expression context
+            // This could be a tag constructor, but for now treat as error
+            try self.pushDiagnostic(allocator, .pattern_in_expr_context, node_region);
+            const expr_idx = try self.exprs.append(allocator, .{
+                .tag = .malformed,
+                .start = node.start,
+                .payload = .{ .malformed = .statement_unexpected_token },
+            });
+            return @enumFromInt(@intFromEnum(expr_idx));
+        },
+        
+        // Statement nodes - error in expression context
+        .import => {
+            try self.pushDiagnostic(allocator, .stmt_in_expr_context, node_region);
+            const expr_idx = try self.exprs.append(allocator, .{
+                .tag = .malformed,
+                .start = node.start,
+                .payload = .{ .malformed = .statement_unexpected_token },
+            });
+            return @enumFromInt(@intFromEnum(expr_idx));
+        },
+        
+        else => {
+            // Unsupported node type
+            try self.pushDiagnostic(allocator, .unsupported_node, node_region);
+            const expr_idx = try self.exprs.append(allocator, .{
+                .tag = .malformed,
+                .start = node.start,
+                .payload = .{ .malformed = .statement_unexpected_token },
+            });
+            return @enumFromInt(@intFromEnum(expr_idx));
+        }
+    }
+}
+
+test "CIR2 basic initialization" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    
+    // Create a ByteSlices instance for the test
+    var byte_slices = ByteSlices{ .entries = .{} };
+    defer byte_slices.entries.deinit(allocator);
+    
+    // Initialize CIR with estimated capacity
+    var cir = try CIR.initCapacity(allocator, 100, &byte_slices);
+    defer cir.deinit(allocator);
+    
+    // Verify initial state
+    try testing.expectEqual(@as(usize, 0), cir.stmts.len());
+    try testing.expectEqual(@as(usize, 0), cir.exprs.len());
+    try testing.expectEqual(@as(usize, 0), cir.patts.len());
+    try testing.expectEqual(@as(usize, 0), cir.types.len());
+}
+
+test "CIR2 canonicalize simple number literal" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    const Parser2 = parse.Parser2;
+    
+    // Parse a simple number literal
+    const source = "42";
+    
+    var ast = try AST2.initCapacity(allocator, 100);
+    defer ast.deinit(allocator);
+    
+    var env = try base.CommonEnv.init(allocator, source);
+    defer env.deinit(allocator);
+    
+    var byte_slices = ByteSlices{ .entries = .{} };
+    defer byte_slices.entries.deinit(allocator);
+    
+    var messages: [128]parse.tokenize_iter.Diagnostic = undefined;
+    const msg_slice = messages[0..];
+    
+    var parser = try Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
+    defer parser.deinit();
+    
+    // Parse as an expression
+    const node_idx = try parser.parseExpr();
+    
+    // Verify we got a num_literal_i32 node
+    const node = ast.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+    try testing.expect(node.tag == .num_literal_i32);
+    try testing.expectEqual(@as(i32, 42), node.payload.num_literal_i32);
+    
+    // Now canonicalize it to CIR2
+    var cir = try CIR.initCapacity(allocator, 100, &byte_slices);
+    defer cir.deinit(allocator);
+    
+    const expr_idx = try cir.canonicalizeExpr(allocator, &ast, node_idx);
+    
+    // Verify the CIR2 expression
+    const expr = cir.exprs.get(@enumFromInt(@intFromEnum(expr_idx)));
+    try testing.expect(expr.tag == .num_literal_i32);
+    try testing.expectEqual(@as(i32, 42), expr.payload.num_literal_i32);
+    
+    // Verify we created exactly one expression
+    try testing.expectEqual(@as(usize, 1), cir.exprs.len());
+}
+
+test "CIR2 canonicalize identifier to lookup" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    const Parser2 = parse.Parser2;
+    
+    // Parse a simple identifier
+    const source = "foo";
+    
+    var ast = try AST2.initCapacity(allocator, 100);
+    defer ast.deinit(allocator);
+    
+    var env = try base.CommonEnv.init(allocator, source);
+    defer env.deinit(allocator);
+    
+    var byte_slices = ByteSlices{ .entries = .{} };
+    defer byte_slices.entries.deinit(allocator);
+    
+    var messages: [128]parse.tokenize_iter.Diagnostic = undefined;
+    const msg_slice = messages[0..];
+    
+    var parser = try Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
+    defer parser.deinit();
+    
+    // Parse as an expression
+    const node_idx = try parser.parseExpr();
+    
+    // Verify we got an lc (lowercase identifier) node in AST
+    const node = ast.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+    try testing.expect(node.tag == .lc);
+    
+    // Now canonicalize it to CIR2
+    var cir = try CIR.initCapacity(allocator, 100, &byte_slices);
+    defer cir.deinit(allocator);
+    
+    // For this test, extend canonicalizeSimpleExpr to handle identifiers
+    const expr_idx = try canonicalizeIdentifier(&cir, allocator, &ast, node_idx);
+    
+    // Verify the CIR2 expression is now a lookup (categorized as an expression)
+    const expr = cir.exprs.get(@enumFromInt(@intFromEnum(expr_idx)));
+    try testing.expect(expr.tag == .lookup);
+    try testing.expectEqual(node.start, expr.start); // Same position
+    try testing.expectEqual(node.payload.ident, expr.payload.ident); // Same identifier
+}
+
+// Helper function to canonicalize identifiers
+fn canonicalizeIdentifier(
+    cir: *CIR,
+    allocator: Allocator,
+    ast: *const AST2,
+    node_idx: AST2.Node.Idx
+) !Expr.Idx {
+    const node = ast.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+    
+    switch (node.tag) {
+        .lc => {
+            // Lowercase identifier becomes a lookup expression
+            const expr_idx = try cir.exprs.append(allocator, .{
+                .tag = .lookup,
+                .start = node.start,
+                .payload = .{ .ident = node.payload.ident },
+            });
+            return @enumFromInt(@intFromEnum(expr_idx));
+        },
+        .var_lc => {
+            // var identifier also becomes a lookup (we'll track mutability separately)
+            const expr_idx = try cir.exprs.append(allocator, .{
+                .tag = .lookup,
+                .start = node.start,
+                .payload = .{ .ident = node.payload.ident },
+            });
+            return @enumFromInt(@intFromEnum(expr_idx));
+        },
+        else => {
+            // Unsupported for now
+            const expr_idx = try cir.exprs.append(allocator, .{
+                .tag = .malformed,
+                .start = node.start,
+                .payload = .{ .malformed = .statement_unexpected_token },
+            });
+            return @enumFromInt(@intFromEnum(expr_idx));
+        }
+    }
+}
+
+test "CIR2 error: pattern in expression context" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    
+    // Create an underscore node (pattern) directly in AST
+    var ast = try AST2.initCapacity(allocator, 10);
+    defer ast.deinit(allocator);
+    
+    var byte_slices = ByteSlices{ .entries = .{} };
+    defer byte_slices.entries.deinit(allocator);
+    
+    // Manually create an underscore node
+    const node_idx = try ast.nodes.append(allocator, .{
+        .tag = .underscore,
+        .start = Position{ .offset = 0 },
+        .payload = .{ .src_bytes_end = Position{ .offset = 1 } },
+    });
+    
+    // Initialize CIR
+    var cir = try CIR.initCapacity(allocator, 10, &byte_slices);
+    defer cir.deinit(allocator);
+    
+    // Try to canonicalize underscore as an expression - should produce error
+    const expr_idx = try cir.canonicalizeExpr(allocator, &ast, @enumFromInt(@intFromEnum(node_idx)));
+    
+    // Verify we got a malformed expression
+    const expr = cir.exprs.get(@enumFromInt(@intFromEnum(expr_idx)));
+    try testing.expect(expr.tag == .malformed);
+    
+    // Verify we got a diagnostic error
+    try testing.expectEqual(@as(usize, 1), cir.diagnostics.items.len);
+    const diagnostic = cir.diagnostics.items[0];
+    try testing.expect(diagnostic.tag == .pattern_in_expr_context);
+    
+    // Verify the region is correct
+    try testing.expectEqual(Position{ .offset = 0 }, diagnostic.region.start);
+}
+
+test "CIR2 error: uppercase identifier in expression context" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    
+    // Create an uppercase identifier node (pattern) in AST
+    var ast = try AST2.initCapacity(allocator, 10);
+    defer ast.deinit(allocator);
+    
+    var byte_slices = ByteSlices{ .entries = .{} };
+    defer byte_slices.entries.deinit(allocator);
+    
+    // Create identifier for "Foo" 
+    const ident_idx = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 }; // Dummy identifier
+    
+    // Manually create an uppercase identifier node
+    const node_idx = try ast.nodes.append(allocator, .{
+        .tag = .uc,
+        .start = Position{ .offset = 0 },
+        .payload = .{ .ident = ident_idx },
+    });
+    
+    // Initialize CIR
+    var cir = try CIR.initCapacity(allocator, 10, &byte_slices);
+    defer cir.deinit(allocator);
+    
+    // Try to canonicalize uppercase identifier as expression - should produce error
+    const expr_idx = try cir.canonicalizeExpr(allocator, &ast, @enumFromInt(@intFromEnum(node_idx)));
+    
+    // Verify we got a malformed expression
+    const expr = cir.exprs.get(@enumFromInt(@intFromEnum(expr_idx)));
+    try testing.expect(expr.tag == .malformed);
+    
+    // Verify we got a diagnostic error
+    try testing.expectEqual(@as(usize, 1), cir.diagnostics.items.len);
+    const diagnostic = cir.diagnostics.items[0];
+    try testing.expect(diagnostic.tag == .pattern_in_expr_context);
+}
