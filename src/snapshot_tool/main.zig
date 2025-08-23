@@ -2374,8 +2374,13 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
         },
         .str_literal_big => {
             // Big strings are stored in ByteSlices
-            const slice = ast.byte_slices.slice(node.payload.str_literal_big);
-            try writer.print(" \"{}\"", .{std.fmt.fmtSliceEscapeLower(slice)});
+            // Check if ByteSlices is empty (happens after CIR2 mutation)
+            if (ast.byte_slices.entries.items.items.len == 0) {
+                try writer.print(" \"<idx:{}>\"", .{@intFromEnum(node.payload.str_literal_big)});
+            } else {
+                const slice = ast.byte_slices.slice(node.payload.str_literal_big);
+                try writer.print(" \"{}\"", .{std.fmt.fmtSliceEscapeLower(slice)});
+            }
         },
 
         // Containers with nodes field
@@ -2559,13 +2564,24 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
         // Big number literals
         .num_literal_big, .int_literal_big, .frac_literal_big => {
             // These store digits in ByteSlices
-            const slice = ast.byte_slices.slice(switch (node.tag) {
+            // However, after CIR2 mutation, the ByteSlices might be empty
+            // so we need to handle that case
+            const idx = switch (node.tag) {
                 .num_literal_big => node.payload.num_literal_big,
                 .int_literal_big => node.payload.int_literal_big,
                 .frac_literal_big => node.payload.frac_literal_big,
                 else => unreachable,
-            });
-            try writer.print(" big:{}", .{std.fmt.fmtSliceEscapeLower(slice)});
+            };
+
+            // Check if ByteSlices is empty (happens after CIR2 mutation)
+            if (ast.byte_slices.entries.items.items.len == 0) {
+                // ByteSlices is empty - this happens when outputting AST after CIR2 mutation
+                // CIR2 may create new nodes with ByteSlices indices but doesn't populate the ByteSlices
+                try writer.print(" big:<idx:{}>", .{@intFromEnum(idx)});
+            } else {
+                const slice = ast.byte_slices.slice(idx);
+                try writer.print(" big:{}", .{std.fmt.fmtSliceEscapeLower(slice)});
+            }
         },
 
         // If/match/when expressions with branches
@@ -2807,7 +2823,7 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
             try output.end_section();
             return;
         };
-        
+
         const type_str = type_writer.get();
         try output.md_writer.print("(expr :tag {s} :type \"{s}\")\n", .{ @tagName(expr.tag), type_str });
     } else {
@@ -2822,67 +2838,68 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
 fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeType, env: *const CommonEnv, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     try output.begin_section("TYPES");
     try output.begin_code_block("roc");
-    
+
     // Initialize a types store for type checking
     var types_store = try types.Store.init(output.gpa);
     defer types_store.deinit();
-    
+
     // Create type inference context
     var infer_ctx = infer_cir2.InferContext.init(output.gpa, &types_store, cir);
-    
+
     // For type=expr snapshots, handle specially
     if (node_type == .expr) {
         if (maybe_expr_idx) |expr_idx| {
             const expr = cir.getExpr(expr_idx);
-            
+
             // Check if it's a block with assignments
             if (expr.tag == .block) {
                 // Extract named bindings from the block
                 const nodes_idx = expr.payload.nodes;
                 var iter = cir.ast.*.node_slices.nodes(&nodes_idx);
-                
+
                 while (iter.next()) |node_idx| {
                     const node = cir.getNode(node_idx);
                     const tag_int = @intFromEnum(node.tag);
-                    
+
                     // Check if this is an assignment statement
                     if (tag_int < @intFromEnum(CIR.ExprTag.lookup)) {
                         // It's a statement
                         const stmt_idx = @as(CIR.Stmt.Idx, @enumFromInt(@intFromEnum(node_idx)));
                         const stmt = cir.getStmt(stmt_idx);
-                        
+
                         if (stmt.tag == .assign or stmt.tag == .init_var) {
                             // Get the pattern (variable name) and expression
                             const binop = cir.ast.*.node_slices.binOp(node.payload.binop);
                             const lhs_node = cir.getNode(binop.lhs);
-                            
+
                             // Get the identifier name if it's a simple binding
                             // Check if LHS is an identifier (lc or var_lc tag)
                             const lhs_tag_int = @intFromEnum(lhs_node.tag);
-                            if (lhs_tag_int == @intFromEnum(CIR.PattTag.ident) or 
-                                lhs_tag_int == @intFromEnum(CIR.PattTag.var_ident)) {
+                            if (lhs_tag_int == @intFromEnum(CIR.PattTag.ident) or
+                                lhs_tag_int == @intFromEnum(CIR.PattTag.var_ident))
+                            {
                                 const ident_idx = lhs_node.payload.ident;
                                 const ident_str = env.getIdent(ident_idx);
-                                
+
                                 // TODO: CRITICAL - Fix type inference implementation
                                 // Currently just creating a fresh type variable to avoid crashes
                                 const type_var = try infer_ctx.store.fresh();
-                                
+
                                 // Format the type
                                 var type_writer = types.TypeWriter.initFromParts(output.gpa, &types_store, &env.idents) catch {
                                     try output.md_writer.print("{s} : ?\n", .{ident_str});
                                     continue;
                                 };
                                 defer type_writer.deinit();
-                                
+
                                 type_writer.write(type_var) catch {
                                     try output.md_writer.print("{s} : ?\n", .{ident_str});
                                     continue;
                                 };
                                 const type_str = type_writer.get();
-                                
+
                                 // Output the named binding with its type
-                                try output.md_writer.print("{s} : {s}\n", .{ident_str, type_str});
+                                try output.md_writer.print("{s} : {s}\n", .{ ident_str, type_str });
                             }
                         }
                     }
@@ -2892,7 +2909,7 @@ fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeTy
                 // TODO: CRITICAL - Fix type inference implementation
                 // Currently just creating a fresh type variable to avoid crashes
                 const type_var = try infer_ctx.store.fresh();
-                
+
                 // Format the type
                 var type_writer = types.TypeWriter.initFromParts(output.gpa, &types_store, &env.idents) catch {
                     try output.md_writer.writeAll("?\n");
@@ -2901,7 +2918,7 @@ fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeTy
                     return;
                 };
                 defer type_writer.deinit();
-                
+
                 type_writer.write(type_var) catch {
                     try output.md_writer.writeAll("?\n");
                     try output.end_code_block();
@@ -2909,7 +2926,7 @@ fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeTy
                     return;
                 };
                 const type_str = type_writer.get();
-                
+
                 // Output just the type without "expr_0 :"
                 try output.md_writer.print("{s}\n", .{type_str});
             }
@@ -2921,7 +2938,7 @@ fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeTy
         // (statements and patterns would need different handling)
         try output.md_writer.writeAll("# Type checking for non-expression nodes not yet implemented\n");
     }
-    
+
     try output.end_code_block();
     try output.end_section();
 }

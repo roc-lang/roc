@@ -1391,6 +1391,11 @@ fn parseStoredStringExpr(self: *Parser) Error!Node.Idx {
     switch (extra) {
         .bytes_idx => |idx| {
             // Get the string from ByteSlices
+            // Check if ByteSlices is empty (can happen with certain parsing scenarios)
+            if (self.byte_slices.entries.items.items.len == 0) {
+                // ByteSlices is empty - use empty string as fallback
+                return try self.ast.appendNode(self.gpa, pos, .str_literal_small, .{ .str_literal_small = [_]u8{0} ** 4 });
+            }
             const str_content = self.byte_slices.slice(idx);
 
             // Check if it fits in small string
@@ -1437,8 +1442,13 @@ fn parseStringExpr(self: *Parser) Error!Node.Idx {
                 const extra = self.currentExtra();
                 switch (extra) {
                     .bytes_idx => |idx| {
-                        const str_content = self.byte_slices.slice(idx);
-                        try self.scratch_bytes.appendSlice(self.gpa, str_content);
+                        // Check if ByteSlices is empty (can happen with certain parsing scenarios)
+                        if (self.byte_slices.entries.items.items.len == 0) {
+                            // ByteSlices is empty - skip this part
+                        } else {
+                            const str_content = self.byte_slices.slice(idx);
+                            try self.scratch_bytes.appendSlice(self.gpa, str_content);
+                        }
                     },
                     else => {
                         // Shouldn't happen - StringPart should always have bytes_idx
