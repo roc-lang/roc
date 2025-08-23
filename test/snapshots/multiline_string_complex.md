@@ -26,7 +26,6 @@ value5 = {
 	a: """Multiline
 	,
 	b: (
-
 		"""Multiline
 		,
 		"""Multiline
@@ -64,24 +63,24 @@ LowerIdent(18:1-18:7),OpAssign(18:8-18:9),OpenCurly(18:10-18:11),
 LowerIdent(19:2-19:3),OpColon(19:3-19:4),MultilineStringStart(19:5-19:8),StringPart(19:8-19:17),
 Comma(20:2-20:3),
 LowerIdent(21:2-21:3),OpColon(21:3-21:4),OpenRound(21:5-21:6),
-MultilineStringStart(23:3-23:6),StringPart(23:6-23:15),
-Comma(24:3-24:4),
-MultilineStringStart(25:3-25:6),StringPart(25:6-25:15),
-Comma(26:3-26:4),
-CloseRound(27:2-27:3),Comma(27:3-27:4),
-LowerIdent(28:2-28:3),OpColon(28:3-28:4),OpenSquare(28:5-28:6),
-MultilineStringStart(29:3-29:6),StringPart(29:6-29:15),
-Comma(30:3-30:4),
-CloseSquare(31:2-31:3),Comma(31:3-31:4),
-CloseCurly(32:1-32:2),
-LowerIdent(34:1-34:2),OpAssign(34:3-34:4),OpenCurly(34:5-34:6),
+MultilineStringStart(22:3-22:6),StringPart(22:6-22:15),
+Comma(23:3-23:4),
+MultilineStringStart(24:3-24:6),StringPart(24:6-24:15),
+Comma(25:3-25:4),
+CloseRound(26:2-26:3),Comma(26:3-26:4),
+LowerIdent(27:2-27:3),OpColon(27:3-27:4),OpenSquare(27:5-27:6),
+MultilineStringStart(28:3-28:6),StringPart(28:6-28:15),
+Comma(29:3-29:4),
+CloseSquare(30:2-30:3),Comma(30:3-30:4),
+CloseCurly(31:1-31:2),
+LowerIdent(33:1-33:2),OpAssign(33:3-33:4),OpenCurly(33:5-33:6),
+MultilineStringStart(34:2-34:5),StringPart(34:5-34:5),
 MultilineStringStart(35:2-35:5),StringPart(35:5-35:5),
-MultilineStringStart(36:2-36:5),StringPart(36:5-36:5),
-CloseCurly(37:1-37:2),EndOfFile(37:2-37:2),
+CloseCurly(36:1-36:2),EndOfFile(36:2-36:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-37.2
+(file @1.1-36.2
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
@@ -109,29 +108,29 @@ CloseCurly(37:1-37:2),EndOfFile(37:2-37:2),
 				(e-string-part @16.5-16.5 (raw ""))
 				(e-ident @16.7-16.13 (raw "value2"))
 				(e-string-part @16.14-16.14 (raw ""))))
-		(s-decl @18.1-32.2
+		(s-decl @18.1-31.2
 			(p-ident @18.1-18.7 (raw "value5"))
-			(e-record @18.10-32.2
+			(e-record @18.10-31.2
 				(field (field "a")
 					(e-multiline-string @19.5-19.17
 						(e-string-part @19.8-19.17 (raw "Multiline"))))
 				(field (field "b")
-					(e-tuple @21.5-27.3
-						(e-multiline-string @23.3-23.15
-							(e-string-part @23.6-23.15 (raw "Multiline")))
-						(e-multiline-string @25.3-25.15
-							(e-string-part @25.6-25.15 (raw "Multiline")))))
+					(e-tuple @21.5-26.3
+						(e-multiline-string @22.3-22.15
+							(e-string-part @22.6-22.15 (raw "Multiline")))
+						(e-multiline-string @24.3-24.15
+							(e-string-part @24.6-24.15 (raw "Multiline")))))
 				(field (field "c")
-					(e-list @28.5-31.3
-						(e-multiline-string @29.3-29.15
-							(e-string-part @29.6-29.15 (raw "multiline")))))))
-		(s-decl @34.1-37.2
-			(p-ident @34.1-34.2 (raw "x"))
-			(e-block @34.5-37.2
+					(e-list @27.5-30.3
+						(e-multiline-string @28.3-28.15
+							(e-string-part @28.6-28.15 (raw "multiline")))))))
+		(s-decl @33.1-36.2
+			(p-ident @33.1-33.2 (raw "x"))
+			(e-block @33.5-36.2
 				(statements
-					(e-multiline-string @35.2-36.5
-						(e-string-part @35.5-35.5 (raw ""))
-						(e-string-part @36.5-36.5 (raw ""))))))))
+					(e-multiline-string @34.2-35.5
+						(e-string-part @34.5-34.5 (raw ""))
+						(e-string-part @35.5-35.5 (raw ""))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -168,28 +167,28 @@ NO CHANGE
 				(p-assign @5.1-5.7 (ident "value2")))))
 	(d-let
 		(p-assign @18.1-18.7 (ident "value5"))
-		(e-record @18.10-32.2
+		(e-record @18.10-31.2
 			(fields
 				(field (name "a")
 					(e-string @19.5-19.17
 						(e-literal @19.8-19.17 (string "Multiline"))))
 				(field (name "b")
-					(e-tuple @21.5-27.3
+					(e-tuple @21.5-26.3
 						(elems
-							(e-string @23.3-23.15
-								(e-literal @23.6-23.15 (string "Multiline")))
-							(e-string @25.3-25.15
-								(e-literal @25.6-25.15 (string "Multiline"))))))
+							(e-string @22.3-22.15
+								(e-literal @22.6-22.15 (string "Multiline")))
+							(e-string @24.3-24.15
+								(e-literal @24.6-24.15 (string "Multiline"))))))
 				(field (name "c")
-					(e-list @28.5-31.3
+					(e-list @27.5-30.3
 						(elems
-							(e-string @29.3-29.15
-								(e-literal @29.6-29.15 (string "multiline")))))))))
+							(e-string @28.3-28.15
+								(e-literal @28.6-28.15 (string "multiline")))))))))
 	(d-let
-		(p-assign @34.1-34.2 (ident "x"))
-		(e-block @34.5-37.2
-			(e-string @35.2-36.5
-				(e-literal @36.2-36.5 (string "\n"))))))
+		(p-assign @33.1-33.2 (ident "x"))
+		(e-block @33.5-36.2
+			(e-string @34.2-35.5
+				(e-literal @35.2-35.5 (string "\n"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -200,12 +199,12 @@ NO CHANGE
 		(patt @8.1-8.7 (type "Str"))
 		(patt @12.1-12.7 (type "Str"))
 		(patt @18.1-18.7 (type "{ a: Str, b: (Str, Str), c: List(Str) }"))
-		(patt @34.1-34.2 (type "Str")))
+		(patt @33.1-33.2 (type "Str")))
 	(expressions
 		(expr @3.10-3.50 (type "Str"))
 		(expr @6.2-6.42 (type "Str"))
 		(expr @8.10-10.14 (type "Str"))
 		(expr @13.2-16.14 (type "Str"))
-		(expr @18.10-32.2 (type "{ a: Str, b: (Str, Str), c: List(Str) }"))
-		(expr @34.5-37.2 (type "Str"))))
+		(expr @18.10-31.2 (type "{ a: Str, b: (Str, Str), c: List(Str) }"))
+		(expr @33.5-36.2 (type "Str"))))
 ~~~
