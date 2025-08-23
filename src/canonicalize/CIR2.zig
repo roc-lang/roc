@@ -30,96 +30,92 @@ ast: *AST2,
 // Diagnostics collected during canonicalization
 diagnostics: std.ArrayListUnmanaged(CanDiagnostic),
 
-/// Unified tag that can represent both AST tags and CIR categorized tags
-/// This is what we store in the tag field after canonicalization
-pub const UnifiedTag = enum(u8) {
-    // === AST tags (before canonicalization) ===
-    // Binops
-    binop_equals, //           =
-    binop_double_equals, //    ==
-    binop_not_equals, //       !=
-    binop_colon, //            :
-    binop_colon_equals, //     :=
-    binop_dot, //              .
-    binop_plus, //             +
-    binop_minus, //            -
-    binop_star, //             *
-    binop_slash, //            /
-    binop_double_slash, //     //
-    binop_double_question, //  ??
-    binop_gt, //               >
-    binop_gte, //              >=
-    binop_lt, //               <
-    binop_lte, //              <=
-    binop_thick_arrow, //      =>
-    binop_thin_arrow, //       ->
-    binop_and, //              and
-    binop_or, //               or
+/// CIR Statement tags - start at 0
+pub const StmtTag = enum(u8) {
+    assign,         // immutable assignment
+    init_var,       // mutable variable initialization
+    reassign,       // reassignment to existing var
+    type_alias,     // type alias definition
+    type_anno,      // type annotation
+    nominal_type,   // nominal type definition
+    import,         // import statement
+    match,          // match expression
+    if_without_else, // if without else
+    ret,            // return statement
+    for_loop,       // for loop
+    while_loop,     // while loop
+    crash,          // crash statement
+    expr,           // standalone expression
+    malformed,      // error case
+};
 
-    // Identifiers
-    lc, // lowercase identifier
-    uc, // uppercase identifier
-    var_lc, // var lowercase
+/// Calculate the starting offset for expression tags
+const EXPR_TAG_START = blk: {
+    // Get the maximum value from StmtTag enum
+    var max: u8 = 0;
+    for (std.meta.fields(StmtTag)) |field| {
+        if (field.value > max) {
+            max = @intCast(field.value);
+        }
+    }
+    // Expression tags start after the highest statement tag
+    break :blk max + 1;
+};
 
-    // Literals
+/// CIR Expression tags - start after statement tags
+pub const ExprTag = enum(u8) {
+    lookup = EXPR_TAG_START,  // First expr tag starts at calculated offset
+    neg_lookup,
+    not_lookup,
     num_literal_i32,
     int_literal_i32,
+    frac_literal_small,
+    str_literal_small,
+    str_literal_big,
+    list_literal,
+    empty_list,
+    record_literal,
+    empty_record,
+    apply_ident,
+    apply_tag,
+    lambda,
+    if_else,
+    binop_plus,
+    binop_minus,
+    binop_star,
+    binop_slash,
+    binop_double_equals,
+    binop_not_equals,
+    binop_gt,
+    binop_gte,
+    binop_lt,
+    binop_lte,
+    binop_and,
+    binop_or,
+    record_access,
+    malformed,
+};
 
-    // Patterns
+/// Calculate the starting offset for pattern tags
+const PATT_TAG_START = blk: {
+    // Get the maximum value from ExprTag enum
+    var max: u8 = 0;
+    for (std.meta.fields(ExprTag)) |field| {
+        if (field.value > max) {
+            max = @intCast(field.value);
+        }
+    }
+    // Pattern tags start after the highest expression tag
+    break :blk max + 1;
+};
+
+/// CIR Pattern tags - start after expression tags
+pub const PattTag = enum(u8) {
+    ident = PATT_TAG_START,  // First patt tag starts at calculated offset
+    var_ident,
     underscore,
-
-    // Statements
-    import,
-
-    // ... other AST tags can be added as needed ...
-
-    // === CIR Statement tags (after canonicalization) ===
-    stmt_assign = 128, // Start at 128 to distinguish from AST tags
-    stmt_init_var,
-    stmt_reassign,
-    stmt_expr,
-    stmt_malformed,
-
-    // === CIR Expression tags ===
-    expr_lookup = 160,
-    expr_neg_lookup,
-    expr_not_lookup,
-    expr_num_literal_i32,
-    expr_int_literal_i32,
-    expr_frac_literal_small,
-    expr_str_literal_small,
-    expr_str_literal_big,
-    expr_list_literal,
-    expr_empty_list,
-    expr_record_literal,
-    expr_empty_record,
-    expr_apply_ident,
-    expr_apply_tag,
-    expr_lambda,
-    expr_if_else,
-    expr_binop_plus,
-    expr_binop_minus,
-    expr_binop_star,
-    expr_binop_slash,
-    expr_binop_double_equals,
-    expr_binop_not_equals,
-    expr_binop_gt,
-    expr_binop_gte,
-    expr_binop_lt,
-    expr_binop_lte,
-    expr_binop_and,
-    expr_binop_or,
-    expr_record_access,
-    expr_malformed,
-
-    // === CIR Pattern tags ===
-    patt_ident = 192,
-    patt_var_ident,
-    patt_underscore,
-    patt_num_literal_i32,
-    patt_malformed,
-
-    // We can add more as needed...
+    num_literal_i32,
+    malformed,
 };
 
 /// Diagnostic errors during canonicalization
@@ -200,8 +196,8 @@ pub const Exprs = struct {
 
         for (tags) |tag| {
             const tag_value = @as(u8, @intFromEnum(tag));
-            // Expression tags start at 160 (expr_lookup)
-            if (tag_value >= 160 and tag_value < 192) {
+            // Expression tags are in the range [EXPR_TAG_START, PATT_TAG_START)
+            if (tag_value >= EXPR_TAG_START and tag_value < PATT_TAG_START) {
                 count += 1;
             }
         }
@@ -221,8 +217,8 @@ pub const Stmts = struct {
 
         for (tags) |tag| {
             const tag_value = @as(u8, @intFromEnum(tag));
-            // Statement tags start at 128 (stmt_assign)
-            if (tag_value >= 128 and tag_value < 160) {
+            // Statement tags are in the range [0, EXPR_TAG_START)
+            if (tag_value < EXPR_TAG_START) {
                 count += 1;
             }
         }
@@ -242,8 +238,8 @@ pub const Patts = struct {
 
         for (tags) |tag| {
             const tag_value = @as(u8, @intFromEnum(tag));
-            // Pattern tags start at 192 (patt_ident)
-            if (tag_value >= 192) {
+            // Pattern tags start at PATT_TAG_START
+            if (tag_value >= PATT_TAG_START) {
                 count += 1;
             }
         }
@@ -306,8 +302,24 @@ pub fn getNode(self: *const CIR, idx: AST2.Node.Idx) AST2.Node {
     return self.ast.*.nodes.get(@enumFromInt(@intFromEnum(idx)));
 }
 
-/// Mutate a node's tag in place to a CIR tag
-pub fn mutateNodeTag(self: *CIR, idx: AST2.Node.Idx, new_tag: UnifiedTag) void {
+/// Mutate a node's tag in place to a CIR statement tag
+pub fn mutateToStmt(self: *CIR, idx: AST2.Node.Idx, new_tag: StmtTag) void {
+    const tag_ptr = self.getNodeTagPtr(idx);
+    // Cast the tag field to u8 and overwrite it
+    const tag_u8_ptr = @as(*u8, @ptrCast(tag_ptr));
+    tag_u8_ptr.* = @intFromEnum(new_tag);
+}
+
+/// Mutate a node's tag in place to a CIR expression tag
+pub fn mutateToExpr(self: *CIR, idx: AST2.Node.Idx, new_tag: ExprTag) void {
+    const tag_ptr = self.getNodeTagPtr(idx);
+    // Cast the tag field to u8 and overwrite it
+    const tag_u8_ptr = @as(*u8, @ptrCast(tag_ptr));
+    tag_u8_ptr.* = @intFromEnum(new_tag);
+}
+
+/// Mutate a node's tag in place to a CIR pattern tag
+pub fn mutateToPatt(self: *CIR, idx: AST2.Node.Idx, new_tag: PattTag) void {
     const tag_ptr = self.getNodeTagPtr(idx);
     // Cast the tag field to u8 and overwrite it
     const tag_u8_ptr = @as(*u8, @ptrCast(tag_ptr));
@@ -344,22 +356,22 @@ pub fn getStmt(self: *const CIR, idx: Stmt.Idx) struct {
     const node_idx = @as(AST2.Node.Idx, @enumFromInt(@intFromEnum(idx)));
     const node = self.getNode(node_idx);
 
-    // Read the tag as a u8 and interpret it as a UnifiedTag
+    // Read the tag as a u8 and interpret it directly as a StmtTag
     const tag_value = @as(u8, @intFromEnum(node.tag));
-    const unified_tag = @as(UnifiedTag, @enumFromInt(tag_value));
+    const stmt_tag = @as(StmtTag, @enumFromInt(tag_value));
 
-    // Convert UnifiedTag to Stmt.Tag
-    const stmt_tag: Stmt.Tag = switch (unified_tag) {
-        .stmt_assign => .assign,
-        .stmt_init_var => .init_var,
-        .stmt_reassign => .reassign,
-        .stmt_expr => .expr,
-        .stmt_malformed => .malformed,
-        else => unreachable, // Should only be called on statement nodes
+    // Convert StmtTag to Stmt.Tag
+    const tag: Stmt.Tag = switch (stmt_tag) {
+        .assign => .assign,
+        .init_var => .init_var,
+        .reassign => .reassign,
+        .expr => .expr,
+        .malformed => .malformed,
+        else => .malformed, // Fallback for unexpected tags
     };
 
     return .{
-        .tag = stmt_tag,
+        .tag = tag,
         .start = node.start,
         .payload = node.payload,
     };
@@ -374,47 +386,46 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
     const node_idx = @as(AST2.Node.Idx, @enumFromInt(@intFromEnum(idx)));
     const node = self.getNode(node_idx);
 
-    // Read the tag as a u8 and interpret it as a UnifiedTag
+    // Read the tag as a u8 and interpret it directly as an ExprTag
     const tag_value = @as(u8, @intFromEnum(node.tag));
-    const unified_tag = @as(UnifiedTag, @enumFromInt(tag_value));
+    const expr_tag = @as(ExprTag, @enumFromInt(tag_value));
 
-    // Convert UnifiedTag to Expr.Tag
-    const expr_tag: Expr.Tag = switch (unified_tag) {
-        .expr_lookup => .lookup,
-        .expr_neg_lookup => .neg_lookup,
-        .expr_not_lookup => .not_lookup,
-        .expr_num_literal_i32 => .num_literal_i32,
-        .expr_int_literal_i32 => .int_literal_i32,
-        .expr_frac_literal_small => .frac_literal_small,
-        .expr_str_literal_small => .str_literal_small,
-        .expr_str_literal_big => .str_literal_big,
-        .expr_list_literal => .list_literal,
-        .expr_empty_list => .empty_list,
-        .expr_record_literal => .record_literal,
-        .expr_empty_record => .empty_record,
-        .expr_apply_ident => .apply_ident,
-        .expr_apply_tag => .apply_tag,
-        .expr_lambda => .lambda,
-        .expr_if_else => .if_else,
-        .expr_binop_plus => .binop_plus,
-        .expr_binop_minus => .binop_minus,
-        .expr_binop_star => .binop_star,
-        .expr_binop_slash => .binop_slash,
-        .expr_binop_double_equals => .binop_double_equals,
-        .expr_binop_not_equals => .binop_not_equals,
-        .expr_binop_gt => .binop_gt,
-        .expr_binop_gte => .binop_gte,
-        .expr_binop_lt => .binop_lt,
-        .expr_binop_lte => .binop_lte,
-        .expr_binop_and => .binop_and,
-        .expr_binop_or => .binop_or,
-        .expr_record_access => .record_access,
-        .expr_malformed => .malformed,
-        else => unreachable, // Should only be called on expression nodes
+    // Convert ExprTag to Expr.Tag
+    const tag: Expr.Tag = switch (expr_tag) {
+        .lookup => .lookup,
+        .neg_lookup => .neg_lookup,
+        .not_lookup => .not_lookup,
+        .num_literal_i32 => .num_literal_i32,
+        .int_literal_i32 => .int_literal_i32,
+        .frac_literal_small => .frac_literal_small,
+        .str_literal_small => .str_literal_small,
+        .str_literal_big => .str_literal_big,
+        .list_literal => .list_literal,
+        .empty_list => .empty_list,
+        .record_literal => .record_literal,
+        .empty_record => .empty_record,
+        .apply_ident => .apply_ident,
+        .apply_tag => .apply_tag,
+        .lambda => .lambda,
+        .if_else => .if_else,
+        .binop_plus => .binop_plus,
+        .binop_minus => .binop_minus,
+        .binop_star => .binop_star,
+        .binop_slash => .binop_slash,
+        .binop_double_equals => .binop_double_equals,
+        .binop_not_equals => .binop_not_equals,
+        .binop_gt => .binop_gt,
+        .binop_gte => .binop_gte,
+        .binop_lt => .binop_lt,
+        .binop_lte => .binop_lte,
+        .binop_and => .binop_and,
+        .binop_or => .binop_or,
+        .record_access => .record_access,
+        .malformed => .malformed,
     };
 
     return .{
-        .tag = expr_tag,
+        .tag = tag,
         .start = node.start,
         .payload = node.payload,
     };
@@ -431,22 +442,21 @@ pub fn getPatt(self: *const CIR, idx: Patt.Idx) struct {
     const node_idx = idx.toNodeIdx();
     const node = self.getNode(node_idx);
 
-    // Read the tag as a u8 and interpret it as a UnifiedTag
+    // Read the tag as a u8 and interpret it directly as a PattTag
     const tag_value = @as(u8, @intFromEnum(node.tag));
-    const unified_tag = @as(UnifiedTag, @enumFromInt(tag_value));
+    const patt_tag = @as(PattTag, @enumFromInt(tag_value));
 
-    // Convert UnifiedTag to Patt.Tag
-    const patt_tag: Patt.Tag = switch (unified_tag) {
-        .patt_ident => .ident,
-        .patt_var_ident => .var_ident,
-        .patt_underscore => .underscore,
-        .patt_num_literal_i32 => .num_literal_i32,
-        .patt_malformed => .malformed,
-        else => unreachable, // Should only be called on pattern nodes
+    // Convert PattTag to Patt.Tag
+    const tag: Patt.Tag = switch (patt_tag) {
+        .ident => .ident,
+        .var_ident => .var_ident,
+        .underscore => .underscore,
+        .num_literal_i32 => .num_literal_i32,
+        .malformed => .malformed,
     };
 
     return .{
-        .tag = patt_tag,
+        .tag = tag,
         .start = node.start,
         .payload = node.payload,
         .is_mutable = idx.isMutable(), // Extract mutability from the index
@@ -860,16 +870,16 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
     switch (node.tag) {
         // Expression nodes - mutate tag in place
         .num_literal_i32 => {
-            self.mutateNodeTag(node_idx, .expr_num_literal_i32);
+            self.mutateToExpr(node_idx, .num_literal_i32);
             return asExprIdx(node_idx);
         },
         .int_literal_i32 => {
-            self.mutateNodeTag(node_idx, .expr_int_literal_i32);
+            self.mutateToExpr(node_idx, .int_literal_i32);
             return asExprIdx(node_idx);
         },
         .lc, .var_lc => {
             // Identifiers become lookups in expression context
-            self.mutateNodeTag(node_idx, .expr_lookup);
+            self.mutateToExpr(node_idx, .lookup);
             return asExprIdx(node_idx);
         },
 
@@ -883,15 +893,14 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             _ = try self.canonicalizeExpr(allocator, ast_binop.rhs);
 
             // Map AST binop tag to CIR expr tag and mutate in place
-            const unified_tag: UnifiedTag = switch (node.tag) {
-                .binop_plus => .expr_binop_plus,
-                .binop_minus => .expr_binop_minus,
-                .binop_star => .expr_binop_star,
-                .binop_slash => .expr_binop_slash,
+            const expr_tag: ExprTag = switch (node.tag) {
+                .binop_plus => .binop_plus,
+                .binop_minus => .binop_minus,
+                .binop_star => .binop_star,
+                .binop_slash => .binop_slash,
                 else => unreachable,
             };
-
-            self.mutateNodeTag(node_idx, unified_tag);
+            self.mutateToExpr(node_idx, expr_tag);
             return asExprIdx(node_idx);
         },
 
@@ -899,28 +908,28 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         .underscore => {
             // Underscore pattern found in expression context
             try self.pushDiagnostic(allocator, .pattern_in_expr_context, node_region);
-            self.mutateNodeTag(node_idx, .expr_malformed);
+            self.mutateToExpr(node_idx, .malformed);
             return asExprIdx(node_idx);
         },
         .uc => {
             // Uppercase identifier (tag pattern) in expression context
             // This could be a tag constructor, but for now treat as error
             try self.pushDiagnostic(allocator, .pattern_in_expr_context, node_region);
-            self.mutateNodeTag(node_idx, .expr_malformed);
+            self.mutateToExpr(node_idx, .malformed);
             return asExprIdx(node_idx);
         },
 
         // Statement nodes - error in expression context
         .import => {
             try self.pushDiagnostic(allocator, .stmt_in_expr_context, node_region);
-            self.mutateNodeTag(node_idx, .expr_malformed);
+            self.mutateToExpr(node_idx, .malformed);
             return asExprIdx(node_idx);
         },
 
         else => {
             // Unsupported node type
             try self.pushDiagnostic(allocator, .unsupported_node, node_region);
-            self.mutateNodeTag(node_idx, .expr_malformed);
+            self.mutateToExpr(node_idx, .malformed);
             return asExprIdx(node_idx);
         },
     }
@@ -1105,7 +1114,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                     _ = try self.canonicalizeExpr(allocator, ast_binop.rhs);
 
                     // Mutate the AST node to have the CIR statement tag
-                    self.mutateNodeTag(node_idx, .stmt_init_var);
+                    self.mutateToStmt(node_idx, .init_var);
 
                     // In CIR2 design, the payload should contain the assignment info
                     // For now, the existing AST binop payload contains the pattern/expr structure
@@ -1133,7 +1142,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                             _ = try self.canonicalizeExpr(allocator, ast_binop.rhs);
 
                             // Mutate AST node to reassignment statement
-                            self.mutateNodeTag(node_idx, .stmt_reassign);
+                            self.mutateToStmt(node_idx, .reassign);
                             // existing_patt_idx is used above in scope boundary check
                             return asStmtIdx(node_idx);
                         } else {
@@ -1141,7 +1150,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                             try self.pushDiagnostic(allocator, .ident_already_defined, node_region);
 
                             // Mutate to malformed statement - this AST node is semantically invalid
-                            self.mutateNodeTag(node_idx, .stmt_malformed);
+                            self.mutateToStmt(node_idx, .malformed);
                             return asStmtIdx(node_idx);
                         }
                     } else {
@@ -1156,7 +1165,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                         _ = try self.canonicalizeExpr(allocator, ast_binop.rhs);
 
                         // Mutate AST node to assignment statement
-                        self.mutateNodeTag(node_idx, .stmt_assign);
+                        self.mutateToStmt(node_idx, .assign);
                         return asStmtIdx(node_idx);
                     }
                 },
@@ -1167,7 +1176,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                     _ = try self.canonicalizeExpr(allocator, ast_binop.rhs);
 
                     // Mutate AST node to assignment statement
-                    self.mutateNodeTag(node_idx, .stmt_assign);
+                    self.mutateToStmt(node_idx, .assign);
                     return asStmtIdx(node_idx);
                 },
             }
@@ -1177,7 +1186,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         .num_literal_i32, .int_literal_i32, .lc => {
             try self.pushDiagnostic(allocator, .expr_in_stmt_context, node_region);
             // Mutate to malformed statement - expressions aren't valid in statement context
-            self.mutateNodeTag(node_idx, .stmt_malformed);
+            self.mutateToStmt(node_idx, .malformed);
             return asStmtIdx(node_idx);
         },
 
@@ -1185,7 +1194,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             // Unsupported statement type
             try self.pushDiagnostic(allocator, .unsupported_node, node_region);
             // Mutate to malformed statement - this AST node type isn't supported in statement context
-            self.mutateNodeTag(node_idx, .stmt_malformed);
+            self.mutateToStmt(node_idx, .malformed);
             return asStmtIdx(node_idx);
         },
     }
@@ -1210,7 +1219,7 @@ pub fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_para
         .lc => {
             // Lowercase identifier pattern
             // Mutate the AST node's tag in place
-            self.mutateNodeTag(node_idx, if (is_mutable) .patt_var_ident else .patt_ident);
+            self.mutateToPatt(node_idx, if (is_mutable) .var_ident else .ident);
 
             // Return the index with mutability encoded
             return Patt.Idx.withMutability(node_idx, is_mutable);
@@ -1218,7 +1227,7 @@ pub fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_para
         .var_lc => {
             // Mutable identifier pattern (var_lc always means mutable)
             // Mutate the AST node's tag in place
-            self.mutateNodeTag(node_idx, .patt_var_ident);
+            self.mutateToPatt(node_idx, .var_ident);
 
             // Return the index with mutability encoded (always mutable for var_lc)
             return Patt.Idx.withMutability(node_idx, true);
@@ -1226,7 +1235,7 @@ pub fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_para
         .underscore => {
             // Underscore pattern
             // Mutate the AST node's tag in place
-            self.mutateNodeTag(node_idx, .patt_underscore);
+            self.mutateToPatt(node_idx, .underscore);
 
             // Return the index with mutability encoded (underscore can't be mutable)
             return Patt.Idx.withMutability(node_idx, false);
@@ -1234,7 +1243,7 @@ pub fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_para
         .num_literal_i32 => {
             // Number literal pattern
             // Mutate the AST node's tag in place
-            self.mutateNodeTag(node_idx, .patt_num_literal_i32);
+            self.mutateToPatt(node_idx, .num_literal_i32);
 
             // Return the index with mutability encoded (literals can't be mutable)
             return Patt.Idx.withMutability(node_idx, false);
@@ -1244,7 +1253,7 @@ pub fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_para
         .binop_plus, .binop_minus, .binop_star, .binop_slash => {
             try self.pushDiagnostic(allocator, .expr_in_pattern_context, node_region);
             // Mutate to malformed pattern tag
-            self.mutateNodeTag(node_idx, .patt_malformed);
+            self.mutateToPatt(node_idx, .malformed);
             // Return with mutability encoded (malformed patterns can't be mutable)
             return Patt.Idx.withMutability(node_idx, false);
         },
@@ -1253,7 +1262,7 @@ pub fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_para
             // Unsupported pattern type
             try self.pushDiagnostic(allocator, .unsupported_node, node_region);
             // Mutate to malformed pattern tag
-            self.mutateNodeTag(node_idx, .patt_malformed);
+            self.mutateToPatt(node_idx, .malformed);
             // Return with mutability encoded (malformed patterns can't be mutable)
             return Patt.Idx.withMutability(node_idx, false);
         },
@@ -1522,8 +1531,8 @@ test "CIR2 demonstrates in-place tag mutation" {
     // Verify the AST node's tag was mutated to expr_lookup
     const mutated_node = ast_ptr.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
     const tag_value = @as(u8, @intFromEnum(mutated_node.tag));
-    const unified_tag = @as(UnifiedTag, @enumFromInt(tag_value));
-    try testing.expect(unified_tag == .expr_lookup);
+    const expr_tag = @as(ExprTag, @enumFromInt(tag_value));
+    try testing.expect(expr_tag == .lookup);
 
     // Verify the CIR can read it as an expression
     const expr = cir.getExpr(expr_idx);

@@ -21,13 +21,11 @@ pub const occurs = @import("occurs.zig");
 pub const problem = @import("problem.zig");
 
 pub const Check = @import("Check.zig");
-pub const TypeCheck2 = @import("TypeCheck2.zig");
 
 pub const ReportBuilder = problem.ReportBuilder;
 
 test "check tests" {
     std.testing.refAllDecls(@import("Check.zig"));
-    std.testing.refAllDecls(@import("TypeCheck2.zig"));
     std.testing.refAllDecls(@import("copy_import.zig"));
     std.testing.refAllDecls(@import("occurs.zig"));
     std.testing.refAllDecls(@import("problem.zig"));
