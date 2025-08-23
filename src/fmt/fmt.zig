@@ -833,7 +833,7 @@ const Formatter = struct {
                             if (add_newline) {
                                 // Comments could be located before the MultilineStringStart token, not the StringPart token
                                 _ = try fmt.flushCommentsBefore(str.region.start - 1);
-                                try ensureNewline(fmt);
+                                try fmt.ensureNewline();
                                 try fmt.pushIndent();
                                 try fmt.pushAll("\"\"\"");
                             }
@@ -950,23 +950,18 @@ const Formatter = struct {
                         }
                         try fmt.push(',');
                         _ = try fmt.flushCommentsAfter(field_region.end);
-                        try fmt.ensureNewline();
-                        if (i < fields.len - 1) {
-                            try fmt.pushIndent();
+                        if (i == fields.len - 1) {
+                            fmt.curr_indent -= 1;
                         }
+                        try fmt.ensureNewline();
+                        try fmt.pushIndent();
                     } else if (i < fields.len - 1) {
                         try fmt.pushAll(",");
                     }
                 }
 
-                if (has_extension or fields.len > 0) {
-                    if (multiline) {
-                        fmt.curr_indent -= 1;
-                        try fmt.ensureNewline();
-                        try fmt.pushIndent();
-                    } else {
-                        try fmt.push(' ');
-                    }
+                if ((has_extension or fields.len > 0) and !multiline) {
+                    try fmt.push(' ');
                 }
                 try fmt.push('}');
             },
@@ -989,16 +984,14 @@ const Formatter = struct {
                     if (args_are_multiline) {
                         try fmt.push(',');
                         _ = try fmt.flushCommentsAfter(arg_region.end);
-                        try fmt.ensureNewline();
-                        if (i < args.len - 1) {
-                            try fmt.pushIndent();
+                        if (i == args.len - 1) {
+                            fmt.curr_indent -= 1;
                         }
+                        try fmt.ensureNewline();
+                        try fmt.pushIndent();
                     } else if (i < args.len - 1) {
                         try fmt.pushAll(", ");
                     }
-                }
-                if (args_are_multiline) {
-                    fmt.curr_indent -= 1;
                 }
                 try fmt.push('|');
                 if (try fmt.flushCommentsBefore(body_region.start)) {
