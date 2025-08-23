@@ -32,21 +32,21 @@ diagnostics: std.ArrayListUnmanaged(CanDiagnostic),
 
 /// CIR Statement tags - start at 0
 pub const StmtTag = enum(u8) {
-    assign,         // immutable assignment
-    init_var,       // mutable variable initialization
-    reassign,       // reassignment to existing var
-    type_alias,     // type alias definition
-    type_anno,      // type annotation
-    nominal_type,   // nominal type definition
-    import,         // import statement
-    match,          // match expression
+    assign, // immutable assignment
+    init_var, // mutable variable initialization
+    reassign, // reassignment to existing var
+    type_alias, // type alias definition
+    type_anno, // type annotation
+    nominal_type, // nominal type definition
+    import, // import statement
+    match, // match expression
     if_without_else, // if without else
-    ret,            // return statement
-    for_loop,       // for loop
-    while_loop,     // while loop
-    crash,          // crash statement
-    expr,           // standalone expression
-    malformed,      // error case
+    ret, // return statement
+    for_loop, // for loop
+    while_loop, // while loop
+    crash, // crash statement
+    expr, // standalone expression
+    malformed, // error case
 };
 
 /// Calculate the starting offset for expression tags
@@ -64,7 +64,7 @@ const EXPR_TAG_START = blk: {
 
 /// CIR Expression tags - start after statement tags
 pub const ExprTag = enum(u8) {
-    lookup = EXPR_TAG_START,  // First expr tag starts at calculated offset
+    lookup = EXPR_TAG_START, // First expr tag starts at calculated offset
     neg_lookup,
     not_lookup,
     num_literal_i32,
@@ -111,7 +111,7 @@ const PATT_TAG_START = blk: {
 
 /// CIR Pattern tags - start after expression tags
 pub const PattTag = enum(u8) {
-    ident = PATT_TAG_START,  // First patt tag starts at calculated offset
+    ident = PATT_TAG_START, // First patt tag starts at calculated offset
     var_ident,
     underscore,
     num_literal_i32,

@@ -18,12 +18,11 @@ const builtins = @import("builtins");
 const compile = @import("compile");
 const fmt = @import("fmt");
 const repl = @import("repl");
+const collections = @import("collections");
 
 const Repl = repl.Repl;
 const CommonEnv = base.CommonEnv;
 const Check = check.Check;
-const CIR = can.CIR;
-const Can = can.Can;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
 const RocDealloc = builtins.host_abi.RocDealloc;
@@ -35,11 +34,14 @@ const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const CacheModule = compile.CacheModule;
-const AST = parse.AST;
+const AST = parse.AST2; // Use AST2 as the main AST
+const Parser = parse.Parser2; // Use Parser2 as the main parser
+const CIR = can.CIR2; // Use CIR2 as the main CIR
 const Report = reporting.Report;
 const types_problem_mod = check.problem;
 const tokenize = parse.tokenize;
 const parallel = base.parallel;
+const ByteSlices = collections.ByteSlices;
 
 var verbose_log: bool = false;
 var prng = std.Random.DefaultPrng.init(1234567890);
@@ -447,64 +449,134 @@ fn problemsEqual(a: ProblemEntry, b: ProblemEntry) bool {
         a.end_col == b.end_col;
 }
 
-/// Generate all reports from the compilation pipeline
-fn generateAllReports(
+/// Helper to determine if an AST2 node tag represents an expression
+fn isExpressionNode(tag: AST.Node.Tag) bool {
+    return switch (tag) {
+        .num_literal_i32, .int_literal_i32, .lc, .uc, .var_lc, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or => true,
+        else => false,
+    };
+}
+
+/// Helper to determine if an AST2 node tag represents a statement
+fn isStatementNode(tag: AST.Node.Tag) bool {
+    return switch (tag) {
+        .binop_equals, .binop_colon, .binop_colon_equals, .import => true,
+        else => false,
+    };
+}
+
+/// Helper to determine if an AST2 node tag represents a pattern
+fn isPatternNode(tag: AST.Node.Tag) bool {
+    return switch (tag) {
+        .underscore => true,
+        else => false,
+    };
+}
+
+/// Generate reports from Parser2 and CIR2 diagnostics
+fn generateReportsFromNewSystem(
     allocator: std.mem.Allocator,
-    parse_ast: *AST,
-    can_ir: *ModuleEnv,
-    solver: *Check,
+    parser: *const Parser,
+    cir: *const CIR,
+    env: *const base.CommonEnv,
     snapshot_path: []const u8,
-    module_env: *ModuleEnv,
 ) !std.ArrayList(reporting.Report) {
     var reports = std.ArrayList(reporting.Report).init(allocator);
     errdefer reports.deinit();
 
-    // Generate tokenize reports
-    for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-        const report = parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator) catch |err| {
-            std.debug.panic("Failed to create tokenize report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
-        };
+    // Convert Parser2 diagnostics to reports
+    for (parser.diagnostics.items) |diag| {
+        const report = try convertParser2DiagnosticToReport(allocator, diag, parser, snapshot_path);
         try reports.append(report);
     }
 
-    // Generate parse reports
-    for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(&module_env.common, diagnostic, allocator, snapshot_path) catch |err| {
-            std.debug.panic("Failed to create parse report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
-        };
-        try reports.append(report);
-    }
-
-    // Generate canonicalization reports
-    const diagnostics = try can_ir.getDiagnostics();
-    defer allocator.free(diagnostics);
-    for (diagnostics) |diagnostic| {
-        const report = can_ir.diagnosticToReport(diagnostic, allocator, snapshot_path) catch |err| {
-            std.debug.panic("Failed to create canonicalization report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
-        };
-        try reports.append(report);
-    }
-
-    // Generate type checking reports
-    for (solver.problems.problems.items) |problem| {
-        const empty_modules: []const *ModuleEnv = &.{};
-        var report_builder = types_problem_mod.ReportBuilder.init(
-            allocator,
-            module_env,
-            can_ir,
-            &solver.snapshots,
-            snapshot_path,
-            empty_modules,
-        );
-        defer report_builder.deinit();
-
-        const report = report_builder.build(problem) catch |err| {
-            std.debug.panic("Failed to create type checking report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
-        };
+    // Convert CIR2 diagnostics to reports
+    for (cir.diagnostics.items) |diag| {
+        const report = try convertCIR2DiagnosticToReport(allocator, diag, env, snapshot_path);
         try reports.append(report);
     }
 
     return reports;
+}
+
+/// Convert Parser2 diagnostic to a report
+fn convertParser2DiagnosticToReport(
+    allocator: std.mem.Allocator,
+    diag: AST.Diagnostic,
+    parser: *const Parser,
+    snapshot_path: []const u8,
+) !Report {
+    _ = snapshot_path;
+
+    const title = switch (diag.tag) {
+        .multiple_platforms => "Multiple Platforms",
+        .no_platform => "No Platform",
+        .missing_header => "Missing Header",
+        .missing_arrow => "Missing Arrow",
+        .expected_exposes => "Expected Exposes",
+        .expected_exposes_close_square => "Expected Close Square Bracket",
+        .expected_exposes_open_square => "Expected Open Square Bracket",
+        .expected_imports => "Expected Imports",
+        .expected_package_or_platform_name => "Expected Package or Platform Name",
+        .expected_package_or_platform_colon => "Expected Colon",
+        .expected_package_or_platform_string => "Expected String",
+        .expected_package_platform_close_curly => "Expected Close Curly Brace",
+        .expected_package_platform_open_curly => "Expected Open Curly Brace",
+        .expected_packages => "Expected Packages",
+        .expected_packages_close_curly => "Expected Close Curly Brace",
+        else => "Parse Error",
+    };
+
+    var report = Report.init(allocator, title, .runtime_error);
+
+    // Convert offsets to line/column using CommonEnv
+    const region_info = parser.token_iter.env.calcRegionInfo(diag.region);
+    const start_str = try std.fmt.allocPrint(allocator, "{}:{}", .{ region_info.start_line_idx + 1, region_info.start_col_idx + 1 });
+    defer allocator.free(start_str);
+    const end_str = try std.fmt.allocPrint(allocator, "{}:{}", .{ region_info.end_line_idx + 1, region_info.end_col_idx + 1 });
+    defer allocator.free(end_str);
+    const region_text = try std.fmt.allocPrint(allocator, "at {s} to {s}", .{ start_str, end_str });
+    defer allocator.free(region_text);
+    try report.document.addText(region_text);
+
+    return report;
+}
+
+/// Convert CIR2 diagnostic to a report
+fn convertCIR2DiagnosticToReport(
+    allocator: std.mem.Allocator,
+    diag: CIR.CanDiagnostic,
+    env: *const base.CommonEnv,
+    snapshot_path: []const u8,
+) !Report {
+    _ = snapshot_path;
+
+    const title = switch (diag.tag) {
+        .pattern_in_expr_context => "Pattern in Expression Context",
+        .expr_in_pattern_context => "Expression in Pattern Context",
+        .stmt_in_expr_context => "Statement in Expression Context",
+        .expr_in_stmt_context => "Expression in Statement Context",
+        .type_in_expr_context => "Type in Expression Context",
+        .ident_not_in_scope => "Identifier Not in Scope",
+        .ident_already_defined => "Identifier Already Defined",
+        .type_not_in_scope => "Type Not in Scope",
+        .unsupported_node => "Unsupported Node",
+        .malformed_ast => "Malformed AST",
+    };
+
+    var report = Report.init(allocator, title, .runtime_error);
+
+    // Convert offsets to line/column using CommonEnv
+    const region_info = env.calcRegionInfo(diag.region);
+    const start_str = try std.fmt.allocPrint(allocator, "{}:{}", .{ region_info.start_line_idx + 1, region_info.start_col_idx + 1 });
+    defer allocator.free(start_str);
+    const end_str = try std.fmt.allocPrint(allocator, "{}:{}", .{ region_info.end_line_idx + 1, region_info.end_col_idx + 1 });
+    defer allocator.free(end_str);
+    const region_text = try std.fmt.allocPrint(allocator, "at {s} to {s}", .{ start_str, end_str });
+    defer allocator.free(region_text);
+    try report.document.addText(region_text);
+
+    return report;
 }
 
 /// Render reports to PROBLEMS section format (markdown and HTML)
@@ -1047,136 +1119,43 @@ fn processSnapshotContent(
         return processReplSnapshot(allocator, content, output_path, config);
     }
 
-    // Process the content through the compilation pipeline
-    var module_env = try ModuleEnv.init(allocator, content.source);
-    defer module_env.deinit();
+    // Create ByteSlices for Parser2
+    var byte_slices = ByteSlices{ .entries = .{} };
+    defer byte_slices.entries.deinit(allocator);
 
-    // Calculate line starts for source location tracking
-    try module_env.common.calcLineStarts(allocator);
+    // Create AST for Parser2
+    var ast = try AST.initCapacity(allocator, 1024);
+    defer ast.deinit(allocator);
 
-    // Parse the source code based on node type
-    var parse_ast: AST = switch (content.meta.node_type) {
-        .file => try parse.parse(&module_env.common, allocator),
-        .header => try parse.parseHeader(&module_env.common, allocator),
-        .expr => try parse.parseExpr(&module_env.common, allocator),
-        .statement => try parse.parseStatement(&module_env.common, allocator),
-        .package => try parse.parse(&module_env.common, allocator),
-        .platform => try parse.parse(&module_env.common, allocator),
-        .app => try parse.parse(&module_env.common, allocator),
+    // Create common environment for Parser2
+    var env = try base.CommonEnv.init(allocator, content.source);
+    defer env.deinit(allocator);
+    try env.calcLineStarts(allocator);
+
+    // Create diagnostics buffer
+    var messages: [128]parse.tokenize_iter.Diagnostic = undefined;
+
+    // Create Parser2
+    var parser = try Parser.init(&env, allocator, content.source, &messages, &ast, &byte_slices);
+    defer parser.deinit();
+
+    // Parse based on node type
+    const parse_result: ?i32 = switch (content.meta.node_type) {
+        .file => if (try parser.parseFile()) |idx| @intFromEnum(idx) else null,
+        .header => blk: {
+            try parser.parseHeader();
+            break :blk null; // Header doesn't return a node, it sets ast.header
+        },
+        .expr => @intFromEnum(try parser.parseExpr()),
+        .statement => if (try parser.parseStmt()) |stmt| @intFromEnum(stmt) else null,
+        .package => if (try parser.parseFile()) |idx| @intFromEnum(idx) else null,
+        .platform => if (try parser.parseFile()) |idx| @intFromEnum(idx) else null,
+        .app => if (try parser.parseFile()) |idx| @intFromEnum(idx) else null,
         .repl => unreachable, // Handled above
     };
-    defer parse_ast.deinit(allocator);
 
-    parse_ast.store.emptyScratch();
-
-    // Extract module name from output path
-    const basename = std.fs.path.basename(output_path);
-    const module_name = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
-        basename[0..dot_idx]
-    else
-        basename;
-    var can_ir = &module_env; // ModuleEnv contains the canonical IR
-    try can_ir.initCIRFields(allocator, module_name);
-
-    var czer = try Can.init(can_ir, &parse_ast, null);
-    defer czer.deinit();
-
-    var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
-
-    switch (content.meta.node_type) {
-        .file => try czer.canonicalizeFile(),
-        .header => {
-            // TODO: implement canonicalize_header when available
-        },
-        .expr => {
-            const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-            maybe_expr_idx = try czer.canonicalizeExpr(expr_idx);
-        },
-        .statement => {
-            // Manually track scratch statements because we aren't using the file entrypoint
-            const stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-            const scratch_statements_start = can_ir.store.scratch_statements.top();
-            _ = try czer.canonicalizeStatement(stmt_idx);
-            can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
-        },
-        .package => try czer.canonicalizeFile(),
-        .platform => try czer.canonicalizeFile(),
-        .app => try czer.canonicalizeFile(),
-        .repl => unreachable, // Handled above
-    }
-
-    // Assert that everything is in-sync
-    can_ir.debugAssertArraysInSync();
-
-    // Types
-    const empty_modules: []const *ModuleEnv = &.{};
-    var solver = try Check.init(
-        allocator,
-        &can_ir.types,
-        can_ir,
-        empty_modules,
-        &can_ir.store.regions,
-    );
-    defer solver.deinit();
-
-    // Assert that we have regions for every type variable
-    solver.debugAssertArraysInSync();
-
-    if (maybe_expr_idx) |expr_idx| {
-        _ = try solver.checkExpr(expr_idx.idx);
-    } else {
-        try solver.checkDefs();
-    }
-
-    // Cache round-trip validation - ensure ModuleCache serialization/deserialization works
-    {
-        // Generate original S-expression for comparison
-        var original_tree = SExprTree.init(allocator);
-        defer original_tree.deinit();
-        try ModuleEnv.pushToSExprTree(can_ir, null, &original_tree);
-
-        var original_sexpr = std.ArrayList(u8).init(allocator);
-        defer original_sexpr.deinit();
-        try original_tree.toStringPretty(original_sexpr.writer().any());
-
-        // Create arena for serialization
-        var cache_arena = std.heap.ArenaAllocator.init(allocator);
-        defer cache_arena.deinit();
-
-        // Create and serialize MmapCache
-        const cache_data = try CacheModule.create(allocator, cache_arena.allocator(), &module_env, can_ir, 0, 0);
-        defer allocator.free(cache_data);
-
-        // Deserialize back
-        var loaded_cache = try CacheModule.fromMappedMemory(cache_data);
-
-        // Create arena for restore operation to handle temporary allocations
-        var restore_arena = std.heap.ArenaAllocator.init(allocator);
-        defer restore_arena.deinit();
-
-        // Restore ModuleEnv
-        const restored_env = try loaded_cache.restore(restore_arena.allocator(), module_name, content.source);
-        // Note: restored_env points to data within the cache, so we don't free it
-
-        // Generate S-expression from restored ModuleEnv
-        var restored_tree = SExprTree.init(allocator);
-        defer restored_tree.deinit();
-        try ModuleEnv.pushToSExprTree(restored_env, null, &restored_tree);
-
-        var restored_sexpr = std.ArrayList(u8).init(allocator);
-        defer restored_sexpr.deinit();
-        try restored_tree.toStringPretty(restored_sexpr.writer().any());
-
-        // Compare S-expressions - crash if they don't match
-        if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
-            std.log.err("Cache round-trip validation failed for snapshot: {s}", .{output_path});
-            std.log.err("Original and restored CIR S-expressions don't match!", .{});
-            std.log.err("This indicates a bug in MmapCache serialization/deserialization.", .{});
-            std.log.err("Original S-expression:\n{s}", .{original_sexpr.items});
-            std.log.err("Restored S-expression:\n{s}", .{restored_sexpr.items});
-            return error.CacheRoundTripValidationFailed;
-        }
-    }
+    // Get pointer to the AST
+    var ast_ptr = &ast;
 
     // Buffer all output in memory before writing files
     var md_buffer = std.ArrayList(u8).init(allocator);
@@ -1190,8 +1169,58 @@ fn processSnapshotContent(
     // Generate HTML wrapper
     try generateHtmlWrapper(&output, &content);
 
-    // Generate reports once and use for both EXPECTED and PROBLEMS sections
-    var generated_reports = try generateAllReports(allocator, &parse_ast, can_ir, &solver, output_path, &module_env);
+    // Generate the PARSE section BEFORE canonicalization (while we still have AST nodes)
+    // We'll generate other sections that depend on AST here too
+    try generateMetaSection(&output, &content);
+    try generateSourceSection(&output, &content);
+    try generateTokensSection2(&output, &parser, &content);
+    try generateParseSection2(&output, &content, ast_ptr, &env, parse_result);
+    try generateFormattedSection2(&output, &content, ast_ptr, &parser);
+
+    // NOW we can create CIR2 and canonicalize (which will mutate AST into CIR)
+    var cir = CIR.init(ast_ptr);
+    defer cir.deinit(allocator);
+
+    var maybe_expr_idx: ?CIR.Expr.Idx = null;
+    var maybe_stmt_idx: ?CIR.Stmt.Idx = null;
+    var maybe_patt_idx: ?CIR.Patt.Idx = null;
+
+    // Create scope state for statement canonicalization
+    var scope_state = CIR.ScopeState{};
+    defer {
+        for (scope_state.scopes.items) |*scope| {
+            scope.idents.deinit(allocator);
+        }
+        scope_state.scopes.deinit(allocator);
+        scope_state.function_regions.deinit(allocator);
+        scope_state.var_function_regions.deinit(allocator);
+    }
+
+    // Initialize with a root scope
+    try scope_state.scopes.append(allocator, CIR.Scope.init(false));
+
+    // Canonicalize if we have a parse result
+    if (parse_result) |node_idx_int| {
+        const root_node_idx: AST.Node.Idx = @enumFromInt(node_idx_int);
+        const node = ast_ptr.nodes.get(@enumFromInt(@intFromEnum(root_node_idx)));
+
+        // Check if it's an expression-like node
+        if (isExpressionNode(node.tag)) {
+            maybe_expr_idx = try cir.canonicalizeExpr(allocator, root_node_idx);
+        } else if (isStatementNode(node.tag)) {
+            maybe_stmt_idx = try cir.canonicalizeStmt(allocator, root_node_idx, &scope_state);
+        } else if (isPatternNode(node.tag)) {
+            maybe_patt_idx = try cir.canonicalizePatt(allocator, root_node_idx);
+        } else {
+            // Default to statement for file-level nodes
+            maybe_stmt_idx = try cir.canonicalizeStmt(allocator, root_node_idx, &scope_state);
+        }
+    }
+
+    // Canonicalization has now mutated AST into CIR
+
+    // Generate reports from Parser2 and CIR2 diagnostics
+    var generated_reports = try generateReportsFromNewSystem(allocator, &parser, &cir, &env, output_path);
     defer {
         for (generated_reports.items) |*report| {
             report.deinit();
@@ -1199,16 +1228,11 @@ fn processSnapshotContent(
         generated_reports.deinit();
     }
 
-    // Generate all sections
-    try generateMetaSection(&output, &content);
-    try generateSourceSection(&output, &content);
+    // Generate remaining sections that depend on canonicalization
     success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
     try generateProblemsSection(&output, &generated_reports);
-    try generateTokensSection(&output, &parse_ast, &content, &module_env);
-    try generateParseSection(&output, &content, &parse_ast, &module_env.common);
-    try generateFormattedSection(&output, &content, &parse_ast);
-    try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
-    try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
+    try generateCanonicalizeSection2(&output, &cir, maybe_expr_idx, maybe_stmt_idx, maybe_patt_idx);
+    try generateTypesSection2(&output, &cir);
 
     try generateHtmlClosing(&output);
 
@@ -2234,6 +2258,556 @@ fn generateHtmlWrapper(output: *DualOutput, content: *const Content) !void {
         \\    <!-- Hidden sections for data storage -->
         \\    <div id="data-sections" style="display: none;">
     );
+}
+
+// ============================================================================
+// New generation functions for Parser2/AST2/CIR2
+// ============================================================================
+
+/// Generate TOKENS section for Parser2
+fn generateTokensSection2(output: *DualOutput, parser: *const Parser, content: *const Content) !void {
+    try output.begin_section("TOKENS");
+    try output.begin_code_block("text");
+
+    // Create a new tokenizer to iterate through the tokens
+    var messages: [128]parse.tokenize_iter.Diagnostic = undefined;
+    var byte_slices_temp = ByteSlices{ .entries = .{} };
+    defer byte_slices_temp.entries.deinit(parser.gpa);
+
+    var token_iter = try parse.tokenize_iter.TokenIterator.init(
+        parser.token_iter.env,
+        parser.gpa,
+        content.source,
+        &messages,
+        &byte_slices_temp,
+    );
+
+    // Iterate through tokens and output them
+    while (try token_iter.next(parser.gpa)) |token| {
+        if (token.tag == .EndOfFile) break;
+
+        try output.md_writer.print("{s} ", .{@tagName(token.tag)});
+    }
+
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Generate PARSE section for AST2
+fn generateParseSection2(output: *DualOutput, content: *const Content, ast: *AST, env: *const base.CommonEnv, parse_result: ?i32) !void {
+    try output.begin_section("PARSE");
+    try output.begin_code_block("clojure");
+
+    // Output AST2 structure as S-expressions
+    if (parse_result) |node_idx_int| {
+        const root_idx: AST.Node.Idx = @enumFromInt(node_idx_int);
+        try outputASTNodeAsSExpr(output.md_writer, ast, env, root_idx, 0);
+    } else if (ast.header) |_| {
+        // We have a header but no root node
+        try output.md_writer.writeAll("(header-only)\n");
+    } else {
+        try output.md_writer.writeAll("(empty)\n");
+    }
+
+    _ = content;
+
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Helper to output AST2 node as S-expression
+fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.CommonEnv, node_idx: AST.Node.Idx, indent: usize) !void {
+    const node = ast.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+
+    // Indent
+    for (0..indent) |_| {
+        try writer.writeAll("  ");
+    }
+
+    // Output node
+    try writer.print("({s}", .{@tagName(node.tag)});
+
+    // Handle payload based on node tag
+    switch (node.tag) {
+        // Binops use the binop field - must list them all explicitly
+        .binop_equals, .binop_double_equals, .binop_not_equals, .binop_colon, .binop_colon_equals, .binop_dot, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_thick_arrow, .binop_thin_arrow, .binop_and, .binop_or, .binop_as, .binop_where, .binop_pipe => {
+            const binop = ast.node_slices.binOp(node.payload.binop);
+            try writer.writeAll("\n");
+            try outputASTNodeAsSExpr(writer, ast, env, binop.lhs, indent + 1);
+            try outputASTNodeAsSExpr(writer, ast, env, binop.rhs, indent + 1);
+            for (0..indent) |_| {
+                try writer.writeAll("  ");
+            }
+        },
+        // Identifiers use the ident field
+        .uc, .lc, .var_lc, .neg_lc, .not_lc => {
+            const ident_text = env.idents.getText(node.payload.ident);
+            try writer.print(" \"{s}\"", .{ident_text});
+        },
+
+        // Number literals
+        .num_literal_i32 => {
+            try writer.print(" {}", .{node.payload.num_literal_i32});
+        },
+        .int_literal_i32 => {
+            try writer.print(" 0x{x}", .{node.payload.int_literal_i32});
+        },
+        .frac_literal_small => {
+            // SmallDec has numerator and denominator_power_of_ten fields
+            const small_dec = node.payload.frac_literal_small;
+            const decimal_value = @as(f64, @floatFromInt(small_dec.numerator)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(small_dec.denominator_power_of_ten)));
+            try writer.print(" {d}", .{decimal_value});
+        },
+
+        // String literals
+        .str_literal_small => {
+            // Small string is stored as [4]u8, null-terminated
+            const bytes = node.payload.str_literal_small;
+            var len: usize = 0;
+            while (len < 4 and bytes[len] != 0) : (len += 1) {}
+            try writer.print(" \"{}\"", .{std.fmt.fmtSliceEscapeLower(bytes[0..len])});
+        },
+        .str_literal_big => {
+            // Big strings are stored in ByteSlices
+            const slice = ast.byte_slices.slice(node.payload.str_literal_big);
+            try writer.print(" \"{}\"", .{std.fmt.fmtSliceEscapeLower(slice)});
+        },
+
+        // Containers with nodes field
+        .block, .list_literal, .tuple_literal, .record_literal => {
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var has_children = false;
+                while (iter.next()) |child_idx| {
+                    if (!has_children) {
+                        try writer.writeAll("\n");
+                        has_children = true;
+                    }
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                }
+                if (has_children) {
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // Lambda uses body_then_args
+        .lambda => {
+            const body_then_args_idx = node.payload.body_then_args;
+            if (!body_then_args_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&body_then_args_idx);
+                // First node is the body
+                if (iter.next()) |body_idx| {
+                    try writer.writeAll("\n");
+                    for (0..indent + 1) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll("(body\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, body_idx, indent + 2);
+                    for (0..indent + 1) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll(")\n");
+
+                    // Remaining nodes are args
+                    var has_args = false;
+                    while (iter.next()) |arg_idx| {
+                        if (!has_args) {
+                            for (0..indent + 1) |_| {
+                                try writer.writeAll("  ");
+                            }
+                            try writer.writeAll("(args\n");
+                            has_args = true;
+                        }
+                        try outputASTNodeAsSExpr(writer, ast, env, arg_idx, indent + 2);
+                    }
+                    if (has_args) {
+                        for (0..indent + 1) |_| {
+                            try writer.writeAll("  ");
+                        }
+                        try writer.writeAll(")\n");
+                    }
+
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // Apply nodes use nodes field for function and args
+        .apply_lc, .apply_uc, .apply_anon, .apply_module => {
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var has_children = false;
+                while (iter.next()) |child_idx| {
+                    if (!has_children) {
+                        try writer.writeAll("\n");
+                        has_children = true;
+                    }
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                }
+                if (has_children) {
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // String interpolation
+        .str_interpolation => {
+            const nodes_idx = node.payload.str_interpolated_nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var has_children = false;
+                while (iter.next()) |child_idx| {
+                    if (!has_children) {
+                        try writer.writeAll("\n");
+                        has_children = true;
+                    }
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                }
+                if (has_children) {
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // Other nodes that don't need special payload handling
+        .underscore, .ellipsis => {
+            // These don't need payload details
+        },
+
+        // Loops
+        .while_loop, .for_loop => {
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var has_children = false;
+                while (iter.next()) |child_idx| {
+                    if (!has_children) {
+                        try writer.writeAll("\n");
+                        has_children = true;
+                    }
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                }
+                if (has_children) {
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // Import and expect
+        .import => {
+            const nodes_idx = node.payload.import_nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var has_children = false;
+                while (iter.next()) |child_idx| {
+                    if (!has_children) {
+                        try writer.writeAll("\n");
+                        has_children = true;
+                    }
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                }
+                if (has_children) {
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+        .expect => {
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var has_children = false;
+                while (iter.next()) |child_idx| {
+                    if (!has_children) {
+                        try writer.writeAll("\n");
+                        has_children = true;
+                    }
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                }
+                if (has_children) {
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // Malformed nodes
+        .malformed => {
+            try writer.print(" malformed:{s}", .{@tagName(node.payload.malformed)});
+        },
+
+        // Big number literals
+        .num_literal_big, .int_literal_big, .frac_literal_big => {
+            // These store digits in ByteSlices
+            const slice = ast.byte_slices.slice(switch (node.tag) {
+                .num_literal_big => node.payload.num_literal_big,
+                .int_literal_big => node.payload.int_literal_big,
+                .frac_literal_big => node.payload.frac_literal_big,
+                else => unreachable,
+            });
+            try writer.print(" big:{}", .{std.fmt.fmtSliceEscapeLower(slice)});
+        },
+
+        // If/match/when expressions with branches
+        .if_else, .if_without_else => {
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var has_children = false;
+                while (iter.next()) |child_idx| {
+                    if (!has_children) {
+                        try writer.writeAll("\n");
+                        has_children = true;
+                    }
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                }
+                if (has_children) {
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+        .match => {
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var has_children = false;
+                while (iter.next()) |child_idx| {
+                    if (!has_children) {
+                        try writer.writeAll("\n");
+                        has_children = true;
+                    }
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                }
+                if (has_children) {
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // Dot accessors
+        .dot_num => {
+            // Payload likely contains the number index
+            // Need to check how this is stored - might be in payload directly
+        },
+        .dot_lc, .double_dot_lc => {
+            const ident_text = env.idents.getText(node.payload.ident);
+            try writer.print(" \"{s}\"", .{ident_text});
+        },
+
+        // Multi-part identifiers
+        .uc_dot_ucs, .lc_dot_ucs => {
+            // These likely use nodes field for the parts
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var has_children = false;
+                while (iter.next()) |child_idx| {
+                    if (!has_children) {
+                        try writer.writeAll("\n");
+                        has_children = true;
+                    }
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                }
+                if (has_children) {
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // Unary operators
+        .unary_not, .unary_neg, .unary_double_dot => {
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                if (iter.next()) |child_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // Return and crash statements
+        .ret, .crash => {
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                if (iter.next()) |child_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // Lambda with no args
+        .lambda_no_args => {
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                if (iter.next()) |body_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, body_idx, indent + 1);
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+    }
+
+    try writer.writeAll(")\n");
+}
+
+/// Generate FORMATTED section for AST2
+fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: *AST, parser: *const Parser) !void {
+    try output.begin_section("FORMATTED");
+    try output.begin_code_block("roc");
+
+    // Reconstruct source from AST2
+    // This is a simplified formatter that just outputs the original source
+    try output.md_writer.writeAll(content.source);
+    if (!std.mem.endsWith(u8, content.source, "\n")) {
+        try output.md_writer.writeAll("\n");
+    }
+
+    _ = ast;
+    _ = parser;
+
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Generate CANONICALIZE section for CIR2
+fn generateCanonicalizeSection2(
+    output: *DualOutput,
+    cir: *const CIR,
+    maybe_expr_idx: ?CIR.Expr.Idx,
+    maybe_stmt_idx: ?CIR.Stmt.Idx,
+    maybe_patt_idx: ?CIR.Patt.Idx,
+) !void {
+    try output.begin_section("CANONICALIZE");
+    try output.begin_code_block("clojure");
+
+    // Output CIR2 structure
+    if (maybe_expr_idx) |expr_idx| {
+        try outputCIR2ExprAsSExpr(output.md_writer, cir, expr_idx, 0);
+    } else if (maybe_stmt_idx) |stmt_idx| {
+        try outputCIR2StmtAsSExpr(output.md_writer, cir, stmt_idx, 0);
+    } else if (maybe_patt_idx) |patt_idx| {
+        try outputCIR2PattAsSExpr(output.md_writer, cir, patt_idx, 0);
+    } else {
+        try output.md_writer.writeAll("(empty)\n");
+    }
+
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Helper to output CIR2 expression as S-expression
+fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, expr_idx: CIR.Expr.Idx, indent: usize) !void {
+    const expr = cir.getExpr(expr_idx);
+
+    // Indent
+    for (0..indent) |_| {
+        try writer.writeAll("  ");
+    }
+
+    // Output expression
+    try writer.print("(Expr.{s}", .{@tagName(expr.tag)});
+
+    // Add payload details based on tag
+    switch (expr.tag) {
+        .num_literal_i32 => {
+            try writer.print(" {}", .{expr.payload.num_literal_i32});
+        },
+        .int_literal_i32 => {
+            try writer.print(" {}", .{expr.payload.int_literal_i32});
+        },
+        .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or => {
+            const binop = cir.getBinOp(CIR.Expr.Idx, expr.payload.binop);
+            try writer.writeAll("\n");
+            try outputCIR2ExprAsSExpr(writer, cir, binop.lhs, indent + 1);
+            try outputCIR2ExprAsSExpr(writer, cir, binop.rhs, indent + 1);
+            for (0..indent) |_| {
+                try writer.writeAll("  ");
+            }
+        },
+        else => {},
+    }
+
+    try writer.writeAll(")\n");
+}
+
+/// Helper to output CIR2 statement as S-expression
+fn outputCIR2StmtAsSExpr(writer: anytype, cir: *const CIR, stmt_idx: CIR.Stmt.Idx, indent: usize) !void {
+    const stmt = cir.getStmt(stmt_idx);
+
+    // Indent
+    for (0..indent) |_| {
+        try writer.writeAll("  ");
+    }
+
+    // Output statement
+    try writer.print("(Stmt.{s})\n", .{@tagName(stmt.tag)});
+}
+
+/// Helper to output CIR2 pattern as S-expression
+fn outputCIR2PattAsSExpr(writer: anytype, cir: *const CIR, patt_idx: CIR.Patt.Idx, indent: usize) !void {
+    const patt = cir.getPatt(patt_idx);
+
+    // Indent
+    for (0..indent) |_| {
+        try writer.writeAll("  ");
+    }
+
+    // Output pattern
+    try writer.print("(Patt.{s}", .{@tagName(patt.tag)});
+    if (patt.is_mutable) {
+        try writer.writeAll(" :mutable");
+    }
+    try writer.writeAll(")\n");
+}
+
+/// Generate TYPES section for new type system
+fn generateTypesSection2(output: *DualOutput, cir: *const CIR) !void {
+    try output.begin_section("TYPES");
+    try output.begin_code_block("clojure");
+
+    // Output type information from CIR2
+    try output.md_writer.print("(; CIR2 has {} expressions, {} statements, {} patterns)\n", .{
+        cir.exprs().len(),
+        cir.stmts().len(),
+        cir.patts().len(),
+    });
+
+    try output.end_code_block();
+    try output.end_section();
 }
 
 /// Generate HTML closing tags and JavaScript

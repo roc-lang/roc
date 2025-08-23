@@ -60,6 +60,14 @@ pub fn initCapacity(allocator: Allocator, estimated_node_count: usize) Allocator
     var nodes = collections.SafeMultiList(Node){};
     try nodes.ensureTotalCapacity(allocator, estimated_node_count);
 
+    // Reserve index 0 as a sentinel/NIL value
+    // Append a dummy node that should never be accessed
+    _ = try nodes.append(allocator, .{
+        .tag = .malformed,
+        .start = Position{ .offset = 0 },
+        .payload = .{ .malformed = .internal_parser_error },
+    });
+
     return .{
         .nodes = nodes,
         .node_slices = .{ .entries = .{} },

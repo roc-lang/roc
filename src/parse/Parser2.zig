@@ -628,7 +628,7 @@ pub fn pushMalformed(self: *Parser, tag: AST.Diagnostic.Tag, start_pos: Position
 /// parse a `.roc` module
 ///
 /// the tokens are provided at Parser initialisation
-pub fn parseFile(self: *Parser) Error!void {
+pub fn parseFile(self: *Parser) Error!?Node.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -650,8 +650,9 @@ pub fn parseFile(self: *Parser) Error!void {
     const statements = self.getScratchNodesSince(scratch_marker);
     if (statements.len > 0) {
         const body_idx = try self.ast.appendNodeSlice(self.gpa, statements);
-        _ = try self.ast.appendNode(self.gpa, Position{ .offset = 0 }, .block, .{ .nodes = body_idx });
+        return try self.ast.appendNode(self.gpa, Position{ .offset = 0 }, .block, .{ .nodes = body_idx });
     }
+    return null; // No statements in file
 }
 
 /// Parse module header
