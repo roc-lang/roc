@@ -1129,7 +1129,7 @@ pub const Node = struct {
 
     // BinOp moved to NodeSlices in collections
 
-    pub const Tag = enum {
+    pub const Tag = enum(u8) {
         // Binops
         binop_equals, //           =
         binop_double_equals, //    ==
