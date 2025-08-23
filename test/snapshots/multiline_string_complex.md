@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module [value1, value2, value3, value4]
+module []
 
 value1 = """This is a "string" with just one line
 
@@ -21,6 +21,26 @@ value4 =
 	# A comment in between
 	"""With multiple lines
 	"""${value2}
+
+value5 = {
+	a: """Multiline
+	,
+	b: (
+		"""Multiline
+		,
+		"""Multiline
+		,
+	),
+	c: [
+		"""multiline
+		,
+	],
+}
+
+x = {
+	"""
+	"""
+}
 ~~~
 # EXPECTED
 NIL
@@ -28,7 +48,7 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:23),Comma(1:23-1:24),LowerIdent(1:25-1:31),Comma(1:31-1:32),LowerIdent(1:33-1:39),CloseSquare(1:39-1:40),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
 LowerIdent(3:1-3:7),OpAssign(3:8-3:9),MultilineStringStart(3:10-3:13),StringPart(3:13-3:50),
 LowerIdent(5:1-5:7),OpAssign(5:8-5:9),
 MultilineStringStart(6:2-6:5),StringPart(6:5-6:42),
@@ -38,21 +58,31 @@ MultilineStringStart(10:2-10:5),StringPart(10:5-10:5),OpenStringInterpolation(10
 LowerIdent(12:1-12:7),OpAssign(12:8-12:9),
 MultilineStringStart(13:2-13:5),StringPart(13:5-13:21),
 MultilineStringStart(15:2-15:5),StringPart(15:5-15:24),
-MultilineStringStart(16:2-16:5),StringPart(16:5-16:5),OpenStringInterpolation(16:5-16:7),LowerIdent(16:7-16:13),CloseStringInterpolation(16:13-16:14),StringPart(16:14-16:14),EndOfFile(16:14-16:14),
+MultilineStringStart(16:2-16:5),StringPart(16:5-16:5),OpenStringInterpolation(16:5-16:7),LowerIdent(16:7-16:13),CloseStringInterpolation(16:13-16:14),StringPart(16:14-16:14),
+LowerIdent(18:1-18:7),OpAssign(18:8-18:9),OpenCurly(18:10-18:11),
+LowerIdent(19:2-19:3),OpColon(19:3-19:4),MultilineStringStart(19:5-19:8),StringPart(19:8-19:17),
+Comma(20:2-20:3),
+LowerIdent(21:2-21:3),OpColon(21:3-21:4),OpenRound(21:5-21:6),
+MultilineStringStart(22:3-22:6),StringPart(22:6-22:15),
+Comma(23:3-23:4),
+MultilineStringStart(24:3-24:6),StringPart(24:6-24:15),
+Comma(25:3-25:4),
+CloseRound(26:2-26:3),Comma(26:3-26:4),
+LowerIdent(27:2-27:3),OpColon(27:3-27:4),OpenSquare(27:5-27:6),
+MultilineStringStart(28:3-28:6),StringPart(28:6-28:15),
+Comma(29:3-29:4),
+CloseSquare(30:2-30:3),Comma(30:3-30:4),
+CloseCurly(31:1-31:2),
+LowerIdent(33:1-33:2),OpAssign(33:3-33:4),OpenCurly(33:5-33:6),
+MultilineStringStart(34:2-34:5),StringPart(34:5-34:5),
+MultilineStringStart(35:2-35:5),StringPart(35:5-35:5),
+CloseCurly(36:1-36:2),EndOfFile(36:2-36:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-16.14
-	(module @1.1-1.40
-		(exposes @1.8-1.40
-			(exposed-lower-ident @1.9-1.15
-				(text "value1"))
-			(exposed-lower-ident @1.17-1.23
-				(text "value2"))
-			(exposed-lower-ident @1.25-1.31
-				(text "value3"))
-			(exposed-lower-ident @1.33-1.39
-				(text "value4"))))
+(file @1.1-36.2
+	(module @1.1-1.10
+		(exposes @1.8-1.10))
 	(statements
 		(s-decl @3.1-3.50
 			(p-ident @3.1-3.7 (raw "value1"))
@@ -77,7 +107,30 @@ MultilineStringStart(16:2-16:5),StringPart(16:5-16:5),OpenStringInterpolation(16
 				(e-string-part @15.5-15.24 (raw "With multiple lines"))
 				(e-string-part @16.5-16.5 (raw ""))
 				(e-ident @16.7-16.13 (raw "value2"))
-				(e-string-part @16.14-16.14 (raw ""))))))
+				(e-string-part @16.14-16.14 (raw ""))))
+		(s-decl @18.1-31.2
+			(p-ident @18.1-18.7 (raw "value5"))
+			(e-record @18.10-31.2
+				(field (field "a")
+					(e-multiline-string @19.5-19.17
+						(e-string-part @19.8-19.17 (raw "Multiline"))))
+				(field (field "b")
+					(e-tuple @21.5-26.3
+						(e-multiline-string @22.3-22.15
+							(e-string-part @22.6-22.15 (raw "Multiline")))
+						(e-multiline-string @24.3-24.15
+							(e-string-part @24.6-24.15 (raw "Multiline")))))
+				(field (field "c")
+					(e-list @27.5-30.3
+						(e-multiline-string @28.3-28.15
+							(e-string-part @28.6-28.15 (raw "multiline")))))))
+		(s-decl @33.1-36.2
+			(p-ident @33.1-33.2 (raw "x"))
+			(e-block @33.5-36.2
+				(statements
+					(e-multiline-string @34.2-35.5
+						(e-string-part @34.5-34.5 (raw ""))
+						(e-string-part @35.5-35.5 (raw ""))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -111,7 +164,31 @@ NO CHANGE
 			(e-literal @15.5-15.24 (string "With multiple lines"))
 			(e-literal @16.2-16.5 (string "\n"))
 			(e-lookup-local @16.7-16.13
-				(p-assign @5.1-5.7 (ident "value2"))))))
+				(p-assign @5.1-5.7 (ident "value2")))))
+	(d-let
+		(p-assign @18.1-18.7 (ident "value5"))
+		(e-record @18.10-31.2
+			(fields
+				(field (name "a")
+					(e-string @19.5-19.17
+						(e-literal @19.8-19.17 (string "Multiline"))))
+				(field (name "b")
+					(e-tuple @21.5-26.3
+						(elems
+							(e-string @22.3-22.15
+								(e-literal @22.6-22.15 (string "Multiline")))
+							(e-string @24.3-24.15
+								(e-literal @24.6-24.15 (string "Multiline"))))))
+				(field (name "c")
+					(e-list @27.5-30.3
+						(elems
+							(e-string @28.3-28.15
+								(e-literal @28.6-28.15 (string "multiline")))))))))
+	(d-let
+		(p-assign @33.1-33.2 (ident "x"))
+		(e-block @33.5-36.2
+			(e-string @34.2-35.5
+				(e-literal @35.2-35.5 (string "\n"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -120,10 +197,14 @@ NO CHANGE
 		(patt @3.1-3.7 (type "Str"))
 		(patt @5.1-5.7 (type "Str"))
 		(patt @8.1-8.7 (type "Str"))
-		(patt @12.1-12.7 (type "Str")))
+		(patt @12.1-12.7 (type "Str"))
+		(patt @18.1-18.7 (type "{ a: Str, b: (Str, Str), c: List(Str) }"))
+		(patt @33.1-33.2 (type "Str")))
 	(expressions
 		(expr @3.10-3.50 (type "Str"))
 		(expr @6.2-6.42 (type "Str"))
 		(expr @8.10-10.14 (type "Str"))
-		(expr @13.2-16.14 (type "Str"))))
+		(expr @13.2-16.14 (type "Str"))
+		(expr @18.10-31.2 (type "{ a: Str, b: (Str, Str), c: List(Str) }"))
+		(expr @33.5-36.2 (type "Str"))))
 ~~~

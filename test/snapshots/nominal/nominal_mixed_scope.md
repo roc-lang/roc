@@ -156,8 +156,7 @@ processColor : _ -> LocalStatus
 processColor = |color| {
 
 	# bring RGB into scope
-	
-	Color.RGB
+		Color.RGB
 
 	match color {
 		RGB.Red => LocalStatus.Pending
