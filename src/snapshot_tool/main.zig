@@ -19,6 +19,7 @@ const compile = @import("compile");
 const fmt = @import("fmt");
 const repl = @import("repl");
 const collections = @import("collections");
+const infer_cir2 = @import("infer_cir2.zig");
 
 const Repl = repl.Repl;
 const CommonEnv = base.CommonEnv;
@@ -1235,7 +1236,8 @@ fn processSnapshotContent(
     success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
     try generateProblemsSection(&output, &generated_reports);
     try generateCanonicalizeSection2(&output, &cir, maybe_expr_idx, maybe_stmt_idx, maybe_patt_idx);
-    try generateTypesSection2(&output, &cir);
+    try generateSolvedSection(&output, &cir, &env, maybe_expr_idx);
+    try generateTypesSection2(&output, &cir, content.meta.node_type, &env, maybe_expr_idx);
 
     try generateHtmlClosing(&output);
 
@@ -2568,23 +2570,10 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
 
         // If/match/when expressions with branches
         .if_else, .if_without_else => {
-            const nodes_idx = node.payload.nodes;
-            if (!nodes_idx.isNil()) {
-                var iter = ast.node_slices.nodes(&nodes_idx);
-                var has_children = false;
-                while (iter.next()) |child_idx| {
-                    if (!has_children) {
-                        try writer.writeAll("\n");
-                        has_children = true;
-                    }
-                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
-                }
-                if (has_children) {
-                    for (0..indent) |_| {
-                        try writer.writeAll("  ");
-                    }
-                }
-            }
+            // if expressions store branch count, not nodes
+            // TODO: To properly output the branches, we'd need to iterate through
+            // the if branches, but that requires different handling than regular nodes
+            try writer.print(" <{} branches>", .{node.payload.if_branches});
         },
         .match => {
             // Match nodes have match_branches as a count
@@ -2779,75 +2768,160 @@ fn outputCIR2PattAsSExpr(writer: anytype, cir: *const CIR, patt_idx: CIR.Patt.Id
     try writer.writeAll(")\n");
 }
 
-/// Generate TYPES section for new type system
-fn generateTypesSection2(output: *DualOutput, cir: *const CIR) !void {
-    try output.begin_section("TYPES");
+/// Generate SOLVED section showing internal type solving details
+fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const CommonEnv, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+    try output.begin_section("SOLVED");
     try output.begin_code_block("clojure");
 
     // Initialize a types store for type checking
-    var types_store = types.Store.init(output.gpa);
+    var types_store = try types.Store.init(output.gpa);
     defer types_store.deinit();
 
     // Create type inference context
-    var infer_ctx = types.infer_cir2.InferContext.init(output.gpa, &types_store, cir);
+    var infer_ctx = infer_cir2.InferContext.init(output.gpa, &types_store, cir);
 
-    // Build a mapping of all expressions and their types
-    const num_exprs = cir.exprs().len();
+    if (maybe_expr_idx) |expr_idx| {
+        // Get the expression
+        const expr = cir.getExpr(expr_idx);
 
-    if (num_exprs > 0) {
-        // Start the S-expression
-        try output.md_writer.writeAll("(types\n");
+        // Infer the type of this specific expression
+        const type_var = infer_ctx.inferExpr(expr_idx) catch |err| {
+            try output.md_writer.print("; Type inference failed: {}\n", .{err});
+            try output.end_code_block();
+            try output.end_section();
+            return;
+        };
 
-        // Iterate through all CIR2 nodes and infer types for expressions
-        const slice = cir.ast.*.nodes.items.slice();
-        const tags = slice.items(.tag);
+        // Format the type
+        var type_writer = types.TypeWriter.initFromParts(output.gpa, &types_store, &env.idents) catch {
+            try output.md_writer.writeAll("; Failed to create type writer\n");
+            try output.end_code_block();
+            try output.end_section();
+            return;
+        };
+        defer type_writer.deinit();
 
-        var found_any = false;
-        for (tags, 0..) |tag_ptr, i| {
-            const tag_int = @intFromEnum(tag_ptr.*);
-            // Check if this is an expression node
-            if (tag_int >= @intFromEnum(CIR.ExprTag.lookup) and
-                tag_int <= @intFromEnum(CIR.ExprTag.malformed))
-            {
-                const expr_idx = @as(CIR.Expr.Idx, @enumFromInt(i));
-                const expr = cir.getExpr(expr_idx);
-
-                // Infer the type
-                const type_var = infer_ctx.inferExpr(expr_idx) catch |err| {
-                    // On error, output a malformed type
-                    try output.md_writer.print("  (expr_{} :tag {} :type error :err {})\n", .{ i, @tagName(expr.tag), err });
-                    continue;
-                };
-
-                // Format the type
-                var type_writer = types.TypeWriter.init(&types_store, output.gpa, .{}) catch {
-                    try output.md_writer.print("  (expr_{} :tag {} :type ?)\n", .{ i, @tagName(expr.tag) });
-                    continue;
-                };
-                defer type_writer.deinit();
-
-                type_writer.write(type_var) catch {
-                    try output.md_writer.print("  (expr_{} :tag {} :type ?)\n", .{ i, @tagName(expr.tag) });
-                    continue;
-                };
-                const type_str = type_writer.get();
-
-                // Output in S-expression format similar to PARSE/CANONICALIZE
-                try output.md_writer.print("  (expr_{} :tag {} :type \"{s}\")\n", .{ i, @tagName(expr.tag), type_str });
-                found_any = true;
-            }
-        }
-
-        if (!found_any) {
-            try output.md_writer.writeAll("  ; No expressions found\n");
-        }
-
-        try output.md_writer.writeAll(")\n");
+        type_writer.write(type_var) catch {
+            try output.md_writer.writeAll("; Failed to write type\n");
+            try output.end_code_block();
+            try output.end_section();
+            return;
+        };
+        
+        const type_str = type_writer.get();
+        try output.md_writer.print("(expr :tag {s} :type \"{s}\")\n", .{ @tagName(expr.tag), type_str });
     } else {
-        // No expressions - output empty types
-        try output.md_writer.writeAll("(types)\n");
+        try output.md_writer.writeAll("; No expression to type check\n");
     }
 
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Generate TYPES section with pretty-printed user-facing type annotations
+fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeType, env: *const CommonEnv, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+    try output.begin_section("TYPES");
+    try output.begin_code_block("roc");
+    
+    // Initialize a types store for type checking
+    var types_store = try types.Store.init(output.gpa);
+    defer types_store.deinit();
+    
+    // Create type inference context
+    var infer_ctx = infer_cir2.InferContext.init(output.gpa, &types_store, cir);
+    
+    // For type=expr snapshots, handle specially
+    if (node_type == .expr) {
+        if (maybe_expr_idx) |expr_idx| {
+            const expr = cir.getExpr(expr_idx);
+            
+            // Check if it's a block with assignments
+            if (expr.tag == .block) {
+                // Extract named bindings from the block
+                const nodes_idx = expr.payload.nodes;
+                var iter = cir.ast.*.node_slices.nodes(&nodes_idx);
+                
+                while (iter.next()) |node_idx| {
+                    const node = cir.getNode(node_idx);
+                    const tag_int = @intFromEnum(node.tag);
+                    
+                    // Check if this is an assignment statement
+                    if (tag_int < @intFromEnum(CIR.ExprTag.lookup)) {
+                        // It's a statement
+                        const stmt_idx = @as(CIR.Stmt.Idx, @enumFromInt(@intFromEnum(node_idx)));
+                        const stmt = cir.getStmt(stmt_idx);
+                        
+                        if (stmt.tag == .assign or stmt.tag == .init_var) {
+                            // Get the pattern (variable name) and expression
+                            const binop = cir.ast.*.node_slices.binOp(node.payload.binop);
+                            const lhs_node = cir.getNode(binop.lhs);
+                            
+                            // Get the identifier name if it's a simple binding
+                            // Check if LHS is an identifier (lc or var_lc tag)
+                            const lhs_tag_int = @intFromEnum(lhs_node.tag);
+                            if (lhs_tag_int == @intFromEnum(CIR.PattTag.ident) or 
+                                lhs_tag_int == @intFromEnum(CIR.PattTag.var_ident)) {
+                                const ident_idx = lhs_node.payload.ident;
+                                const ident_str = env.getIdent(ident_idx);
+                                
+                                // TODO: CRITICAL - Fix type inference implementation
+                                // Currently just creating a fresh type variable to avoid crashes
+                                const type_var = try infer_ctx.store.fresh();
+                                
+                                // Format the type
+                                var type_writer = types.TypeWriter.initFromParts(output.gpa, &types_store, &env.idents) catch {
+                                    try output.md_writer.print("{s} : ?\n", .{ident_str});
+                                    continue;
+                                };
+                                defer type_writer.deinit();
+                                
+                                type_writer.write(type_var) catch {
+                                    try output.md_writer.print("{s} : ?\n", .{ident_str});
+                                    continue;
+                                };
+                                const type_str = type_writer.get();
+                                
+                                // Output the named binding with its type
+                                try output.md_writer.print("{s} : {s}\n", .{ident_str, type_str});
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Single expression - just show its type
+                // TODO: CRITICAL - Fix type inference implementation
+                // Currently just creating a fresh type variable to avoid crashes
+                const type_var = try infer_ctx.store.fresh();
+                
+                // Format the type
+                var type_writer = types.TypeWriter.initFromParts(output.gpa, &types_store, &env.idents) catch {
+                    try output.md_writer.writeAll("?\n");
+                    try output.end_code_block();
+                    try output.end_section();
+                    return;
+                };
+                defer type_writer.deinit();
+                
+                type_writer.write(type_var) catch {
+                    try output.md_writer.writeAll("?\n");
+                    try output.end_code_block();
+                    try output.end_section();
+                    return;
+                };
+                const type_str = type_writer.get();
+                
+                // Output just the type without "expr_0 :"
+                try output.md_writer.print("{s}\n", .{type_str});
+            }
+        } else {
+            try output.md_writer.writeAll("# No expression found\n");
+        }
+    } else {
+        // For non-expr types, we don't show types
+        // (statements and patterns would need different handling)
+        try output.md_writer.writeAll("# Type checking for non-expression nodes not yet implemented\n");
+    }
+    
     try output.end_code_block();
     try output.end_section();
 }
