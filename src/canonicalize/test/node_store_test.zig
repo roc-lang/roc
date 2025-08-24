@@ -57,7 +57,7 @@ test "NodeStore round trip - Statements" {
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
-    var statements = std.ArrayList(CIR.Statement).init(gpa);
+    var statements = std.array_list.Managed(CIR.Statement).init(gpa);
     defer statements.deinit();
 
     try statements.append(CIR.Statement{
@@ -173,7 +173,7 @@ test "NodeStore round trip - Expressions" {
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
-    var expressions = std.ArrayList(CIR.Expr).init(gpa);
+    var expressions = std.array_list.Managed(CIR.Expr).init(gpa);
     defer expressions.deinit();
 
     try expressions.append(CIR.Expr{
@@ -383,7 +383,7 @@ test "NodeStore round trip - Diagnostics" {
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
-    var diagnostics = std.ArrayList(CIR.Diagnostic).init(gpa);
+    var diagnostics = std.array_list.Managed(CIR.Diagnostic).init(gpa);
     defer diagnostics.deinit();
 
     // Test all diagnostic types to ensure complete coverage
@@ -730,7 +730,7 @@ test "NodeStore round trip - TypeAnno" {
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
-    var type_annos = std.ArrayList(CIR.TypeAnno).init(gpa);
+    var type_annos = std.array_list.Managed(CIR.TypeAnno).init(gpa);
     defer type_annos.deinit();
 
     // Test all TypeAnno variants to ensure complete coverage
@@ -841,7 +841,7 @@ test "NodeStore round trip - Pattern" {
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
-    var patterns = std.ArrayList(CIR.Pattern).init(gpa);
+    var patterns = std.array_list.Managed(CIR.Pattern).init(gpa);
     defer patterns.deinit();
 
     // Test all Pattern variants to ensure complete coverage

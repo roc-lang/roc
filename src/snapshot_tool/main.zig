@@ -303,8 +303,8 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
 }
 
 /// Parse all problems from PROBLEMS section
-fn parseProblemsSection(allocator: std.mem.Allocator, content: []const u8) !std.ArrayList(ProblemEntry) {
-    var problems = std.ArrayList(ProblemEntry).init(allocator);
+fn parseProblemsSection(allocator: std.mem.Allocator, content: []const u8) !std.array_list.Managed(ProblemEntry) {
+    var problems = std.array_list.Managed(ProblemEntry).init(allocator);
     errdefer {
         for (problems.items) |p| {
             allocator.free(p.problem_type);
@@ -342,7 +342,7 @@ fn generateExpectedContent(allocator: std.mem.Allocator, problems: []const Probl
         return try allocator.dupe(u8, "NIL");
     }
 
-    var buffer = std.ArrayList(u8).init(allocator);
+    var buffer = std.array_list.Managed(u8).init(allocator);
     errdefer buffer.deinit();
 
     for (problems, 0..) |problem, i| {
@@ -409,8 +409,8 @@ fn parseExpectedLine(allocator: std.mem.Allocator, line: []const u8) !?ProblemEn
 }
 
 /// Parse all problems from EXPECTED section
-fn parseExpectedSection(allocator: std.mem.Allocator, content: []const u8) !std.ArrayList(ProblemEntry) {
-    var problems = std.ArrayList(ProblemEntry).init(allocator);
+fn parseExpectedSection(allocator: std.mem.Allocator, content: []const u8) !std.array_list.Managed(ProblemEntry) {
+    var problems = std.array_list.Managed(ProblemEntry).init(allocator);
     errdefer {
         for (problems.items) |p| {
             allocator.free(p.problem_type);
@@ -455,8 +455,8 @@ fn generateAllReports(
     solver: *Check,
     snapshot_path: []const u8,
     module_env: *ModuleEnv,
-) !std.ArrayList(reporting.Report) {
-    var reports = std.ArrayList(reporting.Report).init(allocator);
+) !std.array_list.Managed(reporting.Report) {
+    var reports = std.array_list.Managed(reporting.Report).init(allocator);
     errdefer reports.deinit();
 
     // Generate tokenize reports
@@ -508,7 +508,7 @@ fn generateAllReports(
 }
 
 /// Render reports to PROBLEMS section format (markdown and HTML)
-fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.ArrayList(reporting.Report)) !void {
+fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.array_list.Managed(reporting.Report)) !void {
     // HTML PROBLEMS section
     if (output.html_writer) |writer| {
         try writer.writeAll(
@@ -548,13 +548,13 @@ fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.Array
 }
 
 /// Render reports to EXPECTED section format (parsed problem entries)
-fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const std.ArrayList(reporting.Report)) ![]const u8 {
+fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const std.array_list.Managed(reporting.Report)) ![]const u8 {
     if (reports.items.len == 0) {
         return try allocator.dupe(u8, "NIL");
     }
 
     // Render all reports to markdown and then parse the problems
-    var problems_buffer = std.ArrayList(u8).init(allocator);
+    var problems_buffer = std.array_list.Managed(u8).init(allocator);
     defer problems_buffer.deinit();
 
     // Render all reports to markdown
@@ -635,7 +635,7 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
 
-    var snapshot_paths = std.ArrayList([]const u8).init(gpa);
+    var snapshot_paths = std.array_list.Managed([]const u8).init(gpa);
     defer snapshot_paths.deinit();
 
     var maybe_fuzz_corpus_path: ?[]const u8 = null;
@@ -921,7 +921,7 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
     // Delete existing .md files
     if (!config.disable_updates) {
         iterator = dir.iterate();
-        var files_to_delete = std.ArrayList([]u8).init(allocator);
+        var files_to_delete = std.array_list.Managed([]u8).init(allocator);
         defer {
             for (files_to_delete.items) |file_path| {
                 allocator.free(file_path);
@@ -1135,7 +1135,7 @@ fn processSnapshotContent(
         defer original_tree.deinit();
         try ModuleEnv.pushToSExprTree(can_ir, null, &original_tree);
 
-        var original_sexpr = std.ArrayList(u8).init(allocator);
+        var original_sexpr = std.array_list.Managed(u8).init(allocator);
         defer original_sexpr.deinit();
         try original_tree.toStringPretty(original_sexpr.writer().any());
 
@@ -1163,7 +1163,7 @@ fn processSnapshotContent(
         defer restored_tree.deinit();
         try ModuleEnv.pushToSExprTree(restored_env, null, &restored_tree);
 
-        var restored_sexpr = std.ArrayList(u8).init(allocator);
+        var restored_sexpr = std.array_list.Managed(u8).init(allocator);
         defer restored_sexpr.deinit();
         try restored_tree.toStringPretty(restored_sexpr.writer().any());
 
@@ -1179,10 +1179,10 @@ fn processSnapshotContent(
     }
 
     // Buffer all output in memory before writing files
-    var md_buffer = std.ArrayList(u8).init(allocator);
+    var md_buffer = std.array_list.Managed(u8).init(allocator);
     defer md_buffer.deinit();
 
-    var html_buffer = if (config.generate_html) std.ArrayList(u8).init(allocator) else null;
+    var html_buffer = if (config.generate_html) std.array_list.Managed(u8).init(allocator) else null;
     defer if (html_buffer) |*buf| buf.deinit();
 
     var output = DualOutput.init(allocator, &md_buffer, if (html_buffer) |*buf| buf else null);
@@ -1274,7 +1274,7 @@ const WorkItem = struct {
     },
 };
 
-const WorkList = std.ArrayList(WorkItem);
+const WorkList = std.array_list.Managed(WorkItem);
 
 const ProcessContext = struct {
     work_list: *WorkList,
@@ -1662,11 +1662,11 @@ const Error = error{ MissingSnapshotHeader, MissingSnapshotSource, InvalidNodeTy
 
 /// Dual output writers for markdown and HTML generation
 pub const DualOutput = struct {
-    md_writer: std.ArrayList(u8).Writer,
-    html_writer: ?std.ArrayList(u8).Writer,
+    md_writer: std.array_list.Managed(u8).Writer,
+    html_writer: ?std.array_list.Managed(u8).Writer,
     gpa: Allocator,
 
-    pub fn init(gpa: Allocator, md_buffer: *std.ArrayList(u8), html_buffer: ?*std.ArrayList(u8)) DualOutput {
+    pub fn init(gpa: Allocator, md_buffer: *std.array_list.Managed(u8), html_buffer: ?*std.array_list.Managed(u8)) DualOutput {
         return .{
             .md_writer = md_buffer.writer(),
             .html_writer = if (html_buffer) |buf| buf.writer() else null,
@@ -1788,7 +1788,7 @@ fn generateExpectedSection(
     output: *DualOutput,
     snapshot_path: []const u8,
     content: *const Content,
-    reports: *const std.ArrayList(reporting.Report),
+    reports: *const std.array_list.Managed(reporting.Report),
     config: *const Config,
 ) !bool {
     try output.begin_section("EXPECTED");
@@ -1875,7 +1875,7 @@ fn generateExpectedSection(
 }
 
 /// Generate PROBLEMS section for both markdown and HTML using shared report generation
-fn generateProblemsSection(output: *DualOutput, reports: *const std.ArrayList(reporting.Report)) !void {
+fn generateProblemsSection(output: *DualOutput, reports: *const std.array_list.Managed(reporting.Report)) !void {
     try output.begin_section("PROBLEMS");
     try renderReportsToProblemsSection(output, reports);
     try output.end_section();
@@ -2028,7 +2028,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
 
 /// Generate FORMATTED section for both markdown and HTML
 fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_ast: *AST) !void {
-    var formatted = std.ArrayList(u8).init(output.gpa);
+    var formatted = std.array_list.Managed(u8).init(output.gpa);
     defer formatted.deinit();
 
     switch (content.meta.node_type) {
@@ -2144,7 +2144,7 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
 /// Generate TYPES section displaying types store for both markdown and HTML
 /// This is used for debugging.
 fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, can_ir: *ModuleEnv) !void {
-    var solved = std.ArrayList(u8).init(output.gpa);
+    var solved = std.array_list.Managed(u8).init(output.gpa);
     defer solved.deinit();
 
     try types.writers.SExprWriter.allVarsToSExprStr(solved.writer().any(), gpa, can_ir.env);
@@ -2257,7 +2257,7 @@ fn generateHtmlClosing(output: *DualOutput) !void {
 }
 
 /// Write HTML buffer to file
-fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.ArrayList(u8)) !void {
+fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.array_list.Managed(u8)) !void {
     // Convert .md path to .html path
     const html_path = blk: {
         if (std.mem.endsWith(u8, snapshot_path, ".md")) {
@@ -2448,10 +2448,10 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
     log("Processing REPL snapshot: {s}", .{output_path});
 
     // Buffer all output in memory before writing files
-    var md_buffer = std.ArrayList(u8).init(allocator);
+    var md_buffer = std.array_list.Managed(u8).init(allocator);
     defer md_buffer.deinit();
 
-    var html_buffer = if (config.generate_html) std.ArrayList(u8).init(allocator) else null;
+    var html_buffer = if (config.generate_html) std.array_list.Managed(u8).init(allocator) else null;
     defer if (html_buffer) |*buf| buf.deinit();
 
     var output = DualOutput.init(allocator, &md_buffer, if (html_buffer) |*buf| buf else null);
@@ -2489,7 +2489,7 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
 fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) !bool {
     var success = true;
     // Parse REPL inputs from the source using » as delimiter
-    var inputs = std.ArrayList([]const u8).init(output.gpa);
+    var inputs = std.array_list.Managed([]const u8).init(output.gpa);
     defer inputs.deinit();
 
     // Split by the » character, each section is a separate REPL input
@@ -2522,7 +2522,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     }
 
     // Process each input and generate output
-    var actual_outputs = std.ArrayList([]const u8).init(output.gpa);
+    var actual_outputs = std.array_list.Managed([]const u8).init(output.gpa);
     defer {
         for (actual_outputs.items) |item| {
             output.gpa.free(item);
@@ -2567,7 +2567,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
             if (content.output) |expected| {
                 try output.begin_section("OUTPUT");
                 // Parse expected outputs
-                var expected_outputs = std.ArrayList([]const u8).init(output.gpa);
+                var expected_outputs = std.array_list.Managed([]const u8).init(output.gpa);
                 defer expected_outputs.deinit();
 
                 var expected_lines = std.mem.splitSequence(u8, expected, "\n---\n");

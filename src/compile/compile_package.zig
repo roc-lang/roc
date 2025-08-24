@@ -682,7 +682,7 @@ pub const PackageEnv = struct {
 
         // Build other_modules array according to env.imports order
         const import_count = env.imports.imports.items.items.len;
-        var others = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, import_count);
+        var others = try std.array_list.Managed(*ModuleEnv).initCapacity(self.gpa, import_count);
         defer others.deinit();
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
             const import_name = env.getString(str_idx);
@@ -752,7 +752,7 @@ pub const PackageEnv = struct {
         }
 
         // Default: convert dotted module name to path under root_dir
-        var buffer = std.ArrayList(u8).init(self.gpa);
+        var buffer = std.array_list.Managed(u8).init(self.gpa);
         defer buffer.deinit();
         var it = std.mem.splitScalar(u8, mod_name, '.');
         var first = true;
@@ -794,10 +794,10 @@ pub const PackageEnv = struct {
         try visited.resize(self.gpa, self.modules.items.len, false);
 
         const Frame = struct { id: ModuleId, next_idx: usize };
-        var frames = std.ArrayList(Frame).init(self.gpa);
+        var frames = std.array_list.Managed(Frame).init(self.gpa);
         defer frames.deinit();
 
-        var stack_ids = std.ArrayList(ModuleId).init(self.gpa);
+        var stack_ids = std.array_list.Managed(ModuleId).init(self.gpa);
         defer stack_ids.deinit();
 
         visited.set(start);

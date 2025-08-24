@@ -39,9 +39,9 @@ last_module_env: ?*ModuleEnv,
 /// Debug flag to store rendered HTML for snapshot generation
 debug_store_snapshots: bool,
 /// Storage for rendered CAN HTML at each step (only when debug_store_snapshots is true)
-debug_can_html: std.ArrayList([]const u8),
+debug_can_html: std.array_list.Managed([]const u8),
 /// Storage for rendered TYPES HTML at each step (only when debug_store_snapshots is true)
-debug_types_html: std.ArrayList([]const u8),
+debug_types_html: std.array_list.Managed([]const u8),
 
 pub fn init(allocator: Allocator, roc_ops: *RocOps) !Repl {
     const eval_stack = try eval_mod.Stack.initCapacity(allocator, 8192);
@@ -54,8 +54,8 @@ pub fn init(allocator: Allocator, roc_ops: *RocOps) !Repl {
         .trace_writer = null,
         .last_module_env = null,
         .debug_store_snapshots = false,
-        .debug_can_html = std.ArrayList([]const u8).init(allocator),
-        .debug_types_html = std.ArrayList([]const u8).init(allocator),
+        .debug_can_html = std.array_list.Managed([]const u8).init(allocator),
+        .debug_types_html = std.array_list.Managed([]const u8).init(allocator),
     };
 }
 
@@ -109,7 +109,7 @@ fn generateAndStoreDebugHtml(self: *Repl, module_env: *ModuleEnv, expr_idx: can.
         defer tree.deinit();
         try module_env.pushToSExprTree(expr_idx, &tree);
 
-        var can_buffer = std.ArrayList(u8).init(self.allocator);
+        var can_buffer = std.array_list.Managed(u8).init(self.allocator);
         defer can_buffer.deinit();
         try tree.toStringPretty(can_buffer.writer().any());
 
@@ -123,7 +123,7 @@ fn generateAndStoreDebugHtml(self: *Repl, module_env: *ModuleEnv, expr_idx: can.
         defer tree.deinit();
         try module_env.pushTypesToSExprTree(expr_idx, &tree);
 
-        var types_buffer = std.ArrayList(u8).init(self.allocator);
+        var types_buffer = std.array_list.Managed(u8).init(self.allocator);
         defer types_buffer.deinit();
         try tree.toStringPretty(types_buffer.writer().any());
 
@@ -316,7 +316,7 @@ pub fn buildFullSource(self: *Repl, current_expr: []const u8) ![]const u8 {
         return try self.allocator.dupe(u8, current_expr);
     }
 
-    var buffer = std.ArrayList(u8).init(self.allocator);
+    var buffer = std.array_list.Managed(u8).init(self.allocator);
     defer buffer.deinit();
 
     // Start block

@@ -154,7 +154,7 @@ pub fn renderDocument(document: *const Document, writer: anytype, target: Render
 
 /// Render a document to terminal with color support.
 pub fn renderDocumentToTerminal(document: *const Document, writer: anytype, palette: ColorPalette, config: ReportingConfig) !void {
-    var annotation_stack = std.ArrayList(Annotation).init(document.allocator);
+    var annotation_stack = std.array_list.Managed(Annotation).init(document.allocator);
     defer annotation_stack.deinit();
 
     for (document.elements.items) |element| {
@@ -171,7 +171,7 @@ pub fn renderDocumentToMarkdown(document: *const Document, writer: anytype, conf
 
 /// Render a document to HTML.
 pub fn renderDocumentToHtml(document: *const Document, writer: anytype, config: ReportingConfig) !void {
-    var annotation_stack = std.ArrayList(Annotation).init(document.allocator);
+    var annotation_stack = std.array_list.Managed(Annotation).init(document.allocator);
     defer annotation_stack.deinit();
 
     for (document.elements.items) |element| {
@@ -188,7 +188,7 @@ pub fn renderDocumentToLsp(document: *const Document, writer: anytype, config: R
 
 // Terminal rendering functions
 
-fn renderElementToTerminal(element: DocumentElement, writer: anytype, palette: ColorPalette, annotation_stack: *std.ArrayList(Annotation), config: ReportingConfig) !void {
+fn renderElementToTerminal(element: DocumentElement, writer: anytype, palette: ColorPalette, annotation_stack: *std.array_list.Managed(Annotation), config: ReportingConfig) !void {
     switch (element) {
         .text => |text| try writer.writeAll(text),
         .annotated => |annotated| {
@@ -653,7 +653,7 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
 
 // HTML rendering functions
 
-fn renderElementToHtml(element: DocumentElement, writer: anytype, annotation_stack: *std.ArrayList(Annotation), config: ReportingConfig) !void {
+fn renderElementToHtml(element: DocumentElement, writer: anytype, annotation_stack: *std.array_list.Managed(Annotation), config: ReportingConfig) !void {
     switch (element) {
         .text => |text| try writeEscapedHtml(writer, text),
         .annotated => |annotated| {
@@ -865,7 +865,7 @@ test "render report to markdown" {
 
     try report.document.addText("This is a test error message.");
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     try renderReportToMarkdown(&report, buffer.writer(), ReportingConfig.initMarkdown());
@@ -882,7 +882,7 @@ test "render document with annotations to markdown" {
     try doc.addAnnotated("world", .emphasized);
     try doc.addText("!");
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     try renderDocumentToMarkdown(&doc, buffer.writer(), ReportingConfig.initMarkdown());
@@ -896,7 +896,7 @@ test "render HTML escaping" {
 
     try doc.addText("<script>alert('test')</script>");
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     try renderDocumentToHtml(&doc, buffer.writer(), ReportingConfig.initHtml());
@@ -914,7 +914,7 @@ test "render indentation and spacing" {
     try doc.addSpace(3);
     try doc.addText("spaced");
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     try renderDocumentToMarkdown(&doc, buffer.writer(), ReportingConfig.initMarkdown());
@@ -928,7 +928,7 @@ test "render horizontal rule" {
 
     try doc.addHorizontalRule(5);
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
     defer buffer.deinit();
 
     try renderDocumentToMarkdown(&doc, buffer.writer(), ReportingConfig.initMarkdown());

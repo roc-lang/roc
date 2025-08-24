@@ -502,7 +502,7 @@ const TypeContext = enum {
 pub const SnapshotWriter = struct {
     const Self = @This();
 
-    writer: std.ArrayList(u8).Writer,
+    writer: std.array_list.Managed(u8).Writer,
     snapshots: *const Store,
     idents: *const Ident.Store,
     current_module_name: ?[]const u8,
@@ -511,7 +511,7 @@ pub const SnapshotWriter = struct {
     next_name_index: u32,
     name_counters: std.EnumMap(TypeContext, u32),
 
-    pub fn init(writer: std.ArrayList(u8).Writer, snapshots: *const Store, idents: *const Ident.Store) Self {
+    pub fn init(writer: std.array_list.Managed(u8).Writer, snapshots: *const Store, idents: *const Ident.Store) Self {
         return .{
             .writer = writer,
             .snapshots = snapshots,
@@ -525,7 +525,7 @@ pub const SnapshotWriter = struct {
     }
 
     pub fn initWithContext(
-        writer: std.ArrayList(u8).Writer,
+        writer: std.array_list.Managed(u8).Writer,
         snapshots: *const Store,
         idents: *const Ident.Store,
         current_module_name: []const u8,

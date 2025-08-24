@@ -38,7 +38,7 @@ test "nominal type origin - displays origin in snapshot writer" {
 
     // Test 1: Origin shown when type is from different module
     {
-        var buf = std.ArrayList(u8).init(test_allocator);
+        var buf = std.array_list.Managed(u8).init(test_allocator);
         defer buf.deinit();
 
         var writer = snapshot.SnapshotWriter.init(
@@ -58,7 +58,7 @@ test "nominal type origin - displays origin in snapshot writer" {
 
     // Test 2: Origin NOT shown when type is from same module
     {
-        var buf = std.ArrayList(u8).init(test_allocator);
+        var buf = std.array_list.Managed(u8).init(test_allocator);
         defer buf.deinit();
 
         // Create a nominal type from the current module
@@ -85,7 +85,7 @@ test "nominal type origin - displays origin in snapshot writer" {
 
     // Test 3: Origin shown with type arguments
     {
-        var buf = std.ArrayList(u8).init(test_allocator);
+        var buf = std.array_list.Managed(u8).init(test_allocator);
         defer buf.deinit();
 
         // Create type arguments
@@ -137,7 +137,7 @@ test "nominal type origin - works with no context" {
         .origin_module = module_ident,
     };
 
-    var buf = std.ArrayList(u8).init(test_allocator);
+    var buf = std.array_list.Managed(u8).init(test_allocator);
     defer buf.deinit();
 
     // Use the basic init without context

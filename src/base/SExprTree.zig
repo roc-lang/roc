@@ -70,14 +70,14 @@ const HtmlSExprWriter = struct {
     writer: std.io.AnyWriter,
     current_color: Color = .default,
     color_active: bool = false,
-    scratch_buffer: std.ArrayList(u8),
+    scratch_buffer: std.array_list.Managed(u8),
 
     pub fn init(writer: std.io.AnyWriter) HtmlSExprWriter {
         return HtmlSExprWriter{
             .writer = writer,
             .current_color = .default,
             .color_active = false,
-            .scratch_buffer = std.ArrayList(u8).init(std.heap.page_allocator),
+            .scratch_buffer = std.array_list.Managed(u8).init(std.heap.page_allocator),
         };
     }
 

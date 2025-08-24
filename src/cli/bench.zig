@@ -40,7 +40,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
     std.debug.print("Benchmarking {s} on '{s}'\n", .{ operation_name, path });
 
     // Find all .roc files (from file or directory)
-    var roc_files = std.ArrayList(RocFile).init(gpa);
+    var roc_files = std.array_list.Managed(RocFile).init(gpa);
     defer {
         for (roc_files.items) |roc_file| {
             gpa.free(roc_file.path);
@@ -140,7 +140,7 @@ pub fn benchTokenizer(gpa: Allocator, path: []const u8) !void {
     try benchParseOrTokenize(false, gpa, path);
 }
 
-fn collectRocFiles(gpa: Allocator, path: []const u8, roc_files: *std.ArrayList(RocFile)) !void {
+fn collectRocFiles(gpa: Allocator, path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
     // Check if path is a file or directory
     const stat = std.fs.cwd().statFile(path) catch |err| {
         fatal("Failed to access '{s}': {}", .{ path, err });
@@ -163,7 +163,7 @@ fn collectRocFiles(gpa: Allocator, path: []const u8, roc_files: *std.ArrayList(R
     }
 }
 
-fn addRocFile(gpa: Allocator, file_path: []const u8, roc_files: *std.ArrayList(RocFile)) !void {
+fn addRocFile(gpa: Allocator, file_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
     const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
         std.debug.print("Warning: Failed to open file '{s}': {}\n", .{ file_path, err });
         return;
@@ -185,7 +185,7 @@ fn addRocFile(gpa: Allocator, file_path: []const u8, roc_files: *std.ArrayList(R
     });
 }
 
-fn findRocFiles(gpa: Allocator, dir_path: []const u8, roc_files: *std.ArrayList(RocFile)) !void {
+fn findRocFiles(gpa: Allocator, dir_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
     var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
         fatal("Failed to open directory '{s}': {}", .{ dir_path, err });
     };

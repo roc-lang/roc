@@ -45,7 +45,7 @@ test "cross-module type checking - monomorphic function" {
     // Type is already set by addExprAndTypeVar
 
     // Create array of module environments
-    var modules = std.ArrayList(*ModuleEnv).init(allocator);
+    var modules = std.array_list.Managed(*ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -122,7 +122,7 @@ test "cross-module type checking - polymorphic function" {
     } }, func_content, base.Region.zero());
 
     // Create array of module environments
-    var modules = std.ArrayList(*ModuleEnv).init(allocator);
+    var modules = std.array_list.Managed(*ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -185,7 +185,7 @@ test "cross-module type checking - record type" {
     const module_a_cir = &module_a_env;
 
     // Create a record type { x: I32, y: Str }
-    var record_fields = std.ArrayList(types_mod.RecordField).init(allocator);
+    var record_fields = std.array_list.Managed(types_mod.RecordField).init(allocator);
     defer record_fields.deinit();
 
     const x_ident = try module_a_env.insertIdent(base.Ident.for_text("x"));
@@ -215,7 +215,7 @@ test "cross-module type checking - record type" {
     } }, record_content, base.Region.zero());
 
     // Create array of module environments
-    var modules = std.ArrayList(*ModuleEnv).init(allocator);
+    var modules = std.array_list.Managed(*ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -321,7 +321,7 @@ test "cross-module type checking - type mismatch error" {
     }, str_content, base.Region.zero());
 
     // Create array of module environments
-    var modules = std.ArrayList(*ModuleEnv).init(allocator);
+    var modules = std.array_list.Managed(*ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -407,7 +407,7 @@ test "cross-module type checking - polymorphic instantiation" {
     }, Content{ .structure = .{ .list = str_var } }, base.Region.zero());
 
     // Create array of module environments
-    var modules = std.ArrayList(*ModuleEnv).init(allocator);
+    var modules = std.array_list.Managed(*ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -486,7 +486,7 @@ test "cross-module type checking - preserves module A types" {
     } }, Content{ .structure = .{ .num = .{ .int_precision = .i32 } } }, base.Region.zero());
 
     // Create array of module environments
-    var modules = std.ArrayList(*ModuleEnv).init(allocator);
+    var modules = std.array_list.Managed(*ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -574,7 +574,7 @@ test "cross-module type checking - three module chain monomorphic" {
     }, Content{ .flex_var = null }, base.Region.zero());
 
     // Create array of module environments
-    var modules = std.ArrayList(*ModuleEnv).init(allocator);
+    var modules = std.array_list.Managed(*ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -671,7 +671,7 @@ test "cross-module type checking - three module chain polymorphic" {
     }, Content{ .flex_var = null }, base.Region.zero());
 
     // Create array of module environments
-    var modules = std.ArrayList(*ModuleEnv).init(allocator);
+    var modules = std.array_list.Managed(*ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -800,7 +800,7 @@ test "cross-module type checking - partial polymorphic instantiation chain" {
     }, Content{ .flex_var = null }, base.Region.zero());
 
     // Create array of module environments
-    var modules = std.ArrayList(*ModuleEnv).init(allocator);
+    var modules = std.array_list.Managed(*ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -896,7 +896,7 @@ test "cross-module type checking - record type chain" {
     const x_ident = try module_a_env.insertIdent(base.Ident.for_text("x"));
     const y_ident = try module_a_env.insertIdent(base.Ident.for_text("y"));
 
-    var record_fields = std.ArrayList(types_mod.RecordField).init(allocator);
+    var record_fields = std.array_list.Managed(types_mod.RecordField).init(allocator);
     defer record_fields.deinit();
 
     try record_fields.append(.{ .name = x_ident, .var_ = i32_var });
@@ -946,7 +946,7 @@ test "cross-module type checking - record type chain" {
     }, Content{ .flex_var = null }, base.Region.zero());
 
     // Create array of module environments
-    var modules = std.ArrayList(*ModuleEnv).init(allocator);
+    var modules = std.array_list.Managed(*ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -1012,7 +1012,7 @@ test "cross-module type checking - polymorphic record chain" {
     const value_ident = try module_a_env.insertIdent(base.Ident.for_text("value"));
     const next_ident = try module_a_env.insertIdent(base.Ident.for_text("next"));
 
-    var record_fields = std.ArrayList(types_mod.RecordField).init(allocator);
+    var record_fields = std.array_list.Managed(types_mod.RecordField).init(allocator);
     defer record_fields.deinit();
 
     try record_fields.append(.{ .name = value_ident, .var_ = type_var_a });
@@ -1054,7 +1054,7 @@ test "cross-module type checking - polymorphic record chain" {
     const value_ident_b = try module_b_env.insertIdent(base.Ident.for_text("value"));
     const next_ident_b = try module_b_env.insertIdent(base.Ident.for_text("next"));
 
-    var str_record_fields = std.ArrayList(types_mod.RecordField).init(allocator);
+    var str_record_fields = std.array_list.Managed(types_mod.RecordField).init(allocator);
     defer str_record_fields.deinit();
 
     try str_record_fields.append(.{ .name = value_ident_b, .var_ = str_var });
@@ -1088,7 +1088,7 @@ test "cross-module type checking - polymorphic record chain" {
     }, Content{ .flex_var = null }, base.Region.zero());
 
     // Create array of module environments
-    var modules = std.ArrayList(*ModuleEnv).init(allocator);
+    var modules = std.array_list.Managed(*ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -1237,7 +1237,7 @@ test "cross-module type checking - complex polymorphic chain with unification" {
     }, Content{ .flex_var = null }, base.Region.zero());
 
     // Create array of module environments
-    var modules = std.ArrayList(*ModuleEnv).init(allocator);
+    var modules = std.array_list.Managed(*ModuleEnv).init(allocator);
     defer modules.deinit();
 
     try modules.append(module_a_cir);
@@ -1392,7 +1392,7 @@ test "cross-module type checking - type mismatch with proper error message" {
     }, Content{ .flex_var = null }, base.Region.zero());
 
     // Set up modules array
-    var modules = std.ArrayList(*ModuleEnv).init(allocator);
+    var modules = std.array_list.Managed(*ModuleEnv).init(allocator);
     defer modules.deinit();
     try modules.append(module_a_cir);
 
