@@ -27,18 +27,15 @@ INCOMPATIBLE IF BRANCHES - if_then_else_simple_block_formatting.md:1:1:1:1
 **Parse Error**
 at 1:1 to 1:9
 
-**Unsupported Node**
-at 1:1 to 3:9
-
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.if_else)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag if_else :type "[]_others")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+[]_others
 ~~~

@@ -202,7 +202,7 @@ at 14:18 to 14:60
 at 15:18 to 15:24
 
 **Unsupported Node**
-at 18:10 to 18:28
+at 18:10 to 18:14
 
 **Unsupported Node**
 at 21:10 to 21:17

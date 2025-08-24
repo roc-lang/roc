@@ -118,12 +118,6 @@ at 1:28 to 1:28
 **Unsupported Node**
 at 1:32 to 1:32
 
-**Pattern in Expression Context**
-at 3:1 to 3:7
-
-**Pattern in Expression Context**
-at 3:10 to 3:13
-
 **Unsupported Node**
 at 5:7 to 5:20
 
@@ -142,8 +136,8 @@ at 8:5 to 8:7
   (Expr.malformed)
   (Expr.malformed)
   (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.malformed)
+    (Expr.apply_tag)
+    (Expr.apply_tag)
   )
   (Expr.binop_colon
     (Expr.lookup "ser")
@@ -161,7 +155,7 @@ at 8:5 to 8:7
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag block :type "_arg, _arg2 -> _ret")
 ~~~
 # TYPES
 ~~~roc

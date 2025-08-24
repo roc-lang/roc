@@ -35,18 +35,15 @@ at 1:1 to 1:9
 **Parse Error**
 at 3:8 to 3:14
 
-**Unsupported Node**
-at 1:1 to 7:1
-
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.if_else)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag if_else :type "Num(_size)")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Num(_size)
 ~~~

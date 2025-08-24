@@ -68,12 +68,6 @@ at 6:16 to 6:29
 **Parse Error**
 at 8:7 to 8:7
 
-**Pattern in Expression Context**
-at 3:1 to 3:7
-
-**Pattern in Expression Context**
-at 3:10 to 3:13
-
 **Unsupported Node**
 at 5:11 to 5:24
 
@@ -87,8 +81,8 @@ at 8:5 to 8:7
 ~~~clojure
 (Expr.block
   (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.malformed)
+    (Expr.apply_tag)
+    (Expr.apply_tag)
   )
   (Expr.binop_colon
     (Expr.lookup "getUser")
@@ -101,7 +95,7 @@ at 8:5 to 8:7
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag block :type "_arg, _arg2 -> _ret")
 ~~~
 # TYPES
 ~~~roc

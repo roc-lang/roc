@@ -29,20 +29,17 @@ PARSE ERROR - fuzz_crash_036.md:1:11:1:11
 **Parse Error**
 at 1:9 to 1:11
 
-**Pattern in Expression Context**
-at 1:10 to 1:11
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.block
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "[]_others")
 ~~~
 # TYPES
 ~~~roc

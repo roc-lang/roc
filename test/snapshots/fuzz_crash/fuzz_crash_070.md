@@ -42,7 +42,7 @@ at 1:9 to 1:10
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag block :type "_arg -> _ret")
 ~~~
 # TYPES
 ~~~roc

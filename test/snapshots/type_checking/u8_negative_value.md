@@ -33,15 +33,13 @@ NO CHANGE
 # EXPECTED
 NEGATIVE UNSIGNED INTEGER - u8_negative_value.md:4:5:4:7
 # PROBLEMS
-**Pattern in Expression Context**
-at 3:5 to 3:7
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "x")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
 )

@@ -63,20 +63,17 @@ at 2:12 to 3:1
 **Unsupported Node**
 at 3:10 to 3:14
 
-**Unsupported Node**
-at 4:5 to 4:17
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.malformed)
+  (Expr.apply_ident)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

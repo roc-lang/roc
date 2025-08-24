@@ -135,9 +135,6 @@ UNDEFINED VARIABLE - multi_qualified_import.md:14:8:14:12
 **Unsupported Node**
 at 3:1 to 3:40
 
-**Pattern in Expression Context**
-at 5:16 to 5:23
-
 **Unsupported Node**
 at 6:16 to 6:20
 
@@ -159,11 +156,11 @@ at 13:12 to 13:16
 **Unsupported Node**
 at 13:17 to 13:21
 
-**Pattern in Expression Context**
-at 13:22 to 13:33
+**Unsupported Node**
+at 14:12 to 14:16
 
 **Unsupported Node**
-at 14:8 to 14:38
+at 14:17 to 14:21
 
 # CANONICALIZE
 ~~~clojure
@@ -171,7 +168,7 @@ at 14:8 to 14:38
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "json_encoder")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon

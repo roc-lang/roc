@@ -55,17 +55,20 @@ NO CHANGE
 NIL
 # PROBLEMS
 **Unsupported Node**
-at 1:2 to 1:36
+at 1:2 to 1:11
+
+**Unsupported Node**
+at 1:30 to 1:31
 
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.apply_ident)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag apply_ident :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+_a
 ~~~

@@ -44,7 +44,7 @@ DUPLICATE DEFINITION - argument_shadows_capture.md:3:7:3:8
 UNUSED VARIABLE - argument_shadows_capture.md:2:5:2:6
 # PROBLEMS
 **Unsupported Node**
-at 2:9 to 3:16
+at 3:6 to 3:10
 
 # CANONICALIZE
 ~~~clojure
@@ -58,5 +58,5 @@ at 2:9 to 3:16
 ~~~
 # TYPES
 ~~~roc
-x : Error
+x : _a
 ~~~

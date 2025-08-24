@@ -42,16 +42,13 @@ UNDERSCORE IN TYPE ALIAS - simple_underscore_error.md:1:1:1:1
 **Unsupported Node**
 at 3:1 to 3:13
 
-**Pattern in Expression Context**
-at 5:7 to 5:14
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "foo")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
 )

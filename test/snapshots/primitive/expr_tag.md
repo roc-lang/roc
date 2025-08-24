@@ -27,9 +27,7 @@ NO CHANGE
 # EXPECTED
 NIL
 # PROBLEMS
-**Pattern in Expression Context**
-at 2:7 to 2:15
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block

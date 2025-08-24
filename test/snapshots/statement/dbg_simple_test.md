@@ -44,7 +44,7 @@ NIL
 at 5:5 to 5:5
 
 **Unsupported Node**
-at 5:5 to 5:11
+at 5:5 to 5:5
 
 # CANONICALIZE
 ~~~clojure

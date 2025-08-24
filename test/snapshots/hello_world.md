@@ -60,12 +60,12 @@ at 5:13 to 5:19
   (Expr.malformed)
   (Expr.lookup "main")
   (Expr.lambda)
-  (Expr.malformed)
+  (Expr.unary_not)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "[True, False]_others")
 ~~~
 # TYPES
 ~~~roc

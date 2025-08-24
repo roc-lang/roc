@@ -78,7 +78,7 @@ at 11:2 to 11:8
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag block :type "_arg, _arg2 -> [True, False]_others")
 ~~~
 # TYPES
 ~~~roc

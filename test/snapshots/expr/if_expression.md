@@ -24,18 +24,15 @@ UNDEFINED VARIABLE - if_expression.md:1:4:1:5
 **Parse Error**
 at 1:1 to 1:10
 
-**Unsupported Node**
-at 1:1 to 1:28
-
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.if_else)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag if_else :type "Str")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Str
 ~~~

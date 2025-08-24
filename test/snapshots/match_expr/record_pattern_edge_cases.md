@@ -60,17 +60,23 @@ at 1:1 to 9:2
 at 9:2 to 9:2
 
 **Unsupported Node**
-at 1:1 to 9:2
+at 1:7 to 1:10
+
+**Unsupported Node**
+at 1:11 to 9:1
+
+**Unsupported Node**
+at 9:2 to 9:2
 
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.match)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag match :type "Error")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Error
 ~~~

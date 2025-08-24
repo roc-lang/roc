@@ -101,12 +101,6 @@ at 5:15 to 5:25
 **Unsupported Node**
 at 6:15 to 7:5
 
-**Pattern in Expression Context**
-at 10:1 to 10:12
-
-**Pattern in Expression Context**
-at 11:5 to 11:11
-
 **Unsupported Node**
 at 11:14 to 12:1
 
@@ -123,10 +117,10 @@ at 11:14 to 12:1
   )
   (Expr.malformed)
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.malformed)
+        (Expr.apply_tag)
         (Expr.malformed)
       )
     )
@@ -135,7 +129,7 @@ at 11:14 to 12:1
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "[]_others")
 ~~~
 # TYPES
 ~~~roc

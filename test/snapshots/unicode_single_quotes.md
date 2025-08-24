@@ -272,19 +272,19 @@ at 8:8 to 8:8
 at 8:9 to 8:9
 
 **Unsupported Node**
-at 9:5 to 9:10
+at 9:5 to 9:5
 
 **Unsupported Node**
-at 10:5 to 10:6
+at 9:9 to 9:9
+
+**Unsupported Node**
+at 10:5 to 10:5
 
 **Unsupported Node**
 at 10:10 to 10:10
 
 **Unsupported Node**
-at 11:5 to 11:11
-
-**Pattern in Expression Context**
-at 11:10 to 11:14
+at 11:5 to 11:5
 
 **Unsupported Node**
 at 11:14 to 11:14
@@ -293,7 +293,7 @@ at 11:14 to 11:14
 at 11:15 to 11:15
 
 **Unsupported Node**
-at 12:5 to 12:11
+at 12:5 to 12:5
 
 **Unsupported Node**
 at 12:11 to 12:11
@@ -347,14 +347,14 @@ at 23:1 to 23:1
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.apply_tag)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.apply_ident)
   (Expr.malformed)
   (Expr.str_literal_small)
   (Expr.malformed)

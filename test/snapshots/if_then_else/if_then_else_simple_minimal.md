@@ -24,18 +24,15 @@ UNDEFINED VARIABLE - if_then_else_simple_minimal.md:1:4:1:8
 **Parse Error**
 at 1:1 to 1:9
 
-**Unsupported Node**
-at 1:1 to 1:17
-
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.if_else)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag if_else :type "Num(_size)")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Num(_size)
 ~~~

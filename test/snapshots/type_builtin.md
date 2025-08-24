@@ -33,34 +33,23 @@ NO CHANGE
 # EXPECTED
 NIL
 # PROBLEMS
-**Pattern in Expression Context**
-at 3:1 to 3:9
-
-**Pattern in Expression Context**
-at 3:12 to 3:15
-
-**Pattern in Expression Context**
-at 4:1 to 4:9
-
-**Pattern in Expression Context**
-at 4:12 to 4:15
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.malformed)
+    (Expr.apply_tag)
+    (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.malformed)
+    (Expr.apply_tag)
+    (Expr.apply_tag)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "[]_others")
 ~~~
 # TYPES
 ~~~roc

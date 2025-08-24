@@ -77,7 +77,7 @@ at 4:1 to 4:17
 at 6:5 to 6:7
 
 **Unsupported Node**
-at 8:14 to 8:54
+at 8:14 to 8:18
 
 **Unsupported Node**
 at 9:5 to 9:11
@@ -93,7 +93,7 @@ at 9:5 to 9:11
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag block :type "_arg, _arg2 -> [True, False]_others")
 ~~~
 # TYPES
 ~~~roc

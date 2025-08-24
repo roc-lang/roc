@@ -30,12 +30,12 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.unary_not)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "[True, False]_others")
 ~~~
 # TYPES
 ~~~roc

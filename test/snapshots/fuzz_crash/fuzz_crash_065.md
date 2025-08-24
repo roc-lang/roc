@@ -26,20 +26,18 @@ NO CHANGE
 PARSE ERROR - fuzz_crash_065.md:1:9:1:10
 PARSE ERROR - fuzz_crash_065.md:1:11:1:12
 # PROBLEMS
-**Pattern in Expression Context**
-at 1:10 to 1:11
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.block
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "[]_others")
 ~~~
 # TYPES
 ~~~roc

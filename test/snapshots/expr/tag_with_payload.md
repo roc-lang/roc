@@ -24,18 +24,16 @@ NO CHANGE
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:9
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.apply_tag)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag apply_tag :type "[]_others")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+[]_others
 ~~~

@@ -65,23 +65,11 @@ INVALID NOMINAL TAG - nominal_tag_simple.md:9:10:9:22
 **Unsupported Node**
 at 3:1 to 4:1
 
-**Pattern in Expression Context**
-at 5:8 to 5:13
-
 **Unsupported Node**
 at 6:8 to 6:13
 
-**Pattern in Expression Context**
-at 6:13 to 6:17
-
-**Pattern in Expression Context**
-at 8:10 to 8:15
-
 **Unsupported Node**
 at 9:10 to 9:15
-
-**Pattern in Expression Context**
-at 9:15 to 9:21
 
 # CANONICALIZE
 ~~~clojure
@@ -89,12 +77,12 @@ at 9:15 to 9:21
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "blue")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "yellow")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
 )

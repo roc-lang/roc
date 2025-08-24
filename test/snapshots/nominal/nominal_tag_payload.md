@@ -126,17 +126,11 @@ at 6:9 to 6:13
 **Unsupported Node**
 at 9:9 to 9:14
 
-**Pattern in Expression Context**
-at 9:14 to 9:18
-
 **Unsupported Node**
 at 11:9 to 11:13
 
 **Unsupported Node**
 at 13:9 to 13:14
-
-**Pattern in Expression Context**
-at 13:14 to 13:18
 
 # CANONICALIZE
 ~~~clojure

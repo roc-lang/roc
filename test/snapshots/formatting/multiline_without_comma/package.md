@@ -59,45 +59,33 @@ at 12:10 to 12:10
 **Unsupported Node**
 at 11:4 to 11:4
 
-**Pattern in Expression Context**
-at 11:6 to 11:9
-
 **Unsupported Node**
 at 11:10 to 11:10
-
-**Pattern in Expression Context**
-at 11:13 to 11:16
 
 **Unsupported Node**
 at 12:4 to 12:4
 
-**Pattern in Expression Context**
-at 12:6 to 12:9
-
 **Unsupported Node**
 at 12:10 to 12:10
-
-**Pattern in Expression Context**
-at 12:13 to 12:16
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.lookup "a")
+  (Expr.unary_not)
+  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.lookup "b")
+  (Expr.unary_not)
+  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.apply_tag)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "[]_others")
 ~~~
 # TYPES
 ~~~roc

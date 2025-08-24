@@ -55,10 +55,10 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Num(_size)")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
 x : Num(_size)
-y : Num(_size)
+y : _a
 ~~~

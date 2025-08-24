@@ -72,7 +72,10 @@ at 4:18 to 4:18
 at 6:7 to 6:7
 
 **Unsupported Node**
-at 3:12 to 3:24
+at 3:12 to 3:12
+
+**Unsupported Node**
+at 3:15 to 3:23
 
 **Unsupported Node**
 at 3:25 to 3:25
@@ -93,23 +96,23 @@ at 6:5 to 6:7
 ~~~clojure
 (Expr.block
   (Expr.lookup "runEffect")
-  (Expr.malformed)
+  (Expr.unary_not)
   (Expr.malformed)
   (Expr.lookup "_a")
   (Expr.malformed)
   (Expr.lookup "_b")
   (Expr.lookup "runEffect")
   (Expr.lambda)
-  (Expr.malformed)
+  (Expr.unary_not)
   (Expr.lambda)
-  (Expr.malformed)
+  (Expr.unary_not)
   (Expr.lookup "main")
   (Expr.lambda)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag block :type "_arg, _arg2 -> {}")
 ~~~
 # TYPES
 ~~~roc

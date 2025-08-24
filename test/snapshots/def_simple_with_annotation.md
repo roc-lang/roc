@@ -33,15 +33,13 @@ NO CHANGE
 # EXPECTED
 NIL
 # PROBLEMS
-**Pattern in Expression Context**
-at 3:7 to 3:10
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "foo")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
 )

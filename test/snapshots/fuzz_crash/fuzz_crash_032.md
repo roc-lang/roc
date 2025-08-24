@@ -109,9 +109,6 @@ at 12:1 to 12:1
 **Parse Error**
 at 6:16 to 12:2
 
-**Pattern in Expression Context**
-at 3:1 to 3:12
-
 **Unsupported Node**
 at 3:14 to 4:1
 
@@ -125,7 +122,7 @@ at 6:8 to 6:16
 ~~~clojure
 (Expr.block
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.malformed)
   )
   (Expr.binop_colon

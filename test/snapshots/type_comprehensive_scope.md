@@ -220,32 +220,8 @@ UNDECLARED TYPE - type_comprehensive_scope.md:15:19:15:23
 TYPE REDECLARED - type_comprehensive_scope.md:24:1:24:13
 UNDECLARED TYPE - type_comprehensive_scope.md:27:11:27:29
 # PROBLEMS
-**Pattern in Expression Context**
-at 4:1 to 4:6
-
-**Pattern in Expression Context**
-at 4:9 to 4:12
-
-**Pattern in Expression Context**
-at 5:1 to 5:9
-
-**Pattern in Expression Context**
-at 5:12 to 5:15
-
-**Pattern in Expression Context**
-at 6:1 to 6:7
-
-**Pattern in Expression Context**
-at 6:10 to 6:14
-
-**Pattern in Expression Context**
-at 9:1 to 9:7
-
 **Unsupported Node**
 at 9:26 to 9:27
-
-**Pattern in Expression Context**
-at 9:28 to 9:31
 
 **Unsupported Node**
 at 12:19 to 13:1
@@ -256,30 +232,6 @@ at 15:11 to 16:1
 **Unsupported Node**
 at 18:31 to 18:32
 
-**Pattern in Expression Context**
-at 21:1 to 21:9
-
-**Pattern in Expression Context**
-at 24:1 to 24:7
-
-**Pattern in Expression Context**
-at 24:10 to 24:13
-
-**Pattern in Expression Context**
-at 27:1 to 27:8
-
-**Pattern in Expression Context**
-at 27:11 to 27:29
-
-**Pattern in Expression Context**
-at 30:1 to 30:7
-
-**Pattern in Expression Context**
-at 31:1 to 31:7
-
-**Pattern in Expression Context**
-at 34:1 to 34:8
-
 **Unsupported Node**
 at 37:9 to 37:10
 
@@ -287,25 +239,25 @@ at 37:9 to 37:10
 ~~~clojure
 (Expr.block
   (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.malformed)
+    (Expr.apply_tag)
+    (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.malformed)
+    (Expr.apply_tag)
+    (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.malformed)
+    (Expr.apply_tag)
+    (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "name")
         (Expr.binop_colon
           (Expr.malformed)
-          (Expr.malformed)
+          (Expr.apply_tag)
         )
       )
     )
@@ -331,27 +283,27 @@ at 37:9 to 37:10
     )
   )
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "person")
@@ -366,7 +318,7 @@ at 37:9 to 37:10
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "[]_others")
 ~~~
 # TYPES
 ~~~roc

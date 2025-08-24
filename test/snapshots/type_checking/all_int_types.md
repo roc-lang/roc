@@ -132,87 +132,58 @@ NO CHANGE
 # EXPECTED
 NIL
 # PROBLEMS
-**Pattern in Expression Context**
-at 3:5 to 3:7
-
-**Pattern in Expression Context**
-at 6:5 to 6:8
-
-**Pattern in Expression Context**
-at 9:5 to 9:8
-
-**Pattern in Expression Context**
-at 12:5 to 12:8
-
-**Pattern in Expression Context**
-at 15:5 to 15:9
-
-**Pattern in Expression Context**
-at 18:5 to 18:7
-
-**Pattern in Expression Context**
-at 21:5 to 21:8
-
-**Pattern in Expression Context**
-at 24:5 to 24:8
-
-**Pattern in Expression Context**
-at 27:5 to 27:8
-
-**Pattern in Expression Context**
-at 30:5 to 30:9
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "a")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "b")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "c")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "d")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "e")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "f")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "g")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "h")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "i")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "j")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
 )

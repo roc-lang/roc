@@ -44,7 +44,7 @@ at 1:18 to 1:18
 at 1:18 to 1:21
 
 **Unsupported Node**
-at 1:18 to 1:22
+at 1:18 to 1:18
 
 # CANONICALIZE
 ~~~clojure
@@ -52,13 +52,13 @@ at 1:18 to 1:22
   (Expr.block
     (Expr.num_literal_i32 0)
     (Expr.num_literal_i32 0)
-    (Expr.malformed)
+    (Expr.apply_ident)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

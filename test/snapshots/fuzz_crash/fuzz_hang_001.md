@@ -29,18 +29,15 @@ PARSE ERROR - fuzz_hang_001.md:1:3:1:4
 **Parse Error**
 at 1:1 to 1:4
 
-**Unsupported Node**
-at 1:1 to 1:3
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.apply_ident)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

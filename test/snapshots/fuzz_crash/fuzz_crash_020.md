@@ -708,9 +708,6 @@ at 17:3 to 20:14
 **Unsupported Node**
 at 22:8 to 22:9
 
-**Pattern in Expression Context**
-at 24:1 to 24:4
-
 **Unsupported Node**
 at 24:22 to 24:22
 
@@ -723,9 +720,6 @@ at 32:13 to 32:14
 **Unsupported Node**
 at 35:7 to 35:13
 
-**Pattern in Expression Context**
-at 37:7 to 37:9
-
 **Unsupported Node**
 at 38:7 to 38:13
 
@@ -734,6 +728,9 @@ at 74:1 to 74:1
 
 **Unsupported Node**
 at 74:7 to 74:7
+
+**Pattern in Expression Context**
+at 74:20 to 74:21
 
 **Unsupported Node**
 at 75:5 to 75:9
@@ -770,7 +767,7 @@ at 118:1 to 121:1
     (Expr.malformed)
   )
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "foo")
@@ -802,11 +799,11 @@ at 118:1 to 121:1
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "one")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.malformed)
+  (Expr.unary_not)
   (Expr.apply_tag)
   (Expr.malformed)
   (Expr.malformed)

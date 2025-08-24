@@ -57,9 +57,9 @@ at 3:10 to 3:16
 (Expr.block
   (Expr.malformed)
   (Expr.lookup "hello")
-  (Expr.malformed)
+  (Expr.unary_not)
   (Expr.lambda)
-  (Expr.malformed)
+  (Expr.unary_not)
   (Expr.malformed)
 )
 ~~~

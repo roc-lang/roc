@@ -149,9 +149,6 @@ at 19:3 to 21:4
 **Parse Error**
 at 15:3 to 21:4
 
-**Pattern in Expression Context**
-at 8:18 to 8:21
-
 **Unsupported Node**
 at 8:23 to 8:23
 
@@ -182,7 +179,7 @@ at 19:3 to 21:3
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.malformed)
   (Expr.record_literal
   )

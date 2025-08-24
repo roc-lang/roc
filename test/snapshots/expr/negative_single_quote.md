@@ -21,18 +21,16 @@ NO CHANGE
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - negative_single_quote.md:1:1:1:2
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:2
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.unary_neg)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag unary_neg :type "Str")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Str
 ~~~

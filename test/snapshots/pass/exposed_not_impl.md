@@ -48,9 +48,6 @@ REDUNDANT EXPOSED - exposed_not_impl.md:1:43:1:49
 EXPOSED BUT NOT DEFINED - exposed_not_impl.md:1:14:1:17
 EXPOSED BUT NOT DEFINED - exposed_not_impl.md:1:27:1:36
 # PROBLEMS
-**Pattern in Expression Context**
-at 10:1 to 10:7
-
 **Unsupported Node**
 at 10:10 to 10:18
 
@@ -59,14 +56,14 @@ at 10:10 to 10:18
 (Expr.block
   (Expr.malformed)
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.malformed)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "[]_others")
 ~~~
 # TYPES
 ~~~roc

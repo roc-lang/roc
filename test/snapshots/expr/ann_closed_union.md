@@ -47,9 +47,6 @@ NIL
 **Unsupported Node**
 at 2:10 to 3:1
 
-**Pattern in Expression Context**
-at 3:10 to 3:15
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -67,5 +64,5 @@ at 3:10 to 3:15
 ~~~
 # TYPES
 ~~~roc
-apple : Error
+apple : []_others
 ~~~

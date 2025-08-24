@@ -54,12 +54,6 @@ NIL
 **Unsupported Node**
 at 2:22 to 2:34
 
-**Pattern in Expression Context**
-at 2:35 to 2:39
-
-**Pattern in Expression Context**
-at 2:40 to 2:53
-
 **Unsupported Node**
 at 3:22 to 3:25
 
@@ -70,8 +64,8 @@ at 3:22 to 3:25
     (Expr.lookup "launchTheNukes")
     (Expr.malformed)
   )
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.apply_tag)
+  (Expr.apply_tag)
   (Expr.malformed)
   (Expr.apply_ident)
 )

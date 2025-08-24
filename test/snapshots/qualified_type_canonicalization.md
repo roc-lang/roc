@@ -345,20 +345,11 @@ at 3:12 to 3:12
 **Unsupported Node**
 at 3:13 to 3:20
 
-**Pattern in Expression Context**
-at 3:20 to 3:25
-
 **Unsupported Node**
 at 3:26 to 3:26
 
-**Pattern in Expression Context**
-at 4:5 to 4:11
-
 **Unsupported Node**
 at 4:11 to 4:11
-
-**Pattern in Expression Context**
-at 5:5 to 5:19
 
 **Unsupported Node**
 at 5:19 to 5:19
@@ -381,17 +372,14 @@ at 11:1 to 11:32
 **Unsupported Node**
 at 14:19 to 14:24
 
-**Pattern in Expression Context**
-at 14:24 to 14:27
+**Unsupported Node**
+at 15:19 to 15:24
 
 **Unsupported Node**
-at 15:19 to 15:51
+at 15:46 to 15:47
 
 **Unsupported Node**
 at 18:20 to 18:26
-
-**Pattern in Expression Context**
-at 18:26 to 18:34
 
 **Unsupported Node**
 at 19:20 to 19:26
@@ -399,26 +387,20 @@ at 19:20 to 19:26
 **Unsupported Node**
 at 19:26 to 19:34
 
-**Pattern in Expression Context**
-at 19:35 to 19:42
-
 **Unsupported Node**
 at 22:23 to 22:30
 
 **Unsupported Node**
 at 22:30 to 22:37
 
-**Pattern in Expression Context**
-at 22:38 to 22:43
-
 **Unsupported Node**
 at 23:23 to 23:28
 
 **Unsupported Node**
-at 26:14 to 27:1
+at 26:14 to 26:20
 
 **Unsupported Node**
-at 27:14 to 27:27
+at 27:14 to 27:20
 
 **Unsupported Node**
 at 30:12 to 30:26
@@ -444,9 +426,9 @@ at 40:13 to 41:5
   (Expr.malformed)
   (Expr.lambda)
   (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
@@ -470,7 +452,7 @@ at 40:13 to 41:5
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "resultType")
-    (Expr.malformed)
+    (Expr.apply_ident)
   )
   (Expr.malformed)
   (Expr.binop_colon

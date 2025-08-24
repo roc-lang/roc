@@ -318,12 +318,6 @@ at 55:7 to 55:7
 **Unsupported Node**
 at 7:12 to 7:16
 
-**Pattern in Expression Context**
-at 12:5 to 12:9
-
-**Pattern in Expression Context**
-at 13:5 to 13:10
-
 **Unsupported Node**
 at 16:19 to 16:23
 
@@ -381,7 +375,7 @@ at 55:5 to 55:7
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_ac")
+(expr :tag block :type "_arg2, _arg3 -> _ret")
 ~~~
 # TYPES
 ~~~roc

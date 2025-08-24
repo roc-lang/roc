@@ -173,7 +173,10 @@ at 13:15 to 13:19
 at 16:15 to 16:19
 
 **Unsupported Node**
-at 23:16 to 35:1
+at 23:16 to 23:19
+
+**Unsupported Node**
+at 34:5 to 34:5
 
 # CANONICALIZE
 ~~~clojure

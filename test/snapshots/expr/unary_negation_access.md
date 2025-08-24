@@ -21,18 +21,16 @@ NO CHANGE
 # EXPECTED
 UNDEFINED VARIABLE - unary_negation_access.md:1:2:1:6
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:11
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.unary_neg)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag unary_neg :type "_arg -> _ret")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+_arg -> _ret
 ~~~

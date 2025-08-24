@@ -217,6 +217,15 @@ at 1:1 to 15:2
 **Unsupported Node**
 at 6:13 to 6:14
 
+**Unsupported Node**
+at 9:6 to 9:6
+
+**Unsupported Node**
+at 9:6 to 9:6
+
+**Unsupported Node**
+at 10:15 to 10:19
+
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal

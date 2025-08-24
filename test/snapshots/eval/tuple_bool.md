@@ -47,13 +47,13 @@ at 1:83 to 1:83
 
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag malformed :type "Error")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Error
 ~~~

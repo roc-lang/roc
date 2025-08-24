@@ -62,14 +62,8 @@ at 3:1 to 3:45
 **Unsupported Node**
 at 3:46 to 3:46
 
-**Pattern in Expression Context**
-at 3:49 to 3:51
-
 **Unsupported Node**
 at 3:51 to 3:51
-
-**Pattern in Expression Context**
-at 5:7 to 5:9
 
 **Unsupported Node**
 at 6:7 to 6:10
@@ -79,11 +73,11 @@ at 6:7 to 6:10
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "red")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
 )

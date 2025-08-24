@@ -36,9 +36,6 @@ UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
 **Unsupported Node**
 at 1:5 to 1:6
 
-**Pattern in Expression Context**
-at 2:1 to 2:2
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

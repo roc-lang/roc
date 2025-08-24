@@ -21,18 +21,16 @@ NO CHANGE
 # EXPECTED
 TYPE MISMATCH - not_tag.md:1:1:1:8
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:7
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.unary_not)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag unary_not :type "[True, False]_others")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+[True, False]_others
 ~~~

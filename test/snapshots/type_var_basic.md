@@ -80,7 +80,7 @@ at 7:5 to 7:7
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_b")
+(expr :tag block :type "_arg, _arg2 -> {}")
 ~~~
 # TYPES
 ~~~roc

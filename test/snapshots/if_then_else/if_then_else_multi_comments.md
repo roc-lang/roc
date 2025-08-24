@@ -30,18 +30,15 @@ UNDEFINED VARIABLE - if_then_else_multi_comments.md:2:2:2:6
 **Parse Error**
 at 1:1 to 3:3
 
-**Unsupported Node**
-at 1:1 to 7:3
-
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.if_else)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag if_else :type "Num(_size)")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Num(_size)
 ~~~

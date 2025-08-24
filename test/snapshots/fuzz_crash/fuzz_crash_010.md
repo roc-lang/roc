@@ -51,9 +51,6 @@ at 1:2 to 3:1
 **Parse Error**
 at 5:5 to 5:5
 
-**Pattern in Expression Context**
-at 1:1 to 1:2
-
 **Unsupported Node**
 at 2:6 to 2:6
 
@@ -63,7 +60,7 @@ at 5:5 to 5:5
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.record_literal
     (Expr.lookup "o")
     (Expr.malformed)

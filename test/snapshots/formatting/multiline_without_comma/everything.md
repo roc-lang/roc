@@ -446,20 +446,11 @@ at 8:1 to 9:5
 **Unsupported Node**
 at 9:6 to 9:6
 
-**Pattern in Expression Context**
-at 9:9 to 9:13
-
 **Unsupported Node**
 at 9:13 to 9:13
 
-**Pattern in Expression Context**
-at 10:2 to 10:5
-
 **Unsupported Node**
 at 10:6 to 10:6
-
-**Pattern in Expression Context**
-at 10:9 to 10:13
 
 **Unsupported Node**
 at 11:1 to 11:1
@@ -473,17 +464,8 @@ at 30:16 to 33:11
 **Unsupported Node**
 at 41:1 to 41:1
 
-**Pattern in Expression Context**
-at 49:1 to 49:2
-
 **Unsupported Node**
 at 51:4 to 51:4
-
-**Pattern in Expression Context**
-at 51:6 to 51:9
-
-**Pattern in Expression Context**
-at 53:1 to 53:2
 
 **Unsupported Node**
 at 53:5 to 56:2
@@ -500,11 +482,11 @@ at 60:5 to 60:12
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.apply_tag)
@@ -523,19 +505,19 @@ at 60:5 to 60:12
     (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "a")
         (Expr.binop_colon
           (Expr.malformed)
-          (Expr.malformed)
+          (Expr.apply_tag)
         )
       )
     )
   )
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.malformed)
   )
   (Expr.binop_colon

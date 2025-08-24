@@ -27,18 +27,16 @@ NO CHANGE
 # EXPECTED
 UNDEFINED VARIABLE - record_access_function_call.md:1:2:1:8
 # PROBLEMS
-**Unsupported Node**
-at 1:2 to 1:23
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.apply_ident)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag apply_ident :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+_a
 ~~~

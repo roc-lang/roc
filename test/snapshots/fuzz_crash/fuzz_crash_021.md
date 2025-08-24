@@ -66,17 +66,17 @@ at 3:12 to 3:15
 **Parse Error**
 at 3:1 to 3:15
 
-**Pattern in Expression Context**
-at 1:1 to 1:4
-
 **Unsupported Node**
 at 1:13 to 1:13
+
+**Unsupported Node**
+at 3:12 to 3:12
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.binop_slash
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.lambda)
   )
   (Expr.malformed)
@@ -85,7 +85,7 @@ at 1:13 to 1:13
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_c")
+(expr :tag block :type "[]_others")
 ~~~
 # TYPES
 ~~~roc

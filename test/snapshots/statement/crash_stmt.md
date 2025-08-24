@@ -21,9 +21,7 @@ NO CHANGE
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:21
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Stmt.malformed)

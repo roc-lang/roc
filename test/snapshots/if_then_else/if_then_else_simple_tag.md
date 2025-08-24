@@ -25,17 +25,17 @@ NIL
 at 1:1 to 1:14
 
 **Unsupported Node**
-at 1:1 to 1:31
+at 1:4 to 1:8
 
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.if_else)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag if_else :type "[]_others")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+[]_others
 ~~~

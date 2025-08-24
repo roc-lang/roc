@@ -41,7 +41,7 @@ at 1:3 to 1:3
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag block :type "_a -> Error")
 ~~~
 # TYPES
 ~~~roc

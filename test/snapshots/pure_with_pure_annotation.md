@@ -135,7 +135,7 @@ at 11:7 to 11:7
   )
   (Expr.malformed)
   (Expr.lookup "main")
-  (Expr.malformed)
+  (Expr.unary_not)
   (Expr.apply_ident)
 )
 ~~~

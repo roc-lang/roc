@@ -59,17 +59,17 @@ NO CHANGE
 NIL
 # PROBLEMS
 **Unsupported Node**
-at 1:2 to 1:44
+at 1:2 to 1:12
 
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.apply_ident)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag apply_ident :type "_d")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+_d
 ~~~

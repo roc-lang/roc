@@ -1223,14 +1223,8 @@ at 14:37 to 14:37
 **Unsupported Node**
 at 14:48 to 14:48
 
-**Pattern in Expression Context**
-at 14:50 to 14:54
-
 **Unsupported Node**
 at 14:55 to 14:55
-
-**Pattern in Expression Context**
-at 14:58 to 14:71
 
 **Unsupported Node**
 at 14:71 to 14:71
@@ -1250,23 +1244,20 @@ at 17:1 to 20:20
 **Unsupported Node**
 at 22:13 to 22:41
 
-**Pattern in Expression Context**
-at 36:1 to 36:4
+**Unsupported Node**
+at 1:1 to 1:1
+
+**Unsupported Node**
+at 29:4 to 34:6
 
 **Unsupported Node**
 at 36:16 to 36:17
-
-**Pattern in Expression Context**
-at 38:1 to 38:13
 
 **Unsupported Node**
 at 1:1 to 1:1
 
 **Unsupported Node**
 at 43:30 to 43:30
-
-**Pattern in Expression Context**
-at 43:32 to 43:41
 
 **Unsupported Node**
 at 44:13 to 194:9
@@ -1295,9 +1286,9 @@ at 203:1 to 207:1
   (Expr.malformed)
   (Expr.lookup "function")
   (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
@@ -1309,11 +1300,11 @@ at 203:1 to 207:1
   )
   (Expr.apply_tag)
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.malformed)
   )
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.malformed)
   )
   (Expr.binop_colon
@@ -1323,7 +1314,7 @@ at 203:1 to 207:1
         (Expr.lookup "foo")
         (Expr.binop_colon
           (Expr.malformed)
-          (Expr.malformed)
+          (Expr.apply_tag)
         )
       )
     )

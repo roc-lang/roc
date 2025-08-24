@@ -79,7 +79,7 @@ at 6:5 to 6:7
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag block :type "_arg, _arg2 -> {}")
 ~~~
 # TYPES
 ~~~roc

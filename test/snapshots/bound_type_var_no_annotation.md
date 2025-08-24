@@ -190,7 +190,7 @@ at 13:5 to 13:7
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_c")
+(expr :tag block :type "_arg, _arg2 -> _ret")
 ~~~
 # TYPES
 ~~~roc

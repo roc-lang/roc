@@ -143,17 +143,11 @@ EXPOSED BUT NOT DEFINED - type_declarations.md:1:42:1:49
 **Unsupported Node**
 at 3:13 to 3:41
 
-**Pattern in Expression Context**
-at 5:1 to 5:4
-
 **Unsupported Node**
 at 5:16 to 5:17
 
 **Unsupported Node**
 at 7:30 to 7:30
-
-**Pattern in Expression Context**
-at 7:32 to 7:41
 
 **Unsupported Node**
 at 9:12 to 10:1
@@ -161,20 +155,8 @@ at 9:12 to 10:1
 **Unsupported Node**
 at 11:15 to 11:38
 
-**Pattern in Expression Context**
-at 13:1 to 13:7
-
-**Pattern in Expression Context**
-at 13:10 to 13:13
-
-**Pattern in Expression Context**
-at 15:1 to 15:8
-
 **Unsupported Node**
 at 15:11 to 15:17
-
-**Pattern in Expression Context**
-at 15:17 to 15:23
 
 # CANONICALIZE
 ~~~clojure
@@ -184,7 +166,7 @@ at 15:17 to 15:23
     (Expr.malformed)
   )
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.malformed)
   )
   (Expr.binop_colon
@@ -194,7 +176,7 @@ at 15:17 to 15:23
         (Expr.lookup "foo")
         (Expr.binop_colon
           (Expr.malformed)
-          (Expr.malformed)
+          (Expr.apply_tag)
         )
       )
     )
@@ -208,18 +190,18 @@ at 15:17 to 15:23
     (Expr.malformed)
   )
   (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.malformed)
+    (Expr.apply_tag)
+    (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.lambda)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "[]_others")
 ~~~
 # TYPES
 ~~~roc

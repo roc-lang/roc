@@ -131,86 +131,57 @@ PARSE ERROR - fuzz_crash_025.md:15:3:15:4
 PARSE ERROR - fuzz_crash_025.md:15:4:15:5
 TYPE MISMATCH - fuzz_crash_025.md:14:5:14:48
 # PROBLEMS
-**Pattern in Expression Context**
-at 3:5 to 3:7
-
-**Pattern in Expression Context**
-at 6:5 to 6:8
-
-**Pattern in Expression Context**
-at 9:5 to 9:8
-
-**Pattern in Expression Context**
-at 10:15 to 10:18
-
-**Pattern in Expression Context**
-at 13:5 to 13:9
-
-**Pattern in Expression Context**
-at 14:50 to 14:52
-
-**Pattern in Expression Context**
-at 17:5 to 17:8
-
-**Pattern in Expression Context**
-at 20:5 to 20:8
-
-**Pattern in Expression Context**
-at 23:5 to 23:8
-
-**Pattern in Expression Context**
-at 26:5 to 26:9
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "a")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "b")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "c")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
-  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "e")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.binop_colon
     (Expr.binop_equals
       (Expr.lookup "e")
       (Expr.frac_literal_big big:<idx:21>)
     )
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "g")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "h")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "i")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "j")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
 )

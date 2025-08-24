@@ -21,9 +21,7 @@ NO CHANGE
 # EXPECTED
 CRASH EXPECTS STRING - crash_stmt_invalid.md:1:1:1:9
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:9
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Stmt.malformed)

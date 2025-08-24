@@ -107,32 +107,14 @@ at 10:5 to 10:5
 **Parse Error**
 at 16:5 to 16:5
 
-**Pattern in Expression Context**
-at 3:13 to 3:17
-
 **Unsupported Node**
 at 3:32 to 3:32
-
-**Pattern in Expression Context**
-at 6:5 to 6:9
 
 **Unsupported Node**
 at 6:24 to 6:24
 
-**Pattern in Expression Context**
-at 8:13 to 8:17
-
-**Pattern in Expression Context**
-at 9:5 to 9:9
-
 **Unsupported Node**
 at 10:5 to 10:5
-
-**Pattern in Expression Context**
-at 13:5 to 13:9
-
-**Pattern in Expression Context**
-at 15:5 to 15:9
 
 **Unsupported Node**
 at 16:5 to 16:5
@@ -141,7 +123,7 @@ at 16:5 to 16:5
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.lookup "is")
   (Expr.lookup "a")
   (Expr.str_literal_big)
@@ -150,7 +132,7 @@ at 16:5 to 16:5
   (Expr.lookup "one")
   (Expr.lookup "line")
   (Expr.malformed)
-  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.lookup "is")
   (Expr.lookup "a")
   (Expr.str_literal_big)
@@ -159,12 +141,12 @@ at 16:5 to 16:5
   (Expr.lookup "one")
   (Expr.lookup "line")
   (Expr.malformed)
-  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.lookup "is")
   (Expr.lookup "a")
   (Expr.lookup "string")
   (Expr.str_literal_big)
-  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.lookup "multiple")
   (Expr.lookup "lines")
   (Expr.str_literal_big)
@@ -173,12 +155,12 @@ at 16:5 to 16:5
     (Expr.lookup "value1")
   )
   (Expr.malformed)
-  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.lookup "is")
   (Expr.lookup "a")
   (Expr.lookup "string")
   (Expr.str_literal_big)
-  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.lookup "multiple")
   (Expr.lookup "lines")
   (Expr.str_literal_big)

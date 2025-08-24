@@ -35,18 +35,16 @@ PARSE ERROR - fuzz_crash_072.md:1:16:1:17
 PARSE ERROR - fuzz_crash_072.md:1:17:1:18
 PARSE ERROR - fuzz_crash_072.md:1:18:1:19
 # PROBLEMS
-**Unsupported Node**
-at 1:10 to 1:19
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.apply_ident)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

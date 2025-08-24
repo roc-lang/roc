@@ -165,7 +165,7 @@ at 17:5 to 17:7
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_d")
+(expr :tag block :type "_arg, _arg2 -> _ret")
 ~~~
 # TYPES
 ~~~roc

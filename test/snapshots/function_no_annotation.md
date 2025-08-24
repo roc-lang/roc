@@ -115,19 +115,19 @@ at 14:7 to 14:7
   (Expr.malformed)
   (Expr.lookup "print_number")
   (Expr.lambda)
-  (Expr.malformed)
+  (Expr.unary_not)
   (Expr.lookup "process")
   (Expr.lambda)
-  (Expr.malformed)
+  (Expr.unary_not)
   (Expr.lookup "main")
-  (Expr.malformed)
+  (Expr.unary_not)
   (Expr.lookup "process")
-  (Expr.malformed)
+  (Expr.unary_not)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "[True, False]_others")
 ~~~
 # TYPES
 ~~~roc

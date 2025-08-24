@@ -102,9 +102,6 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:15:18:15:18
 # PROBLEMS
 **Pattern in Expression Context**
-at 3:1 to 3:7
-
-**Pattern in Expression Context**
 at 3:10 to 3:11
 
 **Unsupported Node**
@@ -129,7 +126,7 @@ at 15:1 to 15:26
 ~~~clojure
 (Expr.block
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.malformed)
   )
   (Expr.malformed)

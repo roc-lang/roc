@@ -21,18 +21,16 @@ NO CHANGE
 # EXPECTED
 UNDEFINED VARIABLE - unary_not.md:1:2:1:6
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:6
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.unary_not)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag unary_not :type "[True, False]_others")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+[True, False]_others
 ~~~

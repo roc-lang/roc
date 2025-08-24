@@ -53,17 +53,11 @@ at 3:1 to 3:13
 **Unsupported Node**
 at 5:7 to 5:12
 
-**Pattern in Expression Context**
-at 5:12 to 5:15
-
 **Unsupported Node**
 at 6:7 to 6:12
 
 **Unsupported Node**
 at 6:12 to 6:15
-
-**Pattern in Expression Context**
-at 6:16 to 6:19
 
 # CANONICALIZE
 ~~~clojure

@@ -156,32 +156,8 @@ NIL
 **Parse Error**
 at 14:7 to 14:7
 
-**Pattern in Expression Context**
-at 3:1 to 3:7
-
-**Pattern in Expression Context**
-at 3:10 to 3:13
-
-**Pattern in Expression Context**
-at 4:1 to 4:9
-
-**Pattern in Expression Context**
-at 4:12 to 4:15
-
-**Pattern in Expression Context**
-at 5:1 to 5:8
-
-**Pattern in Expression Context**
-at 5:11 to 5:13
-
-**Pattern in Expression Context**
-at 6:1 to 6:5
-
 **Unsupported Node**
 at 6:44 to 6:44
-
-**Pattern in Expression Context**
-at 6:46 to 6:53
 
 **Unsupported Node**
 at 8:15 to 8:48
@@ -202,25 +178,25 @@ at 14:5 to 14:7
 ~~~clojure
 (Expr.block
   (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.malformed)
+    (Expr.apply_tag)
+    (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.malformed)
+    (Expr.apply_tag)
+    (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.malformed)
+    (Expr.apply_tag)
+    (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "id")
         (Expr.binop_colon
           (Expr.malformed)
-          (Expr.malformed)
+          (Expr.apply_tag)
         )
       )
     )
@@ -241,7 +217,7 @@ at 14:5 to 14:7
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag block :type "_arg, _arg2 -> _ret")
 ~~~
 # TYPES
 ~~~roc

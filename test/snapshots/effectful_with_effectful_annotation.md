@@ -73,9 +73,6 @@ at 3:1 to 3:17
 **Unsupported Node**
 at 6:12 to 6:12
 
-**Pattern in Expression Context**
-at 6:14 to 6:17
-
 **Unsupported Node**
 at 6:18 to 6:18
 
@@ -93,23 +90,23 @@ at 9:7 to 9:7
 (Expr.block
   (Expr.malformed)
   (Expr.lookup "print_msg")
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.unary_not)
+  (Expr.apply_tag)
   (Expr.malformed)
   (Expr.record_literal
   )
   (Expr.lookup "print_msg")
   (Expr.lambda)
-  (Expr.malformed)
+  (Expr.unary_not)
   (Expr.lookup "main")
-  (Expr.malformed)
+  (Expr.unary_not)
   (Expr.lookup "print_msg")
-  (Expr.malformed)
+  (Expr.unary_not)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "[True, False]_others")
 ~~~
 # TYPES
 ~~~roc

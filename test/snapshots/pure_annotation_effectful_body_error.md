@@ -86,9 +86,9 @@ at 9:7 to 9:7
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.malformed)
+  (Expr.unary_not)
   (Expr.lookup "main")
-  (Expr.malformed)
+  (Expr.unary_not)
   (Expr.apply_ident)
 )
 ~~~

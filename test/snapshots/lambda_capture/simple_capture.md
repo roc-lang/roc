@@ -46,7 +46,7 @@ NO CHANGE
 NIL
 # PROBLEMS
 **Unsupported Node**
-at 3:10 to 3:19
+at 3:10 to 3:14
 
 # CANONICALIZE
 ~~~clojure
@@ -63,5 +63,5 @@ at 3:10 to 3:19
 # TYPES
 ~~~roc
 x : Num(_size)
-y : Error
+y : _a
 ~~~

@@ -162,14 +162,8 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:23:14:23:14
 **Unsupported Node**
 at 3:1 to 3:13
 
-**Pattern in Expression Context**
-at 5:7 to 5:14
-
 **Unsupported Node**
 at 8:1 to 8:19
-
-**Pattern in Expression Context**
-at 10:7 to 10:14
 
 **Unsupported Node**
 at 11:7 to 12:1
@@ -177,26 +171,17 @@ at 11:7 to 12:1
 **Unsupported Node**
 at 13:1 to 13:37
 
-**Pattern in Expression Context**
-at 15:7 to 15:16
-
 **Unsupported Node**
 at 16:27 to 16:28
 
 **Unsupported Node**
 at 18:1 to 18:22
 
-**Pattern in Expression Context**
-at 20:7 to 20:18
-
 **Unsupported Node**
 at 21:7 to 21:11
 
 **Unsupported Node**
 at 23:1 to 23:21
-
-**Pattern in Expression Context**
-at 25:8 to 25:16
 
 **Unsupported Node**
 at 26:20 to 26:20
@@ -207,31 +192,31 @@ at 26:20 to 26:20
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "foo")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "bar")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "baz")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "qux")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "quux")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
 )

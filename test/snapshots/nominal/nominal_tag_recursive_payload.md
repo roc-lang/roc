@@ -65,9 +65,6 @@ at 3:1 to 4:1
 **Unsupported Node**
 at 6:9 to 6:17
 
-**Pattern in Expression Context**
-at 6:17 to 6:20
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

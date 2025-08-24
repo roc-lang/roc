@@ -21,18 +21,16 @@ NO CHANGE
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:3
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.unary_neg)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag unary_neg :type "Num(_a)")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Num(_a)
 ~~~

@@ -26,18 +26,15 @@ UNDEFINED VARIABLE - if_then_else_simple_comments_formatting.md:1:4:1:8
 **Parse Error**
 at 1:1 to 1:9
 
-**Unsupported Node**
-at 1:1 to 3:9
-
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.if_else)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag if_else :type "[]_others")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+[]_others
 ~~~

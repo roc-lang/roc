@@ -96,14 +96,29 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:16:11:16:12
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:16:14:16:15
 # PROBLEMS
 **Pattern in Expression Context**
-at 4:13 to 4:16
+at 4:8 to 4:9
+
+**Pattern in Expression Context**
+at 7:9 to 7:10
+
+**Pattern in Expression Context**
+at 10:12 to 10:13
+
+**Pattern in Expression Context**
+at 13:13 to 13:14
+
+**Pattern in Expression Context**
+at 16:11 to 16:12
+
+**Pattern in Expression Context**
+at 16:14 to 16:15
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.binop_colon
     (Expr.apply_tag)
@@ -130,7 +145,7 @@ at 4:13 to 4:16
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_d")
+(expr :tag block :type "[]_others")
 ~~~
 # TYPES
 ~~~roc

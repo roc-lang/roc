@@ -45,9 +45,6 @@ NIL
 **Unsupported Node**
 at 3:7 to 3:11
 
-**Pattern in Expression Context**
-at 3:11 to 3:15
-
 **Unsupported Node**
 at 5:1 to 5:24
 

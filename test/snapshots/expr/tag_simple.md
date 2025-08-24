@@ -21,18 +21,16 @@ NO CHANGE
 # EXPECTED
 NIL
 # PROBLEMS
-**Pattern in Expression Context**
-at 1:1 to 1:6
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.malformed)
+(Expr.apply_tag)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag malformed :type "Error")
+(expr :tag apply_tag :type "[]_others")
 ~~~
 # TYPES
 ~~~roc
-Error
+[]_others
 ~~~

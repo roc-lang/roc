@@ -31,9 +31,6 @@ NO CHANGE
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_066.md:3:4:3:5
 MALFORMED TYPE - fuzz_crash_066.md:3:4:3:5
 # PROBLEMS
-**Pattern in Expression Context**
-at 3:1 to 3:2
-
 **Unsupported Node**
 at 3:3 to 3:5
 
@@ -41,7 +38,7 @@ at 3:3 to 3:5
 ~~~clojure
 (Expr.record_literal
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.malformed)
   )
 )

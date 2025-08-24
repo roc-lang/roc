@@ -21,18 +21,16 @@ NO CHANGE
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - minus_not_h.md:1:1:1:2
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:4
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.unary_neg)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag unary_neg :type "[True, False]_others")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+[True, False]_others
 ~~~

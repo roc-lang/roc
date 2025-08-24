@@ -74,24 +74,6 @@ at 3:1 to 3:13
 **Unsupported Node**
 at 3:14 to 3:14
 
-**Pattern in Expression Context**
-at 5:7 to 5:12
-
-**Pattern in Expression Context**
-at 6:7 to 6:10
-
-**Pattern in Expression Context**
-at 8:8 to 8:13
-
-**Pattern in Expression Context**
-at 9:8 to 9:12
-
-**Pattern in Expression Context**
-at 11:9 to 11:14
-
-**Pattern in Expression Context**
-at 12:9 to 12:14
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -99,17 +81,17 @@ at 12:9 to 12:14
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "red")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "blue")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "green")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
 )

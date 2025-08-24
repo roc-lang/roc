@@ -61,5 +61,5 @@ NIL
 ~~~roc
 x : Num(_size)
 str : Str
-result : Num(_size)
+result : _a
 ~~~

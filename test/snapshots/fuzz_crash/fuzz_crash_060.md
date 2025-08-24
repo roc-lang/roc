@@ -56,14 +56,17 @@ at 1:14 to 3:2
 **Parse Error**
 at 3:2 to 3:2
 
-**Pattern in Expression Context**
-at 1:9 to 1:10
+**Unsupported Node**
+at 1:21 to 3:1
+
+**Unsupported Node**
+at 3:2 to 3:2
 
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.binop_or
       (Expr.lookup "k")
       (Expr.match)

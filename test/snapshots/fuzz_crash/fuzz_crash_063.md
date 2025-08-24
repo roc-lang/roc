@@ -49,7 +49,7 @@ at 1:10 to 1:10
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_b")
+(expr :tag block :type "_arg -> _ret")
 ~~~
 # TYPES
 ~~~roc

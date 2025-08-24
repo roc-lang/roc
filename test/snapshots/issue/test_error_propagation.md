@@ -51,9 +51,6 @@ at 3:1 to 3:13
 **Unsupported Node**
 at 5:1 to 5:21
 
-**Pattern in Expression Context**
-at 7:9 to 7:18
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -61,7 +58,7 @@ at 7:9 to 7:18
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "value")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
 )

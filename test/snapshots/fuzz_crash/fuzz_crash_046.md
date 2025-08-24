@@ -29,19 +29,16 @@ ASCII CONTROL CHARACTER - :0:0:0:0
 **Unsupported Node**
 at 1:20 to 1:28
 
-**Pattern in Expression Context**
-at 1:29 to 1:30
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.malformed)
+  (Expr.apply_tag)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "[]_others")
 ~~~
 # TYPES
 ~~~roc

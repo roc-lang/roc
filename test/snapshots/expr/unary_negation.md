@@ -21,18 +21,16 @@ NO CHANGE
 # EXPECTED
 UNDEFINED VARIABLE - unary_negation.md:1:2:1:5
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:5
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.unary_neg)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag unary_neg :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+_a
 ~~~

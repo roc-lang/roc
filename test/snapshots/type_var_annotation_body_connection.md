@@ -96,7 +96,7 @@ at 10:5 to 10:7
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_b")
+(expr :tag block :type "_arg, _arg2 -> {}")
 ~~~
 # TYPES
 ~~~roc

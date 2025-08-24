@@ -28,14 +28,11 @@ PARSE ERROR - fuzz_crash_033.md:1:14:1:15
 **Parse Error**
 at 1:1 to 1:14
 
-**Pattern in Expression Context**
-at 1:6 to 1:14
-
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
   (Expr.lookup "i")
-  (Expr.malformed)
+  (Expr.apply_tag)
 )
 ~~~
 # SOLVED

@@ -97,6 +97,9 @@ at 4:11 to 4:22
 **Unsupported Node**
 at 6:5 to 6:7
 
+**Unsupported Node**
+at 6:21 to 6:32
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -111,7 +114,7 @@ at 6:5 to 6:7
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_c")
+(expr :tag block :type "_arg, _arg2 -> _ret")
 ~~~
 # TYPES
 ~~~roc

@@ -37,9 +37,9 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_plus :type "Num(_size)")
+(expr :tag binop_plus :type "_arg -> _ret")
 ~~~
 # TYPES
 ~~~roc
-Num(_size)
+_arg -> _ret
 ~~~

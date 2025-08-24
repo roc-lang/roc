@@ -188,7 +188,7 @@ at 23:5 to 23:6
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag block :type "_arg, _arg2 -> Error")
 ~~~
 # TYPES
 ~~~roc

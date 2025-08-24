@@ -166,32 +166,17 @@ TYPE REDECLARED - type_tag_union_complex.md:7:1:7:55
 **Parse Error**
 at 24:7 to 24:7
 
-**Pattern in Expression Context**
-at 4:1 to 4:7
-
 **Unsupported Node**
 at 4:10 to 5:1
-
-**Pattern in Expression Context**
-at 7:1 to 7:7
 
 **Unsupported Node**
 at 7:10 to 9:1
 
-**Pattern in Expression Context**
-at 10:1 to 10:9
-
 **Unsupported Node**
 at 10:12 to 11:1
 
-**Pattern in Expression Context**
-at 13:1 to 13:10
-
 **Unsupported Node**
 at 13:13 to 14:1
-
-**Pattern in Expression Context**
-at 14:1 to 14:16
 
 **Unsupported Node**
 at 14:19 to 15:1
@@ -215,23 +200,23 @@ at 24:5 to 24:7
 ~~~clojure
 (Expr.block
   (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.malformed)
   )
   (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.malformed)
   )
   (Expr.binop_colon
+    (Expr.apply_tag)
     (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
     (Expr.malformed)
   )
   (Expr.binop_colon
@@ -250,7 +235,7 @@ at 24:5 to 24:7
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag block :type "_arg, _arg2 -> {}")
 ~~~
 # TYPES
 ~~~roc

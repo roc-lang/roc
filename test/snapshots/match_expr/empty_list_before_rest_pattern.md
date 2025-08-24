@@ -49,17 +49,20 @@ at 1:1 to 4:2
 at 4:2 to 4:2
 
 **Unsupported Node**
-at 1:1 to 4:2
+at 1:9 to 4:1
+
+**Unsupported Node**
+at 4:2 to 4:2
 
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.match)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag match :type "Error")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Error
 ~~~

@@ -75,17 +75,11 @@ at 3:1 to 3:13
 **Unsupported Node**
 at 5:1 to 5:22
 
-**Pattern in Expression Context**
-at 7:9 to 7:19
-
 **Unsupported Node**
 at 10:1 to 10:16
 
 **Unsupported Node**
 at 12:1 to 12:24
-
-**Pattern in Expression Context**
-at 14:13 to 14:24
 
 # CANONICALIZE
 ~~~clojure
@@ -94,14 +88,14 @@ at 14:13 to 14:24
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "value")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "goodValue")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
 )

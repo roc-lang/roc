@@ -36,9 +36,6 @@ INCOMPATIBLE IF BRANCHES - if_then_else_simple_file.md:3:7:3:7
 **Parse Error**
 at 3:7 to 3:12
 
-**Pattern in Expression Context**
-at 3:12 to 3:13
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

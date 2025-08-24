@@ -98,7 +98,7 @@ at 8:7 to 8:7
 at 8:22 to 8:22
 
 **Pattern in Expression Context**
-at 3:7 to 3:10
+at 4:19 to 4:20
 
 **Unsupported Node**
 at 5:15 to 5:16
@@ -112,12 +112,15 @@ at 8:7 to 8:7
 **Unsupported Node**
 at 8:22 to 8:22
 
+**Pattern in Expression Context**
+at 8:36 to 8:37
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "foo")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.binop_colon
     (Expr.lookup "bar")
@@ -132,7 +135,7 @@ at 8:22 to 8:22
     (Expr.malformed)
   )
   (Expr.lookup "main")
-  (Expr.malformed)
+  (Expr.unary_not)
   (Expr.apply_tag)
   (Expr.malformed)
   (Expr.apply_tag)

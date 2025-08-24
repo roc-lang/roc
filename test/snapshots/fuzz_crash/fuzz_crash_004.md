@@ -23,18 +23,16 @@ NO CHANGE
 # EXPECTED
 MISSING HEADER - fuzz_crash_004.md:1:1:1:2
 # PROBLEMS
-**Pattern in Expression Context**
-at 1:1 to 1:2
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.apply_tag)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "[]_others")
 ~~~
 # TYPES
 ~~~roc

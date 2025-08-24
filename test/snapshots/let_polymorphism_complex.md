@@ -842,9 +842,6 @@ at 30:15 to 108:2
 **Parse Error**
 at 28:15 to 108:2
 
-**Pattern in Expression Context**
-at 7:8 to 7:12
-
 **Unsupported Node**
 at 10:14 to 10:15
 

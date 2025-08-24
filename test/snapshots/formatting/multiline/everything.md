@@ -604,20 +604,11 @@ at 8:1 to 9:5
 **Unsupported Node**
 at 9:6 to 9:6
 
-**Pattern in Expression Context**
-at 9:9 to 9:13
-
 **Unsupported Node**
 at 9:13 to 9:13
 
-**Pattern in Expression Context**
-at 10:2 to 10:5
-
 **Unsupported Node**
 at 10:6 to 10:6
-
-**Pattern in Expression Context**
-at 10:9 to 10:13
 
 **Unsupported Node**
 at 10:13 to 10:13
@@ -631,14 +622,20 @@ at 14:8 to 23:11
 **Unsupported Node**
 at 24:8 to 33:11
 
-**Pattern in Expression Context**
-at 49:1 to 49:2
+**Unsupported Node**
+at 1:1 to 1:1
 
 **Unsupported Node**
 at 1:1 to 1:1
 
-**Pattern in Expression Context**
-at 53:1 to 53:2
+**Unsupported Node**
+at 1:1 to 1:1
+
+**Unsupported Node**
+at 48:1 to 48:1
+
+**Unsupported Node**
+at 1:1 to 1:1
 
 **Unsupported Node**
 at 53:5 to 57:1
@@ -655,11 +652,11 @@ at 60:5 to 60:12
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.binop_colon
@@ -673,14 +670,14 @@ at 60:5 to 60:12
   (Expr.apply_tag)
   (Expr.apply_tag)
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.block
       (Expr.binop_colon
         (Expr.lookup "a")
         (Expr.malformed)
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (Expr.apply_tag)
         (Expr.malformed)
       )
       (Expr.binop_colon
@@ -694,7 +691,7 @@ at 60:5 to 60:12
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "[]_others")
 ~~~
 # TYPES
 ~~~roc

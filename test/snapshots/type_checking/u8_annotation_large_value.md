@@ -33,15 +33,13 @@ NO CHANGE
 # EXPECTED
 NUMBER DOES NOT FIT IN TYPE - u8_annotation_large_value.md:4:5:4:8
 # PROBLEMS
-**Pattern in Expression Context**
-at 3:5 to 3:7
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "x")
-    (Expr.malformed)
+    (Expr.apply_tag)
   )
   (Expr.malformed)
 )

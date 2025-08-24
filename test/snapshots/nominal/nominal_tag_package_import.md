@@ -64,11 +64,11 @@ at 4:1 to 4:26
 **Unsupported Node**
 at 7:8 to 7:10
 
-**Pattern in Expression Context**
-at 7:10 to 7:15
+**Unsupported Node**
+at 8:8 to 8:10
 
 **Unsupported Node**
-at 8:8 to 8:29
+at 8:10 to 8:15
 
 # CANONICALIZE
 ~~~clojure

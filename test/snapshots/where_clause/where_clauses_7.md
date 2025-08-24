@@ -124,7 +124,7 @@ at 1:1 to 1:1
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_b")
+(expr :tag block :type "[]_others")
 ~~~
 # TYPES
 ~~~roc

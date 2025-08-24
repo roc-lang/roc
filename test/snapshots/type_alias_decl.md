@@ -226,29 +226,14 @@ UNUSED VARIABLE - type_alias_decl.md:36:5:36:10
 **Parse Error**
 at 27:7 to 27:7
 
-**Pattern in Expression Context**
-at 4:1 to 4:7
-
-**Pattern in Expression Context**
-at 4:10 to 4:13
-
 **Unsupported Node**
 at 7:19 to 8:1
-
-**Pattern in Expression Context**
-at 10:1 to 10:7
 
 **Unsupported Node**
 at 10:28 to 10:28
 
-**Pattern in Expression Context**
-at 10:30 to 10:33
-
 **Unsupported Node**
 at 13:15 to 13:21
-
-**Pattern in Expression Context**
-at 19:1 to 19:6
 
 **Unsupported Node**
 at 19:9 to 21:1
@@ -259,46 +244,31 @@ at 24:14 to 24:14
 **Unsupported Node**
 at 24:38 to 24:38
 
-**Pattern in Expression Context**
-at 24:40 to 24:43
-
 **Unsupported Node**
 at 27:5 to 27:7
 
-**Pattern in Expression Context**
-at 29:14 to 29:20
-
-**Pattern in Expression Context**
-at 32:14 to 32:20
-
 **Unsupported Node**
 at 33:34 to 33:35
-
-**Pattern in Expression Context**
-at 35:13 to 35:18
-
-**Pattern in Expression Context**
-at 36:13 to 36:16
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.malformed)
+    (Expr.apply_tag)
+    (Expr.apply_tag)
   )
   (Expr.binop_colon
     (Expr.apply_tag)
     (Expr.malformed)
   )
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "name")
         (Expr.binop_colon
           (Expr.malformed)
-          (Expr.malformed)
+          (Expr.apply_tag)
         )
       )
     )
@@ -312,7 +282,7 @@ at 36:13 to 36:16
     (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.malformed)
+    (Expr.apply_tag)
     (Expr.malformed)
   )
   (Expr.binop_colon
@@ -327,7 +297,7 @@ at 36:13 to 36:16
               (Expr.lookup "size")
               (Expr.binop_colon
                 (Expr.malformed)
-                (Expr.malformed)
+                (Expr.apply_tag)
               )
             )
           )
@@ -341,7 +311,7 @@ at 36:13 to 36:16
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_c")
+(expr :tag block :type "_arg, _arg2 -> _ret")
 ~~~
 # TYPES
 ~~~roc
