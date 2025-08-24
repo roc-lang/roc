@@ -1058,7 +1058,7 @@ const StringKind = enum {
 pub const Tokenizer = struct {
     cursor: Cursor,
     output: TokenizedBuffer,
-    string_interpolation_stack: std.ArrayListUnmanaged(StringKind),
+    string_interpolation_stack: std.ArrayList(StringKind),
     env: *CommonEnv,
 
     /// Creates a new Tokenizer.
@@ -1715,9 +1715,9 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     }
 }
 
-fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std.mem.Allocator) !std.ArrayListUnmanaged(u8) {
+fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std.mem.Allocator) !std.ArrayList(u8) {
     // Create an arraylist to store the new buffer.
-    var buf2 = try std.ArrayListUnmanaged(u8).initCapacity(alloc, buf.len);
+    var buf2 = try std.ArrayList(u8).initCapacity(alloc, buf.len);
     errdefer buf2.deinit(alloc);
 
     // Dump back to buffer.
