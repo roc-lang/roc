@@ -60,7 +60,6 @@ scratch_op_stack: std.ArrayListUnmanaged(OpInfo), // For operator precedence par
 scratch_bytes: std.ArrayListUnmanaged(u8), // For string building
 is_in_lambda_args: bool = false, // Track if we're parsing lambda parameters
 diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
-cached_malformed_node: ?Node.Idx,
 /// init the parser from source text using TokenIterator
 pub fn init(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []const u8, messages: []tokenize.Diagnostic, ast: *AST, byte_slices: *collections.ByteSlices) std.mem.Allocator.Error!Parser {
     return initWithOptions(env, gpa, source, messages, ast, byte_slices);
@@ -81,7 +80,6 @@ pub fn initWithOptions(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []c
         .scratch_op_stack = .{},
         .scratch_bytes = .{},
         .diagnostics = .{},
-        .cached_malformed_node = null,
     };
 
     // Fill initial lookahead buffer
@@ -635,16 +633,13 @@ pub fn pushMalformed(self: *Parser, tag: AST.Diagnostic.Tag, start_pos: Position
         self.advance();
     }
 
+    // Only add diagnostics if we haven't hit the limit
     if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
         try self.pushDiagnostic(tag, actual_start_pos, end_pos);
-        return try self.ast.appendNode(self.gpa, actual_start_pos, .malformed, .{ .malformed = tag });
-    } else {
-        // Return a cached malformed node to avoid creating excessive nodes when diagnostic limit is exceeded
-        if (self.cached_malformed_node == null) {
-            self.cached_malformed_node = try self.ast.appendNode(self.gpa, actual_start_pos, .malformed, .{ .malformed = AST.Diagnostic.Tag.expr_unexpected_token });
-        }
-        return self.cached_malformed_node.?;
     }
+    
+    // Always create a proper malformed node with the correct tag and position
+    return try self.ast.appendNode(self.gpa, actual_start_pos, .malformed, .{ .malformed = tag });
 }
 
 /// parse a `.roc` module

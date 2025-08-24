@@ -7,7 +7,6 @@ pub const Region = @import("Region.zig");
 pub const StringLiteral = @import("StringLiteral.zig");
 pub const RegionInfo = @import("RegionInfo.zig");
 pub const Scratch = @import("Scratch.zig").Scratch;
-// ByteSlices has been moved to collections module
 pub const parallel = @import("parallel.zig");
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 
