@@ -87,7 +87,7 @@ comptime {
     const builtin = @import("builtin");
     if (builtin.os.tag == .windows) {
         // Windows needs __main for MinGW-style initialization
-        @export(__main, .{ .name = "__main" });
+        @export(&__main, .{ .name = "__main" });
     } else {
         // On Unix-like systems, export main to be called by C runtime
         @export(&main, .{ .name = "main" });
@@ -95,7 +95,7 @@ comptime {
 }
 
 // stub for Windows
-fn __main() void {}
+fn __main() callconv(.C) void {}
 
 // C compatible main for runtime
 fn main(argc: c_int, argv: [*][*:0]u8) callconv(.C) c_int {
