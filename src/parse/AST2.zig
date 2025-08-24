@@ -291,7 +291,7 @@ pub fn arrowNodes(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.I
 }
 
 /// Given the idx to a lambda, return the region of just its args (the `| ... |` including the pipes)
-pub fn lambdaArgsRegion(self: *const Ast, idx: Node.Idx, raw_src: []u8, ident_store: *const Ident.Store) Region {
+pub fn lambdaArgsRegion(self: *const Ast, idx: Node.Idx, raw_src: []const u8, ident_store: *const Ident.Store) Region {
     // Opening `|` args delimiter
     const region_start = self.start(idx);
 
@@ -320,7 +320,7 @@ pub fn lambdaArgsRegion(self: *const Ast, idx: Node.Idx, raw_src: []u8, ident_st
 }
 
 /// Given the idx to a BinOp, return the region of just its symbol (e.g. "*" or "==") etc.
-pub fn binOpSymbolRegion(self: *const Ast, idx: Node.Idx, raw_src: []u8, ident_store: *const Ident.Store) Region {
+pub fn binOpSymbolRegion(self: *const Ast, idx: Node.Idx, raw_src: []const u8, ident_store: *const Ident.Store) Region {
     const binop = self.binOp(idx);
 
     // To find the binop symbol itself, we scan from lhs_end to either rhs_start or first whitespace.
@@ -359,7 +359,7 @@ pub fn binOpSymbolRegion(self: *const Ast, idx: Node.Idx, raw_src: []u8, ident_s
 pub fn region(
     self: *const Ast,
     idx: Node.Idx,
-    raw_src: []u8,
+    raw_src: []const u8,
     ident_store: *const Ident.Store,
 ) base.Region {
     switch (self.tag(idx)) {
@@ -1052,7 +1052,7 @@ fn identRegion(self: *const Ast, idx: Node.Idx, ident_store: *const Ident.Store)
 /// in the given slice. Panics in debug builds if we don't find a token; only call this
 /// when you know there is a token that will be found! (This is for regenerating regions;
 /// we should know there's a token before needing to use this.)
-fn nextTokenIndex(bytes: []u8) usize {
+fn nextTokenIndex(bytes: []const u8) usize {
     std.debug.assert(bytes.len > 0);
 
     var index: usize = 0;
@@ -1079,7 +1079,7 @@ fn containerRegion(
     idx: Node.Idx,
     nodes_iter: collections.NodeSlices(Node.Idx).Iterator,
     closing_delimiter: u8,
-    raw_src: []u8,
+    raw_src: []const u8,
     ident_store: *const Ident.Store,
 ) Region {
     const region_start = self.start(idx);
@@ -1095,7 +1095,20 @@ fn containerRegion(
         // Has nodes - find closing delimiter after last node
         const last_node_region = self.region(last_node, raw_src, ident_store);
         const after_last_node = @as(usize, @intCast(last_node_region.end.offset)) + 1;
-        const next_token_offset = nextTokenIndex(raw_src[after_last_node..]);
+
+        // Check if we're at the end of source
+        if (after_last_node >= raw_src.len) {
+            // The closing delimiter must be at the last position
+            break :blk raw_src.len - 1;
+        }
+
+        const remaining_src = raw_src[after_last_node..];
+        if (remaining_src.len == 0) {
+            // No more source - delimiter must be at the end
+            break :blk raw_src.len - 1;
+        }
+
+        const next_token_offset = nextTokenIndex(remaining_src);
         const delim_offset = after_last_node + next_token_offset;
 
         // Verify we found the expected delimiter

@@ -286,34 +286,47 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
             // Special case: comma before arrow creates curried functions
             // This works uniformly in both type and expression contexts
             // Only at top level (min_bp == 0) to avoid interfering with normal comma usage
+            //
+            // PERFORMANCE NOTE: This implementation is INTENTIONALLY designed to avoid O(n²) behavior.
+            // We parse comma-separated items at a HIGHER precedence (10) than comma itself (4).
+            // This prevents recursive comma handling - each comma is processed exactly once at its
+            // nesting level. Without this, expressions like (a,(b,(c,(d,e)))) would cause quadratic
+            // parsing time as each level would recursively reparse all inner levels.
+            //
+            // DO NOT change the precedence value without understanding this performance characteristic!
             if (self.peek() == .Comma and min_bp == 0) {
-                // We're at the top level - check if this is comma-before-arrow
                 const scratch_start = self.scratch_nodes.items.len;
                 defer {
                     self.scratch_nodes.items.len = scratch_start;
                 }
 
-                // Collect the first parameter
+                // Collect the first item
                 try self.scratch_nodes.append(self.gpa, left);
 
-                // Collect comma-separated parameters
+                // Parse comma-separated items at HIGHER precedence to prevent recursion
+                // This is CRITICAL for O(n) performance - see comment above
+                const COMMA_ITEM_PRECEDENCE = 10; // Higher than comma (4) but lower than most operators
+
                 while (self.peek() == .Comma) {
                     self.advance(); // consume comma
-                    const param = try self.parseExprWithPrecedence(4); // Higher than arrow precedence
-                    try self.scratch_nodes.append(self.gpa, param);
+
+                    // Parse a single item - NO recursive comma handling because of high precedence
+                    const item = try self.parseExprWithPrecedence(COMMA_ITEM_PRECEDENCE);
+                    try self.scratch_nodes.append(self.gpa, item);
                 }
 
-                // Check if arrow follows
+                // Now check what follows the comma-separated items
                 if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
+                    // It's a function type - build curried arrows
                     const is_effectful = self.peek() == .OpFatArrow;
                     const arrow_tag: Node.Tag = if (is_effectful) .binop_thick_arrow else .binop_thin_arrow;
                     const arrow_pos = self.currentPosition();
                     self.advance();
 
-                    // Parse return type (which may itself have comma-arrow)
+                    // Parse return type at precedence 0 (allows it to have commas if needed)
                     const return_type = try self.parseExprWithPrecedence(0);
 
-                    // Build nested arrows (right-associative)
+                    // Build right-associative arrows from the parameters
                     const params = self.scratch_nodes.items[scratch_start..];
                     var current = return_type;
                     var i = params.len;
@@ -324,15 +337,15 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
                     }
                     return current;
                 } else {
-                    // No arrow - this is a tuple or will be an error at a higher level
-                    const params = self.scratch_nodes.items[scratch_start..];
-                    if (params.len == 1) {
-                        left = params[0];
+                    // It's a tuple (or will be an error at a higher level)
+                    const items = self.scratch_nodes.items[scratch_start..];
+                    if (items.len == 1) {
+                        left = items[0];
                     } else {
-                        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, params);
+                        const nodes_idx = try self.ast.appendNodeSlice(self.gpa, items);
                         left = try self.ast.appendNode(self.gpa, self.currentPosition(), .tuple_literal, .{ .nodes = nodes_idx });
                     }
-                    // Continue checking for more operators
+                    // Continue checking for more operators on the tuple
                     continue :parse .check_operators;
                 }
             }
@@ -1657,21 +1670,13 @@ fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
         return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = nodes_idx });
     }
 
-    // DEBUG: Check what token we're about to parse
-    const next_token = self.peek();
-    if (next_token == .OpBar) {
-        // We're about to parse a lambda!
-        // This should be handled by parseExpr -> labeled switch -> parseLambda
-        // If parseExpr fails here, there's a problem
-    }
-
+    // Parse the first expression
     const first = self.parseExpr() catch |err| {
-        // If we get an error parsing a lambda, it's likely the comma issue
-        if (next_token == .OpBar) {
-            // This is the lambda parsing issue - return a dummy node for now
-            const dummy = try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = .expr_unexpected_token });
-            return dummy;
-        }
+        // If parsing fails, propagate the error with proper diagnostics
+        try self.diagnostics.append(self.gpa, .{
+            .tag = .expr_unexpected_token,
+            .region = .{ .start = self.currentPosition(), .end = self.currentPosition() },
+        });
         return err;
     };
     try self.scratch_nodes.append(self.gpa, first);

@@ -35,6 +35,9 @@ types_store: *TypeStore,
 // Diagnostics collected during canonicalization
 diagnostics: std.ArrayListUnmanaged(CanDiagnostic),
 
+// Scope state for tracking variable definitions and nested scopes
+scope_state: ScopeState,
+
 /// CIR Statement tags - start at 0
 pub const StmtTag = enum(u8) {
     assign, // immutable assignment
@@ -161,6 +164,7 @@ pub fn init(ast: *AST2, type_store: *TypeStore) CIR {
         .ast = ast,
         .types_store = type_store,
         .diagnostics = .{},
+        .scope_state = .{},
     };
 }
 
@@ -182,12 +186,21 @@ pub fn initCapacity(allocator: Allocator, capacity: u32, byte_slices: *ByteSlice
         .ast = ast_ptr,
         .types_store = types_ptr,
         .diagnostics = .{},
+        .scope_state = .{},
     };
 }
 
 /// Deinitialize the CIR and free all memory
 pub fn deinit(self: *CIR, allocator: Allocator) void {
     self.diagnostics.deinit(allocator);
+    // Clean up scope state
+    for (self.scope_state.scopes.items) |*scope| {
+        scope.deinit(allocator);
+    }
+    self.scope_state.scopes.deinit(allocator);
+    self.scope_state.function_regions.deinit(allocator);
+    self.scope_state.var_function_regions.deinit(allocator);
+    self.scope_state.symbol_table.deinit(allocator);
     // Note: We don't automatically free the AST here because we can't tell
     // if it was created with initCapacity() or passed in with init().
     // Tests using initCapacity() should call deinitWithAST() instead.
@@ -196,10 +209,19 @@ pub fn deinit(self: *CIR, allocator: Allocator) void {
 /// Deinitialize the CIR and also free the AST and TypeStore (for CIRs created with initCapacity)
 pub fn deinitWithAST(self: *CIR, allocator: Allocator) void {
     self.diagnostics.deinit(allocator);
+    // Clean up scope state
+    for (self.scope_state.scopes.items) |*scope| {
+        scope.deinit(allocator);
+    }
+    self.scope_state.scopes.deinit(allocator);
+    self.scope_state.function_regions.deinit(allocator);
+    self.scope_state.var_function_regions.deinit(allocator);
+    self.scope_state.symbol_table.deinit(allocator);
     self.ast.deinit(allocator);
     allocator.destroy(self.ast);
-    // Note: We only destroy types if it was created by initCapacity
-    // For init(), the TypeStore is owned by ModuleEnv
+    // Also free the TypeStore if created by initCapacity
+    self.types_store.deinit();
+    allocator.destroy(self.types_store);
 }
 
 // Interface to provide compatibility with tests that expect separate collections
@@ -213,7 +235,8 @@ pub const Exprs = struct {
         const slice = self.cir.ast.*.nodes.items.slice();
         const tags = slice.items(.tag);
 
-        for (tags) |tag| {
+        // Skip index 0 (sentinel node)
+        for (tags[1..]) |tag| {
             const tag_value = @as(u8, @intFromEnum(tag));
             // Expression tags are in the range [EXPR_TAG_START, PATT_TAG_START)
             if (tag_value >= EXPR_TAG_START and tag_value < PATT_TAG_START) {
@@ -234,7 +257,8 @@ pub const Stmts = struct {
         const slice = self.cir.ast.*.nodes.items.slice();
         const tags = slice.items(.tag);
 
-        for (tags) |tag| {
+        // Skip index 0 (sentinel node)
+        for (tags[1..]) |tag| {
             const tag_value = @as(u8, @intFromEnum(tag));
             // Statement tags are in the range [0, EXPR_TAG_START)
             if (tag_value < EXPR_TAG_START) {
@@ -255,7 +279,8 @@ pub const Patts = struct {
         const slice = self.cir.ast.*.nodes.items.slice();
         const tags = slice.items(.tag);
 
-        for (tags) |tag| {
+        // Skip index 0 (sentinel node)
+        for (tags[1..]) |tag| {
             const tag_value = @as(u8, @intFromEnum(tag));
             // Pattern tags start at PATT_TAG_START
             if (tag_value >= PATT_TAG_START) {
@@ -901,9 +926,10 @@ fn ensureTypeVarExists(self: *CIR, node_idx: AST2.Node.Idx) !void {
 /// Canonicalize an AST node that should be an expression
 /// Mutates the node's tag in place to the appropriate CIR expression tag
 /// Reports errors if the node is not valid in expression context
-pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx) !Expr.Idx {
+pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx, raw_src: []const u8, idents: *const Ident.Store) error{OutOfMemory}!Expr.Idx {
     const node = self.getNode(node_idx);
-    const node_region = Region{ .start = node.start, .end = node.start }; // Simplified region for now
+    // Calculate the proper region for this node
+    const node_region = self.ast.region(node_idx, raw_src, idents);
 
     switch (node.tag) {
         // Expression nodes - mutate tag in place
@@ -970,6 +996,23 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         .lc, .var_lc => {
             // Identifiers become lookups in expression context
             self.mutateToExpr(node_idx, .lookup);
+
+            const ident_idx = node.payload.ident;
+
+            // Ensure type variable exists for the lookup
+            try self.ensureTypeVarExists(node_idx);
+
+            // Look up the definition in the symbol table and connect types
+            if (self.scope_state.symbol_table.get(ident_idx)) |def_node_idx| {
+                // Connect this lookup's type to its definition's type
+                // Both the lookup and its definition share the same type variable
+                // So we need to ensure the definition's type variable exists too
+                try self.ensureTypeVarExists(def_node_idx);
+
+                // The types will be unified during type checking
+                // For now, just ensure both variables exist in the TypeStore
+            }
+
             return asExprIdx(node_idx);
         },
 
@@ -1001,8 +1044,8 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
 
             // Recursively canonicalize left and right operands
-            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs);
-            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
             // Map AST binop tag to CIR expr tag and mutate in place
             const expr_tag: ExprTag = switch (node.tag) {
@@ -1061,7 +1104,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                         self.mutateToExpr(node_idx, .record_literal);
 
                         // Canonicalize the field (the colon binop)
-                        _ = try self.canonicalizeExpr(allocator, fn_idx);
+                        _ = try self.canonicalizeExpr(allocator, fn_idx, raw_src, idents);
 
                         return asExprIdx(node_idx);
                     }
@@ -1069,10 +1112,22 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             }
 
             // Otherwise it's a regular block
-            // Canonicalize all nodes in the block
+            // Push a new scope for the block
+            try self.scope_state.pushScope(allocator, false); // false = not a function boundary
+            defer self.scope_state.popScope(allocator);
+
+            // Canonicalize all nodes in the block with proper scope tracking
             iter = self.ast.*.node_slices.nodes(&nodes_idx);
             while (iter.next()) |n| {
-                _ = try self.canonicalizeExpr(allocator, n);
+                const n_node = self.getNode(n);
+                // Check if this is a statement or expression
+                if (n_node.tag == .binop_equals or n_node.tag == .import) {
+                    // This is a statement in a block
+                    _ = try self.canonicalizeStmt(allocator, n, raw_src, idents);
+                } else {
+                    // This is an expression
+                    _ = try self.canonicalizeExpr(allocator, n, raw_src, idents);
+                }
             }
 
             self.mutateToExpr(node_idx, .block);
@@ -1085,7 +1140,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             const nodes_idx = node.payload.nodes;
             var iter = self.ast.*.node_slices.nodes(&nodes_idx);
             while (iter.next()) |n| {
-                _ = try self.canonicalizeExpr(allocator, n);
+                _ = try self.canonicalizeExpr(allocator, n, raw_src, idents);
             }
 
             self.mutateToExpr(node_idx, .record_literal);
@@ -1121,6 +1176,8 @@ test "CIR2 basic initialization" {
     defer cir.deinitWithAST(allocator);
 
     // Verify initial state
+    // The accessors count actual CIR nodes (based on tag values), not raw AST nodes
+    // Initially, no nodes have been canonicalized, so counts are 0
     try testing.expectEqual(@as(usize, 0), cir.stmts().len());
     try testing.expectEqual(@as(usize, 0), cir.exprs().len());
     try testing.expectEqual(@as(usize, 0), cir.patts().len());
@@ -1163,11 +1220,15 @@ test "CIR2 canonicalize simple number literal" {
     try testing.expect(node.tag == .num_literal_i32);
     try testing.expectEqual(@as(i32, 42), node.payload.num_literal_i32);
 
+    // Create a TypeStore for testing
+    var types_store = try TypeStore.initCapacity(allocator, 100, 10);
+    defer types_store.deinit();
+
     // Now canonicalize it to CIR2
-    var cir = CIR.init(ast_ptr);
+    var cir = CIR.init(ast_ptr, &types_store);
     defer cir.deinit(allocator);
 
-    const expr_idx = try cir.canonicalizeExpr(allocator, node_idx);
+    const expr_idx = try cir.canonicalizeExpr(allocator, node_idx, source, &env.idents);
 
     // Verify the CIR2 expression
     const expr = cir.getExpr(expr_idx);
@@ -1215,7 +1276,7 @@ test "CIR2 canonicalize simple number literal" {
 //     defer cir.deinit(allocator);
 
 //     // Canonicalize using the actual CIR2 method - it should mutate the AST node in place
-//     const expr_idx = try cir.canonicalizeExpr(allocator, node_idx);
+//     const expr_idx = try cir.canonicalizeExpr(allocator, node_idx, source, &env.idents);
 
 //     // Verify the CIR2 expression is now a lookup (categorized as an expression)
 //     const expr = cir.getExpr(expr_idx);
@@ -1260,9 +1321,9 @@ test "CIR2 canonicalize simple number literal" {
 
 /// Canonicalize an AST node that should be a statement
 /// Reports errors if the node is not valid in statement context
-pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx, scope_state: *ScopeState) !Stmt.Idx {
+pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx, raw_src: []const u8, idents: *const Ident.Store) error{OutOfMemory}!Stmt.Idx {
     const node = self.getNode(node_idx);
-    const node_region = Region{ .start = node.start, .end = node.start }; // Simplified region for now
+    const node_region = self.ast.region(node_idx, raw_src, idents);
 
     switch (node.tag) {
         // Assignment-like statements
@@ -1277,17 +1338,17 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                 .var_lc => {
                     // This is a mutable variable declaration: `var x = expr`
                     // Canonicalize the pattern (lhs) as mutable
-                    const patt_idx = try self.canonicalizePattMutable(allocator, ast_binop.lhs);
+                    const patt_idx = try self.canonicalizePattMutable(allocator, ast_binop.lhs, raw_src, idents);
 
                     // Register this as a mutable variable (mutability is encoded in patt_idx)
-                    try scope_state.addIdent(allocator, lhs_node.payload.ident, patt_idx);
-                    try scope_state.recordVarPattern(allocator, patt_idx);
+                    try self.scope_state.addIdent(allocator, lhs_node.payload.ident, patt_idx);
+                    try self.scope_state.recordVarPattern(allocator, patt_idx);
 
                     // Add to symbol table so lookups can find this definition
-                    try scope_state.symbol_table.put(allocator, lhs_node.payload.ident, ast_binop.lhs);
+                    try self.scope_state.symbol_table.put(allocator, lhs_node.payload.ident, ast_binop.lhs);
 
                     // Canonicalize the expression (rhs)
-                    _ = try self.canonicalizeExpr(allocator, ast_binop.rhs);
+                    _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
                     // Mutate the AST node to have the CIR statement tag
                     self.mutateToStmt(node_idx, .init_var);
@@ -1303,19 +1364,19 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                     // Could be immutable declaration or reassignment
                     const ident = lhs_node.payload.ident;
 
-                    if (scope_state.lookupIdent(ident)) |existing_patt_idx| {
+                    if (self.scope_state.lookupIdent(ident)) |existing_patt_idx| {
                         // Identifier already exists - check if it's a var
                         if (ScopeState.isVarPattern(existing_patt_idx)) {
                             // This is a var reassignment
                             // Check for cross-function boundary reassignment
-                            if (scope_state.isVarReassignmentAcrossFunctionBoundary(existing_patt_idx)) {
+                            if (self.scope_state.isVarReassignmentAcrossFunctionBoundary(existing_patt_idx)) {
                                 try self.pushDiagnostic(allocator, .ident_already_defined, node_region);
                             }
 
                             // Canonicalize as reassignment
                             // Note: For reassignment, we don't canonicalize LHS as it should be a reference to existing var
                             // Canonicalize the RHS expression - this mutates it in place
-                            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs);
+                            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
                             // Mutate AST node to reassignment statement
                             self.mutateToStmt(node_idx, .reassign);
@@ -1332,16 +1393,16 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                     } else {
                         // This is an immutable variable declaration: `x = expr`
                         // Canonicalize the pattern (lhs)
-                        const patt_idx = try self.canonicalizePatt(allocator, ast_binop.lhs);
+                        const patt_idx = try self.canonicalizePatt(allocator, ast_binop.lhs, raw_src, idents);
 
                         // Register this as an immutable variable
-                        try scope_state.addIdent(allocator, ident, patt_idx);
+                        try self.scope_state.addIdent(allocator, ident, patt_idx);
 
                         // Add to symbol table so lookups can find this definition
-                        try scope_state.symbol_table.put(allocator, ident, ast_binop.lhs);
+                        try self.scope_state.symbol_table.put(allocator, ident, ast_binop.lhs);
 
                         // Canonicalize the expression (rhs) - this mutates the expression nodes in place
-                        _ = try self.canonicalizeExpr(allocator, ast_binop.rhs);
+                        _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
                         // Mutate AST node to assignment statement
                         self.mutateToStmt(node_idx, .assign);
@@ -1351,8 +1412,8 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                 else => {
                     // Complex pattern on LHS - treat as pattern match assignment
                     // Canonicalize both sides - this mutates the nodes in place
-                    _ = try self.canonicalizePatt(allocator, ast_binop.lhs);
-                    _ = try self.canonicalizeExpr(allocator, ast_binop.rhs);
+                    _ = try self.canonicalizePatt(allocator, ast_binop.lhs, raw_src, idents);
+                    _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
                     // Mutate AST node to assignment statement
                     self.mutateToStmt(node_idx, .assign);
@@ -1380,19 +1441,19 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
 }
 
 /// Canonicalize an AST node that should be a pattern (immutable)
-pub fn canonicalizePatt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx) !Patt.Idx {
-    return self.canonicalizePattWithMutability(allocator, self.ast, node_idx, false);
+pub fn canonicalizePatt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx, raw_src: []const u8, idents: *const Ident.Store) !Patt.Idx {
+    return self.canonicalizePattWithMutability(allocator, self.ast, node_idx, false, raw_src, idents);
 }
 
 /// Canonicalize an AST node that should be a pattern (mutable)
-pub fn canonicalizePattMutable(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx) !Patt.Idx {
-    return self.canonicalizePattWithMutability(allocator, self.ast, node_idx, true);
+pub fn canonicalizePattMutable(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx, raw_src: []const u8, idents: *const Ident.Store) !Patt.Idx {
+    return self.canonicalizePattWithMutability(allocator, self.ast, node_idx, true, raw_src, idents);
 }
 
 /// Canonicalize an AST node that should be a pattern with specified mutability
-pub fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *const AST2, node_idx: AST2.Node.Idx, is_mutable: bool) !Patt.Idx {
+pub fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *const AST2, node_idx: AST2.Node.Idx, is_mutable: bool, raw_src: []const u8, idents: *const Ident.Store) !Patt.Idx {
     const node = ast_param.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
-    const node_region = Region{ .start = node.start, .end = node.start }; // Simplified region for now
+    const node_region = ast_param.region(node_idx, raw_src, idents);
 
     switch (node.tag) {
         .lc => {
@@ -1449,7 +1510,7 @@ pub fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_para
 }
 
 /// Canonicalize a header - processes exposed items and generates type information
-pub fn canonicalizeHeader(self: *CIR, allocator: Allocator) !void {
+pub fn canonicalizeHeader(self: *CIR, allocator: Allocator, raw_src: []const u8, idents: *const Ident.Store) !void {
     // If there's no header, nothing to do
     if (self.ast.header == null) {
         return;
@@ -1465,7 +1526,7 @@ pub fn canonicalizeHeader(self: *CIR, allocator: Allocator) !void {
             while (iter.next()) |node_idx| {
                 // Each provided item needs to be canonicalized
                 // For now, just mark them as expressions so they get type information
-                _ = try self.canonicalizeExpr(allocator, node_idx);
+                _ = try self.canonicalizeExpr(allocator, node_idx, raw_src, idents);
             }
         },
         .module => |mod| {
@@ -1473,7 +1534,7 @@ pub fn canonicalizeHeader(self: *CIR, allocator: Allocator) !void {
             var iter = self.ast.node_slices.nodes(&mod.exposes);
             while (iter.next()) |node_idx| {
                 // Each exposed item needs to be canonicalized
-                _ = try self.canonicalizeExpr(allocator, node_idx);
+                _ = try self.canonicalizeExpr(allocator, node_idx, raw_src, idents);
             }
         },
         .package => |pkg| {
@@ -1481,33 +1542,33 @@ pub fn canonicalizeHeader(self: *CIR, allocator: Allocator) !void {
             var iter = self.ast.node_slices.nodes(&pkg.exposes);
             while (iter.next()) |node_idx| {
                 // Each exposed item needs to be canonicalized
-                _ = try self.canonicalizeExpr(allocator, node_idx);
+                _ = try self.canonicalizeExpr(allocator, node_idx, raw_src, idents);
             }
         },
         .platform => |plat| {
             // For platform headers, process both exposes and provides
             var exposes_iter = self.ast.node_slices.nodes(&plat.exposes);
             while (exposes_iter.next()) |node_idx| {
-                _ = try self.canonicalizeExpr(allocator, node_idx);
+                _ = try self.canonicalizeExpr(allocator, node_idx, raw_src, idents);
             }
 
             var provides_iter = self.ast.node_slices.nodes(&plat.provides);
             while (provides_iter.next()) |node_idx| {
-                _ = try self.canonicalizeExpr(allocator, node_idx);
+                _ = try self.canonicalizeExpr(allocator, node_idx, raw_src, idents);
             }
         },
         .hosted => |host| {
             // For hosted headers, process the exposes list
             var iter = self.ast.node_slices.nodes(&host.exposes);
             while (iter.next()) |node_idx| {
-                _ = try self.canonicalizeExpr(allocator, node_idx);
+                _ = try self.canonicalizeExpr(allocator, node_idx, raw_src, idents);
             }
         },
         .interface => |iface| {
             // For interface headers, process the exposes list
             var iter = self.ast.node_slices.nodes(&iface.exposes);
             while (iter.next()) |node_idx| {
-                _ = try self.canonicalizeExpr(allocator, node_idx);
+                _ = try self.canonicalizeExpr(allocator, node_idx, raw_src, idents);
             }
         },
         .malformed => {
@@ -1539,9 +1600,9 @@ pub const ScopeState = struct {
 
     /// Pop the current scope
     pub fn popScope(self: *ScopeState, allocator: Allocator) void {
-        if (self.scopes.items.len > 0) {
-            var scope = self.scopes.pop();
-            scope.deinit(allocator);
+        if (self.scopes.pop()) |scope| {
+            var mut_scope = scope;
+            mut_scope.deinit(allocator);
         }
     }
 
@@ -1688,15 +1749,18 @@ test "CIR2 canonicalize mutable variable declaration" {
     const lhs_node = ast_ptr.nodes.get(@enumFromInt(@intFromEnum(ast_binop.lhs)));
     try testing.expect(lhs_node.tag == .var_lc);
 
+    // Create a TypeStore for testing
+    var types_store = try TypeStore.initCapacity(allocator, 100, 10);
+    defer types_store.deinit();
+
     // Now canonicalize it to CIR2
-    var cir = CIR.init(ast_ptr);
+    var cir = CIR.init(ast_ptr, &types_store);
     defer cir.deinit(allocator);
 
-    var scope_state = ScopeState{};
-    defer scope_state.deinit(allocator);
-    try scope_state.pushScope(allocator, false);
+    // Initialize with a root scope
+    try cir.scope_state.pushScope(allocator, false);
 
-    const stmt_idx = try cir.canonicalizeStmt(allocator, node_idx, &scope_state);
+    const stmt_idx = try cir.canonicalizeStmt(allocator, node_idx, source, &env.idents);
 
     // Verify the statement was created
     const stmt = cir.getStmt(stmt_idx);
@@ -1709,6 +1773,11 @@ test "CIR2 canonicalize mutable variable declaration" {
 test "CIR2 error: expression in statement context" {
     const testing = std.testing;
     const allocator = testing.allocator;
+
+    // Create a simple source for testing
+    const source = "42";
+    var env = try base.CommonEnv.init(allocator, source);
+    defer env.deinit(allocator);
 
     // Create heap-allocated AST
     const ast_ptr = try allocator.create(AST2);
@@ -1724,17 +1793,20 @@ test "CIR2 error: expression in statement context" {
     // Create a number literal node (expression)
     const node_idx = try ast_ptr.appendNode(allocator, Position{ .offset = 0 }, .num_literal_i32, .{ .num_literal_i32 = 42 });
 
+    // Create a TypeStore for testing
+    var types_store = try TypeStore.initCapacity(allocator, 100, 10);
+    defer types_store.deinit();
+
     // Initialize CIR
-    var cir = CIR.init(ast_ptr);
+    var cir = CIR.init(ast_ptr, &types_store);
     defer cir.deinit(allocator);
 
-    var scope_state = ScopeState{};
-    defer scope_state.deinit(allocator);
-    try scope_state.pushScope(allocator, false);
+    // Initialize with a root scope
+    try cir.scope_state.pushScope(allocator, false);
 
     // Try to canonicalize the expression as a statement
     // This should create a malformed statement and add a diagnostic
-    const stmt_idx = try cir.canonicalizeStmt(allocator, node_idx, &scope_state);
+    const stmt_idx = try cir.canonicalizeStmt(allocator, node_idx, source, &env.idents);
 
     // Verify we got a malformed statement
     const stmt = cir.getStmt(stmt_idx);
@@ -1749,6 +1821,11 @@ test "CIR2 error: expression in statement context" {
 test "CIR2 demonstrates in-place tag mutation" {
     const testing = std.testing;
     const allocator = testing.allocator;
+
+    // Create a simple source for testing
+    const source = "x";
+    var env = try base.CommonEnv.init(allocator, source);
+    defer env.deinit(allocator);
 
     // Create heap-allocated AST
     const ast_ptr = try allocator.create(AST2);
@@ -1769,12 +1846,16 @@ test "CIR2 demonstrates in-place tag mutation" {
     const initial_node = ast_ptr.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
     try testing.expect(initial_node.tag == .lc);
 
+    // Create a TypeStore for testing
+    var types_store = try TypeStore.initCapacity(allocator, 100, 10);
+    defer types_store.deinit();
+
     // Initialize CIR
-    var cir = CIR.init(ast_ptr);
+    var cir = CIR.init(ast_ptr, &types_store);
     defer cir.deinit(allocator);
 
     // Canonicalize as expression - this should mutate the tag in-place
-    const expr_idx = try cir.canonicalizeExpr(allocator, node_idx);
+    const expr_idx = try cir.canonicalizeExpr(allocator, node_idx, source, &env.idents);
 
     // The returned index should be the same as the input (just cast to Expr.Idx)
     try testing.expectEqual(@intFromEnum(node_idx), @intFromEnum(expr_idx));
@@ -1842,11 +1923,20 @@ test "sign bit encoding: mutable vs immutable pattern canonicalization" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
+    // Create a simple source for testing
+    const source = "x y";
+    var env = try base.CommonEnv.init(allocator, source);
+    defer env.deinit(allocator);
+
     var ast = try AST2.initCapacity(allocator, 10);
     defer ast.deinit(allocator);
 
+    // Create a TypeStore for testing
+    var types_store = try TypeStore.initCapacity(allocator, 100, 10);
+    defer types_store.deinit();
+
     // Create CIR with shared AST storage
-    var cir = CIR.init(&ast);
+    var cir = CIR.init(&ast, &types_store);
     defer cir.deinit(allocator);
 
     // Create two identifier nodes
@@ -1857,8 +1947,8 @@ test "sign bit encoding: mutable vs immutable pattern canonicalization" {
     const node2_idx = try ast.appendNode(allocator, Position{ .offset = 10 }, .lc, .{ .ident = ident_idx });
 
     // Canonicalize one as immutable, one as mutable
-    const immutable_patt = try cir.canonicalizePatt(allocator, node1_idx);
-    const mutable_patt = try cir.canonicalizePattMutable(allocator, node2_idx);
+    const immutable_patt = try cir.canonicalizePatt(allocator, node1_idx, source, &env.idents);
+    const mutable_patt = try cir.canonicalizePattMutable(allocator, node2_idx, source, &env.idents);
 
     // Verify mutability encoding
     try testing.expect(!immutable_patt.isMutable());

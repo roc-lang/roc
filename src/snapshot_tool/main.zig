@@ -1190,23 +1190,12 @@ fn processSnapshotContent(
     var maybe_stmt_idx: ?CIR.Stmt.Idx = null;
     var maybe_patt_idx: ?CIR.Patt.Idx = null;
 
-    // Create scope state for statement canonicalization
-    var scope_state = CIR.ScopeState{};
-    defer {
-        for (scope_state.scopes.items) |*scope| {
-            scope.idents.deinit(allocator);
-        }
-        scope_state.scopes.deinit(allocator);
-        scope_state.function_regions.deinit(allocator);
-        scope_state.var_function_regions.deinit(allocator);
-    }
-
-    // Initialize with a root scope
-    try scope_state.scopes.append(allocator, CIR.Scope.init(false));
+    // Initialize the CIR's scope state with a root scope
+    try cir.scope_state.scopes.append(allocator, CIR.Scope.init(false));
 
     // For headers, canonicalize the header itself
     if (content.meta.node_type == .header) {
-        try cir.canonicalizeHeader(allocator);
+        try cir.canonicalizeHeader(allocator, content.source, &env.idents);
     }
 
     // Canonicalize if we have a parse result
@@ -1216,14 +1205,14 @@ fn processSnapshotContent(
 
         // Check if it's an expression-like node
         if (isExpressionNode(node.tag)) {
-            maybe_expr_idx = try cir.canonicalizeExpr(allocator, root_node_idx);
+            maybe_expr_idx = try cir.canonicalizeExpr(allocator, root_node_idx, content.source, &env.idents);
         } else if (isStatementNode(node.tag)) {
-            maybe_stmt_idx = try cir.canonicalizeStmt(allocator, root_node_idx, &scope_state);
+            maybe_stmt_idx = try cir.canonicalizeStmt(allocator, root_node_idx, content.source, &env.idents);
         } else if (isPatternNode(node.tag)) {
-            maybe_patt_idx = try cir.canonicalizePatt(allocator, root_node_idx);
+            maybe_patt_idx = try cir.canonicalizePatt(allocator, root_node_idx, content.source, &env.idents);
         } else {
             // Default to statement for file-level nodes
-            maybe_stmt_idx = try cir.canonicalizeStmt(allocator, root_node_idx, &scope_state);
+            maybe_stmt_idx = try cir.canonicalizeStmt(allocator, root_node_idx, content.source, &env.idents);
         }
     }
 
