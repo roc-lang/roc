@@ -12,7 +12,7 @@ const CompactWriter = @This();
 /// All serialized data must be aligned to this boundary to ensure proper
 /// memory access patterns and avoid alignment faults on architectures that
 /// require aligned memory access.
-pub const SERIALIZATION_ALIGNMENT = 16;
+pub const SERIALIZATION_ALIGNMENT = @"16";
 
 const ZEROS: [16]u8 = [_]u8{0} ** 16;
 

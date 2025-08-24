@@ -261,7 +261,7 @@ test "ExposedItems empty CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try allocator.alignedAlloc(u8, 16, @intCast(file_size));
+    const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer allocator.free(buffer);
 
     _ = try file.read(buffer);
@@ -318,7 +318,7 @@ test "ExposedItems basic CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try allocator.alignedAlloc(u8, @alignOf(ExposedItems.Serialized), @intCast(file_size));
+    const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.of(@alignOf(ExposedItems.Serialized)), @intCast(file_size));
     defer allocator.free(buffer);
 
     _ = try file.read(buffer);
@@ -375,7 +375,7 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try allocator.alignedAlloc(u8, @alignOf(ExposedItems.Serialized), @intCast(file_size));
+    const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.of(@alignOf(ExposedItems.Serialized)), @intCast(file_size));
     defer allocator.free(buffer);
 
     _ = try file.read(buffer);
@@ -441,7 +441,7 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const serialized_align = @alignOf(ExposedItems);
+    const serialized_align = std.mem.Alignment.of(@alignOf(ExposedItems));
     const buffer = try allocator.alignedAlloc(u8, serialized_align, @intCast(file_size));
     defer allocator.free(buffer);
 
@@ -510,7 +510,7 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         // Read back and verify
         try file.seekTo(0);
         const file_size = try file.getEndPos();
-        const buffer = try allocator.alignedAlloc(u8, @alignOf(ExposedItems.Serialized), @intCast(file_size));
+        const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.of(@alignOf(ExposedItems.Serialized)), @intCast(file_size));
         defer allocator.free(buffer);
 
         _ = try file.read(buffer);
