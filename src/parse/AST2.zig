@@ -457,14 +457,12 @@ pub fn region(
 
             // Check if this is an empty apply (no arguments)
             if (nodes_idx.isNil()) {
-                // For empty apply, we need to determine the function name from the tag
-                // and calculate the region based on that
+                // Empty apply nodes should not occur in well-formed AST
+                // If we encounter one, use the node's own position
                 const region_start = self.start(idx);
-                // This is tricky without the function node. We might need to keep some info.
-                // For now, estimate based on typical function call pattern
                 return .{
                     .start = region_start,
-                    .end = Position{ .offset = region_start.offset + 2 }, // Rough estimate for "()"
+                    .end = region_start,
                 };
             }
 
@@ -635,14 +633,12 @@ pub fn region(
             };
         },
         .unary_not => {
-            // `!` followed by expression - the payload should contain the operand node
-            // For now, assume the operand is stored in block_nodes as a single-element slice
+            // `!` followed by expression - the operand is stored in the nodes payload
             const region_start = self.start(idx);
             const nodes_iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
             var iter = nodes_iter;
             // Safe: Parser ensures unary_not nodes always have exactly one operand
-            // The parser creates these with a single operand
-            const operand = iter.next() orelse unreachable; // Should have the operand
+            const operand = iter.next() orelse unreachable;
             const operand_region = self.region(operand, raw_src, ident_store);
 
             return .{
@@ -1610,7 +1606,7 @@ test "collections.NodeSlices with negative sentinel" {
 
 /// Convert a parse diagnostic to a reporting.Report for error display
 pub fn parseDiagnosticToReport(self: *const @This(), env: *const CommonEnv, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) !reporting.Report {
-    _ = self; // unused for now
+    _ = self; // AST is not needed for diagnostic to report conversion
 
     const title = switch (diagnostic.tag) {
         .missing_header => "MISSING HEADER",
