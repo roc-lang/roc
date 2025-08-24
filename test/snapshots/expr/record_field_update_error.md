@@ -17,7 +17,6 @@ MALFORMED TYPE - record_field_update_error.md:1:17:1:19
 The token **&** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **record_field_update_error.md:1:10:1:11:**
 ```roc
 { person & age: 31 }
@@ -29,7 +28,6 @@ Here is the problematic code:
 The token **31** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-Here is the problematic code:
 **record_field_update_error.md:1:17:1:19:**
 ```roc
 { person & age: 31 }
@@ -75,8 +73,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:
 ~~~roc
 {
 	person
-	
-	age : 
+		age : 
 }
 ~~~
 # CANONICALIZE

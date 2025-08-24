@@ -47,7 +47,6 @@ pub const Token = struct {
         StringStart, // the " that starts a string
         StringEnd, // the " that ends a string
         MultilineStringStart, // the """ that starts a multiline string
-        MultilineStringEnd, // the """ that ends a multiline string
         StringPart,
         MalformedStringPart, // malformed, but should be treated similar to a StringPart in the parser
         SingleQuote,
@@ -213,7 +212,6 @@ pub const Token = struct {
                 .StringStart,
                 .StringEnd,
                 .MultilineStringStart,
-                .MultilineStringEnd,
                 .StringPart,
                 .SingleQuote,
                 .Int,
@@ -851,6 +849,13 @@ pub const Cursor = struct {
     }
 
     pub fn chompEscapeSequence(self: *Cursor) !void {
+        return self.chompEscapeSequenceWithQuote(null);
+    }
+
+    pub fn chompEscapeSequenceWithQuote(self: *Cursor, quote_char: ?u8) !void {
+        // Store the start position of the escape sequence (before the backslash)
+        const escape_start = if (self.pos > 0) self.pos - 1 else self.pos;
+
         switch (self.peek() orelse 0) {
             '\\', '"', '\'', 'n', 'r', 't', '$' => {
                 self.pos += 1;
@@ -861,7 +866,7 @@ pub const Cursor = struct {
                 if (self.peek() == '(') {
                     self.pos += 1;
                 } else {
-                    self.pushMessageHere(.InvalidUnicodeEscapeSequence);
+                    self.pushMessage(.InvalidUnicodeEscapeSequence, escape_start, self.pos);
                     return error.InvalidUnicodeEscapeSequence;
                 }
 
@@ -870,7 +875,7 @@ pub const Cursor = struct {
                     if (self.peek() == ')') {
                         if (self.pos == hex_start) {
                             // Empty unicode escape sequence
-                            self.pushMessageHere(.InvalidUnicodeEscapeSequence);
+                            self.pushMessage(.InvalidUnicodeEscapeSequence, escape_start, self.pos + 1);
                             self.pos += 1;
                             return error.InvalidUnicodeEscapeSequence;
                         }
@@ -884,17 +889,37 @@ pub const Cursor = struct {
                         {
                             self.pos += 1;
                         } else {
-                            self.pushMessageHere(.InvalidUnicodeEscapeSequence);
+                            // Invalid hex character - advance to the closing paren if possible
+                            // to include the full escape sequence in the error region, but stop
+                            // if we encounter the closing quote or newline
+                            while (self.pos < self.buf.len) {
+                                const next_char = self.peek() orelse 0;
+                                if (next_char == ')' or next_char == '\n') {
+                                    break;
+                                }
+                                if (quote_char) |qc| {
+                                    if (next_char == qc) {
+                                        break;
+                                    }
+                                }
+                                self.pos += 1;
+                            }
+                            if (self.pos < self.buf.len and self.peek() == ')') {
+                                self.pos += 1;
+                            }
+                            self.pushMessage(.InvalidUnicodeEscapeSequence, escape_start, self.pos);
                             return error.InvalidUnicodeEscapeSequence;
                         }
                     } else {
-                        self.pushMessageHere(.InvalidUnicodeEscapeSequence);
+                        self.pushMessage(.InvalidUnicodeEscapeSequence, escape_start, self.pos);
                         return error.InvalidUnicodeEscapeSequence;
                     }
                 }
             },
             else => {
-                self.pushMessageHere(.InvalidEscapeSequence);
+                // Include the character after the backslash in the error region
+                const end_pos = if (self.peek() != null) self.pos + 1 else self.pos;
+                self.pushMessage(.InvalidEscapeSequence, escape_start, end_pos);
                 return error.InvalidEscapeSequence;
             },
         }
@@ -929,7 +954,7 @@ pub const Cursor = struct {
                     },
                     '\\' => {
                         state = .Enough;
-                        self.chompEscapeSequence() catch {
+                        self.chompEscapeSequenceWithQuote('\'') catch {
                             state = .Invalid;
                         };
                     },
@@ -1370,7 +1395,9 @@ pub const Tokenizer = struct {
                     self.cursor.pos += 1;
                     if (self.string_interpolation_stack.pop()) |last| {
                         try self.pushTokenNormalHere(gpa, .CloseStringInterpolation, start);
-                        try self.tokenizeStringLikeLiteralBody(gpa, last);
+                        // For string interpolations, we don't have the original opening quote position
+                        // so we use the current position as a fallback
+                        try self.tokenizeStringLikeLiteralBody(gpa, last, self.cursor.pos);
                     } else {
                         try self.pushTokenNormalHere(gpa, .CloseCurly, start);
                     }
@@ -1502,14 +1529,14 @@ pub const Tokenizer = struct {
         } else {
             try self.pushTokenNormalHere(gpa, .StringStart, start);
         }
-        try self.tokenizeStringLikeLiteralBody(gpa, kind);
+        try self.tokenizeStringLikeLiteralBody(gpa, kind, start);
     }
 
     // Moving curly chars to constants because some editors hate them inline.
     const open_curly = '{';
     const close_curly = '}';
 
-    pub fn tokenizeStringLikeLiteralBody(self: *Tokenizer, gpa: std.mem.Allocator, kind: StringKind) std.mem.Allocator.Error!void {
+    pub fn tokenizeStringLikeLiteralBody(self: *Tokenizer, gpa: std.mem.Allocator, kind: StringKind, opening_quote_pos: usize) std.mem.Allocator.Error!void {
         const start = self.cursor.pos;
         var string_part_tag: Token.Tag = .StringPart;
         while (self.cursor.pos < self.cursor.buf.len) {
@@ -1524,7 +1551,8 @@ pub const Tokenizer = struct {
             } else if (c == '\n') {
                 try self.pushTokenNormalHere(gpa, string_part_tag, start);
                 if (kind == .single_line) {
-                    self.cursor.pushMessage(.UnclosedString, @intCast(start), @intCast(self.cursor.pos));
+                    // Include the opening quote in the error region
+                    self.cursor.pushMessage(.UnclosedString, @intCast(opening_quote_pos), @intCast(self.cursor.pos));
                     try self.pushTokenNormalHere(gpa, .StringEnd, self.cursor.pos);
                 }
                 return;
@@ -1534,26 +1562,21 @@ pub const Tokenizer = struct {
                 self.cursor.pos += 1;
                 try self.pushTokenNormalHere(gpa, .StringEnd, string_part_end);
                 return;
-            } else if (kind == .multi_line and c == '"' and self.cursor.peekAt(1) == '"' and self.cursor.peekAt(2) == '"') {
-                try self.pushTokenNormalHere(gpa, string_part_tag, start);
-                const quote_start = self.cursor.pos;
-                self.cursor.pos += 3;
-                try self.pushTokenNormalHere(gpa, .MultilineStringEnd, quote_start);
-                return;
             } else {
                 // Handle UTF-8 sequences with printable character validation
                 _ = self.cursor.chompUTF8CodepointWithValidation();
 
                 const escape = c == '\\';
                 if (escape) {
-                    self.cursor.chompEscapeSequence() catch {
+                    self.cursor.chompEscapeSequenceWithQuote('"') catch {
                         string_part_tag = .MalformedStringPart;
                     };
                 }
             }
         }
         if (kind == .single_line) {
-            self.cursor.pushMessage(.UnclosedString, start, self.cursor.pos);
+            // Include the opening quote in the error region
+            self.cursor.pushMessage(.UnclosedString, @intCast(opening_quote_pos), @intCast(self.cursor.pos));
         }
         try self.pushTokenNormalHere(gpa, string_part_tag, start);
     }
@@ -1794,7 +1817,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .StringStart, .StringEnd => {
                 try buf2.append(alloc, '"');
             },
-            .MultilineStringStart, .MultilineStringEnd => {
+            .MultilineStringStart => {
                 try buf2.append(alloc, '"');
                 try buf2.append(alloc, '"');
                 try buf2.append(alloc, '"');
@@ -2257,7 +2280,7 @@ test "tokenizer" {
         gpa,
         \\"""abc"""
     ,
-        &[_]Token.Tag{ .MultilineStringStart, .StringPart, .MultilineStringEnd },
+        &[_]Token.Tag{ .MultilineStringStart, .StringPart },
     );
     try testTokenization(
         gpa,

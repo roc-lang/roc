@@ -16,6 +16,12 @@ PARSE ERROR - fuzz_crash_003.md:1:4:1:6
 **UNCLOSED STRING**
 This string is missing a closing quote.
 
+```roc
+= "te
+```
+  ^^^
+
+
 **MISSING HEADER**
 Roc files must start with a module header.
 
@@ -24,7 +30,6 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
-Here is the problematic code:
 **fuzz_crash_003.md:1:1:1:2:**
 ```roc
 = "te
@@ -36,7 +41,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_003.md:1:3:1:4:**
 ```roc
 = "te
@@ -48,7 +52,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_003.md:1:4:1:6:**
 ```roc
 = "te

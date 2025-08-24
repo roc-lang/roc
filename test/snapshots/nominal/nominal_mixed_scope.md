@@ -34,7 +34,6 @@ UNDECLARED TYPE - nominal_mixed_scope.md:14:9:14:12
 Import statements must appear at the top level of a module.
 Move this import to the top of the file, after the module header but before any definitions.
 
-Here is the problematic code:
 **nominal_mixed_scope.md:9:5:9:11:**
 ```roc
     import Color.RGB
@@ -157,8 +156,7 @@ processColor : _ -> LocalStatus
 processColor = |color| {
 
 	# bring RGB into scope
-	
-	Color.RGB
+		Color.RGB
 
 	match color {
 		RGB.Red => LocalStatus.Pending

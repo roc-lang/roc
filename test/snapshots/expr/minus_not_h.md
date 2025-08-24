@@ -14,7 +14,6 @@ UNEXPECTED TOKEN IN EXPRESSION - minus_not_h.md:1:1:1:2
 The token **-** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **minus_not_h.md:1:1:1:2:**
 ```roc
 -!h

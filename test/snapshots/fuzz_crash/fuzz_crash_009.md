@@ -24,6 +24,12 @@ PARSE ERROR - fuzz_crash_009.md:6:12:6:12
 **UNCLOSED STRING**
 This string is missing a closing quote.
 
+```roc
+    "onmo %
+```
+    ^^^^^^^
+
+
 **MISSING HEADER**
 Roc files must start with a module header.
 
@@ -32,7 +38,6 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
-Here is the problematic code:
 **fuzz_crash_009.md:1:2:1:3:**
 ```roc
  f{o,
@@ -44,7 +49,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_009.md:1:3:1:4:**
 ```roc
  f{o,
@@ -56,7 +60,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_009.md:1:4:1:5:**
 ```roc
  f{o,
@@ -68,7 +71,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_009.md:1:5:1:6:**
 ```roc
  f{o,
@@ -80,7 +82,6 @@ Here is the problematic code:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_009.md:2:6:2:7:**
 ```roc
      ]
@@ -92,7 +93,6 @@ Here is the problematic code:
 A parsing error occurred: `string_unclosed`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_009.md:6:12:6:12:**
 ```roc
     "onmo %

@@ -232,8 +232,16 @@ TYPE MISMATCH - fuzz_crash_027.md:142:10:142:41
 **LEADING ZERO**
 Numbers cannot have leading zeros.
 
+
+
 **UNCLOSED STRING**
 This string is missing a closing quote.
+
+```roc
+	crash "Unreachtement
+```
+	      ^^^^^^^^^^^^^^
+
 
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.
@@ -251,7 +259,6 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-Here is the problematic code:
 **fuzz_crash_027.md:40:5:40:6:**
 ```roc
 Maya) : [ #
@@ -263,7 +270,6 @@ Maya) : [ #
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_027.md:40:7:40:8:**
 ```roc
 Maya) : [ #
@@ -275,7 +281,6 @@ Maya) : [ #
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_027.md:40:9:40:10:**
 ```roc
 Maya) : [ #
@@ -287,7 +292,6 @@ Maya) : [ #
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_027.md:41:1:41:2:**
 ```roc
 ] #se
@@ -299,7 +303,6 @@ Here is the problematic code:
 A parsing error occurred: `expected_expr_apply_close_round`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_027.md:122:3:122:10:**
 ```roc
 		add_one(
@@ -311,7 +314,6 @@ Here is the problematic code:
 The token **)** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **fuzz_crash_027.md:125:3:125:4:**
 ```roc
 		),	456, # ee
@@ -1166,7 +1168,7 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 			(ty-record @37.12-39.2
 				(anno-record-field @38.2-38.11 (name "bar")
 					(ty @38.8-38.11 (name "Som")))))
-		(s-malformed @40.1-40.6 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @40.5-40.6 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @40.7-40.8 (tag "statement_unexpected_token"))
 		(s-malformed @40.9-40.10 (tag "statement_unexpected_token"))
 		(s-malformed @41.1-41.2 (tag "statement_unexpected_token"))

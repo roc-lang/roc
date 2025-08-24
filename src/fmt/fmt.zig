@@ -719,6 +719,12 @@ const Formatter = struct {
             }
             _ = try formatter(fmt, item_idx);
             if (multiline) {
+                const node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(item_idx)));
+                // special case for multiline_strings
+                if (node.tag == .multiline_string) {
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                }
                 try fmt.push(',');
             } else if (i < (items.len - 1)) {
                 try fmt.pushAll(", ");
@@ -751,6 +757,33 @@ const Formatter = struct {
         no_indent_on_access,
     };
 
+    fn formatStringInterpolation(fmt: *Formatter, idx: AST.Expr.Idx) !void {
+        try fmt.pushAll("${");
+        const part_region = fmt.nodeRegion(@intFromEnum(idx));
+        // Parts don't include the StringInterpolationStart and StringInterpolationEnd tokens
+        // That means they won't include any of the newlines between them and the actual expr.
+        // So we'll widen the region by one token for calculating multliline.
+        // Ideally, we'd also check if the expr itself is multiline, and if we will end up flushing, but
+        // we'll leave it as is for now
+        const part_is_multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = part_region.start - 1, .end = part_region.end + 1 }) or
+            fmt.nodeWillBeMultiline(AST.Expr.Idx, idx);
+
+        if (part_is_multiline) {
+            _ = try fmt.flushCommentsBefore(part_region.start);
+            try fmt.ensureNewline();
+            fmt.curr_indent += 1;
+            try fmt.pushIndent();
+        }
+        _ = try fmt.formatExpr(idx);
+        if (part_is_multiline) {
+            _ = try fmt.flushCommentsBefore(part_region.end);
+            try fmt.ensureNewline();
+            fmt.curr_indent -= 1;
+            try fmt.pushIndent();
+        }
+        try fmt.push('}');
+    }
+
     fn formatExpr(fmt: *Formatter, ei: AST.Expr.Idx) anyerror!AST.TokenizedRegion {
         return formatExprInner(fmt, ei, .normal);
     }
@@ -782,35 +815,38 @@ const Formatter = struct {
                         .string_part => |str| {
                             try fmt.pushTokenText(str.token);
                         },
-                        else => {
-                            try fmt.pushAll("${");
-                            const part_region = fmt.nodeRegion(@intFromEnum(idx));
-                            // Parts don't include the StringInterpolationStart and StringInterpolationEnd tokens
-                            // That means they won't include any of the newlines between them and the actual expr.
-                            // So we'll widen the region by one token for calculating multliline.
-                            // Ideally, we'd also check if the expr itself is multiline, and if we will end up flushing, but
-                            // we'll leave it as is for now
-                            const part_is_multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = part_region.start - 1, .end = part_region.end + 1 }) or
-                                fmt.nodeWillBeMultiline(AST.Expr.Idx, idx);
-
-                            if (part_is_multiline) {
-                                _ = try fmt.flushCommentsBefore(part_region.start);
-                                try fmt.ensureNewline();
-                                fmt.curr_indent += 1;
-                                try fmt.pushIndent();
-                            }
-                            _ = try fmt.formatExpr(idx);
-                            if (part_is_multiline) {
-                                _ = try fmt.flushCommentsBefore(part_region.end);
-                                try fmt.ensureNewline();
-                                fmt.curr_indent -= 1;
-                                try fmt.pushIndent();
-                            }
-                            try fmt.push('}');
-                        },
+                        else => try fmt.formatStringInterpolation(idx),
                     }
                 }
                 try fmt.push('"');
+            },
+            .multiline_string => |s| {
+                if (!fmt.has_newline) {
+                    fmt.curr_indent += 1;
+                }
+                var add_newline = false;
+                try fmt.pushAll("\"\"\"");
+                for (fmt.ast.store.exprSlice(s.parts)) |idx| {
+                    const e = fmt.ast.store.getExpr(idx);
+                    switch (e) {
+                        .string_part => |str| {
+                            if (add_newline) {
+                                // Comments could be located before the MultilineStringStart token, not the StringPart token
+                                _ = try fmt.flushCommentsBefore(str.region.start - 1);
+                                try ensureNewline(fmt);
+                                try fmt.pushIndent();
+                                try fmt.pushAll("\"\"\"");
+                            }
+
+                            add_newline = true;
+                            try fmt.pushTokenText(str.token);
+                        },
+                        else => {
+                            add_newline = false;
+                            try fmt.formatStringInterpolation(idx);
+                        },
+                    }
+                }
             },
             .single_quote => |s| {
                 try fmt.pushTokenText(s.token);
@@ -903,6 +939,15 @@ const Formatter = struct {
                     }
                     const field_region = try fmt.formatRecordField(field_idx);
                     if (multiline) {
+                        const field = fmt.ast.store.getRecordField(field_idx);
+                        if (field.value) |v| {
+                            const node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(v)));
+                            // special case for multiline_strings
+                            if (node.tag == .multiline_string) {
+                                try fmt.ensureNewline();
+                                try fmt.pushIndent();
+                            }
+                        }
                         try fmt.push(',');
                         _ = try fmt.flushCommentsAfter(field_region.end);
                         try fmt.ensureNewline();
@@ -1931,7 +1976,9 @@ const Formatter = struct {
     }
 
     fn push(fmt: *Formatter, c: u8) !void {
-        fmt.has_newline = c == '\n';
+        if (c != '\t') {
+            fmt.has_newline = c == '\n';
+        }
         try fmt.buffer.writer().writeByte(c);
     }
 
@@ -1939,12 +1986,17 @@ const Formatter = struct {
         if (str.len == 0) {
             return;
         }
-        fmt.has_newline = str[str.len - 1] == '\n';
+        const all_tabs = for (str) |c| {
+            if (c != '\t') break false;
+        } else true;
+        if (!all_tabs) {
+            fmt.has_newline = str[str.len - 1] == '\n';
+        }
         try fmt.buffer.writer().writeAll(str);
     }
 
     fn pushIndent(fmt: *Formatter) !void {
-        if (fmt.curr_indent == 0) {
+        if (fmt.curr_indent == 0 or !fmt.has_newline) {
             return;
         }
         for (0..fmt.curr_indent) |_| {

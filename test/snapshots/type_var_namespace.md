@@ -31,7 +31,6 @@ UNDEFINED VARIABLE - type_var_namespace.md:11:34:11:52
 The token **|>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **type_var_namespace.md:11:31:11:33:**
 ```roc
     result = List.first(list) |> Result.withDefault(elem)
@@ -136,8 +135,7 @@ process = |list| {
 	# type variable 'elem' still refers to the function annotation's type parameter
 	result : elem
 	result = List.first(list)
-	
-	Result.withDefault(elem)
+		Result.withDefault(elem)
 
 	result
 }

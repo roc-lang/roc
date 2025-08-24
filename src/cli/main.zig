@@ -18,6 +18,9 @@ const bundle = @import("bundle");
 const unbundle = @import("unbundle");
 const ipc = @import("ipc");
 const fmt = @import("fmt");
+const eval = @import("eval");
+const layout = @import("layout");
+const builtins = @import("builtins");
 
 const cli_args = @import("cli_args.zig");
 const bench = @import("bench.zig");
@@ -33,6 +36,15 @@ const TimingInfo = compile.package.TimingInfo;
 const CacheManager = compile.CacheManager;
 const CacheConfig = compile.CacheConfig;
 const tokenize = parse.tokenize;
+const Interpreter = eval.Interpreter;
+const LayoutStore = layout.Store;
+const RocOps = builtins.host_abi.RocOps;
+const RocAlloc = builtins.host_abi.RocAlloc;
+const RocDealloc = builtins.host_abi.RocDealloc;
+const RocRealloc = builtins.host_abi.RocRealloc;
+const RocDbg = builtins.host_abi.RocDbg;
+const RocExpectFailed = builtins.host_abi.RocExpectFailed;
+const RocCrashed = builtins.host_abi.RocCrashed;
 
 const roc_shim_lib = if (builtin.is_test) &[_]u8{} else if (builtin.target.os.tag == .windows) @embedFile("roc_shim.lib") else @embedFile("libroc_shim.a");
 
@@ -1372,10 +1384,327 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
     fatal("build not implemented", .{});
 }
 
+/// Information about a test (expect statement) to be evaluated
+const ExpectTest = struct {
+    expr_idx: can.CIR.Expr.Idx,
+    region: base.Region,
+};
+
+/// Simple test environment for evaluating expects
+const TestOpsEnv = struct {
+    allocator: Allocator,
+    interpreter: ?*Interpreter,
+    roc_ops: ?RocOps,
+
+    fn init(allocator: Allocator) TestOpsEnv {
+        return TestOpsEnv{
+            .allocator = allocator,
+            .interpreter = null,
+            .roc_ops = null,
+        };
+    }
+
+    fn setInterpreter(self: *TestOpsEnv, interp: *Interpreter) void {
+        self.interpreter = interp;
+    }
+
+    fn get_ops(self: *TestOpsEnv) *RocOps {
+        if (self.roc_ops == null) {
+            self.roc_ops = RocOps{
+                .env = @ptrCast(self),
+                .roc_alloc = testRocAlloc,
+                .roc_dealloc = testRocDealloc,
+                .roc_realloc = testRocRealloc,
+                .roc_dbg = testRocDbg,
+                .roc_expect_failed = testRocExpectFailed,
+                .roc_crashed = testRocCrashed,
+                .host_fns = undefined, // Not used in tests
+            };
+        }
+        return &(self.roc_ops.?);
+    }
+
+    fn deinit(self: *TestOpsEnv) void {
+        if (self.interpreter) |interp| {
+            if (interp.crash_message) |msg| {
+                // Only free if we allocated it (not a string literal)
+                if (!std.mem.eql(u8, msg, "Failed to store crash message")) {
+                    self.allocator.free(msg);
+                }
+            }
+        }
+    }
+};
+
+fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
+    const test_env: *TestOpsEnv = @ptrCast(@alignCast(env));
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
+    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
+    const total_size = alloc_args.length + size_storage_bytes;
+    const result = test_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
+    const base_ptr = result orelse {
+        std.debug.panic("Out of memory during testRocAlloc", .{});
+    };
+    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
+    size_ptr.* = total_size;
+    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+}
+
+fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void {
+    const test_env: *TestOpsEnv = @ptrCast(@alignCast(env));
+    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
+    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
+    const total_size = size_ptr.*;
+    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
+    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
+    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
+    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
+    test_env.allocator.rawFree(slice, align_enum, @returnAddress());
+}
+
+fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void {
+    const test_env: *TestOpsEnv = @ptrCast(@alignCast(env));
+    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
+    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
+    const old_total_size = old_size_ptr.*;
+    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
+    const new_total_size = realloc_args.new_length + size_storage_bytes;
+    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
+    const new_slice = test_env.allocator.realloc(old_slice, new_total_size) catch {
+        std.debug.panic("Out of memory during testRocRealloc", .{});
+    };
+    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
+    new_size_ptr.* = new_total_size;
+    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+}
+
+fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
+    _ = dbg_args;
+    _ = env;
+    @panic("testRocDbg not implemented yet");
+}
+
+fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
+    _ = expect_args;
+    _ = env;
+    @panic("testRocExpectFailed not implemented yet");
+}
+
+fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
+    const test_env: *TestOpsEnv = @ptrCast(@alignCast(env));
+    const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
+    if (test_env.interpreter) |interp| {
+        interp.has_crashed = true;
+        const owned_msg = test_env.allocator.dupe(u8, msg_slice) catch |err| {
+            std.log.err("Failed to allocate crash message: {}", .{err});
+            interp.crash_message = "Failed to store crash message";
+            return;
+        };
+        interp.crash_message = owned_msg;
+    }
+}
+
 fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
-    _ = gpa;
-    _ = args;
-    fatal("test not implemented", .{});
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Start timing
+    const start_time = std.time.nanoTimestamp();
+
+    const stdout = std.io.getStdOut().writer();
+    const stderr = std.io.getStdErr().writer();
+
+    // Read the Roc file
+    const source = std.fs.cwd().readFileAlloc(gpa, args.path, std.math.maxInt(usize)) catch |err| {
+        try stderr.print("Failed to read file '{s}': {}\n", .{ args.path, err });
+        std.process.exit(1);
+    };
+    defer gpa.free(source);
+
+    // Extract module name from the file path
+    const basename = std.fs.path.basename(args.path);
+    const module_name = try gpa.dupe(u8, basename);
+    defer gpa.free(module_name);
+
+    // Create ModuleEnv
+    var env = ModuleEnv.init(gpa, source) catch |err| {
+        try stderr.print("Failed to initialize module environment: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer env.deinit();
+
+    env.common.source = source;
+    env.module_name = module_name;
+    try env.common.calcLineStarts(gpa);
+
+    // Parse the source code as a full module
+    var parse_ast = parse.parse(&env.common, gpa) catch |err| {
+        try stderr.print("Failed to parse file: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer parse_ast.deinit(gpa);
+
+    // Empty scratch space (required before canonicalization)
+    parse_ast.store.emptyScratch();
+
+    // Initialize CIR fields in ModuleEnv
+    try env.initCIRFields(gpa, module_name);
+
+    // Create canonicalizer
+    var canonicalizer = Can.init(&env, &parse_ast, null) catch |err| {
+        try stderr.print("Failed to initialize canonicalizer: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer canonicalizer.deinit();
+
+    // Canonicalize the entire module
+    canonicalizer.canonicalizeFile() catch |err| {
+        try stderr.print("Failed to canonicalize file: {}\n", .{err});
+        std.process.exit(1);
+    };
+
+    // Type check the module
+    var checker = Check.init(gpa, &env.types, &env, &.{}, &env.store.regions) catch |err| {
+        try stderr.print("Failed to initialize type checker: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer checker.deinit();
+
+    checker.checkDefs() catch |err| {
+        try stderr.print("Type checking failed: {}\n", .{err});
+        std.process.exit(1);
+    };
+
+    // Find all expect statements
+    const statements = env.store.sliceStatements(env.all_statements);
+    var expects = std.ArrayList(ExpectTest).init(gpa);
+    defer expects.deinit();
+
+    for (statements) |stmt_idx| {
+        const stmt = env.store.getStatement(stmt_idx);
+        if (stmt == .s_expect) {
+            const region = env.store.getStatementRegion(stmt_idx);
+            try expects.append(.{
+                .expr_idx = stmt.s_expect.body,
+                .region = region,
+            });
+        }
+    }
+
+    if (expects.items.len == 0) {
+        try stdout.print("No tests found in {s}\n", .{args.path});
+        return;
+    }
+
+    // Create interpreter infrastructure for test evaluation
+    var stack_memory = eval.Stack.initCapacity(gpa, 1024) catch |err| {
+        try stderr.print("Failed to create stack memory: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer stack_memory.deinit();
+
+    var layout_cache = LayoutStore.init(&env, &env.types) catch |err| {
+        try stderr.print("Failed to create layout cache: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer layout_cache.deinit();
+
+    var test_env = TestOpsEnv.init(gpa);
+    defer test_env.deinit();
+
+    var interpreter = Interpreter.init(gpa, &env, &stack_memory, &layout_cache, &env.types) catch |err| {
+        try stderr.print("Failed to create interpreter: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer interpreter.deinit(test_env.get_ops());
+    test_env.setInterpreter(&interpreter);
+
+    // Track test results for verbose output
+    const TestResult = struct {
+        line_number: u32,
+        passed: bool,
+        error_msg: ?[]const u8 = null,
+    };
+
+    var test_results = std.ArrayList(TestResult).init(gpa);
+    defer test_results.deinit();
+
+    // Evaluate each expect statement
+    var passed: u32 = 0;
+    var failed: u32 = 0;
+
+    for (expects.items) |expect_test| {
+        const region_info = env.calcRegionInfo(expect_test.region);
+        const line_number = region_info.start_line_idx + 1;
+
+        // Evaluate the expect expression
+        const result = interpreter.eval(expect_test.expr_idx, test_env.get_ops()) catch |err| {
+            const error_msg = try std.fmt.allocPrint(gpa, "Test evaluation failed: {}", .{err});
+            try test_results.append(.{ .line_number = line_number, .passed = false, .error_msg = error_msg });
+            failed += 1;
+            continue;
+        };
+
+        // Check if the result is a boolean true
+        if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .bool) {
+            const is_true = result.asBool();
+            if (is_true) {
+                try test_results.append(.{ .line_number = line_number, .passed = true });
+                passed += 1;
+            } else {
+                try test_results.append(.{ .line_number = line_number, .passed = false });
+                failed += 1;
+            }
+        } else {
+            const error_msg = try gpa.dupe(u8, "Test did not evaluate to a boolean");
+            try test_results.append(.{ .line_number = line_number, .passed = false, .error_msg = error_msg });
+            failed += 1;
+        }
+    }
+
+    // Calculate elapsed time
+    const end_time = std.time.nanoTimestamp();
+    const elapsed_ns = @as(u64, @intCast(end_time - start_time));
+    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
+
+    // Free allocated error messages
+    defer for (test_results.items) |test_result| {
+        if (test_result.error_msg) |msg| {
+            gpa.free(msg);
+        }
+    };
+
+    // Report results
+    if (failed == 0) {
+        // Success case: only print if verbose, exit with 0
+        if (args.verbose) {
+            try stdout.print("Ran {} test(s): {} passed, 0 failed in {d:.1}ms\n", .{ passed, passed, elapsed_ms });
+            for (test_results.items) |test_result| {
+                try stdout.print("PASS: line {}\n", .{test_result.line_number});
+            }
+        }
+        // Otherwise print nothing at all
+        return; // Exit with 0
+    } else {
+        // Failure case: always print summary with timing
+        try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms\n", .{ passed + failed, passed, failed, elapsed_ms });
+
+        if (args.verbose) {
+            for (test_results.items) |test_result| {
+                if (test_result.passed) {
+                    try stderr.print("PASS: line {}\n", .{test_result.line_number});
+                } else {
+                    if (test_result.error_msg) |msg| {
+                        try stderr.print("FAIL: line {} - {s}\n", .{ test_result.line_number, msg });
+                    } else {
+                        try stderr.print("FAIL: line {}\n", .{test_result.line_number});
+                    }
+                }
+            }
+        }
+
+        std.process.exit(1);
+    }
 }
 
 fn rocRepl(gpa: Allocator) !void {

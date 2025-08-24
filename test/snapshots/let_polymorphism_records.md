@@ -50,7 +50,6 @@ UNUSED VARIABLE - let_polymorphism_records.md:19:27:19:36
 The token **&** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-Here is the problematic code:
 **let_polymorphism_records.md:19:50:19:51:**
 ```roc
 update_data = |container, new_value| { container & data: new_value }
@@ -240,8 +239,7 @@ list_container = make_container(my_empty_list)
 # Polymorphic record update
 update_data = |container, new_value| {
 	container
-	
-	data : new_value
+		data : new_value
 }
 
 # Used with different record types

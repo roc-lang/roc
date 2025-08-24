@@ -14,7 +14,6 @@ PARSE ERROR - fuzz_crash_045.md:1:51:1:51
 A parsing error occurred: `expected_provides_close_square`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_045.md:1:51:1:51:**
 ```roc
 platform""requires{}{}exposes[]packages{}provides[

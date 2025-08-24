@@ -91,6 +91,7 @@ pub const TestArgs = struct {
     path: []const u8, // the path to the file to be tested
     opt: OptLevel, // the optimization level to be used for test execution
     main: ?[]const u8, // the path to a roc file with an app header to be used to resolve dependencies
+    verbose: bool = false, // enable verbose output showing individual test results
 };
 
 /// Arguments for `roc format`
@@ -449,6 +450,7 @@ fn parseTest(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
     var main: ?[]const u8 = null;
+    var verbose: bool = false;
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
@@ -462,6 +464,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\Options:
             \\      --opt=<size|speed|dev>  Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed dev
             \\      --main <main>           The .roc file of the main app/package module to resolve dependencies from
+            \\      --verbose               Enable verbose output showing individual test results
             \\  -h, --help                  Print help
             \\
         };
@@ -481,6 +484,8 @@ fn parseTest(args: []const []const u8) CliArgs {
             } else {
                 return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
             }
+        } else if (mem.eql(u8, arg, "--verbose")) {
+            verbose = true;
         } else {
             if (path != null) {
                 return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "test", .arg = arg } } };
@@ -488,7 +493,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main } };
+    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main, .verbose = verbose } };
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {

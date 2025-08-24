@@ -1168,13 +1168,14 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!?AST.State
                 // continue to parse final expression
             }
         },
-        // Expect to parse a Type Annotation, e.g. `Foo a : (a,a)`
+        // Type Annotation (e.g. `Foo a : (a,a)`)
         .UpperIdent => {
             const start = self.pos;
             if (statementType == .top_level) {
                 const header = try self.parseTypeHeader();
                 if (self.peek() != .OpColon and self.peek() != .OpColonEqual) {
-                    return try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, start);
+                    // Point to the unexpected token (e.g., "U8" in "List U8")
+                    return try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
                 }
                 const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual) .nominal else .alias;
                 self.advance();
@@ -1855,6 +1856,9 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
         .StringStart => {
             expr = try self.parseStringExpr();
         },
+        .MultilineStringStart => {
+            expr = try self.parseMultiLineStringExpr();
+        },
         .OpenSquare => {
             self.advance();
             const scratch_top = self.store.scratchExprTop();
@@ -2033,7 +2037,8 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
             const condition = try self.parseExpr();
             const then = try self.parseExpr();
             if (self.peek() != .KwElse) {
-                return try self.pushMalformed(AST.Expr.Idx, .no_else, self.pos);
+                // Point to the if keyword for missing else error
+                return try self.pushMalformed(AST.Expr.Idx, .no_else, start);
             }
             self.advance();
             const else_idx = try self.parseExpr();
@@ -2300,6 +2305,65 @@ pub fn parseBranch(self: *Parser) Error!AST.MatchBranch.Idx {
     });
 }
 
+/// Parse a multiline string expression with optional interpolations
+pub fn parseMultiLineStringExpr(self: *Parser) Error!AST.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+    std.debug.assert(self.peek() == .MultilineStringStart);
+    const start = self.pos;
+    self.advance();
+    const scratch_top = self.store.scratchExprTop();
+    while (self.peek() != .EndOfFile) {
+        switch (self.peek()) {
+            .MultilineStringStart => {
+                self.advance();
+            },
+            .StringPart => {
+                const part_start = self.pos;
+                self.advance(); // Advance past the StringPart
+                const index = try self.store.addExpr(.{ .string_part = .{
+                    .token = part_start,
+                    .region = .{ .start = part_start, .end = self.pos },
+                } });
+                try self.store.addScratchExpr(index);
+            },
+            .OpenStringInterpolation => {
+                self.advance(); // Advance past OpenStringInterpolation
+                const ex = try self.parseExpr();
+                try self.store.addScratchExpr(ex);
+                if (self.peek() != .CloseStringInterpolation) {
+                    return try self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, start);
+                }
+                self.advance(); // Advance past the CloseString Interpolation
+            },
+            .MalformedStringPart => {
+                self.advance();
+                try self.pushDiagnostic(.string_unexpected_token, .{
+                    .start = self.pos,
+                    .end = self.pos,
+                });
+            },
+            else => {
+                // Multi lins strings just end
+                break;
+            },
+        }
+    }
+
+    const parts = try self.store.exprSpanFrom(scratch_top);
+    const expr = try self.store.addExpr(.{
+        .multiline_string = .{
+            .token = start,
+            .parts = parts,
+            .region = .{
+                .start = start,
+                .end = self.pos,
+            },
+        },
+    });
+    return expr;
+}
+
 /// todo
 pub fn parseStringExpr(self: *Parser) Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
@@ -2336,11 +2400,9 @@ pub fn parseStringExpr(self: *Parser) Error!AST.Expr.Idx {
                 self.advance(); // Advance past the CloseString Interpolation
             },
             .MalformedStringPart => {
+                // Don't create a parser diagnostic - the tokenizer already created
+                // a more precise diagnostic with the exact error location
                 self.advance();
-                try self.pushDiagnostic(.string_unexpected_token, .{
-                    .start = self.pos,
-                    .end = self.pos,
-                });
             },
             else => {
                 // Something is broken in the tokenizer if we get here!

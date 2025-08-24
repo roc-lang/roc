@@ -251,6 +251,17 @@ pub fn setBool(self: *StackValue, value: u8) void {
     typed_ptr.* = value;
 }
 
+/// Read this StackValue's boolean value
+pub fn asBool(self: StackValue) bool {
+    std.debug.assert(self.is_initialized); // Ensure initialized before reading
+    std.debug.assert(self.ptr != null);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .bool);
+
+    // Read the boolean value as a byte
+    const bool_ptr = @as(*const u8, @ptrCast(@alignCast(self.ptr.?)));
+    return bool_ptr.* != 0;
+}
+
 /// Create a TupleAccessor for safe tuple element access
 pub fn asTuple(self: StackValue, layout_cache: *LayoutStore) !TupleAccessor {
     std.debug.assert(self.is_initialized); // Tuple must be initialized before accessing
@@ -451,13 +462,8 @@ pub fn asClosure(self: StackValue) *const Closure {
     return @ptrCast(@alignCast(self.ptr.?));
 }
 
-/// Clone this value for binding (handles ref counting)
-pub fn cloneForBinding(self: StackValue) StackValue {
-    if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
-        const roc_str = self.asRocStr();
-        roc_str.incref(1);
-    }
-    // For non-strings, just reference the same memory
+/// Move this value to binding (transfers ownership, no refcounts change)
+pub fn moveForBinding(self: StackValue) StackValue {
     return self;
 }
 

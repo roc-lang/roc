@@ -18,7 +18,6 @@ UNDEFINED VARIABLE - wrong_arrow.md:1:7:1:8
 **PARSE ERROR**
 Match branches use `=>` instead of `->`.
 
-Here is the problematic code:
 **wrong_arrow.md:2:8:2:8:**
 ```roc
     [] -> Err(EmptyList)
@@ -29,7 +28,6 @@ Here is the problematic code:
 **PARSE ERROR**
 Match branches use `=>` instead of `->`.
 
-Here is the problematic code:
 **wrong_arrow.md:3:13:3:13:**
 ```roc
     [.., e] -> Ok(e)

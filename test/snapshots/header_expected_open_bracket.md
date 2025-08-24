@@ -14,7 +14,6 @@ PARSE ERROR - header_expected_open_bracket.md:1:7:1:7
 A parsing error occurred: `header_expected_open_square`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **header_expected_open_bracket.md:1:7:1:7:**
 ```roc
 module

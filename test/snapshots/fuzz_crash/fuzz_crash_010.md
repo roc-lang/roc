@@ -24,8 +24,16 @@ PARSE ERROR - fuzz_crash_010.md:5:35:5:35
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
 
+
+
 **UNCLOSED STRING**
 This string is missing a closing quote.
+
+```roc
+    "on        (string 'onmo %')))
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -35,7 +43,6 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
-Here is the problematic code:
 **fuzz_crash_010.md:1:1:1:2:**
 ```roc
 H{o,
@@ -47,7 +54,6 @@ H{o,
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_010.md:1:2:1:3:**
 ```roc
 H{o,
@@ -59,7 +65,6 @@ H{o,
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_010.md:1:3:1:4:**
 ```roc
 H{o,
@@ -71,7 +76,6 @@ H{o,
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_010.md:1:4:1:5:**
 ```roc
 H{o,
@@ -83,7 +87,6 @@ H{o,
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_010.md:2:6:2:7:**
 ```roc
     ]
@@ -95,7 +98,6 @@ Here is the problematic code:
 A parsing error occurred: `string_unclosed`
 This is an unexpected parsing error. Please check your syntax.
 
-Here is the problematic code:
 **fuzz_crash_010.md:5:35:5:35:**
 ```roc
     "on        (string 'onmo %')))
