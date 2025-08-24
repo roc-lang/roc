@@ -453,7 +453,7 @@ fn problemsEqual(a: ProblemEntry, b: ProblemEntry) bool {
 /// Helper to determine if an AST2 node tag represents an expression
 fn isExpressionNode(tag: AST.Node.Tag) bool {
     return switch (tag) {
-        .num_literal_i32, .int_literal_i32, .num_literal_big, .int_literal_big, .frac_literal_small, .frac_literal_big, .str_literal_small, .str_literal_big, .lc, .uc, .var_lc, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .block, .record_literal, .lambda, .lambda_no_args => true,
+        .num_literal_i32, .int_literal_i32, .num_literal_big, .int_literal_big, .frac_literal_small, .frac_literal_big, .str_literal_small, .str_literal_big, .lc, .uc, .var_lc, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .block, .record_literal, .lambda, .lambda_no_args, .apply_lc, .apply_uc, .apply_anon, .tuple_literal, .list_literal, .if_else, .match, .unary_neg, .unary_not => true,
         else => false,
     };
 }

@@ -110,6 +110,8 @@ pub const ExprTag = enum(u8) {
     record_accessor, // Record accessor function (e.g., .foo)
     dot_num, // Tuple accessor (e.g., .0)
     match, // Match/when expression
+    unary_neg, // Unary negation (e.g., -expr)
+    unary_not, // Unary not (e.g., !expr)
     malformed,
 };
 
@@ -491,6 +493,8 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
         .record_accessor => .record_accessor,
         .dot_num => .dot_num,
         .match => .match,
+        .unary_neg => .unary_neg,
+        .unary_not => .unary_not,
         .malformed => .malformed,
     };
 
@@ -1208,9 +1212,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                 _ = try self.canonicalizeExpr(allocator, operand_idx, raw_src, idents);
             }
 
-            // For now, treat unary negation as a regular negation expression
-            // TODO: Implement proper unary operator handling
-            self.mutateToExpr(node_idx, .malformed);
+            self.mutateToExpr(node_idx, .unary_neg);
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
         },
@@ -1223,8 +1225,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                 _ = try self.canonicalizeExpr(allocator, operand_idx, raw_src, idents);
             }
 
-            // For now, mark as malformed since effectful functions aren't fully supported
-            self.mutateToExpr(node_idx, .malformed);
+            self.mutateToExpr(node_idx, .unary_not);
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
         },
