@@ -16,6 +16,8 @@ PARSE ERROR - fuzz_crash_073.md:1:12:1:14
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
 
+
+
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.

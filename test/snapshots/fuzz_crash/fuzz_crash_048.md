@@ -24,6 +24,8 @@ UNDECLARED TYPE - fuzz_crash_048.md:9:13:9:18
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
 
+
+
 **UNDECLARED TYPE**
 The type _Thing_ is not declared in this scope.
 

@@ -143,6 +143,8 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
 
     var report = reporting.Report.init(allocator, title, .runtime_error);
     try report.document.addText(body);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
 
     // Add the region information from the diagnostic if valid
     if (diagnostic.region.start.offset < diagnostic.region.end.offset and
@@ -2205,6 +2207,11 @@ pub const Expr = union(enum) {
         region: TokenizedRegion,
         parts: Expr.Span,
     },
+    multiline_string: struct {
+        token: Token.Idx,
+        region: TokenizedRegion,
+        parts: Expr.Span,
+    },
     list: struct {
         items: Expr.Span,
         region: TokenizedRegion,
@@ -2290,6 +2297,7 @@ pub const Expr = union(enum) {
             .int => |e| e.region,
             .frac => |e| e.region,
             .string => |e| e.region,
+            .multiline_string => |e| e.region,
             .tag => |e| e.region,
             .list => |e| e.region,
             .record => |e| e.region,
@@ -2362,6 +2370,19 @@ pub const Expr = union(enum) {
             .string => |str| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-string");
+                try ast.appendRegionInfoToSexprTree(env, tree, str.region);
+                const attrs = tree.beginNode();
+
+                for (ast.store.exprSlice(str.parts)) |part_id| {
+                    const part_expr = ast.store.getExpr(part_id);
+                    try part_expr.pushToSExprTree(gpa, env, ast, tree);
+                }
+
+                try tree.endNode(begin, attrs);
+            },
+            .multiline_string => |str| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-multiline-string");
                 try ast.appendRegionInfoToSexprTree(env, tree, str.region);
                 const attrs = tree.beginNode();
 

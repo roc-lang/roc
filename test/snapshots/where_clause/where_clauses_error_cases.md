@@ -175,7 +175,6 @@ broken_fn1 : a -> b
 	where
 		
 
-
 # Empty where clause
 broken_fn2 : a -> b
 	where 
