@@ -833,7 +833,7 @@ const Formatter = struct {
                             if (add_newline) {
                                 // Comments could be located before the MultilineStringStart token, not the StringPart token
                                 _ = try fmt.flushCommentsBefore(str.region.start - 1);
-                                try ensureNewline(fmt);
+                                try fmt.ensureNewline();
                                 try fmt.pushIndent();
                                 try fmt.pushAll("\"\"\"");
                             }
@@ -907,28 +907,29 @@ const Formatter = struct {
                 // Handle extension if present
                 if (r.ext) |ext| {
                     if (multiline) {
-                        _ = try fmt.flushCommentsAfter(r.region.start);
                         fmt.curr_indent += 1;
+                        _ = try fmt.flushCommentsAfter(r.region.start);
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
                     } else {
                         try fmt.push(' ');
                     }
                     try fmt.pushAll("..");
-                    _ = try fmt.formatExpr(ext);
+                    const ext_region = try fmt.formatExpr(ext);
                     has_extension = true;
 
                     try fmt.push(',');
                     if (multiline and fields.len > 0) {
-                        try fmt.newline();
+                        _ = try fmt.flushCommentsAfter(ext_region.end);
+                        try fmt.ensureNewline();
                         try fmt.pushIndent();
                     }
                 }
 
                 // Format fields
                 if (multiline and !has_extension and fields.len > 0) {
-                    _ = try fmt.flushCommentsAfter(r.region.start);
                     fmt.curr_indent += 1;
+                    _ = try fmt.flushCommentsAfter(r.region.start);
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
@@ -950,23 +951,18 @@ const Formatter = struct {
                         }
                         try fmt.push(',');
                         _ = try fmt.flushCommentsAfter(field_region.end);
-                        try fmt.ensureNewline();
-                        if (i < fields.len - 1) {
-                            try fmt.pushIndent();
+                        if (i == fields.len - 1) {
+                            fmt.curr_indent -= 1;
                         }
+                        try fmt.ensureNewline();
+                        try fmt.pushIndent();
                     } else if (i < fields.len - 1) {
                         try fmt.pushAll(",");
                     }
                 }
 
-                if (has_extension or fields.len > 0) {
-                    if (multiline) {
-                        fmt.curr_indent -= 1;
-                        try fmt.ensureNewline();
-                        try fmt.pushIndent();
-                    } else {
-                        try fmt.push(' ');
-                    }
+                if ((has_extension or fields.len > 0) and !multiline) {
+                    try fmt.push(' ');
                 }
                 try fmt.push('}');
             },
@@ -989,16 +985,14 @@ const Formatter = struct {
                     if (args_are_multiline) {
                         try fmt.push(',');
                         _ = try fmt.flushCommentsAfter(arg_region.end);
-                        try fmt.ensureNewline();
-                        if (i < args.len - 1) {
-                            try fmt.pushIndent();
+                        if (i == args.len - 1) {
+                            fmt.curr_indent -= 1;
                         }
+                        try fmt.ensureNewline();
+                        try fmt.pushIndent();
                     } else if (i < args.len - 1) {
                         try fmt.pushAll(", ");
                     }
-                }
-                if (args_are_multiline) {
-                    fmt.curr_indent -= 1;
                 }
                 try fmt.push('|');
                 if (try fmt.flushCommentsBefore(body_region.start)) {
@@ -1946,7 +1940,7 @@ const Formatter = struct {
                     if (found_comment or newline_count > 0) {
                         try fmt.pushIndent();
                     } else if (!fmt.has_newline) {
-                        try fmt.pushAll(" ");
+                        try fmt.push(' ');
                     }
                     try fmt.push('#');
                     const comment_text = between_text[comment_start..comment_end];
@@ -1957,13 +1951,15 @@ const Formatter = struct {
                     found_comment = true;
                 }
                 try fmt.newline();
-                newline_count += 1;
+                newline_count = 1; // reset count to allow an additional newline after a comment
                 i = comment_end;
                 if (i < between_text.len and (between_text[i] == '\n' or between_text[i] == '\r')) {
                     i += 1; // Skip any additional newlines
                 }
             } else if (between_text[i] == '\n') {
-                try fmt.newline();
+                if (newline_count < 2) {
+                    try fmt.newline();
+                }
                 newline_count += 1;
                 i += 1;
             } else {
