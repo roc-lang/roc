@@ -7,37 +7,30 @@ type=expr
 ~~~roc
 99999999999999999999999999999999999999999
 ~~~
-# EXPECTED
-INVALID NUMBER - expr_int_invalid.md:1:1:1:42
-# PROBLEMS
-**INVALID NUMBER**
-This number literal is not valid: `99999999999999999999999999999999999999999`
-
-**expr_int_invalid.md:1:1:1:42:**
-```roc
-99999999999999999999999999999999999999999
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
-
 # TOKENS
-~~~zig
-Int(1:1-1:42),EndOfFile(1:42-1:42),
-~~~
+~~~text
+Int ~~~
 # PARSE
 ~~~clojure
-(e-int @1.1-1.42 (raw "99999999999999999999999999999999999999999"))
+(num_literal_big big:<idx:0>)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+INVALID NUMBER - expr_int_invalid.md:1:1:1:42
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "invalid_num_literal"))
+(Expr.num_literal_big)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag num_literal_big :type "Num(_a)")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.42 (type "Error"))
+~~~roc
+Num(_a)
 ~~~

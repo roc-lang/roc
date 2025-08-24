@@ -10,84 +10,56 @@ match l {
     [.., e] => Ok(e)
 }
 ~~~
-# EXPECTED
-UNDEFINED VARIABLE - empty_list_before_rest_pattern.md:1:7:1:8
-# PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `l` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**empty_list_before_rest_pattern.md:1:7:1:8:**
-```roc
-match l {
-```
-      ^
-
-
 # TOKENS
-~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:8),OpenCurly(1:9-1:10),
-OpenSquare(2:5-2:6),CloseSquare(2:6-2:7),OpFatArrow(2:8-2:10),UpperIdent(2:11-2:14),NoSpaceOpenRound(2:14-2:15),UpperIdent(2:15-2:24),CloseRound(2:24-2:25),
-OpenSquare(3:5-3:6),DoubleDot(3:6-3:8),Comma(3:8-3:9),LowerIdent(3:10-3:11),CloseSquare(3:11-3:12),OpFatArrow(3:13-3:15),UpperIdent(3:16-3:18),NoSpaceOpenRound(3:18-3:19),LowerIdent(3:19-3:20),CloseRound(3:20-3:21),
-CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
-~~~
+~~~text
+KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow UpperIdent OpenRound UpperIdent CloseRound OpenSquare DoubleDot Comma LowerIdent CloseSquare OpFatArrow UpperIdent OpenRound LowerIdent CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(e-match
-	(e-ident @1.7-1.8 (raw "l"))
-	(branches
-		(branch @2.5-2.25
-			(p-list @2.5-2.7)
-			(e-apply @2.11-2.25
-				(e-tag @2.11-2.14 (raw "Err"))
-				(e-tag @2.15-2.24 (raw "EmptyList"))))
-		(branch @3.5-3.21
-			(p-list @3.5-3.12
-				(p-list-rest @3.6-3.8)
-				(p-ident @3.10-3.11 (raw "e")))
-			(e-apply @3.16-3.21
-				(e-tag @3.16-3.18 (raw "Ok"))
-				(e-ident @3.19-3.20 (raw "e"))))))
+(match <12 branches>)
 ~~~
 # FORMATTED
 ~~~roc
-match l {
-	[] => Err(EmptyList)
-	[.., e] => Ok(e)
-}
+NO CHANGE
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - empty_list_before_rest_pattern.md:1:7:1:8
+# PROBLEMS
+**Parse Error**
+at 1:1 to 1:9
+
+**Parse Error**
+at 2:8 to 2:8
+
+**Parse Error**
+at 3:8 to 3:8
+
+**Parse Error**
+at 3:5 to 3:10
+
+**Parse Error**
+at 3:11 to 3:11
+
+**Parse Error**
+at 3:13 to 3:13
+
+**Parse Error**
+at 1:1 to 4:2
+
+**Parse Error**
+at 4:2 to 4:2
+
+**Unsupported Node**
+at 1:1 to 4:2
+
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-4.2
-	(match @1.1-4.2
-		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(branches
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-list @2.5-2.7
-							(patterns))))
-				(value
-					(e-nominal @2.11-2.25 (nominal "Result")
-						(e-tag @2.11-2.25 (name "Err")
-							(args
-								(e-tag @2.15-2.24 (name "EmptyList")))))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-list @3.5-3.12
-							(patterns
-								(p-assign @3.10-3.11 (ident "e")))
-							(rest-at (index 0)))))
-				(value
-					(e-nominal @3.16-3.21 (nominal "Result")
-						(e-tag @3.16-3.21 (name "Ok")
-							(args
-								(e-lookup-local @3.19-3.20
-									(p-assign @3.10-3.11 (ident "e")))))))))))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-4.2 (type "Result(ok, [EmptyList]_others)"))
+~~~roc
+# No expression found
 ~~~

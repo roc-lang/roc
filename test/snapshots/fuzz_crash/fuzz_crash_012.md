@@ -7,6 +7,29 @@ type=file
 ~~~roc
 ||(|(l888888888|
 ~~~
+# TOKENS
+~~~text
+OpOr OpenRound OpBar OpenRound LowerIdent OpBar ~~~
+# PARSE
+~~~clojure
+(block
+  (apply_anon
+    (malformed malformed:expr_unexpected_token)
+    (lambda
+      (body
+        (malformed malformed:expr_unexpected_token)
+      )
+      (args
+        (lc "l888888888")
+      )
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_012.md:1:1:1:2
 PARSE ERROR - fuzz_crash_012.md:1:2:1:3
@@ -16,114 +39,31 @@ PARSE ERROR - fuzz_crash_012.md:1:5:1:6
 PARSE ERROR - fuzz_crash_012.md:1:6:1:16
 PARSE ERROR - fuzz_crash_012.md:1:16:1:17
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
+**Parse Error**
+at 1:1 to 1:1
 
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
+**Parse Error**
+at 1:16 to 1:16
 
-**fuzz_crash_012.md:1:1:1:2:**
-```roc
-||(|(l888888888|
-```
-^
+**Parse Error**
+at 1:17 to 1:17
 
+**Parse Error**
+at 1:3 to 1:17
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**Unsupported Node**
+at 1:1 to 1:1
 
-**fuzz_crash_012.md:1:2:1:3:**
-```roc
-||(|(l888888888|
-```
- ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_012.md:1:3:1:4:**
-```roc
-||(|(l888888888|
-```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_012.md:1:4:1:5:**
-```roc
-||(|(l888888888|
-```
-   ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_012.md:1:5:1:6:**
-```roc
-||(|(l888888888|
-```
-    ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_012.md:1:6:1:16:**
-```roc
-||(|(l888888888|
-```
-     ^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_012.md:1:16:1:17:**
-```roc
-||(|(l888888888|
-```
-               ^
-
-
-# TOKENS
-~~~zig
-OpBar(1:1-1:2),OpBar(1:2-1:3),NoSpaceOpenRound(1:3-1:4),OpBar(1:4-1:5),NoSpaceOpenRound(1:5-1:6),LowerIdent(1:6-1:16),OpBar(1:16-1:17),EndOfFile(1:17-1:17),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-1.17
-	(malformed-header @1.1-1.2 (tag "missing_header"))
-	(statements
-		(s-malformed @1.2-1.3 (tag "statement_unexpected_token"))
-		(s-malformed @1.3-1.4 (tag "statement_unexpected_token"))
-		(s-malformed @1.4-1.5 (tag "statement_unexpected_token"))
-		(s-malformed @1.5-1.6 (tag "statement_unexpected_token"))
-		(s-malformed @1.6-1.16 (tag "statement_unexpected_token"))
-		(s-malformed @1.16-1.17 (tag "statement_unexpected_token"))))
-~~~
-# FORMATTED
-~~~roc
-
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

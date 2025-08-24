@@ -7,27 +7,32 @@ type=expr
 ~~~roc
 []
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-OpenSquare(1:1-1:2),CloseSquare(1:2-1:3),EndOfFile(1:3-1:3),
-~~~
+~~~text
+OpenSquare CloseSquare ~~~
 # PARSE
 ~~~clojure
-(e-list @1.1-1.3)
+(list_literal)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**Unsupported Node**
+at 1:1 to 1:2
+
 # CANONICALIZE
 ~~~clojure
-(e-empty_list @1.1-1.3)
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.3 (type "List(_elem)"))
+~~~roc
+# No expression found
 ~~~

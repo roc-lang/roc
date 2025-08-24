@@ -8,46 +8,36 @@ type=file
 module[]{
  
 ~~~
-# EXPECTED
-PARSE ERROR - fuzz_crash_035.md:1:9:1:10
-# PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_035.md:1:9:1:10:**
-```roc
-module[]{
-```
-        ^
-
-
 # TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),OpenCurly(1:9-1:10),
-EndOfFile(2:2-2:2),
-~~~
+~~~text
+KwModule OpenSquare CloseSquare OpenCurly ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.10
-	(module @1.1-1.9
-		(exposes @1.7-1.9))
-	(statements
-		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))))
+(block
+  (block)
+)
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-
+NO CHANGE
 ~~~
+# EXPECTED
+PARSE ERROR - fuzz_crash_035.md:1:9:1:10
+# PROBLEMS
+**Parse Error**
+at 1:9 to 2:2
+
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.block
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "_a")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

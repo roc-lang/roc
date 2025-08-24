@@ -7,39 +7,35 @@ type=expr
 ~~~roc
 I.5
 ~~~
-# EXPECTED
-PARSE ERROR - module_dot_tuple.md:1:2:1:4
-# PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expr_no_space_dot_int`
-This is an unexpected parsing error. Please check your syntax.
-
-**module_dot_tuple.md:1:2:1:4:**
-```roc
-I.5
-```
- ^^
-
-
 # TOKENS
-~~~zig
-UpperIdent(1:1-1:2),NoSpaceDotInt(1:2-1:4),EndOfFile(1:4-1:4),
-~~~
+~~~text
+UpperIdent Dot Int ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.2-1.4 (reason "expr_no_space_dot_int"))
+(binop_pipe
+  (uc "I")
+  (num_literal_i32 5)
+)
 ~~~
 # FORMATTED
 ~~~roc
-
+NO CHANGE
 ~~~
+# EXPECTED
+PARSE ERROR - module_dot_tuple.md:1:2:1:4
+# PROBLEMS
+**Unsupported Node**
+at 1:1 to 1:4
+
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+# No expression found
 ~~~

@@ -10,40 +10,38 @@ type=expr
     {}
 }
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-OpenCurly(1:1-1:2),
-KwCrash(2:5-2:10),StringStart(2:11-2:12),StringPart(2:12-2:37),StringEnd(2:37-2:38),
-OpenCurly(3:5-3:6),CloseCurly(3:6-3:7),
-CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
-~~~
+~~~text
+OpenCurly KwCrash String OpenCurly CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(e-block @1.1-4.2
-	(statements
-		(s-crash @2.5-2.38
-			(e-string @2.11-2.38
-				(e-string-part @2.12-2.37 (raw "This is a crash statement"))))
-		(e-record @3.5-3.7)))
+(block
+  (crash <statement>)
+  (record_literal)
+)
 ~~~
 # FORMATTED
 ~~~roc
-{
-	crash "This is a crash statement"
-	{}
-}
+NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**Unsupported Node**
+at 2:5 to 2:38
+
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-4.2
-	(s-crash @2.5-2.38 (msg "This is a crash statement"))
-	(e-empty_record @3.5-3.7))
+(Expr.block
+  (Expr.malformed)
+  (Expr.record_literal
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "{}")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-4.2 (type "{}"))
+~~~roc
 ~~~

@@ -18,6 +18,46 @@ blue = Blue
 green : Color
 green = Green
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare KwImport UpperIdent Dot OpStar LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent ~~~
+# PARSE
+~~~clojure
+(block
+  (import
+    (uc "Color")
+  )
+  (malformed malformed:expr_unexpected_token)
+  (binop_colon
+    (lc "red")
+    (uc "Color")
+  )
+  (binop_equals
+    (lc "red")
+    (uc "Red")
+  )
+  (binop_colon
+    (lc "blue")
+    (uc "Color")
+  )
+  (binop_equals
+    (lc "blue")
+    (uc "Blue")
+  )
+  (binop_colon
+    (lc "green")
+    (uc "Color")
+  )
+  (binop_equals
+    (lc "green")
+    (uc "Green")
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 PARSE ERROR - nominal_import_wildcard.md:3:13:3:15
 MODULE NOT FOUND - nominal_import_wildcard.md:3:1:3:13
@@ -25,151 +65,59 @@ UNDECLARED TYPE - nominal_import_wildcard.md:5:7:5:12
 UNDECLARED TYPE - nominal_import_wildcard.md:8:8:8:13
 UNDECLARED TYPE - nominal_import_wildcard.md:11:9:11:14
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**Parse Error**
+at 3:14 to 3:14
 
-**nominal_import_wildcard.md:3:13:3:15:**
-```roc
-import Color.*
-```
-            ^^
+**Unsupported Node**
+at 3:1 to 3:13
 
+**Unsupported Node**
+at 3:14 to 3:14
 
-**MODULE NOT FOUND**
-The module `Color` was not found in this Roc project.
+**Pattern in Expression Context**
+at 5:7 to 5:12
 
-You're attempting to use this module here:
-**nominal_import_wildcard.md:3:1:3:13:**
-```roc
-import Color.*
-```
-^^^^^^^^^^^^
+**Pattern in Expression Context**
+at 6:7 to 6:10
 
+**Pattern in Expression Context**
+at 8:8 to 8:13
 
-**UNDECLARED TYPE**
-The type _Color_ is not declared in this scope.
+**Pattern in Expression Context**
+at 9:8 to 9:12
 
-This type is referenced here:
-**nominal_import_wildcard.md:5:7:5:12:**
-```roc
-red : Color
-```
-      ^^^^^
+**Pattern in Expression Context**
+at 11:9 to 11:14
 
+**Pattern in Expression Context**
+at 12:9 to 12:14
 
-**UNDECLARED TYPE**
-The type _Color_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_import_wildcard.md:8:8:8:13:**
-```roc
-blue : Color
-```
-       ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Color_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_import_wildcard.md:11:9:11:14:**
-```roc
-green : Color
-```
-        ^^^^^
-
-
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:19),Comma(1:19-1:20),LowerIdent(1:21-1:25),CloseSquare(1:25-1:26),
-KwImport(3:1-3:7),UpperIdent(3:8-3:13),DotStar(3:13-3:15),
-LowerIdent(5:1-5:4),OpColon(5:5-5:6),UpperIdent(5:7-5:12),
-LowerIdent(6:1-6:4),OpAssign(6:5-6:6),UpperIdent(6:7-6:10),
-LowerIdent(8:1-8:5),OpColon(8:6-8:7),UpperIdent(8:8-8:13),
-LowerIdent(9:1-9:5),OpAssign(9:6-9:7),UpperIdent(9:8-9:12),
-LowerIdent(11:1-11:6),OpColon(11:7-11:8),UpperIdent(11:9-11:14),
-LowerIdent(12:1-12:6),OpAssign(12:7-12:8),UpperIdent(12:9-12:14),EndOfFile(12:14-12:14),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-12.14
-	(module @1.1-1.26
-		(exposes @1.8-1.26
-			(exposed-lower-ident @1.9-1.12
-				(text "red"))
-			(exposed-lower-ident @1.14-1.19
-				(text "green"))
-			(exposed-lower-ident @1.21-1.25
-				(text "blue"))))
-	(statements
-		(s-import @3.1-3.13 (raw "Color"))
-		(s-malformed @3.13-3.15 (tag "statement_unexpected_token"))
-		(s-type-anno @5.1-5.12 (name "red")
-			(ty @5.7-5.12 (name "Color")))
-		(s-decl @6.1-6.10
-			(p-ident @6.1-6.4 (raw "red"))
-			(e-tag @6.7-6.10 (raw "Red")))
-		(s-type-anno @8.1-8.13 (name "blue")
-			(ty @8.8-8.13 (name "Color")))
-		(s-decl @9.1-9.12
-			(p-ident @9.1-9.5 (raw "blue"))
-			(e-tag @9.8-9.12 (raw "Blue")))
-		(s-type-anno @11.1-11.14 (name "green")
-			(ty @11.9-11.14 (name "Color")))
-		(s-decl @12.1-12.14
-			(p-ident @12.1-12.6 (raw "green"))
-			(e-tag @12.9-12.14 (raw "Green")))))
-~~~
-# FORMATTED
-~~~roc
-module [red, green, blue]
-
-import Color
-
-
-red : Color
-red = Red
-
-blue : Color
-blue = Blue
-
-green : Color
-green = Green
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @6.1-6.4 (ident "red"))
-		(e-tag @6.7-6.10 (name "Red"))
-		(annotation @6.1-6.4
-			(declared-type
-				(ty @5.7-5.12 (name "Color")))))
-	(d-let
-		(p-assign @9.1-9.5 (ident "blue"))
-		(e-tag @9.8-9.12 (name "Blue"))
-		(annotation @9.1-9.5
-			(declared-type
-				(ty @8.8-8.13 (name "Color")))))
-	(d-let
-		(p-assign @12.1-12.6 (ident "green"))
-		(e-tag @12.9-12.14 (name "Green"))
-		(annotation @12.1-12.6
-			(declared-type
-				(ty @11.9-11.14 (name "Color")))))
-	(s-import @3.1-3.13 (module "Color")
-		(exposes)))
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "red")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "blue")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "green")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @6.1-6.4 (type "Error"))
-		(patt @9.1-9.5 (type "Error"))
-		(patt @12.1-12.6 (type "Error")))
-	(expressions
-		(expr @6.7-6.10 (type "Error"))
-		(expr @9.8-9.12 (type "Error"))
-		(expr @12.9-12.14 (type "Error"))))
+~~~roc
 ~~~

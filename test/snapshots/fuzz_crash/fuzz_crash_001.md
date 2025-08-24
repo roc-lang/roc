@@ -7,71 +7,43 @@ type=file
 ~~~roc
 mo|%
 ~~~
+# TOKENS
+~~~text
+LowerIdent OpBar OpPercent ~~~
+# PARSE
+~~~clojure
+(block
+  (binop_pipe
+    (lc "mo")
+    (malformed malformed:expr_unexpected_token)
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_001.md:1:1:1:3
 PARSE ERROR - fuzz_crash_001.md:1:3:1:4
 PARSE ERROR - fuzz_crash_001.md:1:4:1:5
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
+**Parse Error**
+at 1:4 to 1:4
 
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
+**Unsupported Node**
+at 1:4 to 1:4
 
-**fuzz_crash_001.md:1:1:1:3:**
-```roc
-mo|%
-```
-^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_001.md:1:3:1:4:**
-```roc
-mo|%
-```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_001.md:1:4:1:5:**
-```roc
-mo|%
-```
-   ^
-
-
-# TOKENS
-~~~zig
-LowerIdent(1:1-1:3),OpBar(1:3-1:4),OpPercent(1:4-1:5),EndOfFile(1:5-1:5),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-1.5
-	(malformed-header @1.1-1.3 (tag "missing_header"))
-	(statements
-		(s-malformed @1.3-1.4 (tag "statement_unexpected_token"))
-		(s-malformed @1.4-1.5 (tag "statement_unexpected_token"))))
-~~~
-# FORMATTED
-~~~roc
-
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.lambda)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "_a")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

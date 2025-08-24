@@ -7,27 +7,31 @@ type=expr
 ~~~roc
 {}
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-OpenCurly(1:1-1:2),CloseCurly(1:2-1:3),EndOfFile(1:3-1:3),
-~~~
+~~~text
+OpenCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(e-record @1.1-1.3)
+(record_literal)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-empty_record @1.1-1.3)
+(Expr.record_literal
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.3 (type "{}"))
+~~~roc
+{}
 ~~~

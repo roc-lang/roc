@@ -22,6 +22,43 @@ pkg: 77"..c", mm} #
 ar,
 		]
 ~~~
+# TOKENS
+~~~text
+KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpFatArrow OpenCurly CloseCurly Comma CloseCurly KwExposes OpenSquare Dot CloseSquare KwPackages OpenCurly LowerIdent OpColon Int String Comma LowerIdent CloseCurly KwProvides OpenSquare LowerIdent Comma CloseSquare ~~~
+# PARSE
+~~~clojure
+(block
+  (uc "Str")
+  (malformed malformed:expr_unexpected_token)
+  (record_literal)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (list_literal
+    (malformed malformed:expr_unexpected_token)
+  )
+  (malformed malformed:expr_unexpected_token)
+  (record_literal
+    (binop_colon
+      (lc "pkg")
+      (num_literal_i32 77)
+    )
+    (str_literal_small "..c")
+    (lc "mm")
+  )
+  (malformed malformed:expr_unexpected_token)
+  (list_literal
+    (tuple_literal
+      (lc "ar")
+      (malformed malformed:expr_unexpected_token)
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_030.md:8:5:8:6
 PARSE ERROR - fuzz_crash_030.md:12:8:12:9
@@ -36,188 +73,124 @@ PARSE ERROR - fuzz_crash_030.md:15:1:15:3
 PARSE ERROR - fuzz_crash_030.md:15:3:15:4
 PARSE ERROR - fuzz_crash_030.md:16:3:16:4
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `exposed_item_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**Parse Error**
+at 1:1 to 5:6
 
-**fuzz_crash_030.md:8:5:8:6:**
-```roc
-		[ .
-```
-		  ^
+**Expected Exposes**
+at 1:1 to 5:6
 
+**Expected Open Square Bracket**
+at 1:1 to 5:6
 
-**PARSE ERROR**
-A parsing error occurred: `expected_packages_close_curly`
-This is an unexpected parsing error. Please check your syntax.
+**Parse Error**
+at 5:6 to 5:6
 
-**fuzz_crash_030.md:12:8:12:9:**
-```roc
-pkg: 77"..c", mm} #
-```
-       ^
+**Expected Close Square Bracket**
+at 1:1 to 5:8
 
+**Expected Packages**
+at 1:1 to 5:8
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**Parse Error**
+at 1:1 to 5:8
 
-**fuzz_crash_030.md:12:9:12:12:**
-```roc
-pkg: 77"..c", mm} #
-```
-        ^^^
+**Parse Error**
+at 5:8 to 5:8
 
+**Expected Close Curly Brace**
+at 1:1 to 5:10
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**Parse Error**
+at 1:1 to 5:10
 
-**fuzz_crash_030.md:12:12:12:13:**
-```roc
-pkg: 77"..c", mm} #
-```
-           ^
+**Parse Error**
+at 1:1 to 5:10
 
+**Parse Error**
+at 1:1 to 5:14
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**Parse Error**
+at 5:20 to 5:20
 
-**fuzz_crash_030.md:12:13:12:14:**
-```roc
-pkg: 77"..c", mm} #
-```
-            ^
+**Parse Error**
+at 5:25 to 5:25
 
+**Parse Error**
+at 6:4 to 6:4
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**Parse Error**
+at 7:2 to 7:2
 
-**fuzz_crash_030.md:12:15:12:17:**
-```roc
-pkg: 77"..c", mm} #
-```
-              ^^
+**Parse Error**
+at 8:5 to 8:5
 
+**Parse Error**
+at 10:2 to 10:2
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**Parse Error**
+at 13:2 to 13:2
 
-**fuzz_crash_030.md:12:17:12:18:**
-```roc
-pkg: 77"..c", mm} #
-```
-                ^
+**Parse Error**
+at 16:3 to 16:3
 
+**Parse Error**
+at 14:3 to 16:4
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**Pattern in Expression Context**
+at 5:15 to 5:18
 
-**fuzz_crash_030.md:13:2:13:10:**
-```roc
-	provides # Cd
-```
-	^^^^^^^^
+**Unsupported Node**
+at 5:20 to 5:20
 
+**Unsupported Node**
+at 5:25 to 5:25
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**Unsupported Node**
+at 6:4 to 6:4
 
-**fuzz_crash_030.md:14:3:14:4:**
-```roc
-		[ # pen
-```
-		^
+**Unsupported Node**
+at 7:2 to 7:2
 
+**Unsupported Node**
+at 8:3 to 9:3
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**Unsupported Node**
+at 10:2 to 10:2
 
-**fuzz_crash_030.md:15:1:15:3:**
-```roc
-ar,
-```
-^^
+**Unsupported Node**
+at 13:2 to 13:2
 
+**Unsupported Node**
+at 14:3 to 16:3
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_030.md:15:3:15:4:**
-```roc
-ar,
-```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_030.md:16:3:16:4:**
-```roc
-		]
-```
-		^
-
-
-# TOKENS
-~~~zig
-KwPlatform(1:1-1:9),
-StringStart(2:2-2:3),StringPart(2:3-2:6),StringEnd(2:6-2:7),
-KwRequires(3:2-3:10),
-OpenCurly(4:3-4:4),CloseCurly(4:5-4:6),
-OpenCurly(5:4-5:5),LowerIdent(5:5-5:7),OpColon(5:8-5:9),UpperIdent(5:10-5:14),NoSpaceOpenRound(5:14-5:15),UpperIdent(5:15-5:18),CloseRound(5:18-5:19),OpFatArrow(5:20-5:22),OpenCurly(5:23-5:24),CloseCurly(5:24-5:25),Comma(5:25-5:26),
-CloseCurly(6:4-6:5),
-KwExposes(7:2-7:9),
-OpenSquare(8:3-8:4),Dot(8:5-8:6),
-CloseSquare(9:3-9:4),
-KwPackages(10:2-10:10),
-OpenCurly(11:3-11:4),
-LowerIdent(12:1-12:4),OpColon(12:4-12:5),Int(12:6-12:8),StringStart(12:8-12:9),StringPart(12:9-12:12),StringEnd(12:12-12:13),Comma(12:13-12:14),LowerIdent(12:15-12:17),CloseCurly(12:17-12:18),
-KwProvides(13:2-13:10),
-OpenSquare(14:3-14:4),
-LowerIdent(15:1-15:3),Comma(15:3-15:4),
-CloseSquare(16:3-16:4),EndOfFile(16:4-16:4),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-16.4
-	(malformed-header @12.8-12.9 (tag "expected_packages_close_curly"))
-	(statements
-		(s-malformed @12.9-12.12 (tag "statement_unexpected_token"))
-		(s-malformed @12.12-12.13 (tag "statement_unexpected_token"))
-		(s-malformed @12.13-12.14 (tag "statement_unexpected_token"))
-		(s-malformed @12.15-12.17 (tag "statement_unexpected_token"))
-		(s-malformed @12.17-12.18 (tag "statement_unexpected_token"))
-		(s-malformed @13.2-13.10 (tag "statement_unexpected_token"))
-		(s-malformed @14.3-14.4 (tag "statement_unexpected_token"))
-		(s-malformed @15.1-15.3 (tag "statement_unexpected_token"))
-		(s-malformed @15.3-15.4 (tag "statement_unexpected_token"))
-		(s-malformed @16.3-16.4 (tag "statement_unexpected_token"))))
-~~~
-# FORMATTED
-~~~roc
-
-# Cd
-# pen
-
-
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.record_literal
+  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.record_literal
+    (Expr.binop_colon
+      (Expr.lookup "pkg")
+      (Expr.num_literal_i32 77)
+    )
+    (Expr.str_literal_small)
+    (Expr.lookup "mm")
+  )
+  (Expr.malformed)
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

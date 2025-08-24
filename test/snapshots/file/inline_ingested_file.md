@@ -12,46 +12,72 @@ import Json
 
 foo = Json.parse(data)
 ~~~
-# EXPECTED
-EXPOSED BUT NOT DEFINED - inline_ingested_file.md:1:9:1:12
-# PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `foo` is exposed, but it is not defined anywhere in this module.
-
-**inline_ingested_file.md:1:9:1:12:**
-```roc
-module [foo]
-```
-        ^^^
-You can fix this by either defining `foo` in this module, or by removing it from the list of exposed values.
-
 # TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
-KwImport(3:1-3:7),StringStart(3:8-3:9),StringPart(3:9-3:19),StringEnd(3:19-3:20),KwAs(3:21-3:23),LowerIdent(3:24-3:28),OpColon(3:29-3:30),UpperIdent(3:31-3:34),
-KwImport(4:1-4:7),UpperIdent(4:8-4:12),
-LowerIdent(6:1-6:4),OpAssign(6:5-6:6),UpperIdent(6:7-6:11),NoSpaceDotLowerIdent(6:11-6:17),NoSpaceOpenRound(6:17-6:18),LowerIdent(6:18-6:22),CloseRound(6:22-6:23),EndOfFile(6:23-6:23),
-~~~
+~~~text
+KwModule OpenSquare LowerIdent CloseSquare KwImport String KwAs LowerIdent OpColon UpperIdent KwImport UpperIdent LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.23
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))))
-	(statements))
+(block
+  (str_literal_big "users.json")
+  (malformed malformed:expr_unexpected_token)
+  (binop_colon
+    (lc "data")
+    (uc "Str")
+  )
+  (import
+    (uc "Json")
+  )
+  (binop_equals
+    (lc "foo")
+    (apply_anon
+      (binop_pipe
+        (uc "Json")
+        (dot_lc "parse")
+      )
+      (lc "data")
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-module [foo]
+NO CHANGE
 ~~~
+# EXPECTED
+EXPOSED BUT NOT DEFINED - inline_ingested_file.md:1:9:1:12
+# PROBLEMS
+**Parse Error**
+at 3:21 to 3:21
+
+**Unsupported Node**
+at 3:21 to 3:21
+
+**Pattern in Expression Context**
+at 3:31 to 3:34
+
+**Unsupported Node**
+at 4:1 to 4:12
+
+**Unsupported Node**
+at 6:7 to 6:23
+
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.str_literal_big)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "data")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

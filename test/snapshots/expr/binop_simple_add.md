@@ -7,31 +7,36 @@ type=expr
 ~~~roc
 1 + 2
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-Int(1:1-1:2),OpPlus(1:3-1:4),Int(1:5-1:6),EndOfFile(1:6-1:6),
-~~~
+~~~text
+Int OpPlus Int ~~~
 # PARSE
 ~~~clojure
-(e-binop @1.1-1.6 (op "+")
-	(e-int @1.1-1.2 (raw "1"))
-	(e-int @1.5-1.6 (raw "2")))
+(binop_plus
+  (num_literal_i32 1)
+  (num_literal_i32 2)
+)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.6 (op "add")
-	(e-int @1.1-1.2 (value "1"))
-	(e-int @1.5-1.6 (value "2")))
+(Expr.binop_plus
+  (Expr.num_literal_i32 1)
+  (Expr.num_literal_i32 2)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag binop_plus :type "Num(_a)")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.6 (type "Num(_size)"))
+~~~roc
+Num(_a)
 ~~~

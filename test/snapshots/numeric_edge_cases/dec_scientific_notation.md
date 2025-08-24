@@ -7,27 +7,30 @@ type=expr
 ~~~roc
 1.23456789012345678e10
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-Float(1:1-1:23),EndOfFile(1:23-1:23),
-~~~
+~~~text
+Float ~~~
 # PARSE
 ~~~clojure
-(e-frac @1.1-1.23 (raw "1.23456789012345678e10"))
+(frac_literal_big big:<idx:0>)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-frac-dec @1.1-1.23 (value "1.2345678901234568e10"))
+(Expr.frac_literal_big big:<idx:0>)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag frac_literal_big :type "F64")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.23 (type "Frac(_size)"))
+~~~roc
+F64
 ~~~

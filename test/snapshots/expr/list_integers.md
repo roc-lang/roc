@@ -7,34 +7,38 @@ type=expr
 ~~~roc
 [1, 2, 3]
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),Int(1:5-1:6),Comma(1:6-1:7),Int(1:8-1:9),CloseSquare(1:9-1:10),EndOfFile(1:10-1:10),
-~~~
+~~~text
+OpenSquare Int Comma Int Comma Int CloseSquare ~~~
 # PARSE
 ~~~clojure
-(e-list @1.1-1.10
-	(e-int @1.2-1.3 (raw "1"))
-	(e-int @1.5-1.6 (raw "2"))
-	(e-int @1.8-1.9 (raw "3")))
+(list_literal
+  (tuple_literal
+    (num_literal_i32 1)
+    (num_literal_i32 2)
+    (num_literal_i32 3)
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**Unsupported Node**
+at 1:1 to 1:9
+
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-1.10
-	(elems
-		(e-int @1.2-1.3 (value "1"))
-		(e-int @1.5-1.6 (value "2"))
-		(e-int @1.8-1.9 (value "3"))))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.10 (type "List(Num(_size))"))
+~~~roc
+# No expression found
 ~~~

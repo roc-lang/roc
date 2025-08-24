@@ -7,27 +7,30 @@ type=expr
 ~~~roc
 1_000_000
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-Int(1:1-1:10),EndOfFile(1:10-1:10),
-~~~
+~~~text
+Int Underscore Int Underscore Int ~~~
 # PARSE
 ~~~clojure
-(e-int @1.1-1.10 (raw "1_000_000"))
+(num_literal_i32 1)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-int @1.1-1.10 (value "1000000"))
+(Expr.num_literal_i32 1)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag num_literal_i32 :type "Num(_a)")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.10 (type "Num(_size)"))
+~~~roc
+Num(_a)
 ~~~

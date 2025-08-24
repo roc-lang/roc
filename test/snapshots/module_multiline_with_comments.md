@@ -11,59 +11,31 @@ module # Comment after module keyword
 		SomeType, # Comment after final exposed item
 	]
 ~~~
-# EXPECTED
-EXPOSED BUT NOT DEFINED - module_multiline_with_comments.md:3:3:3:12
-EXPOSED BUT NOT DEFINED - module_multiline_with_comments.md:4:3:4:11
-# PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `something` is exposed, but it is not defined anywhere in this module.
-
-**module_multiline_with_comments.md:3:3:3:12:**
-```roc
-		something, # Comment after exposed item
-```
-		^^^^^^^^^
-You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `SomeType` is exposed, but it is not defined anywhere in this module.
-
-**module_multiline_with_comments.md:4:3:4:11:**
-```roc
-		SomeType, # Comment after final exposed item
-```
-		^^^^^^^^
-You can fix this by either defining `SomeType` in this module, or by removing it from the list of exposed values.
-
 # TOKENS
-~~~zig
-KwModule(1:1-1:7),
-OpenSquare(2:2-2:3),
-LowerIdent(3:3-3:12),Comma(3:12-3:13),
-UpperIdent(4:3-4:11),Comma(4:11-4:12),
-CloseSquare(5:2-5:3),EndOfFile(5:3-5:3),
-~~~
+~~~text
+KwModule OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare ~~~
 # PARSE
 ~~~clojure
-(file @1.1-5.3
-	(module @1.1-5.3
-		(exposes @2.2-5.3
-			(exposed-lower-ident @3.3-3.12
-				(text "something"))
-			(exposed-upper-ident @4.3-4.11 (text "SomeType"))))
-	(statements))
+(header-only)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+EXPOSED BUT NOT DEFINED - module_multiline_with_comments.md:3:3:3:12
+EXPOSED BUT NOT DEFINED - module_multiline_with_comments.md:4:3:4:11
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(empty)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+# No top-level expression found in file
 ~~~

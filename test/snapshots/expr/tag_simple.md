@@ -7,27 +7,32 @@ type=expr
 ~~~roc
 MyTag
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-UpperIdent(1:1-1:6),EndOfFile(1:6-1:6),
-~~~
+~~~text
+UpperIdent ~~~
 # PARSE
 ~~~clojure
-(e-tag @1.1-1.6 (raw "MyTag"))
+(uc "MyTag")
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**Pattern in Expression Context**
+at 1:1 to 1:6
+
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.6 (name "MyTag"))
+(Expr.malformed)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag malformed :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.6 (type "[MyTag]_others"))
+~~~roc
+Error
 ~~~

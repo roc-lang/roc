@@ -21,6 +21,116 @@ MyType : U64
 
 MyType2 : Module.Thingy
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIdent Comma LowerIdent Comma LowerIdent OpBang CloseSquare UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound UpperIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpColon UpperIdent CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpArrow UpperIdent OpenRound LowerIdent CloseRound UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent Dot UpperIdent ~~~
+# PARSE
+~~~clojure
+(block
+  (binop_colon
+    (apply_uc
+      (uc "Map")
+      (tuple_literal
+        (lc "a")
+        (lc "b")
+      )
+    )
+    (binop_thin_arrow
+      (apply_uc
+        (uc "List")
+        (lc "a")
+      )
+      (binop_thin_arrow
+        (binop_thin_arrow
+          (lc "a")
+          (lc "b")
+        )
+        (apply_uc
+          (uc "List")
+          (lc "b")
+        )
+      )
+    )
+  )
+  (binop_colon
+    (uc "Foo")
+    (tuple_literal
+      (uc "Bar")
+      (uc "Baz")
+    )
+  )
+  (binop_colon
+    (apply_uc
+      (uc "Some")
+      (lc "a")
+    )
+    (block
+      (binop_colon
+        (lc "foo")
+        (binop_colon
+          (tuple_literal
+            (apply_uc
+              (uc "Ok")
+              (lc "a")
+            )
+            (lc "bar")
+          )
+          (uc "Something")
+        )
+      )
+    )
+  )
+  (binop_colon
+    (apply_uc
+      (uc "Maybe")
+      (lc "a")
+    )
+    (list_literal
+      (tuple_literal
+        (apply_uc
+          (uc "Some")
+          (lc "a")
+        )
+        (uc "None")
+      )
+    )
+  )
+  (binop_colon
+    (apply_uc
+      (uc "SomeFunc")
+      (lc "a")
+    )
+    (binop_thin_arrow
+      (apply_uc
+        (uc "Maybe")
+        (lc "a")
+      )
+      (binop_thin_arrow
+        (lc "a")
+        (apply_uc
+          (uc "Maybe")
+          (lc "a")
+        )
+      )
+    )
+  )
+  (binop_colon
+    (uc "MyType")
+    (uc "U64")
+  )
+  (binop_colon
+    (uc "MyType2")
+    (binop_pipe
+      (uc "Module")
+      (uc "Thingy")
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 UNDECLARED TYPE - type_declarations.md:5:8:5:11
 UNDECLARED TYPE - type_declarations.md:5:13:5:16
@@ -30,258 +140,87 @@ MODULE NOT IMPORTED - type_declarations.md:15:11:15:24
 EXPOSED BUT NOT DEFINED - type_declarations.md:1:51:1:56
 EXPOSED BUT NOT DEFINED - type_declarations.md:1:42:1:49
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bar_ is not declared in this scope.
+**Unsupported Node**
+at 3:13 to 3:41
 
-This type is referenced here:
-**type_declarations.md:5:8:5:11:**
-```roc
-Foo : (Bar, Baz)
-```
-       ^^^
+**Pattern in Expression Context**
+at 5:1 to 5:4
 
+**Unsupported Node**
+at 5:16 to 5:17
 
-**UNDECLARED TYPE**
-The type _Baz_ is not declared in this scope.
+**Unsupported Node**
+at 7:30 to 7:30
 
-This type is referenced here:
-**type_declarations.md:5:13:5:16:**
-```roc
-Foo : (Bar, Baz)
-```
-            ^^^
+**Pattern in Expression Context**
+at 7:32 to 7:41
 
+**Unsupported Node**
+at 9:12 to 10:1
 
-**UNDECLARED TYPE**
-The type _Ok_ is not declared in this scope.
+**Unsupported Node**
+at 11:15 to 11:38
 
-This type is referenced here:
-**type_declarations.md:7:19:7:21:**
-```roc
-Some(a) : { foo : Ok(a), bar : Something }
-```
-                  ^^
+**Pattern in Expression Context**
+at 13:1 to 13:7
 
+**Pattern in Expression Context**
+at 13:10 to 13:13
 
-**UNDECLARED TYPE**
-The type _Something_ is not declared in this scope.
+**Pattern in Expression Context**
+at 15:1 to 15:8
 
-This type is referenced here:
-**type_declarations.md:7:32:7:41:**
-```roc
-Some(a) : { foo : Ok(a), bar : Something }
-```
-                               ^^^^^^^^^
+**Unsupported Node**
+at 15:11 to 15:17
 
+**Pattern in Expression Context**
+at 15:17 to 15:23
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Module` imported into this Roc file.
-
-You're attempting to use this module here:
-**type_declarations.md:15:11:15:24:**
-```roc
-MyType2 : Module.Thingy
-```
-          ^^^^^^^^^^^^^
-
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `main!` is exposed, but it is not defined anywhere in this module.
-
-**type_declarations.md:1:51:1:56:**
-```roc
-module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
-```
-                                                  ^^^^^
-You can fix this by either defining `main!` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `add_one` is exposed, but it is not defined anywhere in this module.
-
-**type_declarations.md:1:42:1:49:**
-```roc
-module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
-```
-                                         ^^^^^^^
-You can fix this by either defining `add_one` in this module, or by removing it from the list of exposed values.
-
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:23),Comma(1:23-1:24),UpperIdent(1:25-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:40),Comma(1:40-1:41),LowerIdent(1:42-1:49),Comma(1:49-1:50),LowerIdent(1:51-1:56),CloseSquare(1:56-1:57),
-UpperIdent(3:1-3:4),NoSpaceOpenRound(3:4-3:5),LowerIdent(3:5-3:6),Comma(3:6-3:7),LowerIdent(3:8-3:9),CloseRound(3:9-3:10),OpColon(3:11-3:12),UpperIdent(3:13-3:17),NoSpaceOpenRound(3:17-3:18),LowerIdent(3:18-3:19),CloseRound(3:19-3:20),Comma(3:20-3:21),OpenRound(3:22-3:23),LowerIdent(3:23-3:24),OpArrow(3:25-3:27),LowerIdent(3:28-3:29),CloseRound(3:29-3:30),OpArrow(3:31-3:33),UpperIdent(3:34-3:38),NoSpaceOpenRound(3:38-3:39),LowerIdent(3:39-3:40),CloseRound(3:40-3:41),
-UpperIdent(5:1-5:4),OpColon(5:5-5:6),OpenRound(5:7-5:8),UpperIdent(5:8-5:11),Comma(5:11-5:12),UpperIdent(5:13-5:16),CloseRound(5:16-5:17),
-UpperIdent(7:1-7:5),NoSpaceOpenRound(7:5-7:6),LowerIdent(7:6-7:7),CloseRound(7:7-7:8),OpColon(7:9-7:10),OpenCurly(7:11-7:12),LowerIdent(7:13-7:16),OpColon(7:17-7:18),UpperIdent(7:19-7:21),NoSpaceOpenRound(7:21-7:22),LowerIdent(7:22-7:23),CloseRound(7:23-7:24),Comma(7:24-7:25),LowerIdent(7:26-7:29),OpColon(7:30-7:31),UpperIdent(7:32-7:41),CloseCurly(7:42-7:43),
-UpperIdent(9:1-9:6),NoSpaceOpenRound(9:6-9:7),LowerIdent(9:7-9:8),CloseRound(9:8-9:9),OpColon(9:10-9:11),OpenSquare(9:12-9:13),UpperIdent(9:13-9:17),NoSpaceOpenRound(9:17-9:18),LowerIdent(9:18-9:19),CloseRound(9:19-9:20),Comma(9:20-9:21),UpperIdent(9:22-9:26),CloseSquare(9:26-9:27),
-UpperIdent(11:1-11:9),NoSpaceOpenRound(11:9-11:10),LowerIdent(11:10-11:11),CloseRound(11:11-11:12),OpColon(11:13-11:14),UpperIdent(11:15-11:20),NoSpaceOpenRound(11:20-11:21),LowerIdent(11:21-11:22),CloseRound(11:22-11:23),Comma(11:23-11:24),LowerIdent(11:25-11:26),OpArrow(11:27-11:29),UpperIdent(11:30-11:35),NoSpaceOpenRound(11:35-11:36),LowerIdent(11:36-11:37),CloseRound(11:37-11:38),
-UpperIdent(13:1-13:7),OpColon(13:8-13:9),UpperIdent(13:10-13:13),
-UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUpperIdent(15:17-15:24),EndOfFile(15:24-15:24),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-15.24
-	(module @1.1-1.57
-		(exposes @1.8-1.57
-			(exposed-upper-ident @1.9-1.12 (text "Map"))
-			(exposed-upper-ident @1.14-1.17 (text "Foo"))
-			(exposed-upper-ident @1.19-1.23 (text "Some"))
-			(exposed-upper-ident @1.25-1.30 (text "Maybe"))
-			(exposed-upper-ident @1.32-1.40 (text "SomeFunc"))
-			(exposed-lower-ident @1.42-1.49
-				(text "add_one"))
-			(exposed-lower-ident @1.51-1.56
-				(text "main!"))))
-	(statements
-		(s-type-decl @3.1-3.41
-			(header @3.1-3.10 (name "Map")
-				(args
-					(ty-var @3.5-3.6 (raw "a"))
-					(ty-var @3.8-3.9 (raw "b"))))
-			(ty-fn @3.13-3.41
-				(ty-apply @3.13-3.20
-					(ty @3.13-3.17 (name "List"))
-					(ty-var @3.18-3.19 (raw "a")))
-				(ty-fn @3.23-3.29
-					(ty-var @3.23-3.24 (raw "a"))
-					(ty-var @3.28-3.29 (raw "b")))
-				(ty-apply @3.34-3.41
-					(ty @3.34-3.38 (name "List"))
-					(ty-var @3.39-3.40 (raw "b")))))
-		(s-type-decl @5.1-5.17
-			(header @5.1-5.4 (name "Foo")
-				(args))
-			(ty-tuple @5.7-5.17
-				(ty @5.8-5.11 (name "Bar"))
-				(ty @5.13-5.16 (name "Baz"))))
-		(s-type-decl @7.1-7.43
-			(header @7.1-7.8 (name "Some")
-				(args
-					(ty-var @7.6-7.7 (raw "a"))))
-			(ty-record @7.11-7.43
-				(anno-record-field @7.13-7.24 (name "foo")
-					(ty-apply @7.19-7.24
-						(ty @7.19-7.21 (name "Ok"))
-						(ty-var @7.22-7.23 (raw "a"))))
-				(anno-record-field @7.26-7.41 (name "bar")
-					(ty @7.32-7.41 (name "Something")))))
-		(s-type-decl @9.1-9.27
-			(header @9.1-9.9 (name "Maybe")
-				(args
-					(ty-var @9.7-9.8 (raw "a"))))
-			(ty-tag-union @9.12-9.27
-				(tags
-					(ty-apply @9.13-9.20
-						(ty @9.13-9.17 (name "Some"))
-						(ty-var @9.18-9.19 (raw "a")))
-					(ty @9.22-9.26 (name "None")))))
-		(s-type-decl @11.1-11.38
-			(header @11.1-11.12 (name "SomeFunc")
-				(args
-					(ty-var @11.10-11.11 (raw "a"))))
-			(ty-fn @11.15-11.38
-				(ty-apply @11.15-11.23
-					(ty @11.15-11.20 (name "Maybe"))
-					(ty-var @11.21-11.22 (raw "a")))
-				(ty-var @11.25-11.26 (raw "a"))
-				(ty-apply @11.30-11.38
-					(ty @11.30-11.35 (name "Maybe"))
-					(ty-var @11.36-11.37 (raw "a")))))
-		(s-type-decl @13.1-13.13
-			(header @13.1-13.7 (name "MyType")
-				(args))
-			(ty @13.10-13.13 (name "U64")))
-		(s-type-decl @15.1-15.24
-			(header @15.1-15.8 (name "MyType2")
-				(args))
-			(ty @15.11-15.24 (name "Module.Thingy")))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-alias-decl @3.1-3.41
-		(ty-header @3.1-3.10 (name "Map")
-			(ty-args
-				(ty-var @3.5-3.6 (name "a"))
-				(ty-var @3.8-3.9 (name "b"))))
-		(ty-fn @3.13-3.41 (effectful false)
-			(ty-apply @3.13-3.20 (symbol "List")
-				(ty-var @3.18-3.19 (name "a")))
-			(ty-parens @3.22-3.30
-				(ty-fn @3.23-3.29 (effectful false)
-					(ty-var @3.23-3.24 (name "a"))
-					(ty-var @3.28-3.29 (name "b"))))
-			(ty-apply @3.34-3.41 (symbol "List")
-				(ty-var @3.39-3.40 (name "b")))))
-	(s-alias-decl @5.1-5.17
-		(ty-header @5.1-5.4 (name "Foo"))
-		(ty-tuple @5.7-5.17
-			(ty @5.8-5.11 (name "Bar"))
-			(ty @5.13-5.16 (name "Baz"))))
-	(s-alias-decl @7.1-7.43
-		(ty-header @7.1-7.8 (name "Some")
-			(ty-args
-				(ty-var @7.6-7.7 (name "a"))))
-		(ty-record @7.11-7.43
-			(field (field "foo")
-				(ty-apply @7.19-7.24 (symbol "Ok")
-					(ty-var @7.22-7.23 (name "a"))))
-			(field (field "bar")
-				(ty @7.32-7.41 (name "Something")))))
-	(s-alias-decl @9.1-9.27
-		(ty-header @9.1-9.9 (name "Maybe")
-			(ty-args
-				(ty-var @9.7-9.8 (name "a"))))
-		(ty-tag-union @9.12-9.27
-			(ty-apply @9.13-9.20 (symbol "Some")
-				(ty-var @9.18-9.19 (name "a")))
-			(ty @9.22-9.26 (name "None"))))
-	(s-alias-decl @11.1-11.38
-		(ty-header @11.1-11.12 (name "SomeFunc")
-			(ty-args
-				(ty-var @11.10-11.11 (name "a"))))
-		(ty-fn @11.15-11.38 (effectful false)
-			(ty-apply @11.15-11.23 (symbol "Maybe")
-				(ty-var @11.21-11.22 (name "a")))
-			(ty-var @11.25-11.26 (name "a"))
-			(ty-apply @11.30-11.38 (symbol "Maybe")
-				(ty-var @11.36-11.37 (name "a")))))
-	(s-alias-decl @13.1-13.13
-		(ty-header @13.1-13.7 (name "MyType"))
-		(ty @13.10-13.13 (name "U64")))
-	(s-alias-decl @15.1-15.24
-		(ty-header @15.1-15.8 (name "MyType2"))
-		(ty-malformed @15.11-15.24)))
+(Expr.block
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.malformed)
+    (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "foo")
+        (Expr.binop_colon
+          (Expr.malformed)
+          (Expr.malformed)
+        )
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.malformed)
+    (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.malformed)
+    (Expr.lambda)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(type_decls
-		(alias @3.1-3.41 (type "Map(a, b)")
-			(ty-header @3.1-3.10 (name "Map")
-				(ty-args
-					(ty-var @3.5-3.6 (name "a"))
-					(ty-var @3.8-3.9 (name "b")))))
-		(alias @5.1-5.17 (type "Foo")
-			(ty-header @5.1-5.4 (name "Foo")))
-		(alias @7.1-7.43 (type "Some(a)")
-			(ty-header @7.1-7.8 (name "Some")
-				(ty-args
-					(ty-var @7.6-7.7 (name "a")))))
-		(alias @9.1-9.27 (type "Maybe(a)")
-			(ty-header @9.1-9.9 (name "Maybe")
-				(ty-args
-					(ty-var @9.7-9.8 (name "a")))))
-		(alias @11.1-11.38 (type "SomeFunc(a)")
-			(ty-header @11.1-11.12 (name "SomeFunc")
-				(ty-args
-					(ty-var @11.10-11.11 (name "a")))))
-		(alias @13.1-13.13 (type "MyType")
-			(ty-header @13.1-13.7 (name "MyType")))
-		(alias @15.1-15.24 (type "Error")
-			(ty-header @15.1-15.8 (name "MyType2"))))
-	(expressions))
+~~~roc
 ~~~

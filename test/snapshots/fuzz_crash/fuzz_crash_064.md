@@ -7,38 +7,30 @@ type=file
 ~~~roc
 
 ~~~
-# EXPECTED
-MISSING HEADER - :0:0:0:0
-# PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
-
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
-
 # TOKENS
-~~~zig
-EndOfFile(1:1-1:1),
+~~~text
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.1
-	(malformed-header @1.1-1.1 (tag "missing_header"))
-	(statements))
+(empty)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+MISSING HEADER - :0:0:0:0
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(empty)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+# No top-level expression found in file
 ~~~

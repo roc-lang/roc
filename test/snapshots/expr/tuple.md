@@ -7,37 +7,36 @@ type=expr
 ~~~roc
 (1, "hello", True)
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-OpenRound(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),StringStart(1:5-1:6),StringPart(1:6-1:11),StringEnd(1:11-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:18),CloseRound(1:18-1:19),EndOfFile(1:19-1:19),
-~~~
+~~~text
+OpenRound Int Comma String Comma UpperIdent CloseRound ~~~
 # PARSE
 ~~~clojure
-(e-tuple @1.1-1.19
-	(e-int @1.2-1.3 (raw "1"))
-	(e-string @1.5-1.12
-		(e-string-part @1.6-1.11 (raw "hello")))
-	(e-tag @1.14-1.18 (raw "True")))
+(tuple_literal
+  (num_literal_i32 1)
+  (str_literal_big "hello")
+  (uc "True")
+)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**Unsupported Node**
+at 1:18 to 1:18
+
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-1.19
-	(elems
-		(e-int @1.2-1.3 (value "1"))
-		(e-string @1.5-1.12
-			(e-literal @1.6-1.11 (string "hello")))
-		(e-nominal @1.14-1.18 (nominal "Bool")
-			(e-tag @1.14-1.18 (name "True")))))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.19 (type "(Num(_size), Str, Bool)"))
+~~~roc
+# No expression found
 ~~~

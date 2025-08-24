@@ -7,53 +7,59 @@ type=file
 ~~~roc
 module[}{0      0)(0}
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare CloseCurly OpenCurly Int Int CloseRound OpenRound Int CloseCurly ~~~
+# PARSE
+~~~clojure
+(block
+  (block
+    (num_literal_i32 0)
+    (num_literal_i32 0)
+    (apply_anon
+      (malformed malformed:expr_unexpected_token)
+      (num_literal_i32 0)
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_051.md:1:8:1:9
 PARSE ERROR - fuzz_crash_051.md:1:22:1:22
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `exposed_item_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**Parse Error**
+at 1:8 to 1:8
 
-**fuzz_crash_051.md:1:8:1:9:**
-```roc
-module[}{0      0)(0}
-```
-       ^
+**Parse Error**
+at 1:1 to 1:9
 
+**Parse Error**
+at 1:18 to 1:18
 
-**PARSE ERROR**
-A parsing error occurred: `header_expected_close_square`
-This is an unexpected parsing error. Please check your syntax.
+**Parse Error**
+at 1:18 to 1:21
 
-**fuzz_crash_051.md:1:22:1:22:**
-```roc
-module[}{0      0)(0}
-```
-                     ^
+**Unsupported Node**
+at 1:18 to 1:22
 
-
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseCurly(1:8-1:9),OpenCurly(1:9-1:10),Int(1:10-1:11),Int(1:17-1:18),CloseRound(1:18-1:19),NoSpaceOpenRound(1:19-1:20),Int(1:20-1:21),CloseCurly(1:21-1:22),EndOfFile(1:22-1:22),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-1.22
-	(malformed-header @1.22-1.22 (tag "header_expected_close_square"))
-	(statements))
-~~~
-# FORMATTED
-~~~roc
-
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.block
+    (Expr.num_literal_i32 0)
+    (Expr.num_literal_i32 0)
+    (Expr.malformed)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

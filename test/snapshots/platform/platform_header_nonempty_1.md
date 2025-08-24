@@ -27,79 +27,184 @@ platform # Comment after platform keyword
 			bar, # Comment after exposed item
 		]
 ~~~
-# EXPECTED
-EXPOSED BUT NOT DEFINED - platform_header_nonempty_1.md:12:4:12:7
-# PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `foo` is exposed, but it is not defined anywhere in this module.
-
-**platform_header_nonempty_1.md:12:4:12:7:**
-```roc
-			foo, # Comment after exposed item
-```
-			^^^
-You can fix this by either defining `foo` in this module, or by removing it from the list of exposed values.
-
 # TOKENS
-~~~zig
-KwPlatform(1:1-1:9),
-StringStart(2:2-2:3),StringPart(2:3-2:6),StringEnd(2:6-2:7),
-KwRequires(3:2-3:10),
-OpenCurly(4:3-4:4),
-UpperIdent(5:4-5:8),Comma(5:8-5:9),
-CloseCurly(6:3-6:4),
-OpenCurly(7:4-7:5),
-LowerIdent(8:5-8:10),OpColon(8:11-8:12),UpperIdent(8:13-8:17),NoSpaceOpenRound(8:17-8:18),UpperIdent(8:18-8:21),CloseRound(8:21-8:22),OpFatArrow(8:23-8:25),OpenCurly(8:26-8:27),CloseCurly(8:27-8:28),Comma(8:28-8:29),
-CloseCurly(9:4-9:5),
-KwExposes(10:2-10:9),
-OpenSquare(11:3-11:4),
-LowerIdent(12:4-12:7),Comma(12:7-12:8),
-CloseSquare(13:3-13:4),
-KwPackages(14:2-14:10),
-OpenCurly(15:3-15:4),
-LowerIdent(16:4-16:12),OpColon(16:12-16:13),StringStart(16:14-16:15),StringPart(16:15-16:30),StringEnd(16:30-16:31),Comma(16:31-16:32),
-CloseCurly(17:3-17:4),
-KwProvides(18:2-18:10),
-OpenSquare(19:3-19:4),
-LowerIdent(20:4-20:7),Comma(20:7-20:8),
-CloseSquare(21:3-21:4),EndOfFile(21:4-21:4),
-~~~
+~~~text
+KwPlatform String KwRequires OpenCurly UpperIdent Comma CloseCurly OpenCurly LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpFatArrow OpenCurly CloseCurly Comma CloseCurly KwExposes OpenSquare LowerIdent Comma CloseSquare KwPackages OpenCurly LowerIdent OpColon String Comma CloseCurly KwProvides OpenSquare LowerIdent Comma CloseSquare ~~~
 # PARSE
 ~~~clojure
-(file @1.1-21.4
-	(platform @1.1-21.4 (name "foo")
-		(rigids @4.3-6.4
-			(exposed-upper-ident @5.4-5.8 (text "Main")))
-		(ty-record @7.4-9.5
-			(anno-record-field @8.5-8.28 (name "main!")
-				(ty-fn @8.13-8.28
-					(ty-apply @8.13-8.22
-						(ty @8.13-8.17 (name "List"))
-						(ty @8.18-8.21 (name "Str")))
-					(ty-record @8.26-8.28))))
-		(exposes @11.3-13.4
-			(exposed-lower-ident @12.4-12.7
-				(text "foo")))
-		(packages @15.3-17.4
-			(record-field @16.4-16.31 (name "some_pkg")
-				(e-string @16.14-16.31
-					(e-string-part @16.15-16.30 (raw "../some_pkg.roc")))))
-		(provides @19.3-21.4
-			(exposed-lower-ident @20.4-20.7
-				(text "bar"))))
-	(statements))
+(block
+  (uc "Str")
+  (malformed malformed:expr_unexpected_token)
+  (record_literal)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (list_literal
+    (tuple_literal
+      (lc "foo")
+      (malformed malformed:expr_unexpected_token)
+    )
+  )
+  (malformed malformed:expr_unexpected_token)
+  (block
+    (binop_colon
+      (lc "some_pkg")
+      (tuple_literal
+        (str_literal_big "../some_pkg.roc")
+        (malformed malformed:expr_unexpected_token)
+      )
+    )
+    (malformed malformed:expr_unexpected_token)
+    (list_literal
+      (tuple_literal
+        (lc "bar")
+        (malformed malformed:expr_unexpected_token)
+      )
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+EXPOSED BUT NOT DEFINED - platform_header_nonempty_1.md:12:4:12:7
+# PROBLEMS
+**Parse Error**
+at 6:3 to 6:3
+
+**Parse Error**
+at 1:1 to 7:4
+
+**Parse Error**
+at 1:1 to 8:9
+
+**Expected Exposes**
+at 1:1 to 8:9
+
+**Expected Open Square Bracket**
+at 1:1 to 8:9
+
+**Parse Error**
+at 8:9 to 8:9
+
+**Expected Close Square Bracket**
+at 1:1 to 8:11
+
+**Expected Packages**
+at 1:1 to 8:11
+
+**Parse Error**
+at 1:1 to 8:11
+
+**Parse Error**
+at 8:11 to 8:11
+
+**Expected Close Curly Brace**
+at 1:1 to 8:13
+
+**Parse Error**
+at 1:1 to 8:13
+
+**Parse Error**
+at 1:1 to 8:13
+
+**Parse Error**
+at 1:1 to 8:17
+
+**Parse Error**
+at 8:23 to 8:23
+
+**Parse Error**
+at 8:28 to 8:28
+
+**Parse Error**
+at 9:4 to 9:4
+
+**Parse Error**
+at 10:2 to 10:2
+
+**Parse Error**
+at 13:3 to 13:3
+
+**Parse Error**
+at 11:3 to 14:2
+
+**Parse Error**
+at 14:2 to 14:2
+
+**Parse Error**
+at 17:3 to 17:3
+
+**Parse Error**
+at 18:2 to 18:2
+
+**Parse Error**
+at 21:3 to 21:3
+
+**Parse Error**
+at 19:3 to 21:4
+
+**Parse Error**
+at 15:3 to 21:4
+
+**Pattern in Expression Context**
+at 8:18 to 8:21
+
+**Unsupported Node**
+at 8:23 to 8:23
+
+**Unsupported Node**
+at 8:28 to 8:28
+
+**Unsupported Node**
+at 9:4 to 9:4
+
+**Unsupported Node**
+at 10:2 to 10:2
+
+**Unsupported Node**
+at 11:3 to 13:5
+
+**Unsupported Node**
+at 14:2 to 14:2
+
+**Unsupported Node**
+at 1:1 to 1:1
+
+**Unsupported Node**
+at 18:2 to 18:2
+
+**Unsupported Node**
+at 19:3 to 21:3
+
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.record_literal
+  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.block
+    (Expr.binop_colon
+      (Expr.lookup "some_pkg")
+      (Expr.malformed)
+    )
+    (Expr.malformed)
+    (Expr.malformed)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

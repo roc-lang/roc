@@ -7,35 +7,30 @@ type=expr
 ~~~roc
 "abc\qdef"
 ~~~
-# EXPECTED
-INVALID ESCAPE SEQUENCE - :0:0:0:0
-# PROBLEMS
-**INVALID ESCAPE SEQUENCE**
-This escape sequence is not recognized.
-
-```roc
-"abc\qdef"
-```
-    ^^
-
-
 # TOKENS
-~~~zig
-StringStart(1:1-1:2),MalformedStringPart(1:2-1:10),StringEnd(1:10-1:11),EndOfFile(1:11-1:11),
-~~~
+~~~text
+String ~~~
 # PARSE
 ~~~clojure
-(e-string @1.1-1.11)
+(str_literal_big "abcqdef")
 ~~~
 # FORMATTED
 ~~~roc
-""
+NO CHANGE
 ~~~
+# EXPECTED
+INVALID ESCAPE SEQUENCE - :0:0:0:0
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-1.11)
+(Expr.str_literal_big)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag str_literal_big :type "Str")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.11 (type "Str"))
+~~~roc
+Str
 ~~~

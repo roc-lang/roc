@@ -7,37 +7,30 @@ type=expr
 ~~~roc
 foo
 ~~~
-# EXPECTED
-UNDEFINED VARIABLE - expr_ident_simple.md:1:1:1:4
-# PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `foo` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**expr_ident_simple.md:1:1:1:4:**
-```roc
-foo
-```
-^^^
-
-
 # TOKENS
-~~~zig
-LowerIdent(1:1-1:4),EndOfFile(1:4-1:4),
-~~~
+~~~text
+LowerIdent ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.4 (raw "foo"))
+(lc "foo")
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - expr_ident_simple.md:1:1:1:4
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "ident_not_in_scope"))
+(Expr.lookup "foo")
+~~~
+# SOLVED
+~~~clojure
+(expr :tag lookup :type "_a")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.4 (type "Error"))
+~~~roc
+_a
 ~~~

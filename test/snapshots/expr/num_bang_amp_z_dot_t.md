@@ -9,29 +9,30 @@ type=expr
 !
 &z.t
 ~~~
+# TOKENS
+~~~text
+Int OpBang OpAmpersand LowerIdent Dot LowerIdent ~~~
+# PARSE
+~~~clojure
+(num_literal_i32 4)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-Int(1:1-1:2),
-OpBang(2:1-2:2),
-OpAmpersand(3:1-3:2),LowerIdent(3:2-3:3),NoSpaceDotLowerIdent(3:3-3:5),EndOfFile(3:5-3:5),
-~~~
-# PARSE
-~~~clojure
-(e-int @1.1-1.2 (raw "4"))
-~~~
-# FORMATTED
-~~~roc
-4
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1.1-1.2 (value "4"))
+(Expr.num_literal_i32 4)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag num_literal_i32 :type "Num(_size)")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.2 (type "Num(_size)"))
+~~~roc
+Num(_size)
 ~~~

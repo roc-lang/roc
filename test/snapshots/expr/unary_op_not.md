@@ -7,39 +7,32 @@ type=expr
 ~~~roc
 !isValid
 ~~~
-# EXPECTED
-UNDEFINED VARIABLE - unary_op_not.md:1:2:1:9
-# PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `isValid` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**unary_op_not.md:1:2:1:9:**
-```roc
-!isValid
-```
- ^^^^^^^
-
-
 # TOKENS
-~~~zig
-OpBang(1:1-1:2),LowerIdent(1:2-1:9),EndOfFile(1:9-1:9),
-~~~
+~~~text
+OpBang LowerIdent ~~~
 # PARSE
 ~~~clojure
-(unary "!"
-	(e-ident @1.2-1.9 (raw "isValid")))
+(unary_not <unary>)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - unary_op_not.md:1:2:1:9
+# PROBLEMS
+**Unsupported Node**
+at 1:1 to 1:9
+
 # CANONICALIZE
 ~~~clojure
-(e-unary-not @1.1-1.9
-	(e-runtime-error (tag "ident_not_in_scope")))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.9 (type "Error"))
+~~~roc
+# No expression found
 ~~~

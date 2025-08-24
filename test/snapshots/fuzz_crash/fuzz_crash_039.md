@@ -8,54 +8,45 @@ type=file
 module[}('
 )
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare CloseCurly OpenRound MalformedSingleQuoteUnclosed CloseRound ~~~
+# PARSE
+~~~clojure
+(block
+  (malformed malformed:expr_unexpected_token)
+)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_039.md:1:8:1:9
 PARSE ERROR - fuzz_crash_039.md:2:2:2:2
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `exposed_item_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**Parse Error**
+at 1:8 to 1:8
 
-**fuzz_crash_039.md:1:8:1:9:**
-```roc
-module[}('
-```
-       ^
+**Parse Error**
+at 1:1 to 1:9
 
+**Parse Error**
+at 1:10 to 1:10
 
-**PARSE ERROR**
-A parsing error occurred: `header_expected_close_square`
-This is an unexpected parsing error. Please check your syntax.
+**Unsupported Node**
+at 1:10 to 1:10
 
-**fuzz_crash_039.md:2:2:2:2:**
-```roc
-)
-```
- ^
-
-
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseCurly(1:8-1:9),NoSpaceOpenRound(1:9-1:10),MalformedSingleQuoteUnclosed(1:10-1:11),
-CloseRound(2:1-2:2),EndOfFile(2:2-2:2),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-2.2
-	(malformed-header @2.2-2.2 (tag "header_expected_close_square"))
-	(statements))
-~~~
-# FORMATTED
-~~~roc
-
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

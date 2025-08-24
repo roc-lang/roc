@@ -7,53 +7,50 @@ type=file
 ~~~roc
 module[}0}.a
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare CloseCurly Int CloseCurly Dot LowerIdent ~~~
+# PARSE
+~~~clojure
+(block
+  (num_literal_i32 0)
+  (binop_pipe
+    (malformed malformed:expr_unexpected_token)
+    (dot_lc "a")
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_063.md:1:8:1:9
 PARSE ERROR - fuzz_crash_063.md:1:13:1:13
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `exposed_item_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**Parse Error**
+at 1:8 to 1:8
 
-**fuzz_crash_063.md:1:8:1:9:**
-```roc
-module[}0}.a
-```
-       ^
+**Parse Error**
+at 1:1 to 1:9
 
+**Parse Error**
+at 1:10 to 1:10
 
-**PARSE ERROR**
-A parsing error occurred: `header_expected_close_square`
-This is an unexpected parsing error. Please check your syntax.
+**Unsupported Node**
+at 1:10 to 1:10
 
-**fuzz_crash_063.md:1:13:1:13:**
-```roc
-module[}0}.a
-```
-            ^
-
-
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseCurly(1:8-1:9),Int(1:9-1:10),CloseCurly(1:10-1:11),NoSpaceDotLowerIdent(1:11-1:13),EndOfFile(1:13-1:13),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-1.13
-	(malformed-header @1.13-1.13 (tag "header_expected_close_square"))
-	(statements))
-~~~
-# FORMATTED
-~~~roc
-
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.num_literal_i32 0)
+  (Expr.lambda)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "_b")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

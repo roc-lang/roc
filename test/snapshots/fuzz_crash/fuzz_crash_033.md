@@ -7,51 +7,42 @@ type=expr
 ~~~roc
 { i, Complete]
 ~~~
+# TOKENS
+~~~text
+OpenCurly LowerIdent Comma UpperIdent CloseSquare ~~~
+# PARSE
+~~~clojure
+(record_literal
+  (lc "i")
+  (uc "Complete")
+)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_033.md:1:6:1:14
 PARSE ERROR - fuzz_crash_033.md:1:14:1:15
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_record_field_name`
-This is an unexpected parsing error. Please check your syntax.
+**Parse Error**
+at 1:1 to 1:14
 
-**fuzz_crash_033.md:1:6:1:14:**
-```roc
-{ i, Complete]
-```
-     ^^^^^^^^
+**Pattern in Expression Context**
+at 1:6 to 1:14
 
-
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly_or_comma`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_033.md:1:14:1:15:**
-```roc
-{ i, Complete]
-```
-             ^
-
-
-# TOKENS
-~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:4),Comma(1:4-1:5),UpperIdent(1:6-1:14),CloseSquare(1:14-1:15),EndOfFile(1:15-1:15),
-~~~
-# PARSE
-~~~clojure
-(e-malformed @1.14-1.15 (reason "expected_expr_close_curly_or_comma"))
-~~~
-# FORMATTED
-~~~roc
-
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.record_literal
+  (Expr.lookup "i")
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+{}
 ~~~

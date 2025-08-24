@@ -7,37 +7,35 @@ type=expr
 ~~~roc
 List.map
 ~~~
-# EXPECTED
-UNDEFINED VARIABLE - simple_external_lookup.md:1:1:1:9
-# PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `map` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**simple_external_lookup.md:1:1:1:9:**
-```roc
-List.map
-```
-^^^^^^^^
-
-
 # TOKENS
-~~~zig
-UpperIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:9),EndOfFile(1:9-1:9),
-~~~
+~~~text
+UpperIdent Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.9 (raw "List.map"))
+(binop_pipe
+  (uc "List")
+  (dot_lc "map")
+)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - simple_external_lookup.md:1:1:1:9
+# PROBLEMS
+**Unsupported Node**
+at 1:1 to 1:8
+
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "ident_not_in_scope"))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.9 (type "Error"))
+~~~roc
+# No expression found
 ~~~

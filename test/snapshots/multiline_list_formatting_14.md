@@ -15,38 +15,45 @@ type=expr
 	3, # Third
 ]
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-OpenSquare(1:1-1:2),
-Int(2:2-2:3),Comma(2:3-2:4),
-Int(6:2-6:3),Comma(6:3-6:4),
-Int(8:2-8:3),Comma(8:3-8:4),
-CloseSquare(9:1-9:2),EndOfFile(9:2-9:2),
-~~~
+~~~text
+OpenSquare Int Comma Int Comma Int Comma CloseSquare ~~~
 # PARSE
 ~~~clojure
-(e-list @1.1-9.2
-	(e-int @2.2-2.3 (raw "1"))
-	(e-int @6.2-6.3 (raw "2"))
-	(e-int @8.2-8.3 (raw "3")))
+(list_literal
+  (tuple_literal
+    (num_literal_i32 1)
+    (num_literal_i32 2)
+    (num_literal_i32 3)
+    (malformed malformed:expr_unexpected_token)
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**Parse Error**
+at 9:1 to 9:1
+
+**Parse Error**
+at 1:1 to 9:2
+
+**Unsupported Node**
+at 1:1 to 9:1
+
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-9.2
-	(elems
-		(e-int @2.2-2.3 (value "1"))
-		(e-int @6.2-6.3 (value "2"))
-		(e-int @8.2-8.3 (value "3"))))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-9.2 (type "List(Num(_size))"))
+~~~roc
+# No expression found
 ~~~

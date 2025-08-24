@@ -7,30 +7,32 @@ type=expr
 ~~~roc
 -(8)
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-OpUnaryMinus(1:1-1:2),NoSpaceOpenRound(1:2-1:3),Int(1:3-1:4),CloseRound(1:4-1:5),EndOfFile(1:5-1:5),
-~~~
+~~~text
+OpUnaryMinus OpenRound Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(unary "-"
-	(e-tuple @1.2-1.5
-		(e-int @1.3-1.4 (raw "8"))))
+(unary_neg <unary>)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**Unsupported Node**
+at 1:1 to 1:4
+
 # CANONICALIZE
 ~~~clojure
-(e-unary-minus @1.1-1.5
-	(e-int @1.3-1.4 (value "8")))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.5 (type "Num(_size)"))
+~~~roc
+# No expression found
 ~~~

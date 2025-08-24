@@ -7,32 +7,30 @@ type=file
 ~~~roc
 module []
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),EndOfFile(1:10-1:10),
-~~~
+~~~text
+KwModule OpenSquare CloseSquare ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.10
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
-	(statements))
+(header-only)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(empty)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+# No top-level expression found in file
 ~~~

@@ -50,7 +50,10 @@ fn extractSection(allocator: std.mem.Allocator, content: []const u8, section_nam
     const section_header = try std.fmt.allocPrint(allocator, "# {s}", .{section_name});
     defer allocator.free(section_header);
 
-    const start_idx = std.mem.indexOf(u8, content, section_header) orelse return try allocator.dupe(u8, "");
+    const start_idx = std.mem.indexOf(u8, content, section_header) orelse {
+        // Section not found, return empty string
+        return try allocator.dupe(u8, "");
+    };
     const content_after_header = content[start_idx + section_header.len ..];
 
     // Find the next section or end of file
@@ -101,11 +104,11 @@ fn extractSection(allocator: std.mem.Allocator, content: []const u8, section_nam
 
 /// Parse source using our new Parser2/TokenIterator pipeline
 fn parseWithNewPipeline(allocator: std.mem.Allocator, source: []const u8, snapshot_type: []const u8) ![]const u8 {
-    var ast = AST2.initCapacity(allocator, 100) catch return try allocator.dupe(u8, "INIT_ERROR");
+    var ast = try AST2.initCapacity(allocator, 100);
     defer ast.deinit(allocator);
 
     // Create a CommonEnv for tokenization
-    var env = base.CommonEnv.init(allocator, source) catch return try allocator.dupe(u8, "ENV_ERROR");
+    var env = try base.CommonEnv.init(allocator, source);
     defer env.deinit(allocator);
 
     // Create diagnostics buffer
@@ -115,7 +118,7 @@ fn parseWithNewPipeline(allocator: std.mem.Allocator, source: []const u8, snapsh
     defer byte_slices.entries.deinit(allocator);
 
     // Parse using new Parser2 with TokenIterator
-    var parser = Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices) catch return try allocator.dupe(u8, "PARSER_INIT_ERROR");
+    var parser = try Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
     defer parser.deinit();
 
     if (std.mem.eql(u8, snapshot_type, "file")) {
@@ -185,29 +188,19 @@ fn processSnapshot(allocator: std.mem.Allocator, filepath: []const u8) !Snapshot
     const filename = std.fs.path.basename(filepath);
 
     // Read the snapshot file
-    const file_content = std.fs.cwd().readFileAlloc(allocator, filepath, 1024 * 1024) catch |err| {
-        std.debug.print("Failed to read {s}: {}\n", .{ filepath, err });
-        return SnapshotParseResult{
-            .filename = try allocator.dupe(u8, filename),
-            .meta = SnapshotMeta{ .description = try allocator.dupe(u8, "ERROR"), .type = try allocator.dupe(u8, "file") },
-            .source = try allocator.dupe(u8, ""),
-            .existing_problems = try allocator.dupe(u8, ""),
-            .new_problems = try allocator.dupe(u8, "FILE_READ_ERROR"),
-            .parse_succeeded = false,
-        };
-    };
+    const file_content = try std.fs.cwd().readFileAlloc(allocator, filepath, 1024 * 1024);
     defer allocator.free(file_content);
 
     // Extract sections
-    const meta_content = extractSection(allocator, file_content, "META") catch try allocator.dupe(u8, "");
+    const meta_content = try extractSection(allocator, file_content, "META");
     defer allocator.free(meta_content);
-    const meta = parseMetadata(allocator, meta_content) catch SnapshotMeta{ .description = try allocator.dupe(u8, "PARSE_ERROR"), .type = try allocator.dupe(u8, "file") };
+    const meta = try parseMetadata(allocator, meta_content);
 
-    const source = extractSection(allocator, file_content, "SOURCE") catch try allocator.dupe(u8, "");
-    const existing_problems = extractSection(allocator, file_content, "PROBLEMS") catch try allocator.dupe(u8, "");
+    const source = try extractSection(allocator, file_content, "SOURCE");
+    const existing_problems = try extractSection(allocator, file_content, "PROBLEMS");
 
     // Parse with new pipeline
-    const new_problems = parseWithNewPipeline(allocator, source, meta.type) catch try allocator.dupe(u8, "PARSE_PIPELINE_ERROR");
+    const new_problems = try parseWithNewPipeline(allocator, source, meta.type);
 
     return SnapshotParseResult{
         .filename = try allocator.dupe(u8, filename),

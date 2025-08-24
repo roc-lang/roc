@@ -7,27 +7,30 @@ type=expr
 ~~~roc
 9223372036854775807
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-Int(1:1-1:20),EndOfFile(1:20-1:20),
-~~~
+~~~text
+Int ~~~
 # PARSE
 ~~~clojure
-(e-int @1.1-1.20 (raw "9223372036854775807"))
+(num_literal_big big:<idx:0>)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-int @1.1-1.20 (value "9223372036854775807"))
+(Expr.num_literal_big)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag num_literal_big :type "Num(_a)")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.20 (type "Num(_size)"))
+~~~roc
+Num(_a)
 ~~~

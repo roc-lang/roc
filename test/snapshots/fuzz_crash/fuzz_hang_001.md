@@ -7,58 +7,41 @@ type=file
 ~~~roc
 0 (
 ~~~
+# TOKENS
+~~~text
+Int OpenRound ~~~
+# PARSE
+~~~clojure
+(block
+  (apply_anon
+    (num_literal_i32 0)
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 MISSING HEADER - fuzz_hang_001.md:1:1:1:2
 PARSE ERROR - fuzz_hang_001.md:1:3:1:4
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
+**Parse Error**
+at 1:1 to 1:4
 
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
+**Unsupported Node**
+at 1:1 to 1:3
 
-**fuzz_hang_001.md:1:1:1:2:**
-```roc
-0 (
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_hang_001.md:1:3:1:4:**
-```roc
-0 (
-```
-  ^
-
-
-# TOKENS
-~~~zig
-Int(1:1-1:2),OpenRound(1:3-1:4),EndOfFile(1:4-1:4),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-1.4
-	(malformed-header @1.1-1.2 (tag "missing_header"))
-	(statements
-		(s-malformed @1.3-1.4 (tag "statement_unexpected_token"))))
-~~~
-# FORMATTED
-~~~roc
-
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

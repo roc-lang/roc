@@ -7,27 +7,32 @@ type=expr
 ~~~roc
 -3.14159
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-Float(1:1-1:9),EndOfFile(1:9-1:9),
-~~~
+~~~text
+OpUnaryMinus Float ~~~
 # PARSE
 ~~~clojure
-(e-frac @1.1-1.9 (raw "-3.14159"))
+(unary_neg <unary>)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**Unsupported Node**
+at 1:1 to 1:9
+
 # CANONICALIZE
 ~~~clojure
-(e-frac-dec @1.1-1.9 (value "-3.14159"))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.9 (type "Frac(_size)"))
+~~~roc
+# No expression found
 ~~~

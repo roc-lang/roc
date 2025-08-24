@@ -31,9 +31,7 @@ NO CHANGE
 # EXPECTED
 UNDEFINED VARIABLE - add_var_with_spaces.md:3:8:3:9
 # PROBLEMS
-**Unsupported Node**
-at 3:6 to 3:6
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -46,5 +44,4 @@ at 3:6 to 3:6
 ~~~
 # TYPES
 ~~~roc
-# Type checking for non-expression nodes not yet implemented
 ~~~

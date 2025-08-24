@@ -7,27 +7,30 @@ type=expr
 ~~~roc
 3.14
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-Float(1:1-1:5),EndOfFile(1:5-1:5),
-~~~
+~~~text
+Float ~~~
 # PARSE
 ~~~clojure
-(e-frac @1.1-1.5 (raw "3.14"))
+(frac_literal_small 3.14)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-dec-small @1.1-1.5 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
+(Expr.frac_literal_small 3.14)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag frac_literal_small :type "F64")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.5 (type "Frac(_size)"))
+~~~roc
+F64
 ~~~

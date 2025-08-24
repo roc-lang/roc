@@ -29,6 +29,74 @@ y = 'u
 # Test backslash before EOF
 '\
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare CloseSquare LowerIdent OpAssign OpenRound SingleQuote Comma MalformedSingleQuoteUnclosed MalformedUnknownToken MalformedSingleQuoteUnclosed MalformedSingleQuoteUnclosed MalformedUnknownToken MalformedUnknownToken MalformedUnknownToken MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence Comma MalformedSingleQuoteInvalidEscapeSequence CloseRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound CloseRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound Int UpperIdent CloseRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound UpperIdent CloseRound MalformedSingleQuoteUnclosed SingleQuote Comma SingleQuote Comma MalformedSingleQuoteEmpty Comma MalformedSingleQuoteUnclosed LowerIdent MalformedSingleQuoteUnclosed MalformedSingleQuoteUnclosed Comma CloseRound LowerIdent OpAssign MalformedSingleQuoteUnclosed MalformedSingleQuoteUnclosed ~~~
+# PARSE
+~~~clojure
+(block
+  (binop_equals
+    (lc "x")
+    (tuple_literal
+      (str_literal_small "")
+      (malformed malformed:expr_unexpected_token)
+    )
+  )
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (apply_anon
+    (malformed malformed:expr_unexpected_token)
+    (malformed malformed:expr_unexpected_token)
+  )
+  (apply_anon
+    (malformed malformed:expr_unexpected_token)
+  )
+  (malformed malformed:expr_unexpected_token)
+  (apply_anon
+    (malformed malformed:expr_unexpected_token)
+    (num_literal_i32 1)
+  )
+  (uc "F680")
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (apply_anon
+    (malformed malformed:expr_unexpected_token)
+    (uc "K")
+  )
+  (malformed malformed:expr_unexpected_token)
+  (str_literal_small "")
+  (malformed malformed:expr_unexpected_token)
+  (str_literal_small "")
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (lc "ong")
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (binop_equals
+    (lc "y")
+    (malformed malformed:expr_unexpected_token)
+  )
+  (malformed malformed:expr_unexpected_token)
+)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
 INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
@@ -56,313 +124,258 @@ INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 UNRECOGNIZED SYNTAX - unicode_single_quotes.md:20:5:20:7
 # PROBLEMS
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+**Parse Error**
+at 5:5 to 5:5
 
-```roc
-    '\u',
-```
-     ^^
+**Parse Error**
+at 5:7 to 5:7
 
+**Parse Error**
+at 5:7 to 5:7
 
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+**Parse Error**
+at 5:8 to 5:8
 
-```roc
-    '\u)',
-```
-     ^^
+**Parse Error**
+at 6:5 to 6:5
 
+**Parse Error**
+at 6:7 to 6:7
 
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+**Parse Error**
+at 6:8 to 6:8
 
-```roc
-    '\u(',
-```
-     ^^^
+**Parse Error**
+at 6:9 to 6:9
 
+**Parse Error**
+at 6:10 to 6:10
 
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+**Parse Error**
+at 7:5 to 7:5
 
-```roc
-    '\u()',
-```
-     ^^^^
+**Parse Error**
+at 7:9 to 7:9
 
+**Parse Error**
+at 8:5 to 8:5
 
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+**Parse Error**
+at 8:8 to 8:8
 
-```roc
-    '\u(K)',
-```
-     ^^^^^
+**Parse Error**
+at 8:9 to 8:9
 
+**Parse Error**
+at 9:5 to 9:5
 
-**INVALID ESCAPE SEQUENCE**
-This escape sequence is not recognized.
+**Parse Error**
+at 9:9 to 9:9
 
-```roc
-'\
-```
- ^
+**Parse Error**
+at 9:5 to 10:5
 
+**Parse Error**
+at 10:5 to 10:5
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u'** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**Parse Error**
+at 10:10 to 10:10
 
-**unicode_single_quotes.md:7:5:7:9:**
-```roc
-    '\u',
-```
-    ^^^^
+**Parse Error**
+at 11:5 to 11:5
 
+**Parse Error**
+at 11:5 to 11:10
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u)'** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**Parse Error**
+at 11:14 to 11:14
 
-**unicode_single_quotes.md:8:5:8:10:**
-```roc
-    '\u)',
-```
-    ^^^^^
+**Parse Error**
+at 11:15 to 11:15
 
+**Parse Error**
+at 12:5 to 12:5
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u('** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**Parse Error**
+at 12:11 to 12:11
 
-**unicode_single_quotes.md:9:5:9:10:**
-```roc
-    '\u(',
-```
-    ^^^^^
+**Parse Error**
+at 13:9 to 13:9
 
+**Parse Error**
+at 14:9 to 14:9
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u()'** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**Parse Error**
+at 15:5 to 15:5
 
-**unicode_single_quotes.md:10:5:10:11:**
-```roc
-    '\u()',
-```
-    ^^^^^^
+**Parse Error**
+at 15:7 to 15:7
 
+**Parse Error**
+at 16:5 to 16:5
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u(K)'** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**Parse Error**
+at 16:10 to 16:10
 
-**unicode_single_quotes.md:12:5:12:12:**
-```roc
-    '\u(K)',
-```
-    ^^^^^^^
+**Parse Error**
+at 17:5 to 17:5
 
+**Parse Error**
+at 17:8 to 17:8
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **''** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**Parse Error**
+at 18:1 to 18:1
 
-**unicode_single_quotes.md:15:5:15:7:**
-```roc
-    '',
-```
-    ^^
+**Parse Error**
+at 20:5 to 20:5
 
+**Parse Error**
+at 23:1 to 23:1
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'long'** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**Unsupported Node**
+at 1:1 to 1:1
 
-**unicode_single_quotes.md:16:5:16:11:**
-```roc
-    'long',
-```
-    ^^^^^^
+**Unsupported Node**
+at 5:7 to 5:7
 
+**Unsupported Node**
+at 5:8 to 5:8
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\',** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**Unsupported Node**
+at 6:5 to 6:5
 
-**unicode_single_quotes.md:17:5:17:9:**
-```roc
-    '\',
-```
-    ^^^^
+**Unsupported Node**
+at 6:7 to 6:7
 
+**Unsupported Node**
+at 6:8 to 6:8
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'u** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**Unsupported Node**
+at 6:9 to 6:9
 
-**unicode_single_quotes.md:20:5:20:7:**
-```roc
-y = 'u
-```
-    ^^
+**Unsupported Node**
+at 6:10 to 6:10
 
+**Unsupported Node**
+at 7:5 to 7:5
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**Unsupported Node**
+at 7:9 to 7:9
 
-**unicode_single_quotes.md:23:1:23:3:**
-```roc
-'\
-```
-^^
+**Unsupported Node**
+at 8:5 to 8:5
 
+**Unsupported Node**
+at 8:8 to 8:8
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
+**Unsupported Node**
+at 8:9 to 8:9
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
+**Unsupported Node**
+at 9:5 to 9:10
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
+**Unsupported Node**
+at 10:5 to 10:6
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
+**Unsupported Node**
+at 10:10 to 10:10
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
+**Unsupported Node**
+at 11:5 to 11:11
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
+**Pattern in Expression Context**
+at 11:10 to 11:14
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
+**Unsupported Node**
+at 11:14 to 11:14
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
+**Unsupported Node**
+at 11:15 to 11:15
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
+**Unsupported Node**
+at 12:5 to 12:11
 
-**unicode_single_quotes.md:20:5:20:7:**
-```roc
-y = 'u
-```
-    ^^
+**Unsupported Node**
+at 12:11 to 12:11
 
-This might be a syntax error, an unsupported language feature, or a typo.
+**Unsupported Node**
+at 13:9 to 13:9
 
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-LowerIdent(3:1-3:2),OpAssign(3:3-3:4),OpenRound(3:5-3:6),
-SingleQuote(4:5-4:8),Comma(4:8-4:9),
-SingleQuote(5:5-5:9),Comma(5:9-5:10),
-SingleQuote(6:5-6:11),Comma(6:11-6:12),
-MalformedSingleQuoteInvalidEscapeSequence(7:5-7:9),Comma(7:9-7:10),
-MalformedSingleQuoteInvalidEscapeSequence(8:5-8:10),Comma(8:10-8:11),
-MalformedSingleQuoteInvalidEscapeSequence(9:5-9:10),Comma(9:10-9:11),
-MalformedSingleQuoteInvalidEscapeSequence(10:5-10:11),Comma(10:11-10:12),
-SingleQuote(11:5-11:16),Comma(11:16-11:17),
-MalformedSingleQuoteInvalidEscapeSequence(12:5-12:12),Comma(12:12-12:13),
-SingleQuote(13:5-13:9),Comma(13:9-13:10),
-SingleQuote(14:5-14:9),Comma(14:9-14:10),
-MalformedSingleQuoteEmpty(15:5-15:7),Comma(15:7-15:8),
-MalformedSingleQuoteTooLong(16:5-16:11),Comma(16:11-16:12),
-MalformedSingleQuoteUnclosed(17:5-17:9),
-CloseRound(18:1-18:2),
-LowerIdent(20:1-20:2),OpAssign(20:3-20:4),MalformedSingleQuoteUnclosed(20:5-20:7),
-MalformedSingleQuoteUnclosed(23:1-23:3),EndOfFile(23:3-23:3),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-23.3
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
-	(statements
-		(s-decl @3.1-18.2
-			(p-ident @3.1-3.2 (raw "x"))
-			(e-tuple @3.5-18.2
-				(e-single-quote @4.5-4.8 (raw "'a'"))
-				(e-single-quote @5.5-5.9 (raw "'é'"))
-				(e-single-quote @6.5-6.11 (raw "'🚀'"))
-				(e-malformed @7.5-7.9 (reason "expr_unexpected_token"))
-				(e-malformed @8.5-8.10 (reason "expr_unexpected_token"))
-				(e-malformed @9.5-9.10 (reason "expr_unexpected_token"))
-				(e-malformed @10.5-10.11 (reason "expr_unexpected_token"))
-				(e-single-quote @11.5-11.16 (raw "'\u(1F680)'"))
-				(e-malformed @12.5-12.12 (reason "expr_unexpected_token"))
-				(e-single-quote @13.5-13.9 (raw "'\\'"))
-				(e-single-quote @14.5-14.9 (raw "'\''"))
-				(e-malformed @15.5-15.7 (reason "expr_unexpected_token"))
-				(e-malformed @16.5-16.11 (reason "expr_unexpected_token"))
-				(e-malformed @17.5-17.9 (reason "expr_unexpected_token"))))
-		(s-decl @20.1-20.7
-			(p-ident @20.1-20.2 (raw "y"))
-			(e-malformed @20.5-20.7 (reason "expr_unexpected_token")))
-		(s-malformed @23.1-23.3 (tag "statement_unexpected_token"))))
-~~~
-# FORMATTED
-~~~roc
-module []
+**Unsupported Node**
+at 14:9 to 14:9
 
-x = (
-	'a',
-	'é',
-	'🚀',
-	,
-	,
-	,
-	,
-	'\u(1F680)',
-	,
-	'\\',
-	'\'',
-	,
-	,
-	,
-)
+**Unsupported Node**
+at 15:5 to 15:5
 
-y = 
+**Unsupported Node**
+at 15:7 to 15:7
 
-# Test backslash before EOF
+**Unsupported Node**
+at 16:5 to 16:5
 
-~~~
+**Unsupported Node**
+at 16:10 to 16:10
+
+**Unsupported Node**
+at 17:5 to 17:5
+
+**Unsupported Node**
+at 17:8 to 17:8
+
+**Unsupported Node**
+at 18:1 to 18:1
+
+**Unsupported Node**
+at 20:5 to 20:5
+
+**Unsupported Node**
+at 23:1 to 23:1
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @3.1-3.2 (ident "x"))
-		(e-tuple @3.5-18.2
-			(elems
-				(e-int @4.5-4.8 (value "97"))
-				(e-int @5.5-5.9 (value "233"))
-				(e-int @6.5-6.11 (value "128640"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-int @11.5-11.16 (value "128640"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-int @13.5-13.9 (value "92"))
-				(e-int @14.5-14.9 (value "39"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized")))))
-	(d-let
-		(p-assign @20.1-20.2 (ident "y"))
-		(e-runtime-error (tag "expr_not_canonicalized"))))
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lookup "ong")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @3.1-3.2 (type "(Num(_size), Num(_size2), Num(_size3), Error, Error, Error, Error, Num(_size4), Error, Num(_size5), Num(_size6), Error, Error, Error)"))
-		(patt @20.1-20.2 (type "Error")))
-	(expressions
-		(expr @3.5-18.2 (type "(Num(_size), Num(_size2), Num(_size3), Error, Error, Error, Error, Num(_size4), Error, Num(_size5), Num(_size6), Error, Error, Error)"))
-		(expr @20.5-20.7 (type "Error"))))
+~~~roc
 ~~~

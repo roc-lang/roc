@@ -7,39 +7,32 @@ type=expr
 ~~~roc
 -foo
 ~~~
-# EXPECTED
-UNDEFINED VARIABLE - unary_negation.md:1:2:1:5
-# PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `foo` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**unary_negation.md:1:2:1:5:**
-```roc
--foo
-```
- ^^^
-
-
 # TOKENS
-~~~zig
-OpUnaryMinus(1:1-1:2),LowerIdent(1:2-1:5),EndOfFile(1:5-1:5),
-~~~
+~~~text
+OpUnaryMinus LowerIdent ~~~
 # PARSE
 ~~~clojure
-(unary "-"
-	(e-ident @1.2-1.5 (raw "foo")))
+(unary_neg <unary>)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - unary_negation.md:1:2:1:5
+# PROBLEMS
+**Unsupported Node**
+at 1:1 to 1:5
+
 # CANONICALIZE
 ~~~clojure
-(e-unary-minus @1.1-1.5
-	(e-runtime-error (tag "ident_not_in_scope")))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.5 (type "Error"))
+~~~roc
+# No expression found
 ~~~

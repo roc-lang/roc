@@ -7,32 +7,32 @@ type=statement
 ~~~roc
 crash "some message"
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-KwCrash(1:1-1:6),StringStart(1:7-1:8),StringPart(1:8-1:20),StringEnd(1:20-1:21),EndOfFile(1:21-1:21),
-~~~
+~~~text
+KwCrash String ~~~
 # PARSE
 ~~~clojure
-(s-crash @1.1-1.21
-	(e-string @1.7-1.21
-		(e-string-part @1.8-1.20 (raw "some message"))))
+(crash <statement>)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**Unsupported Node**
+at 1:1 to 1:21
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-crash @1.1-1.21 (msg "some message")))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+# Type checking for this node type not yet implemented
 ~~~

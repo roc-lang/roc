@@ -28,6 +28,136 @@ valid_multi = |x| [x]
 
 main = |x| "done"
 ~~~
+# TOKENS
+~~~text
+KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon LowerIdent OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar String ~~~
+# PARSE
+~~~clojure
+(block
+  (binop_colon
+    (lc "single_use")
+    (binop_thin_arrow
+      (apply_uc
+        (uc "List")
+        (lc "elem")
+      )
+      (uc "Str")
+    )
+  )
+  (binop_equals
+    (lc "single_use")
+    (lambda
+      (body
+        (str_literal_big "hello")
+      )
+      (args
+        (lc "x")
+      )
+    )
+  )
+  (binop_colon
+    (lc "ending_underscore")
+    (binop_thin_arrow
+      (apply_uc
+        (uc "List")
+        (lc "elem_")
+      )
+      (lc "elem_")
+    )
+  )
+  (binop_equals
+    (lc "ending_underscore")
+    (lambda
+      (body
+        (str_literal_big "default")
+      )
+      (args
+        (lc "list")
+      )
+    )
+  )
+  (binop_colon
+    (lc "combo_single")
+    (binop_thin_arrow
+      (apply_uc
+        (uc "List")
+        (lc "bad_")
+      )
+      (uc "Str")
+    )
+  )
+  (binop_equals
+    (lc "combo_single")
+    (lambda
+      (body
+        (str_literal_big "combo")
+      )
+      (args
+        (lc "x")
+      )
+    )
+  )
+  (binop_colon
+    (lc "valid_single")
+    (binop_thin_arrow
+      (apply_uc
+        (uc "List")
+        (lc "_elem")
+      )
+      (uc "Str")
+    )
+  )
+  (binop_equals
+    (lc "valid_single")
+    (lambda
+      (body
+        (str_literal_big "valid")
+      )
+      (args
+        (lc "x")
+      )
+    )
+  )
+  (binop_colon
+    (lc "valid_multi")
+    (binop_thin_arrow
+      (lc "elem")
+      (apply_uc
+        (uc "List")
+        (lc "elem")
+      )
+    )
+  )
+  (binop_equals
+    (lc "valid_multi")
+    (lambda
+      (body
+        (list_literal
+          (lc "x")
+        )
+      )
+      (args
+        (lc "x")
+      )
+    )
+  )
+  (binop_equals
+    (lc "main")
+    (lambda
+      (body
+        (str_literal_small "done")
+      )
+      (args
+        (lc "x")
+      )
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 UNUSED VARIABLE - type_var_underscore_conventions.md:5:15:5:16
 UNUSED VARIABLE - type_var_underscore_conventions.md:9:22:9:26
@@ -36,280 +166,74 @@ UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
 TYPE MISMATCH - type_var_underscore_conventions.md:8:36:8:41
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
+**Unsupported Node**
+at 4:14 to 4:31
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**type_var_underscore_conventions.md:5:15:5:16:**
-```roc
-single_use = |x| "hello"
-```
-              ^
+**Unsupported Node**
+at 5:14 to 5:18
 
+**Unsupported Node**
+at 8:21 to 8:41
 
-**UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
+**Unsupported Node**
+at 9:21 to 9:28
 
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
-**type_var_underscore_conventions.md:9:22:9:26:**
-```roc
-ending_underscore = |list| "default"
-```
-                     ^^^^
+**Unsupported Node**
+at 12:16 to 12:33
 
+**Unsupported Node**
+at 13:16 to 13:20
 
-**UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
+**Unsupported Node**
+at 16:16 to 16:34
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**type_var_underscore_conventions.md:13:17:13:18:**
-```roc
-combo_single = |x| "combo"
-```
-                ^
+**Unsupported Node**
+at 17:16 to 17:20
 
+**Unsupported Node**
+at 19:15 to 19:33
 
-**UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
+**Unsupported Node**
+at 20:15 to 20:19
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**type_var_underscore_conventions.md:17:17:17:18:**
-```roc
-valid_single = |x| "valid"
-```
-                ^
+**Unsupported Node**
+at 22:8 to 22:12
 
-
-**UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**type_var_underscore_conventions.md:22:9:22:10:**
-```roc
-main = |x| "done"
-```
-        ^
-
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_var_underscore_conventions.md:8:36:8:41:**
-```roc
-ending_underscore : List(elem_) -> elem_
-```
-                                   ^^^^^
-
-It has the type:
-    _elem__
-
-But here it's being used as:
-    _Str_
-
-# TOKENS
-~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),LowerIdent(1:14-1:16),OpColon(1:16-1:17),KwPlatform(1:18-1:26),StringStart(1:27-1:28),StringPart(1:28-1:53),StringEnd(1:53-1:54),CloseCurly(1:55-1:56),
-LowerIdent(4:1-4:11),OpColon(4:12-4:13),UpperIdent(4:14-4:18),NoSpaceOpenRound(4:18-4:19),LowerIdent(4:19-4:23),CloseRound(4:23-4:24),OpArrow(4:25-4:27),UpperIdent(4:28-4:31),
-LowerIdent(5:1-5:11),OpAssign(5:12-5:13),OpBar(5:14-5:15),LowerIdent(5:15-5:16),OpBar(5:16-5:17),StringStart(5:18-5:19),StringPart(5:19-5:24),StringEnd(5:24-5:25),
-LowerIdent(8:1-8:18),OpColon(8:19-8:20),UpperIdent(8:21-8:25),NoSpaceOpenRound(8:25-8:26),LowerIdent(8:26-8:31),CloseRound(8:31-8:32),OpArrow(8:33-8:35),LowerIdent(8:36-8:41),
-LowerIdent(9:1-9:18),OpAssign(9:19-9:20),OpBar(9:21-9:22),LowerIdent(9:22-9:26),OpBar(9:26-9:27),StringStart(9:28-9:29),StringPart(9:29-9:36),StringEnd(9:36-9:37),
-LowerIdent(12:1-12:13),OpColon(12:14-12:15),UpperIdent(12:16-12:20),NoSpaceOpenRound(12:20-12:21),LowerIdent(12:21-12:25),CloseRound(12:25-12:26),OpArrow(12:27-12:29),UpperIdent(12:30-12:33),
-LowerIdent(13:1-13:13),OpAssign(13:14-13:15),OpBar(13:16-13:17),LowerIdent(13:17-13:18),OpBar(13:18-13:19),StringStart(13:20-13:21),StringPart(13:21-13:26),StringEnd(13:26-13:27),
-LowerIdent(16:1-16:13),OpColon(16:14-16:15),UpperIdent(16:16-16:20),NoSpaceOpenRound(16:20-16:21),NamedUnderscore(16:21-16:26),CloseRound(16:26-16:27),OpArrow(16:28-16:30),UpperIdent(16:31-16:34),
-LowerIdent(17:1-17:13),OpAssign(17:14-17:15),OpBar(17:16-17:17),LowerIdent(17:17-17:18),OpBar(17:18-17:19),StringStart(17:20-17:21),StringPart(17:21-17:26),StringEnd(17:26-17:27),
-LowerIdent(19:1-19:12),OpColon(19:13-19:14),LowerIdent(19:15-19:19),OpArrow(19:20-19:22),UpperIdent(19:23-19:27),NoSpaceOpenRound(19:27-19:28),LowerIdent(19:28-19:32),CloseRound(19:32-19:33),
-LowerIdent(20:1-20:12),OpAssign(20:13-20:14),OpBar(20:15-20:16),LowerIdent(20:16-20:17),OpBar(20:17-20:18),OpenSquare(20:19-20:20),LowerIdent(20:20-20:21),CloseSquare(20:21-20:22),
-LowerIdent(22:1-22:5),OpAssign(22:6-22:7),OpBar(22:8-22:9),LowerIdent(22:9-22:10),OpBar(22:10-22:11),StringStart(22:12-22:13),StringPart(22:13-22:17),StringEnd(22:17-22:18),EndOfFile(22:18-22:18),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-22.18
-	(app @1.1-1.56
-		(provides @1.5-1.11
-			(exposed-lower-ident @1.6-1.10
-				(text "main")))
-		(record-field @1.14-1.54 (name "pf")
-			(e-string @1.27-1.54
-				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
-		(packages @1.12-1.56
-			(record-field @1.14-1.54 (name "pf")
-				(e-string @1.27-1.54
-					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
-	(statements
-		(s-type-anno @4.1-4.31 (name "single_use")
-			(ty-fn @4.14-4.31
-				(ty-apply @4.14-4.24
-					(ty @4.14-4.18 (name "List"))
-					(ty-var @4.19-4.23 (raw "elem")))
-				(ty @4.28-4.31 (name "Str"))))
-		(s-decl @5.1-5.25
-			(p-ident @5.1-5.11 (raw "single_use"))
-			(e-lambda @5.14-5.25
-				(args
-					(p-ident @5.15-5.16 (raw "x")))
-				(e-string @5.18-5.25
-					(e-string-part @5.19-5.24 (raw "hello")))))
-		(s-type-anno @8.1-8.41 (name "ending_underscore")
-			(ty-fn @8.21-8.41
-				(ty-apply @8.21-8.32
-					(ty @8.21-8.25 (name "List"))
-					(ty-var @8.26-8.31 (raw "elem_")))
-				(ty-var @8.36-8.41 (raw "elem_"))))
-		(s-decl @9.1-9.37
-			(p-ident @9.1-9.18 (raw "ending_underscore"))
-			(e-lambda @9.21-9.37
-				(args
-					(p-ident @9.22-9.26 (raw "list")))
-				(e-string @9.28-9.37
-					(e-string-part @9.29-9.36 (raw "default")))))
-		(s-type-anno @12.1-12.33 (name "combo_single")
-			(ty-fn @12.16-12.33
-				(ty-apply @12.16-12.26
-					(ty @12.16-12.20 (name "List"))
-					(ty-var @12.21-12.25 (raw "bad_")))
-				(ty @12.30-12.33 (name "Str"))))
-		(s-decl @13.1-13.27
-			(p-ident @13.1-13.13 (raw "combo_single"))
-			(e-lambda @13.16-13.27
-				(args
-					(p-ident @13.17-13.18 (raw "x")))
-				(e-string @13.20-13.27
-					(e-string-part @13.21-13.26 (raw "combo")))))
-		(s-type-anno @16.1-16.34 (name "valid_single")
-			(ty-fn @16.16-16.34
-				(ty-apply @16.16-16.27
-					(ty @16.16-16.20 (name "List"))
-					(underscore-ty-var @16.21-16.26 (raw "_elem")))
-				(ty @16.31-16.34 (name "Str"))))
-		(s-decl @17.1-17.27
-			(p-ident @17.1-17.13 (raw "valid_single"))
-			(e-lambda @17.16-17.27
-				(args
-					(p-ident @17.17-17.18 (raw "x")))
-				(e-string @17.20-17.27
-					(e-string-part @17.21-17.26 (raw "valid")))))
-		(s-type-anno @19.1-19.33 (name "valid_multi")
-			(ty-fn @19.15-19.33
-				(ty-var @19.15-19.19 (raw "elem"))
-				(ty-apply @19.23-19.33
-					(ty @19.23-19.27 (name "List"))
-					(ty-var @19.28-19.32 (raw "elem")))))
-		(s-decl @20.1-20.22
-			(p-ident @20.1-20.12 (raw "valid_multi"))
-			(e-lambda @20.15-20.22
-				(args
-					(p-ident @20.16-20.17 (raw "x")))
-				(e-list @20.19-20.22
-					(e-ident @20.20-20.21 (raw "x")))))
-		(s-decl @22.1-22.18
-			(p-ident @22.1-22.5 (raw "main"))
-			(e-lambda @22.8-22.18
-				(args
-					(p-ident @22.9-22.10 (raw "x")))
-				(e-string @22.12-22.18
-					(e-string-part @22.13-22.17 (raw "done")))))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @5.1-5.11 (ident "single_use"))
-		(e-lambda @5.14-5.25
-			(args
-				(p-assign @5.15-5.16 (ident "x")))
-			(e-string @5.18-5.25
-				(e-literal @5.19-5.24 (string "hello"))))
-		(annotation @5.1-5.11
-			(declared-type
-				(ty-fn @4.14-4.31 (effectful false)
-					(ty-apply @4.14-4.24 (symbol "List")
-						(ty-var @4.19-4.23 (name "elem")))
-					(ty @4.28-4.31 (name "Str"))))))
-	(d-let
-		(p-assign @9.1-9.18 (ident "ending_underscore"))
-		(e-lambda @9.21-9.37
-			(args
-				(p-assign @9.22-9.26 (ident "list")))
-			(e-string @9.28-9.37
-				(e-literal @9.29-9.36 (string "default"))))
-		(annotation @9.1-9.18
-			(declared-type
-				(ty-fn @8.21-8.41 (effectful false)
-					(ty-apply @8.21-8.32 (symbol "List")
-						(ty-var @8.26-8.31 (name "elem_")))
-					(ty-var @8.36-8.41 (name "elem_"))))))
-	(d-let
-		(p-assign @13.1-13.13 (ident "combo_single"))
-		(e-lambda @13.16-13.27
-			(args
-				(p-assign @13.17-13.18 (ident "x")))
-			(e-string @13.20-13.27
-				(e-literal @13.21-13.26 (string "combo"))))
-		(annotation @13.1-13.13
-			(declared-type
-				(ty-fn @12.16-12.33 (effectful false)
-					(ty-apply @12.16-12.26 (symbol "List")
-						(ty-var @12.21-12.25 (name "bad_")))
-					(ty @12.30-12.33 (name "Str"))))))
-	(d-let
-		(p-assign @17.1-17.13 (ident "valid_single"))
-		(e-lambda @17.16-17.27
-			(args
-				(p-assign @17.17-17.18 (ident "x")))
-			(e-string @17.20-17.27
-				(e-literal @17.21-17.26 (string "valid"))))
-		(annotation @17.1-17.13
-			(declared-type
-				(ty-fn @16.16-16.34 (effectful false)
-					(ty-apply @16.16-16.27 (symbol "List")
-						(ty-var @16.21-16.26 (name "_elem")))
-					(ty @16.31-16.34 (name "Str"))))))
-	(d-let
-		(p-assign @20.1-20.12 (ident "valid_multi"))
-		(e-lambda @20.15-20.22
-			(args
-				(p-assign @20.16-20.17 (ident "x")))
-			(e-list @20.19-20.22
-				(elems
-					(e-lookup-local @20.20-20.21
-						(p-assign @20.16-20.17 (ident "x"))))))
-		(annotation @20.1-20.12
-			(declared-type
-				(ty-fn @19.15-19.33 (effectful false)
-					(ty-var @19.15-19.19 (name "elem"))
-					(ty-apply @19.23-19.33 (symbol "List")
-						(ty-var @19.28-19.32 (name "elem")))))))
-	(d-let
-		(p-assign @22.1-22.5 (ident "main"))
-		(e-lambda @22.8-22.18
-			(args
-				(p-assign @22.9-22.10 (ident "x")))
-			(e-string @22.12-22.18
-				(e-literal @22.13-22.17 (string "done"))))))
+(Expr.block
+  (Expr.binop_colon
+    (Expr.lookup "single_use")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "ending_underscore")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "combo_single")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "valid_single")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "valid_multi")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @5.1-5.11 (type "List(elem) -> Str"))
-		(patt @9.1-9.18 (type "List(elem_) -> Error"))
-		(patt @13.1-13.13 (type "List(bad_) -> Str"))
-		(patt @17.1-17.13 (type "List(_elem) -> Str"))
-		(patt @20.1-20.12 (type "elem -> List(elem)"))
-		(patt @22.1-22.5 (type "_arg -> Str")))
-	(expressions
-		(expr @5.14-5.25 (type "List(elem) -> Str"))
-		(expr @9.21-9.37 (type "List(elem_) -> Error"))
-		(expr @13.16-13.27 (type "List(bad_) -> Str"))
-		(expr @17.16-17.27 (type "List(_elem) -> Str"))
-		(expr @20.15-20.22 (type "elem -> List(elem)"))
-		(expr @22.8-22.18 (type "_arg -> Str"))))
+~~~roc
 ~~~

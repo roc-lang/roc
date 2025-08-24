@@ -7,39 +7,32 @@ type=statement
 ~~~roc
 crash 42
 ~~~
-# EXPECTED
-CRASH EXPECTS STRING - crash_stmt_invalid.md:1:1:1:9
-# PROBLEMS
-**CRASH EXPECTS STRING**
-The `crash` keyword expects a string literal as its argument.
-For example: `crash "Something went wrong"`
-**crash_stmt_invalid.md:1:1:1:9:**
-```roc
-crash 42
-```
-^^^^^^^^
-
-
 # TOKENS
-~~~zig
-KwCrash(1:1-1:6),Int(1:7-1:9),EndOfFile(1:9-1:9),
-~~~
+~~~text
+KwCrash Int ~~~
 # PARSE
 ~~~clojure
-(s-crash @1.1-1.9
-	(e-int @1.7-1.9 (raw "42")))
+(crash <statement>)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+CRASH EXPECTS STRING - crash_stmt_invalid.md:1:1:1:9
+# PROBLEMS
+**Unsupported Node**
+at 1:1 to 1:9
+
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+# Type checking for this node type not yet implemented
 ~~~

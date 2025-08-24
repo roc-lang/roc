@@ -12,78 +12,37 @@ type=expr
 	)
 } lines of text due to the template parts"
 ~~~
-# EXPECTED
-UNDEFINED VARIABLE - string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_3.md:2:2:2:11
-UNDEFINED VARIABLE - string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_3.md:3:3:3:4
-UNDEFINED VARIABLE - string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_3.md:4:3:4:4
-# PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `some_func` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_3.md:2:2:2:11:**
-```roc
-	some_func(
-```
-	^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `a` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_3.md:3:3:3:4:**
-```roc
-		a, # This is a comment
-```
-		^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_3.md:4:3:4:4:**
-```roc
-		b,
-```
-		^
-
-
 # TOKENS
-~~~zig
-StringStart(1:1-1:2),StringPart(1:2-1:24),OpenStringInterpolation(1:24-1:26),
-LowerIdent(2:2-2:11),NoSpaceOpenRound(2:11-2:12),
-LowerIdent(3:3-3:4),Comma(3:4-3:5),
-LowerIdent(4:3-4:4),Comma(4:4-4:5),
-CloseRound(5:2-5:3),
-CloseStringInterpolation(6:1-6:2),StringPart(6:2-6:42),StringEnd(6:42-6:43),EndOfFile(6:43-6:43),
-~~~
+~~~text
+MalformedString LowerIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound CloseCurly LowerIdent LowerIdent LowerIdent LowerIdent LowerIdent LowerIdent LowerIdent LowerIdent MalformedString ~~~
 # PARSE
 ~~~clojure
-(e-string @1.1-6.43
-	(e-string-part @1.2-1.24 (raw "This is a string with "))
-	(e-apply @2.2-5.3
-		(e-ident @2.2-2.11 (raw "some_func"))
-		(e-ident @3.3-3.4 (raw "a"))
-		(e-ident @4.3-4.4 (raw "b")))
-	(e-string-part @6.2-6.42 (raw " lines of text due to the template parts")))
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_3.md:2:2:2:11
+UNDEFINED VARIABLE - string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_3.md:3:3:3:4
+UNDEFINED VARIABLE - string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_3.md:4:3:4:4
+# PROBLEMS
+**Parse Error**
+at 1:1 to 1:1
+
+**Unsupported Node**
+at 1:26 to 1:26
+
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-6.43
-	(e-literal @1.2-1.24 (string "This is a string with "))
-	(e-call @2.2-5.3
-		(e-runtime-error (tag "ident_not_in_scope"))
-		(e-runtime-error (tag "ident_not_in_scope"))
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(e-literal @6.2-6.42 (string " lines of text due to the template parts")))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-6.43 (type "Str"))
+~~~roc
+# No expression found
 ~~~

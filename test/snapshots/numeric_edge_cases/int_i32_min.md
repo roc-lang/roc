@@ -7,27 +7,32 @@ type=expr
 ~~~roc
 -2147483648
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-Int(1:1-1:12),EndOfFile(1:12-1:12),
-~~~
+~~~text
+OpUnaryMinus Int ~~~
 # PARSE
 ~~~clojure
-(e-int @1.1-1.12 (raw "-2147483648"))
+(unary_neg <unary>)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**Unsupported Node**
+at 1:1 to 1:12
+
 # CANONICALIZE
 ~~~clojure
-(e-int @1.1-1.12 (value "-2147483648"))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.12 (type "Num(_size)"))
+~~~roc
+# No expression found
 ~~~

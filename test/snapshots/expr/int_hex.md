@@ -7,27 +7,30 @@ type=expr
 ~~~roc
 0xFF
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-Int(1:1-1:5),EndOfFile(1:5-1:5),
-~~~
+~~~text
+Int LowerIdent ~~~
 # PARSE
 ~~~clojure
-(e-int @1.1-1.5 (raw "0xFF"))
+(num_literal_i32 0)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-int @1.1-1.5 (value "255"))
+(Expr.num_literal_i32 0)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag num_literal_i32 :type "Num(_size)")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.5 (type "Int(_size)"))
+~~~roc
+Num(_size)
 ~~~

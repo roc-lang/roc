@@ -18,81 +18,93 @@ package
 a! : Str => Str
 b! : Str => Str
 ~~~
-# EXPECTED
-EXPOSED BUT NOT DEFINED - package.md:3:3:3:5
-EXPOSED BUT NOT DEFINED - package.md:4:3:4:5
-# PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `a!` is exposed, but it is not defined anywhere in this module.
-
-**package.md:3:3:3:5:**
-```roc
-		a!,
-```
-		^^
-You can fix this by either defining `a!` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `b!` is exposed, but it is not defined anywhere in this module.
-
-**package.md:4:3:4:5:**
-```roc
-		b!,
-```
-		^^
-You can fix this by either defining `b!` in this module, or by removing it from the list of exposed values.
-
 # TOKENS
-~~~zig
-KwPackage(1:1-1:8),
-OpenSquare(2:2-2:3),
-LowerIdent(3:3-3:5),Comma(3:5-3:6),
-LowerIdent(4:3-4:5),Comma(4:5-4:6),
-CloseSquare(5:2-5:3),
-OpenCurly(6:2-6:3),
-LowerIdent(7:3-7:4),OpColon(7:4-7:5),StringStart(7:6-7:7),StringPart(7:7-7:8),StringEnd(7:8-7:9),Comma(7:9-7:10),
-LowerIdent(8:3-8:4),OpColon(8:4-8:5),StringStart(8:6-8:7),StringPart(8:7-8:8),StringEnd(8:8-8:9),Comma(8:9-8:10),
-CloseCurly(9:2-9:3),
-LowerIdent(11:1-11:3),OpColon(11:4-11:5),UpperIdent(11:6-11:9),OpFatArrow(11:10-11:12),UpperIdent(11:13-11:16),
-LowerIdent(12:1-12:3),OpColon(12:4-12:5),UpperIdent(12:6-12:9),OpFatArrow(12:10-12:12),UpperIdent(12:13-12:16),EndOfFile(12:16-12:16),
-~~~
+~~~text
+KwPackage OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String Comma CloseCurly LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent ~~~
 # PARSE
 ~~~clojure
-(file @1.1-12.16
-	(package @1.1-9.3
-		(exposes @2.2-5.3
-			(exposed-lower-ident @3.3-3.5
-				(text "a!"))
-			(exposed-lower-ident @4.3-4.5
-				(text "b!")))
-		(packages @6.2-9.3
-			(record-field @7.3-7.9 (name "a")
-				(e-string @7.6-7.9
-					(e-string-part @7.7-7.8 (raw "a"))))
-			(record-field @8.3-8.9 (name "b")
-				(e-string @8.6-8.9
-					(e-string-part @8.7-8.8 (raw "b"))))))
-	(statements
-		(s-type-anno @11.1-11.16 (name "a!")
-			(ty-fn @11.6-11.16
-				(ty @11.6-11.9 (name "Str"))
-				(ty @11.13-11.16 (name "Str"))))
-		(s-type-anno @12.1-12.16 (name "b!")
-			(ty-fn @12.6-12.16
-				(ty @12.6-12.9 (name "Str"))
-				(ty @12.13-12.16 (name "Str"))))))
+(block
+  (lc "a")
+  (unary_not <unary>)
+  (uc "Str")
+  (malformed malformed:expr_unexpected_token)
+  (uc "Str")
+  (lc "b")
+  (unary_not <unary>)
+  (uc "Str")
+  (malformed malformed:expr_unexpected_token)
+  (uc "Str")
+)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+EXPOSED BUT NOT DEFINED - package.md:3:3:3:5
+EXPOSED BUT NOT DEFINED - package.md:4:3:4:5
+# PROBLEMS
+**Parse Error**
+at 9:2 to 9:2
+
+**Expected Close Curly Brace**
+at 1:1 to 11:1
+
+**Parse Error**
+at 11:4 to 11:4
+
+**Parse Error**
+at 11:10 to 11:10
+
+**Parse Error**
+at 12:4 to 12:4
+
+**Parse Error**
+at 12:10 to 12:10
+
+**Unsupported Node**
+at 11:4 to 11:4
+
+**Pattern in Expression Context**
+at 11:6 to 11:9
+
+**Unsupported Node**
+at 11:10 to 11:10
+
+**Pattern in Expression Context**
+at 11:13 to 11:16
+
+**Unsupported Node**
+at 12:4 to 12:4
+
+**Pattern in Expression Context**
+at 12:6 to 12:9
+
+**Unsupported Node**
+at 12:10 to 12:10
+
+**Pattern in Expression Context**
+at 12:13 to 12:16
+
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.lookup "a")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lookup "b")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

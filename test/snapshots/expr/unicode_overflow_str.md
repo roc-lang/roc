@@ -7,29 +7,30 @@ type=expr
 ~~~roc
 "\u(FFFFFF)"
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-StringStart(1:1-1:2),StringPart(1:2-1:12),StringEnd(1:12-1:13),EndOfFile(1:13-1:13),
-~~~
+~~~text
+String ~~~
 # PARSE
 ~~~clojure
-(e-string @1.1-1.13
-	(e-string-part @1.2-1.12 (raw "\u(FFFFFF)")))
+(str_literal_big "u(FFFFFF)")
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-1.13
-	(e-literal @1.2-1.12 (string "\u(FFFFFF)")))
+(Expr.str_literal_big)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag str_literal_big :type "Str")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.13 (type "Str"))
+~~~roc
+Str
 ~~~

@@ -7,81 +7,53 @@ type=expr
 ~~~roc
 { name, age: 30, email, status: "active", balance }
 ~~~
-# EXPECTED
-UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:3:1:7
-UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:18:1:23
-UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:43:1:50
-# PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `name` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**record_mixed_field_syntax.md:1:3:1:7:**
-```roc
-{ name, age: 30, email, status: "active", balance }
-```
-  ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `email` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**record_mixed_field_syntax.md:1:18:1:23:**
-```roc
-{ name, age: 30, email, status: "active", balance }
-```
-                 ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `balance` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**record_mixed_field_syntax.md:1:43:1:50:**
-```roc
-{ name, age: 30, email, status: "active", balance }
-```
-                                          ^^^^^^^
-
-
 # TOKENS
-~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),OpColon(1:12-1:13),Int(1:14-1:16),Comma(1:16-1:17),LowerIdent(1:18-1:23),Comma(1:23-1:24),LowerIdent(1:25-1:31),OpColon(1:31-1:32),StringStart(1:33-1:34),StringPart(1:34-1:40),StringEnd(1:40-1:41),Comma(1:41-1:42),LowerIdent(1:43-1:50),CloseCurly(1:51-1:52),EndOfFile(1:52-1:52),
-~~~
+~~~text
+OpenCurly LowerIdent Comma LowerIdent OpColon Int Comma LowerIdent Comma LowerIdent OpColon String Comma LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(e-record @1.1-1.52
-	(field (field "name"))
-	(field (field "age")
-		(e-int @1.14-1.16 (raw "30")))
-	(field (field "email"))
-	(field (field "status")
-		(e-string @1.33-1.41
-			(e-string-part @1.34-1.40 (raw "active"))))
-	(field (field "balance")))
+(record_literal
+  (lc "name")
+  (tuple_literal
+    (binop_colon
+      (tuple_literal
+        (binop_colon
+          (lc "age")
+          (num_literal_i32 30)
+        )
+        (lc "email")
+        (lc "status")
+      )
+      (str_literal_big "active")
+    )
+    (lc "balance")
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:3:1:7
+UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:18:1:23
+UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:43:1:50
+# PROBLEMS
+**Unsupported Node**
+at 1:51 to 1:51
+
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-1.52
-	(fields
-		(field (name "name")
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(field (name "age")
-			(e-int @1.14-1.16 (value "30")))
-		(field (name "email")
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(field (name "status")
-			(e-string @1.33-1.41
-				(e-literal @1.34-1.40 (string "active"))))
-		(field (name "balance")
-			(e-runtime-error (tag "ident_not_in_scope")))))
+(Expr.record_literal
+  (Expr.lookup "name")
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.52 (type "{ name: Error, age: Num(_size), email: Error, status: Str, balance: Error }"))
+~~~roc
+{}
 ~~~

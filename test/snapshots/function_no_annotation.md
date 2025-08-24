@@ -20,146 +20,115 @@ process! = |x| print_number!(multiply(x, 2))
 
 main! = process!(42)
 ~~~
-# EXPECTED
-MODULE NOT FOUND - function_no_annotation.md:3:1:3:17
-# PROBLEMS
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**function_no_annotation.md:3:1:3:17:**
-```roc
-import pf.Stdout
-```
-^^^^^^^^^^^^^^^^
-
-
 # TOKENS
-~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),
-KwImport(3:1-3:7),LowerIdent(3:8-3:10),NoSpaceDotUpperIdent(3:10-3:17),
-LowerIdent(6:1-6:9),OpAssign(6:10-6:11),OpBar(6:12-6:13),LowerIdent(6:13-6:14),Comma(6:14-6:15),LowerIdent(6:16-6:17),OpBar(6:17-6:18),LowerIdent(6:19-6:20),OpStar(6:21-6:22),LowerIdent(6:23-6:24),
-LowerIdent(9:1-9:14),OpAssign(9:15-9:16),OpBar(9:17-9:18),LowerIdent(9:18-9:19),OpBar(9:19-9:20),UpperIdent(9:21-9:27),NoSpaceDotLowerIdent(9:27-9:33),NoSpaceOpenRound(9:33-9:34),LowerIdent(9:34-9:35),CloseRound(9:35-9:36),
-LowerIdent(12:1-12:9),OpAssign(12:10-12:11),OpBar(12:12-12:13),LowerIdent(12:13-12:14),OpBar(12:14-12:15),LowerIdent(12:16-12:29),NoSpaceOpenRound(12:29-12:30),LowerIdent(12:30-12:38),NoSpaceOpenRound(12:38-12:39),LowerIdent(12:39-12:40),Comma(12:40-12:41),Int(12:42-12:43),CloseRound(12:43-12:44),CloseRound(12:44-12:45),
-LowerIdent(14:1-14:6),OpAssign(14:7-14:8),LowerIdent(14:9-14:17),NoSpaceOpenRound(14:17-14:18),Int(14:18-14:20),CloseRound(14:20-14:21),EndOfFile(14:21-14:21),
-~~~
+~~~text
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly KwImport LowerIdent Dot UpperIdent LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar LowerIdent OpStar LowerIdent LowerIdent OpBang OpAssign OpBar LowerIdent OpBar UpperIdent Dot LowerIdent OpBang OpenRound LowerIdent CloseRound LowerIdent OpBang OpAssign OpBar LowerIdent OpBar LowerIdent OpBang OpenRound LowerIdent OpenRound LowerIdent Comma Int CloseRound CloseRound LowerIdent OpBang OpAssign LowerIdent OpBang OpenRound Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(file @1.1-14.21
-	(app @1.1-1.57
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
-				(text "main!")))
-		(record-field @1.15-1.55 (name "pf")
-			(e-string @1.28-1.55
-				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
-		(packages @1.13-1.57
-			(record-field @1.15-1.55 (name "pf")
-				(e-string @1.28-1.55
-					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
-	(statements
-		(s-import @3.1-3.17 (raw "pf.Stdout"))
-		(s-decl @6.1-6.24
-			(p-ident @6.1-6.9 (raw "multiply"))
-			(e-lambda @6.12-6.24
-				(args
-					(p-ident @6.13-6.14 (raw "x"))
-					(p-ident @6.16-6.17 (raw "y")))
-				(e-binop @6.19-6.24 (op "*")
-					(e-ident @6.19-6.20 (raw "x"))
-					(e-ident @6.23-6.24 (raw "y")))))
-		(s-decl @9.1-9.36
-			(p-ident @9.1-9.14 (raw "print_number!"))
-			(e-lambda @9.17-9.36
-				(args
-					(p-ident @9.18-9.19 (raw "n")))
-				(e-apply @9.21-9.36
-					(e-ident @9.21-9.33 (raw "Stdout.line!"))
-					(e-ident @9.34-9.35 (raw "n")))))
-		(s-decl @12.1-12.45
-			(p-ident @12.1-12.9 (raw "process!"))
-			(e-lambda @12.12-12.45
-				(args
-					(p-ident @12.13-12.14 (raw "x")))
-				(e-apply @12.16-12.45
-					(e-ident @12.16-12.29 (raw "print_number!"))
-					(e-apply @12.30-12.44
-						(e-ident @12.30-12.38 (raw "multiply"))
-						(e-ident @12.39-12.40 (raw "x"))
-						(e-int @12.42-12.43 (raw "2"))))))
-		(s-decl @14.1-14.21
-			(p-ident @14.1-14.6 (raw "main!"))
-			(e-apply @14.9-14.21
-				(e-ident @14.9-14.17 (raw "process!"))
-				(e-int @14.18-14.20 (raw "42"))))))
+(block
+  (import
+    (lc "pf")
+    (uc "Stdout")
+  )
+  (binop_equals
+    (lc "multiply")
+    (lambda
+      (body
+        (binop_star
+          (lc "x")
+          (lc "y")
+        )
+      )
+      (args
+        (tuple_literal
+          (lc "x")
+          (lc "y")
+        )
+      )
+    )
+  )
+  (lc "print_number")
+  (binop_pipe
+    (binop_pipe
+      (unary_not <unary>)
+      (lc "n")
+    )
+    (binop_pipe
+      (uc "Stdout")
+      (dot_lc "line")
+    )
+  )
+  (unary_not <unary>)
+  (lc "process")
+  (binop_pipe
+    (binop_pipe
+      (unary_not <unary>)
+      (lc "x")
+    )
+    (lc "print_number")
+  )
+  (unary_not <unary>)
+  (lc "main")
+  (unary_not <unary>)
+  (lc "process")
+  (unary_not <unary>)
+)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+MODULE NOT FOUND - function_no_annotation.md:3:1:3:17
+# PROBLEMS
+**Parse Error**
+at 9:15 to 9:15
+
+**Parse Error**
+at 12:10 to 12:10
+
+**Parse Error**
+at 14:7 to 14:7
+
+**Unsupported Node**
+at 3:1 to 3:17
+
+**Unsupported Node**
+at 6:12 to 6:19
+
+**Unsupported Node**
+at 9:13 to 9:15
+
+**Unsupported Node**
+at 9:21 to 9:27
+
+**Unsupported Node**
+at 12:8 to 12:10
+
+**Unsupported Node**
+at 14:7 to 14:7
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @6.1-6.9 (ident "multiply"))
-		(e-lambda @6.12-6.24
-			(args
-				(p-assign @6.13-6.14 (ident "x"))
-				(p-assign @6.16-6.17 (ident "y")))
-			(e-binop @6.19-6.24 (op "mul")
-				(e-lookup-local @6.19-6.20
-					(p-assign @6.13-6.14 (ident "x")))
-				(e-lookup-local @6.23-6.24
-					(p-assign @6.16-6.17 (ident "y"))))))
-	(d-let
-		(p-assign @9.1-9.14 (ident "print_number!"))
-		(e-lambda @9.17-9.36
-			(args
-				(p-assign @9.18-9.19 (ident "n")))
-			(e-call @9.21-9.36
-				(e-lookup-external @9.21-9.33
-					(module-idx "0")
-					(target-node-idx "0"))
-				(e-lookup-local @9.34-9.35
-					(p-assign @9.18-9.19 (ident "n"))))))
-	(d-let
-		(p-assign @12.1-12.9 (ident "process!"))
-		(e-closure @12.12-12.45
-			(captures
-				(capture @9.1-9.14 (ident "print_number!"))
-				(capture @6.1-6.9 (ident "multiply")))
-			(e-lambda @12.12-12.45
-				(args
-					(p-assign @12.13-12.14 (ident "x")))
-				(e-call @12.16-12.45
-					(e-lookup-local @12.16-12.29
-						(p-assign @9.1-9.14 (ident "print_number!")))
-					(e-call @12.30-12.44
-						(e-lookup-local @12.30-12.38
-							(p-assign @6.1-6.9 (ident "multiply")))
-						(e-lookup-local @12.39-12.40
-							(p-assign @12.13-12.14 (ident "x")))
-						(e-int @12.42-12.43 (value "2")))))))
-	(d-let
-		(p-assign @14.1-14.6 (ident "main!"))
-		(e-call @14.9-14.21
-			(e-lookup-local @14.9-14.17
-				(p-assign @12.1-12.9 (ident "process!")))
-			(e-int @14.18-14.20 (value "42"))))
-	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
-		(exposes)))
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lookup "print_number")
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.lookup "process")
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.lookup "main")
+  (Expr.malformed)
+  (Expr.lookup "process")
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @6.1-6.9 (type "Num(_size), Num(_size2) -> Num(_size3)"))
-		(patt @9.1-9.14 (type "_arg -> _ret"))
-		(patt @12.1-12.9 (type "Num(_size) -> _ret"))
-		(patt @14.1-14.6 (type "_a")))
-	(expressions
-		(expr @6.12-6.24 (type "Num(_size), Num(_size2) -> Num(_size3)"))
-		(expr @9.17-9.36 (type "_arg -> _ret"))
-		(expr @12.12-12.45 (type "Num(_size) -> _ret"))
-		(expr @14.9-14.21 (type "_a"))))
+~~~roc
 ~~~

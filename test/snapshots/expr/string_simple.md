@@ -7,29 +7,30 @@ type=expr
 ~~~roc
 "hello world"
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-StringStart(1:1-1:2),StringPart(1:2-1:13),StringEnd(1:13-1:14),EndOfFile(1:14-1:14),
-~~~
+~~~text
+String ~~~
 # PARSE
 ~~~clojure
-(e-string @1.1-1.14
-	(e-string-part @1.2-1.13 (raw "hello world")))
+(str_literal_big "hello world")
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-1.14
-	(e-literal @1.2-1.13 (string "hello world")))
+(Expr.str_literal_big)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag str_literal_big :type "Str")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.14 (type "Str"))
+~~~roc
+Str
 ~~~

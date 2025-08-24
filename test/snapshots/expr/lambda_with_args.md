@@ -7,41 +7,45 @@ type=expr
 ~~~roc
 |x, y| x + y
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-OpBar(1:1-1:2),LowerIdent(1:2-1:3),Comma(1:3-1:4),LowerIdent(1:5-1:6),OpBar(1:6-1:7),LowerIdent(1:8-1:9),OpPlus(1:10-1:11),LowerIdent(1:12-1:13),EndOfFile(1:13-1:13),
-~~~
+~~~text
+OpBar LowerIdent Comma LowerIdent OpBar LowerIdent OpPlus LowerIdent ~~~
 # PARSE
 ~~~clojure
-(e-lambda @1.1-1.13
-	(args
-		(p-ident @1.2-1.3 (raw "x"))
-		(p-ident @1.5-1.6 (raw "y")))
-	(e-binop @1.8-1.13 (op "+")
-		(e-ident @1.8-1.9 (raw "x"))
-		(e-ident @1.12-1.13 (raw "y"))))
+(lambda
+  (body
+    (binop_plus
+      (lc "x")
+      (lc "y")
+    )
+  )
+  (args
+    (tuple_literal
+      (lc "x")
+      (lc "y")
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**Unsupported Node**
+at 1:1 to 1:8
+
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1.1-1.13
-	(args
-		(p-assign @1.2-1.3 (ident "x"))
-		(p-assign @1.5-1.6 (ident "y")))
-	(e-binop @1.8-1.13 (op "add")
-		(e-lookup-local @1.8-1.9
-			(p-assign @1.2-1.3 (ident "x")))
-		(e-lookup-local @1.12-1.13
-			(p-assign @1.5-1.6 (ident "y")))))
+(Expr.malformed)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag malformed :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.13 (type "Num(_size), Num(_size2) -> Num(_size3)"))
+~~~roc
+Error
 ~~~

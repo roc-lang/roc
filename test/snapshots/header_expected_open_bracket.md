@@ -7,41 +7,32 @@ type=file
 ~~~roc
 module
 ~~~
-# EXPECTED
-PARSE ERROR - header_expected_open_bracket.md:1:7:1:7
-# PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `header_expected_open_square`
-This is an unexpected parsing error. Please check your syntax.
-
-**header_expected_open_bracket.md:1:7:1:7:**
-```roc
-module
-```
-      ^
-
-
 # TOKENS
-~~~zig
-KwModule(1:1-1:7),EndOfFile(1:7-1:7),
-~~~
+~~~text
+KwModule ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.7
-	(malformed-header @1.7-1.7 (tag "header_expected_open_square"))
-	(statements))
+(header-only)
 ~~~
 # FORMATTED
 ~~~roc
-
+NO CHANGE
 ~~~
+# EXPECTED
+PARSE ERROR - header_expected_open_bracket.md:1:7:1:7
+# PROBLEMS
+**Parse Error**
+at 1:1 to 1:7
+
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(empty)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+# No top-level expression found in file
 ~~~

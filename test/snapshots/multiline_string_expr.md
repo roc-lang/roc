@@ -8,33 +8,30 @@ type=expr
 """This is a string
 """With multiple lines
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-MultilineStringStart(1:1-1:4),StringPart(1:4-1:20),
-MultilineStringStart(2:1-2:4),StringPart(2:4-2:23),EndOfFile(2:23-2:23),
-~~~
+~~~text
+MultilineString UpperIdent LowerIdent LowerIdent LowerIdent MultilineString UpperIdent LowerIdent LowerIdent ~~~
 # PARSE
 ~~~clojure
-(e-multiline-string @1.1-2.23
-	(e-string-part @1.4-1.20 (raw "This is a string"))
-	(e-string-part @2.4-2.23 (raw "With multiple lines")))
+(str_literal_small "")
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-2.23
-	(e-literal @1.4-1.20 (string "This is a string"))
-	(e-literal @2.1-2.4 (string "\n"))
-	(e-literal @2.4-2.23 (string "With multiple lines")))
+(Expr.str_literal_small)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag str_literal_small :type "Str")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-2.23 (type "Str"))
+~~~roc
+Str
 ~~~

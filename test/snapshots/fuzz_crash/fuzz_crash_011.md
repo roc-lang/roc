@@ -7,79 +7,53 @@ type=file
 ~~~roc
 module P]F
 ~~~
+# TOKENS
+~~~text
+KwModule UpperIdent CloseSquare UpperIdent ~~~
+# PARSE
+~~~clojure
+(block
+  (uc "P")
+  (malformed malformed:expr_unexpected_token)
+  (uc "F")
+)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_011.md:1:8:1:9
 PARSE ERROR - fuzz_crash_011.md:1:9:1:10
 PARSE ERROR - fuzz_crash_011.md:1:11:1:11
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `header_expected_open_square`
-This is an unexpected parsing error. Please check your syntax.
+**Parse Error**
+at 1:1 to 1:8
 
-**fuzz_crash_011.md:1:8:1:9:**
-```roc
-module P]F
-```
-       ^
+**Parse Error**
+at 1:9 to 1:9
 
+**Pattern in Expression Context**
+at 1:8 to 1:9
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**Unsupported Node**
+at 1:9 to 1:9
 
-**fuzz_crash_011.md:1:9:1:10:**
-```roc
-module P]F
-```
-        ^
+**Pattern in Expression Context**
+at 1:10 to 1:11
 
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-**fuzz_crash_011.md:1:11:1:11:**
-```roc
-module P]F
-```
-          ^
-
-
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),UpperIdent(1:8-1:9),CloseSquare(1:9-1:10),UpperIdent(1:10-1:11),EndOfFile(1:11-1:11),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-1.11
-	(malformed-header @1.8-1.9 (tag "header_expected_open_square"))
-	(statements
-		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
-		(s-malformed @1.11-1.11 (tag "expected_colon_after_type_annotation"))))
-~~~
-# FORMATTED
-~~~roc
-
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

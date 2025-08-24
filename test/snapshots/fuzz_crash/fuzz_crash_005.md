@@ -7,45 +7,33 @@ type=file
 ~~~roc
 modu
 ~~~
-# EXPECTED
-MISSING HEADER - fuzz_crash_005.md:1:1:1:5
-# PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
-
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-**fuzz_crash_005.md:1:1:1:5:**
-```roc
-modu
-```
-^^^^
-
-
 # TOKENS
-~~~zig
-LowerIdent(1:1-1:5),EndOfFile(1:5-1:5),
-~~~
+~~~text
+LowerIdent ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.5
-	(malformed-header @1.1-1.5 (tag "missing_header"))
-	(statements))
+(block
+  (lc "modu")
+)
 ~~~
 # FORMATTED
 ~~~roc
-
+NO CHANGE
 ~~~
+# EXPECTED
+MISSING HEADER - fuzz_crash_005.md:1:1:1:5
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.lookup "modu")
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "_a")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

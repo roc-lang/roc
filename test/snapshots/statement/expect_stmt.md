@@ -7,33 +7,37 @@ type=statement
 ~~~roc
 expect Bool.True
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-KwExpect(1:1-1:7),UpperIdent(1:8-1:12),NoSpaceDotUpperIdent(1:12-1:17),EndOfFile(1:17-1:17),
-~~~
+~~~text
+KwExpect UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
-(s-expect @1.1-1.17
-	(e-tag @1.8-1.17 (raw "Bool.True")))
+(expect
+  (binop_pipe
+    (uc "Bool")
+    (uc "True")
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**Unsupported Node**
+at 1:1 to 1:16
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-expect @1.1-1.17
-		(e-nominal @1.8-1.17 (nominal "Bool")
-			(e-tag @1.8-1.17 (name "True")))))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+# Type checking for this node type not yet implemented
 ~~~

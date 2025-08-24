@@ -7,39 +7,35 @@ type=expr
 ~~~roc
 3.14.15
 ~~~
-# EXPECTED
-PARSE ERROR - float_invalid.md:1:5:1:8
-# PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expr_no_space_dot_int`
-This is an unexpected parsing error. Please check your syntax.
-
-**float_invalid.md:1:5:1:8:**
-```roc
-3.14.15
-```
-    ^^^
-
-
 # TOKENS
-~~~zig
-Float(1:1-1:5),NoSpaceDotInt(1:5-1:8),EndOfFile(1:8-1:8),
-~~~
+~~~text
+Float Dot Int ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.5-1.8 (reason "expr_no_space_dot_int"))
+(binop_pipe
+  (frac_literal_small 3.14)
+  (num_literal_i32 15)
+)
 ~~~
 # FORMATTED
 ~~~roc
-
+NO CHANGE
 ~~~
+# EXPECTED
+PARSE ERROR - float_invalid.md:1:5:1:8
+# PROBLEMS
+**Unsupported Node**
+at 1:1 to 1:8
+
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+# No expression found
 ~~~

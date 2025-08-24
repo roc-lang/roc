@@ -19,90 +19,34 @@ type=expr
     0xDeAdBeEf,
 )
 ~~~
+# TOKENS
+~~~text
+OpenRound Int UpperIdent Comma Int LowerIdent Comma Int UpperIdent Comma Int LowerIdent Comma Int UpperIdent Comma Int LowerIdent Comma Float Comma Float Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma CloseRound ~~~
+# PARSE
+~~~clojure
+(num_literal_i32 0)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 UPPERCASE BASE - :0:0:0:0
 UPPERCASE BASE - :0:0:0:0
 UPPERCASE BASE - :0:0:0:0
 # PROBLEMS
-**UPPERCASE BASE**
-Number base prefixes must be lowercase (0x, 0o, 0b).
+**Parse Error**
+at 2:6 to 2:6
 
-
-
-**UPPERCASE BASE**
-Number base prefixes must be lowercase (0x, 0o, 0b).
-
-
-
-**UPPERCASE BASE**
-Number base prefixes must be lowercase (0x, 0o, 0b).
-
-
-
-# TOKENS
-~~~zig
-OpenRound(1:1-1:2),
-Int(2:5-2:9),Comma(2:9-2:10),
-Int(3:5-3:9),Comma(3:9-3:10),
-Int(4:5-4:9),Comma(4:9-4:10),
-Int(5:5-5:9),Comma(5:9-5:10),
-Int(6:5-6:9),Comma(6:9-6:10),
-Int(7:5-7:9),Comma(7:9-7:10),
-Float(8:5-8:11),Comma(8:11-8:12),
-Float(9:5-9:11),Comma(9:11-9:12),
-Int(10:5-10:15),Comma(10:15-10:16),
-Int(11:5-11:15),Comma(11:15-11:16),
-Int(12:5-12:15),Comma(12:15-12:16),
-CloseRound(13:1-13:2),EndOfFile(13:2-13:2),
-~~~
-# PARSE
-~~~clojure
-(e-tuple @1.1-13.2
-	(e-int @2.5-2.9 (raw "0X42"))
-	(e-int @3.5-3.9 (raw "0x42"))
-	(e-int @4.5-4.9 (raw "0B01"))
-	(e-int @5.5-5.9 (raw "0b01"))
-	(e-int @6.5-6.9 (raw "0O42"))
-	(e-int @7.5-7.9 (raw "0o42"))
-	(e-frac @8.5-8.11 (raw "0.1e42"))
-	(e-frac @9.5-9.11 (raw "0.1E42"))
-	(e-int @10.5-10.15 (raw "0xDEADBEEF"))
-	(e-int @11.5-11.15 (raw "0xdeadbeef"))
-	(e-int @12.5-12.15 (raw "0xDeAdBeEf")))
-~~~
-# FORMATTED
-~~~roc
-(
-	0X42,
-	0x42,
-	0B01,
-	0b01,
-	0O42,
-	0o42,
-	0.1e42,
-	0.1E42,
-	0xDEADBEEF,
-	0xdeadbeef,
-	0xDeAdBeEf,
-)
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-13.2
-	(elems
-		(e-int @2.5-2.9 (value "66"))
-		(e-int @3.5-3.9 (value "66"))
-		(e-int @4.5-4.9 (value "1"))
-		(e-int @5.5-5.9 (value "1"))
-		(e-int @6.5-6.9 (value "34"))
-		(e-int @7.5-7.9 (value "34"))
-		(e-frac-f64 @8.5-8.11 (value "1e41"))
-		(e-frac-f64 @9.5-9.11 (value "1e41"))
-		(e-int @10.5-10.15 (value "3735928559"))
-		(e-int @11.5-11.15 (value "3735928559"))
-		(e-int @12.5-12.15 (value "3735928559"))))
+(Expr.num_literal_i32 0)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag num_literal_i32 :type "Num(_size)")
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-13.2 (type "(Int(_size), Int(_size2), Int(_size3), Int(_size4), Int(_size5), Int(_size6), Frac(_size7), Frac(_size8), Int(_size9), Int(_size10), Int(_size11))"))
+~~~roc
+Num(_size)
 ~~~

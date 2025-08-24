@@ -7,33 +7,35 @@ type=statement
 ~~~roc
 dbg Bool.True
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-KwDbg(1:1-1:4),UpperIdent(1:5-1:9),NoSpaceDotUpperIdent(1:9-1:14),EndOfFile(1:14-1:14),
-~~~
+~~~text
+KwDbg UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
-(s-dbg @1.1-1.14
-	(e-tag @1.5-1.14 (raw "Bool.True")))
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**Parse Error**
+at 1:1 to 1:1
+
+**Unsupported Node**
+at 1:4 to 1:4
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-dbg @1.1-1.14
-		(e-nominal @1.5-1.14 (nominal "Bool")
-			(e-tag @1.5-1.14 (name "True")))))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+# Type checking for this node type not yet implemented
 ~~~

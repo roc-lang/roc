@@ -8,49 +8,53 @@ type=file
 module[]r:a	where
 module(a).h:s
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),LowerIdent(1:9-1:10),OpColon(1:10-1:11),LowerIdent(1:11-1:12),KwWhere(1:13-1:18),
-KwModule(2:1-2:7),NoSpaceOpenRound(2:7-2:8),LowerIdent(2:8-2:9),CloseRound(2:9-2:10),NoSpaceDotLowerIdent(2:10-2:12),OpColon(2:12-2:13),LowerIdent(2:13-2:14),EndOfFile(2:14-2:14),
-~~~
+~~~text
+KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.14
-	(module @1.1-1.9
-		(exposes @1.7-1.9))
-	(statements
-		(s-type-anno @1.9-2.14 (name "r")
-			(ty-var @1.11-1.12 (raw "a"))
-			(where
-				(method @2.1-2.14 (module-of "a") (name "h")
-					(args)
-					(ty-var @2.13-2.14 (raw "s")))))))
+(block
+  (binop_colon
+    (lc "r")
+    (binop_where
+      (lc "a")
+      (binop_colon
+        (binop_pipe
+          (apply_module
+            (lc "a")
+          )
+          (dot_lc "h")
+        )
+        (lc "s")
+      )
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-module []
-r : a
-	where
-		module(a).h : s
+NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**Unsupported Node**
+at 1:11 to 2:14
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-type-anno @1.9-2.14 (name "r")
-		(ty-var @1.11-1.12 (name "a"))
-		(where
-			(method @2.1-2.14 (module-of "a") (ident "h")
-				(args)
-				(ty-var @2.13-2.14 (name "s")))))
-	(ext-decl @2.1-2.14 (ident "module(a).h") (kind "value")))
+(Expr.record_literal
+  (Expr.binop_colon
+    (Expr.lookup "r")
+    (Expr.malformed)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+# File does not contain a block of statements
 ~~~

@@ -7,55 +7,35 @@ type=file
 ~~~roc
 package[]{d:{{d:||{0}->R}}}
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-KwPackage(1:1-1:8),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),OpenCurly(1:10-1:11),LowerIdent(1:11-1:12),OpColon(1:12-1:13),OpenCurly(1:13-1:14),OpenCurly(1:14-1:15),LowerIdent(1:15-1:16),OpColon(1:16-1:17),OpBar(1:17-1:18),OpBar(1:18-1:19),OpenCurly(1:19-1:20),Int(1:20-1:21),CloseCurly(1:21-1:22),OpArrow(1:22-1:24),UpperIdent(1:24-1:25),CloseCurly(1:25-1:26),CloseCurly(1:26-1:27),CloseCurly(1:27-1:28),EndOfFile(1:28-1:28),
-~~~
+~~~text
+KwPackage OpenSquare CloseSquare OpenCurly LowerIdent OpColon OpenCurly OpenCurly LowerIdent OpColon OpOr OpenCurly Int CloseCurly OpArrow UpperIdent CloseCurly CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.28
-	(package @1.1-1.28
-		(exposes @1.8-1.10)
-		(packages @1.10-1.28
-			(record-field @1.11-1.27 (name "d")
-				(e-block @1.13-1.27
-					(statements
-						(e-record @1.14-1.26
-							(field (field "d")
-								(e-lambda @1.17-1.25
-									(args)
-									(e-local-dispatch @1.19-1.25
-										(e-block @1.19-1.22
-											(statements
-												(e-int @1.20-1.21 (raw "0"))))
-										(e-tag @1.24-1.24 (raw "R")))))))))))
-	(statements))
+(header-only)
 ~~~
 # FORMATTED
 ~~~roc
-package
-	[]
-	{
-		d: {
-			{
-				d: || {
-					0
-				}->R,
-			}
-		},
-	}
+NO CHANGE
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**Parse Error**
+at 1:17 to 1:17
+
+**Parse Error**
+at 1:22 to 1:22
+
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(empty)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+# No top-level expression found in file
 ~~~

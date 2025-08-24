@@ -13,58 +13,35 @@ if # Comment after if
 			2
 		}
 ~~~
-# EXPECTED
-UNDEFINED VARIABLE - if_then_else_multi_comments.md:2:2:2:6
-# PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `bool` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**if_then_else_multi_comments.md:2:2:2:6:**
-```roc
-	bool # Comment after cond
-```
-	^^^^
-
-
 # TOKENS
-~~~zig
-KwIf(1:1-1:3),
-LowerIdent(2:2-2:6),
-OpenCurly(3:3-3:4),
-Int(4:4-4:5),
-CloseCurly(5:3-5:4),KwElse(5:5-5:9),OpenCurly(5:10-5:11),
-Int(6:4-6:5),
-CloseCurly(7:3-7:4),EndOfFile(7:4-7:4),
-~~~
+~~~text
+KwIf LowerIdent OpenCurly Int CloseCurly KwElse OpenCurly Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(e-if-then-else @1.1-7.4
-	(e-ident @2.2-2.6 (raw "bool"))
-	(e-block @3.3-5.4
-		(statements
-			(e-int @4.4-4.5 (raw "1"))))
-	(e-block @5.10-7.4
-		(statements
-			(e-int @6.4-6.5 (raw "2")))))
+(if_else <0 branches>)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - if_then_else_multi_comments.md:2:2:2:6
+# PROBLEMS
+**Parse Error**
+at 1:1 to 3:3
+
+**Unsupported Node**
+at 1:1 to 7:3
+
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-7.4
-	(if-branches
-		(if-branch
-			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-block @3.3-5.4
-				(e-int @4.4-4.5 (value "1")))))
-	(if-else
-		(e-block @5.10-7.4
-			(e-int @6.4-6.5 (value "2")))))
+(Stmt.malformed)
+~~~
+# SOLVED
+~~~clojure
+; No expression to type check
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-7.4 (type "Num(_size)"))
+~~~roc
+# No expression found
 ~~~

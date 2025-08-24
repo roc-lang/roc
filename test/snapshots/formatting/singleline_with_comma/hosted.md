@@ -10,72 +10,126 @@ hosted [a!, b!,]
 a! : Str => Str
 b! : Str => Str
 ~~~
+# TOKENS
+~~~text
+KwHosted OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent ~~~
+# PARSE
+~~~clojure
+(block
+  (list_literal
+    (lc "a")
+  )
+  (unary_not <unary>)
+  (lc "b")
+  (unary_not <unary>)
+  (malformed malformed:expr_unexpected_token)
+  (lc "a")
+  (unary_not <unary>)
+  (uc "Str")
+  (malformed malformed:expr_unexpected_token)
+  (uc "Str")
+  (lc "b")
+  (unary_not <unary>)
+  (uc "Str")
+  (malformed malformed:expr_unexpected_token)
+  (uc "Str")
+)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 EXPOSED BUT NOT DEFINED - hosted.md:1:9:1:11
 EXPOSED BUT NOT DEFINED - hosted.md:1:13:1:15
 # PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `a!` is exposed, but it is not defined anywhere in this module.
+**Expected Exposes**
+at 1:1 to 1:8
 
-**hosted.md:1:9:1:11:**
-```roc
-hosted [a!, b!,]
-```
-        ^^
-You can fix this by either defining `a!` in this module, or by removing it from the list of exposed values.
+**Parse Error**
+at 1:8 to 1:10
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `b!` is exposed, but it is not defined anywhere in this module.
+**Parse Error**
+at 1:11 to 1:11
 
-**hosted.md:1:13:1:15:**
-```roc
-hosted [a!, b!,]
-```
-            ^^
-You can fix this by either defining `b!` in this module, or by removing it from the list of exposed values.
+**Parse Error**
+at 1:15 to 1:15
 
-# TOKENS
-~~~zig
-KwHosted(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:11),Comma(1:11-1:12),LowerIdent(1:13-1:15),Comma(1:15-1:16),CloseSquare(1:16-1:17),
-LowerIdent(3:1-3:3),OpColon(3:4-3:5),UpperIdent(3:6-3:9),OpFatArrow(3:10-3:12),UpperIdent(3:13-3:16),
-LowerIdent(4:1-4:3),OpColon(4:4-4:5),UpperIdent(4:6-4:9),OpFatArrow(4:10-4:12),UpperIdent(4:13-4:16),EndOfFile(4:16-4:16),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-4.16
-	(hosted @1.1-1.17
-		(exposes @1.8-1.17
-			(exposed-lower-ident @1.9-1.11
-				(text "a!"))
-			(exposed-lower-ident @1.13-1.15
-				(text "b!"))))
-	(statements
-		(s-type-anno @3.1-3.16 (name "a!")
-			(ty-fn @3.6-3.16
-				(ty @3.6-3.9 (name "Str"))
-				(ty @3.13-3.16 (name "Str"))))
-		(s-type-anno @4.1-4.16 (name "b!")
-			(ty-fn @4.6-4.16
-				(ty @4.6-4.9 (name "Str"))
-				(ty @4.13-4.16 (name "Str"))))))
-~~~
-# FORMATTED
-~~~roc
-hosted [
-	a!,
-	b!,
-]
+**Parse Error**
+at 1:16 to 1:16
 
-a! : Str => Str
-b! : Str => Str
-~~~
+**Parse Error**
+at 3:4 to 3:4
+
+**Parse Error**
+at 3:10 to 3:10
+
+**Parse Error**
+at 4:4 to 4:4
+
+**Parse Error**
+at 4:10 to 4:10
+
+**Unsupported Node**
+at 1:8 to 1:11
+
+**Unsupported Node**
+at 1:11 to 1:11
+
+**Unsupported Node**
+at 1:15 to 1:15
+
+**Unsupported Node**
+at 1:16 to 1:16
+
+**Unsupported Node**
+at 3:4 to 3:4
+
+**Pattern in Expression Context**
+at 3:6 to 3:9
+
+**Unsupported Node**
+at 3:10 to 3:10
+
+**Pattern in Expression Context**
+at 3:13 to 3:16
+
+**Unsupported Node**
+at 4:4 to 4:4
+
+**Pattern in Expression Context**
+at 4:6 to 4:9
+
+**Unsupported Node**
+at 4:10 to 4:10
+
+**Pattern in Expression Context**
+at 4:13 to 4:16
+
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lookup "b")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lookup "a")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lookup "b")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+(expr :tag block :type "Error")
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~
