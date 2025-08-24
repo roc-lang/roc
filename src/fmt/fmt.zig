@@ -719,8 +719,14 @@ const Formatter = struct {
             }
             _ = try formatter(fmt, item_idx);
             if (multiline) {
-                const node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(item_idx)));
                 // special case for multiline_strings
+                var node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(item_idx)));
+                if (node.tag == .record_field) {
+                    const field = fmt.ast.store.getRecordField(@enumFromInt(@intFromEnum(item_idx)));
+                    if (field.value) |v| {
+                        node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(v)));
+                    }
+                }
                 if (node.tag == .multiline_string) {
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
