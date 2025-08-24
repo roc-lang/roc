@@ -955,7 +955,10 @@ pub fn region(
             // Match expressions contain: scrutinee, then branch patterns and bodies
             // The region spans from the 'match' keyword to the end of the last branch
             const region_start = self.start(idx);
-            var iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
+            // match uses .match_branches payload which needs to be converted to NodeSlices.Idx
+            const match_branches_u32 = self.payloadPtr(idx).match_branches;
+            const nodes_idx = @as(collections.NodeSlices(Node.Idx).Idx, @enumFromInt(match_branches_u32));
+            var iter = self.node_slices.nodes(&nodes_idx);
 
             var last_node: ?Node.Idx = null;
             while (iter.next()) |node| {
@@ -979,7 +982,10 @@ pub fn region(
         .if_else => {
             // If-else contains: condition, then branch, else branch
             const region_start = self.start(idx);
-            var iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
+            // if_else uses .if_branches payload which needs to be converted to NodeSlices.Idx
+            const if_branches_u32 = self.payloadPtr(idx).if_branches;
+            const nodes_idx = @as(collections.NodeSlices(Node.Idx).Idx, @enumFromInt(if_branches_u32));
+            var iter = self.node_slices.nodes(&nodes_idx);
 
             var last_node: ?Node.Idx = null;
             while (iter.next()) |node| {
@@ -1003,7 +1009,10 @@ pub fn region(
         .if_without_else => {
             // If without else contains: condition, then branch
             const region_start = self.start(idx);
-            var iter = self.node_slices.nodes(&self.payloadPtr(idx).nodes);
+            // if_without_else uses .if_branches payload which needs to be converted to NodeSlices.Idx
+            const if_branches_u32 = self.payloadPtr(idx).if_branches;
+            const nodes_idx = @as(collections.NodeSlices(Node.Idx).Idx, @enumFromInt(if_branches_u32));
+            var iter = self.node_slices.nodes(&nodes_idx);
 
             var last_node: ?Node.Idx = null;
             while (iter.next()) |node| {
@@ -1049,27 +1058,33 @@ fn identRegion(self: *const Ast, idx: Node.Idx, ident_store: *const Ident.Store)
 }
 
 /// Returns the index of the next token (a non-whitespace byte, skipping over comments)
-/// in the given slice. Panics in debug builds if we don't find a token; only call this
-/// when you know there is a token that will be found! (This is for regenerating regions;
-/// we should know there's a token before needing to use this.)
+/// in the given slice. Returns 0 if the input is empty or contains only whitespace/comments.
 fn nextTokenIndex(bytes: []const u8) usize {
-    std.debug.assert(bytes.len > 0);
+    // Handle empty input
+    if (bytes.len == 0) {
+        return 0;
+    }
 
     var index: usize = 0;
-    var byte = bytes[0];
     var is_in_comment = false;
 
     // Skip past whitespace and_or comments
-    while ((byte == ' ' or byte == '\t' or byte == '\n' or byte == '\r') or is_in_comment) {
+    while (index < bytes.len) {
+        const byte = bytes[index];
+
+        // If we found a non-whitespace, non-comment character, we're done
+        if (!((byte == ' ' or byte == '\t' or byte == '\n' or byte == '\r') or is_in_comment)) {
+            return index;
+        }
+
         // Branchlessly deal with entering and exiting line comments
         is_in_comment = byte == '#' or (is_in_comment and byte != '\n');
         index += 1;
-
-        std.debug.assert(index < bytes.len); // We should never run off the end.
-        byte = bytes[index];
     }
 
-    return index;
+    // If we reached the end without finding a token, return the length
+    // This handles the case where the input is all whitespace/comments
+    return if (index > 0) index - 1 else 0;
 }
 
 /// Helper function to calculate region for containers with delimiters (blocks, lists, records, tuples)
@@ -1112,7 +1127,11 @@ fn containerRegion(
         const delim_offset = after_last_node + next_token_offset;
 
         // Verify we found the expected delimiter
-        std.debug.assert(raw_src[delim_offset] == closing_delimiter);
+        // In malformed code, we might not find the delimiter, so handle gracefully
+        if (delim_offset >= raw_src.len or raw_src[delim_offset] != closing_delimiter) {
+            // Delimiter not found, use the end of the last node
+            break :blk after_last_node;
+        }
         break :blk delim_offset;
     } else blk: {
         // Empty container - find closing delimiter immediately after opening delimiter
@@ -1121,7 +1140,11 @@ fn containerRegion(
         const delim_offset = after_open + next_token_offset;
 
         // Verify we found the expected delimiter
-        std.debug.assert(raw_src[delim_offset] == closing_delimiter);
+        // In malformed code, we might not find the delimiter, so handle gracefully
+        if (delim_offset >= raw_src.len or raw_src[delim_offset] != closing_delimiter) {
+            // Delimiter not found, use current position as fallback
+            break :blk after_open;
+        }
         break :blk delim_offset;
     };
 

@@ -19,7 +19,7 @@ const compile = @import("compile");
 const fmt = @import("fmt");
 const repl = @import("repl");
 const collections = @import("collections");
-const infer_cir2 = @import("infer_cir2.zig");
+const infer_cir2 = types.infer_cir2;
 
 const Repl = repl.Repl;
 const CommonEnv = base.CommonEnv;
@@ -2812,7 +2812,8 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
     try output.begin_code_block("clojure");
 
     // Create type inference context using the passed-in types store
-    var infer_ctx = infer_cir2.InferContext.init(output.gpa, @constCast(types_store), cir);
+    const InferContext = infer_cir2.InferContext(CIR);
+    var infer_ctx = InferContext.init(output.gpa, @constCast(types_store), cir, @constCast(&env.idents));
 
     if (maybe_expr_idx) |expr_idx| {
         // Get the expression
@@ -2858,7 +2859,8 @@ fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeTy
     try output.begin_code_block("roc");
 
     // Create type inference context using the passed-in types store
-    var infer_ctx = infer_cir2.InferContext.init(output.gpa, @constCast(types_store), cir);
+    const InferContext = infer_cir2.InferContext(CIR);
+    var infer_ctx = InferContext.init(output.gpa, @constCast(types_store), cir, @constCast(&env.idents));
 
     // For type=expr snapshots, handle specially
     if (node_type == .expr) {
