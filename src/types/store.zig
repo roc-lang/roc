@@ -186,14 +186,25 @@ pub const Store = struct {
 
     // make builtin types //
 
-    pub fn mkBool(self: *Self, gpa: Allocator, idents: *base.Ident.Store, ext_var: Var) std.mem.Allocator.Error!Content {
-        // TODO: Hardcode idents once in store, do no create fn anno
-        const true_ident = try idents.insert(gpa, base.Ident.for_text("True"));
-        const false_ident = try idents.insert(gpa, base.Ident.for_text("False"));
+    pub fn mkBool(self: *Self, gpa: Allocator, idents: *base.Ident.Store, ext_var: ?Var) std.mem.Allocator.Error!Content {
+        // Bool is a nominal type wrapping [True, False]
+        // It's defined as: Bool := [True, False]
+        _ = ext_var; // Not used for nominal Bool type
 
-        const true_tag = try self.mkTag(true_ident, &[_]Var{});
-        const false_tag = try self.mkTag(false_ident, &[_]Var{});
-        return try self.mkTagUnion(&[_]Tag{ true_tag, false_tag }, ext_var);
+        const bool_ident = try idents.insert(gpa, base.Ident.for_text("Bool"));
+        const builtin_module = try idents.insert(gpa, base.Ident.for_text(""));
+
+        // Create the nominal type with no type parameters
+        // The nominal type wraps the tag union internally
+        const empty_vars = try self.vars.appendSlice(gpa, &[_]Var{});
+
+        const nominal_type = NominalType{
+            .ident = TypeIdent{ .ident_idx = bool_ident },
+            .vars = empty_vars.toNonEmpty(),
+            .origin_module = builtin_module,
+        };
+
+        return Content{ .structure = .{ .nominal_type = nominal_type } };
     }
 
     pub fn mkResult(
