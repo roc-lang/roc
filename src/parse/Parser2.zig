@@ -637,7 +637,7 @@ pub fn pushMalformed(self: *Parser, tag: AST.Diagnostic.Tag, start_pos: Position
     if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
         try self.pushDiagnostic(tag, actual_start_pos, end_pos);
     }
-    
+
     // Always create a proper malformed node with the correct tag and position
     return try self.ast.appendNode(self.gpa, actual_start_pos, .malformed, .{ .malformed = tag });
 }

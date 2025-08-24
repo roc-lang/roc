@@ -1259,15 +1259,109 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
 
         // Function and tag applications
         .apply_uc => {
-            // Tag with optional payload
-            // TODO: Recursively canonicalize the payload arguments
+            // Tag constructor with optional payload
+            // Structure: first node is tag, second node is args (often a tuple)
+            const nodes_idx = node.payload.nodes;
+
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+
+                // First node is the tag/constructor
+                if (iter.next()) |tag_node| {
+                    _ = try self.canonicalizeExpr(allocator, tag_node, raw_src, idents);
+                }
+
+                // Second node contains the payload arguments (could be a tuple or single expr)
+                if (iter.next()) |args_node| {
+                    const args_tag = self.ast.*.tag(args_node);
+                    if (args_tag == .tuple_literal) {
+                        // Arguments are in a tuple - canonicalize each element
+                        const tuple_nodes_idx = self.ast.*.payload(args_node).nodes;
+                        if (!tuple_nodes_idx.isNil()) {
+                            var tuple_iter = self.ast.*.node_slices.nodes(&tuple_nodes_idx);
+                            while (tuple_iter.next()) |arg| {
+                                _ = try self.canonicalizeExpr(allocator, arg, raw_src, idents);
+                            }
+                        }
+                    } else {
+                        // Single argument - canonicalize it directly
+                        _ = try self.canonicalizeExpr(allocator, args_node, raw_src, idents);
+                    }
+                }
+            }
+
             self.mutateToExpr(node_idx, .apply_tag);
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
         },
         .apply_lc => {
-            // Function application
-            // TODO: Recursively canonicalize function and arguments
+            // Function application - canonicalize function and arguments
+            // Structure: first node is function, second node is args (often a tuple)
+            const nodes_idx = node.payload.nodes;
+
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+
+                // First node is the function being called
+                if (iter.next()) |func_node| {
+                    _ = try self.canonicalizeExpr(allocator, func_node, raw_src, idents);
+                }
+
+                // Second node contains the arguments (could be a tuple or single expr)
+                if (iter.next()) |args_node| {
+                    const args_tag = self.ast.*.tag(args_node);
+                    if (args_tag == .tuple_literal) {
+                        // Arguments are in a tuple - canonicalize each element
+                        const tuple_nodes_idx = self.ast.*.payload(args_node).nodes;
+                        if (!tuple_nodes_idx.isNil()) {
+                            var tuple_iter = self.ast.*.node_slices.nodes(&tuple_nodes_idx);
+                            while (tuple_iter.next()) |arg| {
+                                _ = try self.canonicalizeExpr(allocator, arg, raw_src, idents);
+                            }
+                        }
+                    } else {
+                        // Single argument - canonicalize it directly
+                        _ = try self.canonicalizeExpr(allocator, args_node, raw_src, idents);
+                    }
+                }
+            }
+
+            self.mutateToExpr(node_idx, .apply_ident);
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+        .apply_anon => {
+            // Anonymous function application (e.g., (foo(bar))(baz))
+            // Structure: first node is expr, second node is args (often a tuple)
+            const nodes_idx = node.payload.nodes;
+
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+
+                // First node is the expression that evaluates to a function
+                if (iter.next()) |func_expr| {
+                    _ = try self.canonicalizeExpr(allocator, func_expr, raw_src, idents);
+                }
+
+                // Second node contains the arguments (could be a tuple or single expr)
+                if (iter.next()) |args_node| {
+                    const args_tag = self.ast.*.tag(args_node);
+                    if (args_tag == .tuple_literal) {
+                        // Arguments are in a tuple - canonicalize each element
+                        const tuple_nodes_idx = self.ast.*.payload(args_node).nodes;
+                        if (!tuple_nodes_idx.isNil()) {
+                            var tuple_iter = self.ast.*.node_slices.nodes(&tuple_nodes_idx);
+                            while (tuple_iter.next()) |arg| {
+                                _ = try self.canonicalizeExpr(allocator, arg, raw_src, idents);
+                            }
+                        }
+                    } else {
+                        // Single argument - canonicalize it directly
+                        _ = try self.canonicalizeExpr(allocator, args_node, raw_src, idents);
+                    }
+                }
+            }
+
             self.mutateToExpr(node_idx, .apply_ident);
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
