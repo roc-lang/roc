@@ -2651,10 +2651,14 @@ fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: 
     try output.begin_section("FORMATTED");
     try output.begin_code_block("roc");
 
-    // Compare with original source to detect changes
-    const formatted = content.source;
-    const is_changed = !std.mem.eql(u8, formatted, content.source);
-    const display_content = if (is_changed) formatted else "NO CHANGE";
+    // Create a proper formatter for AST2 that preserves comments and handles indentation
+    var formatter = try Formatter2.init(output.gpa, content.source);
+    defer formatter.deinit();
+
+    try formatter.format();
+
+    const is_changed = !std.mem.eql(u8, formatter.output.items, content.source);
+    const display_content = if (is_changed) formatter.output.items else "NO CHANGE";
 
     try output.md_writer.writeAll(display_content);
     if (!std.mem.endsWith(u8, display_content, "\n")) {
@@ -2667,6 +2671,292 @@ fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: 
     try output.end_code_block();
     try output.end_section();
 }
+
+/// Formatter for AST2 using tokenize_iter
+const Formatter2 = struct {
+    gpa: std.mem.Allocator,
+    source: []const u8,
+    tokens: std.ArrayList(parse.tokenize_iter.Token),
+    output: std.ArrayList(u8),
+    curr_indent: u32 = 0,
+    has_newline: bool = true,
+
+    pub fn init(gpa: std.mem.Allocator, source: []const u8) !Formatter2 {
+        return Formatter2{
+            .gpa = gpa,
+            .source = source,
+            .tokens = std.ArrayList(parse.tokenize_iter.Token).init(gpa),
+            .output = std.ArrayList(u8).init(gpa),
+        };
+    }
+
+    pub fn deinit(self: *Formatter2) void {
+        self.tokens.deinit();
+        self.output.deinit();
+    }
+
+    pub fn format(self: *Formatter2) !void {
+        // First, collect all tokens
+        try self.collectTokens();
+
+        // Then format with proper comment handling
+        try self.formatTokens();
+    }
+
+    fn collectTokens(self: *Formatter2) !void {
+        var env = try base.CommonEnv.init(self.gpa, self.source);
+        defer env.deinit(self.gpa);
+
+        var byte_slices = collections.ByteSlices{ .entries = .{} };
+        defer byte_slices.entries.deinit(self.gpa);
+
+        var diagnostics: [128]parse.tokenize_iter.Diagnostic = undefined;
+
+        var tokenizer = try parse.tokenize_iter.TokenIterator.init(&env, self.gpa, self.source, &diagnostics, &byte_slices);
+        defer tokenizer.deinit(self.gpa);
+
+        while (try tokenizer.next(self.gpa)) |token| {
+            try self.tokens.append(token);
+            if (token.tag == .EndOfFile) break;
+        }
+    }
+
+    fn formatTokens(self: *Formatter2) !void {
+        if (self.tokens.items.len == 0) return;
+
+        // Handle comments before first token
+        if (self.tokens.items.len > 0) {
+            const first_token = self.tokens.items[0];
+            if (first_token.region.start.offset > 0) {
+                _ = try self.flushComments(self.source[0..first_token.region.start.offset]);
+            }
+        }
+
+        var at_statement_start = true;
+
+        for (self.tokens.items, 0..) |token, i| {
+            if (token.tag == .EndOfFile) {
+                // Flush any trailing comments
+                if (i > 0) {
+                    const prev_token = self.tokens.items[i - 1];
+                    const start = prev_token.region.end.offset;
+                    if (start < self.source.len) {
+                        _ = try self.flushComments(self.source[start..]);
+                    }
+                }
+                break;
+            }
+
+            // Add newlines between top-level statements
+            if (at_statement_start and i > 0 and self.isStatementStart(token)) {
+                try self.ensureNewline();
+                try self.ensureNewline(); // Double newline between statements
+            }
+
+            // Format based on token type
+            try self.formatToken(token, i);
+
+            // Track if we're at a statement boundary
+            if (self.isStatementEnd(token)) {
+                at_statement_start = true;
+            } else if (!self.isWhitespacePreserving(token)) {
+                at_statement_start = false;
+            }
+
+            // Handle comments after this token
+            if (i + 1 < self.tokens.items.len) {
+                const next_token = self.tokens.items[i + 1];
+                const between_start = token.region.end.offset;
+                const between_end = next_token.region.start.offset;
+                if (between_end > between_start) {
+                    const had_comments = try self.flushComments(self.source[between_start..between_end]);
+                    if (!had_comments) {
+                        // Check if there were newlines in the original
+                        const had_newlines = self.shouldFormatMultiline(i);
+                        if (had_newlines) {
+                            try self.ensureNewline();
+                            if (self.curr_indent > 0) {
+                                try self.pushIndent();
+                            }
+                        } else if (self.needsSpaceAfter(token, next_token)) {
+                            try self.push(' ');
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn isStatementStart(self: *Formatter2, token: parse.tokenize_iter.Token) bool {
+        _ = self;
+        return switch (token.tag) {
+            .KwImport, .KwVar, .LowerIdent => true,
+            else => false,
+        };
+    }
+
+    fn isStatementEnd(self: *Formatter2, token: parse.tokenize_iter.Token) bool {
+        // Simple heuristic: certain tokens typically end statements
+        _ = self;
+        return switch (token.tag) {
+            .CloseRound, .CloseSquare, .CloseCurly => true,
+            .String, .Int, .Float => true,
+            else => false,
+        };
+    }
+
+    fn isWhitespacePreserving(self: *Formatter2, token: parse.tokenize_iter.Token) bool {
+        _ = self;
+        _ = token;
+        return false;
+    }
+
+    fn formatToken(self: *Formatter2, token: parse.tokenize_iter.Token, index: usize) !void {
+        const token_text = self.source[token.region.start.offset..token.region.end.offset];
+
+        switch (token.tag) {
+            .KwModule => {
+                try self.pushAll("module");
+            },
+            .OpenSquare => {
+                try self.pushAll("[");
+                if (self.shouldFormatMultiline(index)) {
+                    self.curr_indent += 1;
+                    try self.ensureNewline();
+                    try self.pushIndent();
+                }
+            },
+            .CloseSquare => {
+                if (self.curr_indent > 0) self.curr_indent -= 1;
+                if (!self.has_newline and self.shouldFormatMultiline(index)) {
+                    try self.ensureNewline();
+                    try self.pushIndent();
+                }
+                try self.pushAll("]");
+            },
+            .Comma => {
+                try self.push(',');
+                if (self.shouldFormatMultiline(index)) {
+                    try self.ensureNewline();
+                    try self.pushIndent();
+                }
+            },
+            .OpAssign => {
+                try self.pushAll(" = ");
+            },
+            .LowerIdent, .UpperIdent => {
+                try self.pushAll(token_text);
+            },
+            .String => {
+                try self.pushAll(token_text);
+            },
+            else => {
+                try self.pushAll(token_text);
+            },
+        }
+    }
+
+    fn shouldFormatMultiline(self: *Formatter2, token_index: usize) bool {
+        // Check if there were newlines in the original between this token and the next
+        if (token_index + 1 < self.tokens.items.len) {
+            const current = self.tokens.items[token_index];
+            const next = self.tokens.items[token_index + 1];
+            const between_start = current.region.end.offset;
+            const between_end = next.region.start.offset;
+
+            if (between_end > between_start) {
+                const between = self.source[between_start..between_end];
+                for (between) |c| {
+                    if (c == '\n') return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    fn needsSpaceAfter(self: *Formatter2, current: parse.tokenize_iter.Token, next: parse.tokenize_iter.Token) bool {
+        _ = self;
+        return switch (current.tag) {
+            .OpenRound, .OpenSquare, .OpenCurly => false,
+            .OpAssign => false, // We already add spaces in formatToken
+            else => switch (next.tag) {
+                .Comma, .CloseRound, .CloseSquare, .CloseCurly => false,
+                else => true,
+            },
+        };
+    }
+
+    fn flushComments(self: *Formatter2, between_text: []const u8) !bool {
+        var found_comment = false;
+        var i: usize = 0;
+
+        while (i < between_text.len) {
+            if (between_text[i] == '#') {
+                // Found a comment
+                if (!self.has_newline) {
+                    try self.push(' ');
+                }
+                try self.push('#');
+
+                // Find end of comment
+                const comment_start = i + 1;
+                var comment_end = comment_start;
+                while (comment_end < between_text.len and between_text[comment_end] != '\n') {
+                    comment_end += 1;
+                }
+
+                // Write comment content
+                if (comment_end > comment_start) {
+                    try self.pushAll(between_text[comment_start..comment_end]);
+                }
+
+                // Add newline after comment
+                if (comment_end < between_text.len and between_text[comment_end] == '\n') {
+                    try self.ensureNewline();
+                    i = comment_end + 1;
+                } else {
+                    i = comment_end;
+                }
+
+                found_comment = true;
+            } else if (between_text[i] == '\n') {
+                // Track newlines but don't output them here
+                i += 1;
+            } else if (between_text[i] == ' ' or between_text[i] == '\t' or between_text[i] == '\r') {
+                // Skip whitespace
+                i += 1;
+            } else {
+                // Unexpected character between tokens
+                i += 1;
+            }
+        }
+
+        return found_comment;
+    }
+
+    fn push(self: *Formatter2, c: u8) !void {
+        self.has_newline = c == '\n';
+        try self.output.append(c);
+    }
+
+    fn pushAll(self: *Formatter2, str: []const u8) !void {
+        if (str.len == 0) return;
+        self.has_newline = str[str.len - 1] == '\n';
+        try self.output.appendSlice(str);
+    }
+
+    fn ensureNewline(self: *Formatter2) !void {
+        if (!self.has_newline) {
+            try self.push('\n');
+        }
+    }
+
+    fn pushIndent(self: *Formatter2) !void {
+        for (0..self.curr_indent) |_| {
+            try self.pushAll("    ");
+        }
+    }
+};
 
 /// Generate CANONICALIZE section for CIR2
 fn generateCanonicalizeSection2(
