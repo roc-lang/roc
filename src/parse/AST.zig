@@ -15,6 +15,7 @@ const testing = std.testing;
 const base = @import("base");
 const collections = @import("collections");
 const reporting = @import("reporting");
+const error_reporting = @import("error_reporting.zig");
 
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");

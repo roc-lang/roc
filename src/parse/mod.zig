@@ -5,9 +5,11 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const tracy = @import("tracy");
 
 pub const tokenize = @import("tokenize.zig");
+pub const tokenize_iter = @import("tokenize_iter.zig");
 
 const CommonEnv = base.CommonEnv;
 const TokenIndex = tokenize.TokenIndex;
@@ -26,6 +28,12 @@ pub const NodeStore = @import("NodeStore.zig");
 
 /// Represents the intermediate representation or Abstract Syntax Tree (AST) of a parsed Roc file.
 pub const AST = @import("AST.zig");
+
+/// New version of the AST module for development.
+pub const AST2 = @import("AST2.zig");
+
+/// New version of the Parser module for development.
+pub const Parser2 = @import("Parser2.zig");
 
 fn runParse(env: *CommonEnv, gpa: std.mem.Allocator, parserCall: *const fn (*Parser) Parser.Error!u32) Parser.Error!AST {
     const trace = tracy.trace(@src());
@@ -51,8 +59,8 @@ fn runParse(env: *CommonEnv, gpa: std.mem.Allocator, parserCall: *const fn (*Par
 
     const idx = try parserCall(&parser);
 
-    const tokenize_diagnostics_slice = try gpa.dupe(tokenize.Diagnostic, result.messages);
-    const tokenize_diagnostics = std.ArrayListUnmanaged(tokenize.Diagnostic).fromOwnedSlice(tokenize_diagnostics_slice);
+    // Transfer ownership of the messages array instead of duplicating
+    const tokenize_diagnostics = std.ArrayListUnmanaged(tokenize.Diagnostic).fromOwnedSlice(result.messages);
 
     return .{
         .env = env,
@@ -113,10 +121,15 @@ pub fn parseStatement(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST 
 
 test "parser tests" {
     std.testing.refAllDecls(@import("AST.zig"));
+    std.testing.refAllDecls(@import("AST2.zig"));
     std.testing.refAllDecls(@import("HTML.zig"));
     std.testing.refAllDecls(@import("Node.zig"));
     std.testing.refAllDecls(@import("NodeStore.zig"));
     std.testing.refAllDecls(@import("Parser.zig"));
+    std.testing.refAllDecls(@import("Parser2.zig"));
     std.testing.refAllDecls(@import("tokenize.zig"));
     std.testing.refAllDecls(@import("test/ast_node_store_test.zig"));
+    std.testing.refAllDecls(@import("test/parse_test.zig"));
+    std.testing.refAllDecls(@import("test/snapshot_comparison_test.zig"));
+    std.testing.refAllDecls(@import("test/test_string_parsing.zig"));
 }

@@ -200,6 +200,15 @@ pub fn SafeList(comptime T: type) type {
             return @enumFromInt(@as(u32, @intCast(length)));
         }
 
+        /// Add an item to the end of this list,
+        /// assuming there is already enough capacity for it.
+        pub fn appendAssumeCapacity(self: *SafeList(T), gpa: Allocator, item: T) std.mem.Allocator.Error!Idx {
+            const length = self.len();
+            try self.items.appendAssumeCapacity(gpa, item);
+
+            return @enumFromInt(@as(u32, @intCast(length)));
+        }
+
         /// Create a range from the provided idx to the end of the list
         pub fn rangeToEnd(self: *SafeList(T), start_int: u32) Range {
             const len_int = self.len();
@@ -211,6 +220,14 @@ pub fn SafeList(comptime T: type) type {
         pub fn appendSlice(self: *SafeList(T), gpa: Allocator, items: []const T) std.mem.Allocator.Error!Range {
             const start_length = self.len();
             try self.items.appendSlice(gpa, items);
+            const end_length = self.len();
+            return Range{ .start = @enumFromInt(start_length), .count = @intCast(end_length - start_length) };
+        }
+
+        /// Add all the items in a slice to the end of this list, assuming there is already enough capacity.
+        pub fn appendSliceAssumeCapacity(self: *SafeList(T), gpa: Allocator, items: []const T) std.mem.Allocator.Error!Range {
+            const start_length = self.len();
+            try self.items.appendSliceAssumeCapacity(gpa, items);
             const end_length = self.len();
             return Range{ .start = @enumFromInt(start_length), .count = @intCast(end_length - start_length) };
         }

@@ -186,14 +186,19 @@ pub const Store = struct {
 
     // make builtin types //
 
-    pub fn mkBool(self: *Self, gpa: Allocator, idents: *base.Ident.Store, ext_var: Var) std.mem.Allocator.Error!Content {
-        // TODO: Hardcode idents once in store, do no create fn anno
+    pub fn mkBool(self: *Self, gpa: Allocator, idents: *base.Ident.Store, ext_var: ?Var) std.mem.Allocator.Error!Content {
+        // Bool is represented as a tag union [True, False]
+        // TODO: In the future, this should be a nominal type Bool := [True, False]
         const true_ident = try idents.insert(gpa, base.Ident.for_text("True"));
         const false_ident = try idents.insert(gpa, base.Ident.for_text("False"));
 
         const true_tag = try self.mkTag(true_ident, &[_]Var{});
         const false_tag = try self.mkTag(false_ident, &[_]Var{});
-        return try self.mkTagUnion(&[_]Tag{ true_tag, false_tag }, ext_var);
+
+        // Use ext_var if provided, otherwise create closed tag union
+        const ext = ext_var orelse try self.fresh();
+
+        return try self.mkTagUnion(&[_]Tag{ true_tag, false_tag }, ext);
     }
 
     pub fn mkResult(

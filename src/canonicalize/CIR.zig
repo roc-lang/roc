@@ -1,4 +1,4 @@
-//! Common IR types and utilities that were previously part of ModuleEnv.
+//! Common IR types and utilities
 //! This module contains type definitions and utilities used across the canonicalization IR.
 
 const std = @import("std");
@@ -8,7 +8,6 @@ const base = @import("base");
 const reporting = @import("reporting");
 const builtins = @import("builtins");
 
-const ModuleEnv = @import("ModuleEnv.zig");
 const CompactWriter = collections.CompactWriter;
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
