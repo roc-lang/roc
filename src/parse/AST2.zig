@@ -1058,7 +1058,7 @@ fn identRegion(self: *const Ast, idx: Node.Idx, ident_store: *const Ident.Store)
 }
 
 /// Returns the index of the next token (a non-whitespace byte, skipping over comments)
-/// in the given slice. Returns 0 if the input is empty or contains only whitespace/comments.
+/// in the given slice. Should only be called when you know there's a token to find.
 fn nextTokenIndex(bytes: []const u8) usize {
     // Handle empty input
     if (bytes.len == 0) {
@@ -1082,9 +1082,9 @@ fn nextTokenIndex(bytes: []const u8) usize {
         index += 1;
     }
 
-    // If we reached the end without finding a token, return the length
-    // This handles the case where the input is all whitespace/comments
-    return if (index > 0) index - 1 else 0;
+    // No token found - this shouldn't happen in well-formed input
+    // Return 0 to stay at current position for graceful error handling
+    return 0;
 }
 
 /// Helper function to calculate region for containers with delimiters (blocks, lists, records, tuples)

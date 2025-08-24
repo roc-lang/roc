@@ -59,8 +59,8 @@ fn runParse(env: *CommonEnv, gpa: std.mem.Allocator, parserCall: *const fn (*Par
 
     const idx = try parserCall(&parser);
 
-    const tokenize_diagnostics_slice = try gpa.dupe(tokenize.Diagnostic, result.messages);
-    const tokenize_diagnostics = std.ArrayListUnmanaged(tokenize.Diagnostic).fromOwnedSlice(tokenize_diagnostics_slice);
+    // Transfer ownership of the messages array instead of duplicating
+    const tokenize_diagnostics = std.ArrayListUnmanaged(tokenize.Diagnostic).fromOwnedSlice(result.messages);
 
     return .{
         .env = env,

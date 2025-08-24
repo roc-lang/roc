@@ -436,15 +436,17 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
     // Read the tag as a u8 and interpret it directly as an ExprTag
     const tag_value = @as(u8, @intFromEnum(node.tag));
 
-    // Check if this is a valid expression tag (must be >= EXPR_TAG_START)
-    if (tag_value < EXPR_TAG_START) {
-        // This node hasn't been canonicalized as an expression yet
-        // Return a malformed expression view
-        return .{
-            .tag = .malformed,
-            .start = node.start,
-            .payload = node.payload,
-        };
+    // In debug builds, check if this is a valid expression tag
+    if (std.debug.runtime_safety) {
+        if (tag_value < EXPR_TAG_START) {
+            // This node hasn't been canonicalized as an expression yet
+            // Return a malformed expression view
+            return .{
+                .tag = .malformed,
+                .start = node.start,
+                .payload = node.payload,
+            };
+        }
     }
 
     const expr_tag = @as(ExprTag, @enumFromInt(tag_value));
