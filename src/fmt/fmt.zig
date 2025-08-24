@@ -719,8 +719,14 @@ const Formatter = struct {
             }
             _ = try formatter(fmt, item_idx);
             if (multiline) {
-                const node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(item_idx)));
                 // special case for multiline_strings
+                var node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(item_idx)));
+                if (node.tag == .record_field) {
+                    const field = fmt.ast.store.getRecordField(@enumFromInt(@intFromEnum(item_idx)));
+                    if (field.value) |v| {
+                        node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(v)));
+                    }
+                }
                 if (node.tag == .multiline_string) {
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
@@ -1936,20 +1942,18 @@ const Formatter = struct {
                     comment_end += 1;
                 }
 
-                if (comment_end > comment_start) {
-                    if (found_comment or newline_count > 0) {
-                        try fmt.pushIndent();
-                    } else if (!fmt.has_newline) {
-                        try fmt.push(' ');
-                    }
-                    try fmt.push('#');
-                    const comment_text = between_text[comment_start..comment_end];
-                    if (comment_text.len > 0 and comment_text[0] != ' ') {
-                        try fmt.push(' ');
-                    }
-                    try fmt.pushAll(comment_text);
-                    found_comment = true;
+                if (found_comment or newline_count > 0) {
+                    try fmt.pushIndent();
+                } else if (!fmt.has_newline) {
+                    try fmt.push(' ');
                 }
+                try fmt.push('#');
+                const comment_text = between_text[comment_start..comment_end];
+                if (comment_text.len > 0 and comment_text[0] != ' ') {
+                    try fmt.push(' ');
+                }
+                try fmt.pushAll(comment_text);
+                found_comment = true;
                 try fmt.newline();
                 newline_count = 1; // reset count to allow an additional newline after a comment
                 i = comment_end;
