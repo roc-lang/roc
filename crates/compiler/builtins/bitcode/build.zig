@@ -67,7 +67,7 @@ pub fn build(b: *Build) void {
 // TODO zig 0.9 can generate .bc directly, switch to that when it is released!
 fn generateLlvmIrFile(
     b: *Build,
-    mode: std.builtin.Mode,
+    mode: std.builtin.OptimizeMode,
     target: std.Build.ResolvedTarget,
     main_path: LazyPath,
     step_name: []const u8,
@@ -100,7 +100,7 @@ fn generateLlvmIrFile(
 // or something similar.
 fn generateObjectFile(
     b: *Build,
-    mode: std.builtin.Mode,
+    mode: std.builtin.OptimizeMode,
     target: std.Build.ResolvedTarget,
     main_path: LazyPath,
     step_name: []const u8,
