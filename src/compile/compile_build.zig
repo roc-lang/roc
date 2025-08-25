@@ -744,6 +744,7 @@ pub const BuildEnv = struct {
         const header = ast.store.getHeader(file.header);
 
         var info = HeaderInfo{ .kind = .package };
+        errdefer info.deinit(self.gpa);
 
         switch (header) {
             .app => |a| {
@@ -754,6 +755,8 @@ pub const BuildEnv = struct {
                 const alias = ast.resolve(pf.name);
                 const value_expr = pf.value orelse return error.ExpectedPlatformString;
                 const plat_rel = try self.stringFromExpr(&ast, value_expr);
+                defer self.gpa.free(plat_rel);
+
                 const header_dir = std.fs.path.dirname(file_abs) orelse ".";
                 const plat_path = try PathUtils.makeAbsolute(self.gpa, header_dir, plat_rel);
                 // Restrict platform dependency path to be within the workspace root(s) even if declared by app.
@@ -780,8 +783,16 @@ pub const BuildEnv = struct {
                         continue;
                     }
                     const relp = try self.stringFromExpr(&ast, rf.value.?);
+                    defer self.gpa.free(relp);
+
                     const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
                     const v = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
+
+                    // TODO: actually handle duplicate keys
+                    if (info.shorthands.fetchRemove(k)) |e| {
+                        self.gpa.free(e.key);
+                        self.gpa.free(e.value);
+                    }
                     try info.shorthands.put(self.gpa, try self.gpa.dupe(u8, k), v);
                 }
             },
@@ -797,12 +808,20 @@ pub const BuildEnv = struct {
                         continue;
                     }
                     const relp = try self.stringFromExpr(&ast, rf.value.?);
+                    defer self.gpa.free(relp);
+
                     const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
                     const v = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
                     // Enforce: package header deps must be within workspace roots
                     if (!PathUtils.isWithinRoot(v, self.workspace_roots.items)) {
                         self.gpa.free(v);
                         return error.PathOutsideWorkspace;
+                    }
+
+                    // TODO: actually handle duplicate keys
+                    if (info.shorthands.fetchRemove(k)) |e| {
+                        self.gpa.free(e.key);
+                        self.gpa.free(e.value);
                     }
                     try info.shorthands.put(self.gpa, try self.gpa.dupe(u8, k), v);
                 }
@@ -819,12 +838,20 @@ pub const BuildEnv = struct {
                         continue;
                     }
                     const relp = try self.stringFromExpr(&ast, rf.value.?);
+                    defer self.gpa.free(relp);
+
                     const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
                     const v = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
                     // Enforce: platform header deps must be within workspace roots
                     if (!PathUtils.isWithinRoot(v, self.workspace_roots.items)) {
                         self.gpa.free(v);
                         return error.PathOutsideWorkspace;
+                    }
+
+                    // TODO: actually handle duplicate keys
+                    if (info.shorthands.fetchRemove(k)) |e| {
+                        self.gpa.free(e.key);
+                        self.gpa.free(e.value);
                     }
                     try info.shorthands.put(self.gpa, try self.gpa.dupe(u8, k), v);
                 }

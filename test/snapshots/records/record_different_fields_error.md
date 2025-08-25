@@ -392,32 +392,21 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~roc
 {
 	_privateField : 
-	
-	
-	
+			
 	field_ : 
-	
-	
-	
+			
 	PascalCase
-	
-	"pascal"
+		"pascal"
 	
 	kebab
 	-case
-	
-	"kebab"
-	
-	field
-	
-	special : 
-	
-	
+		"kebab"
 	
 	field
-	
-	
-	"at symbol"
+		special : 
+			
+	field
+			"at symbol"
 	
 }
 ~~~

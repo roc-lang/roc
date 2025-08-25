@@ -64,6 +64,7 @@ pub fn build(b: *std.Build) void {
     }
     build_options.addOption(bool, "enable_tracy_allocation", flag_tracy_allocation);
     build_options.addOption(u32, "tracy_callstack_depth", flag_tracy_callstack_depth);
+    build_options.addOption(bool, "target_is_native", target.query.isNative());
 
     // We use zstd for `roc bundle` and `roc unbundle` and downloading .tar.zst bundles.
     const zstd = b.dependency("zstd", .{
@@ -178,6 +179,28 @@ pub fn build(b: *std.Build) void {
 
     const run_cli_test = b.addRunArtifact(cli_test);
     test_step.dependOn(&run_cli_test.step);
+
+    // Add watch tests
+    const watch_test = b.addTest(.{
+        .name = "watch_test",
+        .root_source_file = b.path("src/watch/watch.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    roc_modules.addAll(watch_test);
+    add_tracy(b, roc_modules.build_options, watch_test, target, false, flag_enable_tracy);
+
+    // Link platform-specific libraries for file watching
+    if (target.result.os.tag == .macos) {
+        watch_test.linkFramework("CoreFoundation");
+        watch_test.linkFramework("CoreServices");
+    } else if (target.result.os.tag == .windows) {
+        watch_test.linkSystemLibrary("kernel32");
+    }
+
+    const run_watch_test = b.addRunArtifact(watch_test);
+    test_step.dependOn(&run_watch_test.step);
 
     b.default_step.dependOn(playground_step);
     {

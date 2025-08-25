@@ -1558,12 +1558,12 @@ MapML( # Cere
 	: # Aon
 		List(),
 		(a -> b) -> # row
-			List(b)
+			List(b) #
 
 Foo : (Bar, Baz)
 
 line : ( # Cpen
-	Bar,
+	Bar, #
 	Baz, # m
 ) # Co
 Some(a) : { foo : Ok(a), bar : g }
@@ -1574,7 +1574,7 @@ Ml(a) : { # d
 Soine(a) : { # d
 	bar : Som,
 }
-
+#
 # se
 
 Func(a) : Maybe(a), a -> Maybe(a)
@@ -1610,7 +1610,6 @@ match_time = |
 		[1, 2, 3, .. as rest] # Aftet
 			=> ment
 
-
 		[1, 2 | 5, 3, .. as rest] => 123
 		[
 			ist,
@@ -1621,7 +1620,7 @@ match_time = |
 		(1, 2 | 5, 3) => 123
 		{ foo: 1, bar: 2, ..rest } => 12->add(34)
 		{ # Afrd open
-			foo
+			foo #
 				: # ue
 					1, # Aftd field
 			bar: 2,
@@ -1650,7 +1649,7 @@ main! = |_| { # Yeah Ie
 
 	...
 	match_time(
-		...,
+		..., #
 	)
 	some_func(
 		dbg # bug
@@ -1681,7 +1680,7 @@ main! = |_| { # Yeah Ie
 	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 	stale = some_fn(arg1)?.statod()?.ned()?.recd?
 	Stdoline!(
-		"How about ${
+		"How about ${ #
 			Num.toStr(number) # on expr
 		} as a",
 	)

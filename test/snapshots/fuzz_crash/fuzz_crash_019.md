@@ -1365,7 +1365,7 @@ line : () # Co
 Som : { foo : O, bar : g }
 Ml(a) : {}
 
-Soine(a) : {}
+Soine(a) : {} #
 Maybe(a) : [Somne]
 
 Mayine(a) : [] # )
@@ -1429,7 +1429,7 @@ ma = |_| {
 	return # d
 		tag
 
-
+	#
 	...
 	me(
 		..., # r
@@ -1462,7 +1462,7 @@ ma = |_| {
 	b ?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3
 	e_fn(arg1)?.od()?.ned()?.recd?
 	Stdo!(
-		"Ho${
+		"Ho${ #
 			r(nu) # xpr
 		} ",
 	)

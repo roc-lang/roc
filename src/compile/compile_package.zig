@@ -113,6 +113,7 @@ const ModuleState = struct {
         // Free reports
         for (self.reports.items) |*r| r.deinit();
         self.reports.deinit(gpa);
+        gpa.free(self.path);
     }
 };
 

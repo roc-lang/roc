@@ -135,8 +135,7 @@ process = |list| {
 	# type variable 'elem' still refers to the function annotation's type parameter
 	result : elem
 	result = List.first(list)
-	
-	Result.withDefault(elem)
+		Result.withDefault(elem)
 
 	result
 }

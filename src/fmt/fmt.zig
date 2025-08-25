@@ -719,6 +719,18 @@ const Formatter = struct {
             }
             _ = try formatter(fmt, item_idx);
             if (multiline) {
+                // special case for multiline_strings
+                var node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(item_idx)));
+                if (node.tag == .record_field) {
+                    const field = fmt.ast.store.getRecordField(@enumFromInt(@intFromEnum(item_idx)));
+                    if (field.value) |v| {
+                        node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(v)));
+                    }
+                }
+                if (node.tag == .multiline_string) {
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                }
                 try fmt.push(',');
             } else if (i < (items.len - 1)) {
                 try fmt.pushAll(", ");
@@ -815,14 +827,7 @@ const Formatter = struct {
                 try fmt.push('"');
             },
             .multiline_string => |s| {
-                // check if this region starts on a new line
-                var has_newline_before = true;
-                if (s.region.start != 0) {
-                    const start_offset = fmt.ast.tokens.resolve(s.region.start - 1).end.offset;
-                    const end_offset = fmt.ast.tokens.resolve(s.region.start).start.offset;
-                    has_newline_before = std.mem.indexOfScalar(u8, fmt.ast.env.source[start_offset..end_offset], '\n') != null;
-                }
-                if (!has_newline_before) {
+                if (!fmt.has_newline) {
                     fmt.curr_indent += 1;
                 }
                 var add_newline = false;
@@ -834,7 +839,7 @@ const Formatter = struct {
                             if (add_newline) {
                                 // Comments could be located before the MultilineStringStart token, not the StringPart token
                                 _ = try fmt.flushCommentsBefore(str.region.start - 1);
-                                try ensureNewline(fmt);
+                                try fmt.ensureNewline();
                                 try fmt.pushIndent();
                                 try fmt.pushAll("\"\"\"");
                             }
@@ -908,28 +913,29 @@ const Formatter = struct {
                 // Handle extension if present
                 if (r.ext) |ext| {
                     if (multiline) {
-                        _ = try fmt.flushCommentsAfter(r.region.start);
                         fmt.curr_indent += 1;
+                        _ = try fmt.flushCommentsAfter(r.region.start);
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
                     } else {
                         try fmt.push(' ');
                     }
                     try fmt.pushAll("..");
-                    _ = try fmt.formatExpr(ext);
+                    const ext_region = try fmt.formatExpr(ext);
                     has_extension = true;
 
                     try fmt.push(',');
                     if (multiline and fields.len > 0) {
-                        try fmt.newline();
+                        _ = try fmt.flushCommentsAfter(ext_region.end);
+                        try fmt.ensureNewline();
                         try fmt.pushIndent();
                     }
                 }
 
                 // Format fields
                 if (multiline and !has_extension and fields.len > 0) {
-                    _ = try fmt.flushCommentsAfter(r.region.start);
                     fmt.curr_indent += 1;
+                    _ = try fmt.flushCommentsAfter(r.region.start);
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
@@ -940,25 +946,29 @@ const Formatter = struct {
                     }
                     const field_region = try fmt.formatRecordField(field_idx);
                     if (multiline) {
+                        const field = fmt.ast.store.getRecordField(field_idx);
+                        if (field.value) |v| {
+                            const node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(v)));
+                            // special case for multiline_strings
+                            if (node.tag == .multiline_string) {
+                                try fmt.ensureNewline();
+                                try fmt.pushIndent();
+                            }
+                        }
                         try fmt.push(',');
                         _ = try fmt.flushCommentsAfter(field_region.end);
-                        try fmt.ensureNewline();
-                        if (i < fields.len - 1) {
-                            try fmt.pushIndent();
+                        if (i == fields.len - 1) {
+                            fmt.curr_indent -= 1;
                         }
+                        try fmt.ensureNewline();
+                        try fmt.pushIndent();
                     } else if (i < fields.len - 1) {
                         try fmt.pushAll(",");
                     }
                 }
 
-                if (has_extension or fields.len > 0) {
-                    if (multiline) {
-                        fmt.curr_indent -= 1;
-                        try fmt.ensureNewline();
-                        try fmt.pushIndent();
-                    } else {
-                        try fmt.push(' ');
-                    }
+                if ((has_extension or fields.len > 0) and !multiline) {
+                    try fmt.push(' ');
                 }
                 try fmt.push('}');
             },
@@ -981,16 +991,14 @@ const Formatter = struct {
                     if (args_are_multiline) {
                         try fmt.push(',');
                         _ = try fmt.flushCommentsAfter(arg_region.end);
-                        try fmt.ensureNewline();
-                        if (i < args.len - 1) {
-                            try fmt.pushIndent();
+                        if (i == args.len - 1) {
+                            fmt.curr_indent -= 1;
                         }
+                        try fmt.ensureNewline();
+                        try fmt.pushIndent();
                     } else if (i < args.len - 1) {
                         try fmt.pushAll(", ");
                     }
-                }
-                if (args_are_multiline) {
-                    fmt.curr_indent -= 1;
                 }
                 try fmt.push('|');
                 if (try fmt.flushCommentsBefore(body_region.start)) {
@@ -1934,28 +1942,28 @@ const Formatter = struct {
                     comment_end += 1;
                 }
 
-                if (comment_end > comment_start) {
-                    if (found_comment or newline_count > 0) {
-                        try fmt.pushIndent();
-                    } else if (!fmt.has_newline) {
-                        try fmt.pushAll(" ");
-                    }
-                    try fmt.push('#');
-                    const comment_text = between_text[comment_start..comment_end];
-                    if (comment_text.len > 0 and comment_text[0] != ' ') {
-                        try fmt.push(' ');
-                    }
-                    try fmt.pushAll(comment_text);
-                    found_comment = true;
+                if (found_comment or newline_count > 0) {
+                    try fmt.pushIndent();
+                } else if (!fmt.has_newline) {
+                    try fmt.push(' ');
                 }
+                try fmt.push('#');
+                const comment_text = between_text[comment_start..comment_end];
+                if (comment_text.len > 0 and comment_text[0] != ' ') {
+                    try fmt.push(' ');
+                }
+                try fmt.pushAll(comment_text);
+                found_comment = true;
                 try fmt.newline();
-                newline_count += 1;
+                newline_count = 1; // reset count to allow an additional newline after a comment
                 i = comment_end;
                 if (i < between_text.len and (between_text[i] == '\n' or between_text[i] == '\r')) {
                     i += 1; // Skip any additional newlines
                 }
             } else if (between_text[i] == '\n') {
-                try fmt.newline();
+                if (newline_count < 2) {
+                    try fmt.newline();
+                }
                 newline_count += 1;
                 i += 1;
             } else {
@@ -1968,7 +1976,9 @@ const Formatter = struct {
     }
 
     fn push(fmt: *Formatter, c: u8) !void {
-        fmt.has_newline = c == '\n';
+        if (c != '\t') {
+            fmt.has_newline = c == '\n';
+        }
         try fmt.buffer.writer().writeByte(c);
     }
 
@@ -1976,12 +1986,17 @@ const Formatter = struct {
         if (str.len == 0) {
             return;
         }
-        fmt.has_newline = str[str.len - 1] == '\n';
+        const all_tabs = for (str) |c| {
+            if (c != '\t') break false;
+        } else true;
+        if (!all_tabs) {
+            fmt.has_newline = str[str.len - 1] == '\n';
+        }
         try fmt.buffer.writer().writeAll(str);
     }
 
     fn pushIndent(fmt: *Formatter) !void {
-        if (fmt.curr_indent == 0) {
+        if (fmt.curr_indent == 0 or !fmt.has_newline) {
             return;
         }
         for (0..fmt.curr_indent) |_| {
