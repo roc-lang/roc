@@ -75,29 +75,23 @@ comptime {
     }
 }
 
+// stub for Windows
 fn __main() void {}
 
-/// Arguments struct for passing two integers to Roc as a tuple
-const Args = struct {
-    a: i64,
-    b: i64,
-};
-
-/// Platform host entrypoint -- this is where the roc application starts and does platform things
-/// before the platform calls into Roc to do application-specific things.
+// C compatible main for runtime
 fn main(argc: c_int, argv: [*][*:0]u8) callconv(.C) c_int {
     _ = argc;
     _ = argv;
-    roc_platform_host_main() catch |err| {
-        std.debug.print("Error in platform host main: {}\n", .{err});
+    platform_main() catch |err| {
+        std.io.getStdErr().writer().print("HOST ERROR: {?}", .{err}) catch unreachable;
         return 1;
     };
     return 0;
 }
 
-fn roc_platform_host_main() !void {
-    std.io.getStdErr().writer().print("DEBUG HOST: main() started\n", .{}) catch {};
-    std.debug.print("DEBUG HOST: main() started\n", .{});
+/// Platform host entrypoint -- this is where the roc application starts and does platform things
+/// before the platform calls into Roc to do application-specific things.
+fn platform_main() !void {
     var host_env = HostEnv{
         .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
     };
@@ -122,20 +116,17 @@ fn roc_platform_host_main() !void {
     const a = rand.random().intRangeAtMost(i64, 0, 100);
     const b = rand.random().intRangeAtMost(i64, 0, 100);
 
-    // Create arguments struct - Roc expects arguments as a tuple
-    var args = Args{
-        .a = a,
-        .b = b,
-    };
+    // Arguments struct for passing two integers to Roc as a tuple
+    const Args = extern struct { a: i64, b: i64 };
+    var args = Args{ .a = a, .b = b };
 
     try stdout.print("Generated numbers: a = {}, b = {}\n", .{ a, b });
 
     // Test first entrypoint: addInts (entry_idx = 0)
     try stdout.print("\n=== Testing addInts (entry_idx = 0) ===\n", .{});
-    std.debug.print("DEBUG HOST: About to call roc__addInts\n", .{});
+
     var add_result: i64 = undefined;
     roc__addInts(&roc_ops, @as(*anyopaque, @ptrCast(&add_result)), @as(*anyopaque, @ptrCast(&args)));
-    std.debug.print("DEBUG HOST: roc__addInts returned\n", .{});
 
     const expected_add = a +% b; // Use wrapping addition to match Roc behavior
     try stdout.print("Expected add result: {}\n", .{expected_add});
@@ -151,10 +142,9 @@ fn roc_platform_host_main() !void {
 
     // Test second entrypoint: multiplyInts (entry_idx = 1)
     try stdout.print("\n=== Testing multiplyInts (entry_idx = 1) ===\n", .{});
-    std.debug.print("DEBUG HOST: About to call roc__multiplyInts\n", .{});
+
     var multiply_result: i64 = undefined;
     roc__multiplyInts(&roc_ops, @as(*anyopaque, @ptrCast(&multiply_result)), @as(*anyopaque, @ptrCast(&args)));
-    std.debug.print("DEBUG HOST: roc__multiplyInts returned\n", .{});
 
     const expected_multiply = a *% b; // Use wrapping multiplication to match Roc behavior
     try stdout.print("Expected multiply result: {}\n", .{expected_multiply});
