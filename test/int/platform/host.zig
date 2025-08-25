@@ -65,17 +65,17 @@ extern fn roc__multiplyInts(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque,
 
 // OS-specific entry point handling
 comptime {
-    const builtin = @import("builtin");
-    if (builtin.os.tag == .windows) {
-        // Windows needs __main for MinGW-style initialization
+    // Export main for all platforms
+    @export(&main, .{ .name = "main" });
+    
+    // Windows MinGW/MSVCRT compatibility: export __main stub
+    if (@import("builtin").os.tag == .windows) {
         @export(&__main, .{ .name = "__main" });
-    } else {
-        // On Unix-like systems, export main to be called by C runtime
-        @export(&main, .{ .name = "main" });
     }
 }
 
-// stub for Windows
+// Windows MinGW/MSVCRT compatibility stub
+// The C runtime on Windows calls __main from main for constructor initialization
 fn __main() callconv(.C) void {}
 
 // C compatible main for runtime
