@@ -35,16 +35,42 @@ pub const TargetFormat = enum {
     }
 };
 
+/// Target ABI for runtime-configurable linking
+pub const TargetAbi = enum {
+    musl,
+    gnu,
+
+    /// Convert from RocTarget to TargetAbi
+    pub fn fromRocTarget(roc_target: anytype) TargetAbi {
+        // Use string matching to avoid circular imports
+        const target_str = @tagName(roc_target);
+        if (std.mem.endsWith(u8, target_str, "musl")) {
+            return .musl;
+        } else {
+            return .gnu;
+        }
+    }
+};
+
 /// Configuration for linking operation
 pub const LinkConfig = struct {
     /// Target format to use for linking
     target_format: TargetFormat = TargetFormat.detectFromSystem(),
+
+    /// Target ABI - determines static vs dynamic linking strategy
+    target_abi: ?TargetAbi = null, // null means detect from system
 
     /// Output executable path
     output_path: []const u8,
 
     /// Input object files to link
     object_files: []const []const u8,
+
+    /// Platform-provided files to link before object files (e.g., Scrt1.o, crti.o, host.o)
+    platform_files_pre: []const []const u8 = &.{},
+
+    /// Platform-provided files to link after object files (e.g., crtn.o)
+    platform_files_post: []const []const u8 = &.{},
 
     /// Additional linker flags
     extra_args: []const []const u8 = &.{},
@@ -113,22 +139,33 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             try args.append("-o");
             try args.append(config.output_path);
 
-            // Suppress LLD warnings
-            try args.append("-w");
-            // Add verbose flags for debugging (uncomment if needed)
-            // try args.append("--verbose");
-            // try args.append("--print-map");
+            // Determine target ABI
+            const target_abi = config.target_abi orelse if (builtin.target.abi == .musl) TargetAbi.musl else TargetAbi.gnu;
 
-            // Specify the dynamic linker/interpreter
-            try args.append("-dynamic-linker");
-            try args.append("/lib64/ld-linux-x86-64.so.2");
-
-            // Don't let the linker do sneaky stuff, only explicit depdendencies permitted!
-            try args.append("-nostdlib");
-
-            // Link libc for the interpreter shim's system calls
-            try args.append("-L/usr/lib/x86_64-linux-gnu");
-            try args.append("-lc");
+            switch (target_abi) {
+                .musl => {
+                    // Static musl linking
+                    try args.append("-static");
+                    try args.append("-nostdlib");
+                    try args.append("--error-limit=0");
+                    try args.append("--entry");
+                    try args.append("_start");
+                    try args.append("--build-id=none");
+                    try args.append("--gc-sections");
+                    try args.append("--eh-frame-hdr");
+                    try args.append("-s"); // Strip symbols
+                    try args.append("-znow");
+                    try args.append("-m");
+                    try args.append("elf_x86_64");
+                },
+                .gnu => {
+                    // Dynamic GNU linking
+                    try args.append("-w");
+                    try args.append("-dynamic-linker");
+                    try args.append("/lib64/ld-linux-x86-64.so.2");
+                    try args.append("-nostdlib");
+                },
+            }
         },
         .windows => {
             // Add linker name for Windows COFF
@@ -171,9 +208,9 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
         },
     }
 
-    if (builtin.target.os.tag == .linux) {
-        try args.append("/usr/lib/x86_64-linux-gnu/Scrt1.o");
-        try args.append("/usr/lib/x86_64-linux-gnu/crti.o");
+    // Add platform-provided files that come before object files
+    for (config.platform_files_pre) |platform_file| {
+        try args.append(platform_file);
     }
 
     // Add object files
@@ -181,13 +218,20 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
         try args.append(obj_file);
     }
 
-    if (builtin.target.os.tag == .linux) {
-        try args.append("/usr/lib/x86_64-linux-gnu/crtn.o");
+    // Add platform-provided files that come after object files
+    for (config.platform_files_post) |platform_file| {
+        try args.append(platform_file);
     }
 
     // Add any extra arguments
     for (config.extra_args) |extra_arg| {
         try args.append(extra_arg);
+    }
+
+    // Debug: Print the linker command
+    std.log.debug("Linker command:", .{});
+    for (args.items) |arg| {
+        std.log.debug("  {s}", .{arg});
     }
 
     // Convert to null-terminated strings for C API
@@ -273,6 +317,8 @@ test "link config creation" {
     try std.testing.expect(config.target_format == TargetFormat.detectFromSystem());
     try std.testing.expectEqualStrings("test_output", config.output_path);
     try std.testing.expectEqual(@as(usize, 2), config.object_files.len);
+    try std.testing.expectEqual(@as(usize, 0), config.platform_files_pre.len);
+    try std.testing.expectEqual(@as(usize, 0), config.platform_files_post.len);
 }
 
 test "target format detection" {

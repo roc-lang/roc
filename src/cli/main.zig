@@ -661,9 +661,68 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
             std.process.exit(1);
         };
 
+        // Determine platform-specific dependencies based on platform spec
+        var platform_files_pre = std.ArrayList([]const u8).init(gpa);
+        defer platform_files_pre.deinit();
+        var platform_files_post = std.ArrayList([]const u8).init(gpa);
+        defer platform_files_post.deinit();
+        var target_abi: ?linker.TargetAbi = null;
+
+        // Determine platform type from host library path to configure dependencies
+        std.log.debug("Platform host library path: {s}", .{platform_paths.host_lib_path});
+        if (std.mem.indexOf(u8, platform_paths.host_lib_path, "/int/") != null and std.mem.indexOf(u8, platform_paths.host_lib_path, "platform") != null) {
+            std.log.debug("Detected int platform - using musl static linking", .{});
+            // Int platform: use musl static linking
+            target_abi = .musl;
+            if (builtin.target.os.tag == .linux) {
+                platform_files_pre.append("test/int/platform/vendored/musl/crt1.o") catch {
+                    std.log.err("Failed to add musl crt1.o", .{});
+                    std.process.exit(1);
+                };
+                platform_files_post.append("test/int/platform/vendored/musl/libc.a") catch {
+                    std.log.err("Failed to add musl libc.a", .{});
+                    std.process.exit(1);
+                };
+            }
+        } else if (std.mem.indexOf(u8, platform_paths.host_lib_path, "/str/") != null and std.mem.indexOf(u8, platform_paths.host_lib_path, "platform") != null) {
+            std.log.debug("Detected str platform - using gnu dynamic linking", .{});
+            // Str platform: use gnu dynamic linking
+            target_abi = .gnu;
+            if (builtin.target.os.tag == .linux) {
+                platform_files_pre.append("test/str/platform/vendored/gnu/Scrt1.o") catch {
+                    std.log.err("Failed to add gnu Scrt1.o", .{});
+                    std.process.exit(1);
+                };
+                platform_files_pre.append("test/str/platform/vendored/gnu/crti.o") catch {
+                    std.log.err("Failed to add gnu crti.o", .{});
+                    std.process.exit(1);
+                };
+                platform_files_post.append("test/str/platform/vendored/gnu/crtn.o") catch {
+                    std.log.err("Failed to add gnu crtn.o", .{});
+                    std.process.exit(1);
+                };
+                // Add dynamic library dependencies
+                extra_args.append("-L/usr/lib/x86_64-linux-gnu") catch {
+                    std.log.err("Failed to add library path", .{});
+                    std.process.exit(1);
+                };
+                extra_args.append("-lc") catch {
+                    std.log.err("Failed to add libc", .{});
+                    std.process.exit(1);
+                };
+            }
+        } else {
+            std.log.debug("No platform-specific configuration found, using defaults", .{});
+        }
+
+        std.log.debug("Final target_abi: {?}", .{target_abi});
+
         const link_config = linker.LinkConfig{
+            .target_abi = target_abi,
             .output_path = exe_path,
             .object_files = object_files.items,
+            .platform_files_pre = platform_files_pre.items,
+            .platform_files_post = platform_files_post.items,
             .extra_args = extra_args.items,
             .can_exit_early = false,
             .disable_output = false,
