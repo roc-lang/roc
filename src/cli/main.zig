@@ -730,7 +730,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
         linker.link(gpa, link_config) catch |err| switch (err) {
             linker.LinkError.LLVMNotAvailable => {
-                std.log.err("LLD linker not available -- this is likely a test exectuable that was built without LLVM", .{});
+                std.log.err("LLD linker not available -- this is likely a test executable that was built without LLVM", .{});
                 std.process.exit(1);
             },
             linker.LinkError.LinkFailed => {
