@@ -730,42 +730,8 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
         linker.link(gpa, link_config) catch |err| switch (err) {
             linker.LinkError.LLVMNotAvailable => {
-                // Fallback to clang when LLVM is not available
-                var clang_args = std.ArrayList([]const u8).init(gpa);
-                defer clang_args.deinit();
-                clang_args.appendSlice(&.{ "clang", "-o", exe_path, platform_paths.host_lib_path }) catch |alloc_err| {
-                    std.log.err("Failed to allocate clang args: {}", .{alloc_err});
-                    std.process.exit(1);
-                };
-                if (platform_shim_path) |path| {
-                    clang_args.append(path) catch |alloc_err| {
-                        std.log.err("Failed to add platform shim to clang args: {}", .{alloc_err});
-                        std.process.exit(1);
-                    };
-                }
-                clang_args.append(shim_path) catch |alloc_err| {
-                    std.log.err("Failed to add shim to clang args: {}", .{alloc_err});
-                    std.process.exit(1);
-                };
-                const link_result = std.process.Child.run(.{
-                    .allocator = gpa,
-                    .argv = clang_args.items,
-                }) catch |clang_err| {
-                    std.log.err("Failed to link executable with both LLD and clang: LLD unavailable, clang error: {}", .{clang_err});
-                    std.process.exit(1);
-                };
-                defer gpa.free(link_result.stdout);
-                defer gpa.free(link_result.stderr);
-                if (link_result.term.Exited != 0) {
-                    std.log.err("Linker failed with exit code: {}", .{link_result.term.Exited});
-                    if (link_result.stderr.len > 0) {
-                        std.log.err("Linker stderr: {s}", .{link_result.stderr});
-                    }
-                    if (link_result.stdout.len > 0) {
-                        std.log.err("Linker stdout: {s}", .{link_result.stdout});
-                    }
-                    std.process.exit(1);
-                }
+                std.log.err("LLD linker not available -- this is likely a test exectuable that was built without LLVM", .{});
+                std.process.exit(1);
             },
             linker.LinkError.LinkFailed => {
                 std.log.err("LLD linker failed to create executable", .{});
