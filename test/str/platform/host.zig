@@ -87,7 +87,10 @@ pub export fn __main() void {}
 
 /// Platform host entrypoint -- this is where the roc application starts and does platform things
 /// before the platform calls into Roc to do application-specific things.
-pub export fn main() void {
+pub export fn roc_platform_host_main(argc: c_int, argv: [*][*:0]u8) c_int {
+    _ = argc;
+    _ = argv;
+
     var host_env = HostEnv{
         .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
     };
@@ -131,7 +134,7 @@ pub export fn main() void {
     const result_slice = roc_str.asSlice();
     stdout.print("{s}", .{result_slice}) catch {
         std.log.err("Failed to write to stdout\n", .{});
-        std.process.exit(1);
+        return 1;
     };
 
     // Verify the result contains the expected input
@@ -140,6 +143,8 @@ pub export fn main() void {
         stdout.print("\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n", .{}) catch {};
     } else {
         stdout.print("\n\x1b[31mFAIL\x1b[0m: Result does not contain expected substring!\n", .{}) catch {};
-        std.process.exit(1);
+        return 1;
     }
+
+    return 0;
 }

@@ -117,17 +117,13 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             // try args.append("-w");
             // Add verbose flags for debugging (uncomment if needed)
             try args.append("--verbose");
-            try args.append("--print-map");
+            // try args.append("--print-map");
 
             // Use static linking to avoid dynamic linker dependency issues
             // try args.append("-static");
 
+            // Don't let the linker do sneaky stuff, only explicit depdendencies permitted!
             try args.append("-nostdlib");
-
-            // Force include main symbol from static libraries
-            // without this it will be stripped and unnavailable
-            try args.append("-u");
-            try args.append("main");
         },
         .windows => {
             // Add linker name for Windows COFF
@@ -170,9 +166,18 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
         },
     }
 
+    if (builtin.target.os.tag == .linux) {
+        try args.append("/usr/lib/x86_64-linux-gnu/Scrt1.o");
+        try args.append("/usr/lib/x86_64-linux-gnu/crti.o");
+    }
+
     // Add object files
     for (config.object_files) |obj_file| {
         try args.append(obj_file);
+    }
+
+    if (builtin.target.os.tag == .linux) {
+        try args.append("/usr/lib/x86_64-linux-gnu/crtn.o");
     }
 
     // Add any extra arguments

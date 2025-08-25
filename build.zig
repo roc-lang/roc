@@ -311,49 +311,25 @@ fn addMainExe(
         .link_libc = true,
     });
 
-
-    // Create builtins static library at build time with minimal dependencies
-    const builtins_lib = b.addStaticLibrary(.{
-        .name = "roc_builtins",
-        .root_source_file = b.path("src/builtins/static_lib.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = strip,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
-    });
-    // Add the builtins module so it can import "builtins"
-    builtins_lib.root_module.addImport("builtins", roc_modules.builtins);
-    // Force bundle compiler-rt to resolve math symbols
-    builtins_lib.bundle_compiler_rt = true;
-
-    // Create libc stubs object (Linux only) to provide missing libc symbols
-    const libc_stubs_obj = if (target.result.os.tag == .linux) blk: {
-        const obj = b.addObject(.{
-            .name = "libc_stubs",
-            .root_source_file = b.path("src/build/libc_stubs.zig"),
+    // Create test platform host static library (str)
+    const test_platform_host_lib = b.addLibrary(.{
+        .name = "test_platform_str_host",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/str/platform/host.zig"),
             .target = target,
             .optimize = optimize,
-            .strip = strip,
-            .pic = true,
-        });
-        break :blk obj;
-    } else null;
-
-    // Create test platform host static library (str)
-    const test_platform_host_lib = b.addStaticLibrary(.{
-        .name = "test_platform_str_host",
-        .root_source_file = b.path("test/str/platform/host.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = true,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
+            .strip = true,
+            .pic = true, // Enable Position Independent Code for PIE compatibility
+        }),
+        .linkage = .static,
     });
-    // Don't link libc - use stubs instead for self-contained executable
     test_platform_host_lib.root_module.addImport("builtins", roc_modules.builtins);
-    // Add libc stubs for Linux to provide missing symbols
-    if (libc_stubs_obj) |stubs| {
-        test_platform_host_lib.addObject(stubs);
-    }
+    // Add C shim that provides main and calls roc_platform_host_main
+    test_platform_host_lib.addCSourceFile(.{
+        .file = b.path("test/str/platform/main_shim.c"),
+        .flags = &.{"-std=c99"},
+    });
+
     // Force bundle compiler-rt to resolve runtime symbols like __main
     test_platform_host_lib.bundle_compiler_rt = true;
 
@@ -364,20 +340,18 @@ fn addMainExe(
     b.getInstallStep().dependOn(&copy_test_host.step);
 
     // Create test platform host static library (int)
-    const test_platform_int_host_lib = b.addStaticLibrary(.{
+    const test_platform_int_host_lib = b.addLibrary(.{
         .name = "test_platform_int_host",
-        .root_source_file = b.path("test/int/platform/host.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = true,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/int/platform/host.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = true,
+            .pic = true, // Enable Position Independent Code for PIE compatibility
+        }),
+        .linkage = .static,
     });
-    // Don't link libc - use stubs instead for self-contained executable
     test_platform_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
-    // Add libc stubs for Linux to provide missing symbols
-    if (libc_stubs_obj) |stubs| {
-        test_platform_int_host_lib.addObject(stubs);
-    }
     // Force bundle compiler-rt to resolve runtime symbols like __main
     test_platform_int_host_lib.bundle_compiler_rt = true;
 
@@ -387,37 +361,45 @@ fn addMainExe(
     copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform", test_int_host_filename }));
     b.getInstallStep().dependOn(&copy_test_int_host.step);
 
-    // Create shim static library at build time - fully static without libc
-    const shim_lib = b.addStaticLibrary(.{
-        .name = "roc_shim",
-        .root_source_file = b.path("src/interpreter_shim/main.zig"),
+    // Create builtins static library at build time with minimal dependencies
+    const builtins_obj = b.addObject(.{
+        .name = "roc_builtins",
+        .root_source_file = b.path("src/builtins/static_lib.zig"),
         .target = target,
         .optimize = optimize,
-        .strip = strip,
+        .strip = true,
         .pic = true, // Enable Position Independent Code for PIE compatibility
     });
-    shim_lib.linkLibC();
+
+    // Create shim static library at build time - fully static without libc
+    //
+    // NOTE we do NOT link libC here to avoid dynamic dependency on libC
+    const shim_lib = b.addLibrary(.{
+        .name = "roc_interpreter_shim",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/interpreter_shim/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = true,
+            .pic = true, // Enable Position Independent Code for PIE compatibility
+        }),
+        .linkage = .static,
+    });
     // Add all modules from roc_modules that the shim needs
     roc_modules.addAll(shim_lib);
     // Link against the pre-built builtins library
-    shim_lib.linkLibrary(builtins_lib);
-    // Add libc stubs for Linux to provide missing symbols
-    if (libc_stubs_obj) |stubs| {
-        shim_lib.addObject(stubs);
-    }
-    // Force bundle compiler-rt to resolve math symbols
+    shim_lib.addObject(builtins_obj);
+    // Bundle compiler-rt for our math symbols
     shim_lib.bundle_compiler_rt = true;
-
     // Install shim library to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});
     b.getInstallStep().dependOn(&install_shim.step);
-
-    // We need to copy the shim library to the src/ directory for embedding as binary data
+    // Copy the shim library to the src/ directory for embedding as binary data
     // This is because @embedFile happens at compile time and needs the file to exist already
     // and zig doesn't permit embedding files from directories outside the source tree.
     const copy_shim = b.addUpdateSourceFiles();
-    const shim_filename = if (target.result.os.tag == .windows) "roc_shim.lib" else "libroc_shim.a";
-    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", shim_filename }));
+    const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
+    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
     exe.step.dependOn(&copy_shim.step);
 
     const config = b.addOptions();

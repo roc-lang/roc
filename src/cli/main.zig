@@ -51,7 +51,7 @@ const RocDbg = builtins.host_abi.RocDbg;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
 
-const roc_shim_lib = if (builtin.is_test) &[_]u8{} else if (builtin.target.os.tag == .windows) @embedFile("roc_shim.lib") else @embedFile("libroc_shim.a");
+const roc_interpreter_shim_lib = if (builtin.is_test) &[_]u8{} else if (builtin.target.os.tag == .windows) @embedFile("roc_interpreter_shim.lib") else @embedFile("libroc_interpreter_shim.a");
 
 test {
     _ = @import("test_bundle_logic.zig");
@@ -1499,7 +1499,7 @@ pub fn extractReadRocFilePathShimLibrary(gpa: Allocator, output_path: []const u8
     const shim_file = try std.fs.cwd().createFile(output_path, .{});
     defer shim_file.close();
 
-    try shim_file.writeAll(roc_shim_lib);
+    try shim_file.writeAll(roc_interpreter_shim_lib);
 }
 
 /// Format a bundle path validation reason into a user-friendly error message
